@@ -1190,11 +1190,13 @@ public final class PackageManagerService extends IPackageManager.Default {
      * (docs/bluetooth.md) is there when the host has a radio: FEATURE_BLUETOOTH with an
      * adapter, FEATURE_BLUETOOTH_LE when Windows reports LE support (apps such as
      * companion apps check it before anything else). Cameras follow the real devices
-     * ({@link #addCameraFeatures}). FEATURE_MICROPHONE is there when Windows has an audio
+     * ({@link #addCameraFeatures}): FEATURE_CAMERA_AUTOFOCUS only when the camera reported
+     * as FEATURE_CAMERA (the rear one) really focuses automatically. FEATURE_MICROPHONE is there when Windows has an audio
      * capture endpoint, the input AudioRecord and AudioManager report. FEATURE_LOCATION and
      * FEATURE_LOCATION_NETWORK describe {@link LocationManagerService}'s network provider,
      * which is always registered (Windows' location service, with the IP fallback);
-     * FEATURE_LOCATION_GPS is not claimed, as no GNSS receiver is known. Google Play filters
+     * FEATURE_LOCATION_GPS only when Windows has a GNSS receiver ({@link
+     * WindowsLocation#hasGnssReceiver}). Google Play filters
      * on these (a RECORD_AUDIO or location permission implies the feature unless the app
      * marks it not required), so an absent one hides an app the device can run.
      */
@@ -1205,7 +1207,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (String name : new String[] {PackageManager.FEATURE_APP_WIDGETS,
                 PackageManager.FEATURE_TOUCHSCREEN,
                 PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
-                PackageManager.FEATURE_SCREEN_LANDSCAPE}) {
+                PackageManager.FEATURE_SCREEN_LANDSCAPE,
+                // Gesher's built-in WebView (WebView2, ADR 0041; WebViewUpdateService). The
+                // WebView2 Runtime is the installer's prerequisite; without it WebViews
+                // stay empty and webviewupdate names no valid provider.
+                PackageManager.FEATURE_WEBVIEW}) {
             android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
             f.name = name;
             FEATURES.put(name, f);
@@ -1225,7 +1231,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
-        addLocationFeatures(FEATURES);
+        addLocationFeatures(FEATURES, WindowsLocation.hasGnssReceiver());
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */
@@ -1242,24 +1248,35 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (input) addFeature(features, PackageManager.FEATURE_MICROPHONE);
     }
 
-    /** The network location provider's features; no GPS claim. */
-    static void addLocationFeatures(
-            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features) {
+    /**
+     * The network location provider's features, and FEATURE_LOCATION_GPS when Windows has
+     * a GNSS receiver ({@code gnss}), whose fixes the gps provider then gets.
+     */
+    public static void addLocationFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean gnss) {
         addFeature(features, PackageManager.FEATURE_LOCATION);
         addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
+        if (gnss) addFeature(features, PackageManager.FEATURE_LOCATION_GPS);
     }
 
     /**
      * Report real cameras: a configured rear camera as FEATURE_CAMERA, the others as front
      * cameras (a PC's camera faces the user; CONTRIBUTING.md), without inferred capabilities.
+     * FEATURE_CAMERA_AUTOFOCUS describes the FEATURE_CAMERA camera, as on Android: it is
+     * there only when a rear camera's driver really focuses automatically
+     * ({@link WindowsCamera.Device#autofocus}); a front camera's autofocus does not add it.
      */
-    static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+    public static void addCameraFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
             addFeature(features, camera.isRearFacing() ? PackageManager.FEATURE_CAMERA
                     : PackageManager.FEATURE_CAMERA_FRONT);
+            if (camera.isRearFacing() && camera.autofocus) {
+                addFeature(features, PackageManager.FEATURE_CAMERA_AUTOFOCUS);
+            }
         }
     }
 
@@ -1292,7 +1309,16 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ParceledListSlice<android.content.pm.FeatureInfo> getSystemAvailableFeatures() {
-        return new ParceledListSlice<>(new ArrayList<>(FEATURES.values()));
+        // As AOSP's: the named features, then an unnamed one carrying the OpenGL ES
+        // version (ro.opengles.version), which PackageManager.getSystemAvailableFeatures
+        // callers read as reqGlEsVersion.
+        ArrayList<android.content.pm.FeatureInfo> features = new ArrayList<>(FEATURES.size() + 1);
+        features.addAll(FEATURES.values());
+        android.content.pm.FeatureInfo gles = new android.content.pm.FeatureInfo();
+        gles.reqGlEsVersion = android.os.SystemProperties.getInt("ro.opengles.version",
+                android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED);
+        features.add(gles);
+        return new ParceledListSlice<>(features);
     }
 
     @Override

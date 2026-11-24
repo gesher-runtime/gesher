@@ -100,6 +100,19 @@ Check 'arm64: guest ABI (TLS, stack protector, setjmp, stat, epoll, syscall, ato
 } @('arm64_abi_test: all passed', 'arm64_elf_test all passed', 'INFO  arm64 perf: compiled C kernel',
     'Bionic setjmp contracts: all passed')
 
+# android_dlopen_ext from guest code (tests/native/dlext_test.c): the guest's
+# android_dlextinfo reaches the loader as it is; RESERVED_ADDRESS loads an
+# arm64-v8a library at the start of the guest's reservation (its ELF header is
+# readable there, as Chrome reads it) or fails without touching it.
+Check 'arm64: android_dlopen_ext reserved address space, hints, dlclose and flag checks' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/dlext-arm64/dlext_test.so"), (NoDrive "$a64/dlext-arm64"))
+} @('dlext_test: all passed', 'gesher_selftest() == 0', 'arm64_elf_test all passed')
+$env:GESHER_MMAP_NO_PLACEHOLDERS = '1'
+Check 'arm64: android_dlopen_ext with copied segments (no placeholder mappings)' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/dlext-arm64/dlext_test.so"), (NoDrive "$a64/dlext-arm64"))
+} @('dlext_test: all passed', 'gesher_selftest() == 0', 'arm64_elf_test all passed')
+Remove-Item Env:GESHER_MMAP_NO_PLACEHOLDERS
+
 # Step 3/4 (guest JNI): dalvikvm runs gesher.Arm64Jni, whose System.load of an
 # arm64-v8a .so goes through ART's host libnativeloader path to the ELF loader,
 # the translator and the JNI bridge's guest proxy tables: JNI_OnLoad,
