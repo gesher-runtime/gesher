@@ -21,6 +21,9 @@ STUBS = {
       private static final ThreadLocal<Integer> UID=ThreadLocal.withInitial(() -> 1000);
       public static int getCallingUid(){return UID.get();}
       public static void setCallingUid(int uid){UID.set(uid);}
+      private static final ThreadLocal<Integer> PID=ThreadLocal.withInitial(() -> 1);
+      public static int getCallingPid(){return PID.get();}
+      public static void setCallingPid(int pid){PID.set(pid);}
     }''',
     'android/os/Process.java': '''package android.os; public class Process {
       public static final int SYSTEM_UID=1000,ROOT_UID=0,SHELL_UID=2000;

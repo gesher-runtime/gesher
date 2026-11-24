@@ -146,3 +146,11 @@ does, from `OP_GET_USAGE_STATS` (MODE_ALLOWED allows, MODE_DEFAULT falls back to
 PACKAGE_USAGE_STATS, other modes deny), so the Usage access switch governs storage stats as
 it governs usage stats; a declared permission alone no longer gives access. Hosting the
 service in an ordinary standalone app's process does not bypass this decision.
+
+Package UIDs survive replacement and reinstallation, so special-access decisions are bound
+to the caller's installation. StorageStatsService usage access and SettingsProvider writes
+(the Modify system settings op and the privileged WRITE_SECURE_SETTINGS path) answer only an
+attached live process whose recorded installation is still current, and check that again
+after reading the decision; the usage check repeats after a scan. A process retained from an
+earlier installation therefore never uses a grant made to its replacement. Own-UID storage
+queries, current shared-UID peers and system or shell callers are unchanged.

@@ -473,7 +473,10 @@ source on close. The user confirms the specific APK on Windows, then the server 
 authorization again before publishing package code. Trusted install sources keep their
 existing Windows confirmation. Exact alarms and full-screen intents have no switch.
 StorageStatsService honours the Usage access op as usage stats do, including when an
-ordinary standalone application hosts the service in its own process.
+ordinary standalone application hosts the service in its own process. Usage access and
+SettingsProvider writes are decided for the caller's current installation: a process
+retained from an earlier installation of the same package and UID is refused, including
+when the replacement happens during a storage scan.
 All files access (`OP_MANAGE_EXTERNAL_STORAGE`) and Media management (`OP_MANAGE_MEDIA`)
 are neither offered nor accepted by the special-access command. Gesher's raw filesystem
 operations do not enforce Android shared-storage authorization, and no MediaProvider

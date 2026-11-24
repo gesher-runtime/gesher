@@ -48,6 +48,7 @@ final class StorageStatsService extends IStorageStatsManager.Default {
 
     private final PackageManagerService mPm;
     private final File mData;
+    private final CallerCode mCallers;
     private final StorageStatsScans mScans = new StorageStatsScans();
 
     /** Capture both installed-object identity and paths before a query can wait. */
@@ -84,9 +85,28 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         this(pm, android.os.Environment.getDataDirectory());
     }
 
+    StorageStatsService(PackageManagerService pm, CallerCode callers) {
+        this(pm, android.os.Environment.getDataDirectory(), callers);
+    }
+
+    /** Without caller authentication: only system, shell and own-UID queries are answered. */
     StorageStatsService(PackageManagerService pm, File dataDirectory) {
+        this(pm, dataDirectory, (pid, uid) -> null);
+    }
+
+    StorageStatsService(PackageManagerService pm, File dataDirectory, CallerCode callers) {
         mPm = Objects.requireNonNull(pm);
         mData = Objects.requireNonNull(dataDirectory);
+        mCallers = Objects.requireNonNull(callers);
+    }
+
+    /**
+     * The installed code of the live process behind a Binder PID and UID, while that code is
+     * still the package's current installation (ActivityTaskManagerService's authenticated
+     * process record); null for an unattached, dead or retired-installation process.
+     */
+    interface CallerCode {
+        ApkPackage current(int pid, int uid);
     }
 
     private static void volume(String volumeUuid) {
@@ -109,10 +129,16 @@ final class StorageStatsService extends IStorageStatsManager.Default {
      * and any other mode denies. The user decides the op with the Control Center's Usage
      * access switch (SpecialAccess); declaring the permission alone is not access.
      *
+     * <p>Package UIDs survive replacement and reinstallation, so the decision is bound to the
+     * caller's live process and the installation it runs: a process left from an earlier
+     * installation never uses a grant made to its replacement. The re-check after a scan
+     * repeats this, so a replacement during the scan withholds the result.
+     *
      * @param note whether this check records the access (the first check of a call does; the
      *     re-check after a scan only reads the current mode)
      */
     private boolean callerHasUsageAccess(String callingPackage, boolean note) {
+        int pid = android.os.Binder.getCallingPid();
         int uid = android.os.Binder.getCallingUid();
         // The shell holds PACKAGE_USAGE_STATS on Android (host commands run as it here).
         // A standalone app hosts these services in its own process. Sharing the
@@ -121,8 +147,11 @@ final class StorageStatsService extends IStorageStatsManager.Default {
                 || uid == android.os.Process.SHELL_UID) {
             return true;
         }
+        // The calling package may be the process's own installation or a current shared-UID peer.
+        ApkPackage code = mCallers.current(pid, uid);
         ApkPackage caller = callingPackage == null ? null : mPm.get(callingPackage);
-        if (caller == null || caller.uid() != uid || mPm.isRemovalPending(callingPackage)) {
+        if (code == null || caller == null || caller.uid() != uid || code.uid() != uid
+                || mPm.isRemovalPending(callingPackage)) {
             throw new SecurityException("Package " + callingPackage + " does not belong to " + uid);
         }
         int mode = note
@@ -130,11 +159,19 @@ final class StorageStatsService extends IStorageStatsManager.Default {
                         callingPackage, null, false, null, false).getOpMode()
                 : mPm.appOps().checkRawMode(android.app.AppOpsManager.OP_GET_USAGE_STATS, uid,
                         callingPackage);
-        if (mode == android.app.AppOpsManager.MODE_ALLOWED) return true;
-        return mode == android.app.AppOpsManager.MODE_DEFAULT
-                && mPm.permissions().checkUidPermission(uid,
-                        android.Manifest.permission.PACKAGE_USAGE_STATS, 0)
-                        == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        boolean allowed = mode == android.app.AppOpsManager.MODE_ALLOWED
+                || mode == android.app.AppOpsManager.MODE_DEFAULT
+                        && mPm.permissions().checkUidPermission(uid,
+                                android.Manifest.permission.PACKAGE_USAGE_STATS, 0)
+                                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        // A grant can only follow the installation it was made to. If both installations are
+        // unchanged after the decision was read, it was not the replacement's.
+        if (mCallers.current(pid, uid) != code || mPm.get(callingPackage) != caller
+                || mPm.isRemovalPending(callingPackage)) {
+            throw new SecurityException("Package " + callingPackage
+                    + " was replaced while its usage access was checked");
+        }
+        return allowed;
     }
 
     private void enforceUsageAccess(String callingPackage, boolean note) {

@@ -287,7 +287,7 @@ public final class Services {
         // StorageStatsManager: app and volume sizes for file managers and cleaners.
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,
-                new StorageStatsService(pm)).asBinder());
+                new StorageStatsService(pm, atm::authenticatedPackageCodeForPid)).asBinder());
         services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
                 android.app.admin.IDevicePolicyManager.class,
                 new DeviceServices.DevicePolicyService()).asBinder());

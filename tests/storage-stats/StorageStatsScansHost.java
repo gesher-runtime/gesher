@@ -78,6 +78,26 @@ public final class StorageStatsScansHost {
         pm.put(p);
         return p;
     }
+    /** Live attached processes by PID, each with the installation it started from (as ATM records). */
+    private static final class Attached implements StorageStatsService.CallerCode {
+        final PackageManagerService pm;
+        final Map<Integer, ApkPackage> processes = new ConcurrentHashMap<>();
+        Attached(PackageManagerService pm) { this.pm = pm; }
+        @Override public ApkPackage current(int pid, int uid) {
+            ApkPackage code = processes.get(pid);
+            return code != null && code.uid() == uid && pm.get(code.packageName) == code
+                    && !pm.isRemovalPending(code.packageName) ? code : null;
+        }
+    }
+    private static void as(int pid, ApkPackage p) {
+        Binder.setCallingPid(pid);
+        Binder.setCallingUid(p.uid());
+    }
+    private static void asSystem() {
+        Binder.setCallingPid(1);
+        Binder.setCallingUid(1000);
+    }
+
     private static void basic(Path root) throws Exception {
         PackageManagerService pm = new PackageManagerService();
         ApkPackage p = install(pm, root, "app.one", 10001);
@@ -89,8 +109,10 @@ public final class StorageStatsScansHost {
         write(root.resolve("media/0/Android/data/app.one/cache/data"), 500);
         write(root.resolve("media/0/Pictures/a.jpg"), 4000);
         write(root.resolve("media/0/Music/a.mp3"), 300);
-        StorageStatsService service = new StorageStatsService(pm, root.toFile());
-        Binder.setCallingUid(p.uid());
+        Attached attached = new Attached(pm);
+        attached.processes.put(501, p);
+        StorageStatsService service = new StorageStatsService(pm, root.toFile(), attached);
+        as(501, p);
         StorageStats stats = service.queryStatsForPackage(null, p.packageName, 0, "app.one");
         require(stats.codeBytes == 17 && stats.apkBytes == 17, "code and APK bytes");
         require(stats.dataBytes == 4500 && stats.cacheBytes == 2000
@@ -100,7 +122,7 @@ public final class StorageStatsScansHost {
         fails(SecurityException.class, () -> service.queryStatsForUser(null, 0, "forged"), "user authorization");
         fails(SecurityException.class, () -> service.queryStatsForPackage(null, "missing", 0, "forged"), "missing-name authorization");
         require(CountingFiles.walks.get() == walks, "unauthorized caller performed disk I/O");
-        Binder.setCallingUid(1000);
+        asSystem();
         require(service.queryStatsForUid(null, -1, "system").dataBytes == 0, "negative UID matched all packages");
         require(service.getCacheBytes(null, "system") == 1500, "private volume caches");
         ExternalStorageStats external = service.queryExternalStatsForUser(null, 0, "system");
@@ -114,7 +136,7 @@ public final class StorageStatsScansHost {
         CountingFiles.gate = new CountDownLatch(1);
         List<Task<StorageStats>> callers = new ArrayList<>();
         for (int i = 0; i < 16; ++i) callers.add(new Task<>(() -> {
-            Binder.setCallingUid(p.uid());
+            as(501, p);
             return service.queryStatsForPackage(null, p.packageName, 0, p.packageName);
         }));
         blocked(callers);
@@ -152,9 +174,16 @@ public final class StorageStatsScansHost {
 
         ApkPackage observer = install(pm, root, "app.observer", 10002);
         observer.parsed.permissions = List.of("usage");
+        attached.processes.put(502, observer);
+        CountingFiles.reset();
+        Task<ExternalStorageStats> granted = new Task<>(() -> {
+            as(502, observer);
+            return service.queryExternalStatsForUser(null, 0, observer.packageName);
+        });
+        require(granted.get().totalBytes == 4800, "attached current installation receives usage access");
         CountingFiles.gate = new CountDownLatch(1);
         Task<ExternalStorageStats> revoked = new Task<>(() -> {
-            Binder.setCallingUid(observer.uid());
+            as(502, observer);
             return service.queryExternalStatsForUser(null, 0, observer.packageName);
         });
         blocked(List.of(revoked));
@@ -168,9 +197,11 @@ public final class StorageStatsScansHost {
         ApkPackage app = install(pm, root, "app.standalone", 10101);
         ApkPackage other = install(pm, root, "app.other", 10102);
         write(root.resolve("media/0/Pictures/shared.jpg"), 59);
-        StorageStatsService service = new StorageStatsService(pm, root.toFile());
+        Attached attached = new Attached(pm);
+        attached.processes.put(1, app);
+        StorageStatsService service = new StorageStatsService(pm, root.toFile(), attached);
         android.os.Process.uid = app.uid();
-        Binder.setCallingUid(app.uid());
+        as(1, app);
         try {
             CountingFiles.reset();
             // Standalone mode has no distinct service UID. It must still evaluate
@@ -202,7 +233,7 @@ public final class StorageStatsScansHost {
             pm.appOps().mode = android.app.AppOpsManager.MODE_ALLOWED;
             CountingFiles.gate = new CountDownLatch(1);
             Task<ExternalStorageStats> revoked = new Task<>(() -> {
-                Binder.setCallingUid(app.uid());
+                as(1, app);
                 return service.queryExternalStatsForUser(null, 0, app.packageName);
             });
             blocked(List.of(revoked));
@@ -212,7 +243,97 @@ public final class StorageStatsScansHost {
         } finally {
             CountingFiles.release();
             android.os.Process.uid = android.os.Process.SYSTEM_UID;
-            Binder.setCallingUid(android.os.Process.SYSTEM_UID);
+            asSystem();
+        }
+    }
+
+    /**
+     * Package UIDs survive replacement and reinstallation. Usage access is decided for the
+     * installation a live process runs, so a retained earlier process never uses a grant made
+     * to its replacement, before or during a scan.
+     */
+    private static void generationBoundUsageAccess(Path root) throws Exception {
+        PackageManagerService pm = new PackageManagerService();
+        ApkPackage first = install(pm, root, "app.generation", 10201);
+        install(pm, root, "app.target", 10202);
+        write(root.resolve("media/0/Pictures/shared.jpg"), 61);
+        Attached attached = new Attached(pm);
+        StorageStatsService service = new StorageStatsService(pm, root.toFile(), attached);
+        try {
+            attached.processes.put(700, first);
+            pm.appOps().mode = android.app.AppOpsManager.MODE_IGNORED;
+            as(700, first);
+            fails(SecurityException.class, () -> service.queryExternalStatsForUser(null, 0, first.packageName),
+                    "first installation without usage access");
+
+            // Reinstalled (same name and UID): the user grants usage access to the new installation.
+            ApkPackage second = new ApkPackage(first.packageName, first.apkPath, first.uid, first.ce, first.de);
+            pm.put(second);
+            pm.appOps().mode = android.app.AppOpsManager.MODE_ALLOWED;
+            CountingFiles.reset();
+            as(700, first);
+            fails(SecurityException.class, () -> service.queryExternalStatsForUser(null, 0, first.packageName),
+                    "retained process of the earlier installation uses the replacement's grant");
+            fails(SecurityException.class, () -> service.getCacheBytes(null, first.packageName),
+                    "retained process inspects all caches with the replacement's grant");
+            fails(SecurityException.class, () -> service.queryStatsForPackage(null, "app.target", 0, first.packageName),
+                    "retained process inspects another package with the replacement's grant");
+            fails(SecurityException.class, () -> service.queryStatsForPackage(null, "absent", 0, first.packageName),
+                    "retained process probes package names with the replacement's grant");
+            require(CountingFiles.walks.get() == 0, "retained-process denial performed disk I/O");
+            require(service.queryStatsForUid(null, first.uid, first.packageName).codeBytes == 17,
+                    "own-UID stats remain available without usage access");
+            fails(SecurityException.class, () -> service.queryExternalStatsForUser(null, 0, null),
+                    "missing calling package");
+
+            attached.processes.put(701, second);
+            as(701, second);
+            require(service.queryExternalStatsForUser(null, 0, second.packageName).totalBytes == 61,
+                    "current installation receives its own grant");
+            ApkPackage peer = install(pm, root, "app.generation.peer", first.uid);
+            require(service.queryExternalStatsForUser(null, 0, peer.packageName).totalBytes == 61,
+                    "current process may name a current shared-UID peer");
+            as(700, first);
+            fails(SecurityException.class, () -> service.queryExternalStatsForUser(null, 0, peer.packageName),
+                    "retained process names a shared-UID peer");
+            attached.processes.remove(700);
+            fails(SecurityException.class, () -> service.queryExternalStatsForUser(null, 0, second.packageName),
+                    "unattached process claims the current installation");
+
+            pm.appOps().mode = android.app.AppOpsManager.MODE_IGNORED;
+            as(701, second);
+            fails(SecurityException.class, () -> service.queryExternalStatsForUser(null, 0, second.packageName),
+                    "revoked usage access");
+            pm.appOps().mode = android.app.AppOpsManager.MODE_ALLOWED;
+
+            // Replaced while the scan runs: the result is withheld from the earlier installation.
+            CountingFiles.reset();
+            CountingFiles.gate = new CountDownLatch(1);
+            Task<ExternalStorageStats> replaced = new Task<>(() -> {
+                as(701, second);
+                return service.queryExternalStatsForUser(null, 0, second.packageName);
+            });
+            blocked(List.of(replaced));
+            ApkPackage third = new ApkPackage(first.packageName, first.apkPath, first.uid, first.ce, first.de);
+            pm.put(third);
+            CountingFiles.release();
+            fails(SecurityException.class, replaced::get, "installation replaced during the scan");
+
+            attached.processes.put(702, third);
+            pm.removing.add(third.packageName);
+            as(702, third);
+            fails(SecurityException.class, () -> service.queryExternalStatsForUser(null, 0, third.packageName),
+                    "installation being removed");
+            pm.removing.remove(third.packageName);
+            require(service.queryExternalStatsForUser(null, 0, third.packageName).totalBytes == 61,
+                    "current installation after removal was cancelled");
+
+            asSystem();
+            require(service.queryExternalStatsForUser(null, 0, "system").totalBytes == 61,
+                    "system caller without an attached process");
+        } finally {
+            CountingFiles.release();
+            asSystem();
         }
     }
 
@@ -376,6 +497,7 @@ public final class StorageStatsScansHost {
             if (!onlyBenchmark) {
                 basic(root.resolve("basic"));
                 standaloneUsageAccess(root.resolve("standalone"));
+                generationBoundUsageAccess(root.resolve("generation"));
                 walker(root.resolve("walker"));
                 coordinator();
             }
