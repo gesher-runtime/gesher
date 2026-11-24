@@ -62,7 +62,11 @@ public final class GmsPackageTruthHost {
         p.hideAsFinal();
         ApkPackage r = (ApkPackage)U.allocateInstance(ApkPackage.class);
         set(r, "packageName", name); set(r, "parsed", p); set(r, "mUid", PackageUids.uidFor(name));
-        set(r, "apkPath", "/fixture/" + name + "/base.apk");
+        set(r, "apkPath", "/fixture/" + name + "/base.apk"); set(r, "mDataDir", "/fixture/" + name + "/data");
+        Field empty = Class.forName("com.gesher.server.SharedLibraryGraph").getDeclaredField("EMPTY");
+        empty.setAccessible(true); set(r, "sharedLibraries", empty.get(null));
+        set(r, "mSigningIdentityChecked", true);
+        set(r, "mVerifiedSignatures", new android.content.pm.Signature[]{new android.content.pm.Signature(new byte[]{7})});
         return r;
     }
     static ParsedServiceImpl service(String pkg, String name, String action) {
@@ -86,6 +90,10 @@ public final class GmsPackageTruthHost {
         return pm;
     }
     static PackageManager client(IPackageManager service) throws Exception {
+        // ApplicationPackageManager's cached getPackageInfo asks ActivityThread's process-wide
+        // package manager, which is this service in the host process.
+        Field process = Class.forName("android.app.ActivityThread").getDeclaredField("sPackageManager");
+        process.setAccessible(true); process.set(null, service);
         Object context = U.allocateInstance(Class.forName("android.app.ContextImpl"));
         set(context, "mUser", UserHandle.of(0));
         PackageManager m = (PackageManager)U.allocateInstance(Class.forName("android.app.ApplicationPackageManager"));
