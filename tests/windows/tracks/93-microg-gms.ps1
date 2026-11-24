@@ -54,9 +54,9 @@ GmsCheck 'microg-gms (single process): FusedLocationProviderClient connected to 
   'gms: FusedLocationProviderClient: connected to LocationManagerService, updates received'
 )
 
-GmsCheck 'microg-gms (single process): GoogleSignIn & AccountManager dummy accounts' $outSingle $codeSingle @(
-  'gms: GoogleSignIn: dummy account user@gesher.local signed in with idToken',
-  'gms: AccountManager: com.google account and dummy auth token returned'
+GmsCheck 'microg-gms (single process): no Google account or token without microG' $outSingle $codeSingle @(
+  'gms: GoogleSignIn: no signed-in account without Play services (SERVICE_MISSING)',
+  'gms: AccountManager: no com.google account; getAuthToken fails without an authenticator'
 )
 
 GmsCheck 'microg-gms (single process): FirebaseMessaging & FCM receiver intent routing' $outSingle $codeSingle @(
@@ -81,7 +81,8 @@ GmsCheck 'microg-gms (device): full GMS compatibility suite in system server' $o
   'gms: GoogleApiAvailability: isGooglePlayServicesAvailable SERVICE_MISSING (1)',
   'gms: PackageManager: com.google.android.gms and com.android.vending absent without microG',
   'gms: FusedLocationProviderClient: connected to LocationManagerService, updates received',
-  'gms: GoogleSignIn: dummy account user@gesher.local signed in with idToken',
+  'gms: GoogleSignIn: no signed-in account without Play services (SERVICE_MISSING)',
+  'gms: AccountManager: no com.google account; getAuthToken fails without an authenticator',
   'gms: FirebaseMessaging: token obtained, com.google.android.c2dm.intent.RECEIVE routed and received',
   'gms: all steps ran'
 )

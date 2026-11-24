@@ -14,11 +14,14 @@ import android.location.LocationManager;
 import android.os.Bundle;
 
 import com.google.android.gms.auth.GoogleAuthUtil;
+import com.google.android.gms.auth.GooglePlayServicesAvailabilityException;
+import com.google.android.gms.auth.api.signin.GoogleSignIn;
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
 import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailabilityLight;
+import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.Scope;
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
@@ -110,12 +113,20 @@ public final class GmsCompatibilityUnitTest {
     }
 
     private static void testGoogleSignInAccountAndOptions() {
-        GoogleSignInAccount account = GoogleSignInAccount.createDefault();
-        assertEquals("user@gesher.local", account.getEmail(), "Account email mismatch");
-        assertEquals("Gesher User", account.getDisplayName(), "Account display name mismatch");
-        assertTrue(account.getIdToken() != null && !account.getIdToken().isEmpty(), "idToken should not be empty");
-        assertTrue(account.getServerAuthCode() != null, "serverAuthCode should not be null");
+        // A value object as a sign-in result carries it; the fixture creates none itself (#335).
+        GoogleSignInAccount account = new GoogleSignInAccount("1", "someone@example.org", "Someone",
+                "Some", "One", null, "id-token", "auth-code", System.currentTimeMillis() / 1000 + 3600,
+                Collections.singleton(new Scope("email")));
+        assertEquals("someone@example.org", account.getEmail(), "Account email mismatch");
+        assertEquals("Someone", account.getDisplayName(), "Account display name mismatch");
         assertTrue(!account.isExpired(), "Account should not be expired");
+        assertTrue(GoogleSignIn.getLastSignedInAccount(new Context()) == null,
+                "a signed-in account exists before any sign-in");
+        Task<GoogleSignInAccount> silent = GoogleSignIn.getClient(new Context(),
+                GoogleSignInOptions.DEFAULT_SIGN_IN).silentSignIn();
+        assertTrue(silent.isComplete() && !silent.isSuccessful(), "silentSignIn succeeded without Play services");
+        assertEquals(ConnectionResult.SERVICE_MISSING, ((ApiException) silent.getException()).getStatusCode(),
+                "silentSignIn status without Play services");
 
         GoogleSignInOptions options = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestEmail()
@@ -131,10 +142,15 @@ public final class GmsCompatibilityUnitTest {
     }
 
     private static void testGoogleAuthUtil() throws Exception {
-        Account acc = new Account("user@gesher.local", "com.google");
-        String token = GoogleAuthUtil.getToken(null, acc, "oauth2:profile");
-        assertTrue(token != null && token.startsWith("dummy_oauth2_token_gesher_"),
-                "GoogleAuthUtil token format mismatch: " + token);
+        // No Play services in this host: the client library's availability error, no token.
+        Account acc = new Account("someone@example.org", "com.google");
+        try {
+            String token = GoogleAuthUtil.getToken(new Context(), acc, "oauth2:profile");
+            throw new AssertionError("GoogleAuthUtil returned a token without Play services: " + token);
+        } catch (GooglePlayServicesAvailabilityException expected) {
+            assertEquals(ConnectionResult.SERVICE_MISSING, expected.getConnectionStatusCode(),
+                    "GoogleAuthUtil availability code");
+        }
 
         System.out.println("PASS: testGoogleAuthUtil");
     }

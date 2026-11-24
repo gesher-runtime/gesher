@@ -6,6 +6,7 @@ package com.gesher.gmsapp;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
+import android.accounts.AuthenticatorException;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
@@ -14,10 +15,12 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 
 import com.google.android.gms.auth.GoogleAuthUtil;
+import com.google.android.gms.auth.GooglePlayServicesAvailabilityException;
 import com.google.android.gms.auth.api.signin.GoogleSignIn;
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
 import com.google.android.gms.auth.api.signin.GoogleSignInClient;
@@ -25,6 +28,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailability;
 import com.google.android.gms.common.GooglePlayServicesUtil;
+import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.gcm.GoogleCloudMessaging;
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
@@ -188,52 +192,51 @@ public final class GmsUnitSteps {
         Report.line("FusedLocationProviderClient: connected to LocationManagerService, updates received");
     }
 
+    /**
+     * Without microG nobody is signed in and there is no Google account or token (#335):
+     * the client fixture reports Play services missing, and the system's AccountManager
+     * has no com.google account and no authenticator to issue a token ("bind failure",
+     * AuthenticatorException), as Android answers without one.
+     */
     public void testGoogleSignInAndAccountManager() throws Exception {
         GoogleSignInOptions options = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestEmail()
-                .requestIdToken("dummy_client_id.apps.googleusercontent.com")
                 .build();
-
         GoogleSignInClient client = GoogleSignIn.getClient(mActivity, options);
-        Intent signInIntent = client.getSignInIntent();
-        if (signInIntent == null) {
-            throw new AssertionError("getSignInIntent returned null");
+        try {
+            Tasks.await(client.silentSignIn());
+            throw new AssertionError("silentSignIn signed someone in without Play services");
+        } catch (java.util.concurrent.ExecutionException expected) {
+            int code = ((ApiException) expected.getCause()).getStatusCode();
+            if (code != ConnectionResult.SERVICE_MISSING) {
+                throw new AssertionError("silentSignIn status " + code + ", expected SERVICE_MISSING");
+            }
+        }
+        if (GoogleSignIn.getLastSignedInAccount(mActivity) != null) {
+            throw new AssertionError("a signed-in account exists before any sign-in");
         }
 
-        Task<GoogleSignInAccount> accountTask = client.silentSignIn();
-        GoogleSignInAccount account = Tasks.await(accountTask);
-        if (account == null) {
-            throw new AssertionError("silentSignIn returned null account");
-        }
-        if (!"user@gesher.local".equals(account.getEmail())) {
-            throw new AssertionError("unexpected account email: " + account.getEmail());
-        }
-        if (account.getIdToken() == null || account.getIdToken().isEmpty()) {
-            throw new AssertionError("empty idToken");
-        }
-
-        GoogleSignInAccount last = GoogleSignIn.getLastSignedInAccount(mActivity);
-        if (last == null || !account.getEmail().equals(last.getEmail())) {
-            throw new AssertionError("getLastSignedInAccount mismatch");
-        }
-
-        // Test AccountManager
         AccountManager am = AccountManager.get(mActivity);
         Account[] accounts = am.getAccountsByType("com.google");
-        if (accounts == null || accounts.length == 0) {
-            throw new AssertionError("AccountManager returned 0 com.google accounts");
+        if (accounts.length != 0) {
+            throw new AssertionError("AccountManager returned " + accounts.length + " com.google accounts");
         }
-        if (!"user@gesher.local".equals(accounts[0].name)) {
-            throw new AssertionError("unexpected AccountManager account: " + accounts[0].name);
+        Account google = new Account("someone@example.org", "com.google");
+        try {
+            Bundle result = am.getAuthToken(google, "oauth2:profile", null, false, null, null).getResult();
+            throw new AssertionError("a token without an authenticator: " + result);
+        } catch (AuthenticatorException expected) {
+            // as Android answers without an authenticator for the type
+        }
+        try {
+            String token = GoogleAuthUtil.getToken(mActivity, google, "oauth2:profile");
+            throw new AssertionError("GoogleAuthUtil returned a token: " + token);
+        } catch (GooglePlayServicesAvailabilityException expected) {
+            // the client library's answer without Play services
         }
 
-        String token = GoogleAuthUtil.getToken(mActivity, accounts[0], "oauth2:profile");
-        if (token == null || !token.startsWith("dummy_oauth2_token_gesher_")) {
-            throw new AssertionError("unexpected GoogleAuthUtil token: " + token);
-        }
-
-        Report.line("GoogleSignIn: dummy account " + account.getEmail() + " signed in with idToken");
-        Report.line("AccountManager: com.google account and dummy auth token returned");
+        Report.line("GoogleSignIn: no signed-in account without Play services (SERVICE_MISSING)");
+        Report.line("AccountManager: no com.google account; getAuthToken fails without an authenticator");
     }
 
     public void testFirebaseAndFcmRouting() throws Exception {

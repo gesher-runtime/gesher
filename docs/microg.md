@@ -97,8 +97,12 @@ To remove the three addon APK slots instead, stop the device and run the helper
 with `-Remove`. Both operations retain application and account data; neither is
 an account-data wipe. Clear any explicit `GESHER_MICROG_SPOOF` override before
 relying on the marker's disabled state. Without an installed real GMS package,
-Gesher retains its synthetic GMS/dummy-account compatibility path. Synthetic
-sign-in, token and push tests are separate from real microG/Google results.
+Gesher reports no Play services or Play Store package, no Google account and no
+token or push registration, as an Android device without them does (#335):
+client libraries see `SERVICE_MISSING`, `AccountManager.getAccountsByType`
+returns no `com.google` account and `getAuthToken` fails with
+`AuthenticatorException`. Sync settings apps stored for the Google account
+earlier versions reported (`user@gesher.local`) are removed at start.
 
 ## APK verification and certificate compatibility
 
