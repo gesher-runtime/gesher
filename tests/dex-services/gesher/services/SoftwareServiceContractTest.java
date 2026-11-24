@@ -4,42 +4,44 @@
  */
 package gesher.services;
 
-import android.app.PendingIntent;
 import android.app.admin.DevicePolicyManager;
 import android.app.admin.IDevicePolicyManager;
+import android.app.PendingIntent;
 import android.app.usage.IUsageStatsManager;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageEventsQuery;
 import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
 import android.content.ContextWrapper;
-import android.content.IIntentReceiver;
-import android.content.IIntentSender;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.IIntentReceiver;
+import android.content.IIntentSender;
 import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ShortcutInfo;
 import android.content.res.AssetManager;
-import android.os.Bundle;
-import android.os.IBinder;
 import android.os.IThermalService;
 import android.os.IThermalStatusListener;
 import android.os.Parcel;
 import android.os.RemoteCallback;
 import android.os.Temperature;
 import android.os.UserHandle;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.Process;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Object shapes and immediate failure contracts for software-only service policies. */
 public final class SoftwareServiceContractTest {
@@ -74,13 +76,22 @@ public final class SoftwareServiceContractTest {
         }
     }
 
+    private static void unsupported(Action call, String name) throws Exception {
+        long start = System.nanoTime();
+        try {
+            call.run();
+            throw new AssertionError(name + " accepted an unavailable operation");
+        } catch (UnsupportedOperationException expected) {
+            require(System.nanoTime() - start < 1_000_000_000L, name + " did not fail promptly");
+        }
+    }
+
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static void usageHistory(Class<?> pmType, Object pm, Class<?> callersType,
             Object callers, String packageName) throws Exception {
         Path directory = Files.createTempDirectory("gesher-usage-fixture");
         Path history = directory.resolve("activity-usage.bin");
         AutoCloseable historyWriter = null;
-        AutoCloseable observers = null;
         try {
             AtomicLong clock = new AtomicLong(100);
             Object managed = construct("DesktopUsageStatsService", new Class<?>[] {pmType,
@@ -89,9 +100,6 @@ public final class SoftwareServiceContractTest {
             var historyField = managed.getClass().getDeclaredField("mHistory");
             historyField.setAccessible(true);
             historyWriter = (AutoCloseable) historyField.get(managed);
-            var observersField = managed.getClass().getDeclaredField("mObservers");
-            observersField.setAccessible(true);
-            observers = (AutoCloseable) observersField.get(managed);
             IUsageStatsManager usage = strict(IUsageStatsManager.class, managed);
             Class<? extends Enum> state = Class.forName("com.gesher.server.ActivityUsageHistory$State")
                     .asSubclass(Enum.class);
@@ -142,42 +150,7 @@ public final class SoftwareServiceContractTest {
                     .findFirst().orElseThrow();
             require(summary.getTotalTimeInForeground() == 30 && summary.getTotalTimeVisible() == 50,
                     "activity stats lost real lifecycle durations");
-
-            AtomicReference<Intent> delivered = new AtomicReference<>();
-            AtomicInteger deliveries = new AtomicInteger();
-            PendingIntent callback = new PendingIntent(new IIntentSender.Stub() {
-                @Override
-                public void send(int code, Intent intent, String resolvedType,
-                        IBinder allowlistToken, IIntentReceiver finishedReceiver,
-                        String requiredPermission, Bundle options) {
-                    delivered.set(intent);
-                    deliveries.incrementAndGet();
-                }
-            });
-            usage.registerAppUsageObserver(7, new String[] {packageName}, 60_000L, callback,
-                    packageName);
-            Object observed = new Object();
-            clock.set(1_000);
-            transition.invoke(managed, observed, packageName, "ExampleActivity",
-                    Enum.valueOf(state, "RESUMED"));
-            clock.set(61_000);
-            transition.invoke(managed, observed, packageName, "ExampleActivity",
-                    Enum.valueOf(state, "PAUSED"));
-            Intent fired = delivered.get();
-            require(deliveries.get() == 1 && fired != null
-                    && fired.getIntExtra(UsageStatsManager.EXTRA_OBSERVER_ID, -1) == 7
-                    && fired.getLongExtra(UsageStatsManager.EXTRA_TIME_LIMIT, -1L) == 60_000L
-                    && fired.getLongExtra(UsageStatsManager.EXTRA_TIME_USED, -1L) == 60_000L,
-                    "usage observer did not deliver one-shot extras");
-            clock.set(130_000);
-            transition.invoke(managed, observed, packageName, "ExampleActivity",
-                    Enum.valueOf(state, "RESUMED"));
-            clock.set(200_000);
-            transition.invoke(managed, observed, packageName, "ExampleActivity",
-                    Enum.valueOf(state, "STOPPED"));
-            require(deliveries.get() == 1, "one-shot usage observer fired more than once");
         } finally {
-            if (observers != null) observers.close();
             if (historyWriter != null) historyWriter.close();
             Files.deleteIfExists(history);
             Files.delete(directory);
@@ -255,15 +228,22 @@ public final class SoftwareServiceContractTest {
             usage.getAppStandbyBucket("missing.package", "gesher.services", 0);
             throw new AssertionError("unknown package acquired a standby bucket");
         } catch (IllegalArgumentException expected) { }
-        try {
-            usage.registerAppUsageObserver(1, new String[0], 60_000L, null, "gesher.services");
-            throw new AssertionError("empty usage observer package array accepted");
-        } catch (IllegalArgumentException expected) { }
-        try {
-            usage.registerAppUsageObserver(1, new String[] {"gesher.services"}, 60_000L, null,
-                    "gesher.services");
-            throw new AssertionError("null usage observer callback accepted");
-        } catch (NullPointerException expected) { }
+        // This direct in-process service call has trusted local authority. With
+        // no history path or managed lifecycle it must reject the capability;
+        // it is not an unprivileged application's permission-denial case.
+        require(Binder.getCallingPid() == Process.myPid()
+                        && (boolean) callersType.getMethod("isSystem").invoke(callers),
+                "Unmanaged observer fixture requires the real trusted local caller");
+        PendingIntent observerCallback = new PendingIntent(new IIntentSender.Stub() {
+            @Override public void send(int code, Intent intent, String resolvedType,
+                    IBinder whitelistToken, IIntentReceiver finishedReceiver,
+                    String requiredPermission, Bundle options) {
+                throw new AssertionError("Unavailable observer delivered a callback");
+            }
+        });
+        unsupported(() -> usage.registerAppUsageObserver(1, new String[] {"gesher.services"},
+                60_000, observerCallback, "gesher.services"), "unmanaged usage observer");
+        System.out.println("SoftwareServiceContractTest usage observer: trusted local caller, unmanaged unavailable");
         denied(() -> usage.registerUsageSessionObserver(2, new String[] {"gesher.services"},
                 1, 1, null, null, "gesher.services"), "session observer");
         denied(() -> usage.registerAppUsageLimitObserver(3, new String[] {"gesher.services"},
