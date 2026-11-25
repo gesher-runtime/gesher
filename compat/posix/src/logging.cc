@@ -381,7 +381,10 @@ bool RedactCredentials(const char* text, size_t size, std::string* out) {
   bool changed = false;
   for (size_t at = 0; at < size;) {
     size_t begin, end;
-    if (!Secret(text, size, at, &begin, &end)) {
+    // Most bytes cannot start a credential: a prefix's first letter, Bearer's, '=' or ':'.
+    char c = text[at];
+    bool start = c == 'y' || c == 'a' || c == 'o' || c == '1' || c == 'b' || c == 'B' || c == '=' || c == ':';
+    if (!start || !Secret(text, size, at, &begin, &end)) {
       ++at;
       continue;
     }

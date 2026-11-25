@@ -35,6 +35,12 @@ public final class LogRedaction {
     private static final boolean[] PREFIX_BOUNDARY = {false, false, false, true};
     private static final String[] KEY_SUFFIXES = {"token", "secret", "password", "passwd", "cookie"};
     private static final String[] KEY_NAMES = {"authorization", "auth", "apikey", "api_key"};
+    /** Bytes at which {@link #secret} can match: a prefix's first letter, Bearer's, '=', ':'. */
+    private static final boolean[] START = new boolean[256];
+    static {
+        for (String prefix : PREFIXES) START[prefix.charAt(0)] = true;
+        START['b'] = START['B'] = START['='] = START[':'] = true;
+    }
 
     /** The text with credential values replaced, or {@code text} itself when it holds none. */
     public static String redact(String text) {
@@ -50,7 +56,8 @@ public final class LogRedaction {
         int copied = off, end = off + len;
         int[] span = new int[2];
         for (int at = off; at < end;) {
-            if (!secret(b, off, end, at, span)) {
+            // Most bytes cannot start a credential: skip them without the full test.
+            if (!START[b[at] & 0xff] || !secret(b, off, end, at, span)) {
                 ++at;
                 continue;
             }

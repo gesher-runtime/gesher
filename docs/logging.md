@@ -95,8 +95,13 @@ of the device's processes run (`LogRedaction.scrubLogs`):
   interrupted pass are removed.
 
 The marker file `.credentials-redacted-v1` records the pass. If a file cannot
-be replaced (for example, a process left from an older device still holds it),
-the marker is not written and the pass runs again at the next start.
+be replaced (for example, another program holds it open without delete
+sharing), the marker is not written and the pass runs again at the next start.
+Gesher's own processes hold a package's `.log` with delete sharing, so a
+process left from an older device does not block the replacement; its later
+output goes to the replaced file and is not kept. The pass scans every log
+once (a few hundred MB/s on a JIT), so a profile with very large `.log` files
+starts the first device more slowly once.
 
 ## Limits
 
