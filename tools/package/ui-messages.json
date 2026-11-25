@@ -709,16 +709,16 @@
       "he": "עודכן לאחרונה: {0}"
     },
     "cp_app_info_detail": {
-      "en": "An app asked to open this application's settings. Here you can uninstall it, or allow or deny its special access.",
-      "he": "יישום ביקש לפתוח את ההגדרות של היישום הזה. כאן אפשר להסיר אותו, או לאשר או לשלול את הגישה המיוחדת שלו."
+      "en": "An app asked to open this application's settings. Here you can allow or deny its special access. You can launch or uninstall it from the app list in the Gesher Control Center.",
+      "he": "יישום ביקש לפתוח את ההגדרות של היישום הזה. כאן אפשר לאשר או לשלול את הגישה המיוחדת שלו. אפשר להפעיל או להסיר אותו מרשימת היישומים בלוח הבקרה של גשר."
     },
     "cp_app_info_close": {
       "en": "Close",
       "he": "סגירה"
     },
     "cp_app_info_detail_list": {
-      "en": "Here you can uninstall this application, or allow or deny its special access.",
-      "he": "כאן אפשר להסיר את היישום הזה, או לאשר או לשלול את הגישה המיוחדת שלו."
+      "en": "Here you can allow or deny this application's special access. You can launch or uninstall it from the app list in the Gesher Control Center.",
+      "he": "כאן אפשר לאשר או לשלול את הגישה המיוחדת של היישום הזה. אפשר להפעיל או להסיר אותו מרשימת היישומים בלוח הבקרה של גשר."
     },
     "cp_access_title": {
       "en": "Special app access (on Android, you allow these in Settings):",

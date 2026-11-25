@@ -212,7 +212,12 @@ try {
     function Update-MicrogView($enabled) { }
     function Update-StoreView($installed) { }
     function Get-SeparateWindowApps { ,[System.Collections.Generic.HashSet[string]]::new() }
-    function Get-InstalledApps { @([pscustomobject]@{ Package = 'com.d'; Label = 'D'; IconPath = $null; Launchable = $true }) }
+    function Get-InstalledApps([hashtable] $ReadStamps = $null) {
+        foreach ($name in 'shortcut.properties','icon.ico','no-launcher-activity') {
+            $null = Get-FileStamp (Join-Path $root "data/data/com.d/gesher-shell/$name") $ReadStamps
+        }
+        @([pscustomobject]@{ Package = 'com.d'; Label = 'D'; IconPath = $null; Launchable = $true })
+    }
     function Shown-Proxy { @($appsList.ItemsSource)[0].ProxyText }
     function Write-ProxyFile([string[]] $lines) {
         [IO.File]::WriteAllLines($script:ProxyFile, $lines, [Text.Encoding]::GetEncoding(28591))

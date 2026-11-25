@@ -87,6 +87,11 @@ public final class GesherService extends Binder {
     /** What the service does; the system server implements it. */
     interface Device {
         String[] install(String apk) throws Exception;
+        /** Explicit host installation may refresh installer eligibility without replacing code. */
+        default String[] install(String apk, boolean explicitInstall) throws Exception {
+            if (explicitInstall) throw new UnsupportedOperationException("Explicit host installation unavailable");
+            return install(apk);
+        }
         boolean uninstall(String packageName) throws Exception;
         String status();
         void shutdown(String reason);
@@ -154,9 +159,28 @@ public final class GesherService extends Binder {
         try {
             switch (code) {
                 case INSTALL: {
-                    String[] result = mDevice.install(data.readString());
+                    String apk = data.readString();
+                    // Older launchers send only the path. Absence must preserve the
+                    // ordinary launch behavior, never infer an explicit reinstall.
+                    boolean extended = data.dataAvail() != 0;
+                    boolean explicitInstall = false;
+                    if (extended) {
+                        if (data.dataAvail() != Integer.BYTES) {
+                            throw new IllegalArgumentException("Invalid host install intent payload");
+                        }
+                        int intent = data.readInt();
+                        if (intent != 0 && intent != 1) {
+                            throw new IllegalArgumentException("Invalid host install intent");
+                        }
+                        explicitInstall = intent == 1;
+                    }
+                    data.enforceNoDataAvail();
+                    String[] result = mDevice.install(apk, explicitInstall);
                     reply.writeNoException();
                     reply.writeStringArray(result);
+                    // An updated launcher must not mistake an older server ignoring
+                    // the extension for a completed explicit reinstall.
+                    if (extended) reply.writeInt(explicitInstall ? 1 : 0);
                     return true;
                 }
                 case UNINSTALL: {
@@ -322,6 +346,31 @@ public final class GesherService extends Binder {
             try {
                 return reply.createStringArray();
             } finally {
+                reply.recycle();
+            }
+        }
+
+        /** Only an explicit host install asks to refresh unchanged-package eligibility. */
+        public String[] install(String apk, boolean explicitInstall) throws RemoteException {
+            if (!explicitInstall) return install(apk);
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(apk);
+                data.writeInt(1);
+                if (!mBinder.transact(INSTALL, data, reply, 0)) {
+                    throw new RemoteException("Host installation unavailable");
+                }
+                reply.readException();
+                String[] result = reply.createStringArray();
+                if (reply.dataAvail() != Integer.BYTES || reply.readInt() != 1) {
+                    throw new IllegalStateException(
+                            "Explicit host installation unavailable; restart the Gesher device after updating");
+                }
+                return result;
+            } finally {
+                data.recycle();
                 reply.recycle();
             }
         }
