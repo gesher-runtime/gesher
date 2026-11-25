@@ -36,10 +36,12 @@ public final class ContentObserverLifecycleTest {
                 "Lifecycle fixture requires the ordinary desktop policy; permission fixtures run separately");
         Unsafe unsafe = (Unsafe)field(Unsafe.class, "theUnsafe").get(null);
         Class<?> type = Class.forName("com.gesher.server.ContentService");
-        // Only the sync/process constructor dependencies are absent. The actual
-        // production collection, registration, delivery and removal methods run.
-        Object service = unsafe.allocateInstance(type);
-        field(type, "mObservers").set(service, new ArrayList<>());
+        // Only the sync/process dependency is absent. Run the production
+        // constructor so all owned registry/index initializers are exercised.
+        Class<?> syncType = Class.forName("com.gesher.server.SyncManager");
+        var constructor = type.getDeclaredConstructor(syncType);
+        constructor.setAccessible(true);
+        Object service = constructor.newInstance(unsafe.allocateInstance(syncType));
         return (IContentService)service;
     }
 
@@ -250,6 +252,8 @@ public final class ContentObserverLifecycleTest {
                 "Binder equality callback ran under observer registry lock");
         check(!broken.token.equalityUnderRegistryLock && !healthy.token.equalityUnderRegistryLock,
                 "Binder equality callback ran under registry lock during notification grouping");
+        ContentObserverDispatchTest.contracts();
+        checks += ContentObserverDispatchTest.checks;
     }
 
     public static void main(String[] args) throws Exception {
