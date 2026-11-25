@@ -11,6 +11,24 @@
 
 namespace gesher::usb_storage {
 
+// Identifies the last check reached by the unchanged namespace policy verifier.
+// This is diagnostic output, never a policy selector or a reason to retry.
+enum class AuthorityNamespacePolicyStage : DWORD {
+  kNotAttempted, kQuery, kLength, kControl, kOwner, kGroup, kDacl, kLabel,
+  kOwnerBounds, kGroupBounds, kDaclBounds, kLabelBounds, kDescriptor, kPolicy,
+  kComplete,
+};
+struct AuthorityNamespacePolicyResult {
+  AuthorityNamespacePolicyStage stage = AuthorityNamespacePolicyStage::kNotAttempted;
+  LONG query_status = 0;
+  DWORD requested_information = 0;
+  DWORD returned_bytes = 0, captured_bytes = 0;
+  // A bounded copy of the actual NtQuerySecurityObject return. Capture before
+  // parsing so absent or malformed components remain observable on failure.
+  // At most this prefix is copied; returned_bytes records any truncation.
+  BYTE descriptor[320]{};
+};
+
 // Optional diagnostics for the authority's one package-directory creation.
 // Values are written to trusted caller memory only; they never select behavior.
 struct AuthorityNamespaceCreateResult {
@@ -25,6 +43,7 @@ struct AuthorityNamespaceCreateResult {
   DWORD pipe_create_called = 0;
   LONG pipe_create_status = 0;
   DWORD pipe_policy_status = ERROR_NOT_READY;
+  AuthorityNamespacePolicyResult pipe_policy;
   DWORD context_restore_status = ERROR_NOT_READY;
 };
 

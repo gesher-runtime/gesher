@@ -2099,6 +2099,50 @@ void ObserveNamespaceCollision(storage::ProtectedIdentity& identity, HANDLE desk
       "deny-desktop-owned-namespace-collision", ERROR_ACCESS_DENIED);
   evidence->status = ERROR_SUCCESS;
 }
+void PrintPipePolicyReadback(const storage::AuthorityNamespacePolicyResult& observed) {
+  using Stage = storage::AuthorityNamespacePolicyStage;
+  const char* stage = "invalid";
+  switch (observed.stage) {
+    case Stage::kNotAttempted: stage = "not-attempted"; break;
+    case Stage::kQuery: stage = "native-query"; break;
+    case Stage::kLength: stage = "returned-length"; break;
+    case Stage::kControl: stage = "relative-control"; break;
+    case Stage::kOwner: stage = "owner-getter"; break;
+    case Stage::kGroup: stage = "group-getter"; break;
+    case Stage::kDacl: stage = "dacl-getter-present"; break;
+    case Stage::kLabel: stage = "label-getter-present"; break;
+    case Stage::kOwnerBounds: stage = "owner-bounds"; break;
+    case Stage::kGroupBounds: stage = "group-bounds"; break;
+    case Stage::kDaclBounds: stage = "dacl-bounds"; break;
+    case Stage::kLabelBounds: stage = "label-bounds"; break;
+    case Stage::kDescriptor: stage = "valid-descriptor"; break;
+    case Stage::kPolicy: stage = "exact-policy"; break;
+    case Stage::kComplete: stage = "complete"; break;
+  }
+  Require(std::strcmp(stage, "invalid") != 0 && observed.captured_bytes <= sizeof(observed.descriptor) &&
+      observed.captured_bytes <= observed.returned_bytes,
+      "bounded-pipe-policy-readback", ERROR_INVALID_DATA);
+  std::printf("Protected pipe policy readback: stage=%s query-ntstatus=0x%08lx requested=0x%08lx returned-bytes=%lu captured-bytes=%lu\n",
+      stage, static_cast<unsigned long>(observed.query_status), static_cast<unsigned long>(observed.requested_information),
+      static_cast<unsigned long>(observed.returned_bytes),
+      static_cast<unsigned long>(observed.captured_bytes));
+  if (observed.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE)) {
+    SECURITY_DESCRIPTOR_RELATIVE header{};
+    std::memcpy(&header, observed.descriptor, sizeof(header));
+    std::printf("Protected pipe policy relative header: revision=%u control=0x%04x owner-offset=%lu group-offset=%lu dacl-offset=%lu sacl-offset=%lu\n",
+        static_cast<unsigned int>(header.Revision), static_cast<unsigned int>(header.Control),
+        static_cast<unsigned long>(header.Owner), static_cast<unsigned long>(header.Group),
+        static_cast<unsigned long>(header.Dacl), static_cast<unsigned long>(header.Sacl));
+  }
+  // Print bytes without dereferencing any offsets from a rejected descriptor.
+  // The query prefix remains useful even if a Windows component is absent.
+  std::printf("Protected pipe policy descriptor hex: ");
+  for (DWORD i = 0; i < observed.captured_bytes; ++i) {
+    std::printf("%02x", static_cast<unsigned int>(observed.descriptor[i]));
+  }
+  std::puts("");
+}
+
 void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceCollisionEvidence& collision) {
   std::printf("Protected package leaf: absent-before-launch=%lu captured=%lu status=%lu control=0x%04lx path=%ls\n",
       static_cast<unsigned long>(leaf.absent_before_launch), static_cast<unsigned long>(leaf.captured),
@@ -2406,7 +2450,11 @@ Evidence RunSystem() {
         creation.privilege_restore_status == ERROR_SUCCESS && creation.privilege_restored == creation.privilege_before &&
         creation.bind_status == ERROR_SUCCESS && creation.native_called == 1 && creation.native_status == 0 &&
         creation.context_restore_status == ERROR_SUCCESS && creation.pipe_create_called == 1 &&
-        creation.pipe_create_status == 0 && creation.pipe_policy_status == ERROR_SUCCESS,
+        creation.pipe_create_status == 0 && creation.pipe_policy_status == ERROR_SUCCESS &&
+        creation.pipe_policy.stage == storage::AuthorityNamespacePolicyStage::kComplete &&
+        creation.pipe_policy.query_status >= 0 && creation.pipe_policy.returned_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) &&
+        creation.pipe_policy.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) &&
+        creation.pipe_policy.captured_bytes <= creation.pipe_policy.returned_bytes,
         "authority-package-create-scoped-privilege-and-native-success", ERROR_INVALID_DATA);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
     BOOL contained = FALSE;
@@ -2731,6 +2779,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
     std::printf("Protected pipe creation: open-win32=%lu create-called=%lu create-ntstatus=0x%08lx policy-win32=%lu\n",
         static_cast<unsigned long>(creation.pipe_open_status), static_cast<unsigned long>(creation.pipe_create_called),
         static_cast<unsigned long>(creation.pipe_create_status), static_cast<unsigned long>(creation.pipe_policy_status));
+    PrintPipePolicyReadback(creation.pipe_policy);
     std::printf("Protected package creation: actual-process-privileges-unchanged=%lu actual-no-thread-token=%lu context-check-win32=%lu\n",
         static_cast<unsigned long>(evidence.namespace_process_privileges_unchanged),
         static_cast<unsigned long>(evidence.namespace_no_thread_token), static_cast<unsigned long>(evidence.namespace_context_status));

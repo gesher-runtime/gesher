@@ -614,7 +614,7 @@ class PackageNamespace {
     status = VerifyPolicy(retained->get());
     if (status != ERROR_SUCCESS) return status;
     stage("lowbox.verify-package-pipe-namespace");
-    status = VerifyPipePolicy(retained_pipe->get());
+    status = VerifyPipePolicy(retained_pipe->get(), spec.namespace_create_result ? &observed.value.pipe_policy : nullptr);
     observed.value.pipe_policy_status = status;
     return status == ERROR_SUCCESS ? Recheck(root, retained->get(), retained_pipe->get()) : status;
   }
@@ -740,43 +740,71 @@ class PackageNamespace {
   DWORD VerifyPolicy(HANDLE directory) {
     return VerifyPolicy(directory, expected_dacl_, expected_label_, &have_control_, &control_);
   }
-  DWORD VerifyPipePolicy(HANDLE pipe) {
+  DWORD VerifyPipePolicy(HANDLE pipe, AuthorityNamespacePolicyResult* observed = nullptr) {
     DWORD flags = 0;
     if (!pipe || !GetHandleInformation(pipe, &flags)) return ERROR_INVALID_HANDLE;
     if (flags & HANDLE_FLAG_INHERIT) return ERROR_ACCESS_DENIED;
-    return VerifyPolicy(pipe, expected_pipe_dacl_, expected_pipe_label_, &have_pipe_control_, &pipe_control_);
+    return VerifyPolicy(pipe, expected_pipe_dacl_, expected_pipe_label_, &have_pipe_control_, &pipe_control_, observed);
   }
   DWORD VerifyPolicy(HANDLE directory, PACL expected_dacl, PACL expected_label,
-                     bool* have_control, SECURITY_DESCRIPTOR_CONTROL* saved_control) {
+                     bool* have_control, SECURITY_DESCRIPTOR_CONTROL* saved_control,
+                     AuthorityNamespacePolicyResult* observed = nullptr) {
+    const auto stage = [observed](AuthorityNamespacePolicyStage value) {
+      if (observed) observed->stage = value;
+    };
     std::vector<DWORD> storage(kSecurityLimit / sizeof(DWORD));
     ULONG bytes = 0;
-    const NTSTATUS status = query_(directory, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
-        DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION, storage.data(), kSecurityLimit, &bytes);
+    stage(AuthorityNamespacePolicyStage::kQuery);
+    constexpr SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+        DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+    const NTSTATUS status = query_(directory, information, storage.data(), kSecurityLimit, &bytes);
+    if (observed) {
+      observed->query_status = status;
+      observed->requested_information = information;
+      observed->returned_bytes = bytes;
+      if (status >= 0) {
+        observed->captured_bytes = std::min<DWORD>(bytes, static_cast<DWORD>(sizeof(observed->descriptor)));
+        std::memcpy(observed->descriptor, storage.data(), observed->captured_bytes);
+      }
+    }
     if (status < 0) return Error(status);
+    stage(AuthorityNamespacePolicyStage::kLength);
     if (bytes < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || bytes > kSecurityLimit) return ERROR_INVALID_SECURITY_DESCR;
     SECURITY_DESCRIPTOR_CONTROL control = 0;
     DWORD revision = 0;
     PSID owner = nullptr, group = nullptr;
     PACL dacl = nullptr, label = nullptr;
     BOOL present = FALSE, defaulted = FALSE;
-    if (!GetSecurityDescriptorControl(storage.data(), &control, &revision) || !(control & SE_SELF_RELATIVE) ||
-        !GetSecurityDescriptorOwner(storage.data(), &owner, &defaulted) ||
-        !GetSecurityDescriptorGroup(storage.data(), &group, &defaulted) ||
-        !GetSecurityDescriptorDacl(storage.data(), &present, &dacl, &defaulted) || !present || !dacl ||
-        !GetSecurityDescriptorSacl(storage.data(), &present, &label, &defaulted) || !present || !label) {
-      return ERROR_INVALID_SECURITY_DESCR;
-    }
+    stage(AuthorityNamespacePolicyStage::kControl);
+    if (!GetSecurityDescriptorControl(storage.data(), &control, &revision) || !(control & SE_SELF_RELATIVE)) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kOwner);
+    if (!GetSecurityDescriptorOwner(storage.data(), &owner, &defaulted)) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kGroup);
+    if (!GetSecurityDescriptorGroup(storage.data(), &group, &defaulted)) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kDacl);
+    if (!GetSecurityDescriptorDacl(storage.data(), &present, &dacl, &defaulted) || !present || !dacl) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kLabel);
+    if (!GetSecurityDescriptorSacl(storage.data(), &present, &label, &defaulted) || !present || !label) return ERROR_INVALID_SECURITY_DESCR;
     const auto* begin = reinterpret_cast<const BYTE*>(storage.data());
-    if (!SidWithin(owner, begin, bytes) || !SidWithin(group, begin, bytes) ||
-        !AclWithin(dacl, begin, bytes) || !AclWithin(label, begin, bytes) ||
-        !IsValidSecurityDescriptor(storage.data())) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kOwnerBounds);
+    if (!SidWithin(owner, begin, bytes)) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kGroupBounds);
+    if (!SidWithin(group, begin, bytes)) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kDaclBounds);
+    if (!AclWithin(dacl, begin, bytes)) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kLabelBounds);
+    if (!AclWithin(label, begin, bytes)) return ERROR_INVALID_SECURITY_DESCR;
+    stage(AuthorityNamespacePolicyStage::kDescriptor);
+    if (!IsValidSecurityDescriptor(storage.data())) return ERROR_INVALID_SECURITY_DESCR;
     constexpr WORD protected_lists = SE_DACL_PROTECTED | SE_SACL_PROTECTED;
+    stage(AuthorityNamespacePolicyStage::kPolicy);
     if (!IsWellKnownSid(owner, WinLocalSystemSid) || !IsWellKnownSid(group, WinLocalSystemSid) ||
         (control & protected_lists) != protected_lists || dacl->AclRevision != expected_dacl->AclRevision ||
         label->AclRevision != expected_label->AclRevision || !SameAcl(expected_dacl, dacl) ||
         !SameAcl(expected_label, label) || (*have_control && control != *saved_control)) return ERROR_ACCESS_DENIED;
     *saved_control = control;
     *have_control = true;
+    stage(AuthorityNamespacePolicyStage::kComplete);
     return ERROR_SUCCESS;
   }
 };
