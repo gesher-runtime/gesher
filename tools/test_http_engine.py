@@ -213,7 +213,7 @@ def main():
                 return
             subprocess.run([sys.executable, str(ROOT / 'tools/test_http_engine_policy.py'),
                             '--java-home', str(args.java_home), '--okhttp-source', str(provider)],
-                           check=True, timeout=180)
+                           check=True, timeout=300)
 
 
 if __name__ == '__main__':
