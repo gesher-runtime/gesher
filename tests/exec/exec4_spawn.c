@@ -69,6 +69,65 @@ static int child_main(int argc, char** argv) {
     const char* marker = getenv("SPAWN_MARKER");
     okay = strcmp(argv[0], child_name) == 0 && path && strcmp(path, "/missing-spawn-path") == 0 &&
            marker && strcmp(marker, "exact replacement environment") == 0;
+  } else if (strcmp(argv[1], "--list-args") == 0) {
+    // What execl/execlp/execle passed: argv[0] and the list up to its null.
+    okay = argc == 4 && strcmp(argv[0], child_name) == 0 && strcmp(argv[2], "one") == 0 &&
+           strcmp(argv[3], "two words \xd7\x92") == 0;
+  } else if (strcmp(argv[1], "--execl") == 0 && argc == 3) {
+    execl(argv[2], child_name, "--list-args", "one", "two words \xd7\x92", (char*)NULL);
+    perror("execl");
+  } else if (strcmp(argv[1], "--execlp") == 0 && argc == 4) {
+    if (setenv("PATH", argv[3], 1) == 0)
+      execlp(argv[2], child_name, "--list-args", "one", "two words \xd7\x92", (char*)NULL);
+    perror("execlp");
+  } else if (strcmp(argv[1], "--execle") == 0 && argc == 3) {
+    char* env[] = {"EXECLE_MARKER=list environment", NULL};
+    if (setenv("EXECLE_INHERITED", "must not reach the program", 1) == 0)
+      execle(argv[2], child_name, "--execle-env", (char*)NULL, env);
+    perror("execle");
+  } else if (strcmp(argv[1], "--execle-env") == 0) {
+    const char* marker = getenv("EXECLE_MARKER");
+    okay = argc == 2 && strcmp(argv[0], child_name) == 0 && marker &&
+           strcmp(marker, "list environment") == 0 && getenv("EXECLE_INHERITED") == NULL;
+  } else if (strcmp(argv[1], "--execle-null") == 0 && argc == 3) {
+    // A null envp after the argv null is an empty environment, not environ.
+    if (setenv("EXECLE_NULL_MARKER", "must not reach the program", 1) == 0)
+      execle(argv[2], child_name, "--execle-empty", (char*)NULL, (char**)NULL);
+    perror("execle");
+  } else if (strcmp(argv[1], "--execle-empty") == 0) {
+    // None of the caller's variables arrive. Gesher's standalone property backend
+    // still sets its own GESHER_PROPERTY_SESSION in the program, so the count is
+    // reported rather than required to be zero.
+    int count = 0;
+    while (environ && environ[count]) ++count;
+    if (count) printf("INFO exec4 execle null envp: %d variable(s), first %s\n", count, environ[0]);
+    okay = argc == 2 && strcmp(argv[0], child_name) == 0 && getenv("EXECLE_NULL_MARKER") == NULL &&
+           getenv("PATH") == NULL;
+  } else if (strcmp(argv[1], "--execlp-many") == 0 && argc == 4) {
+    // Ten argv items: past the argument registers (x2-x7 on arm64, rdx-r9 on
+    // x86-64), so the rest of the list, its null and execle's envp are on the stack.
+    if (setenv("PATH", argv[3], 1) == 0)
+      execlp(argv[2], child_name, "--many-args", "a2", "a3", "a4", "a5", "a6", "a7", "a8",
+             "a9 \xd7\x92", (char*)NULL);
+    perror("execlp");
+  } else if (strcmp(argv[1], "--execle-many") == 0 && argc == 3) {
+    char* env[] = {"EXECLE_MARKER=stacked environment", NULL};
+    if (setenv("EXECLE_INHERITED", "must not reach the program", 1) == 0)
+      execle(argv[2], child_name, "--many-args", "a2", "a3", "a4", "a5", "a6", "a7", "a8",
+             "a9 \xd7\x92", (char*)NULL, env);
+    perror("execle");
+  } else if (strcmp(argv[1], "--many-args") == 0) {
+    char expected[8];
+    okay = argc == 10 && strcmp(argv[0], child_name) == 0 && strcmp(argv[9], "a9 \xd7\x92") == 0;
+    for (int i = 2; okay && i < 9; ++i) {
+      snprintf(expected, sizeof(expected), "a%d", i);
+      okay = strcmp(argv[i], expected) == 0;
+    }
+    // From execle the stacked envp replaces environ; from execlp environ stays.
+    const char* marker = getenv("EXECLE_MARKER");
+    if (marker) okay = okay && strcmp(marker, "stacked environment") == 0 &&
+                       getenv("EXECLE_INHERITED") == NULL;
+    else okay = okay && getenv("PATH") != NULL;
   }
   if (!okay) fprintf(stderr, "FAIL  exec4 spawn child: %s (pid%d)\n", argv[1], (int)getpid());
   return okay ? 42 : 41;
@@ -229,6 +288,22 @@ int main(int argc, char** argv) {
   run_child(base, env_args, replacement, NULL, 1, 42,
             "spawnp searches caller PATH while passing exact argv and replacement envp");
   if (saved_path) { setenv("PATH", saved_path, 1); free(saved_path); } else unsetenv("PATH");
+
+  // execl, execlp and execle: a child replaces itself with this program through
+  // the list form, and the program it becomes checks what the list carried. Run
+  // for both ABIs; exec2 covers execl's lookup, ENOENT and stack arguments on x86-64.
+  char* via_execl[] = {(char*)child_name, "--execl", argv[1], NULL};
+  run_child(argv[1], via_execl, environ, NULL, 0, 42, "execl passes its variadic argv to the program");
+  char* via_execlp[] = {(char*)child_name, "--execlp", base, self_dir, NULL};
+  run_child(argv[1], via_execlp, environ, NULL, 0, 42, "execlp searches PATH and passes its variadic argv");
+  char* via_execle[] = {(char*)child_name, "--execle", argv[1], NULL};
+  run_child(argv[1], via_execle, environ, NULL, 0, 42, "execle passes the envp after the argv null, not environ");
+  char* via_execle_null[] = {(char*)child_name, "--execle-null", argv[1], NULL};
+  run_child(argv[1], via_execle_null, environ, NULL, 0, 42, "execle with a null envp passes none of the caller environment");
+  char* via_execlp_many[] = {(char*)child_name, "--execlp-many", base, self_dir, NULL};
+  run_child(argv[1], via_execlp_many, environ, NULL, 0, 42, "execlp passes ten variadic argv items, the rest on the stack");
+  char* via_execle_many[] = {(char*)child_name, "--execle-many", argv[1], NULL};
+  run_child(argv[1], via_execle_many, environ, NULL, 0, 42, "execle passes ten argv items and a stack-passed envp");
   check(getcwd(after, sizeof(after)) && strcmp(before, after) == 0 &&
             fcntl(parent_fd, F_GETFD) == parent_flags,
         "every child preserves the parent directory and descriptor flags");

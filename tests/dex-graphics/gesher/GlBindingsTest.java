@@ -160,25 +160,49 @@ public final class GlBindingsTest {
     egl.eglDestroyContext(display, context);
   }
 
-  // --- the advertised OpenGL ES version --------------------------------------------------------
+  // --- the declared OpenGL ES version --------------------------------------------------------
 
   /**
-   * ro.opengles.version (build.prop; ConfigurationInfo.reqGlEsVersion) is what the device
-   * gives: ES 3.0, so an ES 3 config and context exist and GL_VERSION is at least 3.0.
+   * ro.opengles.version (ConfigurationInfo.reqGlEsVersion) is what the default display gives
+   * (docs/system-features.md, "OpenGL ES version"): the system server declares 0x30000 only
+   * on a GPU that gives ES 3.0, 0x20000 on WARP (capped at feature level 10_0) or a GPU
+   * without ES 3. A process with nothing declared (this one, without a system server) on
+   * WARP (GESHER_EGL_DEVICE=warp) gets the capped device, the one the probe declares ES 2.0
+   * for. Declared 3.0: an ES 3 context's GL_VERSION is at least 3.0. Declared (or probed)
+   * 2.0: the display has no ES 3 config and an ES 2 context's GL_VERSION is 2.0, so EGL
+   * gives no more than the device declares.
    */
   private static void es3(EGL10 egl, EGLDisplay display) {
-    int advertised = android.os.SystemProperties.getInt("ro.opengles.version", 0);
-    check(advertised == 0x30000,
-        "ro.opengles.version advertises OpenGL ES 3.0 (0x" + Integer.toHexString(advertised) + ")");
-    int[] attribs = {EGL10.EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT_KHR */,
+    int declared = android.os.SystemProperties.getInt("ro.opengles.version", 0);
+    check(declared == 0 || declared == 0x20000 || declared == 0x30000,
+        "ro.opengles.version is a version Gesher declares (0x" + Integer.toHexString(declared) + ")");
+    int expected = declared != 0 ? declared
+        : "warp".equals(System.getenv("GESHER_EGL_DEVICE")) ? 0x20000 : 0;
+    int[] es3Attribs = {EGL10.EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT_KHR */,
         EGL10.EGL_RED_SIZE, 8, EGL10.EGL_GREEN_SIZE, 8, EGL10.EGL_BLUE_SIZE, 8,
         EGL10.EGL_SURFACE_TYPE, EGL10.EGL_PBUFFER_BIT, EGL10.EGL_NONE};
     EGLConfig[] configs = new EGLConfig[1];
     int[] count = new int[1];
-    boolean chosen = egl.eglChooseConfig(display, attribs, configs, 1, count) && count[0] == 1;
-    EGLContext context = chosen ? context(egl, display, configs[0], 3) : EGL10.EGL_NO_CONTEXT;
-    EGLSurface surface = chosen ? egl.eglCreatePbufferSurface(display, configs[0],
-        new int[] {EGL10.EGL_WIDTH, 8, EGL10.EGL_HEIGHT, 8, EGL10.EGL_NONE}) : EGL10.EGL_NO_SURFACE;
+    boolean es3Config = egl.eglChooseConfig(display, es3Attribs, configs, 1, count) && count[0] == 1;
+    if (expected == 0) {
+      System.out.println("INFO OpenGL ES version: nothing declared in this process, ES 3 configs "
+          + (es3Config ? "yes" : "no"));
+      return;
+    }
+    if (expected == 0x20000) {
+      check(!es3Config, "EGL10: no ES 3 config on a display declared OpenGL ES 2.0");
+      int[] es2Attribs = {EGL10.EGL_RENDERABLE_TYPE, 4 /* EGL_OPENGL_ES2_BIT */,
+          EGL10.EGL_RED_SIZE, 8, EGL10.EGL_GREEN_SIZE, 8, EGL10.EGL_BLUE_SIZE, 8,
+          EGL10.EGL_SURFACE_TYPE, EGL10.EGL_PBUFFER_BIT, EGL10.EGL_NONE};
+      boolean chosen = egl.eglChooseConfig(display, es2Attribs, configs, 1, count) && count[0] == 1;
+      check(chosen, "EGL10: an ES 2 pbuffer config on a display declared OpenGL ES 2.0");
+    } else {
+      check(es3Config, "EGL10: an ES 3 config on a display declared OpenGL ES 3.0");
+    }
+    int major = expected >> 16;
+    EGLContext context = context(egl, display, configs[0], major);
+    EGLSurface surface = egl.eglCreatePbufferSurface(display, configs[0],
+        new int[] {EGL10.EGL_WIDTH, 8, EGL10.EGL_HEIGHT, 8, EGL10.EGL_NONE});
     boolean current = context != EGL10.EGL_NO_CONTEXT && surface != EGL10.EGL_NO_SURFACE
         && egl.eglMakeCurrent(display, surface, surface, context);
     String glVersion = current ? GLES20.glGetString(GLES20.GL_VERSION) : null;
@@ -188,8 +212,9 @@ public final class GlBindingsTest {
     if (m != null && m.find()) {
       actual = (Integer.parseInt(m.group(1)) << 16) | Integer.parseInt(m.group(2));
     }
-    check(current && actual >= advertised,
-        "EGL10: an ES 3 context gives at least the advertised version (" + glVersion + ")");
+    check(current && (expected == 0x20000 ? actual == expected : actual >= expected),
+        "EGL10: an ES " + major + " context gives the declared version 0x"
+            + Integer.toHexString(expected) + " (" + glVersion + ")");
     if (current) {
       egl.eglMakeCurrent(display, EGL10.EGL_NO_SURFACE, EGL10.EGL_NO_SURFACE, EGL10.EGL_NO_CONTEXT);
     }

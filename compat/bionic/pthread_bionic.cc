@@ -42,11 +42,12 @@ using Word = std::atomic<int32_t>;
 
 Word* W(void* object, int index) { return reinterpret_cast<Word*>(object) + index; }
 
-// Waits while *w == expected, up to `ms`. Returns false on timeout.
+// Waits while *w == expected, up to `ms`. Returns false on timeout. A signal
+// another thread directs at this one ends the wait after its handler ran (a
+// spurious wake to the caller, who rechecks), as Linux interrupts a futex.
 bool FutexWait(Word* w, int32_t expected, DWORD ms = INFINITE) {
   int32_t cmp = expected;
-  if (WaitOnAddress(reinterpret_cast<volatile void*>(w), &cmp, sizeof(int32_t), ms)) return true;
-  return GetLastError() != ERROR_TIMEOUT;
+  return InterruptibleAddressWait(reinterpret_cast<volatile void*>(w), &cmp, sizeof(int32_t), ms);
 }
 void FutexWake(Word* w, bool all) {
   if (all) {
