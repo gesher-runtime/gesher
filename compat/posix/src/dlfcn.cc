@@ -3,7 +3,10 @@
 // <gesher/elf_dlopen.h> (phase 6).
 
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include <gesher/builtin_library.h>
 #include <gesher/elf_dlopen.h>
 #include <unistd.h>
@@ -102,6 +105,61 @@ bool IsElfFile(const char* path) {
   return elf;
 }
 
+// GESHER_TRACE_DL (docs/compiled-code.md): what Windows said when dlerror()
+// gives the Android linker's text instead.
+bool TraceDl() {
+  static const bool on = getenv("GESHER_TRACE_DL") != nullptr;
+  return on;
+}
+
+// dlerror() for a path LoadLibraryExW could not load, as Android's linker
+// words it (bionic linker.cpp load_library, linker_phdr.cpp ReadElfHeader and
+// VerifyElfHeader) when the path names no file or a file that is not a
+// library: an app that dlopen()s or System.load()s its own path sees what it
+// would on a device. Empty when Windows' text stays: a bare name (looked up
+// along the DLL search path), a PE image (a Windows DLL of Gesher's own,
+// whose failure is a Windows one, a missing dependency say), or a file that
+// cannot be classified.
+std::string AndroidLoadError(const char* filename) {
+  if (strpbrk(filename, "/\\") == nullptr) return std::string();
+  int fd = open(filename, O_RDONLY);
+  if (fd < 0) {
+    if (errno == ENOENT || errno == ENOTDIR) {
+      return std::string("dlopen failed: library \"") + filename + "\" not found";
+    }
+    return std::string();
+  }
+  struct stat st = {};
+  // The size of an ELF64 header (Elf64_Ehdr), what the linker reads first.
+  unsigned char header[64] = {};
+  ssize_t got = -1;
+  if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+    got = 0;
+    while (got < static_cast<ssize_t>(sizeof(header))) {
+      ssize_t n = read(fd, header + got, sizeof(header) - got);
+      if (n <= 0) break;
+      got += n;
+    }
+  }
+  close(fd);
+  if (got < 0) return std::string();
+  if (got >= 2 && header[0] == 'M' && header[1] == 'Z') return std::string();
+  if (st.st_size == 0) {
+    return std::string("dlopen failed: file offset for the library \"") + filename +
+           "\" >= file size: 0 >= 0";
+  }
+  if (got < static_cast<ssize_t>(sizeof(header))) {
+    return std::string("dlopen failed: \"") + filename +
+           "\" is too small to be an ELF executable: only found " + std::to_string(got) +
+           " bytes";
+  }
+  // A file that starts with the ELF magic went to the ELF loader before.
+  // The path is not part of the formatted text: a long one is never cut short.
+  char text[16];
+  snprintf(text, sizeof(text), "%02x%02x%02x%02x", header[0], header[1], header[2], header[3]);
+  return std::string("dlopen failed: \"") + filename + "\" has bad ELF magic: " + text;
+}
+
 void* OpenElf(const char* filename, int flags) {
   const gesher_elf_dlopen_ops* ops = elf_ops.load();
   if (ops == nullptr) {
@@ -112,7 +170,9 @@ void* OpenElf(const char* filename, int flags) {
   char error[1024] = {};
   void* handle = ops->open(filename, flags, error, sizeof(error));
   if (handle == nullptr) {
-    last_error = std::string("dlopen ") + filename + ": " + error;
+    // Android's linker prefixes its dlerror() text so (as the bionic shim's
+    // dlopen does for the same loader).
+    last_error = std::string("dlopen failed: ") + error;
     has_error = true;
     return nullptr;
   }
@@ -138,19 +198,48 @@ void* dlopen(const char* filename, int flags) {
   if (BuiltinLibrary* library = FindBuiltin(filename)) return library;
   if (IsElfFile(filename)) return OpenElf(filename, flags);
   std::wstring path = gesher::Widen(filename);
-  HMODULE module = (flags & RTLD_NOLOAD) != 0
-      ? GetModuleHandleW(path.c_str())
-      : LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
-                                                  LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
-  if (module == nullptr) {
-    if (GetLastError() == ERROR_INVALID_PARAMETER && BaseName(filename) == filename) {
-      // A bare name that is no builtin library: LoadLibraryExW refuses it
-      // (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR needs a full path), which only means
-      // there is no library by that name here.
-      last_error = std::string("dlopen ") + filename + ": library not found";
-      has_error = true;
-    } else {
+  DWORD load_flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS;
+  const bool has_drive = path.size() >= 2 && path[1] == L':' &&
+      ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z'));
+  if (path.find_first_of(L"/\\") != std::wstring::npos || has_drive) {
+    // Consume a relative path once: another thread can change the process's
+    // current directory between a size query and the subsequent conversion.
+    // This bounds the allocation at Windows' maximum UTF-16 path length.
+    std::vector<wchar_t> full_path(32768);
+    const DWORD length = GetFullPathNameW(path.c_str(),
+        static_cast<DWORD>(full_path.size()), full_path.data(), nullptr);
+    if (length == 0 || length >= full_path.size()) {
+      if (length != 0) SetLastError(ERROR_FILENAME_EXCED_RANGE);
       SetError("dlopen", filename);
+      return nullptr;
+    }
+    path.assign(full_path.data(), length);
+    load_flags |= LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR;
+  }
+  HMODULE module = nullptr;
+  if ((flags & RTLD_NOLOAD) != 0) {
+    // A successful dlopen owns the reference that its dlclose releases, even
+    // when it is only looking up an already loaded module.
+    GetModuleHandleExW(0, path.c_str(), &module);
+  } else {
+    module = LoadLibraryExW(path.c_str(), nullptr, load_flags);
+  }
+  if (module == nullptr) {
+    const DWORD windows_error = GetLastError();
+    std::string android = (flags & RTLD_NOLOAD) != 0 ? std::string() : AndroidLoadError(filename);
+    if (android.empty()) {
+      SetLastError(windows_error);
+      SetError("dlopen", filename);
+      // Safe bare-name lookup reports a real missing module, rather than the
+      // invalid-parameter error from using DLL_LOAD_DIR without a full path.
+      if (windows_error == ERROR_MOD_NOT_FOUND) last_error += ": library not found";
+    } else {
+      if (TraceDl()) {
+        fprintf(stderr, "gesher dl: dlopen(\"%s\"): LoadLibraryExW: Windows error %lu\n", filename,
+                windows_error);
+      }
+      last_error = std::move(android);
+      has_error = true;
     }
   }
   return module;

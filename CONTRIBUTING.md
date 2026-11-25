@@ -23,7 +23,9 @@ What must stay the same is what the user and the application actually do:
   with a different operation because the real one is hard to provide. For
   example, when an application asks for a live camera capture, do not let the
   user choose an existing image from the PC instead, including for cheque
-  deposits.
+  deposits, unless the capability is missing on the PC and the alternative
+  operation is enabled through an explicit, documented setting approved by the
+  maintainer and listed in the examples below.
 - **Honest results.** Do not report that something happened when it did not:
   a capture, a payment, an autofocus, a permission the user did not grant. When
   something is unavailable, use Android's own unavailable or unsupported
@@ -40,9 +42,15 @@ and defaults may follow what a PC is. Such adaptations are documented, named as
 Gesher's where an application can see them, and give way to real hardware when
 it exists. A default may describe the PC's real state (it stands still, its
 camera faces the user); it never substitutes content (an image, a location, a
-reading that does not match the PC's real state). A new default that
-applications can see is a maintainer decision and is listed in the examples
-below before it is merged.
+reading that does not match the PC's real state). For capabilities that may be
+missing on a PC, a maintainer-approved adaptation may substitute a similar
+available capability (for example, using a regular PC camera in place of a
+missing rear camera) even without a user setting. Providing an alternative
+operation for a missing capability (such as letting the user choose an existing
+image from the PC when an application asks for a live camera capture) is in
+scope only with both maintainer approval and an explicit, documented setting.
+Any such adaptation, default, or substitution setting that applications can see
+is a maintainer decision and is listed in the examples below before it is merged.
 
 Examples:
 
@@ -53,8 +61,10 @@ Examples:
 | Report a PC camera not configured as rear as Android's front camera. | Within scope: a desktop default. A PC's camera faces the user; `GESHER_CAMERA_REAR_ID` marks a rear one. |
 | Report a camera's orientation relative to the display rotation of the Activity using it, since Windows delivers frames upright for the monitor. | Within scope: a desktop adaptation. The frames and the capture are real. |
 | Expose Gesher's stationary accelerometer (gravity only) on a PC without motion sensors. | Within scope: a desktop default. Real motion sensors replace it, it is documented and `GESHER_SENSOR_FALLBACK=0` turns it off. It declares no `android.hardware.sensor.*` feature: only real sensors do. |
+| Substitute a similar available PC capability for a missing one (such as exposing a regular PC camera as a rear camera) with maintainer approval. | Within scope once approved by the maintainer and listed here as a decided adaptation (no setting required). |
+| Provide an alternative operation for a missing PC capability (such as choosing an existing image from the PC for a camera capture) via an explicit, documented setting with maintainer approval. | Within scope once approved by the maintainer, gated behind an explicit setting, and listed here as a decided adaptation. |
 | Implement an Android file-selection request with a Windows file picker. | Within scope: the user picks a file, as asked. |
-| Answer a camera capture request with a file picker or a saved image presented as a fresh capture. | Outside scope: a different operation. |
+| Answer a camera capture request with a file picker or a saved image presented as a fresh capture. | Outside scope: a different operation, unless enabled by a maintainer-approved, documented setting for a missing PC capability. |
 | Report success for an operation that did not run (a capture, a payment, an autofocus). | Outside scope. |
 | Add package-name exceptions so tests pass while ordinary applications behave differently. | Outside scope. Tests must exercise the production behavior. |
 

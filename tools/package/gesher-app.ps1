@@ -210,6 +210,13 @@ if (Test-Path (Join-Path $here 'com.android.location.provider.jar')) {
   Install (Join-Path $here 'com.android.location.provider.jar') (Join-Path $root 'system/framework/com.android.location.provider.jar')
   Install (Join-Path $here 'etc/permissions/com.android.location.provider.xml') (Join-Path $root 'system/etc/permissions/com.android.location.provider.xml')
 }
+foreach ($library in 'android.test.base', 'android.test.mock', 'android.test.runner') {
+  if (Test-Path (Join-Path $here "$library.jar")) {
+    New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
+    Install (Join-Path $here "$library.jar") (Join-Path $root "system/framework/$library.jar")
+    Install (Join-Path $here "etc/permissions/$library.xml") (Join-Path $root "system/etc/permissions/$library.xml")
+  }
+}
 if (Test-Path (Join-Path $here 'etc/permissions/privapp-permissions-microg.xml')) {
   New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
   Install (Join-Path $here 'etc/permissions/privapp-permissions-microg.xml') (Join-Path $root 'system/etc/permissions/privapp-permissions-microg.xml')

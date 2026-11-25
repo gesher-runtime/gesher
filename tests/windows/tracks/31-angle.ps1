@@ -111,6 +111,12 @@ GraphicsDex 'SurfaceTexture in OpenGL ES: updateTexImage latches frames into an 
   SurfaceTextureGlTest @()
 GraphicsDex 'ImageReader native surface: EGL pixels, Canvas notification, queue overflow and close lifetime' `
   ImageReaderEglTest @()
+# A PRIVATE, GPU-sampled reader, as Flutter's platform views create it: drawn into
+# through lockHardwareCanvas, lockCanvas and EGL, its images' HardwareBuffers imported
+# by an NDK library (AHardwareBuffer_fromHardwareBuffer, reader_buffer_test.so from
+# native-libs.yml), and camera frames still delivered to it.
+GraphicsDex 'ImageReader PRIVATE: drawn into, imported through AHardwareBuffer_fromHardwareBuffer, camera frames kept' `
+  ImageReaderPrivateTest @((NoDrive (Resolve-Path "$Dir/reader_buffer_test.so").Path))
 # Independently exercise the old staging path even if ANGLE supports the
 # direct readback extension. All ImageReader pixel/lifetime checks must pass.
 $env:GESHER_EGL_DIRECT_READBACK = '0'

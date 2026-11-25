@@ -33,7 +33,8 @@ unavailable result.
   `WindowsCamera.devices()`, `WindowsBluetooth.adapter()`, the audio engine's
   input devices, `ActivityManager.isLowRamDeviceStatic()`,
   `WindowsSensors.types()` (the sensor list SensorManager serves),
-  `WindowsWifi.hardware()` (the WLAN census, docs/wifi.md) and
+  `WindowsWifi.hardware()` (the WLAN census, docs/wifi.md),
+  `WindowsLocation.hasGnssReceiver()` and
   `TelephonyService.bootSnapshot()` (the cellular modem, docs/telephony.md).
   Without the runtime natives (a host JVM) a probe reports nothing.
 
@@ -181,10 +182,12 @@ Not reported:
 | `android.hardware.microphone` | an audio capture device | AudioRecord |
 | `android.hardware.ethernet` | a hardware wired Ethernet interface (`GetIfTable2`: `IF_TYPE_ETHERNET_CSMACD`, `NdisPhysicalMedium802_3`, `HardwareInterface`), connected or not | ConnectivityManager's `TRANSPORT_ETHERNET` networks (docs/network.md) |
 | `android.hardware.location`, `.location.network` | always | LocationManagerService, Windows location with IP fallback |
+| `android.hardware.location.gps` | Windows has a GNSS receiver (`WindowsLocation.hasGnssReceiver`) | the gps provider gets its fixes |
 | `android.hardware.bluetooth`, `.bluetooth_le` | Windows radio / LE support | docs/bluetooth.md |
 | `android.hardware.camera.any` | a Windows camera | CameraService (docs/devices.md) |
 | `android.hardware.camera` | a camera explicitly configured as rear-mounted (`GESHER_CAMERA_REAR_ID`) | as above; Camera2 and the legacy API report it `LENS_FACING_BACK` |
 | `android.hardware.camera.front` | a camera not configured as rear: a PC's camera faces the user (maintainer-approved desktop default, CONTRIBUTING.md) | as above; Camera2 and the legacy API report it `LENS_FACING_FRONT` (`CAMERA_FACING_FRONT`) |
+| `android.hardware.camera.autofocus` | the rear (`android.hardware.camera`) camera's driver really focuses automatically (`WindowsCamera.Device.autofocus`); a front camera's autofocus does not add it | as above |
 | `android.hardware.ram.normal` / `.ram.low` | whichever `ActivityManager.isLowRamDevice()` says (`ro.config.low_ram` is unset: normal) | as AOSP's SystemConfig |
 | `android.software.webview` | the WebView2 Runtime is installed | `android.webkit.WebView` on WebView2 (docs/webview.md); without the runtime WebViews stay empty, so it is not claimed |
 | `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass`, `.light` | the matching sensor in the list SensorManager gives apps (Windows.Devices.Sensors' default sensors), except Gesher's stationary accelerometer: the gravity-only desktop default SensorManager lists on a PC without motion sensors (`GESHER_SENSOR_FALLBACK`) is not hardware and declares no feature | SensorManager over Windows sensors (docs/devices.md) |
@@ -201,9 +204,8 @@ promises. Absent (c): nothing implements it.
 | `android.hardware.audio.low_latency` | b | Proof of the CDD's latency limits (≤ 45 ms cold output, continuous output ≤ 45 ms, round trip) with the WASAPI shared-mode mixer; measurement on real hardware |
 | `android.hardware.audio.pro` | c | low_latency, plus ≤ 20 ms round trip, USB host audio and MIDI |
 | `android.hardware.audio.spatial.headtracking.low_latency` | c | a spatializer with head tracking |
-| `android.hardware.location.gps` | b | GPS_PROVIDER exists over Windows location, which can use a GNSS receiver, but there is no GnssStatus, NMEA, measurements or `GnssCapabilities`, and no detection of a GNSS device. Needs a GNSS device check (GUID_DEVINTERFACE_GNSS / Sensor API) and the GNSS status callbacks |
 | `android.hardware.camera.external` | b | cameras are reported with a facing (FRONT, or BACK when configured as rear), never `LENS_FACING_EXTERNAL`, so the feature that describes such cameras does not apply |
-| `android.hardware.camera.autofocus`, `.flash`, `.capability.*`, `.level.full`, `.concurrent`, `.ar` | c | the camera is fixed-focus, EXTERNAL level, no flash; needs Media Foundation focus/torch controls and the matching Camera2 metadata |
+| `android.hardware.camera.flash`, `.capability.*`, `.level.full`, `.concurrent`, `.ar` | c | EXTERNAL level, no flash; needs Media Foundation torch controls and the matching Camera2 metadata |
 | `android.software.input_methods` | c | only Windows' own text input is an IME (InputMethodManagerService); hosting installed `InputMethodService` apps |
 | `android.software.home_screen` | c | Windows' Start menu is the launcher; hosting a HOME activity |
 | `android.software.live_wallpaper` | c | no wallpaper service |
@@ -286,7 +288,7 @@ promises. Absent (c): nothing implements it.
   default display gives exactly the declared version.
 - `tools/test_camera_selection_and_orientation.py`: `camera.front` for a
   camera not configured as rear, `camera` for a configured rear one, both for
-  a rear and a front camera together; never `camera.external` or `autofocus`.
+  a rear and a front camera together; never `camera.external`.
 - `PackageServiceQueriesTest` compares the sensor features with
   `WindowsSensors.types()`, the plain run without natives (nothing listed,
   nothing claimed). Through `ServiceFixtureRunner` (the runtime natives) the

@@ -162,7 +162,10 @@ public final class ImageReaderEglTest {
         EGLContext context = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT,
                 new int[] { EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE }, 0);
         check(context != EGL14.EGL_NO_CONTEXT, "context");
-        try (ImageReader reader = ImageReader.newInstance(16, 12, PixelFormat.RGBA_8888, 2)) {
+        // GPU_SAMPLED_IMAGE: the reader's HardwareBuffers are wrapped as Bitmaps below, and an
+        // RGBA reader without that usage has CPU-only ones (as on Android).
+        try (ImageReader reader = new ImageReader.Builder(16, 12).setMaxImages(2)
+                .setImageFormat(PixelFormat.RGBA_8888).setUsage(HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE).build()) {
             check(reader.getSurface().isValid(), "native reader surface");
             EGLSurface surface = EGL14.eglCreateWindowSurface(display, configs[0], reader.getSurface(),
                     new int[] { EGL14.EGL_NONE }, 0);

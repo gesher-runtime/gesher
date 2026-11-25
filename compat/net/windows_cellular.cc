@@ -584,13 +584,16 @@ void AppendProfile(Api& api, mbn::ProfileManager* profiles, mbn::Interface* mode
 //         <firmware> <imsi> <iccid> <numbers> <home-id> <home-name> <register> <reg-id>
 //         <reg-name> <roaming-text> <data-class> <signal> <signal-error> <activation>
 //         <software-radio> <hardware-radio> <connection-mode>
+// HRESULTs are printed as their 32 bits (through uint32_t), so a 64-bit unsigned
+// long (the Linux host fixture) does not sign-extend them.
 std::string Snapshot(Api& api) {
   HRESULT initialized = api.initialize(nullptr, COINIT_MULTITHREADED);
   // RPC_E_CHANGED_MODE: the thread is already in an apartment; COM is usable.
   bool balance = SUCCEEDED(initialized);
   if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) {
     char status[48];
-    snprintf(status, sizeof(status), "status\terror\t%08lx\n", static_cast<unsigned long>(initialized));
+    snprintf(status, sizeof(status), "status\terror\t%08lx\n",
+             static_cast<unsigned long>(static_cast<uint32_t>(initialized)));
     return status;
   }
   std::string out;
@@ -621,10 +624,11 @@ std::string Snapshot(Api& api) {
           || result == HRESULT_FROM_WIN32(ERROR_SERVICE_DISABLED)
           || result == HRESULT_FROM_WIN32(ERROR_SERVICE_DOES_NOT_EXIST);
       snprintf(status, sizeof(status), "status\t%s\t%08lx\n", absent ? "none" : "error",
-               static_cast<unsigned long>(result));
+               static_cast<unsigned long>(static_cast<uint32_t>(result)));
       out = status;
     } else {
-      snprintf(status, sizeof(status), "status\tok\t%08lx\n", static_cast<unsigned long>(result));
+      snprintf(status, sizeof(status), "status\tok\t%08lx\n",
+               static_cast<unsigned long>(static_cast<uint32_t>(result)));
       out = status;
       for (LONG i = low, n = 0; interfaces.value && i <= high && n < kMaxInterfaces; i++, n++) {
         Ref<mbn::Interface> modem;
@@ -707,7 +711,8 @@ std::string Enforce(Api& api, mbn::Interface* modem, const Text& mode, const Tex
 std::string Configure(Api& api, const Text& interfaceId, const Text& mode) {
   auto line = [](const char* outcome, const char* step, HRESULT result) {
     char text[64];
-    snprintf(text, sizeof(text), "%s\t%s\t%08lx", outcome, step, static_cast<unsigned long>(result));
+    snprintf(text, sizeof(text), "%s\t%s\t%08lx", outcome, step,
+             static_cast<unsigned long>(static_cast<uint32_t>(result)));
     return std::string(text);
   };
   if (!KnownMode(mode)) return line("error", "mode", E_INVALIDARG);

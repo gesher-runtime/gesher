@@ -199,7 +199,7 @@ public final class ApkPackage {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
-        if ("android".equals(packageName)) {
+        if (PLATFORM_PACKAGE.equals(packageName)) {
             throw new SecurityException("The platform package name is reserved");
         }
         mUid = -1;
@@ -297,6 +297,20 @@ public final class ApkPackage {
                     "INSTALL_FAILED_MISSING_SPLIT: " + baseLite.getPackageName());
         }
         return parse(base.getPath(), directory);
+    }
+
+    /** The platform's own package (framework-res.apk), which no app may be. */
+    public static final String PLATFORM_PACKAGE = "android";
+
+    /** The package an APK's manifest declares (ApkLite: the manifest's head only). */
+    public static String declaredPackageName(File apk) throws IOException {
+        ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(
+                ParseTypeImpl.forParsingWithoutPlatformCompat(), apk, 0);
+        if (result.isError()) {
+            throw new IOException("Cannot parse APK " + apk + ": " + result.getErrorMessage(),
+                    result.getException());
+        }
+        return result.getResult().getPackageName();
     }
 
     /** Identify the base APK from the manifest before assembling a package cluster. */
@@ -1193,7 +1207,9 @@ public final class ApkPackage {
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
 
-        // A long-lived PM record must not publish a cached graph after XML/jar updates.
+        // A long-lived PM record must not publish a stale graph after XML/jar updates:
+        // the registry's snapshot is checked against the files' metadata and the graph
+        // comes from it, without reading or hashing again while they are unchanged.
         // Ordinary packages keep the cheap immutable empty graph path.
         try {
             SharedLibraryGraph graph = SharedLibraryRegistry.usesNone(parsed) ? sharedLibraries

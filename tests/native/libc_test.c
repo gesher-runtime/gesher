@@ -83,6 +83,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "statvfs_contract_test.inc"
 #include "sleep_contract_test.inc"
 #include "bionic_signal_range_contracts.h"
+#include "bionic_tgkill_contracts.h"
 #include "stream_device_contract_test.inc"
 #include "regex_scaling_contract.inc"
 
@@ -121,6 +122,16 @@ static void test_memory(void) {
   check("mallinfo: allocated fit in mapped, the rest is free",
         during.hblkhd >= during.uordblks && during.fordblks == during.hblkhd - during.uordblks);
   free(big);
+  // mallopt: purging unused memory succeeds (1); an option the heap does not
+  // support, or one no allocator knows, fails (0), as malloc.h specifies.
+  check("mallopt(M_PURGE) succeeds", mallopt(M_PURGE, 0) == 1);
+  check("mallopt(M_PURGE_ALL) succeeds", mallopt(M_PURGE_ALL, 0) == 1);
+  check("mallopt(unknown option) fails", mallopt(12345, 0) == 0);
+  // No memory tags: the NONE level holds already; a tagging level fails.
+  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, NONE) succeeds",
+        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE) == 1);
+  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, TBI) fails",
+        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_TBI) == 0);
 }
 
 static void test_strings(void) {
@@ -934,6 +945,7 @@ static void test_dl(void) {
 __attribute__((visibility("default"))) int gesher_selftest(void) {
   printf("libc_test: bionic libc through the shim\n");
   failures += BionicSignalRangeContracts();
+  failures += BionicTgkillContracts();
   test_memory();
   test_allocation_contracts();
   test_system_contracts();

@@ -7,6 +7,18 @@ The build was done on branch `wip/angle`, hwui's GL pipeline on it on
 `wip/hwui-gl`; the decision records are [0018](decisions/0018-angle-build.md)
 and [0030](decisions/0030-angle-hwui-skiagl.md).
 
+The declared OpenGL ES version (`ro.opengles.version`,
+`ConfigurationInfo.reqGlEsVersion`) is not in `app/build.prop`: the system
+server sets it at boot from the device Android's default EGL display runs on
+(`compat/bionic/egl_gles.cc`): ES 3.0 only on a hardware Direct3D 11 GPU that
+gives it, ES 2.0 on WARP (capped at feature level 10_0, so EGL gives no more)
+or on a GPU without ES 3 configs. Every process follows the boot's declaration,
+and ES 3.1 contexts are refused. Google Play hides apps whose
+`<uses-feature android:glEsVersion>` is above it (Chrome asks for 3.0).
+[system-features.md](system-features.md#opengl-es-version) has the full policy;
+`GlBindingsTest` checks the property against the default display's contexts and
+`GL_VERSION`.
+
 ## What is built, and how
 
 - **Source**: upstream ANGLE (`chromium.googlesource.com/angle/angle`) at
