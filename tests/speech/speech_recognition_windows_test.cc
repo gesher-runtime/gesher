@@ -16,8 +16,10 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "speech_recognition_win.h"
@@ -27,6 +29,35 @@ namespace sr = gesher::devices::speech_recognition;
 namespace {
 
 int g_failures = 0;
+
+// A startup or teardown deadlock must fail this process, never leave a detached
+// worker or disguise a session that has not started as a successful test.
+class Deadline {
+ public:
+  Deadline(const char* phase, DWORD timeout_ms)
+      : done_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
+    if (done_ == nullptr) {
+      std::fprintf(stderr, "FAIL could not create the test deadline event\n");
+      std::exit(1);
+    }
+    watcher_ = std::thread([this, phase, timeout_ms] {
+      if (WaitForSingleObject(done_, timeout_ms) != WAIT_OBJECT_0) {
+        std::fprintf(stderr, "FAIL %s did not complete within %lu ms\n", phase, timeout_ms);
+        std::fflush(stderr);
+        std::_Exit(1);
+      }
+    });
+  }
+  ~Deadline() {
+    SetEvent(done_);
+    watcher_.join();
+    CloseHandle(done_);
+  }
+
+ private:
+  HANDLE done_;
+  std::thread watcher_;
+};
 
 void Check(bool ok, const char* what) {
   std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
@@ -46,11 +77,8 @@ std::string Narrow(const std::wstring& s) {
 // Feeds `ms` of silence and returns the events until the stream ends (or 20 s pass).
 std::vector<sr::Event> RecognizeSilence(sr::Session* session, int rate, int ms) {
   std::vector<int16_t> chunk(static_cast<size_t>(rate / 10), 0);  // 100 ms
-  std::printf("TRACE silence write begin\n");
   for (int t = 0; t < ms; t += 100) session->Write(chunk.data(), chunk.size());
-  std::printf("TRACE silence write complete, EndAudio begin\n");
   session->EndAudio();
-  std::printf("TRACE EndAudio complete, wait events\n");
   std::vector<sr::Event> events;
   ULONGLONG deadline = GetTickCount64() + 20000;
   while (GetTickCount64() < deadline) {
@@ -65,7 +93,7 @@ std::vector<sr::Event> RecognizeSilence(sr::Session* session, int rate, int ms) 
 }  // namespace
 
 int main() {
-  // Diagnostic-only: keep the last completed operation visible if the process hangs.
+  // Preserve the last completed contract when a watchdog reports a deadlock.
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   std::setvbuf(stderr, nullptr, _IONBF, 0);
   // The pure language matching, as the Android engine relies on it.
@@ -83,7 +111,6 @@ int main() {
   Check(sr::FindRecognizer(fixture, L"") == -1, "no language is not found");
 
   std::vector<sr::Recognizer> recognizers;
-  std::printf("TRACE enumerate begin\n");
   HRESULT hr = sr::EnumerateRecognizers(&recognizers);
   std::printf("EnumerateRecognizers: HRESULT 0x%08lX, %zu recognizer(s)\n",
               static_cast<unsigned long>(hr), recognizers.size());
@@ -100,7 +127,6 @@ int main() {
   bool recognizer_failed = true;
   sr::SessionOptions unsupported;
   unsupported.language = L"x-gesher-none";
-  std::printf("TRACE unsupported-language session begin\n");
   hr = sr::StartSession(unsupported, &session, &recognizer_failed);
   Check(hr == sr::kSpErrNotFound && session == nullptr && !recognizer_failed,
         "a language without recognizer fails with SPERR_NOT_FOUND");
@@ -119,11 +145,13 @@ int main() {
     options.sample_rate = 16000;
     options.hypotheses = true;
     options.max_alternates = 3;
-    std::printf("TRACE real session begin\n");
-    hr = sr::StartSession(options, &session, &recognizer_failed);
+    {
+      Deadline deadline("starting dictation before caller PCM", 30000);
+      hr = sr::StartSession(options, &session, &recognizer_failed);
+    }
     std::printf("StartSession(%s): HRESULT 0x%08lX%s\n", Narrow(options.language).c_str(),
                 static_cast<unsigned long>(hr), recognizer_failed ? " (recognizer failed)" : "");
-    Check(SUCCEEDED(hr) && session != nullptr, "dictation starts over handed-over PCM");
+    Check(SUCCEEDED(hr) && session != nullptr, "dictation starts before the caller provides PCM");
     if (session != nullptr) {
       std::vector<sr::Event> events = RecognizeSilence(session.get(), 16000, 2000);
       bool ended = !events.empty() && events.back().kind == sr::EventKind::kStreamEnd;
@@ -133,12 +161,19 @@ int main() {
       Check(!recognized, "silence is not recognized as speech");
       Check(!session->Write(std::vector<int16_t>(160).data(), 160),
             "no audio is taken after the end");
-      session.reset();
+      {
+        Deadline deadline("releasing the ended stream", 5000);
+        session.reset();
+      }
 
-      std::printf("TRACE real session begin\n");
-      hr = sr::StartSession(options, &session, &recognizer_failed);
-      Check(SUCCEEDED(hr), "a second session starts");
+      {
+        Deadline deadline("starting the empty session to cancel", 30000);
+        hr = sr::StartSession(options, &session, &recognizer_failed);
+      }
+      Check(SUCCEEDED(hr) && session != nullptr,
+            "a second session starts without PCM before immediate cancellation");
       if (session != nullptr) {
+        Deadline deadline("canceling and joining a session with no PCM", 5000);
         ULONGLONG before = GetTickCount64();
         session->Cancel();
         Check(session->NextEvent(1000).kind == sr::EventKind::kNone,
