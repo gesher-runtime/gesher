@@ -6,7 +6,9 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import java.nio.ByteBuffer;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Public SDK calls through the real ART/JNI receiver; no substituted MediaCodec. */
@@ -138,7 +140,25 @@ public final class CodecLifecycleContractTest {
         HandlerThread callbacks = new HandlerThread("codec-java-callbacks");
         callbacks.start();
         Handler handler = new Handler(callbacks.getLooper());
-        MediaCodec codec = MediaCodec.createDecoderByType("audio/raw");
+        // Standalone ART has no main Looper. MediaCodec must be constructed on
+        // a Looper thread to initialize its EventHandler, even when setCallback
+        // is later given an explicit Handler.
+        FutureTask<MediaCodec> creation = new FutureTask<>(
+                () -> MediaCodec.createDecoderByType("audio/raw"));
+        MediaCodec codec;
+        try {
+            check(handler.post(creation), "codec construction is posted to the callback Looper");
+            codec = creation.get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException timeout) {
+            // Do not dispose a codec whose native construction may still be in flight.
+            System.err.println("FAIL CodecLifecycleContractTest: codec construction timed out");
+            Runtime.getRuntime().halt(2);
+            throw new AssertionError("codec construction timed out", timeout);
+        } catch (Exception | Error failure) {
+            callbacks.quitSafely();
+            callbacks.join(2000);
+            throw failure;
+        }
         CountDownLatch finished = new CountDownLatch(1);
         AtomicReference<Throwable> failure = new AtomicReference<>();
         // These fields are confined to the callback Handler.
