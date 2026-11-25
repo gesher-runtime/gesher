@@ -1,0 +1,425 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+// Exercises the complete unmodified production record_lock_liveness.cc and
+// ErrnoFromWin32 over controlled Win32 handle/volume/object boundaries.
+
+#include "record_lock_liveness.h"
+#include "internal.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+
+namespace gesher {
+@ERRNO_FROM_WIN32@
+}  // namespace gesher
+
+@RECORD_LOCK_LIVENESS_CC@
+
+namespace {
+
+using namespace gesher::record_locks;
+
+struct FakeHandle {
+  int tag;
+};
+
+FakeHandle g_disk_a{1}, g_disk_b{2}, g_pipe{3}, g_proc{4}, g_thread{5};
+FakeHandle g_kernelbase_mod{6}, g_ntdll_mod{7};
+
+DWORD g_last_error = ERROR_SUCCESS;
+DWORD g_file_type = FILE_TYPE_DISK;
+int g_file_type_calls = 0;
+int g_file_id_ex_calls = 0;
+int g_legacy_info_calls = 0;
+
+bool g_file_id_ex_succeeds = true;
+DWORD g_file_id_ex_error = ERROR_INVALID_PARAMETER;
+FILE_ID_INFO g_file_id_ex_value{};
+
+bool g_legacy_info_succeeds = true;
+DWORD g_legacy_info_error = ERROR_ACCESS_DENIED;
+BY_HANDLE_FILE_INFORMATION g_legacy_info_value{};
+
+bool g_proc_times_ok = true;
+FILETIME g_proc_created{0x11223344U, 0x55667788U};
+DWORD g_current_pid = 4242;
+DWORD g_current_tid = 9191;
+bool g_thread_times_ok = true;
+FILETIME g_thread_created{0x99aabbccU, 0xddeeff01U};
+
+bool g_compare_handles_available = true;
+BOOL g_compare_handles_result = TRUE;
+DWORD g_compare_handles_error = ERROR_SUCCESS;
+
+bool g_ntquery_available = true;
+LONG g_ntquery_status = 0;
+ULONG g_granted_access = 0x0012019fU;
+ULONG g_handle_count = 3;
+
+int g_checks = 0;
+
+void Check(bool ok, const char* msg) {
+  if (!ok) {
+    std::fprintf(stderr, "record_lock_liveness contract failure: %s\n", msg);
+    std::exit(1);
+  }
+  ++g_checks;
+}
+
+void ResetWin32() {
+  g_last_error = ERROR_SUCCESS;
+  g_file_type = FILE_TYPE_DISK;
+  g_file_type_calls = g_file_id_ex_calls = g_legacy_info_calls = 0;
+  g_file_id_ex_succeeds = true;
+  g_file_id_ex_error = ERROR_INVALID_PARAMETER;
+  g_file_id_ex_value = {};
+  g_legacy_info_succeeds = true;
+  g_legacy_info_error = ERROR_ACCESS_DENIED;
+  g_legacy_info_value = {};
+  g_proc_times_ok = true;
+  g_proc_created = {0x11223344U, 0x55667788U};
+  g_thread_times_ok = true;
+  g_thread_created = {0x99aabbccU, 0xddeeff01U};
+  g_compare_handles_available = true;
+  g_compare_handles_result = TRUE;
+  g_compare_handles_error = ERROR_SUCCESS;
+  g_ntquery_available = true;
+  g_ntquery_status = 0;
+}
+
+BOOL WINAPI MockCompareObjectHandles(HANDLE, HANDLE) {
+  if (!g_compare_handles_result && g_compare_handles_error != ERROR_SUCCESS) {
+    SetLastError(g_compare_handles_error);
+  }
+  return g_compare_handles_result;
+}
+
+LONG WINAPI MockNtQueryObject(HANDLE, ULONG info_class, void* buffer, ULONG length, ULONG*) {
+  Check(info_class == 0 && length == 56, "NtQueryObject requests 56-byte ObjectBasicInformation");
+  if (g_ntquery_status < 0) return g_ntquery_status;
+  std::memset(buffer, 0, length);
+  auto* words = static_cast<ULONG*>(buffer);
+  words[1] = g_granted_access;
+  words[2] = g_handle_count;
+  return 0;
+}
+
+ULONG WINAPI MockRtlNtStatusToDosError(LONG status) {
+  return status == static_cast<LONG>(0xC0000008L) ? ERROR_INVALID_HANDLE : ERROR_ACCESS_DENIED;
+}
+
+}  // namespace
+
+DWORD GetLastError() { return g_last_error; }
+void SetLastError(DWORD error) { g_last_error = error; }
+HANDLE GetCurrentProcess() { return &g_proc; }
+DWORD GetCurrentProcessId() { return g_current_pid; }
+HANDLE GetCurrentThread() { return &g_thread; }
+DWORD GetCurrentThreadId() { return g_current_tid; }
+
+BOOL GetProcessTimes(HANDLE, FILETIME* created, FILETIME*, FILETIME*, FILETIME*) {
+  if (!g_proc_times_ok) {
+    g_last_error = ERROR_ACCESS_DENIED;
+    return FALSE;
+  }
+  *created = g_proc_created;
+  return TRUE;
+}
+
+BOOL GetThreadTimes(HANDLE, FILETIME* created, FILETIME*, FILETIME*, FILETIME*) {
+  if (!g_thread_times_ok) {
+    g_last_error = ERROR_ACCESS_DENIED;
+    return FALSE;
+  }
+  *created = g_thread_created;
+  return TRUE;
+}
+
+HANDLE OpenProcess(DWORD, BOOL, DWORD pid) {
+  if (pid == 999999U) {
+    g_last_error = ERROR_INVALID_PARAMETER;
+    return nullptr;
+  }
+  if (pid == 888888U) {
+    g_last_error = ERROR_ACCESS_DENIED;
+    return nullptr;
+  }
+  return &g_proc;
+}
+
+HANDLE OpenThread(DWORD, BOOL, DWORD tid) {
+  if (tid == 777777U) {
+    g_last_error = ERROR_INVALID_PARAMETER;
+    return nullptr;
+  }
+  return &g_thread;
+}
+
+DWORD GetProcessIdOfThread(HANDLE) { return g_current_pid; }
+DWORD WaitForSingleObject(HANDLE, DWORD) { return WAIT_TIMEOUT; }
+BOOL CloseHandle(HANDLE) { return TRUE; }
+
+DWORD GetFileType(HANDLE) {
+  ++g_file_type_calls;
+  return g_file_type;
+}
+
+BOOL GetFileInformationByHandleEx(HANDLE, FILE_INFO_BY_HANDLE_CLASS cls, void* buffer, DWORD size) {
+  ++g_file_id_ex_calls;
+  Check(cls == FileIdInfo, "FileIdentity queries FileIdInfo");
+  Check(size == sizeof(FILE_ID_INFO) && sizeof(FILE_ID_INFO) == 24,
+        "FileIdentity passes exact 24-byte FILE_ID_INFO buffer");
+  if (!g_file_id_ex_succeeds) {
+    g_last_error = g_file_id_ex_error;
+    return FALSE;
+  }
+  std::memcpy(buffer, &g_file_id_ex_value, sizeof(FILE_ID_INFO));
+  return TRUE;
+}
+
+BOOL GetFileInformationByHandle(HANDLE, BY_HANDLE_FILE_INFORMATION* info) {
+  ++g_legacy_info_calls;
+  if (!g_legacy_info_succeeds) {
+    g_last_error = g_legacy_info_error;
+    return FALSE;
+  }
+  *info = g_legacy_info_value;
+  return TRUE;
+}
+
+HMODULE GetModuleHandleW(const wchar_t* name) {
+  if (std::wcscmp(name, L"kernelbase.dll") == 0) {
+    return g_compare_handles_available ? &g_kernelbase_mod : nullptr;
+  }
+  if (std::wcscmp(name, L"ntdll.dll") == 0) {
+    return g_ntquery_available ? &g_ntdll_mod : nullptr;
+  }
+  return nullptr;
+}
+
+FARPROC GetProcAddress(HMODULE module, const char* symbol) {
+  if (module == &g_kernelbase_mod && std::strcmp(symbol, "CompareObjectHandles") == 0) {
+    return reinterpret_cast<FARPROC>(&MockCompareObjectHandles);
+  }
+  if (module == &g_ntdll_mod && std::strcmp(symbol, "NtQueryObject") == 0) {
+    return reinterpret_cast<FARPROC>(&MockNtQueryObject);
+  }
+  if (module == &g_ntdll_mod && std::strcmp(symbol, "RtlNtStatusToDosError") == 0) {
+    return reinterpret_cast<FARPROC>(&MockRtlNtStatusToDosError);
+  }
+  return nullptr;
+}
+
+namespace {
+
+void TestFileIdentityGuardsAndSentinels() {
+  const File kSentinel{0xdeadbeefcafebabeULL, 0x0123456789abcdefULL, 0xfedcba9876543210ULL};
+
+  ResetWin32();
+  Check(FileIdentity(&g_disk_a, nullptr) == EINVAL, "null output File* returns EINVAL");
+  Check(g_file_type_calls == 0 && g_file_id_ex_calls == 0 && g_legacy_info_calls == 0,
+        "null output File* makes zero Win32 queries");
+
+  File untouched = kSentinel;
+  Check(FileIdentity(nullptr, &untouched) == EBADF && untouched == kSentinel,
+        "nullptr HANDLE returns EBADF and preserves caller sentinel");
+  Check(FileIdentity(INVALID_HANDLE_VALUE, &untouched) == EBADF && untouched == kSentinel,
+        "INVALID_HANDLE_VALUE returns EBADF and preserves caller sentinel");
+  Check(g_file_type_calls == 0 && g_file_id_ex_calls == 0 && g_legacy_info_calls == 0,
+        "invalid HANDLEs make zero Win32 queries");
+
+  for (DWORD non_disk : {FILE_TYPE_UNKNOWN, FILE_TYPE_CHAR, FILE_TYPE_PIPE}) {
+    ResetWin32();
+    g_file_type = non_disk;
+    untouched = kSentinel;
+    Check(FileIdentity(&g_pipe, &untouched) == EINVAL && untouched == kSentinel,
+          "non-disk handle returns EINVAL without modifying output");
+    Check(g_file_type_calls == 1 && g_file_id_ex_calls == 0 && g_legacy_info_calls == 0,
+          "non-disk handle stops before FileIdInfo");
+  }
+}
+
+void TestFileIdInfoSuccess() {
+  ResetWin32();
+  g_file_id_ex_value.VolumeSerialNumber = 0xa1b2c3d4e5f60718ULL;
+  const uint64_t expected_low = 0x1122334455667788ULL;
+  const uint64_t expected_high = 0x99aabbccddeeff00ULL;
+  std::memcpy(g_file_id_ex_value.FileId.Identifier, &expected_low, sizeof(uint64_t));
+  std::memcpy(g_file_id_ex_value.FileId.Identifier + sizeof(uint64_t), &expected_high, sizeof(uint64_t));
+
+  File actual{};
+  Check(FileIdentity(&g_disk_a, &actual) == 0, "NTFS/ReFS FileIdInfo succeeds");
+  Check(g_file_id_ex_calls == 1 && g_legacy_info_calls == 0,
+        "FileIdInfo success never invokes legacy GetFileInformationByHandle");
+  Check(actual.volume == 0xa1b2c3d4e5f60718ULL &&
+            actual.id_low == expected_low &&
+            actual.id_high == expected_high,
+        "FileIdInfo preserves full 64-bit volume serial and 128-bit FileId");
+}
+
+void TestFatExfatLegacyFallback() {
+  // FAT32, exFAT, UDF and legacy redirectors return ERROR_INVALID_PARAMETER,
+  // ERROR_INVALID_FUNCTION or ERROR_NOT_SUPPORTED for FileIdInfo.
+  for (DWORD fallback_error : {ERROR_INVALID_PARAMETER, ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED}) {
+    ResetWin32();
+    g_file_id_ex_succeeds = false;
+    g_file_id_ex_error = fallback_error;
+    g_legacy_info_value.dwVolumeSerialNumber = 0x89abcdefU;
+    g_legacy_info_value.nFileIndexHigh = 0xfedcba98U;  // High bit set to check unsigned shift under UBSan.
+    g_legacy_info_value.nFileIndexLow = 0x76543210U;
+
+    File legacy_id{};
+    Check(FileIdentity(&g_disk_a, &legacy_id) == 0,
+          "FAT32/exFAT unsupported FileIdInfo falls back cleanly to GetFileInformationByHandle");
+    Check(g_file_id_ex_calls == 1 && g_legacy_info_calls == 1,
+          "fallback calls GetFileInformationByHandle exactly once");
+    Check(legacy_id.volume == 0x0000000089abcdefULL,
+          "fallback copies 32-bit volume serial into 64-bit File::volume");
+    Check(legacy_id.id_low == 0xfedcba9876543210ULL,
+          "fallback packs nFileIndexHigh:nFileIndexLow into id_low without sign extension");
+    Check(legacy_id.id_high == UINT64_MAX,
+          "fallback tags id_high with UINT64_MAX sentinel");
+
+    // Verify sentinel disambiguation against an NTFS FileIdInfo identity that has
+    // the exact same 32-bit volume serial and 64-bit low file ID (with upper 64 bits 0).
+    ResetWin32();
+    g_file_id_ex_value.VolumeSerialNumber = 0x0000000089abcdefULL;
+    const uint64_t same_low = 0xfedcba9876543210ULL;
+    const uint64_t ntfs_high = 0ULL;
+    std::memcpy(g_file_id_ex_value.FileId.Identifier, &same_low, sizeof(uint64_t));
+    std::memcpy(g_file_id_ex_value.FileId.Identifier + sizeof(uint64_t), &ntfs_high, sizeof(uint64_t));
+    File ntfs_id{};
+    Check(FileIdentity(&g_disk_b, &ntfs_id) == 0, "NTFS zero-extended 128-bit FileId succeeds");
+    Check(!(legacy_id == ntfs_id),
+          "kLegacyFileIndex sentinel keeps legacy identity distinct from NTFS FileIdInfo");
+  }
+
+  // Distinct open files on the same FAT32/exFAT volume stay distinct; same index matches.
+  ResetWin32();
+  g_file_id_ex_succeeds = false;
+  g_file_id_ex_error = ERROR_INVALID_PARAMETER;
+  g_legacy_info_value.dwVolumeSerialNumber = 0x13572468U;
+  g_legacy_info_value.nFileIndexHigh = 0U;
+  g_legacy_info_value.nFileIndexLow = 0x00001000U;
+  File first{}, duplicate{}, second{};
+  Check(FileIdentity(&g_disk_a, &first) == 0 && FileIdentity(&g_disk_a, &duplicate) == 0,
+        "repeated queries of the same FAT32 file succeed");
+  g_legacy_info_value.nFileIndexLow = 0x00001040U;
+  Check(FileIdentity(&g_disk_b, &second) == 0, "second FAT32 file query succeeds");
+  Check(first == duplicate && !(first == second),
+        "FAT32 64-bit file index distinguishes concurrent files on the same volume");
+}
+
+void TestFileIdentityFailures() {
+  const File kSentinel{0xaaaa5555aaaa5555ULL, 0x1111222233334444ULL, 0x5555666677778888ULL};
+
+  // Non-fallback errors from GetFileInformationByHandleEx must NOT fall back!
+  struct ErrorCase {
+    DWORD win_error;
+    int expected_errno;
+  };
+  const ErrorCase direct_errors[] = {
+      {ERROR_ACCESS_DENIED, EACCES},
+      {ERROR_INVALID_HANDLE, EBADF},
+      {ERROR_FILE_NOT_FOUND, ENOENT},
+      {ERROR_SHARING_VIOLATION, EACCES},
+      {ERROR_GEN_FAILURE, EINVAL},
+  };
+  for (const auto& item : direct_errors) {
+    ResetWin32();
+    g_file_id_ex_succeeds = false;
+    g_file_id_ex_error = item.win_error;
+    File out = kSentinel;
+    Check(FileIdentity(&g_disk_a, &out) == item.expected_errno,
+          "non-fallback FileIdInfo failure translates Win32 error directly");
+    Check(g_file_id_ex_calls == 1 && g_legacy_info_calls == 0,
+          "non-fallback FileIdInfo failure never calls GetFileInformationByHandle");
+    Check(out == kSentinel, "non-fallback failure leaves caller File struct untouched");
+  }
+
+  // Fallback triggered, and GetFileInformationByHandle itself fails.
+  for (const auto& item : direct_errors) {
+    ResetWin32();
+    g_file_id_ex_succeeds = false;
+    g_file_id_ex_error = ERROR_INVALID_PARAMETER;
+    g_legacy_info_succeeds = false;
+    g_legacy_info_error = item.win_error;
+    File out = kSentinel;
+    Check(FileIdentity(&g_disk_a, &out) == item.expected_errno,
+          "legacy GetFileInformationByHandle failure returns translated errno");
+    Check(g_file_id_ex_calls == 1 && g_legacy_info_calls == 1,
+          "legacy failure observed after single fallback attempt");
+    Check(out == kSentinel, "legacy failure leaves caller File struct untouched");
+  }
+}
+
+void TestLivenessProbesAndLegacyPruning() {
+  ResetWin32();
+  g_file_id_ex_succeeds = false;
+  g_file_id_ex_error = ERROR_INVALID_PARAMETER;
+  g_legacy_info_value.dwVolumeSerialNumber = 0x44332211U;
+  g_legacy_info_value.nFileIndexHigh = 0x00000002U;
+  g_legacy_info_value.nFileIndexLow = 0x00000099U;
+  File fat_file{};
+  Check(FileIdentity(&g_disk_a, &fat_file) == 0 && fat_file.id_high == UINT64_MAX,
+        "legacy FAT file identity acquired for registry pruning test");
+
+  ProcessIdentity self_proc{};
+  ThreadIdentity self_thread{};
+  Check(CurrentProcessIdentity(&self_proc) == 0 && self_proc.pid == g_current_pid,
+        "CurrentProcessIdentity captures PID and creation timestamp");
+  Check(CurrentThreadIdentity(&self_thread) == 0 && self_thread.tid == g_current_tid,
+        "CurrentThreadIdentity captures TID and process identity");
+  Check(ProbeProcess(self_proc) == Liveness::kAlive, "live process probes as kAlive");
+  Check(ProbeProcess({999999U, 0, self_proc.created}) == Liveness::kDead,
+        "missing PID probes as kDead");
+  Check(ProbeProcess({888888U, 0, self_proc.created}) == Liveness::kUnknown,
+        "access-denied PID probes conservatively as kUnknown");
+  Check(ProbeThread(self_thread) == Liveness::kAlive, "live thread probes as kAlive");
+
+  bool same = false;
+  Check(SameDescription(&g_disk_a, &g_disk_b, &same) == 0 && same,
+        "CompareObjectHandles true reports matching kernel file object");
+  g_compare_handles_result = FALSE;
+  g_compare_handles_error = ERROR_NOT_SAME_OBJECT;
+  Check(SameDescription(&g_disk_a, &g_disk_b, &same) == 0 && !same,
+        "CompareObjectHandles ERROR_NOT_SAME_OBJECT reports distinct file objects");
+
+  uint32_t access = 0, handles = 0;
+  Check(HandleAccess(&g_disk_a, &access, &handles) == 0 &&
+            access == g_granted_access && handles == g_handle_count,
+        "HandleAccess extracts granted_access and handle_count from NtQueryObject");
+
+  // Verify OFD locks on a FAT32/exFAT legacy-identified file survive when
+  // referenced by a live owner and are pruned once the dead owner is removed.
+  auto state = std::make_unique<RegistryState>();
+  Owner ofd_live{Ownership::kDescription, 0x111ULL, 0x222ULL};
+  Owner ofd_dead{Ownership::kDescription, 0x333ULL, 0x444ULL};
+  state->reference_count = 2;
+  state->references[0] = {ofd_live, fat_file, self_proc, 1, 3, 0};
+  state->references[1] = {ofd_dead, fat_file, {999999U, 0, self_proc.created}, 2, 4, 0};
+  state->locks.count = 2;
+  state->locks.records[0] = {fat_file, ofd_live, {0, 64}, Kind::kWrite, 0};
+  state->locks.records[1] = {fat_file, ofd_dead, {64, 128}, Kind::kWrite, 0};
+
+  Pruned pruned{};
+  PruneDeadOwners(state.get(), &pruned);
+  Check(pruned.references == 1 && pruned.description_locks == 1 &&
+            state->reference_count == 1 && state->locks.count == 1 &&
+            state->locks.records[0].owner == ofd_live &&
+            state->locks.records[0].file == fat_file,
+        "PruneDeadOwners retains live OFD lock and prunes dead OFD lock on legacy FAT32 identity");
+}
+
+}  // namespace
+
+int main() {
+  TestFileIdentityGuardsAndSentinels();
+  TestFileIdInfoSuccess();
+  TestFatExfatLegacyFallback();
+  TestFileIdentityFailures();
+  TestLivenessProbesAndLegacyPruning();
+  std::printf("record_lock_liveness contracts all passed: %d checks\n", g_checks);
+  return 0;
+}
