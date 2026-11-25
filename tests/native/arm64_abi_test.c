@@ -14,7 +14,11 @@
 //    va_list converted to System V), with more than six integer arguments;
 //  - a host function pointer from dlsym called directly by guest code;
 //  - code the guest writes and makes PROT_EXEC itself, in an anonymous mapping
-//    and over a libc string (Facebook's force_dlopen).
+//    and over a libc string (Facebook's force_dlopen);
+//  - code moved over code that already ran (mremap, MREMAP_FIXED);
+//  - code rewritten after it ran (an in-place hook, IC IVAU), also while
+//    another thread spins in it, and in code only another thread translated;
+//    IC IALLU is SIGILL (GESHER_ARM64_ABI_CRASH).
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -289,8 +293,8 @@ static void test_written_code(void) {
     int ok = mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
     check("calling code made PROT_EXEC by mprotect", ok && ((int (*)(void))code)() == 42);
   }
-  // Still mapped: the translator keeps the blocks it translated at an address
-  // (it does not act on IC IVAU), so a new mapping there would run the old code.
+  // Still mapped: a new mapping at the same address, written without an IC
+  // instruction, could run the blocks translated for the old one.
   uint32_t* rwx =
       mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (rwx != MAP_FAILED) {
@@ -319,6 +323,202 @@ static void test_written_code(void) {
   void* handle = ok ? call("libdl.so", RTLD_NOW, dlopen) : NULL;
   check("force_dlopen: dlopen through the trampoline", handle != NULL);
   check("force_dlopen: dlsym on its handle", handle != NULL && dlsym(handle, "dlopen") != NULL);
+}
+
+// Code rewritten after it ran: a packer's inline hook over a function already
+// called (mprotect RWX, write, mprotect R-X, as the kernel then makes the new
+// instructions visible), and a JIT's rewrite followed by IC IVAU
+// (__builtin___clear_cache) alone. Each call must run the current instructions.
+static int __attribute__((noinline)) call_code(const uint32_t* code) { return ((int (*)(void))code)(); }
+
+static void test_rewritten_code(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  uint32_t* code = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  check("mmap for rewritten code", code != MAP_FAILED);
+  if (code == MAP_FAILED) return;
+  code[0] = 0x52800020;  // mov w0, #1
+  code[1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)code, (char*)(code + 2));
+  int ok = mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("rewritten code: first version runs", ok && call_code(code) == 1 && call_code(code) == 1);
+  ok = mprotect(code, page, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  code[0] = 0x52800040;  // mov w0, #2
+  ok = ok && mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("rewritten code: an in-place hook (RWX, write, R-X) runs", ok && call_code(code) == 2);
+  ok = mprotect(code, page, PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+  check("rewritten code: still the hook while writable", ok && call_code(code) == 2);
+  code[0] = 0x52800060;  // mov w0, #3
+  __builtin___clear_cache((char*)code, (char*)(code + 1));
+  check("rewritten code: IC IVAU makes a rewrite visible", ok && call_code(code) == 3);
+  // Two functions a page apart, each rewritten with its own IC IVAU line.
+  code[0] = 0x52800080;  // mov w0, #4
+  code[page / 4 - 2] = 0x52800020;  // mov w0, #1
+  code[page / 4 - 1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)code, (char*)(code + 1));
+  __builtin___clear_cache((char*)(code + page / 4 - 2), (char*)(code + page / 4));
+  ok = ok && call_code(code) == 4 && call_code(code + page / 4 - 2) == 1;
+  code[page / 4 - 2] = 0x528000A0;  // mov w0, #5
+  __builtin___clear_cache((char*)(code + page / 4 - 2), (char*)(code + page / 4 - 1));
+  check("rewritten code: IC IVAU of separate lines", ok && call_code(code + page / 4 - 2) == 5);
+  // Both functions rewritten, then IC IVAU of each line and one ISB: the
+  // first line must not be lost when the second does not extend its range.
+  ok = ok && call_code(code) == 4 && call_code(code + page / 4 - 2) == 5;
+  code[0] = 0x528000C0;             // mov w0, #6
+  code[page / 4 - 2] = 0x528000E0;  // mov w0, #7
+  __asm__ volatile("dc cvau, %0\n\t"
+                   "dc cvau, %1\n\t"
+                   "dsb ish\n\t"
+                   "ic ivau, %0\n\t"
+                   "ic ivau, %1\n\t"
+                   "dsb ish\n\t"
+                   "isb"
+                   :
+                   : "r"(code), "r"(code + page / 4 - 2)
+                   : "memory");
+  check("rewritten code: IC IVAU of two separate lines, one ISB",
+        ok && call_code(code) == 6 && call_code(code + page / 4 - 2) == 7);
+  munmap(code, page);
+}
+
+// Code moved by mremap: a buffer of new code moved (MREMAP_FIXED) over pages
+// whose older code already ran, then made R-X, runs the new code; the libc
+// function and the raw syscall alike. Code moved from R-X pages runs at its
+// new address.
+static uint32_t* rw_code(long page, uint32_t mov) {
+  uint32_t* p = mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (p == MAP_FAILED) return NULL;
+  p[0] = mov;
+  p[1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)p, (char*)(p + 2));
+  return p;
+}
+
+static void test_moved_code(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  uint32_t* code = rw_code(page, 0x52800020);  // mov w0, #1
+  int ok = code != NULL && mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("moved code: the first version runs", ok && call_code(code) == 1 && call_code(code) == 1);
+  if (!ok) return;
+  uint32_t* buf = rw_code(page, 0x528000C0);  // mov w0, #6
+  ok = buf != NULL &&
+       mremap(buf, page, page, MREMAP_MAYMOVE | MREMAP_FIXED, code) == (void*)code &&
+       mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("moved code: mremap(MREMAP_FIXED) over run code, R-X", ok && call_code(code) == 6);
+  buf = rw_code(page, 0x528000E0);  // mov w0, #7
+  ok = ok && buf != NULL &&
+       syscall(SYS_mremap, buf, page, page, MREMAP_MAYMOVE | MREMAP_FIXED, code) == (long)code &&
+       mprotect(code, page, PROT_READ | PROT_EXEC) == 0;
+  check("moved code: syscall(SYS_mremap) over run code, R-X", ok && call_code(code) == 7);
+  // MREMAP_FIXED, as MREMAP_MAYMOVE alone may leave it in place.
+  uint32_t* spare = mmap(NULL, page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  uint32_t* moved = ok && spare != MAP_FAILED
+                        ? mremap(code, page, page, MREMAP_MAYMOVE | MREMAP_FIXED, spare)
+                        : MAP_FAILED;
+  check("moved code: R-X code runs after a move", moved == spare && call_code(moved) == 7);
+  // A failed mremap keeps its errno: the source is no longer mapped.
+  errno = 0;
+  check("mremap of an unmapped range fails with EFAULT",
+        moved == spare && syscall(SYS_mremap, code, page, page, 0) == -1 && errno == EFAULT);
+  munmap(moved == spare ? moved : code, page);
+}
+
+// Another thread rewrites code this one is running in a loop that never
+// leaves guest code: IC IVAU is broadcast, and the spinning thread's next ISB
+// runs the new instructions (it must not keep the old ones and spin forever).
+static uint32_t* spin_code;
+static atomic_int spin_started, spin_give_up, spin_saw;
+
+static void* spin_thread(void* arg) {
+  (void)arg;
+  int calls = 0;
+  int r;
+  while ((r = call_code(spin_code)) == 1 && !atomic_load_explicit(&spin_give_up, memory_order_relaxed)) {
+    if (++calls == 1000) atomic_store(&spin_started, 1);
+    __asm__ volatile("isb" ::: "memory");
+  }
+  atomic_store(&spin_saw, r);
+  return NULL;
+}
+
+static void test_rewritten_code_other_thread(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  spin_code = mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  check("mmap for code another thread rewrites", spin_code != MAP_FAILED);
+  if (spin_code == MAP_FAILED) return;
+  spin_code[0] = 0x52800020;  // mov w0, #1
+  spin_code[1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)spin_code, (char*)(spin_code + 2));
+  pthread_t t;
+  if (pthread_create(&t, NULL, spin_thread, NULL) != 0) {
+    check("rewritten code: a thread spinning in guest code", 0);
+    return;
+  }
+  struct timespec ms = {0, 1000000};
+  for (int i = 0; i < 5000 && !atomic_load(&spin_started); ++i) nanosleep(&ms, NULL);
+  nanosleep(&ms, NULL);
+  spin_code[0] = 0x52800040;  // mov w0, #2
+  __builtin___clear_cache((char*)spin_code, (char*)(spin_code + 1));
+  for (int i = 0; i < 5000 && atomic_load(&spin_saw) == 0; ++i) nanosleep(&ms, NULL);
+  int saw = atomic_load(&spin_saw);
+  atomic_store(&spin_give_up, 1);
+  pthread_join(t, NULL);
+  check("rewritten code: a thread spinning in guest code runs the rewrite",
+        atomic_load(&spin_started) && saw == 2);
+  munmap(spin_code, page);
+}
+
+// Code another thread translated, rewritten while that thread waits outside
+// it: the translator routes IC IVAU to each Jit that translated the page
+// (JitCode, compat/arm64/dll/translator.cc), here only the other thread's,
+// since this thread never runs the code. A handshake through atomics orders
+// the steps; nothing depends on timing.
+static uint32_t* routed_code;
+static atomic_int routed_step, routed_first, routed_second;
+
+static void* routed_thread(void* arg) {
+  (void)arg;
+  atomic_store(&routed_first, call_code(routed_code));
+  atomic_store(&routed_step, 1);  // translated and ran: the main thread may rewrite
+  while (atomic_load(&routed_step) != 2) {
+  }
+  atomic_store(&routed_second, call_code(routed_code));
+  return NULL;
+}
+
+static void test_rewritten_code_translated_by_other_thread(void) {
+  long page = sysconf(_SC_PAGESIZE);
+  routed_code = mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  check("mmap for code another thread translated", routed_code != MAP_FAILED);
+  if (routed_code == MAP_FAILED) return;
+  routed_code[0] = 0x52800020;  // mov w0, #1
+  routed_code[1] = 0xD65F03C0;  // ret
+  __builtin___clear_cache((char*)routed_code, (char*)(routed_code + 2));
+  pthread_t t;
+  if (pthread_create(&t, NULL, routed_thread, NULL) != 0) {
+    check("rewritten code: a thread that translated it", 0);
+    munmap(routed_code, page);
+    return;
+  }
+  while (atomic_load(&routed_step) != 1) {
+  }
+  routed_code[0] = 0x52800040;  // mov w0, #2
+  __builtin___clear_cache((char*)routed_code, (char*)(routed_code + 1));
+  atomic_store(&routed_step, 2);
+  pthread_join(t, NULL);
+  check("rewritten code: the thread that translated it runs the rewrite",
+        atomic_load(&routed_first) == 1 && atomic_load(&routed_second) == 2);
+  munmap(routed_code, page);
+}
+
+// IC IALLU is an EL1 instruction, UNDEFINED at EL0: the process gets SIGILL
+// (GESHER_ARM64_ABI_CRASH=ic-iallu: a run that must end with that report).
+static void crash_mode(void) {
+  const char* mode = getenv("GESHER_ARM64_ABI_CRASH");
+  if (mode != NULL && strcmp(mode, "ic-iallu") == 0) {
+    __asm__ volatile("ic iallu" ::: "memory");
+    printf("ic iallu: no SIGILL\n");
+    exit(1);
+  }
 }
 
 // Called by arm64_elf_test with the trampoline of a host function: re-protects
@@ -371,6 +571,7 @@ static int __attribute__((noinline)) protected_frame(const char* s) {
 
 int gesher_selftest(const char* dir);
 int gesher_selftest(const char* dir) {
+  crash_mode();
   failures = 0;
   printf("arm64_abi_test:\n");
   check("stack protector frames return", protected_frame("guarded") == 7);
@@ -384,6 +585,10 @@ int gesher_selftest(const char* dir) {
   test_va_list();
   test_host_pointer();
   test_written_code();
+  test_rewritten_code();
+  test_moved_code();
+  test_rewritten_code_other_thread();
+  test_rewritten_code_translated_by_other_thread();
   failures += Arm64FpcrContracts();
   failures += Arm64FpsrContracts();
   printf(failures == 0 ? "arm64_abi_test: all passed\n" : "arm64_abi_test: %d failed\n", failures);
