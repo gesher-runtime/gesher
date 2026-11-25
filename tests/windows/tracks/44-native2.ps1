@@ -109,6 +109,25 @@ foreach ($a in $abis) {
   }
 }
 
+# --- 1b. eglDestroyContext while another guest thread draws (issue #485) ------------
+# gesher.EglContextDestroyTest System.load()s libeglcontextdestroy.so
+# (tests/native2/egl_context_destroy_jni.cpp; arm64-v8a through the
+# translator): two pthreads, each with its own context of the default display,
+# stepped so that thread B destroys its released context right after thread A's
+# last GL call, then A draws (tests/native/egl_context_destroy_scenarios.h).
+# Before compat/angle/patches/0001 that draw faulted in libGLESv2.dll.
+foreach ($a in $abis) {
+  Check "native2 ($($a.Tag)): eglDestroyContext on one thread while another keeps drawing, through dalvikvm on WARP" {
+    N2Run "$n2Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+      '-Xint', '-Xusejit:false', '-cp', (NoDrive "$n2/native2-test.dex"), 'gesher.EglContextDestroyTest',
+      (NoDrive "$n2/$($a.Abi)/libeglcontextdestroy.so")) (Get-Location).Path `
+      @{ GESHER_EGL_DEVICE = 'warp'; LD_LIBRARY_PATH = (NoDrive "$n2/$($a.Abi)") } 300
+  } @('egl_context_destroy: ok: glUseProgram then draw: thread A''s draw after X''s destruction has its own program''s color',
+      'egl_context_destroy: ok: draw with the same program: thread A''s draw after X''s destruction has its own program''s color',
+      'egl_context_destroy: ok: destroying thread has another context current: thread B''s context C still draws',
+      'egl_context_destroy all passed')
+}
+
 # --- 2. Popular NDK libraries' own tests, through gesher-exec -----------------------
 # Android ELF executables built by the NDK (tests/native2/build-third-party.sh)
 # with the shim as their libc: zlib's example and minigzip against libz.so,

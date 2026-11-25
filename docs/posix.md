@@ -212,7 +212,13 @@ closed three of this layer's leftovers:
 - `signal()` is still the CRT's; signal dispositions set with it are not seen
   by `kill` from another process (use `sigaction`).
 - `/proc/<pid>` exists only for this process; `/proc/self/maps` has no
-  `[anon:...]` names and its inode/device fields are 0.
+  `[anon:...]` names, and its device and inode fields are those `stat`
+  reports for a mapped file (0 for anonymous memory). Its first read maps
+  `/system/bin/linker64` (Gesher's ELF loader under Android's name, ADR 0096)
+  for the rest of the process's life, so the list has it, as every process on
+  a 64-bit device has its linker; `/proc/self/maps` and `/proc/self/fd` name
+  that file `/system/bin/linker64`, as `realpath` does; changes through that
+  name fail with `EROFS`.
 - Permissions are the read-only attribute only: regular files show
   `0755` (`0555` read-only) and `access(X_OK)` holds for every file (native2,
   ADR 0057), as on an NTFS volume mounted on Linux; `chmod` changes only the

@@ -2,8 +2,29 @@
 # Gesher Control Center (לוח הבקרה של גשר) - GUI Dashboard for apps and Google Play services.
 
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
 $here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Resolve-Path (Join-Path $PWD 'tools/package')).Path }
+. (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Set-GesherProfileEnvironment $here
+
+# One Control Center. A second start (the Start menu again, or an app's "App info", which
+# the system server answers by writing the package here and opening the panel:
+# ControlCenter.java) signals the open panel, which comes to the front and takes the
+# request on its live-refresh timer, and exits. The mutex is only a name (never owned);
+# a panel closes its handles as its window closes, so a start right after that opens a
+# new one. "Reopen" after an update starts the new version while the old one is still
+# open: GESHER_PANEL_REOPEN lets that start through.
+$script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
+Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
+$script:PanelInstanceCreated = $false
+$panelName = Get-GesherControlPanelName $root
+$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
+$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
+if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
+    $null = $script:PanelShowEvent.Set()
+    exit 0
+}
+
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
 
 # Set explicit AppUserModelID so Windows taskbar groups under Gesher instead of PowerShell host
 try {
@@ -14,17 +35,7 @@ try {
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
 . (Join-Path $here 'gesher-panel-view.ps1')
-. (Join-Path $here 'gesher-runtime-files.ps1')
-$root = Set-GesherProfileEnvironment $here
 $script:UpdateDirectory = Join-Path $root 'updates'
-
-# One Control Center. A second start (the Start menu again, or an app's "App info", which
-# the system server answers by writing the package here and opening the panel:
-# ControlCenter.java) signals the open panel, which comes to the front and takes the
-# request on its live-refresh timer, and exits. The mutex is only a name (never owned);
-# a panel closes its handles as its window closes, so a start right after that opens a
-# new one. "Reopen" after an update starts the new version while the old one is still
-# open: GESHER_PANEL_REOPEN lets that start through.
 # Legacy single-file requests are imported for an older running server.
 $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
 $script:PanelRequestsDir = Join-Path $root 'data/system/control-panel-requests'
@@ -33,20 +44,12 @@ $script:PanelResultsDir = Join-Path $root 'data/system/control-panel-results'
 # The package whose details are shown for a request: a new request never replaces its tokens.
 $script:PanelShowingFile = Join-Path $root 'data/system/control-panel-showing'
 $script:PanelLogFile = Join-Path $root 'logs/control-panel.log'
-$script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
 # Apps whose tasks are windows of their own (ADR 0088; AppWindows.java): separate.<package>=true.
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 # Gesher's own proxy (ProxySetting.java, docs/network.md): proxy=<every app>, proxy.<package>=<one app>.
 $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
-Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
-$script:PanelInstanceCreated = $false
-$panelName = Get-GesherControlPanelName $root
-$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
-$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
-if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
-    $null = $script:PanelShowEvent.Set()
-    exit 0
-}
+# Gesher's camera settings: image_picker_fallback=true.
+$script:CameraFile = Join-Path $root 'data/system/camera.properties'
 
 $isHe = ($script:GesherUiLanguage -eq 'he')
 $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
@@ -58,6 +61,40 @@ $script:ActionState = @{ Worker = $null; Completing = $false; Closed = $false }
 $script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{} }
 $script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; PendingFirst = $null; Tick = 0; WasVisible = $false; RecoveryAt = $null }
 $script:MetadataMonitor = $null
+$script:UpdatingCameraView = $false
+
+# Camera image-picker fallback setting (data/system/camera.properties).
+function Get-CameraImagePickerEnabled {
+    if ([string]::IsNullOrEmpty($script:CameraFile) -or -not (Test-Path -LiteralPath $script:CameraFile)) { return $false }
+    $enabled = $false
+    try {
+        foreach ($line in Get-Content -LiteralPath $script:CameraFile) {
+            if ($line -match '^\s*image_picker_fallback\s*[=:]\s*(.+?)\s*$') {
+                $enabled = ($Matches[1].Trim().ToLowerInvariant() -eq 'true')
+            }
+        }
+    } catch { return $false }
+    return $enabled
+}
+
+function Set-CameraImagePickerEnabled([bool] $enabled) {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if (Test-Path -LiteralPath $script:CameraFile) {
+        foreach ($line in Get-Content -LiteralPath $script:CameraFile) {
+            if ($line -match '^\s*image_picker_fallback\s*[=:]') { continue }
+            $lines.Add($line)
+        }
+    } else {
+        $lines.Add('#Gesher camera settings')
+    }
+    if ($enabled) { $lines.Add('image_picker_fallback=true') }
+    $directory = Split-Path -Parent $script:CameraFile
+    if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
+    # The system server reads the file at any time: write a sibling, then move it into place.
+    $temporary = $script:CameraFile + '.tmp'
+    [IO.File]::WriteAllLines($temporary, $lines, [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporary -Destination $script:CameraFile -Force
+}
 
 # Packages whose tasks are windows of their own (AppWindows.java's file).
 function Get-SeparateWindowApps {
@@ -357,6 +394,7 @@ function Get-StateStamp {
         Get-FileStamp (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
         Get-FileStamp $script:AppWindowsFile
         Get-FileStamp $script:ProxyFile
+        Get-FileStamp $script:CameraFile
     ) -join '|')
 }
 
@@ -385,13 +423,19 @@ function Update-PanelMetadataWatch {
         (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
         $script:AppWindowsFile
         $script:ProxyFile
+        $(if (-not [string]::IsNullOrEmpty($script:CameraFile)) { $script:CameraFile })
     ) + @($script:ViewState.AppFiles)
     $script:MetadataMonitor.SetFiles($root, [string[]]$paths)
 }
 
 function Invoke-PanelMetadataVisibilityChanged {
     if (-not (Test-PanelMetadataVisible)) {
+        $script:LiveState.InitialShowPending = $false
         $script:LiveState.WasVisible = $false
+        return
+    }
+    if ($script:LiveState.InitialShowPending) {
+        $script:LiveState.WasVisible = $true
         return
     }
     # Restore resynchronizes even if the watcher overflowed or a directory was replaced.
@@ -401,6 +445,11 @@ function Invoke-PanelMetadataVisibilityChanged {
 
 function Invoke-PanelMetadataActivated {
     try {
+        if ($script:LiveState.InitialShowPending -and (Test-PanelMetadataVisible)) {
+            $script:LiveState.InitialShowPending = $false
+            $script:LiveState.WasVisible = $true
+            return
+        }
         Invoke-PanelMetadataVisibilityChanged
         if (-not $script:IsBusy -and (Test-PanelMetadataVisible)) {
             $script:LiveState.WasVisible = $true
@@ -414,7 +463,16 @@ function Initialize-PanelMetadata {
         $context = [System.Windows.Threading.DispatcherSynchronizationContext]::new($window.Dispatcher,
             [System.Windows.Threading.DispatcherPriority]::Background)
         $script:MetadataMonitor = [Gesher.PanelChangeMonitor]::new($context)
-        $script:MetadataMonitor.add_Changed({ try { Request-PanelMetadataRefresh } catch { } })
+        $script:MetadataMonitor.add_Changed({
+            try {
+                if ($null -ne $script:LiveState.IgnoreChangedGeneration) {
+                    $ignored = $script:LiveState.IgnoreChangedGeneration
+                    $script:LiveState.IgnoreChangedGeneration = $null
+                    if ($script:MetadataMonitor -and $script:MetadataMonitor.Generation -eq $ignored) { return }
+                }
+                Request-PanelMetadataRefresh
+            } catch { }
+        })
     } catch { $script:MetadataMonitor = $null }
     $window.Add_StateChanged({ Invoke-PanelMetadataVisibilityChanged })
     $window.Add_IsVisibleChanged({ Invoke-PanelMetadataVisibilityChanged })
@@ -541,6 +599,7 @@ $btnProxyAll = $window.FindName('BtnProxyAll')
 $updateVersionText = $window.FindName('UpdateVersionText')
 $updateStatusText = $window.FindName('UpdateStatusText')
 $automaticUpdateChecks = $window.FindName('AutomaticUpdateChecks')
+$cameraImagePickerFallback = $window.FindName('CameraImagePickerFallback')
 $btnCheckUpdate = $window.FindName('BtnCheckUpdate')
 $btnInstallUpdate = $window.FindName('BtnInstallUpdate')
 $btnCancelUpdate = $window.FindName('BtnCancelUpdate')
@@ -552,8 +611,8 @@ $panelLayout = $window.FindName('PanelLayout')
 
 function Update-PanelWindowLayout {
     # A short or scaled display can scroll the complete dashboard. Its app list
-    # keeps a useful viewport rather than being squeezed behind the update card.
-    $panelLayout.Height = [Math]::Max(640, $panelScroll.ActualHeight - 48)
+    # keeps a useful viewport rather than being squeezed behind the update and camera cards.
+    $panelLayout.Height = [Math]::Max(740, $panelScroll.ActualHeight - 48)
 }
 
 function Set-Busy([bool] $busy, [string] $msg = '') {
@@ -715,6 +774,14 @@ function Update-AppsView($installed) {
 
 # Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
 function Refresh-Dashboard {
+    # Subscribe before the first snapshot. Only the setup notification already covered
+    # by that snapshot may be ignored; changes during the read must remain dirty.
+    if ($script:MetadataMonitor -and $script:MetadataMonitor.WatcherCount -eq 0) {
+        Update-PanelMetadataWatch
+        if ($script:MetadataMonitor.WatcherCount -gt 0) {
+            $script:LiveState.IgnoreChangedGeneration = $script:MetadataMonitor.Generation
+        }
+    }
     $generation = if ($script:MetadataMonitor) { $script:MetadataMonitor.Generation } else { 0 }
     # Stamps precede reads so notifications or visible recovery notice a change during the read.
     $stateStamp = Get-StateStamp
@@ -724,10 +791,14 @@ function Refresh-Dashboard {
     if (-not $script:LiveState.PendingSince) { Request-PanelMetadataRefresh }
     Update-DeviceView (Get-DeviceStatus)
     Update-MicrogView (Get-MicrogStatus)
+    if (Get-Command Update-CameraView -ErrorAction SilentlyContinue) { Update-CameraView }
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
     Update-PanelMetadataWatch
+    if ($null -eq $script:LiveState.Stamp -and -not (Test-PanelMetadataVisible)) {
+        $script:LiveState.InitialShowPending = $true
+    }
     $script:LiveState.Stamp = $stateStamp
     $script:LiveState.AppsStamp = $appsStamp
     $script:LiveState.RecoveryAt = [DateTime]::UtcNow.AddMilliseconds($script:LiveRefreshRecoveryMs)
@@ -760,6 +831,7 @@ function Invoke-LiveRefreshTick {
         Refresh-Dashboard
         return
     }
+    $live.InitialShowPending = $false
     $now = [DateTime]::UtcNow
     if (-not $live.RecoveryAt -or $now -ge $live.RecoveryAt) {
         $live.RecoveryAt = $now.AddMilliseconds($script:LiveRefreshRecoveryMs)
@@ -1809,6 +1881,27 @@ $btnInstallUpdate.Add_Click({
 $btnCancelUpdate.Add_Click({ Request-PanelUpdateCancellation })
 $automaticUpdateChecks.Add_Checked({ Set-PanelAutomaticUpdateChecks $true })
 $automaticUpdateChecks.Add_Unchecked({ Set-PanelAutomaticUpdateChecks $false })
+
+function Update-CameraView {
+    if ($null -eq $cameraImagePickerFallback) { return }
+    $script:UpdatingCameraView = $true
+    try { $cameraImagePickerFallback.IsChecked = [bool](Get-CameraImagePickerEnabled) }
+    finally { $script:UpdatingCameraView = $false }
+}
+
+function Set-PanelCameraImagePickerFallback([bool] $enabled) {
+    if ($script:UpdatingCameraView) { return }
+    try {
+        Set-CameraImagePickerEnabled $enabled
+        $statusMessage.Text = Get-GesherText 'cp_camera_image_picker_saved'
+    } catch {
+        Show-ModernMessageDialog -Title (Get-GesherText 'cp_title') -Message (Get-GesherText 'cp_camera_image_picker_failed' @($_.Exception.Message)) -IsError $true
+        Update-CameraView
+    }
+}
+
+$cameraImagePickerFallback.Add_Checked({ Set-PanelCameraImagePickerFallback $true })
+$cameraImagePickerFallback.Add_Unchecked({ Set-PanelCameraImagePickerFallback $false })
 $btnUpdateNotes.Add_Click({
     try {
         if ($script:UpdateState.Release) { Start-Process -FilePath $script:UpdateState.Release.Url }
