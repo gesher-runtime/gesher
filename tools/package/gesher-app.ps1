@@ -19,6 +19,9 @@
 #   gesher-app my.apk --activity .Other [--ez KEY true|false]...
 #   gesher-app install my.apk          install or update the package (and its
 #                                      Start menu shortcut, Gesher Apps\<label>)
+#   gesher-app install my.apk --desktop-shortcut  ... and a shortcut on the user's
+#                                      desktop too (gesher-launch's install confirmation;
+#                                      not in portable Gesher or with GESHER_SHORTCUTS=0)
 #   gesher-app launch com.example      start an installed package (its shortcut's
 #                                      command; `launch my.apk` = `gesher-app my.apk`)
 #   gesher-app uninstall com.example   uninstall a package (and its shortcut and
@@ -47,6 +50,11 @@
 #                                      on an app's toast, given to the device (ADR 0051)
 #   gesher-app apk-icon my.apk         (the .apk icon handler runs it) draw my.apk's app
 #                                      icon for Explorer, without installing it
+#   gesher-app apk-info my.apk OUT     (gesher-launch runs it before it asks to install
+#                                      an APK opened from Explorer) my.apk's package,
+#                                      version, label and icon, and the installed
+#                                      version, as key=value lines in the file OUT;
+#                                      no device, nothing installed
 #   gesher-app my.apk --single-process the app alone in this process, with
 #                                      stand-in services (no device)
 #   gesher-app my.apk --system-server  a device of this run only, the app in
@@ -101,10 +109,10 @@ $root = Set-GesherProfileEnvironment $here
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'windows', 'special-access', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'apk-info', 'proxy', 'windows', 'special-access', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--detach | --wait | --single-process | --system-server]')
-  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared'
+  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared'
   Write-Host '       gesher-app spell-checker list|use COMPONENT|automatic|enable|disable|language ID'
   Write-Host '       gesher-app cameras [rear CAMERA_ID | reset]'
   Write-Host '       gesher-app mobile-data [on|off] | mobile-data roaming [on|off]'
@@ -173,9 +181,21 @@ $apkFull = $null
 if ($commands -notcontains $command) {
   $apkFull = (Resolve-Path $command).Path
 } elseif ($rest.Count -gt 0 -and ($command -eq 'install' -or $command -eq 'apk-icon' -or
+    $command -eq 'apk-info' -or
     ($command -eq 'launch' -and (Test-Path -LiteralPath $rest[0] -PathType Leaf)))) {
   $apkFull = (Resolve-Path -LiteralPath $rest[0]).Path
   $rest = @($rest | Select-Object -Skip 1)
+}
+# apk-info's output file (it need not exist yet): a full Windows path, converted below
+# as the APK's is.
+$apkInfoOut = $null
+if ($command -eq 'apk-info') {
+  if (-not $apkFull -or $rest.Count -ne 1) {
+    Write-Host ((Get-GesherText 'usage') + 'gesher-app apk-info APK OUT')
+    exit 2
+  }
+  $apkInfoOut = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($rest[0])
+  $rest = @()
 }
 Set-Location -LiteralPath $here
 # A Windows path as gesher-base's path model reads it (docs/posix.md): no drive
@@ -315,6 +335,7 @@ try {
   if ($commands -contains $command) {
     $launcherArgs = @($command)
     if ($apkFull) { $launcherArgs += UserPath $apkFull }
+    if ($apkInfoOut) { $launcherArgs += UserPath $apkInfoOut }
     Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments @launcherArgs @rest
     exit $LASTEXITCODE
   }

@@ -40,6 +40,14 @@ import java.util.Set;
  * uninstalling Gesher removes the whole folder (gesher.iss). What a shortcut belongs to is
  * recorded in {@code <data dir>/gesher-shell/shortcut.properties}, next to {@code icon.ico}.
  *
+ * <p>Only when the user asks for one ({@code gesher-app install --desktop-shortcut}, the
+ * install confirmation's checkbox), the app also gets a desktop shortcut, the same link in
+ * the user's Desktop folder ({@link #createDesktopLinkQuietly}), recorded as {@code
+ * desktop_link}. Later launches keep the record but never make the link again (the user may
+ * have deleted it); uninstalling the package removes the recorded link ({@link
+ * #unregisterQuietly}), and so does uninstalling Gesher (gesher.iss). Portable Gesher and
+ * {@code GESHER_SHORTCUTS=0} make none.
+ *
  * <p>The custom schemes of a package's BROWSABLE VIEW filters (an OAuth redirect, as AppAuth's
  * RedirectUriReceiverActivity declares one) become per-user URL protocols that run {@code
  * gesher-launch view <package> "%1"} ({@link #registerUrlProtocolsQuietly}): a URL the Windows
@@ -209,6 +217,7 @@ public final class AppShell {
             // windows get its icon, but no Start menu shortcut, which gesher-app-microg.ps1
             // -Remove would leave behind; the Control Center opens microG's settings.
             removeShortcut(old);
+            removeDesktopLink(old);
             if (old != null) new File(shellDir(packageName), RECORD).delete();
             writeWindowIcon(addon, packageName, changed);
             return;
@@ -218,6 +227,7 @@ public final class AppShell {
             // As a launcher's app list: only apps with a MAIN/LAUNCHER activity.
             log(packageName + " has no launcher activity: no Start menu shortcut");
             removeShortcut(old);
+            removeDesktopLink(old);
             if (old != null) new File(shellDir(packageName), RECORD).delete();
             writeWindowIcon(pkg, packageName, changed);
             return;
@@ -256,6 +266,10 @@ public final class AppShell {
         record.setProperty("app_user_model_id", id);
         record.setProperty("target", kind);
         record.setProperty("ui_language", UiText.language());
+        // The desktop shortcut the user asked for stays recorded (for its removal), and is
+        // never made again here: the user may have deleted it.
+        String desktopLink = old != null ? old.getProperty("desktop_link") : null;
+        if (desktopLink != null) record.setProperty("desktop_link", desktopLink);
         dir.mkdirs();
         Device.write(new File(dir, RECORD), record);
         log("Start menu shortcut " + link + ": " + icon.label + ", AppUserModelID " + id
@@ -327,6 +341,7 @@ public final class AppShell {
             try { removeAllDynamicShortcuts(packageName); }
             catch (RuntimeException failure) { log("dynamic shortcut cleanup needs retry for " + packageName); }
             removeShortcut(shortcut);
+            removeDesktopLink(shortcut);
             File dir = shellDir(packageName);
             new File(dir, ICON).delete();
             new File(dir, RECORD).delete();
@@ -336,6 +351,126 @@ public final class AppShell {
             rewriteApkIcons(packageName, null);
         } catch (Throwable t) {
             log("the Start menu shortcut of " + packageName + " was not removed: " + t);
+        }
+    }
+
+    // --- the desktop shortcut ------------------------------------------------------------
+
+    /**
+     * {@code gesher-app install --desktop-shortcut}: after {@link #registerQuietly} made the
+     * package's Start menu shortcut, the same shortcut (target, arguments, icon, description,
+     * AppUserModelID) in the user's Desktop folder, {@code <label>.lnk} ({@code <label>
+     * (<package>).lnk} when another file has that name), recorded as {@code desktop_link}.
+     * Never in portable Gesher or with {@code GESHER_SHORTCUTS=0}. Logs what it did, or why
+     * there is none; never throws. Returns whether the desktop shortcut was made.
+     */
+    public static boolean createDesktopLinkQuietly(String packageName) {
+        try {
+            return createDesktopLink(packageName);
+        } catch (Throwable t) {
+            log("desktop shortcut for " + packageName + " failed: " + t);
+            return false;
+        }
+    }
+
+    private static boolean createDesktopLink(String packageName) throws Exception {
+        if (portableMode()) {
+            log("no desktop shortcut for " + packageName
+                    + ": portable Gesher makes no shortcuts on this PC");
+            return false;
+        }
+        if ("0".equals(System.getenv(ENV_SHORTCUTS))) {
+            log("no desktop shortcut for " + packageName + ": " + ENV_SHORTCUTS + "=0");
+            return false;
+        }
+        Properties record = shortcutOf(packageName);
+        if (record == null || record.getProperty("link") == null) {
+            // A copy of the Start menu shortcut: none without one (no launcher activity, not
+            // an installed Gesher; registerQuietly said why).
+            log("no desktop shortcut for " + packageName + ": it has no Start menu shortcut");
+            return false;
+        }
+        String desktop = Shell.desktopFolder();
+        if (desktop == null || desktop.isEmpty()) {
+            log("desktop shortcut for " + packageName + " failed: no Desktop folder");
+            return false;
+        }
+        String label = record.getProperty("label", packageName);
+        String old = record.getProperty("desktop_link");
+        String mine = isDesktopLink(old) ? old : null;
+        String link = linkPath(desktop, label, packageName, mine);
+        if (Shell.exists(link) && !link.equalsIgnoreCase(mine)) {
+            log("desktop shortcut for " + packageName + " failed: " + link
+                    + " exists and is not this app's");
+            return false;
+        }
+        String gesher = installDir();
+        String systemRoot = System.getenv("SystemRoot");
+        if (systemRoot == null || systemRoot.isEmpty()) systemRoot = "C:\\Windows";
+        String psExe = systemRoot + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+        String psScript = gesher + "\\gesher-app.ps1";
+        String launchExe = gesher + "\\gesher-launch.exe";
+        // As the Start menu shortcut (register).
+        boolean viaLauncher = Shell.exists(launchExe);
+        String target = viaLauncher ? launchExe : Shell.exists(psExe) ? psExe : "powershell.exe";
+        String arguments = viaLauncher ? "launch " + packageName
+                : "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + psScript
+                        + "\" launch " + packageName;
+        String id = record.getProperty("app_user_model_id", appUserModelId(packageName));
+        int hr = Shell.createShortcut(link, target, arguments, gesher,
+                record.getProperty("icon", ""), text("run_app", label + " (" + packageName + ")"),
+                id);
+        if (hr != 0) {
+            log(String.format("desktop shortcut %s for %s failed: HRESULT 0x%08x", link,
+                    packageName, hr));
+            return false;
+        }
+        if (mine != null && !mine.equalsIgnoreCase(link) && Shell.exists(mine)) {
+            Shell.removeFile(mine);  // its earlier name (another label)
+        }
+        record.setProperty("desktop_link", link);
+        Device.write(new File(shellDir(packageName), RECORD), record);
+        log("desktop shortcut " + link + ": " + label + ", AppUserModelID " + id);
+        return true;
+    }
+
+    /** Whether {@code path} is a .lnk directly in the user's Desktop folder. */
+    static boolean isDesktopLink(String path) {
+        if (path == null || path.isEmpty()) return false;
+        String desktop = Shell.desktopFolder();
+        if (desktop == null || desktop.isEmpty()) return false;
+        String prefix = desktop.replace('/', '\\');
+        if (!prefix.endsWith("\\")) prefix += "\\";
+        String normalized = path.replace('/', '\\');
+        if (!normalized.regionMatches(true, 0, prefix, 0, prefix.length())) return false;
+        String name = normalized.substring(prefix.length());
+        return !name.isEmpty() && name.indexOf('\\') < 0 && name.indexOf(':') < 0
+                && !name.startsWith(".") && name.toLowerCase(Locale.ROOT).endsWith(".lnk");
+    }
+
+    /** Whether the package's recorded desktop shortcut is there (apk-info). */
+    public static boolean hasDesktopLink(String packageName) {
+        try {
+            Properties record = shortcutOf(packageName);
+            String link = record != null ? record.getProperty("desktop_link") : null;
+            return link != null && !portableMode() && isDesktopLink(link) && Shell.exists(link);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Removes the recorded desktop shortcut: that path only, in the Desktop folder. */
+    private static void removeDesktopLink(Properties shortcut) {
+        if (portableMode()) return;  // a copied profile's record: not this PC's link
+        String link = shortcut != null ? shortcut.getProperty("desktop_link") : null;
+        if (link == null) return;
+        if (!isDesktopLink(link)) {
+            log("the recorded desktop shortcut " + link + " is not in the Desktop folder: left");
+            return;
+        }
+        if (Shell.exists(link)) {
+            log(Shell.removeFile(link) ? "removed the desktop shortcut " + link
+                    : "cannot remove the desktop shortcut " + link);
         }
     }
 
@@ -757,10 +892,27 @@ public final class AppShell {
      * exit code: 0 when the file is recorded.
      */
     public static int apkIcon(File apk) {
+        return apkIcon(apk, null);
+    }
+
+    /** What {@link #apkIcon} read of the file, for {@link #apkInfo}. */
+    private static final class ApkFacts {
+        String packageName;
+        long versionCode;
+        String versionName;
+        String label;
+        /** The drawn .ico (a Windows path), or null. */
+        String icon;
+        /** Why the file was not read as an app, or null. */
+        String error;
+    }
+
+    private static int apkIcon(File apk, ApkFacts facts) {
         long size = apk.length();
         long time = apk.lastModified();
         if (!apk.isFile() || size == 0) {
             apkIconLog(apk + ": no such file, or empty");
+            if (facts != null) facts.error = "no such file, or empty";
             return 1;
         }
         String windowsApk = Zygote.windowsPath(apk.getAbsolutePath());
@@ -788,14 +940,24 @@ public final class AppShell {
             } else {
                 what = packageName + ": no icon drawn (" + icon.source + ")";
             }
+            if (facts != null) {
+                facts.packageName = packageName;
+                facts.versionCode = pkg.versionCode();
+                facts.versionName = pkg.parsed.getVersionName();
+                facts.label = icon.label;
+                facts.icon = iconPath;
+            }
         } catch (PlatformPackage p) {
             what = "the Android platform's resources (package android), not an app";
+            if (facts != null) facts.error = what;
         } catch (Throwable t) {
             what = "not read: " + t;
+            if (facts != null) facts.error = String.valueOf(t);
         }
         if (apk.length() != size || apk.lastModified() != time) {
             // Changed meanwhile: the handler asks again for the file as it is now.
             apkIconLog(windowsApk + ": changed while it was read; " + what);
+            if (facts != null) facts.error = "the file changed while it was read";
             return 1;
         }
         if (iconPath == null) {
@@ -815,6 +977,93 @@ public final class AppShell {
         }
         apkIconLog(windowsApk + ": " + what);
         return 0;
+    }
+
+    /**
+     * {@code gesher-app apk-info APK OUT}, what gesher-launch runs before it asks the user to
+     * install an APK or split APK bundle opened from Explorer: reads the file as {@link
+     * #apkIcon} does (also recording its icon for Explorer), without installing it or
+     * starting the device, and writes {@code out} (UTF-8, atomically), a {@code key=value}
+     * line each: {@code package}, {@code version_code}, {@code version_name}, {@code label},
+     * {@code icon} (the drawn .ico, when there is one), {@code installed_version_code} and
+     * {@code installed_version_name} (when the package is installed: its installed base.apk,
+     * from packages.list) and {@code desktop_shortcut=1} (when its recorded desktop shortcut
+     * is there). Throws when the file cannot be read as an app.
+     */
+    public static void apkInfo(File apk, File out) throws Exception {
+        ApkFacts facts = new ApkFacts();
+        int code = apkIcon(apk, facts);
+        if (facts.packageName == null || facts.error != null || code != 0) {
+            throw new IllegalArgumentException(Zygote.windowsPath(apk.getAbsolutePath())
+                    + " cannot be read as an Android app: "
+                    + (facts.error != null ? facts.error : "not recorded"));
+        }
+        java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
+        values.put("package", facts.packageName);
+        values.put("version_code", String.valueOf(facts.versionCode));
+        values.put("version_name", facts.versionName != null ? facts.versionName : "");
+        values.put("label", facts.label != null && !facts.label.isEmpty() ? facts.label
+                : facts.packageName);
+        if (facts.icon != null) values.put("icon", facts.icon);
+        ApkPackage installed = installedBase(facts.packageName);
+        if (installed != null) {
+            values.put("installed_version_code", String.valueOf(installed.versionCode()));
+            String name = installed.parsed.getVersionName();
+            values.put("installed_version_name", name != null ? name : "");
+        }
+        if (hasDesktopLink(facts.packageName)) values.put("desktop_shortcut", "1");
+        StringBuilder text = new StringBuilder();
+        for (java.util.Map.Entry<String, String> e : values.entrySet()) {
+            text.append(e.getKey()).append('=')
+                    .append(e.getValue().replace('\r', ' ').replace('\n', ' ')).append('\n');
+        }
+        File target = out.getAbsoluteFile();
+        File tmp = File.createTempFile("apk-info-", ".tmp", target.getParentFile());
+        try {
+            java.nio.file.Files.write(tmp.toPath(),
+                    text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            java.nio.file.Files.move(tmp.toPath(), target.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            tmp.delete();
+        }
+        log("apk-info: " + facts.packageName + " " + values.get("version_code")
+                + (installed != null ? ", installed " + values.get("installed_version_code")
+                        : ", not installed"));
+    }
+
+    /**
+     * The installed base.apk of {@code packageName}, parsed, from the device's packages.list
+     * (read without the device, as the system server reads it at startup); null when it is
+     * not installed, or cannot be read (logged).
+     */
+    private static ApkPackage installedBase(String packageName) {
+        File list = new File(Device.dataDir(), "system/packages.list");
+        if (!list.isFile()) return null;
+        try {
+            for (String line : java.nio.file.Files.readAllLines(list.toPath(),
+                    java.nio.charset.StandardCharsets.UTF_8)) {
+                if (line.startsWith("#")) continue;
+                String[] fields = line.split("\t", -1);
+                if (fields.length < 4 || !fields[0].equals(packageName)) continue;
+                File code = new File(fields[1]);
+                if (!new File(code, "base.apk").isFile()) {
+                    // A moved profile: its code directory under this data directory
+                    // (Installer.resolveCodePath).
+                    code = new File(new File(Device.dataDir(), "app"), code.getName());
+                }
+                File base = new File(code, "base.apk");
+                if (!base.isFile()) {
+                    log("apk-info: " + packageName + " is listed, but " + base + " is missing");
+                    return null;
+                }
+                return ApkPackage.parse(base.getPath());
+            }
+        } catch (Throwable t) {
+            log("apk-info: the installed " + packageName + " was not read: " + t);
+        }
+        return null;
     }
 
     /** {@link #apkIcon}: the file is the platform package, recorded with Gesher's icon. */
