@@ -32,11 +32,13 @@ Windows without them (no location service, no Media Foundation) gets clean
   location service uses for high-accuracy fixes). Google Play filters apps that
   require `location.gps` on it. `isLocationEnabled()` is Windows' setting for desktop
   apps ("Let desktop apps access your location"), or a test provider being on.
-  `Settings.Secure` `location_mode` (`LOCATION_MODE_ON` / `LOCATION_MODE_OFF`) and
-  `location_providers_allowed` (the enabled providers, without passive and fused)
-  answer the same state, as Android's location service keeps them, since apps read
-  them instead (react-native-wifi-reborn before a Wi-Fi scan). Writes to them are
-  ignored, as `setLocationEnabledForUser` is: Windows' setting turns location on and off.
+  (Unless microG's signature spoofing is on, the network provider's IP-address
+  fallback, a position from ip-api.com, also counts as location being on.) `Settings.Secure`
+  `location_mode` (`LOCATION_MODE_ON` / `LOCATION_MODE_OFF`) answers the same state,
+  as Android's location service keeps it, since apps read it instead
+  (react-native-wifi-reborn before a Wi-Fi scan). Writes to it are ignored, as
+  `setLocationEnabledForUser` is: Windows' setting turns location on and off.
+  (`location_providers_allowed` no longer exists from Android S on.)
 - Permissions: the app's manifest must ask for ACCESS_FINE_LOCATION or
   ACCESS_COARSE_LOCATION (Gesher grants what an app requests; there is no
   runtime prompt yet), else a SecurityException as on Android; coarse-only apps
@@ -54,7 +56,9 @@ Windows without them (no location service, no Media Foundation) gets clean
   the mock-location app op; Gesher's app ops allow everything).
 - `PROVIDERS_CHANGED_ACTION` is broadcast on provider changes, and `MODE_CHANGED_ACTION`
   (with `EXTRA_LOCATION_ENABLED`) when location as a whole turns on or off; observers of
-  `location_mode` and `location_providers_allowed` are notified too.
+  `location_mode` are notified too. Windows has no notification for its setting:
+  a change is seen when a request polls Windows, a test provider changes, or
+  `location_mode` is read (Windows is asked again at most every 10 s).
 - Not there: a geocoder (`Geocoder.isPresent()` is false and its calls throw
   IOException; final: Windows.Services.Maps' MapLocationFinder answers
   InvalidCredentials without a Bing Maps key, checked on the runners by
