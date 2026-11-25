@@ -32,6 +32,19 @@ struct AuthorityNamespacePolicyResult {
   BYTE descriptor[320]{};
 };
 
+// Records only the checks the existing Recheck actually reached. An early
+// failure leaves later policy snapshots unattempted; no diagnostic retry runs.
+enum class AuthorityNamespaceRecheckStage : DWORD {
+  kNotAttempted, kLeafOpen, kSamePin, kDirectoryPolicy, kPipePolicy, kComplete,
+};
+struct AuthorityNamespaceRecheckResult {
+  AuthorityNamespaceRecheckStage stage = AuthorityNamespaceRecheckStage::kNotAttempted;
+  DWORD attempts = 0;
+  DWORD status = ERROR_NOT_READY;
+  LONG leaf_open_status = 0;
+  AuthorityNamespacePolicyResult directory_policy, pipe_policy;
+};
+
 // Optional diagnostics for the authority's one package-directory creation.
 // Values are written to trusted caller memory only; they never select behavior.
 struct AuthorityNamespaceCreateResult {
@@ -46,7 +59,8 @@ struct AuthorityNamespaceCreateResult {
   DWORD pipe_create_called = 0;
   LONG pipe_create_status = 0;
   DWORD pipe_policy_status = ERROR_NOT_READY;
-  AuthorityNamespacePolicyResult pipe_policy;
+  AuthorityNamespacePolicyResult directory_policy, pipe_policy;
+  AuthorityNamespaceRecheckResult recheck;
   DWORD context_restore_status = ERROR_NOT_READY;
 };
 

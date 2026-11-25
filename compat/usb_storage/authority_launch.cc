@@ -503,7 +503,7 @@ class PackageNamespace {
         status = SamePin(spec.expected_package_objects, retained->get());
         if (status != ERROR_SUCCESS) return status;
       }
-      status = VerifyPolicy(retained->get());
+      status = VerifyPolicy(retained->get(), spec.namespace_create_result ? &observed.value.directory_policy : nullptr);
       if (status != ERROR_SUCCESS) return status;
     }
     stage("lowbox.open-package-pipe-namespace");
@@ -611,21 +611,42 @@ class PackageNamespace {
       status = SamePin(spec.expected_package_objects, retained->get());
       if (status != ERROR_SUCCESS) return status;
     }
-    status = VerifyPolicy(retained->get());
+    status = VerifyPolicy(retained->get(), spec.namespace_create_result ? &observed.value.directory_policy : nullptr);
     if (status != ERROR_SUCCESS) return status;
     stage("lowbox.verify-package-pipe-namespace");
     status = VerifyPipePolicy(retained_pipe->get(), spec.namespace_create_result ? &observed.value.pipe_policy : nullptr);
     observed.value.pipe_policy_status = status;
-    return status == ERROR_SUCCESS ? Recheck(root, retained->get(), retained_pipe->get()) : status;
+    return status == ERROR_SUCCESS ? Recheck(root, retained->get(), retained_pipe->get(),
+        spec.namespace_create_result ? &observed.value.recheck : nullptr) : status;
   }
 
-  DWORD Recheck(HANDLE root, HANDLE expected, HANDLE pipe) {
+  DWORD Recheck(HANDLE root, HANDLE expected, HANDLE pipe,
+                AuthorityNamespaceRecheckResult* observed = nullptr) {
+    using Stage = AuthorityNamespaceRecheckStage;
+    if (observed) {
+      const DWORD attempts = observed->attempts + 1;
+      *observed = {};
+      observed->attempts = attempts;
+    }
+    const auto stage = [observed](Stage value) { if (observed) observed->stage = value; };
+    const auto finish = [observed](DWORD status) {
+      if (observed) observed->status = status;
+      return status;
+    };
     Handle fresh;
-    DWORD status = OpenLeaf(root, &fresh);
-    if (status != ERROR_SUCCESS) return status;
+    stage(Stage::kLeafOpen);
+    DWORD status = OpenLeaf(root, &fresh, observed ? &observed->leaf_open_status : nullptr);
+    if (status != ERROR_SUCCESS) return finish(status);
+    stage(Stage::kSamePin);
     status = SamePin(expected, fresh.get());
-    if (status == ERROR_SUCCESS) status = VerifyPolicy(fresh.get());
-    return status == ERROR_SUCCESS ? VerifyPipePolicy(pipe) : status;
+    if (status != ERROR_SUCCESS) return finish(status);
+    stage(Stage::kDirectoryPolicy);
+    status = VerifyPolicy(fresh.get(), observed ? &observed->directory_policy : nullptr);
+    if (status != ERROR_SUCCESS) return finish(status);
+    stage(Stage::kPipePolicy);
+    status = VerifyPipePolicy(pipe, observed ? &observed->pipe_policy : nullptr);
+    if (status == ERROR_SUCCESS) stage(Stage::kComplete);
+    return finish(status);
   }
 
  private:
@@ -737,8 +758,8 @@ class PackageNamespace {
     return Within(acl, sizeof(ACL), begin, bytes) && acl->AclSize >= sizeof(ACL) &&
         acl->AceCount <= 16 && Within(acl, acl->AclSize, begin, bytes) && IsValidAcl(acl);
   }
-  DWORD VerifyPolicy(HANDLE directory) {
-    return VerifyPolicy(directory, expected_dacl_, expected_label_, &have_control_, &control_);
+  DWORD VerifyPolicy(HANDLE directory, AuthorityNamespacePolicyResult* observed = nullptr) {
+    return VerifyPolicy(directory, expected_dacl_, expected_label_, &have_control_, &control_, observed);
   }
   DWORD VerifyPipePolicy(HANDLE pipe, AuthorityNamespacePolicyResult* observed = nullptr) {
     DWORD flags = 0;
@@ -1188,7 +1209,8 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
     status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &app_container_objects_after);
     if (status != ERROR_SUCCESS) return status;
     stage("lowbox.recheck-package-namespace");
-    status = package_namespace.Recheck(app_container_objects_after.get(), launch->package_objects_, launch->package_pipe_objects_);
+    status = package_namespace.Recheck(app_container_objects_after.get(), launch->package_objects_, launch->package_pipe_objects_,
+        spec.namespace_create_result ? &spec.namespace_create_result->recheck : nullptr);
     if (status != ERROR_SUCCESS) return status;
   }
   status = SealAndVerifyToken(raw_lowbox, desktop, spec, default_acl, startup_stage, false);
@@ -1239,7 +1261,8 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
     status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &root);
     if (status != ERROR_SUCCESS) return status;
     stage("launch.recheck-package-namespace");
-    status = package_namespace.Recheck(root.get(), launch->package_objects_, launch->package_pipe_objects_);
+    status = package_namespace.Recheck(root.get(), launch->package_objects_, launch->package_pipe_objects_,
+        spec.namespace_create_result ? &spec.namespace_create_result->recheck : nullptr);
     if (status != ERROR_SUCCESS) return status;
   }
   *result = std::move(launch);

@@ -148,7 +148,10 @@ struct NamespaceCollisionEvidence {
   DWORD launch_called = 0, launch_status = ERROR_NOT_READY, returned_child = 0;
   DWORD stopped_child = ERROR_NOT_READY, same_object_after = 0;
   wchar_t path[kNamespacePathCharacters]{};
-  wchar_t security[4096]{};
+  // This disposable collision has a small fixed ACE set. Preserve the complete
+  // SDDL with the existing fail-closed copy check, leaving room in the bounded
+  // evidence payload for the actual pre/post-wrapper namespace readbacks.
+  wchar_t security[2048]{};
   char stage[96] = "not-attempted";
 };
 struct Evidence {
@@ -2099,7 +2102,7 @@ void ObserveNamespaceCollision(storage::ProtectedIdentity& identity, HANDLE desk
       "deny-desktop-owned-namespace-collision", ERROR_ACCESS_DENIED);
   evidence->status = ERROR_SUCCESS;
 }
-void PrintPipePolicyReadback(const storage::AuthorityNamespacePolicyResult& observed) {
+void PrintPolicyReadback(const char* object, const storage::AuthorityNamespacePolicyResult& observed) {
   using Stage = storage::AuthorityNamespacePolicyStage;
   const char* stage = "invalid";
   switch (observed.stage) {
@@ -2122,28 +2125,47 @@ void PrintPipePolicyReadback(const storage::AuthorityNamespacePolicyResult& obse
   }
   Require(std::strcmp(stage, "invalid") != 0 && observed.captured_bytes <= sizeof(observed.descriptor) &&
       observed.captured_bytes <= observed.allocation_bytes,
-      "bounded-pipe-policy-readback", ERROR_INVALID_DATA);
-  std::printf("Protected pipe policy readback: stage=%s size-ntstatus=0x%08lx allocation-bytes=%lu query-ntstatus=0x%08lx requested=0x%08lx returned-bytes=%lu allocation-prefix-bytes=%lu\n",
-      stage, static_cast<unsigned long>(observed.size_query_status), static_cast<unsigned long>(observed.allocation_bytes),
+      "bounded-namespace-policy-readback", ERROR_INVALID_DATA);
+  std::printf("Protected %s policy readback: stage=%s size-ntstatus=0x%08lx allocation-bytes=%lu query-ntstatus=0x%08lx requested=0x%08lx returned-bytes=%lu allocation-prefix-bytes=%lu\n",
+      object, stage, static_cast<unsigned long>(observed.size_query_status), static_cast<unsigned long>(observed.allocation_bytes),
       static_cast<unsigned long>(observed.query_status), static_cast<unsigned long>(observed.requested_information),
       static_cast<unsigned long>(observed.returned_bytes),
       static_cast<unsigned long>(observed.captured_bytes));
   if (observed.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE)) {
     SECURITY_DESCRIPTOR_RELATIVE header{};
     std::memcpy(&header, observed.descriptor, sizeof(header));
-    std::printf("Protected pipe policy allocation relative header: revision=%u control=0x%04x owner-offset=%lu group-offset=%lu dacl-offset=%lu sacl-offset=%lu\n",
-        static_cast<unsigned int>(header.Revision), static_cast<unsigned int>(header.Control),
+    std::printf("Protected %s policy allocation relative header: revision=%u control=0x%04x owner-offset=%lu group-offset=%lu dacl-offset=%lu sacl-offset=%lu\n",
+        object, static_cast<unsigned int>(header.Revision), static_cast<unsigned int>(header.Control),
         static_cast<unsigned long>(header.Owner), static_cast<unsigned long>(header.Group),
         static_cast<unsigned long>(header.Dacl), static_cast<unsigned long>(header.Sacl));
   }
   // Print bytes without dereferencing any offsets from a rejected descriptor.
   // This is an allocation prefix, including any unwritten zero-filled bytes.
   // It is never substituted for the reported length in policy verification.
-  std::printf("Protected pipe policy allocation prefix hex: ");
+  std::printf("Protected %s policy allocation prefix hex: ", object);
   for (DWORD i = 0; i < observed.captured_bytes; ++i) {
     std::printf("%02x", static_cast<unsigned int>(observed.descriptor[i]));
   }
   std::puts("");
+}
+
+void PrintNamespaceRecheck(const storage::AuthorityNamespaceRecheckResult& observed) {
+  using Stage = storage::AuthorityNamespaceRecheckStage;
+  const char* stage = "invalid";
+  switch (observed.stage) {
+    case Stage::kNotAttempted: stage = "not-attempted"; break;
+    case Stage::kLeafOpen: stage = "leaf-open"; break;
+    case Stage::kSamePin: stage = "retained-object-identity"; break;
+    case Stage::kDirectoryPolicy: stage = "directory-policy"; break;
+    case Stage::kPipePolicy: stage = "pipe-policy"; break;
+    case Stage::kComplete: stage = "complete"; break;
+  }
+  Require(std::strcmp(stage, "invalid") != 0, "bounded-namespace-recheck-stage", ERROR_INVALID_DATA);
+  std::printf("Protected package recheck: stage=%s attempts=%lu win32=%lu leaf-open-ntstatus=0x%08lx\n",
+      stage, static_cast<unsigned long>(observed.attempts), static_cast<unsigned long>(observed.status),
+      static_cast<unsigned long>(observed.leaf_open_status));
+  PrintPolicyReadback("recheck package", observed.directory_policy);
+  PrintPolicyReadback("recheck pipe", observed.pipe_policy);
 }
 
 void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceCollisionEvidence& collision) {
@@ -2783,7 +2805,9 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
     std::printf("Protected pipe creation: open-win32=%lu create-called=%lu create-ntstatus=0x%08lx policy-win32=%lu\n",
         static_cast<unsigned long>(creation.pipe_open_status), static_cast<unsigned long>(creation.pipe_create_called),
         static_cast<unsigned long>(creation.pipe_create_status), static_cast<unsigned long>(creation.pipe_policy_status));
-    PrintPipePolicyReadback(creation.pipe_policy);
+    PrintPolicyReadback("package", creation.directory_policy);
+    PrintPolicyReadback("pipe", creation.pipe_policy);
+    PrintNamespaceRecheck(creation.recheck);
     std::printf("Protected package creation: actual-process-privileges-unchanged=%lu actual-no-thread-token=%lu context-check-win32=%lu\n",
         static_cast<unsigned long>(evidence.namespace_process_privileges_unchanged),
         static_cast<unsigned long>(evidence.namespace_no_thread_token), static_cast<unsigned long>(evidence.namespace_context_status));

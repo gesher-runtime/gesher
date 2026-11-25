@@ -876,7 +876,7 @@ DWORD EndLowboxIatTrace(LowboxIatTraceEvidence* evidence) noexcept {
 }
 
 void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
-  bool valid = e.version == 3 && e.attempted <= 1 && e.delay_imports_present <= 1 &&
+  bool valid = e.version == kLowboxTraceEvidenceVersion && e.attempted <= 1 && e.delay_imports_present <= 1 &&
       e.record_count <= kLowboxTraceRecordCount && e.slot_count <= kSlots &&
       e.page_count <= kPages && e.missing_symbols <= kLowboxTraceSymbolCount && e.record_count <= e.total_calls &&
       e.overflow == e.total_calls - e.record_count && ValidSecurity(e);
@@ -897,6 +897,8 @@ void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
       static_cast<unsigned long>(e.overflow), static_cast<unsigned long>(e.missing_symbols), static_cast<unsigned long>(e.uninspectable_imports),
       static_cast<unsigned long>(e.delay_imports_present));
   if (!valid) { std::puts("Protected lowbox IAT: invalid bounded evidence; coverage inconclusive"); return; }
+  if (e.missing_symbols || e.uninspectable_imports || e.delay_imports_present || e.overflow)
+    std::puts("Protected lowbox IAT: partial bounded evidence; coverage inconclusive");
   std::printf("Protected lowbox IAT: version=%lu module=KernelBase.dll mapped-pe-timestamp=0x%08lx mapped-pe-checksum=0x%08lx mapped-image-size=0x%08lx\n",
       static_cast<unsigned long>(e.version), static_cast<unsigned long>(e.image_timestamp),
       static_cast<unsigned long>(e.image_checksum), static_cast<unsigned long>(e.image_size));

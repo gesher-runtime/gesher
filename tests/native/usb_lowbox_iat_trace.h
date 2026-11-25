@@ -16,6 +16,7 @@ enum class LowboxTraceApi : DWORD {
 };
 inline constexpr DWORD kLowboxTraceSymbolCount = static_cast<DWORD>(LowboxTraceApi::count);
 inline constexpr DWORD kLowboxTraceRecordCount = 64;
+inline constexpr DWORD kLowboxTraceEvidenceVersion = 4;
 
 enum class LowboxSnapshotState : DWORD {
   not_observed, not_requested, absent, null_acl, complete, unreadable,
@@ -75,7 +76,7 @@ struct LowboxTraceCall {
   wchar_t target[56]{};
 };
 struct LowboxIatTraceEvidence {
-  DWORD version = 4;
+  DWORD version = kLowboxTraceEvidenceVersion;
   // Caller may set ONLY this metadata field before Begin. It is an expected
   // target session, not a claim that every recorded call had that token/session.
   DWORD expected_target_session = 0;
