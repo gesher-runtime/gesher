@@ -342,7 +342,7 @@ static void TestMaps() {
 static std::wstring FindFile(const std::wstring& data) {
   wchar_t hash[16];
   swprintf(hash, 16, L"%08x", ImageHash());
-  const std::wstring file = data + L"\system\gesher-linker\\" + hash + L"\linker64";
+  const std::wstring file = data + L"\\system\\gesher-linker\\" + hash + L"\\linker64";
   return GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES ? file : L"";
 }
 
@@ -378,8 +378,7 @@ static void TestExec(const std::wstring& data) {
   printf("PASS  linker64 PROGRAM ARGS launches PROGRAM; nothing else runs\n");
 
   // The file itself as a program: the ELF loader refuses it (it has no entry
-  // point either)
-  // stops, before any code of it could run.
+  // point either), before any code of it could run.
   const std::wstring file = FindFile(data);
   CHECK(!file.empty());
   const std::wstring launcher = ex::LauncherPath();
@@ -419,7 +418,8 @@ static void TestExec(const std::wstring& data) {
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
   CHECK(status != 0 && status != STILL_ACTIVE);
-  CHECK(output.find("no entry point") != std::string::npos);
+  CHECK(output.find("CANNOT LINK EXECUTABLE") != std::string::npos &&
+        output.find("Gesher's ELF loader") != std::string::npos);
   printf("PASS  running the file itself fails to link (exit %lu)\n", static_cast<unsigned long>(status));
 }
 
@@ -431,8 +431,7 @@ int main(int argc, char** argv) {
     return stat("/system/bin/linker64", &st) == 0 ? 0 : 1;
   }
   if (argc != 2) {
-    fprintf(stderr, "usage: system_linker_test <empty directory for $ANDROID_DATA>
-");
+    fprintf(stderr, "usage: system_linker_test <empty directory for $ANDROID_DATA>\n");
     return 2;
   }
   const std::wstring data = ex::Widen(argv[1]);
@@ -448,11 +447,9 @@ int main(int argc, char** argv) {
   TestExec(data);
   TestTemporaryPrune(data);
   if (g_failed != 0) {
-    printf("system_linker_test: %d of %d checks failed
-", g_failed, g_checks);
+    printf("system_linker_test: %d of %d checks failed\n", g_failed, g_checks);
     return 1;
   }
-  printf("system_linker_test: all %d checks passed
-", g_checks);
+  printf("system_linker_test: all %d checks passed\n", g_checks);
   return 0;
 }
