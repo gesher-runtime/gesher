@@ -12,9 +12,14 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.OperationCanceledException;
+import android.os.Parcel;
 import android.provider.MediaStore;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
 import android.util.Size;
 
+import java.io.FileDescriptor;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Base64;
@@ -68,10 +73,22 @@ public final class MediaStoreThumbnailContractTest {
             Bundle opts = new Bundle();
             opts.putParcelable(ContentResolver.EXTRA_SIZE, new Point(44, 36));
             try (AssetFileDescriptor asset = resolver.openTypedAssetFileDescriptor(
-                    uri, "image/jpeg", opts, null);
-                    InputStream input = asset.createInputStream()) {
-                require(input.read() == 0xff && input.read() == 0xd8,
-                        "a typed JPEG request receives JPEG bytes");
+                    uri, "image/jpeg", opts, null)) {
+                checkReadOnlyJpeg(asset);
+                Parcel parcel = Parcel.obtain();
+                try {
+                    asset.writeToParcel(parcel, 0);
+                    parcel.setDataPosition(0);
+                    try (AssetFileDescriptor copy = AssetFileDescriptor.CREATOR.createFromParcel(parcel)) {
+                        checkReadOnlyJpeg(copy);
+                        try (InputStream input = copy.createInputStream()) {
+                            require(input.read() == 0xff && input.read() == 0xd8,
+                                    "parcelled JPEG descriptor starts at the encoded image");
+                        }
+                    }
+                } finally {
+                    parcel.recycle();
+                }
             }
             CancellationSignal cancelled = new CancellationSignal();
             cancelled.cancel();
@@ -83,6 +100,20 @@ public final class MediaStoreThumbnailContractTest {
             }
         } finally {
             resolver.delete(uri, null, null);
+        }
+    }
+
+    private static void checkReadOnlyJpeg(AssetFileDescriptor asset) throws Exception {
+        FileDescriptor fd = asset.getFileDescriptor();
+        byte[] signature = new byte[2];
+        require(Os.pread(fd, signature, 0, signature.length, 0) == signature.length
+                        && (signature[0] & 0xff) == 0xff && (signature[1] & 0xff) == 0xd8,
+                "a typed JPEG request receives a seekable JPEG file");
+        try {
+            Os.pwrite(fd, new byte[] {0}, 0, 1, 0);
+            throw new AssertionError("thumbnail descriptor has write access");
+        } catch (ErrnoException expected) {
+            require(expected.errno == OsConstants.EBADF, "thumbnail descriptor denies writes");
         }
     }
 
