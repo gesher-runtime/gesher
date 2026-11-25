@@ -34,3 +34,7 @@ add_library(gesher_shellext SHARED
 set_target_properties(gesher_shellext PROPERTIES PREFIX "")
 target_compile_options(gesher_shellext PRIVATE -Wall -Wextra -Werror -fno-exceptions -fno-rtti)
 target_link_libraries(gesher_shellext PRIVATE ole32)
+if(GESHER_HARDEN)
+  target_link_options(gesher-launch PRIVATE -Wl,--exclude-all-symbols)
+  target_link_options(gesher_shellext PRIVATE -Wl,--exclude-all-symbols)
+endif()

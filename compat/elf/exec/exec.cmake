@@ -42,6 +42,9 @@ add_executable(gesher-exec
   ${CMAKE_CURRENT_LIST_DIR}/gesher_shell.cc)
 target_compile_options(gesher-exec PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(gesher-exec PRIVATE gesher_exec_spawn gesher_bionic gesher_elf bcrypt shell32)
+if(GESHER_HARDEN)
+  target_link_options(gesher-exec PRIVATE -Wl,--exclude-all-symbols)
+endif()
 add_dependencies(ofd_spawn_test gesher-exec)
 
 add_executable(exec4_no_console_probe ${CMAKE_SOURCE_DIR}/tests/exec/no-console-spawn.cc)

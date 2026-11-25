@@ -7,6 +7,9 @@ target_link_libraries(gesher_install_pipe PRIVATE advapi32 bcrypt shell32 kernel
 set_target_properties(gesher_install_pipe PROPERTIES
   PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "gesher_install_pipe")
 target_compile_options(gesher_install_pipe PRIVATE -Wall -Wextra -Werror)
+if(GESHER_HARDEN)
+  target_link_options(gesher_install_pipe PRIVATE -Wl,--exclude-all-symbols)
+endif()
 add_dependencies(dalvikvm gesher_install_pipe)
 
 add_executable(install_pipe_test EXCLUDE_FROM_ALL

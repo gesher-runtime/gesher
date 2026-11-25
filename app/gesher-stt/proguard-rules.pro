@@ -1,0 +1,6 @@
+-optimizationpasses 3
+-allowaccessmodification
+-overloadaggressively
+-repackageclasses 's'
+-dontwarn **
+-keep class com.gesher.stt.WindowsRecognitionService { *; }

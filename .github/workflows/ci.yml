@@ -978,9 +978,9 @@ jobs:
         run: |
           # Canonical suite/package/e2e always receive the production role.
           if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum || "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+            cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DGESHER_WEB3_QUERY_TESTS=OFF -DGESHER_CAPTURE_TEST_SOURCES=OFF -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           else
             exit 1
           fi
@@ -1131,11 +1131,11 @@ jobs:
 
       - name: Build isolated synthetic capture hosts after production package is sealed
         run: |
-          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DGESHER_CAPTURE_TEST_SOURCES=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           ninja -C out dalvikvm media_probe
           python3 tools/media_capture/host_roles.py fixture --build out --dist dist
           # Restore the ordinary compilation boundary before the query-only role.
-          cmake -S . -B out -DGESHER_CAPTURE_TEST_SOURCES=OFF -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+          cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DGESHER_CAPTURE_TEST_SOURCES=OFF -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           ninja -C out dalvikvm media_probe
       - uses: actions/upload-artifact@v4
         with:
@@ -1146,9 +1146,9 @@ jobs:
       - name: Build separately named same-source query-hook runtime after production package is sealed
         run: |
           if [[ "$GESHER_HOST_PTHREAD_SELECTION" == selected-minimum || "$GESHER_HOST_PTHREAD_SELECTION" == publisher-cancel ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
+            cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DGESHER_WEB3_QUERY_TESTS=ON -DLLVM_MINGW="$GESHER_BUILD_LLVM"
           elif [[ "$GESHER_HOST_PTHREAD_SELECTION" == publisher ]]; then
-            cmake -S . -B out -DGESHER_WEB3_QUERY_TESTS=ON
+            cmake -S . -B out -DCMAKE_BUILD_TYPE=Release -DGESHER_WEB3_QUERY_TESTS=ON
           else
             exit 1
           fi

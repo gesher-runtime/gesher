@@ -93,6 +93,7 @@ fi
 mkdir -p "$work/gen"
 "$aapt2" link -o "$(native "$work/unaligned.apk")" -I "$(native "$framework_res")" \
   --manifest "$(native "$app/AndroidManifest.xml")" --java "$(native "$work/gen")" \
+  --proguard "$(native "$work/aapt-rules.pro")" \
   --min-sdk-version 36 --target-sdk-version 36 "$(native "$work/res.zip")"
 
 # Code.
@@ -107,9 +108,29 @@ classpath=$(native "$framework")
 if [[ -n $app_classes ]]; then classpath="$classpath$sep$(native "$app_classes")"; fi
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
   -cp "$classpath" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
-(cd "$work" && find classes -name '*.class' > dex.txt &&
-  java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
+(cd "$work" && find classes -name '*.class' > dex.txt)
+if [[ ${GESHER_R8:-1} == 1 && -f "$app/proguard-rules.pro" ]]; then
+  (cd "$work/classes" && jar --create --file "$(native "$work/r8-input.jar")" --no-manifest $(find . -name '*.class'))
+  r8_libs=(--lib "$(native "$framework")")
+  if [[ -n $app_classes ]]; then r8_libs+=(--lib "$(native "$app_classes")"); fi
+  if [[ -n $core ]]; then
+    r8_libs+=(--lib "$(native "$core")")
+  else
+    java_home_dir=$(java -XshowSettings:properties -version 2>&1 | tr -d '\r' | sed -n 's/^[[:space:]]*java\.home = //p' | head -n1)
+    if [[ -n $java_home_dir ]]; then
+      r8_libs+=(--lib "$(native "$java_home_dir")")
+    fi
+  fi
+  java -cp "$(native "$r8")" com.android.tools.r8.R8 --release --min-api 36 \
+    "${r8_libs[@]}" \
+    --pg-conf "$(native "$work/aapt-rules.pro")" \
+    --pg-conf "$(native "$app/proguard-rules.pro")" \
+    --output "$(native "$work/dex")" \
+    "$(native "$work/r8-input.jar")"
+else
+  (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
     --output dex @dex.txt)
+fi
 
 # The dex into the APK, then 4-byte alignment.
 (cd "$work/dex" && jar -u -M -f "$(native "$work/unaligned.apk")" classes.dex)

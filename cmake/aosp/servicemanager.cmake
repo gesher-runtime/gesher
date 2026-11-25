@@ -13,6 +13,9 @@ target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter $
 # The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom; the
 # sandboxed pipe's security descriptor (ADR 0090) from app_container.cc.
 target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32)
+if(GESHER_HARDEN)
+  target_link_options(binderd PRIVATE -Wl,--exclude-all-symbols)
+endif()
 
 # servicemanager, as vndservicemanager is built (no VINTF, no perfetto), with
 # libcutils' multiuser.cpp (not in libcutils' Windows set) and a main of its
@@ -29,6 +32,9 @@ target_link_libraries(servicemanager PRIVATE binder)
 # libbinder's headers reach cutils/trace.h's <stdatomic.h> (C++23, as libbinder).
 set_target_properties(servicemanager PROPERTIES CXX_STANDARD 23)
 target_compile_options(servicemanager PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+if(GESHER_HARDEN)
+  target_link_options(servicemanager PRIVATE -Wl,--exclude-all-symbols)
+endif()
 
 # The driver's ABI across processes (raw ioctls), and libbinder with
 # servicemanager across processes.

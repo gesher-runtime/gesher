@@ -16,6 +16,9 @@ target_link_libraries(gesher_account_crypto PRIVATE crypt32 kernel32 shell32 use
 set_target_properties(gesher_account_crypto PROPERTIES
   PREFIX "lib" SUFFIX ".so" OUTPUT_NAME "gesher_account_crypto")
 target_compile_options(gesher_account_crypto PRIVATE -UNOGDI -Wall -Wextra -Werror)
+if(GESHER_HARDEN)
+  target_link_options(gesher_account_crypto PRIVATE -Wl,--exclude-all-symbols)
+endif()
 add_dependencies(dalvikvm gesher_account_crypto)
 
 add_executable(account_chooser_test EXCLUDE_FROM_ALL

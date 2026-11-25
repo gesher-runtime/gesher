@@ -1,0 +1,7 @@
+-optimizationpasses 3
+-allowaccessmodification
+-overloadaggressively
+-repackageclasses 't'
+-dontwarn **
+-keep class com.gesher.tts.WindowsTtsService { *; }
+-keep class com.gesher.tts.CheckVoiceDataActivity { *; }
