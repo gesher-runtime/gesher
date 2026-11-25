@@ -235,3 +235,38 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
 }
 
 #include "account_chooser.inc"
+
+JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_WindowsLocation_nativePromptEnable(JNIEnv* env, jclass cls,
+    jstring app_label) {
+  (void)cls;
+  if (!RequireServer(env) || app_label == NULL) return JNI_FALSE;
+  enum GesherUiLanguage lang = GesherUiCurrentLanguage();
+  const WCHAR* pattern = GesherUiText(lang, "location_off_prompt");
+  jsize label_len = (*env)->GetStringLength(env, app_label);
+  if (label_len <= 0 || label_len > 256) return JNI_FALSE;
+  SIZE_T pattern_len = (SIZE_T)wcslen(pattern);
+  SIZE_T total = pattern_len + (SIZE_T)label_len + 1;
+  WCHAR* text = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, total * sizeof(WCHAR));
+  if (text == NULL) return JNI_FALSE;
+  SIZE_T at = 0;
+  BOOL replaced = FALSE;
+  for (SIZE_T i = 0; i < pattern_len;) {
+    if (!replaced && i + 2 < pattern_len
+        && pattern[i] == L'{' && pattern[i + 1] == L'0' && pattern[i + 2] == L'}') {
+      (*env)->GetStringRegion(env, app_label, 0, label_len, (jchar*)(text + at));
+      if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return JNI_FALSE; }
+      at += (SIZE_T)label_len;
+      i += 3;
+      replaced = TRUE;
+    } else {
+      text[at++] = pattern[i++];
+    }
+  }
+  text[at] = 0;
+  BOOL open = GesherHostPrompt(GesherUiText(lang, "brand"), text,
+      GesherUiText(lang, "location_off_open"), GesherUiText(lang, "location_off_later"),
+      GesherUiRtl(lang), NULL);
+  HeapFree(GetProcessHeap(), 0, text);
+  return open ? JNI_TRUE : JNI_FALSE;
+}
