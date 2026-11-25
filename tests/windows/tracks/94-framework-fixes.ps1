@@ -449,7 +449,7 @@ $appOpsCode = $LASTEXITCODE
 Check 'services: AppOps defaults, authority, attributed delivery, foreground lifecycle and signed persistence' {
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
-} @('AppOpsContractTest all passed: 489 checks; binder=true')
+} @('AppOpsContractTest all passed: 494 checks; binder=true')
 
 $specialAccessOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SpecialAccessTest') 90
 $specialAccessCode = $LASTEXITCODE
@@ -688,6 +688,49 @@ foreach ($fixture in @(
     $valueOut
   } @("$($fixture[0]) all passed:")
 }
+
+# FEATURE_SENSOR_* through the production path: the runner registers the runtime natives
+# (the plain run above has none, so its sensor comparison is empty on both sides).
+# GESHER_SENSOR_TEST's sensors, the runners having no Windows sensor, must become system
+# features; with the defaults the runners' SensorManager lists Gesher's stationary
+# accelerometer, a desktop default that must declare no feature; GESHER_SENSOR_FALLBACK=0
+# removes it from the list.
+function SensorFeaturesRun([hashtable] $Environment, [string] $Mode) {
+  $saved = @{}
+  foreach ($name in @('GESHER_SENSOR_TEST', 'GESHER_SENSOR_FALLBACK')) {
+    $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    [Environment]::SetEnvironmentVariable($name, $Environment[$name], 'Process')
+  }
+  try {
+    $out = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+      'PackageServiceQueriesTest' + $Mode) 90
+    return @{ Out = $out; Code = $LASTEXITCODE }
+  } finally {
+    foreach ($name in $saved.Keys) {
+      [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')
+    }
+  }
+}
+$sensorFeatures = SensorFeaturesRun @{ GESHER_SENSOR_TEST = '1' } 'sensor-test'
+Check 'services: GESHER_SENSOR_TEST''s accelerometer and light sensor are FEATURE_SENSOR_* through the sensor natives' {
+  $global:LASTEXITCODE = $sensorFeatures.Code
+  $sensorFeatures.Out
+} @('PackageServiceQueriesTest: GESHER_SENSOR_TEST''s accelerometer and light sensor are system features',
+  'PackageServiceQueriesTest all passed:')
+$sensorFallback = SensorFeaturesRun @{} 'sensor-fallback'
+Check 'services: Gesher''s stationary accelerometer is listed by the sensor natives and declares no FEATURE_SENSOR_*' {
+  $global:LASTEXITCODE = $sensorFallback.Code
+  $sensorFallback.Out
+} @('PackageServiceQueriesTest: SensorManager lists 1 sensors, 1 stationary accelerometer',
+  'PackageServiceQueriesTest: the stationary accelerometer is listed and declares no system feature',
+  'PackageServiceQueriesTest all passed:')
+$sensorFallbackOff = SensorFeaturesRun @{ GESHER_SENSOR_FALLBACK = '0' } 'sensor-fallback-off'
+Check 'services: GESHER_SENSOR_FALLBACK=0 lists no stationary accelerometer and declares no FEATURE_SENSOR_*' {
+  $global:LASTEXITCODE = $sensorFallbackOff.Code
+  $sensorFallbackOff.Out
+} @('PackageServiceQueriesTest: SensorManager lists 0 sensors, 0 stationary accelerometer',
+  'PackageServiceQueriesTest: GESHER_SENSOR_FALLBACK=0 lists no stationary accelerometer and its features follow the real sensors',
+  'PackageServiceQueriesTest all passed:')
 
 # org.apache.http.legacy (external/apache-http), a shared library apps name in
 # <uses-library>, not on the boot class path: laid out as gesher-app.ps1 installs it

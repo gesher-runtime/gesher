@@ -170,6 +170,12 @@ error occurred"); with the check off it returns a 32-character key. That APK
 carries no Anker certificate, so a phone gives the same result; with Anker's
 APK the check passes.
 
+**Amended 2026-11-24 ([0093](0093-cross-process-ptrace.md)):** ptrace is
+now real between Gesher processes. Nothing above depends on the old stub:
+`PTRACE_TRACEME` still succeeds once and then fails with `EPERM`, and
+`/proc/self/status` now names the parent as `TracerPid` after it, as a device
+does. The guest `fork`/`vfork` `EAGAIN` above is unchanged by 0093.
+
 ## Consequences
 
 - An Ijiami-packed app can get its method bodies as on an Android 16 device.

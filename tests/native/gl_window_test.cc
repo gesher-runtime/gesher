@@ -18,6 +18,7 @@
 // forces WARP).
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/egl_angle.h>
 
 #include "gesher_native_window.h"
 
@@ -25,8 +26,11 @@
 #undef NOGDI
 #include <windows.h>
 
+#include "declared_boot.h"  // after <windows.h> with GDI
+
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -44,6 +48,7 @@ namespace {
 #endif
 using CpuDraw = int(SYSV*)(ANativeWindow* window, char* out, size_t n);
 using GlDraw = int(SYSV*)(ANativeWindow* window, int es, char* out, size_t n);
+using UseAngleWarp = void(SYSV*)(int on);
 using GlFinish = void(SYSV*)();
 
 // Wider than the narrowest client area Windows gives a captioned window
@@ -252,9 +257,16 @@ bool CheckForegroundOnInput(HWND hwnd) {
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::fprintf(stderr, "usage: gl_window_test <libglapp.so>\n");
+    std::fprintf(stderr, "usage: gl_window_test <libglapp.so> [--declared <ro.opengles.version>]\n");
     return 2;
   }
+  // --declared: this test as an app process of a boot that declared that
+  // version (declared_boot.h); with 0x30000 under GESHER_EGL_DEVICE=warp the
+  // default display gives ES 3.0 (uncapped WARP), so a machine without a GPU
+  // still runs the ES 3 checks on it.
+  int declared = 0;
+  const int parent = gesher::test::RunAsDeclaredBoot(argc, argv, "gl-window-test", &declared);
+  if (parent >= 0) return parent;
   setvbuf(stdout, nullptr, _IONBF, 0);
   gesher::bionic::InstallBionicShim();
   gesher::elf::SetupThreadTls();
@@ -267,7 +279,8 @@ int main(int argc, char** argv) {
   auto cpu_draw = reinterpret_cast<CpuDraw>(gesher::elf::Lookup(lib, "glapp_cpu_draw"));
   auto gl_draw = reinterpret_cast<GlDraw>(gesher::elf::Lookup(lib, "glapp_gl_draw"));
   auto gl_finish = reinterpret_cast<GlFinish>(gesher::elf::Lookup(lib, "glapp_gl_finish"));
-  if (cpu_draw == nullptr || gl_draw == nullptr || gl_finish == nullptr) {
+  auto use_angle_warp = reinterpret_cast<UseAngleWarp>(gesher::elf::Lookup(lib, "glapp_use_angle_warp"));
+  if (cpu_draw == nullptr || gl_draw == nullptr || gl_finish == nullptr || use_angle_warp == nullptr) {
     std::printf("FAIL: libglapp.so lacks its exports\n");
     return 1;
   }
@@ -316,6 +329,7 @@ int main(int argc, char** argv) {
 
   // EGL/GLES 3 and 2, each on a window of its own.
   bool composed = true;
+  bool es3_default = true;
   for (int es : {3, 2}) {
     std::string title = "gl_window_test: GLES " + std::to_string(es);
     ANativeWindow* window = gesher_window_create(title.c_str(), kWidth, kHeight);
@@ -326,12 +340,50 @@ int main(int argc, char** argv) {
     gesher_window_show(window);
     rc = gl_draw(window, es, out, sizeof out);
     std::printf("es%d: %s\n", es, out);
-    if (rc != 0) {
+    if (rc == 2 && es == 3) {
+      // No ES 3 on this device (a software Direct3D device): refused as checked.
+      std::printf("es3: unavailable on this device, ES 3 refused as on Android\n");
+      es3_default = false;
+    } else if (rc != 0) {
       failures++;
     } else {
       char label[16];
       std::snprintf(label, sizeof label, "es%d", es);
       composed = CheckGlWindow(static_cast<HWND>(gesher_window_hwnd(window)), label) && composed;
+    }
+    gl_finish();
+    ANativeWindow_release(window);
+  }
+
+  // With --declared, the default display gives exactly the declared version:
+  // ES 3 drawn for 0x30000, refused for 0x20000 (egl_gles_version.h).
+  if (declared != 0) {
+    const int gives = gesher_egl_gles_version();
+    const bool ok = gives == declared && (declared == 0x30000 ? es3_default : !es3_default);
+    std::printf("declared 0x%x: the default display gives 0x%x, ES 3 %s: %s\n", declared, gives,
+                es3_default ? "drawn" : "refused", ok ? "as declared" : "FAILED, not as declared");
+    if (!ok) failures++;
+  }
+
+  // Without ES 3 on the default display (no GPU, as on the CI runners), the
+  // same ES 3 draw, buffer ranges and window read-back on ANGLE's own WARP
+  // display, uncapped, reached through eglGetPlatformDisplayEXT: test-only, so
+  // the ES 3 paths of the thunks and window surfaces stay covered.
+  if (!es3_default) {
+    ANativeWindow* window = gesher_window_create("gl_window_test: GLES 3 on ANGLE WARP", kWidth, kHeight);
+    if (window == nullptr) {
+      std::printf("FAIL: gesher_window_create\n");
+      return 1;
+    }
+    gesher_window_show(window);
+    use_angle_warp(1);
+    rc = gl_draw(window, 3, out, sizeof out);
+    use_angle_warp(0);
+    std::printf("es3 (ANGLE WARP display, uncapped, test-only): %s\n", out);
+    if (rc != 0) {
+      failures++;
+    } else {
+      composed = CheckGlWindow(static_cast<HWND>(gesher_window_hwnd(window)), "es3-angle-warp") && composed;
     }
     gl_finish();
     ANativeWindow_release(window);

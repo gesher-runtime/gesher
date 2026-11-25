@@ -61,6 +61,13 @@ static DWORD GetLastError() { return last_error; }
 static void Sleep(DWORD milliseconds) {
   std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
 }
+// No high-resolution waitable timer here: production falls back to Sleep(1).
+using LONGLONG = long long;
+struct LARGE_INTEGER { LONGLONG QuadPart; };
+constexpr DWORD CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 2, TIMER_ALL_ACCESS = 0x1f0003,
+    INFINITE = 0xffffffff;
+static HANDLE CreateWaitableTimerExW(void*, const wchar_t*, DWORD, DWORD) { return nullptr; }
+static BOOL SetWaitableTimer(HANDLE, const LARGE_INTEGER*, LONG, void*, void*, BOOL) { return FALSE; }
 static DWORD MapError(int error, bool writing) {
   return error == EAGAIN ? writing ? ERROR_SUCCESS : ERROR_NO_DATA :
       error == EPIPE ? ERROR_BROKEN_PIPE : error == EINTR ? ERROR_OPERATION_ABORTED : error;
@@ -259,6 +266,17 @@ static int TransferFifo(const DescriptorSnapshotPtr&, void*, unsigned, bool, HAN
 static int PollFifo(const DescriptorSnapshotPtr&, short, short*) { std::abort(); }
 static int FifoBytesAvailable(const DescriptorSnapshotPtr&, int*) { std::abort(); }
 }
+
+// The production pipe I/O marks its blocking waits for gesher-base's ptrace
+// guard (compat/posix/src/ptrace_state.cc, ADR 0093). No tracer stops this
+// host process: no wait is ever interrupted for a stop.
+namespace gesher::ptrace {
+struct ParkedScope {
+  void SetIo(HANDLE, OVERLAPPED*) {}
+  bool Interrupted() const { return false; }
+};
+inline void WaitWhileStopping() {}
+}  // namespace gesher::ptrace
 
 @PIPE_IMPLEMENTATION@
 
@@ -473,6 +491,29 @@ int main() {
   release.store(true); holder.join();
 
   Check("blocking mode restored for cancellation", Mode(r, false) == 0);
+  {
+    // A blocking write larger than the pipe goes in pieces that fit its room
+    // (and single blocking bytes), never pending whole: every byte arrives
+    // once, in order, and the call returns the full count.
+    Check("blocking writer mode", Mode(w, false) == 0);
+    const size_t total = static_cast<size_t>(capacity) * 3 + 123;
+    std::vector<char> big(total), got;
+    for (size_t i = 0; i != total; ++i) big[i] = static_cast<char>(i * 7 + i / 251);
+    std::thread drain([&] {
+      std::vector<char> chunk(1000);
+      while (got.size() < total) {
+        const ssize_t n = read(reader.fd, chunk.data(), chunk.size());
+        if (n <= 0) break;
+        got.insert(got.end(), chunk.begin(), chunk.begin() + n);
+        Sleep(0);
+      }
+    });
+    Check("blocking write larger than the pipe returns its full count",
+          gesher::TransferPipe(w, big.data(), static_cast<unsigned>(total), true) == static_cast<int>(total));
+    drain.join();
+    Check("blocking write's bytes arrive once, in order", got == big);
+    Check("blocking write releases every wait and handle", live_waits.load() == 0 && live_handles.load() == 0);
+  }
   for (int iteration = 0; iteration != 32; ++iteration) {
     ReaderTask task{r}; pthread_t caller;
     Require("blocking caller starts", pthread_create(&caller, nullptr, BlockedRead, &task) == 0);

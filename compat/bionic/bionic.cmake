@@ -18,6 +18,7 @@ add_library(gesher_bionic STATIC
   ${CMAKE_CURRENT_LIST_DIR}/posix_bionic.cc
   ${CMAKE_CURRENT_LIST_DIR}/process_bionic.cc
   ${CMAKE_CURRENT_LIST_DIR}/pthread_bionic.cc
+  ${CMAKE_CURRENT_LIST_DIR}/ptrace_bionic.cc
   ${CMAKE_CURRENT_LIST_DIR}/search_bionic.cc
   ${CMAKE_CURRENT_LIST_DIR}/shim.cc
   ${CMAKE_CURRENT_LIST_DIR}/signal_bionic.cc
