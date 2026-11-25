@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'ebbbd0721c6aba4b140bc465e0390814e1870cdf7a2b96aa7d221ef81e73dfc6'
+OFD_QUALIFICATION_SHA256 = 'ff2d4aeaca8b8eaef54cdcb5822dd5c952d67fb17d72aad3c3bea2a88d2a33a3'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
