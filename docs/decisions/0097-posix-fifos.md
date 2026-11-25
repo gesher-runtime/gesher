@@ -30,8 +30,8 @@ again once connected, so they cannot be that object.
    `access`, `chmod`, `fchmod`, `realpath`, `utimensat` and `readdir`
    (`DT_FIFO`) report or act on it, unlink and rename work on it unchanged,
    and bionic's `truncate` fails with `EINVAL` without opening it. `mkfifo`
-   tags a hidden file under a private name in the same directory and renames
-   it without replacing, so the name appears as a FIFO or not at all
+   tags a file under a private name (`.gesher-fifo-<random>`) in the same
+   directory and renames it without replacing, so the name appears as a FIFO or not at all
    (`EEXIST` for a racing creator). A volume without reparse points makes
    `mkfifo` fail with `EPERM`, as Linux's vfat does.
 2. **The pipe** is a 64 KiB ring in a section named after the FIFO's
@@ -47,13 +47,13 @@ again once connected, so they cannot be that object.
    to descriptors that are all closed or to processes that have exited, and
    is counted out: when a description is destroyed, and otherwise within
    100 ms by a sweep (immediately before a nonblocking read reports
-   `EAGAIN`). A named section ends with its last handle, so when the last
-   process that maps a ring closes its descriptors while other processes
-   still hold endpoints (a child that inherited one and has not imported it
-   yet), it keeps the ring until another process maps it, the endpoints are
-   gone, or 30 s pass. An importing process binds its inherited FIFO
-   descriptions while it starts, and an endpoint that finds its ring
-   recreated registers again.
+   `EAGAIN`). A named section ends with its last handle, so a launcher passes
+   an inheritable reference to the ring's section with each FIFO
+   description it exports (`SpawnWithFds`): the buffered bytes survive the
+   exporter closing its copies or exiting before the child has bound the
+   ring. The child binds its inherited FIFO descriptions while it starts and
+   keeps that reference for its lifetime (one handle per exported FIFO
+   description). An endpoint that finds its ring recreated registers again.
 4. **The descriptor** is of kind `kFifo`: a pipe-type placeholder handle
    without data access, so the descriptor layer treats it as a stream
    (`lseek` and `pread` fail with `ESPIPE`, `fsync` and `ftruncate` with
@@ -78,10 +78,15 @@ again once connected, so they cannot be that object.
 - Waits for the ring's mutex end on cancellation, or are bounded (an open
   fails with `EAGAIN` after 5 s, a poll slice reports nothing ready), so a
   peer stopped while holding it cannot wedge other processes indefinitely.
-- An exporter that exits immediately after spawning a child, before the
-  child has started, takes the ring (and its buffered bytes) with it; the
-  child's endpoint registers again on a fresh ring.
-- Known gaps: `futimens` on a FIFO descriptor fails (the placeholder has no
+- The last component's symbolic links are walked by Gesher (Windows refuses
+  the FIFO's tag at the end of a followed path): absolute and relative
+  targets, `.` and `..` resolved lexically against the link's directory as
+  Windows does, at most 40 links.
+- Known gaps: `fchmod` on a FIFO descriptor reopens the FIFO by the path it
+  was opened by and fails with `EOPNOTSUPP` once it was renamed or removed,
+  or when that path is longer than 1023 bytes; a process that dies between
+  creating and renaming a FIFO leaves its `.gesher-fifo-<random>`
+  file behind; `futimens` on a FIFO descriptor fails (the placeholder has no
   times); `/proc/self/fd/<n>` of a FIFO reads `pipe:[...]` rather than the
   path; bionic exports `mkfifo` but not `mknod`/`mknodat`/`mkfifoat`;
   passing a FIFO descriptor over AF_UNIX `SCM_RIGHTS` or Binder fails with

@@ -85,6 +85,11 @@ int CaptureDescriptors(std::vector<std::pair<int, DescriptorSnapshotPtr>>* out,
 int SetDescriptorKind(int fd, DescriptorKind kind);
 DescriptorKind GetDescriptorKind(int fd);
 
+// A FIFO description's ring section (fifo.cc), borrowed while the snapshot
+// lives. A launcher passes an inheritable duplicate with the description so
+// that the FIFO's buffered bytes outlive its exporter until the child binds.
+HANDLE FifoRingSection(const DescriptorSnapshotPtr& snapshot);
+
 // Returns a borrowed, noninherited shared-state handle. The snapshot keeps it
 // alive; a launcher duplicates it explicitly into its child's handle list.
 HANDLE ShareFileDescription(const DescriptorSnapshotPtr& snapshot);

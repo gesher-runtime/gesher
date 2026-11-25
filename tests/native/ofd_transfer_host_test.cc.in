@@ -512,6 +512,8 @@ bool VisitEnvironment(void (*visit)(const char*, void*), void* context) {
   visit("GESHER_OFD_TRANSFER_ENV=fixture", context);
   return true;
 }
+// FIFO descriptions (fifo.cc) are outside this envelope: none is exported.
+HANDLE FifoRingSection(const DescriptorSnapshotPtr&) { errno = EOPNOTSUPP; return nullptr; }
 }
 namespace gesher::exec {
 static wchar_t* GetEnvironmentStringsW() {

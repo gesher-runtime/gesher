@@ -419,12 +419,68 @@ static void Crash(const char* path) {
 
 // The only remaining endpoint is inherited by a child that has not touched
 // it yet: the bytes already written and the child's endpoint must survive the
-// parent closing every copy (fifo.cc keeps the ring until the child maps it).
+// parent closing every copy (the launcher passes the ring with the description).
+// One byte within a deadline, so that a failing child never lingers.
+static int ReadByteWithin(int fd, char* byte, int timeout_ms) {
+  pollfd p{fd, POLLIN, 0};
+  if (poll(&p, 1, timeout_ms) != 1 || (p.revents & POLLIN) == 0) return -1;
+  return static_cast<int>(read(fd, byte, 1));
+}
+
 static int ChildInheritedOnly() {
   char byte = 0;
-  if (read(9, &byte, 1) != 1 || byte != 'x') return 60;   // written before the handoff
-  if (read(9, &byte, 1) != 1 || byte != 'z') return 61;   // from a later writer
+  if (ReadByteWithin(9, &byte, 10000) != 1 || byte != 'x') return 60;  // written before the handoff
+  if (ReadByteWithin(9, &byte, 10000) != 1 || byte != 'z') return 61;  // from a later writer
   return write(9, "y", 1) == 1 ? 0 : 62;                  // O_RDWR: still a writer
+}
+
+// The exporter passes its only descriptor to a child and exits at once,
+// without closing anything: the bytes it wrote must still reach the child.
+static int ChildExporter(const char* path) {
+  int fd = open(path, O_RDWR);
+  if (fd < 0 || write(fd, "x", 1) != 1) return 70;
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return 71;
+  gesher::exec::Launch launch;
+  launch.application = Self();
+  gesher::exec::AppendQuoted(&launch.command_line, launch.application);
+  launch.command_line += L" --late-reader \"" + Widen(path) + L"\"";
+  launch.kind = "exe";
+  std::vector<gesher::exec::ChildFd> files{{9, snapshot->handle, snapshot}};
+  PROCESS_INFORMATION child{};
+  if (gesher::exec::SpawnWithFds(launch, nullptr, L"", files, &child) != 0) return 72;
+  ExitProcess(0);  // no destructor, no close: the process and its handles just end
+}
+static int ChildLateReader(const char* path) {
+  Sleep(1500);  // long after the exporter has exited
+  char byte = 0;
+  if (ReadByteWithin(9, &byte, 10000) != 1 || byte != 'x') return 80;
+  if (ReadByteWithin(9, &byte, 10000) != 1 || byte != 'z') return 81;
+  const std::string done = std::string(path) + "-done";
+  int marker = open(done.c_str(), O_CREAT | O_WRONLY, 0600);
+  return marker >= 0 && close(marker) == 0 ? 0 : 82;
+}
+
+static void ExporterExits(const char* path) {
+  const std::string done = std::string(path) + "-done";
+  unlink(done.c_str());
+  Check("Exporter exit: mkfifo", mkfifo(path, 0600) == 0);
+  PROCESS_INFORMATION exporter{};
+  Check("Exporter exit: start the exporter", StartIndependent("--exporter", path, &exporter));
+  if (!exporter.hProcess) return;
+  Check("Exporter exit: the exporter spawned and exited", Finish(&exporter) == 0);
+  int writer = open(path, O_WRONLY | O_NONBLOCK);
+  Check("Exporter exit: the grandchild's reader counts", writer >= 0 && write(writer, "z", 1) == 1);
+  struct stat st{};
+  bool finished = false;
+  for (int i = 0; i < 200 && !finished; ++i) {
+    finished = stat(done.c_str(), &st) == 0;
+    if (!finished) Sleep(50);
+  }
+  Check("Exporter exit: the grandchild read the exporter's byte and a later one", finished);
+  close(writer);
+  unlink(done.c_str());
+  unlink(path);
 }
 
 static void InheritedOnly(const char* path) {
@@ -529,6 +585,8 @@ int main(int argc, char** argv) {
   if (argc == 3 && std::strcmp(argv[1], "--crash") == 0) return ChildCrash(argv[2]);
   if (argc == 2 && std::strcmp(argv[1], "--inherited") == 0) return ChildInherited();
   if (argc == 2 && std::strcmp(argv[1], "--inherited-only") == 0) return ChildInheritedOnly();
+  if (argc == 3 && std::strcmp(argv[1], "--exporter") == 0) return ChildExporter(argv[2]);
+  if (argc == 3 && std::strcmp(argv[1], "--late-reader") == 0) return ChildLateReader(argv[2]);
   char path[64];
   std::snprintf(path, sizeof(path), "gesher-fifo-test-%lu", GetCurrentProcessId());
   unlink(path);
@@ -542,6 +600,7 @@ int main(int argc, char** argv) {
   Crash(path);
   Unlink(path);
   InheritedOnly((std::string(path) + "-handoff").c_str());
+  ExporterExits((std::string(path) + "-exporter").c_str());
   Paths(path);
   unlink(path);
   std::printf("fifo-windows: %d assertions, %d failures\n", checks, failures);
