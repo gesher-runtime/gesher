@@ -20,6 +20,7 @@ on:
       - 'tools/host-tools-ci.cmake'
       - 'tools/build-boot-jars.sh'
       - 'tools/build-framework-res.sh'
+      - 'config/framework-res-overlay/**'
       - 'tools/make-coremod.sh'
       - 'tools/sparse-bp.sh'
       - 'tools/fetch-aosp.sh'
@@ -306,7 +307,7 @@ jobs:
         with:
           phase: restore
           path: out/framework-res
-          key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock') }}
+          key: framework-res-${{ hashFiles('tools/build-framework-res.sh', 'tools/gen/aconfig_values.py', 'aosp.lock', 'config/framework-res-overlay/**') }}
 
       # aapt2 for framework-res and lifecycle.apk, from Google's build-tools, where
       # tools/build-framework-res.sh looks for it (WORK_DIR); fetched here,
@@ -432,7 +433,12 @@ jobs:
           printf '%s  %s\n' 3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad "$R8_JAR.download" | sha256sum --check --strict
           mv "$R8_JAR.download" "$R8_JAR"
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          python3 tests/host-net-proxy/run.py --java-home "$JAVA_HOME" \
+            --proxy-source third_party/aosp/frameworks/base/core/java/android/net/Proxy.java
           python3 tools/test_uia_cache.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_dexopt_failure_output.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_apk_signing.py --apksig-jar "$APKSIG_JAR"
@@ -502,6 +508,11 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/app/gesher-camera" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
+          # Gesher Speech Recognition (docs/speech-recognition.md): the RecognitionService over Windows' recognizers.
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/app/gesher-stt" tests/apps/lifecycle/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/popupapp/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
@@ -847,6 +858,11 @@ jobs:
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
 
+      - name: SDK36 WifiManager public API completeness
+        run: |
+          python3 tools/check_wifi_manager_api.py --java-home "$JAVA_HOME" \
+            --sdk-jar work/sdk-36/android.jar --app-classes out/app/gesher-app-classes.jar
+
       - name: Windows Wi-Fi data, permissions and native scan contracts
         run: |
           set -euo pipefail
@@ -858,6 +874,17 @@ jobs:
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME"
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control premature-notification
           python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control skip-eligibility
+          python3 tools/test_windows_wifi_native.py --java-home "$JAVA_HOME" --negative-control listing-failure-as-empty
+
+      - name: Windows cellular telephony services and native Mobile Broadband contracts
+        run: |
+          set -euo pipefail
+          python3 tools/test_telephony.py --java-home "$JAVA_HOME" --framework-classes out/framework/classes \
+            --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+          python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME"
+          python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control leak-capability-strings
+          python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control uninitialize-foreign-apartment
+          python3 tools/test_windows_cellular_native.py --java-home "$JAVA_HOME" --negative-control swap-radio-states
 
       - name: SDK36 WifiInfo Builder, copy and redaction contracts
         run: |
@@ -903,6 +930,7 @@ jobs:
           cp out/app/popupapp.apk dist-framework/
           cp out/app/split-package-fixtures.zip dist-framework/
           cp out/app/gesher-camera.apk dist-framework/
+          cp out/app/gesher-stt.apk dist-framework/
           cp out/app/rtlapp.apk dist-framework/
           cp out/app/imeapp.apk dist-framework/
           cp out/app/lifeapp.apk dist-framework/

@@ -80,6 +80,43 @@ jobs:
           python3 tools/ci/test_release_workflows.py
           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
           python3 -m unittest discover -s tools/ci -p test_prune_caches.py
+  # The hosted Server images can expose NLM without its cost backend. Their
+  # contracts below prove that absence independently and check failed-start
+  # cleanup. This client job unconditionally requires the real subscription.
+  network-cost-client:
+    name: Windows client network cost
+    needs: [source-identity]
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+      - name: Verify the compiler targets native ARM64
+        shell: pwsh
+        run: |
+          if ($env:VSCMD_ARG_TGT_ARCH -ne 'arm64') { throw 'Windows client contracts require the ARM64 compiler target' }
+      - name: Build production network cost policy contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
+      - name: Unknown cost never grants unmetered capability
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-policy-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Production cost classification failed' }
+      - name: Build unchanged strict connection cost subscription test
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc /Fe:cost-events-test.exe ole32.lib uuid.lib
+      - name: Require real Windows client subscription and unsubscription
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-events-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Required Windows client cost subscription failed' }
   # Short Windows host contracts share one runner per OS: separate jobs each
   # paid for a runner, checkout and queue slot to run a minute of checks.
   # Every check step runs even after an earlier one fails, so one failure
@@ -128,6 +165,20 @@ jobs:
         run: |
           & .\query-pool-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Actual UIA query pool lifecycle controls failed' }
+      - name: Build actual Windows speech recognition contracts (docs/speech-recognition.md)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\speech\speech_recognition_windows_test.cc compat\devices\speech_recognition_win.cc /Fe:speech-recognition-windows.exe ole32.lib uuid.lib
+      - name: SAPI recognizers enumerate and recognize handed-over PCM without a microphone
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\speech-recognition-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech recognition contracts failed' }
+      - name: Speech recognition service contracts on Windows' JVM (docs/speech-recognition.md)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Java DNS admission and completion ownership on Windows
         if: ${{ !cancelled() }}
         shell: bash
@@ -204,16 +255,36 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
-      - name: Build actual connection cost event sink (Network List Manager)
+      - name: Build production network cost policy contracts
         if: ${{ !cancelled() }}
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc /Fe:cost-events-test.exe ole32.lib uuid.lib
-      - name: Connection cost events wake the network watcher; subscribe and unsubscribe against Windows
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
+      - name: Unknown cost never grants unmetered capability
         if: ${{ !cancelled() }}
         shell: pwsh
         run: |
-          & .\cost-events-test.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Windows connection cost event checks failed' }
+          & .\cost-policy-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Production cost classification failed' }
+      - name: Build SDK-verified Server cost capability and lifecycle contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_server_test.cc /Fe:cost-events-server-test.exe ole32.lib uuid.lib
+      - name: Verify actual Server cost support and failed-start handle reclamation
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-events-server-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Server cost capability or lifecycle checks failed' }
+      - name: Build actual Windows Country or region lookup
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\home_region_win.cc tests\country-detector\home_region_windows_test.cc /Fe:home-region-test.exe
+      - name: Country or region agrees with GetUserDefaultGeoName and GetUserGeoID
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\home-region-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Country or region checks failed' }
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell
@@ -224,6 +295,8 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
           tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelLaunchChecks.ps1
@@ -231,13 +304,23 @@ jobs:
           tests/windows/shell/ControlPanelLogsChecks.ps1
           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
           tests/windows/shell/ControlPanelActionChecks.ps1
+          tests/windows/shell/CameraImagePickerChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
           tests/windows/shell/NativeStderrChecks.ps1
+      - name: Control panel startup helpers on PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/PreferredLanguagesChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
       - name: Production modal dialogs on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         timeout-minutes: 2
@@ -369,6 +452,7 @@ jobs:
           python3 tools/test_bionic_system_contracts.py --sanitize
           python3 tools/test_environment_contracts.py --sanitize
           python3 tools/test_environment_lookup_contracts.py
+          python3 tools/test_device_identity.py --sanitize
           python3 tools/test_bionic_signal_masks.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
@@ -380,6 +464,7 @@ jobs:
           python3 tools/test_file_io_contracts.py --sanitize
           python3 tools/test_pipe_io_contracts.py --sanitize
           python3 tools/test_revocable_file_contracts.py --sanitize
+          python3 tools/test_record_lock_liveness.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
@@ -533,6 +618,7 @@ jobs:
           python3 tools/test_media_callback_state.py --sanitize
           python3 tools/test_media_http_contracts.py --sanitize
           python3 tools/test_mf_encoder_input.py --sanitize
+          python3 tools/test_mf_video_output.py --sanitize
           python3 tools/test_media_surface_contracts.py --sanitize
           python3 tools/test_codec_output_storage.py --sanitize
           python3 tools/test_codec_reader_delivery.py --sanitize
@@ -556,6 +642,7 @@ jobs:
           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_receiver_lifetimes.py
           python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
+          python3 tools/test_media_session_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_encoder_selection.py
 
       - name: Android HttpEngine requests over real HTTP sockets
@@ -578,9 +665,13 @@ jobs:
           python3 tools/test_bluetooth_native_contracts.py --sanitize
           python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_bluetooth_sdp_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
 
+      - name: Speech recognition service contracts (docs/speech-recognition.md)
+        run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Biometric and device-credential auth service contracts (ADR 0091)
         run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
 
@@ -596,6 +687,9 @@ jobs:
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
 
+      - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
+        run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
+
       - name: Portable code relocation, shell ownership and native profile selection
         run: |
           python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
@@ -609,9 +703,11 @@ jobs:
           python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
+          python3 tools/test_log_redaction.py --java-home "$JAVA_HOME"
           python3 tools/test_install_metadata_comparison.py --java-home "$JAVA_HOME"
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
+          python3 tools/test_camera_image_picker.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
           python3 tools/test_capture_permission_flow.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_callback_admission.py --java-home "$JAVA_HOME"
@@ -1196,8 +1292,11 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
           tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
@@ -1311,7 +1410,7 @@ jobs:
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'android.test.base.jar', 'android.test.mock.jar', 'android.test.runner.jar', 'etc\permissions\android.test.runner.xml', 'licenses\JUNIT-CPL-NOTICES.txt', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk') {
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk', 'gesher-stt.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
@@ -2734,7 +2833,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job

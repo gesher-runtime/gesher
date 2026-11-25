@@ -51,6 +51,12 @@
     "permission_requested": {"en": "This app is requesting the following permissions:", "he": "היישום מבקש את ההרשאות הבאות:"},
     "permission_allow": {"en": "Allow", "he": "לאפשר"},
     "permission_deny": {"en": "Don't allow", "he": "לא לאפשר"},
+    "background_permission_title": {"en": "Gesher background permission request", "he": "גשר — בקשת הרשאה ברקע"},
+    "background_permission_heading": {"en": "Allow access all the time?", "he": "לאפשר גישה כל הזמן?"},
+    "background_permission_requested": {"en": "This app is also asking to use this permission in the background, when you are not using it:", "he": "היישום מבקש להשתמש בהרשאה זו גם ברקע, כשאינך משתמש בו:"},
+    "background_permission_always": {"en": "Allow all the time", "he": "לאפשר כל הזמן"},
+    "background_permission_foreground": {"en": "Allow only while using the app", "he": "לאפשר רק בזמן השימוש ביישום"},
+    "background_permission_deny": {"en": "Don't allow, not even while using the app", "he": "לא לאפשר, גם לא בזמן השימוש ביישום"},
     "exact_alarm_title": {"en": "Alarms and reminders", "he": "התראות ותזכורות"},
     "exact_alarm_allow": {"en": "Allow alarms and reminders", "he": "לאפשר התראות ותזכורות"},
     "exact_alarm_detail": {"en": "Allow this app to schedule alarms and reminders at precise times. Turning this off stops the app and cancels its exact alarms.", "he": "הרשאה לתזמן התראות ותזכורות בזמנים מדויקים. ביטול ההרשאה מפסיק את היישום ומבטל את ההתראות המדויקות שלו."},
@@ -96,6 +102,22 @@
     "camera_cancel": {
       "en": "Cancel",
       "he": "ביטול"
+    },
+    "camera_source_title": {
+      "en": "Camera or image from the PC?",
+      "he": "מצלמה או תמונה מהמחשב?"
+    },
+    "camera_source_camera": {
+      "en": "Use the PC camera",
+      "he": "שימוש במצלמת המחשב"
+    },
+    "camera_source_image": {
+      "en": "Choose an image from the PC",
+      "he": "בחירת תמונה מהמחשב"
+    },
+    "camera_pick_title": {
+      "en": "Choose an image for the camera",
+      "he": "בחירת תמונה עבור המצלמה"
     },
     "no_device": {
       "en": "no Gesher device is running",
@@ -242,8 +264,8 @@
       "he": "כל היישומים"
     },
     "proxy_invalid": {
-      "en": "{0}: not host:port, direct or windows",
-      "he": "{0}: יש להזין host:port, direct או windows"
+      "en": "{0}: not host:port, socks5://host:port, direct or windows",
+      "he": "{0}: יש להזין host:port, socks5://host:port, direct או windows"
     },
     "proxy_saved": {
       "en": "proxy of {0}: {1} (app processes started from now on)",
@@ -489,6 +511,10 @@
       "en": "Launch",
       "he": "הפעל"
     },
+    "cp_btn_app_info": {
+      "en": "Details",
+      "he": "פרטים"
+    },
     "cp_separate_windows": {
       "en": "Separate windows",
       "he": "חלונות נפרדים"
@@ -498,8 +524,8 @@
       "he": "כל משימה של האפליקציה נפתחת בחלון משלה, במקום חלון אחד לאפליקציה. חל מההפעלה הבאה של האפליקציה."
     },
     "cp_proxy_desc": {
-      "en": "Gesher's own HTTP proxy for every app, instead of Windows' proxy settings. Each app can have its own with its Proxy button. It applies to app processes started from now on: close a running app completely and start it again, or stop and start the device (reopening a window can keep the app's process and its previous proxy). It covers the HTTP clients that use the system proxy; WebView pages keep Windows' settings.",
-      "he": "פרוקסי HTTP של גשר לכל היישומים, במקום הגדרות הפרוקסי של Windows. לכל יישום אפשר לקבוע פרוקסי משלו בכפתור 'פרוקסי' שלו. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש, או לכבות ולהפעיל את המערכת (פתיחה מחדש של חלון יכולה להשאיר את תהליך היישום עם הפרוקסי הקודם). חל על לקוחות HTTP שמשתמשים בפרוקסי המערכת; דפי WebView ממשיכים לפי הגדרות Windows."
+      "en": "Gesher's own HTTP or SOCKS5 proxy for every app, instead of Windows' proxy settings. Each app can have its own with its Proxy button. It applies to app processes started from now on: close a running app completely and start it again, or stop and start the device (reopening a window can keep the app's process and its previous proxy). It covers clients that support the selected proxy type and use the system proxy; WebView pages keep Windows' settings.",
+      "he": "פרוקסי HTTP או SOCKS5 של גשר לכל היישומים, במקום הגדרות הפרוקסי של Windows. לכל יישום אפשר לקבוע פרוקסי משלו בכפתור 'פרוקסי' שלו. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש, או לכבות ולהפעיל את המערכת (פתיחה מחדש של חלון יכולה להשאיר את תהליך היישום עם הפרוקסי הקודם). חל על לקוחות שתומכים בסוג הפרוקסי הנבחר ומשתמשים בפרוקסי המערכת; דפי WebView ממשיכים לפי הגדרות Windows."
     },
     "cp_proxy_mode_inherit": {
       "en": "Same as every app",
@@ -518,8 +544,8 @@
       "he": "שרת פרוקסי"
     },
     "cp_proxy_address_hint": {
-      "en": "Proxy server address: host:port, for example 127.0.0.1:8080",
-      "he": "כתובת שרת הפרוקסי: כתובת:פורט, למשל 127.0.0.1:8080"
+      "en": "HTTP: host:port (127.0.0.1:8080). SOCKS5: socks5://host:port (socks5://127.0.0.1:1080).",
+      "he": "HTTP: כתובת:פורט (127.0.0.1:8080). SOCKS5: למשל socks5://127.0.0.1:1080."
     },
     "cp_proxy_save": {
       "en": "Save",
@@ -530,8 +556,8 @@
       "he": "הפרוקסי נשמר. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש."
     },
     "cp_proxy_invalid": {
-      "en": "⁨{0}⁩ is not a proxy server address. Enter host:port, for example 127.0.0.1:8080.",
-      "he": "⁨{0}⁩ אינה כתובת של שרת פרוקסי. יש להזין כתובת:פורט, למשל 127.0.0.1:8080."
+      "en": "⁨{0}⁩ is not a proxy server address. Enter host:port for HTTP or socks5://host:port for SOCKS5.",
+      "he": "⁨{0}⁩ אינה כתובת של שרת פרוקסי. יש להזין host:port עבור HTTP או socks5://host:port עבור SOCKS5."
     },
     "cp_proxy_save_failed": {
       "en": "Failed to save the proxy: {0}",
@@ -602,12 +628,60 @@
       "he": "עודכן לאחרונה: {0}"
     },
     "cp_app_info_detail": {
-      "en": "An app asked to open this application's settings. Here you can launch or uninstall it.",
-      "he": "יישום ביקש לפתוח את ההגדרות של היישום הזה. כאן אפשר להפעיל אותו או להסיר אותו."
+      "en": "An app asked to open this application's settings. Here you can allow or deny its special access. You can launch or uninstall it from the app list in the Gesher Control Center.",
+      "he": "יישום ביקש לפתוח את ההגדרות של היישום הזה. כאן אפשר לאשר או לשלול את הגישה המיוחדת שלו. אפשר להפעיל או להסיר אותו מרשימת היישומים בלוח הבקרה של גשר."
     },
     "cp_app_info_close": {
       "en": "Close",
       "he": "סגירה"
+    },
+    "cp_app_info_detail_list": {
+      "en": "Here you can allow or deny this application's special access. You can launch or uninstall it from the app list in the Gesher Control Center.",
+      "he": "כאן אפשר לאשר או לשלול את הגישה המיוחדת של היישום הזה. אפשר להפעיל או להסיר אותו מרשימת היישומים בלוח הבקרה של גשר."
+    },
+    "cp_access_title": {
+      "en": "Special app access (on Android, you allow these in Settings):",
+      "he": "הרשאות גישה מיוחדות (באנדרואיד מאשרים אותן בהגדרות):"
+    },
+    "cp_access_loading": {
+      "en": "Reading the special access from the Gesher device...",
+      "he": "קורא את הגישה המיוחדת מסביבת גשר..."
+    },
+    "cp_access_fixed": {
+      "en": "{0} (always allowed: this app is itself an installer)",
+      "he": "{0} (תמיד מאושר: היישום הזה הוא בעצמו מתקין יישומים)"
+    },
+    "cp_access_all_files": {
+      "en": "All files access",
+      "he": "גישה לכל הקבצים"
+    },
+    "cp_access_overlay": {
+      "en": "Display over other apps",
+      "he": "הצגה מעל יישומים אחרים"
+    },
+    "cp_access_install": {
+      "en": "Install unknown apps",
+      "he": "התקנת יישומים לא מוכרים"
+    },
+    "cp_access_write_settings": {
+      "en": "Modify system settings",
+      "he": "שינוי הגדרות המערכת"
+    },
+    "cp_access_usage": {
+      "en": "Usage access",
+      "he": "גישה לנתוני שימוש"
+    },
+    "cp_access_media": {
+      "en": "Media management",
+      "he": "ניהול מדיה"
+    },
+    "cp_access_unavailable": {
+      "en": "Gesher could not read this application's special access. If the Gesher device is stopped, start it and open the details again.",
+      "he": "גשר לא הצליח לקרוא את הגישה המיוחדת של היישום הזה. אם סביבת גשר כבויה, יש להפעיל אותה ולפתוח שוב את הפרטים."
+    },
+    "cp_access_failed": {
+      "en": "Could not change \"{0}\".",
+      "he": "לא ניתן היה לשנות את \"{0}\"."
     },
     "cp_uninstall_failed": {
       "en": "Failed to uninstall {0}.",
@@ -920,6 +994,26 @@
     "cp_update_reopen_failed": {
       "en": "The update is installed. Close and reopen the control center from the Start menu.",
       "he": "העדכון מותקן. סגור את לוח הבקרה ופתח אותו מחדש מתפריט התחל."
+    },
+    "cp_camera_title": {
+      "en": "Camera",
+      "he": "מצלמה"
+    },
+    "cp_camera_image_picker": {
+      "en": "Allow choosing an image from the PC instead of taking a photo",
+      "he": "אפשר בחירת תמונה מהמחשב במקום צילום במצלמה"
+    },
+    "cp_camera_image_picker_hint": {
+      "en": "Off by default. When on, an app that takes a photo or opens the camera can use an image you choose from the PC instead; when the PC has a camera, you are asked which to use. Applies the next time an app opens the camera. Whether the device reports a camera, and the camera app on a PC without one, follow after Gesher restarts.",
+      "he": "כבוי כברירת מחדל. כשהאפשרות פועלת, יישום שמצלם או פותח את המצלמה יכול להשתמש במקום זאת בתמונה שתבחר מהמחשב; כשיש למחשב מצלמה, תישאל במה להשתמש. חל בפעם הבאה שיישום פותח את המצלמה. דיווח המכשיר על קיום מצלמה, ויישום המצלמה במחשב ללא מצלמה, מתעדכנים לאחר הפעלה מחדש של גשר."
+    },
+    "cp_camera_image_picker_saved": {
+      "en": "Camera setting saved.",
+      "he": "הגדרת המצלמה נשמרה."
+    },
+    "cp_camera_image_picker_failed": {
+      "en": "Could not save the camera setting: {0}",
+      "he": "שמירת הגדרת המצלמה נכשלה: {0}"
     }
   }
 }

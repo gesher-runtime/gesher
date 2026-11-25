@@ -56,6 +56,22 @@ Windows without them (no location service, no Media Foundation) gets clean
 - `ActivityManagerService.isIntentSenderTargetedToPackage` (as Android's): the
   client checks it before registering a PendingIntent.
 
+### Country (`country_detector`)
+
+`CountryDetectorService` answers `android.location.CountryDetector` (`ICountryDetector`)
+as AOSP's `ComprehensiveCountryDetector` does on a device without a mobile network, a
+SIM or a location-based country: the country of the system's locale settings, with
+source `Country.COUNTRY_SOURCE_LOCALE`. On Windows that setting is the user's "Country or
+region" (`GetUserDefaultGeoName`, or `GetUserGeoID` + `GetGeoInfoW(GEO_ISO2)` before
+Windows 10 1709), a preference rather than a detection, so it is never reported as
+NETWORK, LOCATION or SIM. When Windows has no two-letter code (a UN M.49 area such as
+`419`, or no natives), the answer is AOSP's own fallback: the default Locale's country.
+Location gives no country (there is no geocoder). Listeners get the current country when
+added and again when it changes (WM_SETTINGCHANGE, `WindowsHost.EVENT_SETTING_CHANGED`).
+Tests: `tools/test_country_detector_contracts.py` (host, AOSP classes from android-all),
+`tests/country-detector/home_region_windows_test.cc` (windows-host-contracts) and
+`gesher.services.CountryDetectorTest` (track 95-browser.ps1).
+
 ## Sensors
 
 - Windows.Devices.Sensors' default accelerometer, gyrometer, magnetometer,
@@ -63,7 +79,36 @@ Windows without them (no location service, no Media Foundation) gets clean
   TYPE_ACCELEROMETER (m/s^2, Android's sign), TYPE_GYROSCOPE (rad/s),
   TYPE_MAGNETIC_FIELD, TYPE_LIGHT and TYPE_ROTATION_VECTOR (the quaternion).
   Readings are polled at the rate asked for; on-change sensors report changes
-  only. The CI runners have none.
+  only. The CI runners have no Windows sensor (their list is Gesher's
+  stationary accelerometer, below, unless `GESHER_SENSOR_FALLBACK=0`).
+- The package manager's system features follow the same list
+  (`PackageManagerService.addSensorFeatures`, through `WindowsSensors`):
+  `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass` (the
+  magnetometer) and `.light` when SensorManager lists that type, so
+  `hasSystemFeature` and Google Play's filtering agree with `getDefaultSensor`.
+  The rotation vector has no feature of its own. Without a sensor no feature
+  is claimed. Gesher's stationary accelerometer (below) declares no feature:
+  it is a desktop default, not hardware, and the native list marks where each
+  sensor comes from (`Origin` in `compat/devices/sensors.h`), so
+  `WindowsSensors.types()` gives only Windows' sensors and, under the test
+  switch, `GESHER_SENSOR_TEST`'s. On a PC without
+  an accelerometer, `hasSystemFeature` and feature filtering (an app's required
+  `<uses-feature>`) answer that there is none, while an app that asks
+  SensorManager gets the gravity-only reading. The features are the system server's list at boot, like every
+  system feature (docs/system-features.md): a sensor attached later appears in
+  SensorManager in newly started app processes, and in the features after
+  Gesher restarts. The feature says the sensor exists, as on Android; how closely
+  a real PC sensor meets the CDD (section 7.3: rates, ranges, magnetometer
+  calibration) is not established, as no real sensor has been checked (below).
+  Checked by `PackageServiceQueriesTest` in the framework-fixes track. Through
+  `ServiceFixtureRunner` (which registers the runtime natives): with
+  `GESHER_SENSOR_TEST=1`, the test accelerometer and light sensor are
+  `hasSystemFeature` and `getSystemAvailableFeatures` answers; with the
+  defaults, SensorManager's native list holds the stationary accelerometer and
+  no sensor feature is declared; with `GESHER_SENSOR_FALLBACK=0`, the list has
+  no stationary accelerometer and still no feature. Its plain run has no
+  natives, so it checks only the mapping and that nothing is claimed without a
+  sensor.
 - `GESHER_SENSOR_TEST=1` adds a test accelerometer (gravity on Z) and a test
   light sensor (250 lux), below the framework's natives, so the whole path is
   checked where there is no hardware.
@@ -78,7 +123,8 @@ Windows without them (no location service, no Media Foundation) gets clean
   processes; the native sensor list decides, nothing is set per package), and
   any real motion sensor replaces it. A motion sensor class Windows fails to
   activate (rather than reporting none) keeps it out, so it never stands in for
-  hardware that is present. `GESHER_SENSOR_FALLBACK=0` turns it off:
+  hardware that is present. It declares no system feature (above).
+  `GESHER_SENSOR_FALLBACK=0` turns it off:
   the list is then empty on the runners and `registerListener` answers false.
   Both are checked in the single-process mode.
 - Each event queue is an eventfd watched by the queue's Looper, as Android's
@@ -236,6 +282,59 @@ Windows without them (no location service, no Media Foundation) gets clean
   TextureView (they get no native window on Gesher today; frames go to any
   surface that has one).
 
+### Choosing an image instead of the camera (Control Center setting)
+
+An alternative operation for a missing PC capability, approved by the maintainer
+and off by default (CONTRIBUTING.md): a PC usually has no rear camera to
+photograph a document such as a cheque. The Control Center's Camera card has
+"Allow choosing an image from the PC instead of taking a photo", stored as
+`image_picker_fallback=true` in `<data>/system/camera.properties`.
+
+- While it is on, the camera list ends with `gesher-image-picker`
+  (`CameraImageSource.DEVICE_ID`), a fixed-focus rear camera whose frames are an
+  image the user selects with the Windows file picker when an app starts using
+  it (offered at 2592x1944, 1920x1080, 1280x960, 1280x720 and 640x480; the image
+  is scaled into the configured size with its shape kept, on black). Opening one
+  of the PC's cameras asks first: "Use the PC camera" or "Choose an image from
+  the PC". Without the setting nothing changes. The image is shown as Windows
+  shows the file (its EXIF orientation applied), and has nothing to focus: an
+  autofocus PC camera used for an image answers `autoFocus` at once and its
+  Camera2 AF state stays INACTIVE, as a fixed-focus camera.
+- The question is asked once per client: from an app's open of the camera until
+  it closes it, a new size, a picture (`takePicture` reopens the device) or a
+  restarted preview keep the answer, and a cancelled question fails the client's
+  opens (`ERROR_CANCELLED`): Camera2's frames do not ask again, while a legacy
+  `startPreview` that failed after a cancel asks again when the app retries it.
+  Legacy `Camera.open()` and
+  `getParameters()` do not ask (apps probe a camera that way); `startPreview` asks,
+  outside the session's lock, and Camera2 asks when the capture thread first opens
+  the device.
+- The camera service runs in the app's process, which neither reads data/system
+  nor opens the PC's files (and, in an AppContainer, cannot): the system server's
+  `gesher.camera_source` (`CameraSourceService`) answers whether the setting is on
+  and shows the question and the file picker, owned by the app's process. Choosing
+  requires the caller's CAMERA grant, as opening the camera does, and only one
+  question is open at a time (it holds a binder thread until the user answers; another
+  caller meanwhile is refused, as a cancel). The selection is admitted as the
+  document picker admits one (canonical, local, not in Android/data, obb or sandbox),
+  must start as a JPEG, PNG, GIF, BMP or WebP image does and be at most 32 MiB, and
+  reaches the app's process as a read-only descriptor; the log names only the file.
+  The file's bytes, its metadata included, are in the app's process while it decodes
+  them.
+- `MediaStore.ACTION_IMAGE_CAPTURE` keeps going to Gesher Camera, installed at the
+  device's start when there is a camera or the setting is on; its Camera2 open asks
+  the same question, and the photo it takes, written to `EXTRA_OUTPUT` with the
+  requesting app's own URI grant, is the selected image at the camera's largest size.
+- The setting is followed as it changes for the camera list and the question. What
+  the device decides at its start follows it at the next start: `FEATURE_CAMERA`
+  (the selected-image camera is a rear camera) and whether Gesher Camera is
+  installed on a PC without a camera. An app that cached the camera list keeps it.
+- Validation: `tools/test_camera_image_picker.py` runs the production classes
+  (including the Binder round trip and the descriptor) over framework shims, and
+  `tests/windows/shell/CameraImagePickerChecks.ps1` the Control Center's file
+  handling. The Windows question and file picker and an app's live use of the
+  frames are not exercised in CI.
+
 ## Speech recognition
 
 `SpeechRecognizer` delegates to an installed, enabled, exported Android
@@ -258,6 +357,10 @@ attribution. A missing provider or timed-out bind produces an API error. If an
 active provider disconnects, the current operations fail and a new operation may
 reconnect. Destroying the recognizer or losing its app process releases the
 provider binding and cancels active listening.
+
+Gesher's own provider, Gesher Speech Recognition (`com.gesher.stt`), is installed when
+Windows has SAPI 5 recognizers and becomes the unset default; see
+[speech-recognition.md](speech-recognition.md).
 
 `tools/test_speech_recognition.py --help` describes the host fixtures. The Windows
 framework-fixes track also runs them under ART. The fixtures exercise the broker and

@@ -95,6 +95,8 @@ public final class Main {
     }
 
     public static void main(String[] args) {
+        // stdout/stderr may be a persisted log file: no credentials (docs/logging.md).
+        LogRedaction.installStandardStreams();
         int code;
         try {
             code = run(args);
@@ -236,6 +238,9 @@ public final class Main {
             }
             log("starting " + intent.toShortString(false, true, true, false)
                     + " through the system server");
+            // The zygote's specialisation of this app process: not dumpable unless
+            // debuggable (ADR 0093).
+            ProcessSpecialization.apply(ProcessSpecialization.runtimeFlagsFor(appInfo), "gesher-app");
             // With a window the run ends when it is closed (the task stays).
             GesherAppProcess.run(intent, appInfo.targetSdkVersion, !keepTask && !window,
                     !window ? WindowMode.HEADLESS

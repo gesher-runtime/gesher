@@ -1,6 +1,7 @@
 /* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
 package gesher.services;
 
+import android.content.ComponentName;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
 import android.content.pm.Signature;
@@ -196,6 +197,7 @@ public final class ProviderAuthorityIndexTest {
         provider(parsed, "Aware", "aware", true, true);
         provider(parsed, "One", "same", true, false);
         provider(parsed, "Two", "same", true, false);
+        provider(parsed, "Three", "same;three", true, false);
         ApkPackage duplicates = apk(parsed, 12350);
         publish(pm, map(duplicates));
         require(declared(pm, "canonical") == null && declared(pm, "ignored") == null,
@@ -208,6 +210,7 @@ public final class ProviderAuthorityIndexTest {
                 && pm.resolveContentProvider("aware", PackageManager.MATCH_DIRECT_BOOT_AWARE, 0) != null,
                 "Direct-boot flags were cached");
         sameAuthority(pm, duplicates);
+        registeredClaims(pm, duplicates);
 
         // Thousands of distinct misses must not grow a result/negative-result cache.
         Object index = field(PackageManagerService.class, "mProviderAuthorityIndex").get(pm);
@@ -228,6 +231,45 @@ public final class ProviderAuthorityIndexTest {
     private static ProviderInfo component(PackageManagerService pm, ApkPackage pkg, String name, long flags) {
         return pm.getProviderInfo(new android.content.ComponentName(pkg.packageName,
                 pkg.packageName + "." + name), flags, 0);
+    }
+
+    /**
+     * A provider left with no authority stays a registered component with a null
+     * authority (queryable by component, enable-able, never resolved by authority);
+     * getPackageInfo(GET_PROVIDERS) reports what registration left each declaration, as
+     * AOSP's rewritten ParsedProvider does; and the claims are computed (and their
+     * "Skipping provider name" warnings logged) once per parsed package.
+     */
+    private static void registeredClaims(PackageManagerService pm, ApkPackage duplicates) throws Exception {
+        String pkgName = duplicates.packageName;
+        ProviderInfo two = null;
+        int twoCount = 0;
+        for (ProviderInfo info : duplicates.providers(PackageManager.MATCH_DISABLED_COMPONENTS)) {
+            if (info.name.equals(pkgName + ".Two")) { two = info; twoCount++; }
+        }
+        require(two != null && twoCount == 1 && two.authority == null,
+                "Provider left without an authority was not registered with a null authority");
+        ProviderInfo twoInfo = component(pm, duplicates, "Two", 0);
+        require(twoInfo != null && twoInfo.readPermission != null,
+                "getProviderInfo lost a provider without an authority's declaration");
+        require((Boolean)invoke(method(PackageManagerService.class, "hasComponent", ComponentName.class),
+                        pm, new ComponentName(pkgName, pkgName + ".Two")),
+                "setComponentEnabledSetting would reject a provider without an authority");
+        Map<String, String> reported = new LinkedHashMap<>();
+        for (ProviderInfo info : pm.getPackageInfo(pkgName, PackageManager.GET_PROVIDERS
+                | PackageManager.MATCH_DISABLED_COMPONENTS, 0).providers) {
+            if (!info.name.equals(pkgName + ".Canonical")) reported.put(info.name, info.authority);
+        }
+        Map<String, String> expected = new LinkedHashMap<>();
+        expected.put(pkgName + ".Aware", "aware"); expected.put(pkgName + ".One", "same");
+        expected.put(pkgName + ".Two", null); expected.put(pkgName + ".Three", "three");
+        require(expected.equals(reported), "PackageInfo reported unclaimed authorities: " + reported);
+        Field claims = field(ApkPackage.class, "mProviderAuthorities");
+        Object computed = claims.get(duplicates);
+        require(computed != null, "Claims were not cached");
+        declared(pm, "three"); duplicates.providers(0); component(pm, duplicates, "Two", 0);
+        pm.getPackageInfo(pkgName, PackageManager.GET_PROVIDERS | PackageManager.MATCH_DIRECT_BOOT_AWARE, 0);
+        require(claims.get(duplicates) == computed, "Claims were recomputed per query");
     }
 
     /**

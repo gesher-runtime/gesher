@@ -206,6 +206,7 @@ int register_gesher_sensors(JNIEnv* env);  // sensors_jni.cc
 int register_gesher_camera_metadata(JNIEnv* env);  // camera_metadata_jni.cc
 int register_gesher_camera_frames(JNIEnv* env);  // camera_frames.cc
 int register_gesher_bluetooth(JNIEnv* env);  // bluetooth_jni.cc
+int register_gesher_speech_recognition(JNIEnv* env);  // speech_recognition_jni.cc
 int register_gesher_hello(JNIEnv* env);  // hello_jni.cc
 
 int register_gesher_devices(JNIEnv* env) {
@@ -213,6 +214,7 @@ int register_gesher_devices(JNIEnv* env) {
   register_gesher_camera_metadata(env);
   register_gesher_camera_frames(env);
   register_gesher_bluetooth(env);
+  register_gesher_speech_recognition(env);
   register_gesher_hello(env);
   RegisterGesherNatives(env, "com/gesher/server/WindowsCamera", gWindowsCameraMethods,
                         NELEM(gWindowsCameraMethods));
