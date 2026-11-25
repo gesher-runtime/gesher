@@ -15,6 +15,9 @@
 //   succeeds, which is when the Windows spooler holds the whole job.
 #pragma once
 
+// The runtime defines NOGDI for AOSP code. Printing needs GDI's DEVMODE,
+// duplex constants and drawing declarations, before any Windows header loads.
+#undef NOGDI
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
