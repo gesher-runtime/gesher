@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -100,6 +101,7 @@ constexpr BOOL FALSE = 0, TRUE = 1;
 constexpr size_t kBridgeBodyLimit = 1024 * 1024;
 uint64_t tick = 100;
 ULONGLONG GetTickCount64() { return tick; }
+@NAVIGATION_TRACE@
 std::wstring Hex(HRESULT) { return L"HRESULT"; }
 template <typename T> struct RecordedObject {
   ULONG refs = 1;
@@ -187,7 +189,9 @@ struct Deferral { int completed = 0; void Complete() { ++completed; } };
 struct RequestArgs {
   int published = 0;
   Com<ICoreWebView2WebResourceResponse> response;
-  void put_Response(ICoreWebView2WebResourceResponse* r) { ++published; response = Com<ICoreWebView2WebResourceResponse>(r); }
+  HRESULT put_Response(ICoreWebView2WebResourceResponse* r) {
+    ++published; response = Com<ICoreWebView2WebResourceResponse>(r); return S_OK;
+  }
 };
 struct Impl {
   struct Request {
