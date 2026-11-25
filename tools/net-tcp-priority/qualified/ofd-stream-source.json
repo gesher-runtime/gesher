@@ -19,7 +19,7 @@
     "compat/posix/src/stdio_internal.h": "90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17",
     "compat/posix/src/stdio_stream_buffer.h": "f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d",
     "compat/posix/src/stdio_output_buffer.h": "1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542",
-    "compat/posix/src/fsops.cc": "63aef523ce97d8df01d91ed7667cb1802355f3dcb5e221c7170893a74882cd20",
+    "compat/posix/src/fsops.cc": "28367d79bdfa9bc1bab1fe0cae52b3997fec485d14e9626225d18f997c12ffd1",
     "compat/posix/src/unistd.cc": "513d0a079d0cff5a2b368b96bb9d4ce1838e747ee6534cfb376311252f28bf46",
     "compat/posix/posix.cmake": "9c571facb18b4faec4739e0f7185509836d07ba9f35035647871b94c316ac52b",
     "compat/posix/include/wchar.h": "b4ab6d86bfcffc534eb1a74abdfb13164cc7c51200eacece3f96310873120817",
