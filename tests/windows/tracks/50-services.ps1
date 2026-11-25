@@ -240,7 +240,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, auth, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, country_detector, credential, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.alert_window, gesher.bluetooth, gesher.wifi, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, speech_recognition, statusbar, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, usb, user, vibrator_manager, webviewupdate, window',
+    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, auth, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, country_detector, credential, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.alert_window, gesher.bluetooth, gesher.camera_source, gesher.wifi, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, speech_recognition, statusbar, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, usb, user, vibrator_manager, webviewupdate, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -1023,7 +1023,7 @@ try {
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
     @{ Class = 'BlobStoreContractTest'; Count = 87; Name = 'blob sessions, digest publication, quota admission, leases, and restart' },
     @{ Class = 'NsdContractTest'; Count = 65; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
-    @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'observed Wi-Fi state and unsupported controller mutations'; SystemContext = $true },
+    @{ Class = 'WifiUnsupportedTest'; Count = 51; Name = 'observed Wi-Fi state and unsupported controller mutations'; SystemContext = $true },
     @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service'; SystemContext = $true },
     @{ Class = 'RoleManagerUnsupportedTest'; Count = 168; Name = 'RoleManager absence, permission, callback and mutation contracts' }
   )

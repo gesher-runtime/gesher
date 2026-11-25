@@ -824,22 +824,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   if (n == 0 || n >= sizeof(self) / sizeof(self[0])) return 1;
   const std::wstring here = Directory(self);
 
-  std::wstring script = here + L"\\gesher-app.ps1";
-  if (!IsFile(script)) {
-    std::wstring app_script = here + L"\\App\\gesher-app.ps1";
-    if (IsFile(app_script)) {
-      script = app_script;
-    }
-  }
-
   wchar_t system[MAX_PATH];
   UINT s = GetSystemDirectoryW(system, MAX_PATH);
   std::wstring powershell = (s > 0 && s < MAX_PATH ? std::wstring(system) : L"C:\\Windows\\System32") +
                             L"\\WindowsPowerShell\\v1.0\\powershell.exe";
-  std::wstring command_args = default_to_control_panel ? L"control-panel" : Arguments(GetCommandLineW());
-  std::wstring command = L"\"" + powershell +
-                         L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
-                         script + L"\" " + command_args;
 
   AllowSetForegroundWindow(ASFW_ANY);
 
@@ -885,6 +873,33 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
       }
       LocalFree(argv);
     }
+  }
+
+  auto find_script = [&](const wchar_t* name) -> std::wstring {
+    std::wstring candidate = here + L"\\" + name;
+    if (IsFile(candidate)) return candidate;
+    std::wstring app_candidate = here + L"\\App\\" + name;
+    if (IsFile(app_candidate)) return app_candidate;
+    return L"";
+  };
+
+  std::wstring script = find_script(L"gesher-app.ps1");
+  if (script.empty()) script = here + L"\\gesher-app.ps1";
+  bool direct_control_panel = false;
+  if (control_panel) {
+    std::wstring cp_script = find_script(L"gesher-control-panel.ps1");
+    if (!cp_script.empty()) {
+      script = cp_script;
+      direct_control_panel = true;
+    }
+  }
+
+  std::wstring command = L"\"" + powershell +
+                         L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
+                         script + L"\"";
+  if (!direct_control_panel) {
+    std::wstring command_args = default_to_control_panel ? L"control-panel" : Arguments(GetCommandLineW());
+    command += L" " + command_args;
   }
   // Nobody reads the output: a failure is shown in a message box (ShowLaunchFailure).
   std::wstring error_file;

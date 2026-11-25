@@ -40,7 +40,8 @@ this result does not establish arbitrary accessibility or screen-reader UX.
   work with no WebView APK.
 - **The provider package.** The system server's `webviewupdate` service
   (`com.gesher.server.WebViewUpdateService`) names the built-in provider, and
-  the device declares `android.software.webview`. So
+  the device declares `android.software.webview` while the WebView2 Runtime is
+  installed (docs/system-features.md). So
   `WebView.getCurrentWebViewPackage()` (which asks that service while no
   provider APK is loaded in the process) returns a `PackageInfo` for
   `com.gesher.webview` whose `versionName` is the installed WebView2 Runtime's

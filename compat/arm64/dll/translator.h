@@ -63,6 +63,15 @@ void* GuestSymbol(const char* name);
 // diagnostic, when guest code it requires cannot be bound or emitted.
 bool InitGuestLibc();
 
+// Memory another process wrote into this one (a ptrace tracer's POKEs, ADR
+// 0093), as the host publishes it: each Jit drops what it translated from
+// those ranges at its next dispatch.
+void SetExternalCodeWrites(const void* writes);
+// Makes every running Jit return to its dispatcher (it then drops those
+// translations). The host's ptrace guard calls it with every other thread
+// suspended: it takes no lock and allocates nothing.
+void GESHER_SYSV HaltForExternalWrites();
+
 // The calling guest thread's actual FPCR, including changes made by MSR.
 // Host callbacks run outside Jit::Run; setters take effect before resuming.
 uint32_t GuestFpcr();

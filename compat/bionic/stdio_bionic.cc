@@ -1028,6 +1028,9 @@ const HANDLE logOutput = [] {
 int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool filter = true) {
   if (!tag) tag = ::gesher_android_default_log_tag();
   if (filter && !::__android_log_is_loggable_len(prio, tag, tag ? std::strlen(tag) : 0, 2)) return -1;
+  // Both sinks persist (the logcat file and the package's .log): no credentials.
+  std::string redacted;
+  if (text && logging::RedactCredentials(text, std::strlen(text), &redacted)) text = redacted.c_str();
   logging::Record(buffer, prio, tag, text);
   std::string line(1, PriorityLetter(prio));
   line += '/';
