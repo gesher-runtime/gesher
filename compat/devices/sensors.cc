@@ -288,6 +288,7 @@ std::vector<Sensor> Find() {
     a.handle = handle++;
     a.type = kAccelerometer;
     a.name = "Gesher Test Accelerometer";
+    a.origin = Origin::kTest;
     a.vendor = "Gesher (GESHER_SENSOR_TEST)";
     a.maxRange = 8 * kGravity;
     a.resolution = 0.01f;
@@ -300,6 +301,7 @@ std::vector<Sensor> Find() {
     l.handle = handle++;
     l.type = kLight;
     l.name = "Gesher Test Light Sensor";
+    l.origin = Origin::kTest;
     l.vendor = "Gesher (GESHER_SENSOR_TEST)";
     l.maxRange = 100000;
     l.resolution = 1;
@@ -317,6 +319,7 @@ std::vector<Sensor> Find() {
     Sensor a;
     a.handle = handle++;
     a.type = kAccelerometer;
+    a.origin = Origin::kStationaryDefault;
     a.name = "Gesher Stationary Accelerometer";
     a.vendor = "Gesher";
     a.maxRange = 8 * kGravity;

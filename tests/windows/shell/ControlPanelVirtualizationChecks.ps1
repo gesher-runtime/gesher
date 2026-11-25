@@ -84,7 +84,7 @@ foreach ($language in 'en', 'he') {
             }
             $appsList.ItemsSource = $items
             $window.Show(); Settle-Layout
-            $panelLayout.Height = [Math]::Max(640, $panelScroll.ActualHeight - 48)
+            $panelLayout.Height = [Math]::Max(740, $panelScroll.ActualHeight - 48)
             Settle-Layout
             $viewport = $window.FindName('AppsViewport')
             if (-not $viewport) { $viewport = $appsList.Template.FindName('AppsViewport', $appsList) }
@@ -109,7 +109,7 @@ foreach ($language in 'en', 'he') {
             Assert-List ($null -ne $appsList.ItemContainerGenerator.ContainerFromIndex(0)) 'First app cannot be reached after recycling'
             $window.Height = if ($height -eq 600) { 820 } else { 600 }
             Settle-Layout
-            $panelLayout.Height = [Math]::Max(640, $panelScroll.ActualHeight - 48)
+            $panelLayout.Height = [Math]::Max(740, $panelScroll.ActualHeight - 48)
             Settle-Layout
             $viewport.ScrollToEnd(); Settle-Layout
             Assert-List ($null -ne $appsList.ItemContainerGenerator.ContainerFromIndex(999)) 'Resize lost the final app'

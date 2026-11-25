@@ -265,7 +265,7 @@ public final class PackageInstallerIdentityHost {
                 ? Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
                         ApkPackage.class, entry)
                 : Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
-                        ApkPackage.class, entry, source, Runnable.class);
+                        ApkPackage.class, entry, source, java.util.Collection.class, Runnable.class);
         unchanged.setAccessible(true);
         int[] authorizations = {0};
         if (source != null) {
@@ -275,7 +275,7 @@ public final class PackageInstallerIdentityHost {
                 throw new SecurityException("Fixture source access was revoked");
             };
             try {
-                unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null, deny);
+                unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null, null, deny);
                 throw new AssertionError("Unchanged compilation bypassed source authorization");
             } catch (java.lang.reflect.InvocationTargetException expected) {
                 if (!(expected.getCause() instanceof SecurityException)) throw expected;
@@ -287,7 +287,7 @@ public final class PackageInstallerIdentityHost {
         }
         String[] result = (String[])(source == null
                 ? unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed)
-                : unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null,
+                : unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null, null,
                         (Runnable)() -> authorizations[0]++));
         if (source != null) check(authorizations[0] == 2, "Allowed compilation skipped source authorization");
         check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
