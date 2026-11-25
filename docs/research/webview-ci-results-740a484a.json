@@ -1,0 +1,1998 @@
+{
+  "schemaVersion": 1,
+  "receiptState": "terminal",
+  "preparedAt": "2026-11-25T14:41:19.381589+00:00",
+  "pullRequest": 391,
+  "pullRequestUrl": "https://github.com/gesher-runtime/gesher/pull/391",
+  "testedHead": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+  "testedHeadTree": "8cd93619615d15713d18d64f088fb3ba09f3a8ac",
+  "testedBase": "a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a",
+  "testMerge": {
+    "sha": "e02db283ad145e42532cfcea79c99ba71f464230",
+    "tree": "8cd93619615d15713d18d64f088fb3ba09f3a8ac",
+    "parents": [
+      "a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a",
+      "740a484a0586715bdeceb2393f6ac3be97edb5e6"
+    ],
+    "treeEqualsTestedHead": true
+  },
+  "documentationCommitIsNotTestedSource": true,
+  "scope": "Cached ordinary CI outcome and unchanged-source failure review only. No network or security implementation/experiment, gate change, rerun, CLA action, merge or auto-merge was performed for this receipt.",
+  "evidenceMethod": "Complete job inventory using per_page=100 with returned and unique counts checked against total_count. Each retained terminal log was downloaded once and checked byte-for-byte against its saved connector response. SHA-256 identities and one-based physical-line anchors are retained. In-progress observations are not terminal results.",
+  "ci": {
+    "run": 45623774731,
+    "url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731",
+    "event": "pull_request",
+    "attempt": 1,
+    "status": "completed",
+    "conclusion": "failure",
+    "createdAt": "2026-11-25T13:27:28Z",
+    "startedAt": "2026-11-25T13:27:28Z",
+    "updatedAt": "2026-11-25T14:38:43Z",
+    "jobCounts": {
+      "success": 52,
+      "failure": 6,
+      "skipped": 9
+    },
+    "pagination": {
+      "perPage": 100,
+      "pages": 1,
+      "reportedTotal": 67,
+      "returnedJobs": 67,
+      "uniqueJobs": 67
+    },
+    "jobs": [
+      {
+        "id": 139238488113,
+        "name": "automerge-script",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:28:40Z",
+        "completed_at": "2026-11-25T13:29:05Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139238488113",
+        "stepCounts": {
+          "success": 9
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139238489105,
+        "name": "source-identity",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:31:01Z",
+        "completed_at": "2026-11-25T13:31:06Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139238489105",
+        "stepCounts": {
+          "success": 3,
+          "skipped": 1
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240648374,
+        "name": "artifact-preflight",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-25T13:35:01Z",
+        "completed_at": "2026-11-25T13:46:56Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240648374",
+        "stepCounts": {
+          "success": 22,
+          "failure": 1,
+          "skipped": 27
+        },
+        "failedSteps": [
+          "Host event loop, audio state and surface geometry contracts"
+        ]
+      },
+      {
+        "id": 139240648545,
+        "name": "windows-host-contracts (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:32:50Z",
+        "completed_at": "2026-11-25T13:40:25Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240648545",
+        "stepCounts": {
+          "success": 56
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240648632,
+        "name": "windows-host-contracts (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-25T13:34:34Z",
+        "completed_at": "2026-11-25T13:40:46Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240648632",
+        "stepCounts": {
+          "success": 54,
+          "failure": 1,
+          "skipped": 1
+        },
+        "failedSteps": [
+          "Bound raw DNS owners with real Windows workers and loopback UDP/TCP"
+        ]
+      },
+      {
+        "id": 139240648946,
+        "name": "api37-report-tests",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:35:03Z",
+        "completed_at": "2026-11-25T13:35:26Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240648946",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240649083,
+        "name": "build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:36:59Z",
+        "completed_at": "2026-11-25T14:19:40Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240649083",
+        "stepCounts": {
+          "success": 27
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240649191,
+        "name": "build-framework-assets",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:41:45Z",
+        "completed_at": "2026-11-25T13:45:22Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240649191",
+        "stepCounts": {
+          "success": 15,
+          "skipped": 1
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240649206,
+        "name": "native3-locks-reference",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:35:12Z",
+        "completed_at": "2026-11-25T13:35:29Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240649206",
+        "stepCounts": {
+          "success": 6
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240649364,
+        "name": "linux-reference",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:41:41Z",
+        "completed_at": "2026-11-25T13:41:49Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240649364",
+        "stepCounts": {
+          "success": 6
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240649494,
+        "name": "compile-selected-minimum",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-25T13:41:50Z",
+        "completed_at": "2026-11-25T13:42:00Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240649494",
+        "stepCounts": {
+          "success": 5,
+          "failure": 1,
+          "skipped": 10
+        },
+        "failedSteps": [
+          "Verify exact source and two-supplier preservation before native compilation"
+        ]
+      },
+      {
+        "id": 139240649510,
+        "name": "asm-port",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:42:01Z",
+        "completed_at": "2026-11-25T13:42:16Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240649510",
+        "stepCounts": {
+          "success": 8,
+          "skipped": 1
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240650075,
+        "name": "union-services / controlled-worker (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:39:49Z",
+        "completed_at": "2026-11-25T13:41:47Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240650075",
+        "stepCounts": {
+          "success": 9
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240650076,
+        "name": "union-services / controlled-worker (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:32:34Z",
+        "completed_at": "2026-11-25T13:34:04Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240650076",
+        "stepCounts": {
+          "success": 9
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240651148,
+        "name": "bluetooth / probe-build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:33:17Z",
+        "completed_at": "2026-11-25T13:33:41Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240651148",
+        "stepCounts": {
+          "success": 8,
+          "skipped": 1
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240651330,
+        "name": "binder2-sg-fixtures / modes-build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:31:29Z",
+        "completed_at": "2026-11-25T13:32:03Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240651330",
+        "stepCounts": {
+          "success": 14,
+          "skipped": 3
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240653194,
+        "name": "union-tsf / preflight",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:31:54Z",
+        "completed_at": "2026-11-25T13:32:02Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240653194",
+        "stepCounts": {
+          "success": 5
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240653782,
+        "name": "union-native-blocking / preflight",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:34:06Z",
+        "completed_at": "2026-11-25T13:34:22Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240653782",
+        "stepCounts": {
+          "success": 8
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240654087,
+        "name": "angle / build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:32:04Z",
+        "completed_at": "2026-11-25T13:32:16Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240654087",
+        "stepCounts": {
+          "success": 7,
+          "skipped": 1
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240654171,
+        "name": "native-libs / native-libs",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:36:12Z",
+        "completed_at": "2026-11-25T13:36:54Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240654171",
+        "stepCounts": {
+          "success": 18,
+          "skipped": 3
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240654286,
+        "name": "framework / runner-route",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:34:57Z",
+        "completed_at": "2026-11-25T13:35:09Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240654286",
+        "stepCounts": {
+          "success": 3
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240654415,
+        "name": "exec / exec",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:34:18Z",
+        "completed_at": "2026-11-25T13:34:59Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240654415",
+        "stepCounts": {
+          "success": 16,
+          "skipped": 3
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240654423,
+        "name": "graphics / build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:43:39Z",
+        "completed_at": "2026-11-25T13:55:30Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240654423",
+        "stepCounts": {
+          "success": 10,
+          "skipped": 1
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240654573,
+        "name": "posix / build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:40:50Z",
+        "completed_at": "2026-11-25T13:53:18Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240654573",
+        "stepCounts": {
+          "success": 11,
+          "skipped": 1
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240654836,
+        "name": "libs / build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:43:15Z",
+        "completed_at": "2026-11-25T13:48:35Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240654836",
+        "stepCounts": {
+          "success": 9
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240654934,
+        "name": "native2 / native2",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:37:36Z",
+        "completed_at": "2026-11-25T13:39:12Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240654934",
+        "stepCounts": {
+          "success": 22,
+          "skipped": 4
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240655120,
+        "name": "surfaces / apps",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:39:29Z",
+        "completed_at": "2026-11-25T13:40:04Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240655120",
+        "stepCounts": {
+          "success": 12,
+          "skipped": 3
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240655576,
+        "name": "arm64 / fpsr-reference / reference",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:42:06Z",
+        "completed_at": "2026-11-25T13:42:31Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240655576",
+        "stepCounts": {
+          "success": 11,
+          "skipped": 2
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139241199247,
+        "name": "union-tsf / controller (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:32:07Z",
+        "completed_at": "2026-11-25T13:32:33Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139241199247",
+        "stepCounts": {
+          "success": 5
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139241199291,
+        "name": "union-tsf / controller (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:32:27Z",
+        "completed_at": "2026-11-25T13:32:51Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139241199291",
+        "stepCounts": {
+          "success": 5
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139241330294,
+        "name": "angle / probe-build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:38:15Z",
+        "completed_at": "2026-11-25T13:38:40Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139241330294",
+        "stepCounts": {
+          "success": 9,
+          "skipped": 1
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139241677224,
+        "name": "union-tsf / compile",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:33:52Z",
+        "completed_at": "2026-11-25T13:34:30Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139241677224",
+        "stepCounts": {
+          "success": 8
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139242177983,
+        "name": "bluetooth / probe-run (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:40:48Z",
+        "completed_at": "2026-11-25T13:41:02Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139242177983",
+        "stepCounts": {
+          "success": 5
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139242178032,
+        "name": "bluetooth / probe-run (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:37:13Z",
+        "completed_at": "2026-11-25T13:37:22Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139242178032",
+        "stepCounts": {
+          "success": 5
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139242575364,
+        "name": "union-native-blocking / compile",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:35:10Z",
+        "completed_at": "2026-11-25T13:36:50Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139242575364",
+        "stepCounts": {
+          "success": 11
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139242656982,
+        "name": "union-tsf / windows (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:38:34Z",
+        "completed_at": "2026-11-25T13:39:09Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139242656982",
+        "stepCounts": {
+          "success": 5
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139242657256,
+        "name": "union-tsf / windows (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:40:26Z",
+        "completed_at": "2026-11-25T13:41:09Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139242657256",
+        "stepCounts": {
+          "success": 5
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139243036731,
+        "name": "framework / host-tools",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:37:23Z",
+        "completed_at": "2026-11-25T13:38:12Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139243036731",
+        "stepCounts": {
+          "success": 15,
+          "skipped": 2
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139244053660,
+        "name": "union-native-blocking / windows (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:42:34Z",
+        "completed_at": "2026-11-25T13:43:38Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139244053660",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139244053699,
+        "name": "union-native-blocking / windows (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:44:29Z",
+        "completed_at": "2026-11-25T13:45:28Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139244053699",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139244872058,
+        "name": "framework / framework",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:41:35Z",
+        "completed_at": "2026-11-25T13:54:00Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139244872058",
+        "stepCounts": {
+          "success": 72,
+          "skipped": 11
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139245153116,
+        "name": "angle / probe",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T13:38:41Z",
+        "completed_at": "2026-11-25T13:38:41Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139245153116",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139247393521,
+        "name": "arm64 / build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:47:17Z",
+        "completed_at": "2026-11-25T13:49:23Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139247393521",
+        "stepCounts": {
+          "success": 26,
+          "skipped": 5
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139251010297,
+        "name": "libs / test",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T13:48:35Z",
+        "completed_at": "2026-11-25T13:48:35Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139251010297",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139251479992,
+        "name": "arm64 / smoke",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T13:49:23Z",
+        "completed_at": "2026-11-25T13:49:23Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139251479992",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139253816543,
+        "name": "posix / test",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T13:53:19Z",
+        "completed_at": "2026-11-25T13:53:18Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139253816543",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139254234615,
+        "name": "media / media",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:54:10Z",
+        "completed_at": "2026-11-25T13:56:07Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139254234615",
+        "stepCounts": {
+          "success": 22,
+          "skipped": 2
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139254235083,
+        "name": "webview / build",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:54:04Z",
+        "completed_at": "2026-11-25T13:55:55Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139254235083",
+        "stepCounts": {
+          "success": 19,
+          "skipped": 2
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139255148232,
+        "name": "graphics / probe",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T13:55:31Z",
+        "completed_at": "2026-11-25T13:55:30Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139255148232",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139255387943,
+        "name": "webview / probe",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T13:55:56Z",
+        "completed_at": "2026-11-25T13:55:55Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139255387943",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139270315404,
+        "name": "native3-locks-regression (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:19:43Z",
+        "completed_at": "2026-11-25T14:20:15Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270315404",
+        "stepCounts": {
+          "success": 9
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270315625,
+        "name": "native3-locks-regression (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:19:43Z",
+        "completed_at": "2026-11-25T14:20:23Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270315625",
+        "stepCounts": {
+          "success": 9
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270315635,
+        "name": "boot-image / compile",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:19:42Z",
+        "completed_at": "2026-11-25T14:20:26Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270315635",
+        "stepCounts": {
+          "success": 12
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270318685,
+        "name": "supplier-correlation",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T14:19:41Z",
+        "completed_at": "2026-11-25T14:19:41Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270318685",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139270319975,
+        "name": "windows",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T14:19:41Z",
+        "completed_at": "2026-11-25T14:19:41Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270319975",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139270818267,
+        "name": "binder2-sg-regression (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:30Z",
+        "completed_at": "2026-11-25T14:24:33Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818267",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818282,
+        "name": "web3-query-regression (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:29Z",
+        "completed_at": "2026-11-25T14:23:07Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818282",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818332,
+        "name": "web3-query-regression (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:29Z",
+        "completed_at": "2026-11-25T14:23:25Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818332",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818363,
+        "name": "core-suppliers",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:30Z",
+        "completed_at": "2026-11-25T14:21:26Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818363",
+        "stepCounts": {
+          "success": 6
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818376,
+        "name": "binder2-sg-regression (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:30Z",
+        "completed_at": "2026-11-25T14:24:11Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818376",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818479,
+        "name": "package",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:29Z",
+        "completed_at": "2026-11-25T14:25:47Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818479",
+        "stepCounts": {
+          "success": 14
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139271458927,
+        "name": "test (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-25T14:21:29Z",
+        "completed_at": "2026-11-25T14:21:32Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139271458927",
+        "stepCounts": {
+          "success": 2,
+          "failure": 1
+        },
+        "failedSteps": [
+          "Require every Windows test shard to pass"
+        ]
+      },
+      {
+        "id": 139271459009,
+        "name": "test (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-25T14:21:29Z",
+        "completed_at": "2026-11-25T14:21:33Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139271459009",
+        "stepCounts": {
+          "success": 2,
+          "failure": 1
+        },
+        "failedSteps": [
+          "Require every Windows test shard to pass"
+        ]
+      },
+      {
+        "id": 139271460639,
+        "name": "test-${{ matrix.shard }} (${{ matrix.os }})",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T14:21:27Z",
+        "completed_at": "2026-11-25T14:21:27Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139271460639",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139274263976,
+        "name": "e2e (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:25:49Z",
+        "completed_at": "2026-11-25T14:35:02Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139274263976",
+        "stepCounts": {
+          "success": 12
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139274264038,
+        "name": "e2e (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:25:49Z",
+        "completed_at": "2026-11-25T14:38:36Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139274264038",
+        "stepCounts": {
+          "success": 12
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139282547905,
+        "name": "ci-required",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-25T14:38:38Z",
+        "completed_at": "2026-11-25T14:38:42Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139282547905",
+        "stepCounts": {
+          "success": 2,
+          "failure": 1
+        },
+        "failedSteps": [
+          "Require every production CI job"
+        ]
+      }
+    ],
+    "activeJobs": []
+  },
+  "arm64Windows": {
+    "run": 45623774483,
+    "url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774483",
+    "attempt": 1,
+    "status": "completed",
+    "conclusion": "success",
+    "createdAt": "2026-11-25T13:27:28Z",
+    "updatedAt": "2026-11-25T13:42:04Z",
+    "startedAt": "2026-11-25T13:27:28Z",
+    "jobCounts": {
+      "success": 3
+    },
+    "jobs": [
+      {
+        "id": 139238484135,
+        "name": "source-identity / identity",
+        "run_id": 45623774483,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:31:00Z",
+        "completed_at": "2026-11-25T13:31:05Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774483/job/139238484135",
+        "stepCounts": {
+          "success": 3
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139240630889,
+        "name": "build",
+        "run_id": 45623774483,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:37:15Z",
+        "completed_at": "2026-11-25T13:38:54Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774483/job/139240630889",
+        "stepCounts": {
+          "success": 13,
+          "skipped": 2
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139245276516,
+        "name": "arm64-required",
+        "run_id": 45623774483,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T13:41:59Z",
+        "completed_at": "2026-11-25T13:42:03Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774483/job/139245276516",
+        "stepCounts": {
+          "success": 3
+        },
+        "failedSteps": []
+      }
+    ],
+    "selectedTargets": [
+      {
+        "line": 738,
+        "text": "Checking architecture for out-arm64/platform_probe.exe..."
+      },
+      {
+        "line": 745,
+        "text": "Checking architecture for out-arm64/socket_probe.exe..."
+      },
+      {
+        "line": 752,
+        "text": "Checking architecture for out-arm64/mman_probe.exe..."
+      },
+      {
+        "line": 759,
+        "text": "Checking architecture for out-arm64/madvise_probe.exe..."
+      },
+      {
+        "line": 766,
+        "text": "Checking architecture for out-arm64/epoll_probe.exe..."
+      },
+      {
+        "line": 773,
+        "text": "Checking architecture for out-arm64/posix_probe.exe..."
+      },
+      {
+        "line": 780,
+        "text": "Checking architecture for out-arm64/timerfd_windows_test.exe..."
+      },
+      {
+        "line": 787,
+        "text": "Checking architecture for out-arm64/boottime_resume_windows_test.exe..."
+      },
+      {
+        "line": 794,
+        "text": "Checking architecture for out-arm64/arm64_elf_test.exe..."
+      }
+    ],
+    "verification": {
+      "line": 801,
+      "text": "All binaries verified as aarch64!"
+    },
+    "limit": "Selected Windows ARM64 cross-build and PE architecture verification only; no Windows-on-ARM runtime or complete WebView runtime acceptance is established."
+  },
+  "ordinaryProductBuild": {
+    "job": {
+      "id": 139240649083,
+      "name": "build",
+      "run_id": 45623774731,
+      "run_attempt": 1,
+      "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-11-25T13:36:59Z",
+      "completed_at": "2026-11-25T14:19:40Z",
+      "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240649083",
+      "stepCounts": {
+        "success": 27
+      },
+      "failedSteps": []
+    },
+    "buildStep": {
+      "name": "Build",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 7,
+      "started_at": "2026-11-25T13:38:55Z",
+      "completed_at": "2026-11-25T14:17:10Z"
+    },
+    "selectedEvidence": [
+      {
+        "line": 127,
+        "text": "HEAD is now at e02db28 Merge 740a484a0586715bdeceb2393f6ac3be97edb5e6 into a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a"
+      },
+      {
+        "line": 130,
+        "text": "e02db283ad145e42532cfcea79c99ba71f464230"
+      },
+      {
+        "line": 21036,
+        "text": "[1095/1095] Linking CXX executable dalvikvm.exe"
+      },
+      {
+        "line": 21056,
+        "text": "[2/2] Linking CXX executable font_environment_test.exe"
+      }
+    ],
+    "limit": "Successful integrated compilation and linking do not establish execution of skipped Windows runtime shards."
+  },
+  "ordinaryWebView": {
+    "buildJob": 139254235083,
+    "buildConclusion": "success",
+    "isolatedContractObservations": [
+      {
+        "line": 142,
+        "text": "storage-key selection: 71 checks, 0 failures"
+      },
+      {
+        "line": 143,
+        "text": "current: Quota registry evidence gates: 51 checks, 0 failures"
+      },
+      {
+        "line": 153,
+        "text": "discovery-barrier: IndexedDB discovery barrier: 14 checks passed"
+      },
+      {
+        "line": 364,
+        "text": "WebViewDarkeningTest all passed: 36"
+      }
+    ],
+    "probeJobs": [
+      {
+        "id": 139255387943,
+        "name": "webview / probe",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T13:55:56Z",
+        "completed_at": "2026-11-25T13:55:55Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139255387943",
+        "stepCounts": {},
+        "failedSteps": []
+      }
+    ],
+    "limit": "Build and isolated contracts are not a live WebView runtime result. The separate probe job is skipped."
+  },
+  "normalWindowing": {
+    "state": "dependency_blocked",
+    "observedRelatedJobs": [
+      {
+        "id": 139270318685,
+        "name": "supplier-correlation",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T14:19:41Z",
+        "completed_at": "2026-11-25T14:19:41Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270318685",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139270319975,
+        "name": "windows",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-11-25T14:19:41Z",
+        "completed_at": "2026-11-25T14:19:41Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270319975",
+        "stepCounts": {},
+        "failedSteps": []
+      },
+      {
+        "id": 139271458927,
+        "name": "test (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-25T14:21:29Z",
+        "completed_at": "2026-11-25T14:21:32Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139271458927",
+        "stepCounts": {
+          "success": 2,
+          "failure": 1
+        },
+        "failedSteps": [
+          "Require every Windows test shard to pass"
+        ]
+      },
+      {
+        "id": 139271459009,
+        "name": "test (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "failure",
+        "started_at": "2026-11-25T14:21:29Z",
+        "completed_at": "2026-11-25T14:21:33Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139271459009",
+        "stepCounts": {
+          "success": 2,
+          "failure": 1
+        },
+        "failedSteps": [
+          "Require every Windows test shard to pass"
+        ]
+      }
+    ],
+    "dependencyEvidence": {
+      "source": ".github/workflows/ci.yml at the unchanged tested tree",
+      "edges": [
+        "compile (displayed as compile-selected-minimum) failed",
+        "supplier-correlation needs source-identity, build and compile with default success condition (2779-2781)",
+        "test-shards needs supplier-correlation with default success condition (2213-2221); all 14 matrix shards are blocked",
+        "windows component also requires supplier-correlation (2816-2823)"
+      ],
+      "aggregationOnly": "test summaries at2469-2482 use always() to report dependency outcomes; they do not execute the Windows runtime tests.",
+      "separateAggregateFailures": "artifact-preflight and windows-host-contracts block ci-required (2857-2872), but are not the test-shards dependency reason.",
+      "limit": "A later successful main build cannot make the normal windowing matrix run in this unchanged attempt. No gate changes or reruns."
+    },
+    "limit": "No normal windowing pass can be inferred from the build or always-run test summaries."
+  },
+  "independentDownstream": {
+    "jobs": [
+      {
+        "id": 139270818267,
+        "name": "binder2-sg-regression (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:30Z",
+        "completed_at": "2026-11-25T14:24:33Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818267",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818282,
+        "name": "web3-query-regression (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:29Z",
+        "completed_at": "2026-11-25T14:23:07Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818282",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818332,
+        "name": "web3-query-regression (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:29Z",
+        "completed_at": "2026-11-25T14:23:25Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818332",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818363,
+        "name": "core-suppliers",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:30Z",
+        "completed_at": "2026-11-25T14:21:26Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818363",
+        "stepCounts": {
+          "success": 6
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818376,
+        "name": "binder2-sg-regression (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:30Z",
+        "completed_at": "2026-11-25T14:24:11Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818376",
+        "stepCounts": {
+          "success": 10
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139270818479,
+        "name": "package",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:20:29Z",
+        "completed_at": "2026-11-25T14:25:47Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139270818479",
+        "stepCounts": {
+          "success": 14
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139274263976,
+        "name": "e2e (windows-2022)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:25:49Z",
+        "completed_at": "2026-11-25T14:35:02Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139274263976",
+        "stepCounts": {
+          "success": 12
+        },
+        "failedSteps": []
+      },
+      {
+        "id": 139274264038,
+        "name": "e2e (windows-2025)",
+        "run_id": 45623774731,
+        "run_attempt": 1,
+        "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-11-25T14:25:49Z",
+        "completed_at": "2026-11-25T14:38:36Z",
+        "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139274264038",
+        "stepCounts": {
+          "success": 12
+        },
+        "failedSteps": []
+      }
+    ],
+    "method": "Complete terminal job metadata when the receipt is terminal; in-progress statuses are explicitly retained in draft observations. Individual payload assertions are not inferred from job names."
+  },
+  "reviewOnlyFailureClassification": {
+    "testedHead": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+    "testedTree": "8cd93619615d15713d18d64f088fb3ba09f3a8ac",
+    "base": "a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a",
+    "method": "Independent read-only Git tree mode/blob comparisons reported by the integration reviewer and preflight reviewer; no additional source download, test, policy change or rerun was performed for these findings.",
+    "filesIdenticalToBase": {
+      ".github/workflows/ci.yml": "d815f2d94b4341961a93cb1e12568f3a800a4502",
+      "tools/net-tcp-priority/test-selected-policy.py": "a8a658b16f493dcc7e88096cffeb80b1e4fa6a96",
+      "tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json": "2bd57d911561c0120a6d7588642fa1e830406841",
+      "compat/posix/src/network_dns.cc": "102f1958ffd24eaf209b52593bbdfec027eeaf2f",
+      "tests/native/dns_admission_host.cc.in": "39b8b89f8d9ed42ec56c89831f432a3823409094",
+      "tools/test_dns_admission.py": "f1ac9e7ae34c789242462b7772654bfd99e5fa39"
+    },
+    "preflight": {
+      "jobs": [
+        139240649494,
+        139240648374
+      ],
+      "observedFailure": "Pinned reviewed-manifest SHA-256 assertion in reviewed():549, reached from check():597, before native compilation in compile-selected-minimum; artifact-preflight reaches the same assertion through test-vector-policy.py.",
+      "limit": "The exact expected and actual content SHA-256 values are not present in the cached failure excerpt. Blob equality establishes inherited source scope, not that every run of the base necessarily fails. The gate remains unchanged."
+    },
+    "windowingDependency": {
+      "source": ".github/workflows/ci.yml at the unchanged tested tree",
+      "edges": [
+        "compile (displayed as compile-selected-minimum) failed",
+        "supplier-correlation needs source-identity, build and compile with default success condition (2779-2781)",
+        "test-shards needs supplier-correlation with default success condition (2213-2221); all 14 matrix shards are blocked",
+        "windows component also requires supplier-correlation (2816-2823)"
+      ],
+      "aggregationOnly": "test summaries at2469-2482 use always() to report dependency outcomes; they do not execute the Windows runtime tests.",
+      "separateAggregateFailures": "artifact-preflight and windows-host-contracts block ci-required (2857-2872), but are not the test-shards dependency reason.",
+      "limit": "A later successful main build cannot make the normal windowing matrix run in this unchanged attempt. No gate changes or reruns."
+    },
+    "dns": {
+      "job": 139240648632,
+      "observedFailure": "FAIL DNS admission: exclusive peer UDP bind (native socket error 10013)",
+      "limit": "Existing-log observation and unchanged-source evidence only. No root-cause, environment or every-base-run conclusion; no network experiment, fix, bypass or rerun."
+    }
+  },
+  "failedJobs": [
+    {
+      "id": 139240648374,
+      "name": "artifact-preflight",
+      "run_id": 45623774731,
+      "run_attempt": 1,
+      "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-11-25T13:35:01Z",
+      "completed_at": "2026-11-25T13:46:56Z",
+      "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240648374",
+      "stepCounts": {
+        "success": 22,
+        "failure": 1,
+        "skipped": 27
+      },
+      "failedSteps": [
+        "Host event loop, audio state and surface geometry contracts"
+      ]
+    },
+    {
+      "id": 139240648632,
+      "name": "windows-host-contracts (windows-2022)",
+      "run_id": 45623774731,
+      "run_attempt": 1,
+      "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-11-25T13:34:34Z",
+      "completed_at": "2026-11-25T13:40:46Z",
+      "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240648632",
+      "stepCounts": {
+        "success": 54,
+        "failure": 1,
+        "skipped": 1
+      },
+      "failedSteps": [
+        "Bound raw DNS owners with real Windows workers and loopback UDP/TCP"
+      ]
+    },
+    {
+      "id": 139240649494,
+      "name": "compile-selected-minimum",
+      "run_id": 45623774731,
+      "run_attempt": 1,
+      "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-11-25T13:41:50Z",
+      "completed_at": "2026-11-25T13:42:00Z",
+      "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139240649494",
+      "stepCounts": {
+        "success": 5,
+        "failure": 1,
+        "skipped": 10
+      },
+      "failedSteps": [
+        "Verify exact source and two-supplier preservation before native compilation"
+      ]
+    },
+    {
+      "id": 139271458927,
+      "name": "test (windows-2025)",
+      "run_id": 45623774731,
+      "run_attempt": 1,
+      "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-11-25T14:21:29Z",
+      "completed_at": "2026-11-25T14:21:32Z",
+      "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139271458927",
+      "stepCounts": {
+        "success": 2,
+        "failure": 1
+      },
+      "failedSteps": [
+        "Require every Windows test shard to pass"
+      ]
+    },
+    {
+      "id": 139271459009,
+      "name": "test (windows-2022)",
+      "run_id": 45623774731,
+      "run_attempt": 1,
+      "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-11-25T14:21:29Z",
+      "completed_at": "2026-11-25T14:21:33Z",
+      "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139271459009",
+      "stepCounts": {
+        "success": 2,
+        "failure": 1
+      },
+      "failedSteps": [
+        "Require every Windows test shard to pass"
+      ]
+    },
+    {
+      "id": 139282547905,
+      "name": "ci-required",
+      "run_id": 45623774731,
+      "run_attempt": 1,
+      "head_sha": "740a484a0586715bdeceb2393f6ac3be97edb5e6",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2026-11-25T14:38:38Z",
+      "completed_at": "2026-11-25T14:38:42Z",
+      "html_url": "https://github.com/gesher-runtime/gesher/actions/runs/45623774731/job/139282547905",
+      "stepCounts": {
+        "success": 2,
+        "failure": 1
+      },
+      "failedSteps": [
+        "Require every production CI job"
+      ]
+    }
+  ],
+  "logs": [
+    {
+      "file": "pr391-740a-arm64-build-139240630889.log",
+      "bytes": 89418,
+      "sha256": "72690036a8af83c2fcf9d093e910495cadef56b184969f91ecbd42e4793a269c",
+      "job": 139240630889,
+      "run": 45623774483,
+      "jobName": "build",
+      "lines": 859,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [
+        {
+          "line": 123,
+          "text": "HEAD is now at e02db28 Merge 740a484a0586715bdeceb2393f6ac3be97edb5e6 into a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a"
+        },
+        {
+          "line": 126,
+          "text": "e02db283ad145e42532cfcea79c99ba71f464230"
+        }
+      ],
+      "selectedFailureEvidence": []
+    },
+    {
+      "file": "pr391-740a-ci-angle-build-139240654087.log",
+      "bytes": 16418,
+      "sha256": "588f1ef90d765f6a30f2245a4c0cd47268418cfe8a830d6e5e6453ce6131f1cb",
+      "job": 139240654087,
+      "run": 45623774731,
+      "jobName": "angle / build",
+      "lines": 190,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [
+        {
+          "line": 116,
+          "text": "HEAD is now at e02db28 Merge 740a484a0586715bdeceb2393f6ac3be97edb5e6 into a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a"
+        },
+        {
+          "line": 119,
+          "text": "e02db283ad145e42532cfcea79c99ba71f464230"
+        }
+      ],
+      "selectedFailureEvidence": []
+    },
+    {
+      "file": "pr391-740a-ci-artifact-preflight-139240648374.log",
+      "bytes": 978483,
+      "sha256": "c119ca486ee7909d5d135de30b326e137e261d2c16aba7af182ff3797b285345",
+      "job": 139240648374,
+      "run": 45623774731,
+      "jobName": "artifact-preflight",
+      "lines": 7046,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [
+        {
+          "line": 205,
+          "text": "e02db283ad145e42532cfcea79c99ba71f464230"
+        }
+      ],
+      "selectedFailureEvidence": [
+        {
+          "line": 6083,
+          "text": "DNS_PEER_PORT kind=specific occupied_tcp_retries=1 first_error=98 shared_port_ready=1"
+        },
+        {
+          "line": 7029,
+          "text": "AssertionError: tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json"
+        },
+        {
+          "line": 7030,
+          "text": "##[error]Process completed with exit code 1."
+        }
+      ]
+    },
+    {
+      "file": "pr391-740a-ci-build-139240649083.log",
+      "bytes": 2948077,
+      "sha256": "6d4632d5ae14d6090cbb48f22fdbaf0cacc4e37c67ee4ccd7b2a06827f0d13f5",
+      "job": 139240649083,
+      "run": 45623774731,
+      "jobName": "build",
+      "lines": 21750,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [
+        {
+          "line": 127,
+          "text": "HEAD is now at e02db28 Merge 740a484a0586715bdeceb2393f6ac3be97edb5e6 into a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a"
+        },
+        {
+          "line": 130,
+          "text": "e02db283ad145e42532cfcea79c99ba71f464230"
+        }
+      ],
+      "selectedFailureEvidence": []
+    },
+    {
+      "file": "pr391-740a-ci-compile-selected-minimum-139240649494.log",
+      "bytes": 27241,
+      "sha256": "20c89d8b3b5f54f70fc6b379e73dd7865ff30775ea3f2351cfb3ed55b23c87e3",
+      "job": 139240649494,
+      "run": 45623774731,
+      "jobName": "compile-selected-minimum",
+      "lines": 285,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [
+        {
+          "line": 216,
+          "text": "e02db283ad145e42532cfcea79c99ba71f464230"
+        }
+      ],
+      "selectedFailureEvidence": [
+        {
+          "line": 268,
+          "text": "AssertionError: tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json"
+        },
+        {
+          "line": 269,
+          "text": "##[error]Process completed with exit code 1."
+        }
+      ]
+    },
+    {
+      "file": "pr391-740a-ci-required-139282547905.log",
+      "bytes": 5899,
+      "sha256": "f9ef49430c3bc2cce7e865f19217d631d7437ba31b49377c0ab16eb54f7f5f8b",
+      "job": 139282547905,
+      "run": 45623774731,
+      "jobName": "ci-required",
+      "lines": 208,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [],
+      "selectedFailureEvidence": [
+        {
+          "line": 206,
+          "text": "Required jobs did not succeed: {'windows-host-contracts': 'failure', 'artifact-preflight': 'failure', 'test-shards': 'skipped', 'test': 'failure', 'compile': 'failure', 'supplier-correlation': 'skipped', 'windows': 'skipped'}"
+        },
+        {
+          "line": 207,
+          "text": "##[error]Process completed with exit code 1."
+        }
+      ]
+    },
+    {
+      "file": "pr391-740a-ci-source-identity-139238489105.log",
+      "bytes": 2579,
+      "sha256": "2bba6dc236ab79f589944c7fbf6c7e66853ac2a9222764dc0538b1e572c79824",
+      "job": 139238489105,
+      "run": 45623774731,
+      "jobName": "source-identity",
+      "lines": 43,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [],
+      "selectedFailureEvidence": []
+    },
+    {
+      "file": "pr391-740a-ci-test-windows-2022-139271459009.log",
+      "bytes": 2377,
+      "sha256": "72c930fa7db32d59fb6542acf725ad737b1adf6740748b2a66265e7569bbaca5",
+      "job": 139271459009,
+      "run": 45623774731,
+      "jobName": "test (windows-2022)",
+      "lines": 41,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [],
+      "selectedFailureEvidence": [
+        {
+          "line": 38,
+          "text": "  SHARD_RESULT: skipped"
+        },
+        {
+          "line": 40,
+          "text": "##[error]Process completed with exit code 1."
+        }
+      ]
+    },
+    {
+      "file": "pr391-740a-ci-test-windows-2025-139271458927.log",
+      "bytes": 2379,
+      "sha256": "bf2002d354a7b31337bdcce2725183742b3f70f4576beba297cb215e42cfc564",
+      "job": 139271458927,
+      "run": 45623774731,
+      "jobName": "test (windows-2025)",
+      "lines": 41,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [],
+      "selectedFailureEvidence": [
+        {
+          "line": 38,
+          "text": "  SHARD_RESULT: skipped"
+        },
+        {
+          "line": 40,
+          "text": "##[error]Process completed with exit code 1."
+        }
+      ]
+    },
+    {
+      "file": "pr391-740a-ci-webview-build-139254235083.log",
+      "bytes": 45561,
+      "sha256": "24b0fb90c56c3cc6d389e8641c374bfd2127d57abb9dca37c3e437d5802aaeb8",
+      "job": 139254235083,
+      "run": 45623774731,
+      "jobName": "webview / build",
+      "lines": 469,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [
+        {
+          "line": 129,
+          "text": "HEAD is now at e02db28 Merge 740a484a0586715bdeceb2393f6ac3be97edb5e6 into a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a"
+        },
+        {
+          "line": 132,
+          "text": "e02db283ad145e42532cfcea79c99ba71f464230"
+        }
+      ],
+      "selectedFailureEvidence": []
+    },
+    {
+      "file": "pr391-740a-ci-windows-host-contracts-windows-2022-139240648632.log",
+      "bytes": 903537,
+      "sha256": "c71b406bfa85fd594b448dc3ddd50bd062dab46b63655277e4713dc5bab2fb55",
+      "job": 139240648632,
+      "run": 45623774731,
+      "jobName": "windows-host-contracts (windows-2022)",
+      "lines": 4749,
+      "cachedConnectorBytesIdentical": true,
+      "actualCheckoutEvidence": [
+        {
+          "line": 113,
+          "text": "HEAD is now at e02db28 Merge 740a484a0586715bdeceb2393f6ac3be97edb5e6 into a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a"
+        },
+        {
+          "line": 116,
+          "text": "e02db283ad145e42532cfcea79c99ba71f464230"
+        }
+      ],
+      "selectedFailureEvidence": [
+        {
+          "line": 1566,
+          "text": "FAIL DNS admission: exclusive peer UDP bind (native socket error 10013)"
+        },
+        {
+          "line": 1567,
+          "text": "DNS_PEER_PORT kind=specific occupied_tcp_retries=1 first_error=10048 shared_port_ready=1"
+        },
+        {
+          "line": 1576,
+          "text": "##[error]Process completed with exit code 1."
+        }
+      ]
+    }
+  ],
+  "metadataFiles": [
+    {
+      "file": "pr391-740a-ci-run-terminal.json",
+      "bytes": 36990,
+      "sha256": "d684391e96a05c6be344bd0d920c482b645f5a245c49a0c8c53e11eb6794b855"
+    },
+    {
+      "file": "pr391-740a-ci-jobs-terminal-page1.json",
+      "bytes": 471712,
+      "sha256": "ce673aae1925e74df912dd9e22e6f4d2cbacdc7a16e2b712f403d8f4786177c5"
+    },
+    {
+      "file": "pr391-740a-arm64-run-terminal.json",
+      "bytes": 29940,
+      "sha256": "33685ce29f1f0895ad8f7469e7dd38458d21aaeeba4a6d676a556bb177b09d05"
+    },
+    {
+      "file": "pr391-740a-arm64-jobs-terminal.json",
+      "bytes": 14592,
+      "sha256": "9e47427b079f7c8e69c78bd1fe949ea774e681178bab965aaedc8fed1990ad81"
+    },
+    {
+      "file": "pr391-740a-test-merge-detail.json",
+      "bytes": 6291,
+      "sha256": "bf130e2bbeb71cf320e0bfd771556b40ff7a2529c1f1569add744ff7f5e28e1f"
+    },
+    {
+      "file": "pr391-740a-scope-classification.json",
+      "bytes": 2783,
+      "sha256": "0863e9b2f29c9968e45503c68846331cdf4c7cab1cc9fa0140bcc8233b332e29"
+    }
+  ],
+  "separateStorageGate": {
+    "source": "18c1f8135ac82f4dbc8ba3ea36f8fb5dec93f9b9",
+    "run": 45618078011,
+    "result": "failed on both actual storage executions",
+    "receipt": "webview-storage-results-18c1f813.md",
+    "limit": "Completed data/lifecycle sequences without the earlier access violation do not erase the failed final sentinel gate. Its attribution remains unresolved and review-only."
+  }
+}
