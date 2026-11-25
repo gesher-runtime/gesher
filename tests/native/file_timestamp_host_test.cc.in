@@ -220,6 +220,10 @@ static PathKind MapPath(const char* path, std::wstring* result) {
   if (std::strcmp(path, "/mnt/c/תיקיה/file") == 0) { *result = L"mapped-file"; return PathKind::kFile; }
   result->assign(path, path + std::strlen(path)); return PathKind::kFile;
 }
+// No fixture path is a FIFO (fifo.cc): following one is the plain open.
+static HANDLE CreateFileFollowingFifo(const wchar_t* path, DWORD access, DWORD share, DWORD flags) {
+  return CreateFileW(path, access, share, nullptr, OPEN_EXISTING, flags, nullptr);
+}
 // Gesher's ELF loader as /system/bin/linker64 is not part of this fixture.
 namespace system_linker {
 static int RefuseChange(const char*) { return 0; }

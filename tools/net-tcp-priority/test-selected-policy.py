@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '886a85a2a00b8f0ee042099db3264e11fa8b72b13d63b475462b859dca241fb0'
+OFD_QUALIFICATION_SHA256 = 'e6ac57a6e729d21831e743313e435b5830ad82ee3672613115077f264ff4cc73'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -467,8 +467,8 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # neither this transition nor a passing source check qualifies native execution.
 STORAGE_POLICY_QUALIFICATION='tools/net-tcp-priority/qualified/storage-policy-source.json'
 STORAGE_POLICY_PATCH='tools/net-tcp-priority/qualified/storage-policy-source.patch'
-STORAGE_POLICY_QUALIFICATION_SHA256='bba7e97e707d61ec36e95635650d39ebf94168c9b8a5ff4111732564070586fc'
-STORAGE_POLICY_BASELINE='7a35c74ea0061f9664f501371a200f07444bb13b'
+STORAGE_POLICY_QUALIFICATION_SHA256='a2a1dbe59999ac9bb210dbdd5bd6d67603e4ae88458706fd25a2261e958370a5'
+STORAGE_POLICY_BASELINE='a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a'
 STORAGE_POLICY_PATHS=[
  'compat/art/dalvikvm_main.cc',
  'compat/elf/exec/exec_spawn.cc',
@@ -610,7 +610,7 @@ GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::ws::LocalAddressCac
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='2a768b3c11112a2fd6d7bd378953aa44efc77984941b3e498b4aa4bd2694bf4e'
+REVIEWED_PATCH_SHA256='ee4583db58b83515430b5a4333cb95d3ef037ddc5731f5ad0f7958ba858a8e55'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH

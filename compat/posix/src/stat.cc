@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "fifo_internal.h"
 #include "internal.h"
 #include "revocable_internal.h"
 #include "storage_policy.h"
@@ -65,6 +66,9 @@ int FromHandle(HANDLE h, struct stat* buf) {
   bool read_only = (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
   if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
     buf->st_mode = S_IFDIR | 0755;
+  } else if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && gesher::IsFifoHandle(h)) {
+    // A FIFO (fifo.cc): no data of its own, and nothing to execute.
+    buf->st_mode = S_IFIFO | (read_only ? 0444 : 0666);
   } else {
     buf->st_mode = S_IFREG | (read_only ? 0555 : 0755);
     buf->st_size = standard.EndOfFile.QuadPart;
@@ -90,11 +94,9 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
       if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kStat)) return -1;
       // Directories need backup semantics to be opened; no access right is
       // needed to read attributes.
-      HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                             OPEN_EXISTING,
-                             FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
-                             nullptr);
+      HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
       int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)
                        ? FromHandle(h, buf) : -1;
@@ -162,6 +164,22 @@ int fstat(int fd, struct stat* buf) {
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE h = snapshot->handle;
+  if (snapshot->kind == gesher::DescriptorKind::kFifo) {
+    gesher::FifoFileStatus status;
+    if (gesher::FifoStatus(snapshot, &status) < 0) return -1;
+    Clear(buf);
+    buf->st_mode = S_IFIFO | status.mode;
+    buf->st_dev = status.device;
+    buf->st_ino = status.inode;
+    LARGE_INTEGER time;
+    time.QuadPart = status.access_time;
+    buf->st_atim = ToTimespec(time);
+    time.QuadPart = status.write_time;
+    buf->st_mtim = ToTimespec(time);
+    time.QuadPart = status.change_time;
+    buf->st_ctim = ToTimespec(time);
+    return 0;
+  }
   switch (GetFileType(h)) {
     case FILE_TYPE_DISK:
       return FromHandle(h, buf);

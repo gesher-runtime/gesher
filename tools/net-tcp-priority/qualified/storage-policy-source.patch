@@ -1,5 +1,5 @@
 diff --git a/compat/art/dalvikvm_main.cc b/compat/art/dalvikvm_main.cc
-index 66d85f2ab59ce73d1416fa5ff739f9a1b2270f88..831997deefed4759402135246b4ce37545cff330 100644
+index 66d85f2ab..831997dee 100644
 --- a/compat/art/dalvikvm_main.cc
 +++ b/compat/art/dalvikvm_main.cc
 @@ -10,6 +10,7 @@
@@ -19,7 +19,7 @@ index 66d85f2ab59ce73d1416fa5ff739f9a1b2270f88..831997deefed4759402135246b4ce375
    std::vector<std::string> values;
    values.reserve(static_cast<std::size_t>(argc));
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index 4ff357cd51253bcef5ea3837faa9f828a34a4747..7008e99b9a5184669e9f9c3df08f4da01ba99a25 100644
+index bef1a5a4c..e8c745d91 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
 @@ -7,6 +7,7 @@
@@ -40,7 +40,7 @@ index 4ff357cd51253bcef5ea3837faa9f828a34a4747..7008e99b9a5184669e9f9c3df08f4da0
      HANDLE value = nullptr;
      ~ImagePin() { if (value) CloseHandle(value); }
 diff --git a/compat/elf/exec/gesher_exec.cc b/compat/elf/exec/gesher_exec.cc
-index 1df87adfa9f251fb55b6857193d3f6b6e615ab58..eded54300beec58590bdff58d5ab89bc45a9baa1 100644
+index 1df87adfa..eded54300 100644
 --- a/compat/elf/exec/gesher_exec.cc
 +++ b/compat/elf/exec/gesher_exec.cc
 @@ -25,6 +25,7 @@
@@ -60,10 +60,10 @@ index 1df87adfa9f251fb55b6857193d3f6b6e615ab58..eded54300beec58590bdff58d5ab89bc
    gesher::properties::Initialize();
    // Bytes in and out unchanged, as on Linux; no Windows error dialogs.
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index 9fbbaf8a98abff2a3d18b506b22709e671e77646..9f03c79fa45f34de4e33ece2378fb19916aaec26 100644
+index 3ccaf503b..869d3d90b 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
-@@ -51,6 +51,7 @@ add_library(gesher_posix STATIC
+@@ -52,6 +52,7 @@ add_library(gesher_posix STATIC
    ${CMAKE_CURRENT_LIST_DIR}/src/unix_rights.cc
    ${CMAKE_CURRENT_LIST_DIR}/src/stat.cc
    ${CMAKE_CURRENT_LIST_DIR}/src/stdio_output.cc
@@ -71,7 +71,7 @@ index 9fbbaf8a98abff2a3d18b506b22709e671e77646..9f03c79fa45f34de4e33ece2378fb199
    ${CMAKE_CURRENT_LIST_DIR}/src/syscall.cc
    ${CMAKE_CURRENT_LIST_DIR}/src/sysv_shims.cc
    ${CMAKE_CURRENT_LIST_DIR}/src/system.cc
-@@ -98,6 +99,7 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_ofd_owner_anchor_v1)
+@@ -99,6 +100,7 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_ofd_owner_anchor_v1)
  target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_descriptor_transaction_anchor_v1)
  target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_stdio_output_anchor_v1)
  target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
@@ -80,10 +80,10 @@ index 9fbbaf8a98abff2a3d18b506b22709e671e77646..9f03c79fa45f34de4e33ece2378fb199
  # its complete conversion sequence, including ANSI-mode assembly aliases.
  target_link_options(gesher_posix INTERFACE -Wl,--wrap=__mingw_vfscanf -Wl,--wrap=__mingw_vfwscanf)
 diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
-index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f3b57706a 100644
+index cd046541a..80d115ba1 100644
 --- a/compat/posix/src/fsops.cc
 +++ b/compat/posix/src/fsops.cc
-@@ -30,6 +30,7 @@
+@@ -31,6 +31,7 @@
  #include "revocable_internal.h"
  #include "stdio_internal.h"
  #include "system_linker.h"
@@ -91,7 +91,7 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
 
  using gesher::PathKind;
 
-@@ -167,11 +168,19 @@ int Rename(const char* oldpath, const char* newpath, unsigned flags) {
+@@ -168,11 +169,19 @@ int Rename(const char* oldpath, const char* newpath, unsigned flags) {
    if (!gesher::DiskPath(oldpath, &from, EACCES) || !gesher::DiskPath(newpath, &to, EACCES)) {
      return -1;
    }
@@ -111,16 +111,14 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
    BY_HANDLE_FILE_INFORMATION info;
    if (!GetFileInformationByHandle(h, &info)) {
      int r = gesher::FailWithLastError();
-@@ -272,13 +281,15 @@ int Chmod(const char* path, mode_t mode, bool follow) {
+@@ -273,11 +282,13 @@ int Chmod(const char* path, mode_t mode, bool follow) {
    if (gesher::system_linker::RefuseChange(path) != 0) return -1;
    std::wstring windows;
    if (!gesher::DiskPath(path, &windows, EPERM)) return -1;
 +  if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
-   HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
-                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                          OPEN_EXISTING,
-                          FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
-                          nullptr);
+   HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
    if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
 -  int result = !follow && gesher::IsSymlinkHandle(h) ? (errno = EOPNOTSUPP, -1) : SetMode(h, mode);
 +  int result = !gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite) ? -1
@@ -128,23 +126,35 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
    CloseHandle(h);
    return result;
  }
-@@ -289,8 +300,14 @@ int Access(const char* path, int mode, bool follow) {
+@@ -287,9 +298,15 @@ int Access(const char* path, int mode, bool follow) {
+   if (path == nullptr) return errno = EFAULT, -1;
    if (path[0] == '\0') return errno = ENOENT, -1;
    std::wstring windows;
++  const gesher::AccessKind access_kind =
++      (mode & W_OK) != 0          ? gesher::AccessKind::kWrite
++      : (mode & (R_OK | X_OK)) != 0 ? gesher::AccessKind::kRead
++                                    : gesher::AccessKind::kStat;
    switch (gesher::MapPath(path, &windows)) {
 -    case PathKind::kFile:
 +    case PathKind::kFile: {
-+      gesher::AccessKind access_kind =
-+          (mode & W_OK) != 0          ? gesher::AccessKind::kWrite
-+          : (mode & (R_OK | X_OK)) != 0 ? gesher::AccessKind::kRead
-+                                        : gesher::AccessKind::kStat;
 +      if (!gesher::CheckExternalStorageAccess(windows, access_kind)) return -1;
        break;
 +    }
      case PathKind::kNull:
      case PathKind::kZero:
      case PathKind::kRandom:
-@@ -332,6 +349,7 @@ int Symlink(const char* target, const char* linkpath) {
+@@ -308,6 +325,10 @@ int Access(const char* path, int mode, bool follow) {
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
+   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
++  if (!gesher::CheckExternalStorageHandle(h, access_kind)) {
++    CloseHandle(h);
++    return errno = EACCES, -1;
++  }
+   BY_HANDLE_FILE_INFORMATION info;
+   bool ok = GetFileInformationByHandle(h, &info);
+   CloseHandle(h);
+@@ -329,6 +350,7 @@ int Symlink(const char* target, const char* linkpath) {
    if (gesher::system_linker::RefuseChange(linkpath) != 0) return -1;
    std::wstring link;
    if (!gesher::DiskPath(linkpath, &link, EEXIST)) return -1;
@@ -152,7 +162,7 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
    // The target as Windows stores it: backslashes; an absolute one with its
    // drive, as a drive-less one would be read against whatever drive is
    // current when the link is followed.
-@@ -357,6 +375,7 @@ int Symlink(const char* target, const char* linkpath) {
+@@ -354,6 +376,7 @@ int Symlink(const char* target, const char* linkpath) {
      size_t slash = link.find_last_of(L"\\/");
      resolved = (slash == std::wstring::npos ? L"" : link.substr(0, slash + 1)) + windows_target;
    }
@@ -160,7 +170,7 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
    DWORD attributes = GetFileAttributesW(resolved.c_str());
    DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE |
                  (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
-@@ -381,6 +400,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
+@@ -378,6 +401,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
        if (!gesher::procfs::ReadLink(windows, &target)) return -1;
        break;
      case PathKind::kFile: {
@@ -168,7 +178,7 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
        HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                               OPEN_EXISTING,
-@@ -417,6 +437,10 @@ int Link(const char* oldpath, const char* newpath, bool follow) {
+@@ -414,6 +438,10 @@ int Link(const char* oldpath, const char* newpath, bool follow) {
    }
    std::wstring from, to;
    if (!gesher::DiskPath(oldpath, &from, EPERM) || !gesher::DiskPath(newpath, &to, EEXIST)) return -1;
@@ -179,7 +189,7 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
    if (follow) {
      // AT_SYMLINK_FOLLOW: a link to the file a symbolic link names.
      HANDLE h = CreateFileW(from.c_str(), FILE_READ_ATTRIBUTES,
-@@ -570,6 +594,7 @@ static int SetCurrent(std::wstring path) {
+@@ -567,6 +595,7 @@ static int SetCurrent(std::wstring path) {
  int chdir(const char* path) {
    std::wstring windows;
    if (!gesher::DiskPath(path, &windows, ENOTDIR)) return -1;
@@ -187,15 +197,23 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
    return SetCurrent(windows);
  }
 
-@@ -601,6 +626,7 @@ int fchmod(int fd, mode_t mode) {
-   HANDLE h = snapshot->handle;
+@@ -600,12 +629,14 @@ int fchmod(int fd, mode_t mode) {
+     // The mode belongs to the FIFO file, not its placeholder (fifo.cc).
+     HANDLE fifo = gesher::OpenFifoFile(snapshot, FILE_WRITE_ATTRIBUTES);
+     if (fifo == INVALID_HANDLE_VALUE) return -1;
+-    const int result = SetMode(fifo, mode);
++    const int result = gesher::CheckExternalStorageHandle(fifo, gesher::AccessKind::kWrite)
++        ? SetMode(fifo, mode) : -1;
+     CloseHandle(fifo);
+     return result;
+   }
    if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
    if (gesher::system_linker::RefuseChangeHandle(h) != 0) return -1;
 +  if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite)) return -1;
    HANDLE writable = ReOpenFile(h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                 FILE_FLAG_BACKUP_SEMANTICS);
-@@ -766,8 +792,15 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
+@@ -771,8 +802,15 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
      if (path == nullptr) return fail_reopen(EOPNOTSUPP);
      std::wstring windows;
      switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
@@ -213,7 +231,7 @@ index df62c8f06422cbaaeca05f6a076c69f5f65bb3b9..38ebe37913988f240f0be30230563b3f
          windows = L"NUL";
          break;
 diff --git a/compat/posix/src/socket.cc b/compat/posix/src/socket.cc
-index 8324d92d2835559af62a87aeafa4d81af12dcc11..c28d77edacd0c98cdf55079837c850b45eae2d72 100644
+index 8324d92d2..c28d77eda 100644
 --- a/compat/posix/src/socket.cc
 +++ b/compat/posix/src/socket.cc
 @@ -19,6 +19,7 @@
@@ -236,7 +254,7 @@ index 8324d92d2835559af62a87aeafa4d81af12dcc11..c28d77edacd0c98cdf55079837c850b4
      case gesher::PathKind::kMissing:
        return errno = ENOENT, false;
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index 2f1b7477f67758fd70e9adf685db551e61b1fbf9..4495c1b9720d74e488f50ffbe4018f45b3cd11c0 100644
+index 7198a5794..00aaf9f45 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
 @@ -38,6 +38,7 @@
@@ -259,10 +277,10 @@ index 2f1b7477f67758fd70e9adf685db551e61b1fbf9..4495c1b9720d74e488f50ffbe4018f45
      // This repair does not supply procfs/device filesystem statistics.
      mapped = gesher::Widen(path);
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
-index b233763acc14a06bbca593e042f74022294fe670..ba2af4ecaf6dcc9681b8cbc30fc0c8941812ac1c 100644
+index afca78ee2..2a4f8b7fd 100644
 --- a/compat/posix/src/unistd.cc
 +++ b/compat/posix/src/unistd.cc
-@@ -30,6 +30,7 @@
+@@ -31,6 +31,7 @@
  #include "record_lock_descriptors.h"
  #include "pipe_io.h"
  #include "system_linker.h"
@@ -270,16 +288,27 @@ index b233763acc14a06bbca593e042f74022294fe670..ba2af4ecaf6dcc9681b8cbc30fc0c894
 
  namespace {
 
-@@ -869,6 +870,7 @@ char* realpath(const char* path, char* resolved_path) {
+@@ -870,12 +871,18 @@ char* realpath(const char* path, char* resolved_path) {
      return nullptr;
    }
    if (kind == gesher::PathKind::kFile) {
 +    if (!gesher::CheckExternalStorageAccess(wpath, gesher::AccessKind::kStat)) return nullptr;
-     HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+     HANDLE h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                                FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS);
      if (h == INVALID_HANDLE_VALUE) {
+       gesher::FailWithLastError();
+       return nullptr;
+     }
++    if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
++      CloseHandle(h);
++      errno = EACCES;
++      return nullptr;
++    }
+     // Gesher's ELF loader by its name, however it was reached (system_linker.h).
+     bool ok = gesher::system_linker::IsFileHandle(h) ? (out = gesher::system_linker::kPath, true)
+                                                       : FinalPath(h, &out);
 diff --git a/tests/art-temp/entry_test.cc b/tests/art-temp/entry_test.cc
-index 6b226dd4db82532127c29edcbaa7adda2b988234..4a66630c799943a0e7933f62beba161531ad7a26 100644
+index 6b226dd4d..4a66630c7 100644
 --- a/tests/art-temp/entry_test.cc
 +++ b/tests/art-temp/entry_test.cc
 @@ -29,6 +29,7 @@ int temp_reads;
@@ -315,7 +344,7 @@ index 6b226dd4db82532127c29edcbaa7adda2b988234..4a66630c799943a0e7933f62beba1615
    for (int i = 0; i < argc; ++i) vm_arguments.emplace_back(argv[i]);
    Require(argv[argc] == nullptr, "ART argv must retain its null sentinel");
 diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
-index 59b8e229c21875c8c8d5b80f621c0744c0faabb1..f62cd6e8fe10b56035fa61ac2c6c07b5632d1e4f 100644
+index ea5796bb4..78327ea7c 100644
 --- a/tests/native/ofd_transfer_host_test.cc.in
 +++ b/tests/native/ofd_transfer_host_test.cc.in
 @@ -40,12 +40,12 @@ void* operator new(size_t count) {
@@ -341,11 +370,11 @@ index 59b8e229c21875c8c8d5b80f621c0744c0faabb1..f62cd6e8fe10b56035fa61ac2c6c07b5
 +// Model the trusted launcher's empty package identity: no storage override.
 +// Guest identity propagation is outside this OFD transport fixture's scope.
 +std::wstring ExternalStorageChildEnvironment(const wchar_t*) { return {}; }
+ // FIFO descriptions (fifo.cc) are outside this envelope: none is exported.
+ HANDLE FifoRingSection(const DescriptorSnapshotPtr&) { errno = EOPNOTSUPP; return nullptr; }
  // gesher/fork.h (ADR 0092): this fixture is never a forked child, so the
- // builder creates its process itself, under the spawn lock a fork excludes.
- static int spawn_lock_depth = 0;
 diff --git a/tools/test_temp_directory.py b/tools/test_temp_directory.py
-index 9c65429d25391c6f4afb3e01693d9cbf874f624b..98d72be9ce260fddd9fc2e752dc8c210cc871d36 100644
+index 9c65429d2..98d72be9c 100644
 --- a/tools/test_temp_directory.py
 +++ b/tools/test_temp_directory.py
 @@ -21,6 +21,8 @@ def main():

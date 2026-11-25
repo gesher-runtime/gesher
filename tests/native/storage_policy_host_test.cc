@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <windows.h>
+#include <winioctl.h>
 
 #include <string>
 #include <gesher/storage_policy.h>
@@ -163,6 +164,168 @@ void SQLitePolicyLifecycle(const std::string& data) {
   CheckSqlite(sqlite3_close(db), SQLITE_OK, "SQLite SCOPED: release failed-open handle");
 }
 
+bool CreateHostFifo(const std::string& path) {
+  // The trusted host creates another application's fixture independently of
+  // the guest identity. All tested guest operations below use gesher_posix.
+  HANDLE file = CreateFileA(path.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_NEW,
+      FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  Check(file != INVALID_HANDLE_VALUE, "FIFO host: create foreign fixture");
+  if (file == INVALID_HANDLE_VALUE) return false;
+  struct { DWORD tag; WORD length, reserved; } reparse{0x80000024, 0, 0};
+  DWORD returned = 0;
+  const bool tagged = DeviceIoControl(file, FSCTL_SET_REPARSE_POINT, &reparse, sizeof(reparse),
+                                      nullptr, 0, &returned, nullptr) != FALSE;
+  Check(tagged, "FIFO host: apply real Windows FIFO reparse tag");
+  if (!tagged) fprintf(stderr, "FIFO host tag error: %lu\n", GetLastError());
+  CloseHandle(file);
+  return tagged;
+}
+
+void FifoPolicyLifecycle(const std::string& data) {
+  constexpr const char* own = "/sdcard/Android/data/com.test.app/notify.pipe";
+  constexpr const char* shared = "/sdcard/Download/shared.pipe";
+  constexpr const char* foreign = "/sdcard/Android/data/com.other.app/foreign.pipe";
+  constexpr const char* alias = "/sdcard/Android/data/com.test.app/alias.pipe";
+  const std::string shared_native = data + "\\media\\0\\Download\\shared.pipe";
+  const std::string foreign_native = data + "\\media\\0\\Android\\data\\com.other.app\\foreign.pipe";
+  const std::string alias_native = data + "\\media\\0\\Android\\data\\com.test.app\\alias.pipe";
+  const bool foreign_ready = CreateHostFifo(foreign_native);
+
+  WritePolicy(data, "com.test.app", "SCOPED", 0);
+  Check(mkfifo(own, 0600) == 0, "FIFO SCOPED: create own application FIFO");
+  Check(gesher_is_fifo_path(own) == 1, "FIFO SCOPED: permitted path helper recognizes own FIFO");
+  int own_fd = open(own, O_RDWR | O_NONBLOCK);
+  Check(own_fd >= 0, "FIFO SCOPED: open own application FIFO");
+  if (own_fd >= 0) {
+    char byte = 0;
+    Check(write(own_fd, "N", 1) == 1 && read(own_fd, &byte, 1) == 1 && byte == 'N',
+          "FIFO SCOPED: own FIFO really transfers bytes");
+    close(own_fd);
+  }
+  errno = 0;
+  Check(mkfifo("/sdcard/Download/scoped-create.pipe", 0600) == -1 && errno == EACCES,
+        "FIFO SCOPED: shared mkfifo denied");
+  Check(GetFileAttributesA((data + "\\media\\0\\Download\\scoped-create.pipe").c_str())
+            == INVALID_FILE_ATTRIBUTES, "FIFO SCOPED: denied creation leaves no target");
+  errno = 0;
+  Check(mknod("/sdcard/Download/scoped-node.pipe", S_IFIFO | 0600, 0) == -1 && errno == EACCES,
+        "FIFO SCOPED: mknod FIFO uses the same policy");
+
+  WritePolicy(data, "com.test.app", "MANAGER", 0);
+  Check(mkfifo(shared, 0600) == 0, "FIFO MANAGER: shared creation allowed");
+  int shared_fd = open(shared, O_RDWR | O_NONBLOCK);
+  Check(shared_fd >= 0, "FIFO MANAGER: shared read/write open allowed");
+  struct stat before {};
+  Check(stat(shared, &before) == 0 && S_ISFIFO(before.st_mode),
+        "FIFO MANAGER: shared path reports a FIFO");
+  errno = 0;
+  Check(mkfifo("/sdcard/Android/data/com.other.app/blocked.pipe", 0600) == -1 && errno == EACCES,
+        "FIFO MANAGER: foreign Android/data creation denied");
+  errno = 0;
+  Check(mkfifo("/sdcard/Android/obb/com.other.app/blocked.pipe", 0600) == -1 && errno == EACCES,
+        "FIFO MANAGER: foreign Android/obb creation denied");
+  errno = 0;
+  const int foreign_link = symlink(foreign, alias);
+  Check(foreign_link == -1 && errno == EACCES,
+        "FIFO MANAGER: application cannot create a link to a foreign target");
+  if (foreign_link == 0) DeleteFileA(alias_native.c_str());
+
+  // First prove that this volume can follow an ordinary, permitted FIFO link.
+  // If Windows denies creation of symbolic links, only these alias cases skip.
+  if (symlink(own, alias) == 0) {
+    int fd = open(alias, O_RDONLY | O_NONBLOCK);
+    Check(fd >= 0, "FIFO alias: permitted own target remains readable");
+    if (fd >= 0) close(fd);
+    Check(unlink(alias) == 0, "FIFO alias: remove permitted symbolic link");
+    // Only the trusted host can install this foreign-target alias. Exercise the
+    // guest's handling of an existing host-created link, without bypassing its
+    // ordinary symlink creation policy in the operation under test.
+    if (foreign_ready && CreateSymbolicLinkA(alias_native.c_str(), foreign_native.c_str(),
+                                             SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+      for (int flags : {O_RDONLY | O_NONBLOCK, O_RDWR | O_NONBLOCK, O_PATH}) {
+        errno = 0;
+        fd = open(alias, flags);
+        const int error = errno;
+        Check(fd < 0 && error == EACCES,
+              "FIFO alias: actual foreign target denied for read/write/path opens");
+        if (fd >= 0) close(fd);
+      }
+      struct stat st {};
+      errno = 0;
+      Check(stat(alias, &st) == -1 && errno == EACCES,
+            "FIFO alias: stat cannot expose foreign target metadata");
+      for (int mode : {F_OK, R_OK, W_OK}) {
+        errno = 0;
+        Check(access(alias, mode) == -1 && errno == EACCES,
+              "FIFO alias: access authorizes the actual foreign target");
+      }
+      char resolved[4096];
+      errno = 0;
+      Check(realpath(alias, resolved) == nullptr && errno == EACCES,
+            "FIFO alias: realpath cannot reveal the foreign target");
+      Check(gesher_is_fifo_path(alias) == 0,
+            "FIFO alias: truncate helper cannot identify a forbidden FIFO");
+      Check(unlink(alias) == 0, "FIFO alias: removing own link remains allowed");
+    } else if (foreign_ready) {
+      const DWORD error = GetLastError();
+      Check(error == ERROR_PRIVILEGE_NOT_HELD || error == ERROR_NOT_SUPPORTED ||
+                error == ERROR_INVALID_FUNCTION,
+            "FIFO alias: host setup failed for an unexpected reason");
+      printf("FIFO foreign alias skipped: host symbolic link unavailable (win32=%lu)\n", error);
+    }
+  } else {
+    const int error = errno;
+    Check(error == EPERM || error == EACCES || error == EOPNOTSUPP || error == ENOSYS,
+          "FIFO alias: symbolic-link setup failed for an unexpected reason");
+    printf("FIFO storage aliases skipped: symbolic links unavailable (errno=%d)\n", error);
+  }
+
+  WritePolicy(data, "com.test.app", "LEGACY_RO", 0);
+  int reader = open(shared, O_RDONLY | O_NONBLOCK);
+  Check(reader >= 0, "FIFO LEGACY_RO: shared read-only open allowed");
+  if (reader >= 0) close(reader);
+  errno = 0;
+  int writer = open(shared, O_RDWR | O_NONBLOCK);
+  Check(writer < 0 && errno == EACCES, "FIFO LEGACY_RO: fresh shared write open denied");
+  if (writer >= 0) close(writer);
+  errno = 0;
+  Check(mkfifo("/sdcard/Download/readonly-create.pipe", 0600) == -1 && errno == EACCES,
+        "FIFO LEGACY_RO: shared creation denied");
+  if (shared_fd >= 0) {
+    errno = 0;
+    Check(fchmod(shared_fd, 0444) == -1 && errno == EACCES,
+          "FIFO LEGACY_RO: previously opened descriptor cannot change file mode");
+    struct stat after {};
+    Check(stat(shared, &after) == 0 && (after.st_mode & 0222) == (before.st_mode & 0222),
+          "FIFO LEGACY_RO: rejected fchmod preserves file attributes");
+  }
+  errno = 0;
+  Check(rename(shared, "/sdcard/Download/renamed.pipe") == -1 && errno == EACCES,
+        "FIFO LEGACY_RO: rename remains denied");
+  errno = 0;
+  Check(unlink(shared) == -1 && errno == EACCES, "FIFO LEGACY_RO: unlink remains denied");
+  Check(GetFileAttributesA(shared_native.c_str()) != INVALID_FILE_ATTRIBUTES,
+        "FIFO LEGACY_RO: denied mutations preserve the real file");
+
+  WritePolicy(data, "com.test.app", "SCOPED", 0);
+  errno = 0;
+  reader = open(shared, O_RDONLY | O_NONBLOCK);
+  Check(reader < 0 && errno == EACCES, "FIFO SCOPED: revoked shared read open denied");
+  if (reader >= 0) close(reader);
+  own_fd = open(own, O_RDWR | O_NONBLOCK);
+  Check(own_fd >= 0, "FIFO SCOPED: revocation retains own application FIFO");
+  if (own_fd >= 0) close(own_fd);
+
+  WritePolicy(data, "com.test.app", "MANAGER", 0);
+  if (shared_fd >= 0) {
+    Check(fchmod(shared_fd, 0600) == 0, "FIFO MANAGER: restored write permission permits fchmod");
+    close(shared_fd);
+  }
+  Check(unlink(shared) == 0, "FIFO MANAGER: remove shared FIFO after closing descriptors");
+  Check(unlink(own) == 0, "FIFO: remove own application FIFO");
+}
+
 }  // namespace
 
 int main() {
@@ -297,6 +460,7 @@ int main() {
   }
 
   SQLitePolicyLifecycle(data);
+  FifoPolicyLifecycle(data);
 
   // 6. A running process observes the host's later permission revocation.
   WritePolicy(data, "com.test.app", "SCOPED", 0);

@@ -1,6 +1,6 @@
 {
-  "baseline": "7a35c74ea0061f9664f501371a200f07444bb13b",
-  "baseline_policy_sha256": "df175c08d0191322b6f29aacc6fba6736f29084fde10649299bf39cc0ce86e7b",
+  "baseline": "a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a",
+  "baseline_policy_sha256": "e90c7e296dd6d83fb5ab8d89bfd82bbc74a7332257eeaf30d6157c6f0bd6d7b8",
   "paths": [
     "compat/art/dalvikvm_main.cc",
     "compat/elf/exec/exec_spawn.cc",
@@ -16,28 +16,28 @@
   ],
   "previous_sha256": {
     "compat/art/dalvikvm_main.cc": "72709c45a261a9dc89b714053a4c5b380f2f57604d7269541e614e7b03f36910",
-    "compat/elf/exec/exec_spawn.cc": "f1d84cb0c05dcb683310962ed5fff6ab8f380264730a7117c3e31762e8529e2d",
+    "compat/elf/exec/exec_spawn.cc": "9eede0ff82f9f4a0f4f14bd16ec40ad8214b820beb2a112fece2ade83affce2b",
     "compat/elf/exec/gesher_exec.cc": "4b1f5676cf5426bd1fce246fe30c0b3ac3fd2c2a6491ccf6e28711e3fb0a5a78",
-    "compat/posix/posix.cmake": "2dff7e4c2960c306a1b4fbef10e0fe83dbf30bb0ead3e6c9e013379709c7e8ed",
-    "compat/posix/src/fsops.cc": "63aef523ce97d8df01d91ed7667cb1802355f3dcb5e221c7170893a74882cd20",
+    "compat/posix/posix.cmake": "7cfde79fb79b29f244066fb431dfab4c7729549d19b7ad4945bac967de7f56cd",
+    "compat/posix/src/fsops.cc": "a7720f3696091ccb1449f20d6a8f98b43ddbe7fd18707d547f98eb5f25b5ffea",
     "compat/posix/src/socket.cc": "d106dc2c1039d27b0f21fb70bcff02780df737077f7b1e763271b28d5adcd343",
-    "compat/posix/src/system.cc": "461b3dae9c26e11fbc9aa41871a23913971b43dec1e058e8f3460aeaf9dfb295",
-    "compat/posix/src/unistd.cc": "513d0a079d0cff5a2b368b96bb9d4ce1838e747ee6534cfb376311252f28bf46",
+    "compat/posix/src/system.cc": "c90291b2c376dd3834d82ef7ea83c391ab98aca904f9528e1648a980a36e4620",
+    "compat/posix/src/unistd.cc": "35187c1cec0c5f851c8d06a5fe791a61a9caa1d39d4d92fe8080de4c3eaa23af",
     "tests/art-temp/entry_test.cc": "805caa3374d4247cab02fce66b23faac85115806315eb3e6b1c04b5807a0485a",
-    "tests/native/ofd_transfer_host_test.cc.in": "f7530c0869c05faa273033aaf30c7ad5721c18f0dda0d1213316ff5ad057fa30",
+    "tests/native/ofd_transfer_host_test.cc.in": "96a54c4cb3ff671b1c98168c2532cdc13cd19f249a40b69eb8eb4a224e4b4ef9",
     "tools/test_temp_directory.py": "45295aa6d13d235969f2df7ec8763fc8522aa278030dc3ccc34b2657400e78cd"
   },
   "source_sha256": {
     "compat/art/dalvikvm_main.cc": "3920c597673ecfc7800430776533777a12df0a6ef159dfb55959d7418db46c63",
-    "compat/elf/exec/exec_spawn.cc": "216c3c78bf7be2ad81235c6a9f80948545a3b120b53ef401d349a7c89b25aa78",
+    "compat/elf/exec/exec_spawn.cc": "5338d750e3a01d4aaa2bd3adf019342403cb4eb8f2e337e4707f4e0e383362d4",
     "compat/elf/exec/gesher_exec.cc": "5d3dc551f5e1fabafcf6ba4eda3a2cf4a86a6c9268ebdf11fb7aa5979a82dd6e",
-    "compat/posix/posix.cmake": "6f6118c77080dea3d736e1809ed3e109ed446ac510e32befc6fddc6ad4c150fc",
-    "compat/posix/src/fsops.cc": "214ecb83b194d7e050aade5956ea8fd886e9428f02b2067b4e32d32cb3c05e2e",
+    "compat/posix/posix.cmake": "5f6009b3513d7859c7c53af23c47a3497812b04fa81321efca299307c5d7b276",
+    "compat/posix/src/fsops.cc": "703f14fa375c312232c0ff691ca6d292daa61d90874cd5756251d5f45a5f661d",
     "compat/posix/src/socket.cc": "049354ae6ec312aa487a1d040949a9b366e28c18e770f2ec21653d6a65fec2eb",
-    "compat/posix/src/system.cc": "928354d38aa301429eabce07f6f2118af609b767b56f0037e8d97402b34465f3",
-    "compat/posix/src/unistd.cc": "bd8381554cc3a03dea9f4c5e3e6846b1fa3d98cb08552ecd86eadbb02b953f67",
+    "compat/posix/src/system.cc": "22ffaa16d319618169c3fe8d01e2af155f4299e232943dc211e4ead9c4ebf1dd",
+    "compat/posix/src/unistd.cc": "3bc9bd782e6b25c6d1d5a5bfdcc0fe87a745cfa9bed98d05ea8a5e50aefbb5e5",
     "tests/art-temp/entry_test.cc": "53167f5d58aa396f737aa1cf80742ab08967cf9312ef29cd1b01117340024d10",
-    "tests/native/ofd_transfer_host_test.cc.in": "06ea85e0457ef98e7010bb97d45804f63f65919b9f9fbacdb93d570ce89908fc",
+    "tests/native/ofd_transfer_host_test.cc.in": "191344661c640fc6d1eaeac09a1dcedf4d56a1b0aad26657865320ed936187b7",
     "tools/test_temp_directory.py": "d8583073123077066b161dd24d6c77d37f972093f68c0b93cc8b016935f773b6"
   },
   "helper_sha256": {
@@ -45,6 +45,6 @@
     "compat/posix/src/storage_policy.cc": "40704f856610896082eac4fe7055ee8634a27860f86504a5874d12ed980cd373",
     "compat/posix/src/storage_policy.h": "b40df105a58d1c17a3144442b9c3b1cf1f2ce69ff71a3bb7f969c979c1d71770"
   },
-  "patch_sha256": "87a5ffdf92c62a3407d9bcfe217288586c8555b80ee1a315fdff64b07c13f966",
+  "patch_sha256": "859d26c3334cdb18d7a85fdcd22610253727b7cfc338be9e672e161ac9fc05aa",
   "native_runtime_approval": false
 }

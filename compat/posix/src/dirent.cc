@@ -148,6 +148,8 @@ struct dirent* readdir(DIR* dir) {
       (dir->data.dwReserved0 == IO_REPARSE_TAG_SYMLINK ||
        dir->data.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT)) {
     type = DT_LNK;  // as lstat reports them (stat.cc)
+  } else if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && dir->data.dwReserved0 == 0x80000024) {
+    type = DT_FIFO;  // IO_REPARSE_TAG_LX_FIFO (fifo.cc)
   } else {
     type = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0 ? DT_DIR : DT_REG;
   }

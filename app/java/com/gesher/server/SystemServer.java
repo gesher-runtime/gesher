@@ -483,6 +483,8 @@ public final class SystemServer {
             ControlCenter.clearResults(Device.dataDir());
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
+            // The text-to-speech engine, when Windows has voices (docs/tts.md).
+            TtsEngineApp.sync(mInstaller, mServices.pm);
             // The speech recognition service, when Windows has recognizers (docs/speech-recognition.md).
             SttEngineApp.sync(mInstaller, mServices.pm);
             trackLauncherRecords(mServices.pm);
