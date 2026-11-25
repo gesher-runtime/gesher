@@ -33,4 +33,13 @@ add_library(gesher_shellext SHARED
   ${CMAKE_SOURCE_DIR}/compat/shell/gesher_shellext.def)
 set_target_properties(gesher_shellext PROPERTIES PREFIX "")
 target_compile_options(gesher_shellext PRIVATE -Wall -Wextra -Werror -fno-exceptions -fno-rtti)
-target_link_libraries(gesher_shellext PRIVATE ole32)
+target_link_libraries(gesher_shellext PRIVATE ole32 user32 gdi32)
+
+# CI-only handler contracts; not installed or registered with Explorer.
+foreach(probe icon_async_probe icon_badge_probe)
+  add_executable(${probe} EXCLUDE_FROM_ALL ${CMAKE_SOURCE_DIR}/tests/windows/${probe}.cc)
+  set_property(TARGET ${probe} PROPERTY LINK_LIBRARIES "")
+  target_compile_options(${probe} PRIVATE -Wall -Wextra -Werror -fno-exceptions -fno-rtti -municode)
+  target_link_options(${probe} PRIVATE -municode)
+  target_link_libraries(${probe} PRIVATE ole32 user32 gdi32)
+endforeach()

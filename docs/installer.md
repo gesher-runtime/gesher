@@ -14,8 +14,9 @@ own [Start menu shortcuts](#installed-apps-in-the-start-menu).
 
 Gesher's icon, `tools/package/gesher.ico` (a bridge, drawn by
 `tools/icons/make-icons.py`), is Setup's (`SetupIconFile`), Add/Remove
-Programs' (`UninstallDisplayIcon`), the Start menu entries' and that of an
-`.apk` file Gesher has not installed.
+Programs' (`UninstallDisplayIcon`) and the Start menu entries'. APK files use
+their application's icon with a small Gesher badge, even before installation;
+Gesher's own icon is the fallback when extraction cannot provide an app icon.
 
 ## Portable package
 
@@ -182,9 +183,15 @@ Each APK or split APK bundle's icon comes from `gesher_shellext.dll`
 (`compat/shell/gesher_shellext.cc`), loaded by Explorer: its app's icon. It
 parses no APK: it looks the file (its size and last write time) up in
 `%LOCALAPPDATA%\Gesher\data\system\apk-icons.list`, which `gesher-app install`
-and launches fill with the shortcut's `.ico`. An APK not listed shows Gesher's
-icon at first, while the handler runs `gesher-launch.exe apk-icon "<file>"` in
-the background (no window; once per file, at most two at once, not for an empty
+  and launches fill with the shortcut's `.ico`. `Extract` adds a small Gesher
+  badge to the file icon at the requested size; cached ICO files, application
+  window icons and shortcuts are not modified. If the badge cannot be loaded or
+  composed, the original app icon is retained. For an APK not listed, an async
+  `GetIconLocation` request queues extraction and returns `E_PENDING`, rather
+  than returning a temporary Gesher icon as a successful final result. The
+  shell's synchronous worker completes the same producer and looks up the
+  published icon. The handler runs `gesher-launch.exe apk-icon "<file>"`
+  (no window; deduplicated background requests, at most two producers at once, not for an empty
 file or one still being written). That command draws the app's icon without
 installing it into `data\system\apk-icons\<size>-<time>.ico`, records it, and
 Explorer shows it. Bundles are read in a temporary directory without installing

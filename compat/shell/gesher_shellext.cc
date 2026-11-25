@@ -1,8 +1,8 @@
 // gesher_shellext.dll: the icon handler of Gesher's .apk file type
 // (Gesher.Apk\shellex\IconHandler, docs/installer.md). Explorer asks it for each
 // .apk file's icon: its app's icon (the .ico com.gesher.app.shell.AppShell made
-// for the app's Start menu shortcut, or drew for the file), Gesher's own
-// (gesher.ico, next to this DLL) until that is drawn.
+// for the app's Start menu shortcut, or drew for the file). Missing icons use
+// the shell's async extraction contract; Gesher's own icon is a failure fallback.
 //
 // It parses no APK: Explorer loads it in its own process, for every .apk it
 // shows. Gesher records APK files and their icons in
@@ -12,18 +12,20 @@
 // package, tab-separated, UTF-8. A file is the one recorded when its size and
 // time are; a copy or a move keeps both.
 //
-// An APK not recorded shows gesher.ico for now, and its icon is drawn in the
+// An APK not recorded returns E_PENDING to async callers and is drawn in the
 // background: a thread of this DLL runs `gesher-launch.exe apk-icon "<file>"`
 // (next to this DLL; no window), which draws the app's icon without installing
 // the app, records it and tells the shell the file changed, so Explorer asks
-// again. Never on the caller's thread; once per file (path, size and time) in
+// again. Async callers return promptly; synchronous extraction completes the
+// same producer. Background requests are deduplicated by path, size and time in
 // this process, at most kQueued waiting; at most two runs at once in the
 // session (two named mutexes, shared by every process that loads this DLL);
 // not for an empty file or one written in the last seconds (still being
 // written).
 //
 // In-process COM server, apartment threaded: IPersistFile::Load gets the file,
-// IExtractIconW::GetIconLocation names the icon, and the shell extracts it.
+// IExtractIconW::GetIconLocation names the cached icon; Extract adds Gesher's
+// small identifying badge without modifying the app's cached ICO or shortcuts.
 //
 // The COM and shell headers need what WIN32_LEAN_AND_MEAN and NOGDI (the
 // build's defaults) leave out.
@@ -34,6 +36,7 @@
 #include <shlobj.h>
 
 #include <new>
+#include "icon_badge.h"
 
 namespace {
 
@@ -383,24 +386,58 @@ class IconHandler final : public IPersistFile, public IExtractIconW {
   STDMETHODIMP GetCurFile(LPOLESTR*) override { return E_NOTIMPL; }
 
   // IExtractIconW
-  STDMETHODIMP GetIconLocation(UINT, PWSTR file, UINT cch, int* index, UINT* flags) override {
+  STDMETHODIMP GetIconLocation(UINT input_flags, PWSTR file, UINT cch, int* index, UINT* flags) override {
     if (file == nullptr || index == nullptr || flags == nullptr || cch == 0) return E_INVALIDARG;
     *index = 0;
-    *flags = GIL_PERINSTANCE | GIL_DONTCACHE;
+    *flags = GIL_PERINSTANCE | GIL_DONTCACHE | GIL_NOTFILENAME;
     unsigned long long size = 0, millis = 0;
     if (FileKey(path_, &size, &millis)) {
       if (RecordedIcon(size, millis, file, cch)) return S_OK;
       if (size > 0) {
-        // Gesher's icon until the app's is drawn; the shell asks again then.
-        RequestIcon(path_, size, millis);
+        // Let Explorer extract on its worker instead of caching gesher.ico as
+        // the final image. E_PENDING is the IExtractIcon async contract.
+        if ((input_flags & GIL_ASYNC) != 0) {
+          RequestIcon(path_, size, millis);
+          return E_PENDING;
+        }
+        IconRequest request = {};
+        lstrcpyW(request.path, path_);
+        request.size = size;
+        request.millis = millis;
+        DrawIcon(request);
+        if (RecordedIcon(size, millis, file, cch)) return S_OK;
         return DefaultIcon(file, cch) ? S_OK : S_FALSE;
       }
     }
     *flags = 0;  // Gesher's icon is the same for every other APK
     return DefaultIcon(file, cch) ? S_OK : S_FALSE;
   }
-  STDMETHODIMP Extract(PCWSTR, UINT, HICON*, HICON*, UINT) override {
-    return S_FALSE;  // the shell extracts the icon from the location
+  STDMETHODIMP Extract(PCWSTR file, UINT, HICON* large, HICON* small, UINT sizes) override {
+    if (large != nullptr) *large = nullptr;
+    if (small != nullptr) *small = nullptr;
+    if (file == nullptr || (large == nullptr && small == nullptr)) return E_INVALIDARG;
+    wchar_t badge[kPathChars];
+    if (!DefaultIcon(badge, kPathChars)) return E_FAIL;
+    bool fallback = gesher::SameIconFile(file, badge);
+    auto load = [&](int pixels) -> HICON {
+      if (fallback) return static_cast<HICON>(LoadImageW(nullptr, file, IMAGE_ICON,
+                                                         pixels, pixels, LR_LOADFROMFILE));
+      return gesher::LoadBadgedIcon(file, badge, pixels);
+    };
+    if (large != nullptr) {
+      int pixels = LOWORD(sizes);
+      *large = load(pixels != 0 ? pixels : GetSystemMetrics(SM_CXICON));
+      if (*large == nullptr) return E_FAIL;
+    }
+    if (small != nullptr) {
+      int pixels = HIWORD(sizes);
+      *small = load(pixels != 0 ? pixels : GetSystemMetrics(SM_CXSMICON));
+      if (*small == nullptr) {
+        if (large != nullptr) { DestroyIcon(*large); *large = nullptr; }
+        return E_FAIL;
+      }
+    }
+    return S_OK;
   }
 
  private:

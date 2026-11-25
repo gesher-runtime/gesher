@@ -45,6 +45,18 @@ foreach ($app in $shellApps) {
   }
 }
 
+# Exercise the production handler's async and badge contracts with the real
+# components icon drawn above. Isolated copies avoid launching a runtime and
+# preserve the runner's profile and machine-wide COM/file associations.
+try {
+  & (Join-Path $PSScriptRoot '../run-icon-handler-checks.ps1') -ProbeDir $Dir `
+    -AppIcon (Join-Path $shellOut 'components.ico') -OutputRoot (Join-Path $shellOut 'handler-contracts')
+  Write-Host 'PASS  shell: async icon publication and badge contracts'
+} catch {
+  Write-Host "FAIL  shell: async icon publication and badge contracts ($_)"
+  $failed++
+}
+
 # gesher-launch.exe (compat/shell/gesher_launch.cc): what an app's shortcut, a
 # double-clicked .apk and a toast click start. A copy runs a stand-in
 # gesher-app.ps1 next to it: the arguments arrive as written, the script's exit
