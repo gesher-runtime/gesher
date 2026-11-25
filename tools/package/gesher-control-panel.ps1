@@ -2,8 +2,29 @@
 # Gesher Control Center (לוח הבקרה של גשר) - GUI Dashboard for apps and Google Play services.
 
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
 $here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Resolve-Path (Join-Path $PWD 'tools/package')).Path }
+. (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Set-GesherProfileEnvironment $here
+
+# One Control Center. A second start (the Start menu again, or an app's "App info", which
+# the system server answers by writing the package here and opening the panel:
+# ControlCenter.java) signals the open panel, which comes to the front and takes the
+# request on its live-refresh timer, and exits. The mutex is only a name (never owned);
+# a panel closes its handles as its window closes, so a start right after that opens a
+# new one. "Reopen" after an update starts the new version while the old one is still
+# open: GESHER_PANEL_REOPEN lets that start through.
+$script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
+Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
+$script:PanelInstanceCreated = $false
+$panelName = Get-GesherControlPanelName $root
+$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
+$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
+if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
+    $null = $script:PanelShowEvent.Set()
+    exit 0
+}
+
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
 
 # Set explicit AppUserModelID so Windows taskbar groups under Gesher instead of PowerShell host
 try {
@@ -14,32 +35,12 @@ try {
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
 . (Join-Path $here 'gesher-panel-view.ps1')
-. (Join-Path $here 'gesher-runtime-files.ps1')
-$root = Set-GesherProfileEnvironment $here
 $script:UpdateDirectory = Join-Path $root 'updates'
-
-# One Control Center. A second start (the Start menu again, or an app's "App info", which
-# the system server answers by writing the package here and opening the panel:
-# ControlCenter.java) signals the open panel, which comes to the front and takes the
-# request on its live-refresh timer, and exits. The mutex is only a name (never owned);
-# a panel closes its handles as its window closes, so a start right after that opens a
-# new one. "Reopen" after an update starts the new version while the old one is still
-# open: GESHER_PANEL_REOPEN lets that start through.
 $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
-$script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
 # Apps whose tasks are windows of their own (ADR 0088; AppWindows.java): separate.<package>=true.
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 # Gesher's own proxy (ProxySetting.java, docs/network.md): proxy=<every app>, proxy.<package>=<one app>.
 $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
-Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
-$script:PanelInstanceCreated = $false
-$panelName = Get-GesherControlPanelName $root
-$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
-$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
-if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
-    $null = $script:PanelShowEvent.Set()
-    exit 0
-}
 
 $isHe = ($script:GesherUiLanguage -eq 'he')
 $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
@@ -384,7 +385,12 @@ function Update-PanelMetadataWatch {
 
 function Invoke-PanelMetadataVisibilityChanged {
     if (-not (Test-PanelMetadataVisible)) {
+        $script:LiveState.InitialShowPending = $false
         $script:LiveState.WasVisible = $false
+        return
+    }
+    if ($script:LiveState.InitialShowPending) {
+        $script:LiveState.WasVisible = $true
         return
     }
     # Restore resynchronizes even if the watcher overflowed or a directory was replaced.
@@ -394,6 +400,11 @@ function Invoke-PanelMetadataVisibilityChanged {
 
 function Invoke-PanelMetadataActivated {
     try {
+        if ($script:LiveState.InitialShowPending -and (Test-PanelMetadataVisible)) {
+            $script:LiveState.InitialShowPending = $false
+            $script:LiveState.WasVisible = $true
+            return
+        }
         Invoke-PanelMetadataVisibilityChanged
         if (-not $script:IsBusy -and (Test-PanelMetadataVisible)) {
             $script:LiveState.WasVisible = $true
@@ -407,7 +418,16 @@ function Initialize-PanelMetadata {
         $context = [System.Windows.Threading.DispatcherSynchronizationContext]::new($window.Dispatcher,
             [System.Windows.Threading.DispatcherPriority]::Background)
         $script:MetadataMonitor = [Gesher.PanelChangeMonitor]::new($context)
-        $script:MetadataMonitor.add_Changed({ try { Request-PanelMetadataRefresh } catch { } })
+        $script:MetadataMonitor.add_Changed({
+            try {
+                if ($null -ne $script:LiveState.IgnoreChangedGeneration) {
+                    $ignored = $script:LiveState.IgnoreChangedGeneration
+                    $script:LiveState.IgnoreChangedGeneration = $null
+                    if ($script:MetadataMonitor -and $script:MetadataMonitor.Generation -eq $ignored) { return }
+                }
+                Request-PanelMetadataRefresh
+            } catch { }
+        })
     } catch { $script:MetadataMonitor = $null }
     $window.Add_StateChanged({ Invoke-PanelMetadataVisibilityChanged })
     $window.Add_IsVisibleChanged({ Invoke-PanelMetadataVisibilityChanged })
@@ -720,7 +740,16 @@ function Refresh-Dashboard {
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
+    $hadWatchers = $script:MetadataMonitor -and ($script:MetadataMonitor.WatcherCount -gt 0)
     Update-PanelMetadataWatch
+    if (-not $hadWatchers -and $script:MetadataMonitor -and $script:MetadataMonitor.WatcherCount -gt 0) {
+        # Initial watch setup calls Signal() even though there was no prior watch gap.
+        $generation = $script:MetadataMonitor.Generation
+        $script:LiveState.IgnoreChangedGeneration = $generation
+    }
+    if ($null -eq $script:LiveState.Stamp -and -not (Test-PanelMetadataVisible)) {
+        $script:LiveState.InitialShowPending = $true
+    }
     $script:LiveState.Stamp = $stateStamp
     $script:LiveState.AppsStamp = $appsStamp
     $script:LiveState.RecoveryAt = [DateTime]::UtcNow.AddMilliseconds($script:LiveRefreshRecoveryMs)
@@ -753,6 +782,7 @@ function Invoke-LiveRefreshTick {
         Refresh-Dashboard
         return
     }
+    $live.InitialShowPending = $false
     $now = [DateTime]::UtcNow
     if (-not $live.RecoveryAt -or $now -ge $live.RecoveryAt) {
         $live.RecoveryAt = $now.AddMilliseconds($script:LiveRefreshRecoveryMs)
