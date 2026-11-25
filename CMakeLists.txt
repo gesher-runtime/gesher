@@ -88,6 +88,8 @@ include(cmake/aosp/media.cmake)
 target_link_libraries(dalvikvm PRIVATE ole32 mmdevapi)
 # Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
 include(compat/devices/devices.cmake)
+# Printing (docs/print.md): Windows printers for android.print; uses devices' winrt.cc.
+include(compat/print/print.cmake)
 # Camera (compat/camera): Media Foundation webcam capture and Camera2 delivery
 include(compat/camera/camera.cmake)
 target_link_libraries(framework_runtime PUBLIC mfplat mfreadwrite mfuuid)

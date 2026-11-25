@@ -1,6 +1,7 @@
 // Message-type kernel pipes with byte-stream reads preserve PIPE_BUF admission.
 // Windows owns capacity, peer lifetime and waiter completion across processes.
 #include "pipe_io.h"
+#include "fifo_internal.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
 #include "ofd_internal.h"
@@ -13,6 +14,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <winternl.h>
+#include <gesher/fork.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -116,7 +118,9 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
   operation.file = file;
   operation.overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!operation.overlapped.hEvent) return FailWithLastError();
-  if (canceled || interrupted) {
+  // A forked child has no thread pool (gesher/fork.h): its pipe transfers
+  // block without asynchronous cancellation; they still end at EOF or data.
+  if ((canceled || interrupted) && !InForkedChild()) {
     if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
           &operation.thread, THREAD_TERMINATE, FALSE, 0)) return FailWithLastError();
     if (canceled) {
@@ -468,6 +472,9 @@ static int TransferPipeWithInterrupt(const DescriptorSnapshotPtr& snapshot, void
   HANDLE canceled = previous == PTHREAD_CANCEL_ENABLE ? static_cast<HANDLE>(pthread_getevent()) : nullptr;
   int result;
   if (previous == PTHREAD_CANCEL_ENABLE && !canceled) result = (errno = ENOMEM, -1);
+  // A FIFO's placeholder carries no data: its bytes are in the shared ring.
+  else if (snapshot->kind == DescriptorKind::kFifo)
+    result = TransferFifo(snapshot, bytes, count, writing, canceled, interrupted);
   else result = TransferPipeBody(snapshot, bytes, count, writing, canceled, interrupted);
   const int saved = errno;
   pthread_setcancelstate(previous, nullptr);
@@ -485,13 +492,15 @@ int ReadPipeDescriptionInterruptible(const DescriptorSnapshotPtr& snapshot, void
   const int flags = FileDescriptionIoFlags(snapshot);
   if (flags < 0) return -1;
   if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) return errno = EBADF, -1;
-  if (snapshot->kind != DescriptorKind::kFile || GetFileType(snapshot->handle) != FILE_TYPE_PIPE)
+  if ((snapshot->kind != DescriptorKind::kFile && snapshot->kind != DescriptorKind::kFifo) ||
+      GetFileType(snapshot->handle) != FILE_TYPE_PIPE)
     return errno = EOPNOTSUPP, -1;
   return TransferPipeWithInterrupt(snapshot, bytes, std::min(count, 0x7ffff000u), false, interrupted);
 }
 
 int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* ready) {
   *ready = 0;
+  if (snapshot->kind == DescriptorKind::kFifo) return PollFifo(snapshot, events, ready);
   PipeAdmission admission;
   if (admission.Acquire(snapshot, false) < 0) return -1;
   const int flags = snapshot->description->Flags();
@@ -513,6 +522,7 @@ int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* r
 
 int PipeBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes) {
   if (!bytes) return errno = EFAULT, -1;
+  if (snapshot->kind == DescriptorKind::kFifo) return FifoBytesAvailable(snapshot, bytes);
   PipeAdmission admission;
   if (admission.Acquire(snapshot, false) < 0) return -1;
   // The writer's quota is not the queue length, especially while a reader

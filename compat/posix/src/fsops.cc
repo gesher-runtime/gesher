@@ -26,6 +26,7 @@
 
 #include "internal.h"
 #include "descriptor_resources.h"
+#include "fifo_internal.h"
 #include "record_lock_descriptors.h"
 #include "revocable_internal.h"
 #include "stdio_internal.h"
@@ -272,11 +273,9 @@ int Chmod(const char* path, mode_t mode, bool follow) {
   if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EPERM)) return -1;
-  HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                         OPEN_EXISTING,
-                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
-                         nullptr);
+  HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
   // Gesher's ELF loader through a link to it (system_linker.h).
   if (gesher::system_linker::RefuseChangeHandle(h) != 0) {
@@ -310,11 +309,9 @@ int Access(const char* path, int mode, bool follow) {
     case PathKind::kMissing:
       return errno = ENOENT, -1;
   }
-  HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                         OPEN_EXISTING,
-                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
-                         nullptr);
+  HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
   BY_HANDLE_FILE_INFORMATION info;
   bool ok = GetFileInformationByHandle(h, &info);
@@ -604,6 +601,14 @@ int fchmod(int fd, mode_t mode) {
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   HANDLE h = snapshot->handle;
+  if (snapshot->kind == gesher::DescriptorKind::kFifo) {
+    // The mode belongs to the FIFO file, not its placeholder (fifo.cc).
+    HANDLE fifo = gesher::OpenFifoFile(snapshot, FILE_WRITE_ATTRIBUTES);
+    if (fifo == INVALID_HANDLE_VALUE) return -1;
+    const int result = SetMode(fifo, mode);
+    CloseHandle(fifo);
+    return result;
+  }
   if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
   if (gesher::system_linker::RefuseChangeHandle(h) != 0) return -1;
   HANDLE writable = ReOpenFile(h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
