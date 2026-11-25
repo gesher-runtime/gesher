@@ -180,6 +180,20 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/clipboard/Publication.ps1
+      - name: Build actual Windows speech synthesis contracts (docs/tts.md)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\tts\tts_windows_test.cc compat\devices\speech_win.cc compat\devices\winrt.cc /Fe:tts-windows.exe ole32.lib uuid.lib
+      - name: Windows voices enumerate and synthesize PCM without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\tts-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech synthesis contracts failed' }
+      - name: Text-to-speech engine contracts on Windows' JVM (docs/tts.md)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Print jobs and the PrintDocumentAdapter lifecycle (host harness)
         if: ${{ !cancelled() }}
         shell: bash
@@ -656,6 +670,8 @@ jobs:
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
 
+      - name: Text-to-speech engine contracts (docs/tts.md)
+        run: python3 tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Speech recognition service contracts (docs/speech-recognition.md)
         run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Biometric and device-credential auth service contracts (ADR 0091)
@@ -1399,7 +1415,7 @@ jobs:
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'android.test.base.jar', 'android.test.mock.jar', 'android.test.runner.jar', 'etc\permissions\android.test.runner.xml', 'licenses\JUNIT-CPL-NOTICES.txt', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk', 'gesher-stt.apk') {
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk', 'gesher-tts.apk', 'gesher-stt.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
