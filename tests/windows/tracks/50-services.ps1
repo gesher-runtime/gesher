@@ -931,6 +931,7 @@ $code = $LASTEXITCODE
 $out += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
 $code = [Math]::Max($code, $LASTEXITCODE)
 $ok = CheckOrdered 'services: gesher-app uninstall: the package''s code, data and entry removed' $out @(
+  # The components fixture installed above replaces the removed peer fixture.
   'gesher-app: uninstalled com.gesher.peer', "gesher-app: $expectedInstalledPackageCount installed packages",
   'package:com.gesher.lifecycle ', 'package:com.gesher.components ') $code
 if ($ok -and ($out.Contains('package:com.gesher.peer') -or (Test-Path (Join-Path $root 'data/app/com.gesher.peer-1')) -or
