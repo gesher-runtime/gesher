@@ -1,7 +1,6 @@
 # UI presentation separation
 
-Base: `66d21c895fc0a385881446408d2a369a98336ef5`.
-Local branch: `codex/ui-presentation-separation`; uncommitted changes.
+Presentation is separated within the existing WPF and Win32 technologies.
 
 | Surface | Before | After / remaining work |
 | --- | --- | --- |
@@ -10,7 +9,7 @@ Local branch: `codex/ui-presentation-separation`; uncommitted changes.
 | Shared Win32 theme and messages | `host_dialog_theme.h` already owns colors, painting, DPI/high contrast and native message construction | Reused unchanged; no new shared design. |
 | Launcher splash | GDI paint code inside window callback | `PaintSplash` owns drawing with a const view of existing state; window creation, resources, process observation and cancellation stay in place. |
 | Android window shell | `Window::Run`, registration, WndProc and buffer/input methods | `window_frame.h` owns initial frame style/bounds, shared DPI-aware client/frame sizing, Back geometry and painting, and non-client geometry/hit testing. `Window` retains HWND/COM/thread ownership, popup/owner semantics, splash discovery/positioning, readiness, state, input/Back/close events and buffers. APK-rendered content is untouched. |
-| Inno Setup | Existing packaging | Only four required resource/helper entries added. |
+| Inno Setup | Existing packaging | Five required entries added: the action helper, view loader and three XAML resources. |
 
 No new runtime, framework, shared visual design, APK behavior or migration to
 C#/WPF. Native creation and default-message handling retain their ordering on the same modal/window thread.
@@ -19,7 +18,7 @@ cleanup stay with their existing owners. Dynamic WPF resources carry translated
 strings as objects, including within item templates; XML/markup is not generated
 from translations. Window language selection remains in `gesher-ui.ps1`.
 
-## Validation performed
+## Local validation performed
 
 - Windows PowerShell 5.1 STA: `ControlPanelPresentationChecks.ps1` passed:
   three production XAML resources loaded in English and Hebrew; title resource,
@@ -40,9 +39,9 @@ from translations. Window language selection remains in `gesher-ui.ps1`.
 - Presentation checks also verify required files and explicit installer entries.
 - `git diff --check` passed. Source review covered moved control/paint code and CI lists.
 
-Additional native validation (same local diff, no installed runtime suppliers):
+Additional native validation (before the CI run below, without installed runtime suppliers):
 
-- The coordinating chat compiled `libgesher_account_crypto.so` with the JNI
+- Local validation compiled `libgesher_account_crypto.so` with the JNI
   headers and credential includes, `gesher-launch.exe`, and
   `permission_dialog_test.exe`. Its retained log in
   `out/presentation-review/permission-test.log` records **500 checks, 0 failures**
@@ -62,60 +61,38 @@ Additional native validation (same local diff, no installed runtime suppliers):
   repeated rendering rather than first-use cache allocation.
 - Added `window_frame_test` to the native CI build and bounded Windows contract
   track, and package-directory WPF loading after the disposable CI installation.
-  CI itself has not run locally.
+  Full CI subsequently passed as recorded below.
 - Loaded all three WPF views in both languages from an isolated package-layout
   directory with spaces and Hebrew in its path, using copied source resources
   and helpers. This exercises the production loader independent of working
   directory and checks Inno manifest entries; it is not an installed Setup test.
 
-Remaining validation: full linking/execution of the Android window stack,
-ART account chooser, Android Back/close event delivery, COM/input-pane/drag/drop
-lifetime, physical DPI transitions, accessibility/visual comparison, installer
-build and actual installed-resource checks. The new frame fixture does not run
-`Window::Run` or its event queue. Existing unchanged integration probes remain
-required for those contracts. A larger extraction of registration, HWND creation,
-message-loop ownership or rendering is intentionally left out: those operations
-coordinate Android readiness and thread teardown rather than define presentation.
-No active installation, registry or Android profile was changed. `outputs/` was
-left untouched. The test/build products remain in ignored `out/presentation-review`.
+## Completed CI validation
 
-## Proposed PR
+The reviewed head `6ca4e6b693bc50bfadcef731e193616bbdf68132` passed
+[full CI, attempt 2](https://github.com/gesher-runtime/gesher/actions/runs/45339730245/attempts/2)
+and [ARM64 Windows](https://github.com/gesher-runtime/gesher/actions/runs/45339729822).
+The [independent review](https://github.com/gesher-runtime/gesher/pull/422#pullrequestreview-6036593638)
+and [completion update](https://github.com/gesher-runtime/gesher/pull/422#issuecomment-7127356492)
+record the results and their limits. These results apply to that commit.
 
-Title: Separate WPF resources and Windows frame presentation from UI control logic
+Windows 2022 and Windows 2025 checks covered external WPF views in both
+languages, native consent dialogs, frame geometry/drawing, Windows/ART
+windowing, launcher/services and end-to-end execution. Installed-package
+checks covered resource loading, application interaction, splash handoff,
+136 portable-runtime checks, upgrade/data preservation and uninstall.
+Virtualization checks reached 64 assertions in CI; the earlier local run
+recorded above passed 60. Installer and portable packaging include both
+helpers and all three XAML resources.
 
-### Summary
+## Validation limits
 
-The dashboard and internal dialogs embed layout in the action controller, while
-native modal callbacks mix control creation with request handling. Extract their
-presentation boundaries within the existing technologies without intentional
-visual or workflow changes.
+Physical cross-monitor DPI transitions, the complete pointer-click-to-Android
+Back sequence and pixel-exact spinner appearance were not tested. Back-key
+integration and frame hit testing/drawing were exercised separately. The frame
+fixture does not execute `Window::Run` or its event queue; Windows/ART integration
+checks provide separate evidence for window and lifecycle behavior.
 
-```text
-control panel -> panel-view loader -> dashboard / confirm / message XAML
-credential callbacks -> per-dialog CreateControls helpers
-splash callback -> PaintSplash
-Android Window -> window_frame geometry / hit testing / Back drawing
-```
-
-### Evidence
-
-Before: XAML interpolated translations directly into controller source; native
-callbacks constructed controls inline. After: production resource loading passes
-for English and Hebrew, including literal strings and template construction;
-existing action (219), idle (10 + 22), virtualization (60), update (101) and
-wrapper/WPF interaction (251) checks pass. Translation and package-entry checks
-also pass. Production permission/exact-alarm dialogs pass 500 checks; production
-frame helpers pass 46 checks. The full window translation unit compiles with
-warnings as errors. Package-layout resource loading passes; actual installed
-validation and Windows/ART window execution remain pending as described above. No Android contract change is
-intended; request/result and lifecycle logic remain in their original owners.
-
-### Merge Danger
-
-**Door:** two-way; source/resource refactor, no data migration.
-
-**Blast Radius:** desktop. Missing packaged XAML prevents panel loading; native
-construction regressions could affect consent dialogs or Android window bounds
-and Back hit testing. Explicit installer entries,
-CI installed-file checks and host resource checks cover part of that risk; native
-integration and visual verification are still needed before approval.
+A larger extraction of registration, HWND creation, message-loop ownership or
+rendering is intentionally left out: those operations coordinate Android
+readiness and thread teardown rather than define presentation.
