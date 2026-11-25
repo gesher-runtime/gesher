@@ -445,6 +445,9 @@ public final class MediaStoreHost {
             try { index.openFileTarget(gallery, photo, false); } catch (IOException e) { throw new RuntimeException(e); }
         }, "only the owner opens a pending item");
         check(notOwner.getMessage().contains("Only owner is able to interact with pending/trashed item"), "pending owner message");
+        expect(IllegalStateException.class, () -> {
+            try { index.thumbnailTarget(gallery, photo); } catch (IOException e) { throw new AssertionError(e); }
+        }, "another app cannot render a pending image thumbnail");
         MediaStoreIndex.FileTarget target = index.openFileTarget(camera, photo, true);
         write(target.file, png(640, 480));
         index.fileWritten(target.id);
@@ -473,6 +476,11 @@ public final class MediaStoreHost {
         }, "an app without permission cannot open another app's image");
         check(rows(index.query(gallery, IMAGES, null, args())).size() == 1, "READ_MEDIA_IMAGES reads every image");
         check(index.openFileTarget(gallery, photo, false).file.equals(finalFile), "READ_MEDIA_IMAGES opens another app's image");
+        check(index.thumbnailTarget(gallery, photo).file.equals(finalFile),
+                "thumbnail rendering uses the authorized published row");
+        expect(SecurityException.class, () -> {
+            try { index.thumbnailTarget(stranger, photo); } catch (IOException e) { throw new AssertionError(e); }
+        }, "thumbnail rendering does not grant access to a foreign image");
         check(rows(index.query(gallery, VIDEO, null, args())).isEmpty() && rows(index.query(stranger, AUDIO, null, args())).isEmpty(),
                 "collections are separate");
         ContentValues rename = new ContentValues();
@@ -639,6 +647,9 @@ public final class MediaStoreHost {
         check(new File(trashedRow.get("_data")).getName().startsWith(".trashed-") && !finalFile.exists()
                 && rows(index.query(camera, IMAGES, null, args("_id=?", new String[] {Long.toString(photoId)}, null))).isEmpty(),
                 "a trashed item is renamed .trashed-<expires>-<name> and leaves default queries");
+        expect(IllegalStateException.class, () -> {
+            try { index.thumbnailTarget(gallery, photo); } catch (IOException e) { throw new AssertionError(e); }
+        }, "another app cannot render a trashed image thumbnail");
         trash.put("is_trashed", 0);
         check(index.update(camera, photo, trash, args()) == 1 && finalFile.isFile(), "untrashing restores the file");
         App manager = new App("com.example.files", 10111, 35, MediaStoreIndex.MANAGE_EXTERNAL_STORAGE);
@@ -704,6 +715,8 @@ public final class MediaStoreHost {
             try { index.openFileTarget(gallery, geoUri, false); } catch (IOException e) { throw new RuntimeException(e); }
         }, "location metadata is not handed to a reader without ACCESS_MEDIA_LOCATION");
         check(redaction.getMessage().contains("ACCESS_MEDIA_LOCATION"), redaction.getMessage());
+        check(index.thumbnailTarget(gallery, geoUri).file.equals(geo),
+                "the authorized renderer can read a geotagged source without exporting the original");
         gallery.granted.add(MediaStoreIndex.ACCESS_MEDIA_LOCATION);
         check(index.openFileTarget(gallery, geoUri, false).file.equals(geo), "ACCESS_MEDIA_LOCATION opens the original");
         gallery.granted.remove(MediaStoreIndex.ACCESS_MEDIA_LOCATION);

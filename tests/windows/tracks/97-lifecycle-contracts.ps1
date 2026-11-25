@@ -9,6 +9,8 @@ foreach ($fixture in @(
      Label = 'network callback identity, timeout retirement, Binder and Handler' },
   @{ Main = 'WebMessagePortContractTest'; Markers = @('WebMessagePort contracts:', ' checks, 0 failures');
      Label = 'message port ownership, queued delivery and real Handler lifecycle' },
+  @{ Main = 'MediaStoreThumbnailContractTest'; Markers = @('MediaStoreThumbnailContractTest all passed: image, video, cancellation');
+     Label = 'MediaStore image and video thumbnails through ContentResolver' },
   @{ Main = 'CodecLifecycleContractTest'; Markers = @('CodecLifecycleContractTest:', ' checks passed; native=true');
      Label = 'MediaCodec retained operations and bounded release interruption' }
 )) {

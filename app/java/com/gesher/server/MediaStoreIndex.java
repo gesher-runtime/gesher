@@ -150,13 +150,14 @@ final class MediaStoreIndex {
         int matchFavorite = MATCH_DEFAULT;
     }
 
-    /** A row resolved for openFile, after the access check. */
+    /** A row resolved for an open request, after the access check. */
     static final class FileTarget {
         final long id;
         final File file;
         final String mimeType;
-        FileTarget(long id, File file, String mimeType) {
-            this.id = id; this.file = file; this.mimeType = mimeType;
+        final int mediaType;
+        FileTarget(long id, File file, String mimeType, int mediaType) {
+            this.id = id; this.file = file; this.mimeType = mimeType; this.mediaType = mediaType;
         }
     }
 
@@ -1576,6 +1577,23 @@ final class MediaStoreIndex {
      * ({@link LocationMetadata}) and otherwise refuses as AOSP does for an original.
      */
     FileTarget openFileTarget(Caller caller, Uri uri, boolean forWrite) throws FileNotFoundException {
+        return resolveFileTarget(caller, uri, forWrite, false);
+    }
+
+    /**
+     * Resolves images and videos for pixel-only encoding, with the same read, state and
+     * path checks as openFile. The provider never returns this source file to the client.
+     */
+    FileTarget thumbnailTarget(Caller caller, Uri uri) throws FileNotFoundException {
+        FileTarget target = resolveFileTarget(caller, uri, false, true);
+        if (target.mediaType != MEDIA_TYPE_IMAGE && target.mediaType != MEDIA_TYPE_VIDEO) {
+            throw new FileNotFoundException("No image or video thumbnail for " + uri);
+        }
+        return target;
+    }
+
+    private FileTarget resolveFileTarget(Caller caller, Uri uri, boolean forWrite,
+            boolean thumbnail) throws FileNotFoundException {
         int match = match(uri);
         if (match < 0 || !isItem(match)) throw new FileNotFoundException("Invalid URI " + uri);
         volume(uri);
@@ -1622,12 +1640,12 @@ final class MediaStoreIndex {
         boolean redactionNeeded = !access.self && !callerIsOwner && !access.manager
                 && !caller.permission(ACCESS_MEDIA_LOCATION)
                 && (mediaType == MEDIA_TYPE_IMAGE || mediaType == MEDIA_TYPE_VIDEO);
-        if (redactionNeeded && !forWrite && LocationMetadata.mayContain(file)) {
+        if (redactionNeeded && !forWrite && !thumbnail && LocationMetadata.mayContain(file)) {
             throw new UnsupportedOperationException("Caller must hold ACCESS_MEDIA_LOCATION "
                     + "permission to access original: " + uri + " carries location metadata "
                     + "and this device cannot redact it");
         }
-        return new FileTarget(id, file, mime);
+        return new FileTarget(id, file, mime, mediaType);
     }
 
     static final String ACCESS_MEDIA_LOCATION = "android.permission.ACCESS_MEDIA_LOCATION";
