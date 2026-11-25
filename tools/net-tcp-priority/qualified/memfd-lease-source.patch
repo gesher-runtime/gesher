@@ -1,5 +1,5 @@
 diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
-index 8ce83721..5b6ebb59 100644
+index 8ce837212..1b662913d 100644
 --- a/compat/posix/src/internal.h
 +++ b/compat/posix/src/internal.h
 @@ -7,0 +8 @@
@@ -13,12 +13,15 @@ index 8ce83721..5b6ebb59 100644
 +// dies, when the OS releases it); an error returns no lease.
 +int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
 +                        std::shared_ptr<void>* write_lease);
-@@ -210 +217,2 @@ int MemfdGrowHandleError(HANDLE file, uint64_t end);
+@@ -210 +217,5 @@ int MemfdGrowHandleError(HANDLE file, uint64_t end);
 -int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write);
 +int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
 +                               std::shared_ptr<void>* write_lease);
++// In a forked child (ADR 0092): a write lease the child inherited with its
++// mapping becomes the child's own (its byte-range lock was the parent's).
++void RenewMemfdWriteLeaseInChild(void* write_lease);
 diff --git a/compat/posix/src/memfd_seals.cc b/compat/posix/src/memfd_seals.cc
-index 0697d4a2..72f1adcf 100644
+index 0697d4a22..fd49e2c74 100644
 --- a/compat/posix/src/memfd_seals.cc
 +++ b/compat/posix/src/memfd_seals.cc
 @@ -18,4 +18,11 @@
@@ -39,10 +42,15 @@ index 0697d4a2..72f1adcf 100644
 +// different processes cannot overwrite each other.
 @@ -31,0 +39 @@
 +#include <memory>
-@@ -43,2 +50,0 @@ constexpr size_t kSealsNameLength = sizeof(kSealsName) - 1;
+@@ -36,0 +45,4 @@
++// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
++#if __has_include(<gesher/fork.h>)
++#include <gesher/fork.h>
++#endif
+@@ -43,2 +54,0 @@ constexpr size_t kSealsNameLength = sizeof(kSealsName) - 1;
 -// Internal, never reported: the file has had a writable shared mapping.
 -constexpr uint32_t kWritablyMapped = 0x80000000u;
-@@ -126,9 +132,24 @@ bool WriteValue(HANDLE file, uint32_t value) {
+@@ -126,9 +136,24 @@ bool WriteValue(HANDLE file, uint32_t value) {
 -// Seals only grow. Another process may add seals at the same time: write,
 -// read back, and repeat until the stored value holds every bit asked for.
 -bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
@@ -76,14 +84,14 @@ index 0697d4a2..72f1adcf 100644
 +    if (LockFileEx(file, LOCKFILE_FAIL_IMMEDIATELY | (exclusive ? LOCKFILE_EXCLUSIVE_LOCK : 0), 0, 1,
 +                   0, &at)) {
 +      return ERROR_SUCCESS;
-@@ -136 +157,3 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
+@@ -136 +161,3 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
 -    if (!WriteValue(file, current | bits)) return false;
 +    const DWORD error = GetLastError();
 +    if (error != ERROR_LOCK_VIOLATION || !wait || attempt >= kLockAttempts) return error;
 +    Sleep(1);
-@@ -138 +160,0 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
+@@ -138 +164,0 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
 -  return errno = EAGAIN, false;
-@@ -140,0 +163,64 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
+@@ -140,0 +167,73 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
 +void UnlockByte(HANDLE file, DWORD byte) {
 +  OVERLAPPED at = {};
 +  at.Offset = byte;
@@ -105,6 +113,15 @@ index 0697d4a2..72f1adcf 100644
 +    if (own_ == nullptr) return;
 +    UnlockByte(own_, kLeaseByte);
 +    CloseHandle(own_);
++  }
++  // In a forked child (ADR 0092): the child inherited the mapping and this
++  // handle, but the byte-range lock is the parent's. The child takes its own
++  // shared lock, so F_SEAL_WRITE stays EBUSY while the child maps the file.
++  void RenewInChild() {
++    if (own_ != nullptr && LockByte(own_, kLeaseByte, false, true) != ERROR_SUCCESS) {
++      CloseHandle(own_);  // no lease the child could release
++      own_ = nullptr;
++    }
 +  }
 +  // 0, or the errno that denies the mapping; nothing is held after an error.
 +  int Acquire(HANDLE file) {
@@ -148,7 +165,7 @@ index 0697d4a2..72f1adcf 100644
 +  HANDLE file_;
 +};
 +
-@@ -228,3 +314,16 @@ int AddMemfdSeals(int fd, unsigned seals) {
+@@ -228,3 +327,16 @@ int AddMemfdSeals(int fd, unsigned seals) {
 -  if ((seals & F_SEAL_WRITE) != 0 && (current & F_SEAL_WRITE) == 0 &&
 -      (current & kWritablyMapped) != 0) {
 -    return errno = EBUSY, -1;
@@ -168,16 +185,16 @@ index 0697d4a2..72f1adcf 100644
 +    const bool stored = WriteValue(file, current | seals);
 +    UnlockByte(file, kLeaseByte);
 +    return stored ? 0 : -1;
-@@ -232 +331 @@ int AddMemfdSeals(int fd, unsigned seals) {
+@@ -232 +344 @@ int AddMemfdSeals(int fd, unsigned seals) {
 -  return OrValue(file, seals, nullptr) ? 0 : -1;
 +  return WriteValue(file, current | seals) ? 0 : -1;
-@@ -295 +394,2 @@ int MemfdGrowError(int fd, uint64_t end) {
+@@ -295 +407,2 @@ int MemfdGrowError(int fd, uint64_t end) {
 -int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
 +int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
 +                              std::shared_ptr<void>* write_lease) {
-@@ -296,0 +397 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
+@@ -296,0 +410 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
 +  if (write_lease != nullptr) write_lease->reset();
-@@ -303 +404,9 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
+@@ -303 +417,9 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
 -  if (writable && (seals & kWritablyMapped) == 0 && !OrValue(file, kWritablyMapped, nullptr)) return errno;
 +  if (!writable) return 0;
 +  if (write_lease == nullptr) return EINVAL;  // a writable mapping must hold its lease
@@ -188,30 +205,46 @@ index 0697d4a2..72f1adcf 100644
 +  if (!ReadValue(file, &seals)) return EINVAL;
 +  if ((seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0) return EPERM;  // the lease ends here
 +  *write_lease = std::move(lease);
-@@ -307 +416,2 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
+@@ -307 +429,6 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
 -int MemfdSharedMapError(int fd, bool writable, bool* deny_write) {
++void RenewMemfdWriteLeaseInChild(void* write_lease) {
++  if (write_lease != nullptr) static_cast<WriteLease*>(write_lease)->RenewInChild();
++}
++
 +int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
 +                        std::shared_ptr<void>* write_lease) {
-@@ -310 +420 @@ int MemfdSharedMapError(int fd, bool writable, bool* deny_write) {
+@@ -310 +437 @@ int MemfdSharedMapError(int fd, bool writable, bool* deny_write) {
 -  return MemfdSharedMapHandleError(file, writable, deny_write);
 +  return MemfdSharedMapHandleError(file, writable, deny_write, write_lease);
+@@ -313,0 +441,6 @@ int MemfdSharedMapError(int fd, bool writable, bool* deny_write) {
++
++#ifdef GESHER_FORK_LOCK
++// fork (gesher/fork.h).
++GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_registry_mutex);
++GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_seal_mutex);
++#endif
 diff --git a/compat/posix/src/mman.cc b/compat/posix/src/mman.cc
-index 01eb82f8..47d539ff 100644
+index 01eb82f81..a19efde1f 100644
 --- a/compat/posix/src/mman.cc
 +++ b/compat/posix/src/mman.cc
 @@ -56,0 +57 @@
 +#include <memory>
-@@ -162,0 +164,5 @@ struct Region {
+@@ -62,0 +64,4 @@
++// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
++#if __has_include(<gesher/fork.h>)
++#include <gesher/fork.h>
++#endif
+@@ -162,0 +168,5 @@ struct Region {
 +  // A writable shared view of a memfd: the lease that keeps F_SEAL_WRITE from
 +  // being added while any such view lives (memfd_seals.cc). Pieces of a view
 +  // share it; the last piece to give up its pages (munmap, MAP_FIXED, mremap)
 +  // releases it, so every path that turns a view into a hole must reset it.
 +  std::shared_ptr<void> write_lease;
-@@ -313,0 +320 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
+@@ -313,0 +324 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
 +  alias.write_lease = from.write_lease;  // another view of the same writable mapping
-@@ -511,0 +519 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
+@@ -511,0 +523 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 +  it->second.write_lease.reset();  // the pieces that stay take it back from `view`
-@@ -522,0 +531,8 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
+@@ -522,0 +535,8 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 +    bool any_live = false;
 +    for (uintptr_t p = from; p < to; p += page) {
 +      if (saved[(p - start) / page].live) {
@@ -220,24 +253,65 @@ index 01eb82f8..47d539ff 100644
 +      }
 +    }
 +    if (!any_live) return;  // already-unmapped pages stay a Kind::kHole placeholder without a view or lease
-@@ -541,0 +558 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
+@@ -541,0 +562 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 +    r.write_lease = view.write_lease;
-@@ -627,0 +645 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
+@@ -627,0 +649 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
 +          r.write_lease.reset();
-@@ -1598,0 +1617,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1565,0 +1588,6 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
++  // A binder fd a forked child inherited maps nothing there (Linux's binder
++  // refuses an mmap from a process other than the one that opened it).
++  if (binder_mapping && !gesher::BinderFdOwnedHere(fd)) {
++    errno = EINVAL;
++    return MAP_FAILED;
++  }
+@@ -1598,0 +1627,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 +    // A writable one holds a lease on the file until its pages are unmapped, and
 +    // releases it here if the mapping cannot be made.
-@@ -1599,0 +1620 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1599,0 +1630 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 +    std::shared_ptr<void> write_lease;
-@@ -1601 +1622 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1601 +1632 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write)) {
 +      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write, &write_lease)) {
-@@ -1607 +1628 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1607 +1638 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -    if (result != MAP_FAILED && deny_write) {
 +    if (result != MAP_FAILED && (deny_write || write_lease)) {
-@@ -1610 +1631,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1610 +1641,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -        it->second.deny_write = true;
 +        if (deny_write) it->second.deny_write = true;
 +        if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;
-@@ -1693,0 +1716 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
+@@ -1693,0 +1726 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
 +      region.write_lease.reset();
+@@ -2174,0 +2208,33 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
++
++#ifdef GESHER_FORK_LOCK
++// fork (gesher/fork.h): mmap/munmap/mprotect in a forked child.
++GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, state().lock);
++// The child inherited every writable memfd mapping: each lease (once per
++// mapping, shared by its views) is taken again by the child, so F_SEAL_WRITE
++// stays EBUSY while the child maps the file, as on Linux.
++namespace {
++bool LeasesTry(void*) { return true; }
++void LeasesUnlock(void*) {}
++void LeasesChild(void*) {
++  std::set<void*> renewed;
++  for (auto& entry : state().regions) {
++    void* lease = entry.second.write_lease.get();
++    if (lease != nullptr && renewed.insert(lease).second) gesher::RenewMemfdWriteLeaseInChild(lease);
++  }
++}
++const gesher::ForkLockOps kLeaseForkOps = {&LeasesTry, &LeasesUnlock, &LeasesChild};
++int g_lease_fork_anchor = 0;
++const gesher::ForkLockRegistration g_fork_memfd_leases(gesher::kForkOrderLeaf, "memfd write leases",
++                                                       []() -> void* { return &g_lease_fork_anchor; },
++                                                       &kLeaseForkOps);
++}  // namespace
++
++namespace gesher {
++bool ForkHasMemfdWriteLeases() {
++  for (auto& entry : state().regions) {
++    if (entry.second.write_lease) return true;
++  }
++  return false;
++}
++}  // namespace gesher
++#endif
