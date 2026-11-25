@@ -20,6 +20,7 @@
 #include "search_bionic.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/stdio.h>
 #include <gesher/system_properties.h>
 
 #include <windows.h>
@@ -67,6 +68,7 @@ Fn Shim(const char* name) {
 }
 
 using wchar32 = uint32_t;
+FILE* F(void* f);
 
 // --- libm ----------------------------------------------------------------------
 
@@ -1033,8 +1035,8 @@ FILE* F(void* f) {
   }
   return static_cast<FILE*>(f);
 }
-int BIONIC_SYSV FflushUnlocked(void* f) { return _fflush_nolock(f == nullptr ? nullptr : F(f)); }
-int BIONIC_SYSV FeofUnlocked(void* f) { return std::feof(F(f)); }
+int BIONIC_SYSV FflushUnlocked(void* f) { return gesher::stdio::Flush(f == nullptr ? nullptr : F(f), true); }
+int BIONIC_SYSV FeofUnlocked(void* f) { return gesher::stdio::Eof(F(f), true); }
 int BIONIC_SYSV FilenoUnlocked(void* f) { return _fileno(F(f)); }
 int BIONIC_SYSV Fsetlocking(void*, int) { return 1; }  // FSETLOCKING_INTERNAL
 void BIONIC_SYSV Setlinebuf(void* f) { std::setvbuf(F(f), nullptr, _IOLBF, BUFSIZ); }

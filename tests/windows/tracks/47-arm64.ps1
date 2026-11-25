@@ -88,7 +88,7 @@ Check 'arm64: TEXTREL pages relocate before guest constructors and selftest' {
 Check 'arm64: an arm64-v8a libc/pthread .so runs its checks through the shim' {
   A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/libc_test_arm64.so"), (NoDrive "$a64"))
 } @('libc_test: all passed', 'sleep contracts: complete', 'arm64_elf_test all passed',
-    'Bionic realtime range contracts: all passed')
+    'Bionic realtime range contracts: all passed', 'Bionic tgkill contracts: all passed')
 
 # The guest-ABI checks (tests/native/arm64_abi_test.c): ELF TLS through
 # TLSDESC in several threads, the stack protector, setjmp/longjmp, struct stat
@@ -100,6 +100,19 @@ Check 'arm64: guest ABI (TLS, stack protector, setjmp, stat, epoll, syscall, ato
 } @('arm64_abi_test: all passed', 'arm64_elf_test all passed', 'INFO  arm64 perf: compiled C kernel',
     'Bionic setjmp contracts: all passed')
 
+# android_dlopen_ext from guest code (tests/native/dlext_test.c): the guest's
+# android_dlextinfo reaches the loader as it is; RESERVED_ADDRESS loads an
+# arm64-v8a library at the start of the guest's reservation (its ELF header is
+# readable there, as Chrome reads it) or fails without touching it.
+Check 'arm64: android_dlopen_ext reserved address space, hints, dlclose and flag checks' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/dlext-arm64/dlext_test.so"), (NoDrive "$a64/dlext-arm64"))
+} @('dlext_test: all passed', 'gesher_selftest() == 0', 'arm64_elf_test all passed')
+$env:GESHER_MMAP_NO_PLACEHOLDERS = '1'
+Check 'arm64: android_dlopen_ext with copied segments (no placeholder mappings)' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/dlext-arm64/dlext_test.so"), (NoDrive "$a64/dlext-arm64"))
+} @('dlext_test: all passed', 'gesher_selftest() == 0', 'arm64_elf_test all passed')
+Remove-Item Env:GESHER_MMAP_NO_PLACEHOLDERS
+
 # Step 3/4 (guest JNI): dalvikvm runs gesher.Arm64Jni, whose System.load of an
 # arm64-v8a .so goes through ART's host libnativeloader path to the ELF loader,
 # the translator and the JNI bridge's guest proxy tables: JNI_OnLoad,
@@ -109,7 +122,8 @@ Check 'arm64: System.load of an arm64-v8a .so; JNI both ways, Call*MethodV, nest
   A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
     '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/arm64-jni.dex"), 'gesher.Arm64Jni',
     (NoDrive (Resolve-Path "$Dir/jni_test_arm64.so").Path))
-} @('JNI_OnLoad ran: ok', 'Arm64Jni all passed')
+} @('JNI_OnLoad ran: ok', 'GetEnv guest boundary: all passed',
+    'GetEnv attach/detach: all passed', 'Arm64Jni all passed')
 
 # arm64-v8a ELF executables (the exec track's launcher, ADR 0035): the exec
 # test program built for arm64 (arm64.yml, $Dir/arm64-exec) runs in

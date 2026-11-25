@@ -41,6 +41,7 @@ inline constexpr int kMsgPeek = 2;
 inline constexpr int kMsgDontRoute = 4;
 inline constexpr int kMsgWaitAll = 8;
 inline constexpr int kMsgTrunc = 16;
+inline constexpr int kMsgCmsgCloexec = 32;
 
 // Options with an int value. Timeouts are in milliseconds.
 enum class Option {
@@ -342,10 +343,11 @@ bool UnixRightsAvailable();
 bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t position,
                    ws::RightsToken* token);
 // The deposited descriptors as new fds here (-1 for one that could not be
-// adopted). With `fds` null, the descriptors are discarded.
-bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds);
+// adopted). With `fds` null, the descriptors are discarded. close_on_exec
+// belongs to this receive, not to the sender's descriptor or the shared OFD.
+bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec = false);
 // The groups of a stream connection's queue whose position is below `limit`.
-bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds);
+bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec = false);
 // A sender's deposit whose message was not sent: discarded, if still queued.
 void CancelRights(const ws::RightsToken& token);
 // Whether a group waits in the queue of a connection whose receiving end is

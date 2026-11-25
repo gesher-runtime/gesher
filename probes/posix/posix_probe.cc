@@ -91,7 +91,8 @@ static void DescriptorControls() {
   CHECK(fd >= 0);
   if (fd >= 0) {
     CHECK(fcntl(fd, F_GETFD) == FD_CLOEXEC);
-    CHECK(fcntl(fd, F_GETFL) == O_RDWR);
+    // A 64-bit Android kernel reports O_LARGEFILE for every regular file description.
+    CHECK(fcntl(fd, F_GETFL) == (O_RDWR | O_LARGEFILE));
     CHECK(fcntl(fd, F_GET_SEALS) >= 0);
     CHECK(fcntl(fd, F_SETFD, 0) == 0 && fcntl(fd, F_GETFD) == 0);
     CHECK(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 &&
@@ -663,6 +664,12 @@ static void Proc(const std::string& dir) {
 }
 
 // --- inotify ---------------------------------------------------------------------
+
+static void route_check(const char* label, bool ok) {
+  if (!ok) printf("  inotify routing: %s\n", label);
+  CHECK(ok);
+}
+#include "../../tests/native/inotify_write_routing_test.inc"
 
 struct Event {
   int wd;
@@ -1249,6 +1256,8 @@ int main(int argc, char** argv) {
   ThreadNames();
   fprintf(stderr, "-- %s\n", "Inotify");
   Inotify(dir);
+  fprintf(stderr, "-- %s\n", "InotifyWriteRouting");
+  InotifyWriteRouting(dir);
   fprintf(stderr, "-- %s\n", "ReservedNames");
   ReservedNames(dir);
   fprintf(stderr, "-- %s\n", "Processes");

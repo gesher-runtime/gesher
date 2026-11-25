@@ -37,6 +37,17 @@ generation atomically after the payload and metadata. Log writes remain best
 effort, with rollback attempted after an incomplete append; they do not promise
 a durable disk flush on each line.
 
+Loggability caches 64 tag priorities in at most 20 KiB per process, keyed by
+both property-area identity and its atomically published generation. A miss
+records the revision returned with the property snapshot, so a concurrent
+writer or device switch cannot attach new values to an old revision. Explicit
+tag lengths are preserved; tags longer than 247 bytes use the uncached lookup.
+Minimum priority and caller fallback remain per-call decisions. Common unchanged
+session/root/destination environment values are compared without temporary heap
+strings. Record assembly uses at most 8232 stack bytes and keeps one synchronous
+append; it introduces no queue, batching, retained data handle or weaker fatal
+visibility. See [NATIVE-13 measurements](performance/native13-logging.md).
+
 Benchmarks from an implementation that retained data handles do not describe
 this implementation. Performance must be measured again with these file
 lifetimes and the required Windows regression suites.
@@ -71,6 +82,12 @@ inheritance at thread creation is not implemented here.
   names; two writers delete and recreate a log while one stays alive and idle;
   rotation/replacement, cross-process clear, 16 MiB rollover and a log path
   longer than 2200 characters retain complete records.
+- `tools/test_structured_logging.py`: complete production logger with a separate
+  priority oracle, counted allocations and explicit short/failed-write injection.
+  Linux declares its Win32/property adapters and runs ASan/UBSan. The native
+  Windows CI shard runs the same contracts with actual mapped property areas,
+  files and mutexes, cross-process priority publication, equal-generation device
+  switches, inherited-root repair and immediate-exit fatal visibility.
 - `tests/native/bionic_key_exit_test.cc` (mandatory native-libs track) also
   exercises the registered pthread/prctl name adapters on joinable and detached
   bionic threads, host pthreads and Windows threads, including remote getters,
@@ -244,7 +261,9 @@ close the cross-process notifications gap.
 - `tools/package/gesher.iss` (tzdata + TZDATA-NOTICES.txt),
   `gesher.ps1` and `gesher-app.ps1` (`NoDrive` writes `/mnt/<drive>` for other
   drives; the same-drive checks for the .dex/.apk are gone;
-  `ANDROID_TZDATA_ROOT` is the install folder's tzdata).
+  `ANDROID_TZDATA_ROOT` is the install folder's tzdata). Non-ASCII ancestors of
+  Gesher's own roots are now written as 8.3 short names, user APK/dex paths are
+  not; see installer.md, "Non-ASCII profile and install paths".
 - `cmake/aosp/framework.cmake` + `compat/framework/android_runtime.cc`:
   `android_util_FileObserver.cpp` and its registration;
   `patches/frameworks/base/0450-posix-fileobserver-inotify.patch` (new).

@@ -435,6 +435,7 @@ int ToMsgFlags(int flags) {
   if (flags & MSG_DONTROUTE) result |= ws::kMsgDontRoute;
   if (flags & MSG_WAITALL) result |= ws::kMsgWaitAll;
   if (flags & MSG_TRUNC) result |= ws::kMsgTrunc;
+  if (flags & MSG_CMSG_CLOEXEC) result |= ws::kMsgCmsgCloexec;
   return result;
 }
 
@@ -482,7 +483,8 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
                        addr != nullptr ? &from : nullptr, state.description,
                             (flags & MSG_DONTWAIT) != 0, result_flags, credentials,
                             rights != nullptr ? &token : nullptr, rights);
-  if (n >= 0 && rights != nullptr && token.count != 0) gesher::ClaimRights(token, rights);
+  if (n >= 0 && rights != nullptr && token.count != 0)
+    gesher::ClaimRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0);
   if (n >= 0 && addr != nullptr) {
     sockaddr_storage local = {};
     socklen_t actual = sizeof(local), capacity = 0;

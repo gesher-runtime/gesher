@@ -15,7 +15,8 @@
 //     without "#!", as Linux's execvp does) run in gesher-exec's shell; other
 //     "#!" interpreters are looked up like programs;
 //   - Android's /system/bin programs gesher-exec provides (IsToolName: ls,
-//     cat, id, ps, getprop, setprop, logcat, pm, kill, sleep), as a bare name
+//     cat, id, ps, getprop, setprop, logcat, pm, am, kill, sleep, which,
+//     mount, toybox), as a bare name
 //     or a /system/bin path, run as `gesher-exec --tool <name>`;
 //   - a static executable (ET_EXEC) is ENOEXEC (ADR 0055).
 //
@@ -24,6 +25,7 @@
 #pragma once
 
 #include <windows.h>
+#include <gesher/file_description.h>
 
 #include <string>
 #include <vector>
@@ -37,9 +39,12 @@ std::string Narrow(const std::wstring& utf16);
 constexpr int kENOENT = 2;
 constexpr int kE2BIG = 7;
 constexpr int kENOEXEC = 8;
+constexpr int kEBADF = 9;
 constexpr int kENOMEM = 12;
 constexpr int kEACCES = 13;
 constexpr int kENOTDIR = 20;
+constexpr int kEINVAL = 22;
+constexpr int kEOPNOTSUPP = 95;
 
 // strerror for the values above (and a generic text for others).
 const char* ErrorText(int error);
@@ -78,6 +83,15 @@ int PrepareLaunchInPath(const std::vector<std::string>& argv, const std::string&
 // finds it), or "" if there is none. Tools and sh are not files: "".
 std::wstring FindInPath(const std::string& name, const std::string& path);
 
+// Every file a bare name matches in `path`, in search order, each spelled as
+// its PATH entry followed by the name (and the Windows executable extension
+// matched, if any). Unlike FindInPath, tools and sh are not excluded here.
+std::vector<std::string> FindAllInPath(const std::string& name, const std::string& path);
+
+// Whether `name` is one of the names exec runs in gesher-exec's own shell
+// (sh, /system/bin/sh, /bin/sh, /system/xbin/sh, /vendor/bin/sh).
+bool IsShellName(const std::string& name);
+
 // The same for exec*(path, argv): `program` is the file to run (found in PATH
 // when `search_path` and it has no '/', as execvp; else a path, as execv),
 // `argv` what it gets, argv[0] included.
@@ -92,7 +106,8 @@ int PrepareLaunchProgramInPath(const std::string& program, const std::vector<std
 
 // Whether `name` (a bare name or /system/bin/<name>, /system/xbin/<name>) is
 // one of the Android programs gesher-exec provides itself (`--tool`):
-// getprop, setprop, logcat, ls, cat, id, ps, pm, am, kill, sleep, toybox.
+// getprop, setprop, logcat, ls, cat, id, ps, pm, am, kill, sleep, toybox,
+// which, mount.
 bool IsToolName(const std::string& name);
 
 // gesher-exec --tool: runs the built-in program `name` with `args` (argv[1..]).
@@ -103,27 +118,37 @@ int RunTool(const std::string& name, const std::vector<std::string>& args);
 struct ChildFd {
   int fd;
   HANDLE handle;
+  // Present for descriptor-table snapshots; keeps the exact object and its
+  // shared status alive through close/reuse and process creation.
+  gesher::DescriptorSnapshotPtr snapshot{};
 };
 
 // CreateProcessW for `launch` with exactly `fds` as the child's file
 // descriptors: 0-2 are its standard handles, and every fd also goes into the
-// C runtime's inherited-fd block (STARTUPINFO's lpReserved2), from which a
-// UCRT program (gesher-exec, dalvikvm) gets fds 3 and above at the same
-// numbers. Handles are duplicated inheritable for the call only; nothing else
-// is inherited. A missing 0-2 is NUL. Returns 0 or the Win32 error.
+// C runtime's inherited-fd block and Gesher's versioned startup manifest.
+// Gesher programs retain descriptor numbers, kernel offsets and shared status
+// across exec/spawn, including descriptors above the UCRT block's size limit.
+// Only pinned, inheritable duplicates are supplied to CreateProcess. Missing
+// standard descriptors are closed before Gesher application code runs.
+// Native PE programs without the importer receive only kernel-representable
+// files and the CRT block: logical devices, emulated append/nonblocking pipe
+// policy and descriptors above its limit fail with ERROR_NOT_SUPPORTED.
+// Returns 0 or the Win32 error.
 DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,
                    const std::vector<ChildFd>& fds, PROCESS_INFORMATION* info, DWORD extra_flags = 0);
 
 // CreateProcessW for `launch` with exactly the three standard handles
-// inherited (they must be inheritable; duplicates and null are fine), no
+// inherited (borrowed handles are duplicated; null means closed), no
 // console window, `environment` a UTF-16 block (or null: this process's) and
 // `cwd` (or empty: this process's). Returns 0 or the Win32 error.
 DWORD Spawn(const Launch& launch, const wchar_t* environment, const std::wstring& cwd,
             HANDLE std_in, HANDLE std_out, HANDLE std_err, PROCESS_INFORMATION* info);
 
 // A UTF-16 environment block from "NAME=value" strings, sorted by name as
-// Windows expects.
-std::wstring EnvironmentBlock(const std::vector<std::string>& entries);
+// Windows expects. WTF8 preserves inherited unpaired native surrogates. An
+// empty result reports EILSEQ; a valid empty environment has two NUL units.
+std::wstring EnvironmentBlock(const std::vector<std::string>& entries,
+                              const wchar_t* native_defaults = nullptr);
 
 // An exit status as Linux code sees it: the low 8 bits for exit codes
 // gesher-exec and most programs use, 128 + signal for a crash (NTSTATUS

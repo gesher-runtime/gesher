@@ -26,7 +26,7 @@ public final class ExecActivity extends Activity {
             if (environmentResult != 0) throw new AssertionError("live native environment suite failed: " + environmentResult);
             System.out.println("Exec4DeviceTest PASS host environment changes reach native environ and spawned children");
             if (nativeProcesses(child) != 0) throw new AssertionError("in-process native suite failed");
-            System.out.println("Exec3DeviceTest PASS native fork/exec, spawn, popen, system, signals and waitpid in an app");
+            System.out.println("Exec3DeviceTest PASS native exec, spawn, popen, system, signals and waitpid in an app");
             Exec3Test.main(new String[0]);
             Exec3ProcessTest.main(new String[]{directory});
             Exec3PropertiesTest.main(new String[]{directory});

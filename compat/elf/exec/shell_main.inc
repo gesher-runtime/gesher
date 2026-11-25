@@ -64,8 +64,10 @@ int RunShell(const std::vector<std::string>& argv) {
     int fd = atoi(argv[1].c_str());
     HANDLE handle = fd == 63 ? InheritedHandle(fd) : nullptr;
     if (!handle) return 2;
-    source = ReadAll(handle);
-    _close(fd);
+    bool complete = false;
+    source = ReadAll(handle, &complete);
+    ::close(fd);
+    if (!complete) return 2;
     sh.shell_pid = strtoul(argv[2].c_str(), nullptr, 10);
     sh.pos[0] = argv[3];
     command = true;
@@ -116,7 +118,8 @@ int RunShell(const std::vector<std::string>& argv) {
         return 127;
       }
       script = std::make_shared<OwnedHandle>(handle);
-      input = handle;
+      input = script->h;
+      if (input == INVALID_HANDLE_VALUE) return 127;
     }
     sh.pos.insert(sh.pos.end(), argv.begin() + at, argv.end());
   }
@@ -131,7 +134,9 @@ int RunShell(const std::vector<std::string>& argv) {
     std::string pending;
     for (;;) {
       char c;
-      bool eof = ReadByte(&sh, sh.io, input, &c, false) == 0;
+      int result = ReadByte(&sh, sh.io, input, &c, false);
+      if (result < 0) { sh.status = 2; break; }
+      bool eof = result == 0;
       if (eof && pending.empty()) break;
       if (!eof) {
         pending += c;

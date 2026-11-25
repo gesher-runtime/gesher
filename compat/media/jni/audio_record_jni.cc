@@ -12,6 +12,7 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -56,6 +57,7 @@ struct {
 } gFields;
 
 std::mutex gLock;
+std::atomic<JavaVM*> g_jvm{nullptr};
 
 struct JniRecord {
   std::shared_ptr<CaptureStream> stream;
@@ -350,19 +352,64 @@ const JNINativeMethod kMethods[] = {
 }  // namespace
 
 bool MayRecordAudio(JNIEnv* env) {
-  if (env == nullptr) env = AttachedEnv("gesher-record");
-  if (env == nullptr) return false;
+  struct ScopedDetach {
+    JavaVM* vm = nullptr;
+    ~ScopedDetach() {
+      if (vm != nullptr) vm->DetachCurrentThread();
+    }
+  } detach;
+  struct EnvOut {
+    JNIEnv** target;
+    void* raw = nullptr;
+    bool via_void = false;
+    ~EnvOut() {
+      if (via_void) *target = static_cast<JNIEnv*>(raw);
+    }
+    operator JNIEnv**() { return target; }
+    operator void**() {
+      via_void = true;
+      return &raw;
+    }
+  };
+  if (env != nullptr) {
+    if (g_jvm.load(std::memory_order_acquire) == nullptr) {
+      JavaVM* vm = nullptr;
+      if (env->GetJavaVM(&vm) == JNI_OK && vm != nullptr) {
+        g_jvm.store(vm, std::memory_order_release);
+      }
+    }
+  } else {
+    JavaVM* vm = g_jvm.load(std::memory_order_acquire);
+    if (vm == nullptr) {
+      vm = Vm();
+      if (vm != nullptr) g_jvm.store(vm, std::memory_order_release);
+    }
+    if (vm == nullptr) return false;
+    void* raw_env = nullptr;
+    const jint status = vm->GetEnv(&raw_env, JNI_VERSION_1_6);
+    if (status == JNI_OK) {
+      env = static_cast<JNIEnv*>(raw_env);
+      if (env == nullptr) return false;
+    } else if (status == JNI_EDETACHED) {
+      JavaVMAttachArgs args = {JNI_VERSION_1_6, const_cast<char*>("gesher-record"), nullptr};
+      const jint attached = vm->AttachCurrentThreadAsDaemon(EnvOut{&env}, &args);
+      if (attached != JNI_OK || env == nullptr) return false;
+      detach.vm = vm;
+    } else {
+      return false;
+    }
+  }
   jclass cls = env->FindClass("com/gesher/server/AudioService");
   if (cls == nullptr) {
-    // Not on Gesher's boot class path (a bare runtime): nothing to ask.
+    // A bare runtime has no authoritative recording identity or permission store.
     env->ExceptionClear();
-    return true;
+    return false;
   }
   jmethodID m = env->GetStaticMethodID(cls, "recordAudioAllowed", "()Z");
   if (m == nullptr) {
     env->ExceptionClear();
     env->DeleteLocalRef(cls);
-    return true;
+    return false;
   }
   jboolean ok = env->CallStaticBooleanMethod(cls, m);
   if (CheckException(env, "AudioService.recordAudioAllowed")) ok = JNI_FALSE;
@@ -372,12 +419,19 @@ bool MayRecordAudio(JNIEnv* env) {
 
 namespace {
 // The standalone native launcher has no Java provider. In ART retain the
-// existing manifest decision, including the bare-core boot path's policy.
+// live UID grant decision. Missing Java policy cannot authorize recording.
 [[maybe_unused]] const bool g_record_permission_registered =
     (SetRecordingPermissionProvider([] { return MayRecordAudio(nullptr); }), true);
 }
 
 int RegisterAudioRecord(JNIEnv* env) {
+  if (env != nullptr) {
+    JavaVM* vm = nullptr;
+    if (env->GetJavaVM(&vm) == JNI_OK && vm != nullptr) {
+      g_jvm.store(vm, std::memory_order_release);
+    }
+  }
+  SetRecordingPermissionProvider([] { return MayRecordAudio(nullptr); });
   if (!RegisterStandins(env, "android/media/AudioRecord")) return 0;
   jclass cls = env->FindClass("android/media/AudioRecord");
   if (cls == nullptr) {

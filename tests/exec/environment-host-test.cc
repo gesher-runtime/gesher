@@ -3,6 +3,7 @@
 // Host mutations must reach an already-relocated Android ELF environ import.
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/environment.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -39,24 +40,23 @@ int main(int argc, char** argv) {
   for (int i = 0; i < 64; ++i) {
     const std::string name = "GESHER_EXEC4_GROW_" + std::to_string(i);
     if (_putenv_s(name.c_str(), "host-narrow") != 0) return 1;
-    // A copied pointer has a different slot even when the CRT grows its array
-    // in place. Check slot identity before dereferencing it: this rejects the
-    // old snapshot export without requiring the allocator to move the array.
-    if (slot != &_environ || alias != slot || *slot != _environ) {
-      std::fputs("exec4: FAIL environ does not export the current CRT slot\n", stderr);
+    // A copied pointer has a different slot even when the owner grows its
+    // array in place. Verify the actual shared POSIX slot before traversal.
+    if (slot != gesher::EnvironmentSlot() || alias != slot || *slot != environ) {
+      std::fputs("exec4: FAIL environ does not export the current POSIX owner slot\n", stderr);
       return 1;
     }
   }
-  std::puts("exec4: PASS live CRT slot and aliases verified without dereferencing a snapshot");
+  std::puts("exec4: PASS live POSIX owner slot and aliases verified without dereferencing a snapshot");
   if (_putenv_s("GESHER_EXEC4_ENV", "host-narrow") != 0 ||
       !check_guest(run, "host-narrow", "host-narrow"))
     return 1;
   if (_wputenv_s(L"GESHER_EXEC4_ENV", L"host-wide") != 0 ||
       _wputenv_s(L"GESHER_EXEC4_WIDE_ADDED", L"wide-added") != 0)
     return 1;
-  if (slot != &_environ || *slot != _environ || !check_guest(run, "host-wide", "host-wide"))
+  if (slot != gesher::EnvironmentSlot() || *slot != environ || !check_guest(run, "host-wide", "host-wide"))
     return 1;
-  if (_wputenv_s(L"GESHER_EXEC4_ENV", L"") != 0 || *slot != _environ ||
+  if (_wputenv_s(L"GESHER_EXEC4_ENV", L"") != 0 || *slot != environ ||
       !check_guest(run, nullptr, "host-wide removal"))
     return 1;
   if (!check_guest(mutate, nullptr, "guest mutations")) return 1;

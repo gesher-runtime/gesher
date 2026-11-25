@@ -190,7 +190,14 @@ public final class BluetoothRequestFixture {
                     pm, queue, radio.proxy());
         }
         ApkPackage install(String name, int target, String... requested) throws Exception {
-            ApkPackage apk = code(name, nextUid++, target, requested); packages.put(name, apk); return apk;
+            ApkPackage apk = code(name, nextUid++, target, requested); packages.put(name, apk); publish(); return apk;
+        }
+        // PackageManagerService publishes a new immutable map for every install,
+        // replacement and removal; its permission indexes follow that publication.
+        // Model the fixture's package changes through the same production method.
+        void publish() throws Exception {
+            var method = PackageManagerService.class.getDeclaredMethod("publishPackages", Map.class);
+            method.setAccessible(true); method.invoke(pm, new LinkedHashMap<>(packages));
         }
         void grant(ApkPackage apk, String permission, boolean granted) {
             decisions.setProperty("uid:" + apk.uid() + ":" + permission, granted ? "granted" : "denied");
@@ -299,8 +306,8 @@ public final class BluetoothRequestFixture {
             stale.request(ENABLE, app.packageName, app, () -> alive[0], results::add);
             switch (retirement) {
                 case "lifetime" -> alive[0] = false;
-                case "removed" -> stale.packages.remove(app.packageName);
-                case "replaced" -> stale.packages.put(app.packageName, code(app.packageName, app.uid(), 36, CONNECT));
+                case "removed" -> { stale.packages.remove(app.packageName); stale.publish(); }
+                case "replaced" -> { stale.packages.put(app.packageName, code(app.packageName, app.uid(), 36, CONNECT)); stale.publish(); }
                 case "removing" -> stale.removing.put(app.packageName, app);
                 case "disabled" -> ((PackageImpl) app.parsed).setEnabled(false);
             }
@@ -451,6 +458,22 @@ public final class BluetoothRequestFixture {
         }
         check(operations == h.radio.reads + h.radio.confirms + h.radio.switches, "unhandled intent reached backend");
     }
+    /** Restore constructor defaults used by the real foreground-observation hooks. */
+    private static void initializeForegroundTracking(Object am, Object atm, PackageManagerService pm) throws Exception {
+        set(am, "mShortcutEvaluation", construct(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+        set(am, "mShortcutAwake", (BooleanSupplier) () -> false);
+        set(am, "mServices", construct(type("ActiveServices"), new Class<?>[]{
+                ActivityTaskManagerService.class, PackageManagerService.class, type("NotificationManagerService")},
+                atm, pm, null));
+        Object providers = get(am, "mProviders");
+        if (providers == null) {
+            providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(am, "mProviders", providers);
+        }
+        // These isolated routes have no provider connections. Keep the normal empty
+        // topology without initializing unrelated settings and document providers.
+        set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
+    }
     /** Result/lifetime integration, using real ActivityRecord and pending ResultInfo objects. */
     private static final class ResultRoute {
         final Harness h = new Harness();
@@ -462,10 +485,11 @@ public final class BluetoothRequestFixture {
         ResultRoute() throws Exception {
             set(atm, "mBluetoothRequests", h.requests);
             // The real result publisher needs its URI-grant boundary. Empty result
-            // data carries no URIs; unrelated service constructors are unnecessary.
+            // data carries no URIs, so provider/settings startup remains isolated.
             Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
             Object am = UNSAFE.allocateInstance(ActivityManagerService.class);
             set(am, "mProviders", providers); set(am, "mAtm", atm); set(am, "mPm", h.pm);
+            initializeForegroundTracking(am, atm, h.pm);
             set(atm, "mAm", am);
         }
         @SuppressWarnings({"unchecked", "rawtypes"}) Object record(Object parent, String who, int code) throws Exception {
@@ -577,6 +601,7 @@ public final class BluetoothRequestFixture {
             Object am = UNSAFE.allocateInstance(ActivityManagerService.class);
             set(am, "mAtm", atm); set(am, "mPm", h.pm);
             set(am, "mCallers", new CallerIdentity(h.pm, (ActivityTaskManagerService) atm));
+            initializeForegroundTracking(am, atm, h.pm);
             set(atm, "mAm", am);
             Class<?> processType = type("ActivityTaskManagerService$ProcessRecord");
             process = UNSAFE.allocateInstance(processType);
@@ -644,8 +669,8 @@ public final class BluetoothRequestFixture {
                 case "exiting" -> set(retired.process, "exiting", true);
                 case "dead" -> set(retired.process, "dead", true);
                 case "unready" -> set(retired.process, "ready", false);
-                case "replaced" -> retired.h.packages.put(retired.owner.packageName,
-                        code(retired.owner.packageName, retired.owner.uid(), 36, CONNECT));
+                case "replaced" -> { retired.h.packages.put(retired.owner.packageName,
+                        code(retired.owner.packageName, retired.owner.uid(), 36, CONNECT)); retired.h.publish(); }
                 case "removing" -> retired.h.removing.put(retired.owner.packageName, retired.owner);
                 case "disabled" -> ((PackageImpl) retired.owner.parsed).setEnabled(false);
             }

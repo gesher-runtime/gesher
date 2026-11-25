@@ -29,6 +29,7 @@ import com.android.internal.pm.pkg.component.ParsedComponent;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +47,10 @@ import java.util.function.Consumer;
  */
 public final class PackageManagerService extends IPackageManager.Default {
     private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
+    // Candidate metadata only. Enabled state, removal, query flags and fresh Android
+    // result objects remain the responsibility of each resolution under this monitor.
+    private ProviderAuthorityIndex mProviderAuthorityIndex;
+    private IntentPackageIndex mIntentPackageIndex;
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
@@ -65,6 +70,24 @@ public final class PackageManagerService extends IPackageManager.Default {
         mEnabledStateListener = listener;
         mEnabledStateRestarter = restarter;
     }
+    private volatile Consumer<ApkPackage> mDesktopEnabledStateListener;
+
+    /**
+     * Updates the desktop shell's launcher's view after a package install or enabled-state
+     * change, outside the package manager monitor.
+     */
+    void setDesktopEnabledStateListener(Consumer<ApkPackage> listener) {
+        mDesktopEnabledStateListener = listener;
+    }
+    private void notifyDesktopLauncher(ApkPackage pkg) {
+        Consumer<ApkPackage> desktop = mDesktopEnabledStateListener;
+        if (desktop == null) return;
+        try { desktop.accept(pkg); }
+        catch (RuntimeException failure) {
+            SystemServer.log("desktop launcher update failed: " + failure);
+        }
+    }
+
     private final List<Consumer<String>> mPackageRemoval = new ArrayList<>();
     private final List<Consumer<String>> mPackageRemovalChecks = new ArrayList<>();
     private volatile Consumer<Set<String>> mAccountRemovalReconciler = installed -> { };
@@ -138,6 +161,12 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     public PermissionPolicy permissions() { return mPermissions; }
 
+    private ExactAlarmAccessRequests mExactAlarmAccessRequests;
+    synchronized ExactAlarmAccessRequests exactAlarmAccessRequests() {
+        if (mExactAlarmAccessRequests == null) mExactAlarmAccessRequests = new ExactAlarmAccessRequests(this);
+        return mExactAlarmAccessRequests;
+    }
+
     /** One policy/operation ledger shared by the Binder and all server consumers. */
     public AppOpsService appOps() {
         AppOpsService service = mAppOps;
@@ -195,11 +224,16 @@ public final class PackageManagerService extends IPackageManager.Default {
         mTransientEnabled = !persistentEnabled;
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
+            if (ContactsProviderSupport.hasBuiltInConflict(p)) {
+                SystemServer.log("package " + p.packageName
+                        + " skipped: claims a built-in contacts authority");
+                continue;
+            }
             if (map.put(p.packageName, p) != null) throw new IllegalArgumentException("Duplicate installed package");
         }
         try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
             identity.commit();
-            mPackages = map;
+            publishPackages(map);
             enabledStore();
             identity.accept();
         }
@@ -218,8 +252,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         return mEnabledStore;
     }
 
+    private static void checkBuiltInProviderOwner(ApkPackage pkg) {
+        try {
+            ContactsProviderSupport.checkPackageAdmission(pkg);
+        } catch (android.content.pm.PackageParser.PackageParserException conflict) {
+            throw new IllegalArgumentException(conflict.getMessage(), conflict);
+        }
+    }
+
     /** Finish owner I/O before an installer commits its durable package registry. */
     synchronized PackageUids.Admission prepareAdd(ApkPackage p) {
+        checkBuiltInProviderOwner(p);
         PackageUids.Admission identity = PackageUids.prepare(List.of(p), mPackages.values());
         try {
             PackageEnabledStore store = enabledStore();
@@ -249,7 +292,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         map.put(p.packageName, p);
         Runnable permissions = mPermissions.publishPackage(p, () -> {
-            mPackages = map;
+            publishPackages(map);
             PackageManager.invalidatePackageInfoCache();
         }, publicationLock);
         mPackageEventExecutor.execute(() -> {
@@ -276,7 +319,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage p = map.get(packageName);
         if (p != null) enabledStore().retire(packageName, p.enabledStateOwner());
         map.remove(packageName);
-        mPackages = map;
+        publishPackages(map);
         if (p != null) {
             p.clearComponentStates();
             PackageManager.invalidatePackageInfoCache();
@@ -293,6 +336,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             // checks. Do not call application Binders until that outer lock is released.
             synchronized (publicationLock) { }
             if (get(name) != pkg || isRemovalPending(name)) return;
+            notifyDesktopLauncher(pkg);
             for (Consumer<ApkPackage> listener : mPackageChanges) {
                 if (get(name) != pkg || isRemovalPending(name)) return;
                 listener.accept(pkg);
@@ -355,6 +399,130 @@ public final class PackageManagerService extends IPackageManager.Default {
         return mPackages.values();
     }
 
+    /** The map is replaced as a whole; package metadata is admitted before publication. */
+    Map<String, ApkPackage> packageSnapshot() { return mPackages; }
+
+    /** Called under this monitor, or before the constructor publishes this service. */
+    private void publishPackages(Map<String, ApkPackage> packages) {
+        mPackages = packages;
+        // Retire references to removed/replaced code even if no provider or
+        // permission query follows.
+        mProviderAuthorityIndex = null;
+        mIntentPackageIndex = null;
+        mPermissions.invalidatePackageIndex();
+    }
+
+    /** Candidates only; callers keep the publication monitor through actual matching. */
+    private synchronized Collection<ApkPackage> intentPackages(Intent intent, ApkPackage.ComponentKind kind) {
+        // Preserve the existing null-intent behavior in the family resolver.
+        if (intent == null) return mPackages.values();
+        ComponentName component = intent.getComponent();
+        String packageName = intent.getPackage();
+        if (component != null) {
+            if (packageName != null && !packageName.equals(component.getPackageName())) return List.of();
+            packageName = component.getPackageName();
+        }
+        if (packageName != null) {
+            ApkPackage owner = mPackages.get(packageName);
+            // Explicit components need no intent filters. Do not build an index
+            // or inspect any unrelated package for either constrained query.
+            return owner == null ? List.of() : List.of(owner);
+        }
+        Map<String, ApkPackage> packages = mPackages;
+        IntentPackageIndex index = mIntentPackageIndex;
+        if (index == null || index.packages != packages) {
+            index = new IntentPackageIndex(packages);
+            mIntentPackageIndex = index;
+        }
+        IntentCandidates candidates = index.families.computeIfAbsent(kind,
+                family -> new IntentCandidates(packages, family));
+        // IntentFilter.match skips action matching when the action is null.
+        // Even a zero-action filter can then match its data/categories.
+        return intent.getAction() == null ? candidates.withFilters
+                : candidates.actions.getOrDefault(intent.getAction(), List.of());
+    }
+
+    /** Each family is built on first use, bounded by the installed declarations. */
+    private static final class IntentPackageIndex {
+        final Map<String, ApkPackage> packages;
+        final Map<ApkPackage.ComponentKind, IntentCandidates> families =
+                new EnumMap<>(ApkPackage.ComponentKind.class);
+        IntentPackageIndex(Map<String, ApkPackage> packages) { this.packages = packages; }
+    }
+
+    private static final class IntentCandidates {
+        final Map<String, List<ApkPackage>> actions;
+        final List<ApkPackage> withFilters;
+
+        IntentCandidates(Map<String, ApkPackage> packages, ApkPackage.ComponentKind kind) {
+            Map<String, List<ApkPackage>> owners = new LinkedHashMap<>();
+            List<ApkPackage> anyAction = new ArrayList<>();
+            for (ApkPackage pkg : packages.values()) {
+                List<? extends ParsedComponent> declarations = switch (kind) {
+                    case ACTIVITY -> pkg.parsed.getActivities();
+                    case SERVICE -> pkg.parsed.getServices();
+                    case RECEIVER -> pkg.parsed.getReceivers();
+                    case PROVIDER -> pkg.parsed.getProviders();
+                };
+                Set<String> seen = new java.util.HashSet<>();
+                boolean hasFilters = false;
+                for (ParsedComponent declaration : declarations) {
+                    for (var info : declaration.getIntents()) {
+                        hasFilters = true;
+                        var filter = info.getIntentFilter();
+                        for (int i = 0; i < filter.countActions(); i++) {
+                            String action = filter.getAction(i);
+                            if (seen.add(action)) owners.computeIfAbsent(action, key -> new ArrayList<>()).add(pkg);
+                        }
+                    }
+                }
+                if (hasFilters) anyAction.add(pkg);
+            }
+            owners.replaceAll((action, values) -> List.copyOf(values));
+            actions = Map.copyOf(owners);
+            withFilters = List.copyOf(anyAction);
+        }
+    }
+
+    /** All possible owners in installed order; never cache a visibility decision. */
+    synchronized List<ApkPackage> providerPackages(String authority) {
+        if (authority == null) return List.of();
+        Map<String, ApkPackage> packages = mPackages;
+        ProviderAuthorityIndex index = mProviderAuthorityIndex;
+        if (index == null || index.packages != packages) {
+            index = new ProviderAuthorityIndex(packages);
+            mProviderAuthorityIndex = index;
+        }
+        return index.owners.getOrDefault(authority, List.of());
+    }
+
+    /** Immutable, bounded by installed declarations, and tied to one package map. */
+    private static final class ProviderAuthorityIndex {
+        final Map<String, ApkPackage> packages;
+        final Map<String, List<ApkPackage>> owners;
+
+        ProviderAuthorityIndex(Map<String, ApkPackage> packages) {
+            this.packages = packages;
+            Map<String, List<ApkPackage>> candidates = new LinkedHashMap<>();
+            for (ApkPackage pkg : packages.values()) {
+                Set<String> components = new java.util.HashSet<>();
+                Set<String> authorities = new java.util.HashSet<>();
+                for (var provider : pkg.parsed.getProviders()) {
+                    // ApkPackage.providers registers the first declaration before
+                    // applying enabled/direct-boot flags; a duplicate adds no owner.
+                    if (!components.add(provider.getName()) || provider.getAuthority() == null) continue;
+                    for (String authority : provider.getAuthority().split(";")) {
+                        if (authorities.add(authority)) {
+                            candidates.computeIfAbsent(authority, key -> new ArrayList<>()).add(pkg);
+                        }
+                    }
+                }
+            }
+            candidates.replaceAll((authority, values) -> List.copyOf(values));
+            owners = Map.copyOf(candidates);
+        }
+    }
+
     public ApkPackage get(String packageName) {
         return packageName == null ? null : mPackages.get(packageName);
     }
@@ -375,6 +543,13 @@ public final class PackageManagerService extends IPackageManager.Default {
             info.packageName = "android";
             info.applicationInfo = platformApplication();
             info.setLongVersionCode(android.os.Build.VERSION.SDK_INT);
+            if ((flags & PackageManager.GET_PROVIDERS) != 0
+                    && ContactsProviderSupport.matchesProviderFlags(flags)) {
+                info.providers = new ProviderInfo[] {
+                        ContactsProviderSupport.contactsProviderInfo(),
+                        ContactsProviderSupport.callLogProviderInfo()
+                };
+            }
             return info;
         }
         ApkPackage p = get(packageName);
@@ -431,7 +606,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         return null;
     }
 
-    private ApplicationInfo platformApplication() {
+    static ApplicationInfo platformApplication() {
         ApplicationInfo info = new ApplicationInfo();
         String root = System.getenv("ANDROID_ROOT");
         info.packageName = "android";
@@ -454,6 +629,10 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
         if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
+        if (p == null && userId == 0 && ExactAlarmAccessRequests.PACKAGE.equals(className.getPackageName())) {
+            ActivityInfo nativeActivity = exactAlarmAccessRequests().activityInfo(className, flags);
+            if (nativeActivity != null) return nativeActivity;
+        }
         if (p == null && BrowserPackageSupport.isBrowserPackage(className.getPackageName())) {
             return BrowserPackageSupport.activityInfo(className.getClassName(), flags);
         }
@@ -463,14 +642,14 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ResolveInfo resolveIntent(Intent intent, String resolvedType, long flags,
             int userId) {
-        List<ResolveInfo> all = query(intent, resolvedType, flags);
+        List<ResolveInfo> all = query(intent, resolvedType, flags, userId);
         return all.isEmpty() ? null : all.get(0);
     }
 
     @Override
     public ParceledListSlice queryIntentActivities(Intent intent, String resolvedType,
             long flags, int userId) {
-        return new ParceledListSlice<>(query(intent, resolvedType, flags));
+        return new ParceledListSlice<>(query(intent, resolvedType, flags, userId));
     }
 
     @Override
@@ -484,15 +663,29 @@ public final class PackageManagerService extends IPackageManager.Default {
             packages = new LinkedHashMap<>(mPackages);
             for (String removing : mRemoving.keySet()) packages.remove(removing);
         }
-        return new ParceledListSlice<>(new ActivityOptionsResolver(packages, hostBrowser).query(
+        return new ParceledListSlice<>(new ActivityOptionsResolver(packages, hostBrowser,
+                exactAlarmAccessRequests()).query(
                 caller, specifics, specificTypes, intent, resolvedType, flags));
     }
 
     // A query spanning multiple records must not straddle an atomic enabled-state
     // batch. These readers do metadata/filter work only, never application callbacks.
-    private synchronized List<ResolveInfo> query(Intent intent, String resolvedType, long flags) {
+    private synchronized List<ResolveInfo> query(Intent intent, String resolvedType, long flags, int userId) {
+        if (ExactAlarmAccessRequests.handles(intent, resolvedType)) {
+            if (userId != 0) return new ArrayList<>();
+            Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
+            for (String removing : mRemoving.keySet()) packages.remove(removing);
+            // Use the same AOSP filter cuts, system-priority normalization and ordering
+            // as activity options. Installed iteration order must not select a handler.
+            List<ResolveInfo> settings = new ActivityOptionsResolver(packages, false)
+                    .activities(intent, resolvedType, flags);
+            ResolveInfo nativeSettings = exactAlarmAccessRequests().resolve(intent, resolvedType, flags);
+            if (nativeSettings != null) settings.add(nativeSettings);
+            settings.sort(ActivityOptionsResolver.ORDER);
+            return settings;
+        }
         List<ResolveInfo> result = new ArrayList<>();
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.ACTIVITY)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentActivities(intent, resolvedType, flags));
         }
@@ -512,7 +705,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage caller = packages.get(source);
         if (caller == null) return false;
         PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
         // Package admission assigns isolated or authenticated shared identities
         // in both signature-spoofing modes.
         return visibility.canSee(caller.uid(), target);
@@ -521,7 +714,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** The services {@code intent} resolves to, in every package. */
     synchronized List<ResolveInfo> services(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.SERVICE)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentServices(intent, resolvedType, flags));
         }
@@ -534,7 +727,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** The manifest receivers {@code intent} reaches, in every package. */
     synchronized List<ResolveInfo> receivers(Intent intent, String resolvedType, long flags) {
         List<ResolveInfo> result = new ArrayList<>();
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.RECEIVER)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentReceivers(intent, resolvedType, flags));
         }
@@ -543,14 +736,10 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     /** The provider with authority {@code authority} (one of its authorities), or null. */
     synchronized ProviderInfo provider(String authority, long flags) {
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : providerPackages(authority)) {
             if (isRemovalPending(p.packageName)) continue;
-            for (ProviderInfo info : p.providers(flags)) {
-                if (info.authority == null) continue;
-                for (String a : info.authority.split(";")) {
-                    if (a.equals(authority)) return info;
-                }
-            }
+            ProviderInfo info = p.providerForAuthority(authority, flags);
+            if (info != null) return info;
         }
         return null;
     }
@@ -590,7 +779,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             long flags, int userId) {
         List<ResolveInfo> result = new ArrayList<>();
         if (intent == null || userId != 0) return new ParceledListSlice<>(result);
-        for (ApkPackage p : mPackages.values()) {
+        for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.PROVIDER)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentContentProviders(intent, resolvedType, flags));
         }
@@ -625,7 +814,18 @@ public final class PackageManagerService extends IPackageManager.Default {
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
         if (userId != 0) return null;
         ProviderInfo hosted = hostedProvider(name);
-        if (hosted != null) return hosted;
+        if (hosted != null) {
+            if (ContactsProviderSupport.isSystemAuthority(name)
+                    && !ContactsProviderSupport.matchesProviderFlags(flags)) {
+                return null;
+            }
+            return hosted;
+        }
+        if (mHostedProviders == null && ContactsProviderSupport.isSystemAuthority(name)
+                && ContentProviders.declaredProvider(this, name) == null) {
+            ProviderInfo builtIn = ContactsProviderSupport.providerForAuthority(name, flags);
+            if (builtIn != null) return builtIn;
+        }
         return provider(name, flags);
     }
 
@@ -646,6 +846,10 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ProviderInfo getProviderInfo(ComponentName className, long flags, int userId) {
+        if (userId != 0 || className == null) return null;
+        if (ContactsProviderSupport.PACKAGE.equals(className.getPackageName())) {
+            return ContactsProviderSupport.providerForComponent(className.getClassName(), flags);
+        }
         if (isRemovalPending(className.getPackageName())) return null;
         ApkPackage p = get(className.getPackageName());
         if (p == null) return null;
@@ -815,6 +1019,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             for (EnabledChange event : events.values()) {
                 Consumer<EnabledChange> listener = mEnabledStateListener;
                 if (listener != null && event.current(this)) listener.accept(event);
+                if (event.current(this)) notifyDesktopLauncher(event.pkg);
                 if (!event.dontKill && event.restartCurrent(this)) {
                     try {
                         Consumer<EnabledChange> restarter = mEnabledStateRestarter;
@@ -952,10 +1157,19 @@ public final class PackageManagerService extends IPackageManager.Default {
      * (touchscreen and faketouch, matching {@link com.gesher.app.DeviceProfile#configuration()},
      * both orientations) whose launcher could host app widgets (apps reach
      * AppWidgetManager only on devices with app_widgets, and phone apps assume it).
-     * Telephony, Wi-Fi, camera, sensors and the rest are absent. Bluetooth
+     * Telephony, Wi-Fi, sensors and the rest are absent. Bluetooth
      * (docs/bluetooth.md) is there when the host has a radio: FEATURE_BLUETOOTH with an
      * adapter, FEATURE_BLUETOOTH_LE when Windows reports LE support (apps such as
-     * companion apps check it before anything else).
+     * companion apps check it before anything else). Cameras follow the real devices
+     * ({@link #addCameraFeatures}): FEATURE_CAMERA_AUTOFOCUS only when the camera reported
+     * as FEATURE_CAMERA (the rear one) really focuses automatically. FEATURE_MICROPHONE is there when Windows has an audio
+     * capture endpoint, the input AudioRecord and AudioManager report. FEATURE_LOCATION and
+     * FEATURE_LOCATION_NETWORK describe {@link LocationManagerService}'s network provider,
+     * which is always registered (Windows' location service, with the IP fallback);
+     * FEATURE_LOCATION_GPS only when Windows has a GNSS receiver ({@link
+     * WindowsLocation#hasGnssReceiver}). Google Play filters
+     * on these (a RECORD_AUDIO or location permission implies the feature unless the app
+     * marks it not required), so an absent one hides an app the device can run.
      */
     static final android.util.ArrayMap<String, android.content.pm.FeatureInfo> FEATURES =
             new android.util.ArrayMap<>();
@@ -964,7 +1178,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (String name : new String[] {PackageManager.FEATURE_APP_WIDGETS,
                 PackageManager.FEATURE_TOUCHSCREEN,
                 PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
-                PackageManager.FEATURE_SCREEN_LANDSCAPE}) {
+                PackageManager.FEATURE_SCREEN_LANDSCAPE,
+                // Gesher's built-in WebView (WebView2, ADR 0041; WebViewUpdateService). The
+                // WebView2 Runtime is the installer's prerequisite; without it WebViews
+                // stay empty and webviewupdate names no valid provider.
+                PackageManager.FEATURE_WEBVIEW}) {
             android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
             f.name = name;
             FEATURES.put(name, f);
@@ -979,15 +1197,57 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no cameras to report.
         }
+        try {
+            addMicrophoneFeature(FEATURES, hasAudioInput());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no input to report.
+        }
+        addLocationFeatures(FEATURES, WindowsLocation.hasGnssReceiver());
     }
 
-    /** Report real cameras and an explicitly configured rear role, without inferred capabilities. */
-    static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+    /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */
+    private static boolean hasAudioInput() {
+        android.util.IntArray types = new android.util.IntArray();
+        int status = android.media.AudioSystem.getSupportedDeviceTypes(
+                android.media.AudioManager.GET_DEVICES_INPUTS, types);
+        return status == android.media.AudioSystem.SUCCESS && types.size() > 0;
+    }
+
+    /** FEATURE_MICROPHONE when there is an audio input device. */
+    public static void addMicrophoneFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean input) {
+        if (input) addFeature(features, PackageManager.FEATURE_MICROPHONE);
+    }
+
+    /**
+     * The network location provider's features, and FEATURE_LOCATION_GPS when Windows has
+     * a GNSS receiver ({@code gnss}), whose fixes the gps provider then gets.
+     */
+    public static void addLocationFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean gnss) {
+        addFeature(features, PackageManager.FEATURE_LOCATION);
+        addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
+        if (gnss) addFeature(features, PackageManager.FEATURE_LOCATION_GPS);
+    }
+
+    /**
+     * Report real cameras: a configured rear camera as FEATURE_CAMERA, the others as front
+     * cameras (a PC's camera faces the user; CONTRIBUTING.md), without inferred capabilities.
+     * FEATURE_CAMERA_AUTOFOCUS describes the FEATURE_CAMERA camera, as on Android: it is
+     * there only when a rear camera's driver really focuses automatically
+     * ({@link WindowsCamera.Device#autofocus}); a front camera's autofocus does not add it.
+     */
+    public static void addCameraFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
-            if (camera.isRearFacing()) addFeature(features, PackageManager.FEATURE_CAMERA);
+            addFeature(features, camera.isRearFacing() ? PackageManager.FEATURE_CAMERA
+                    : PackageManager.FEATURE_CAMERA_FRONT);
+            if (camera.isRearFacing() && camera.autofocus) {
+                addFeature(features, PackageManager.FEATURE_CAMERA_AUTOFOCUS);
+            }
         }
     }
 
@@ -1020,7 +1280,16 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ParceledListSlice<android.content.pm.FeatureInfo> getSystemAvailableFeatures() {
-        return new ParceledListSlice<>(new ArrayList<>(FEATURES.values()));
+        // As AOSP's: the named features, then an unnamed one carrying the OpenGL ES
+        // version (ro.opengles.version), which PackageManager.getSystemAvailableFeatures
+        // callers read as reqGlEsVersion.
+        ArrayList<android.content.pm.FeatureInfo> features = new ArrayList<>(FEATURES.size() + 1);
+        features.addAll(FEATURES.values());
+        android.content.pm.FeatureInfo gles = new android.content.pm.FeatureInfo();
+        gles.reqGlEsVersion = android.os.SystemProperties.getInt("ro.opengles.version",
+                android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED);
+        features.add(gles);
+        return new ParceledListSlice<>(features);
     }
 
     @Override
@@ -1143,7 +1412,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                     && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
         }
         return new PackageVisibility(packages, browser, gms, vending,
-                this::isProtectedBroadcast);
+                mPermissions::isDeclaredProtectedBroadcast);
     }
 
     @Override

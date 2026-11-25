@@ -58,7 +58,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: angle-sdk
-          key: angle-sdk-${{ env.ANGLE_COMMIT }}-${{ hashFiles('compat/angle/args.gn', 'compat/angle/build-angle.ps1') }}
+          key: angle-sdk-${{ env.ANGLE_COMMIT }}-${{ hashFiles('compat/angle/**', 'LICENSE') }}
 
       - name: Build ANGLE (libEGL, libGLESv2)
         if: steps.cache.outputs.cache-hit != 'true'

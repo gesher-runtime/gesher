@@ -6,26 +6,39 @@ import android.app.blob.BlobHandle;
 import android.app.blob.BlobInfo;
 import android.app.blob.BlobStoreManager;
 import android.app.blob.IBlobStoreManager;
+import android.app.blob.IBlobStoreSession;
 import android.content.Context;
 import android.content.res.AssetManager;
-import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Parcel;
+import android.os.ParcelFileDescriptor;
 import android.os.RemoteCallback;
 import android.os.ServiceManager;
 import android.os.UserHandle;
 
 import com.gesher.server.Services;
 
+import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
-/** Real framework lookup and honest empty queries without a shared-blob backend. */
+/** Exercises public Android BlobStore contracts with the managed runtime's real disk backend. */
 public final class BlobStoreContractTest {
+    private static final long CALLBACK_SECONDS = 20;
     private static int checks;
 
     private static void check(boolean condition, String reason) {
@@ -35,10 +48,49 @@ public final class BlobStoreContractTest {
 
     private interface Operation { void run() throws Exception; }
 
-    private static void unsupported(Operation operation, String reason) throws Exception {
+    private static void expect(Class<? extends Throwable> type, Operation operation, String reason)
+            throws Exception {
         try { operation.run(); }
-        catch (SecurityException expected) { checks++; return; }
+        catch (Throwable failure) {
+            if (!type.isInstance(failure)) throw new AssertionError(reason, failure);
+            checks++;
+            return;
+        }
         throw new AssertionError(reason);
+    }
+
+    private static byte[] read(ParcelFileDescriptor descriptor) throws IOException {
+        try (var stream = new ParcelFileDescriptor.AutoCloseInputStream(descriptor)) {
+            return stream.readAllBytes();
+        }
+    }
+
+    private static void write(ParcelFileDescriptor descriptor, byte[] bytes) throws IOException {
+        try (var stream = new ParcelFileDescriptor.AutoCloseOutputStream(descriptor)) {
+            stream.write(bytes);
+        }
+    }
+
+    private static ParcelFileDescriptor parcelAlias(ParcelFileDescriptor descriptor) {
+        Parcel parcel = Parcel.obtain();
+        try {
+            descriptor.writeToParcel(parcel, 0);
+            parcel.setDataPosition(0);
+            return ParcelFileDescriptor.CREATOR.createFromParcel(parcel);
+        } finally {
+            parcel.recycle();
+        }
+    }
+
+    private static int commit(BlobStoreManager.Session session) throws Exception {
+        CompletableFuture<Integer> result = new CompletableFuture<>();
+        session.commit(Runnable::run, result::complete);
+        return result.get(CALLBACK_SECONDS, TimeUnit.SECONDS);
+    }
+
+    private static BlobHandle handle(byte[] bytes, String tag, long expiry) throws Exception {
+        return BlobHandle.createWithSha256(MessageDigest.getInstance("SHA-256").digest(bytes),
+                "Gesher BlobStore fixture", expiry, tag);
     }
 
     public static void main(String[] args) throws Exception {
@@ -65,40 +117,204 @@ public final class BlobStoreContractTest {
         check(manager.getClass() == BlobStoreManager.class, "unmodified framework client implementation");
         check(manager.getClass().getClassLoader() == Object.class.getClassLoader(), "manager is on boot classpath");
 
+        byte[] bytes = "Android blob: immutable after commit".getBytes(StandardCharsets.UTF_8);
+        byte[] corrupt = "invalid payload".getBytes(StandardCharsets.UTF_8);
+        String tag = UUID.randomUUID().toString();
+        long expiry = System.currentTimeMillis() + TimeUnit.HOURS.toMillis(1);
+        BlobHandle handle = handle(bytes, tag, expiry);
         IBlobStoreManager service = IBlobStoreManager.Stub.asInterface(binder);
-        List<BlobHandle> leased = manager.getLeasedBlobs();
-        check(leased != null && leased.isEmpty(), "getLeasedBlobs is non-null and empty");
-        BlobHandle handle = BlobHandle.createWithSha256(new byte[32], "synthetic blob", 0, "gesher.fixture");
-        try { leased.add(handle); } catch (UnsupportedOperationException expected) { }
-        check(manager.getLeasedBlobs().isEmpty(), "client mutation cannot create a lease");
-        check(service.getLeasedBlobs("com.gesher.other").isEmpty(), "foreign package reveals no leases");
-        check(manager.getRemainingLeaseQuotaBytes() == 0, "no storage quota is advertised");
-        check(manager.queryBlobsForUser(UserHandle.of(0)).isEmpty(), "no blobs exist for user0");
-        check(service.queryBlobsForUser(10).isEmpty(), "unknown user reveals no blobs");
-        try { manager.getLeaseInfo(handle); throw new AssertionError("absent blob reported accessible"); }
-        catch (SecurityException expected) { checks++; }
+        checks += BlobStoreQuotaContractTest.contracts();
+        long quota = manager.getRemainingLeaseQuotaBytes();
+        check(quota >= 300L * 1024 * 1024, "quota reflects managed storage");
+        check(!manager.getLeasedBlobs().contains(handle), "new handle is unleased");
+        expect(SecurityException.class, () -> service.getLeasedBlobs("com.gesher.uninstalled"),
+                "unknown package cannot request lease metadata");
+        expect(SecurityException.class, () -> manager.openBlob(handle), "uncommitted blob is inaccessible");
+        expect(SecurityException.class, () -> manager.getLeaseInfo(handle), "inaccessible lease is rejected");
+        expect(IllegalArgumentException.class, () -> manager.openSession(0), "invalid session ID is rejected");
+        expect(SecurityException.class, () -> manager.openSession(Long.MAX_VALUE),
+                "unknown session ID is rejected");
 
-        manager.waitForIdle(1000);
-        checks++;
-        AtomicInteger callbacks = new AtomicInteger();
-        service.waitForIdle(new RemoteCallback(result -> {
-            if (result != null && result.isEmpty()) callbacks.incrementAndGet();
-        }));
-        check(callbacks.get() == 1, "empty backend reports idle exactly once");
-        try { service.waitForIdle(null); throw new AssertionError("null callback accepted"); }
-        catch (NullPointerException expected) { checks++; }
+        long id = manager.createSession(handle);
+        check(id > 0, "session ID is positive");
+        int prefix = 7;
+        BlobStoreManager.Session initial = manager.openSession(id);
+        check(!initial.isPublicAccessAllowed(), "sessions begin private");
+        byte[] certificate = new byte[32];
+        byte[] other = new byte[32];
+        other[0] = 1;
+        initial.allowPackageAccess("com.gesher.recipient", certificate);
+        check(initial.isPackageAccessAllowed("com.gesher.recipient", certificate), "package grant retained");
+        check(!initial.isPackageAccessAllowed("com.gesher.recipient", other), "certificate must match");
+        initial.allowSameSignatureAccess();
+        check(initial.isSameSignatureAccessAllowed(), "same-signer access mode retained");
+        initial.allowPublicAccess();
+        check(initial.isPublicAccessAllowed(), "public access mode retained");
+        write(initial.openWrite(0, -1), Arrays.copyOf(bytes, prefix));
+        check(initial.getSize() == prefix, "partial length is reported");
+        check(Arrays.equals(Arrays.copyOf(bytes, prefix), read(initial.openRead())),
+                "session read sees the current bytes");
+        try (var staleWriter = new ParcelFileDescriptor.AutoCloseOutputStream(initial.openWrite(0, -1));
+                var staleReader = new ParcelFileDescriptor.AutoCloseInputStream(initial.openRead())) {
+            initial.close();
+            expect(IOException.class, () -> staleWriter.write(corrupt), "close revokes outstanding writers");
+            expect(IOException.class, staleReader::read, "close revokes outstanding readers");
+        }
+        expect(IllegalStateException.class, initial::openRead, "closed Binder cannot reopen a descriptor");
 
-        unsupported(() -> manager.createSession(handle), "session creation fabricated an ID");
-        unsupported(() -> manager.openSession(1), "session open fabricated a session");
-        unsupported(() -> manager.openBlob(handle), "blob open fabricated a descriptor");
-        manager.abandonSession(1); checks++;
-        unsupported(() -> manager.acquireLease(handle, "synthetic lease"), "lease acquisition reported success");
-        manager.releaseLease(handle); checks++;
-        manager.releaseAllLeases(); checks++;
-        BlobInfo info = new BlobInfo(1, 0, "synthetic blob", 0, Collections.emptyList());
-        unsupported(() -> manager.deleteBlob(info), "unsupported blob deletion reported success");
-        check(manager.getLeasedBlobs().isEmpty() && manager.getRemainingLeaseQuotaBytes() == 0,
-                "rejected requests leave queries empty and quota unavailable");
+        try (BlobStoreManager.Session resumed = manager.openSession(id)) {
+            check(resumed.getSize() == prefix && resumed.isPublicAccessAllowed(),
+                    "reopen preserves both bytes and access modes");
+            expect(IOException.class, () -> resumed.openWrite(0, Long.MAX_VALUE),
+                    "impossible allocation fails without changing the session");
+            check(resumed.getSize() == prefix, "rejected allocation preserves the staged prefix");
+            ParcelFileDescriptor allocated = resumed.openWrite(prefix, bytes.length);
+            check(allocated.getStatSize() == bytes.length && resumed.getSize() == bytes.length,
+                    "positive length extends the backing file before any guest write");
+            check(android.system.Os.lseek(allocated.getFileDescriptor(), 0,
+                            android.system.OsConstants.SEEK_CUR) == prefix,
+                    "allocation preserves the initial write offset");
+            write(allocated, Arrays.copyOfRange(bytes, prefix, bytes.length));
+            check(Arrays.equals(bytes, read(resumed.openRead())), "offset write preserves the prefix");
+            ParcelFileDescriptor writer = resumed.openWrite(0, -1);
+            try (var stale = new ParcelFileDescriptor.AutoCloseOutputStream(writer);
+                    var duplicate = new ParcelFileDescriptor.AutoCloseOutputStream(
+                            ParcelFileDescriptor.dup(writer.getFileDescriptor()));
+                    var parcelled = new ParcelFileDescriptor.AutoCloseOutputStream(parcelAlias(writer))) {
+                // Hold the actual worker so no hash/snapshot can accidentally
+                // make this pass before commit's synchronous barrier is tested.
+                Field workerField = binder.getClass().getDeclaredField("mWorker");
+                workerField.setAccessible(true);
+                var worker = (ScheduledThreadPoolExecutor) workerField.get(binder);
+                CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+                worker.execute(() -> {
+                    entered.countDown();
+                    try { release.await(CALLBACK_SECONDS, TimeUnit.SECONDS); }
+                    catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                });
+                check(entered.await(CALLBACK_SECONDS, TimeUnit.SECONDS), "commit worker is held by the fixture");
+                CompletableFuture<Integer> result = new CompletableFuture<>();
+                try {
+                    resumed.commit(Runnable::run, result::complete);
+                    check(!result.isDone(), "commit callback still waits for the worker");
+                    expect(IOException.class, () -> stale.write(corrupt), "commit revokes before returning");
+                    expect(IOException.class, () -> duplicate.write(corrupt), "commit revokes dup aliases");
+                    expect(IOException.class, () -> parcelled.write(corrupt), "commit revokes Parcel aliases");
+                    resumed.close();
+                    expect(SecurityException.class, () -> manager.openSession(id),
+                            "close after commit cannot reopen the stage while hashing is pending");
+                } finally {
+                    release.countDown();
+                }
+                check(result.get(CALLBACK_SECONDS, TimeUnit.SECONDS) == BlobStoreManager.COMMIT_RESULT_SUCCESS,
+                        "verified commit succeeds after synchronous revocation");
+                check(Arrays.equals(bytes, read(manager.openBlob(handle))), "committed data is immutable");
+            }
+        }
+        expect(SecurityException.class, () -> manager.openSession(id), "committed session cannot reopen");
+        check(manager.getLeaseInfo(handle) == null, "available blob without caller lease returns null");
+
+        long failedPublication = manager.createSession(handle);
+        try (BlobStoreManager.Session session = manager.openSession(failedPublication)) {
+            write(session.openWrite(0, -1), bytes);
+            Path root = android.os.Environment.getDataDirectory().toPath().resolve("system/gesher-blobs");
+            Path index = root.resolve("index"), backup = root.resolve("fixture-index-backup");
+            Files.move(index, backup);
+            try {
+                Files.createDirectory(index);
+                try {
+                    check(commit(session) == BlobStoreManager.COMMIT_RESULT_ERROR,
+                            "publication fails when the index cannot be atomically replaced");
+                    expect(SecurityException.class, () -> manager.openSession(failedPublication),
+                            "storage failure leaves a finalized session consumed");
+                    check(Arrays.equals(bytes, read(manager.openBlob(handle))),
+                            "failed recommit preserves earlier published bytes");
+                } finally {
+                    Files.delete(index);
+                }
+            } finally {
+                Files.move(backup, index);
+            }
+        }
+
+        BlobHandle mismatch = handle(bytes, tag + "-mismatch", expiry);
+        long mismatchId = manager.createSession(mismatch);
+        try (BlobStoreManager.Session session = manager.openSession(mismatchId)) {
+            write(session.openWrite(0, -1), corrupt);
+            check(commit(session) == BlobStoreManager.COMMIT_RESULT_ERROR, "digest mismatch fails asynchronously");
+        }
+        expect(SecurityException.class, () -> manager.openBlob(mismatch), "bad digest publishes no blob");
+        expect(SecurityException.class, () -> manager.openSession(mismatchId), "failed commit consumes session");
+        long abandoned = manager.createSession(mismatch);
+        try (BlobStoreManager.Session session = manager.openSession(abandoned);
+                var stale = new ParcelFileDescriptor.AutoCloseOutputStream(session.openWrite(0, -1))) {
+            manager.abandonSession(abandoned);
+            expect(IOException.class, () -> stale.write(corrupt), "manager abandon revokes outstanding writers");
+        }
+        expect(SecurityException.class, () -> manager.openSession(abandoned), "abandon deletes the session");
+        long abandonedDirect = manager.createSession(mismatch);
+        try (BlobStoreManager.Session session = manager.openSession(abandonedDirect);
+                var stale = new ParcelFileDescriptor.AutoCloseOutputStream(session.openWrite(0, -1))) {
+            session.abandon();
+            expect(IOException.class, () -> stale.write(corrupt), "session abandon revokes outstanding writers");
+        }
+
+        expect(IllegalArgumentException.class, () -> manager.acquireLease(handle, "too long", expiry + 1),
+                "lease cannot outlive the blob");
+        manager.acquireLease(handle, "expires immediately", System.currentTimeMillis() - 1000);
+        check(!manager.getLeasedBlobs().contains(handle), "expired lease is omitted");
+        manager.acquireLease(handle, android.R.string.ok);
+        var resourceLease = manager.getLeaseInfo(handle);
+        check(resourceLease.getDescriptionResId() == android.R.string.ok,
+                "resource-based description retains its resource identity");
+        check(context.getString(android.R.string.ok).contentEquals(resourceLease.getDescription()),
+                "resource-based description retains the resolved fallback text");
+        check(resourceLease.getExpiryTimeMillis() == 0,
+                "direct lease metadata keeps an indefinite lease expiry at zero");
+        manager.acquireLease(handle, "persistent consumer");
+        check(manager.getLeasedBlobs().contains(handle), "lease listing includes the blob");
+        check("persistent consumer".contentEquals(manager.getLeaseInfo(handle).getDescription()),
+                "lease metadata is returned");
+        check(manager.getRemainingLeaseQuotaBytes() == quota - bytes.length,
+                "replacement lease charges actual bytes once");
+
+        BlobInfo info = manager.queryBlobsForUser(UserHandle.of(0)).stream()
+                .filter(blob -> blob.getLabel().equals(handle.getLabel()) && blob.getExpiryTimeMs() == expiry)
+                .findFirst().orElseThrow();
+        check(info.getSizeBytes() == bytes.length && info.getLeases().size() == 1,
+                "administrative metadata includes size and active lease");
+        check(info.getLeases().get(0).getExpiryTimeMillis() == expiry,
+                "administrative lease reporting uses the effective blob expiry");
+        check(service.queryBlobsForUser(10).isEmpty(), "unknown user does not expose managed blobs");
+        CompletableFuture<Boolean> idle = new CompletableFuture<>();
+        service.waitForIdle(new RemoteCallback(bundle -> idle.complete(bundle != null && bundle.isEmpty())));
+        check(idle.get(CALLBACK_SECONDS, TimeUnit.SECONDS), "idle callback follows pending writes");
+        expect(NullPointerException.class, () -> service.waitForIdle(null), "idle callback is required");
+
+        BlobHandle pending = handle(bytes, tag + "-pending", expiry);
+        long pendingId = manager.createSession(pending);
+        try (BlobStoreManager.Session session = manager.openSession(pendingId)) {
+            write(session.openWrite(0, -1), Arrays.copyOf(bytes, prefix));
+        }
+        IBinder registryAfterRestart = Services.create(Collections.emptyList()).get(Context.BLOB_STORE_SERVICE);
+        IBlobStoreManager restored = IBlobStoreManager.Stub.asInterface(registryAfterRestart);
+        check(restored.getLeasedBlobs("android").contains(handle), "new service reloads durable lease");
+        expect(SecurityException.class, () -> restored.openSession(failedPublication, "android"),
+                "restart cannot reopen a finalized stage after publication failure");
+        check(Arrays.equals(bytes, read(restored.openBlob(handle, "android"))), "new service reloads committed bytes");
+        IBlobStoreSession sessionAfterRestart = restored.openSession(pendingId, "android");
+        check(sessionAfterRestart.getSize() == prefix, "new service reloads partial session");
+        sessionAfterRestart.abandon();
+        restored.releaseAllLeases("android");
+        check(!restored.getLeasedBlobs("android").contains(handle), "release-all clears ownership leases");
+        check(restored.getRemainingLeaseQuotaBytes("android") == quota, "released bytes restore quota");
+        restored.deleteBlob(info.getId());
+        expect(SecurityException.class, () -> restored.openBlob(handle, "android"),
+                "system deletion removes published bytes from lookups");
+        List<BlobInfo> remaining = restored.queryBlobsForUser(0);
+        check(remaining.stream().noneMatch(blob -> blob.getId() == info.getId()),
+                "deleted blob metadata stays absent");
+
         System.out.println("BlobStoreContractTest all passed: " + checks);
         System.exit(0);
     }

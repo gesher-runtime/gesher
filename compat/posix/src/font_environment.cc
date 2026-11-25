@@ -1,5 +1,6 @@
 // Two font keys only. Fallible buffers preserve the global -fno-exceptions policy.
 #include <gesher/font_environment.h>
+#include <gesher/environment.h>
 #include <windows.h>
 #include <atomic>
 #include <cerrno>
@@ -168,6 +169,21 @@ std::string_view FontEnvironmentValue::value() const noexcept {
 FontEnvironmentValue ReadFontEnvironment(FontEnvironmentKey key) noexcept {
   int index = static_cast<int>(key);
   if (index < 0 || index >= 2) return {};
+  // A POSIX putenv value (including its name) can change in caller storage.
+  // Snapshot only this requested key while the shared owner protects removal;
+  // untouched keys retain the existing native UTF16/immutable-owner path.
+  FontEnvironmentValue posix;
+  const int written = VisitBorrowedFontEnvironment(kNames[index], [](const char* value, void* context) {
+    auto* result = static_cast<FontEnvironmentValue*>(context);
+    if (!value || !*value) { *result = {FontEnvironmentValue::State::kAbsent, nullptr}; return; }
+    const size_t length = std::strlen(value);
+    if (length > 32767) return;
+    auto* bytes = Allocate(length);
+    if (!bytes) return;
+    std::memcpy(bytes->data, value, length);
+    *result = Adopt({FontEnvironmentValue::State::kValue, bytes});
+  }, &posix);
+  if (written != 0) return posix;
   View before = Snapshot(index);
   if (before.authoritative) return Adopt(before);
   auto os = ReadWide(index);  // All allocation/conversion outside snapshot SRW.
@@ -176,14 +192,11 @@ FontEnvironmentValue ReadFontEnvironment(FontEnvironmentKey key) noexcept {
   if (after.authoritative) { Release(os.value); return Adopt(after); }
   return Adopt(os);
 }
-std::optional<int> WriteFontEnvironment(const char* name, const char* value,
-                                      int overwrite) noexcept {
+static std::optional<int> WriteFontValue(const char* name, const char* value,
+    int overwrite, size_t length, int (*write)(const char*, const char*, void*),
+    void* context) noexcept {
   int key = KeyIndex(name);
   if (key < 0 || !value) return std::nullopt;
-  // Preserve UCRT's invalid-parameter callback path outside our owner lock.
-  size_t length = 0;
-  while (length < 32767 && value[length]) ++length;
-  if (length == 32767) return std::nullopt;
   {
     Lock lock(g_font_environment_writer, true);
     if (Skip(name, overwrite)) return 0;  // Before preparatory allocation.
@@ -215,7 +228,7 @@ std::optional<int> WriteFontEnvironment(const char* name, const char* value,
       }
       // No snapshot lock is held during CRT locks/callbacks. Arbitrary
       // reentrant handler WRITES remain unqualified/open; no guarantee added.
-      result = _putenv_s(name, prepared ? prepared->data : "");
+      result = write(name, prepared ? prepared->data : "", context);
       {
         Lock snapshot(g_font_environment_snapshot, true);
         if (result == 0) {
@@ -232,5 +245,25 @@ std::optional<int> WriteFontEnvironment(const char* name, const char* value,
   Release(prepared);
   Release(retired_prior);
   return result;
+}
+std::optional<int> WriteFontEnvironment(const char* name, const char* value,
+                                      int overwrite) noexcept {
+  if (KeyIndex(name) < 0 || !value) return std::nullopt;
+  // Keep UCRT's pre-mutation invalid-input path outside the font writer.
+  size_t length = 0;
+  while (length < 32767 && value[length]) ++length;
+  if (length == 32767) return std::nullopt;
+  return WriteFontValue(name, value, overwrite, length,
+      [](const char* n, const char* v, void*) { return RawPutEnvironment(n, v); }, nullptr);
+}
+std::optional<int> WriteWideFontEnvironment(const char* name, const char* value,
+    const wchar_t* wide_name, const wchar_t* wide_value) noexcept {
+  if (KeyIndex(name) < 0 || !value) return std::nullopt;
+  struct Wide { const wchar_t* name; const wchar_t* value; } wide{wide_name, wide_value};
+  return WriteFontValue(name, value, 1, std::strlen(value),
+      [](const char*, const char*, void* context) {
+        auto* wide = static_cast<Wide*>(context);
+        return RawPutWideEnvironment(wide->name, wide->value);
+      }, &wide);
 }
 }  // namespace gesher

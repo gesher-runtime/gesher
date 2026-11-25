@@ -11,6 +11,7 @@
       "45-exec3.ps1",
       "46-native3.ps1",
       "47-arm64.ps1",
+      "53-sandbox.ps1",
       "66-native3-wide.ps1",
       "67-exec4.ps1",
       "68-native3-time.ps1",

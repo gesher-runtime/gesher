@@ -39,6 +39,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertificateEncodingException;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -95,6 +98,10 @@ public final class ApkPackage {
     private boolean mSystemAddon;
     private boolean mSigningIdentityChecked;
     private Signature[] mVerifiedSignatures;
+    // A parsed APK's verified signing identity is immutable. A replacement APK gets
+    // another ApkPackage; permission migration must not hash this certificate on
+    // each lookup after full admission verification has already succeeded.
+    private String mVerifiedSignerSha256;
     private int mVerifiedSignatureSchemeVersion;
     private com.android.apksig.SigningCertificateLineage mVerifiedLineage;
     // A parsed record can be used before a package service owns it (standalone tools).
@@ -192,7 +199,7 @@ public final class ApkPackage {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
-        if ("android".equals(packageName)) {
+        if (PLATFORM_PACKAGE.equals(packageName)) {
             throw new SecurityException("The platform package name is reserved");
         }
         mUid = -1;
@@ -292,8 +299,37 @@ public final class ApkPackage {
         return parse(base.getPath(), directory);
     }
 
+    /** The platform's own package (framework-res.apk), which no app may be. */
+    public static final String PLATFORM_PACKAGE = "android";
+
+    /** The package an APK's manifest declares (ApkLite: the manifest's head only). */
+    public static String declaredPackageName(File apk) throws IOException {
+        ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(
+                ParseTypeImpl.forParsingWithoutPlatformCompat(), apk, 0);
+        if (result.isError()) {
+            throw new IOException("Cannot parse APK " + apk + ": " + result.getErrorMessage(),
+                    result.getException());
+        }
+        return result.getResult().getPackageName();
+    }
+
+    /** Identify the base APK from the manifest before assembling a package cluster. */
+    public static boolean isBaseApk(File file) throws IOException {
+        return splitName(file) == null;
+    }
+
+    /** The manifest's package name of {@code file}, a base or a split APK. */
+    public static String packageName(File file) throws IOException {
+        return codeApkLite(file).getPackageName();
+    }
+
+    /** The manifest's {@code split} name of {@code file}; null for a base APK. */
+    public static String splitName(File file) throws IOException {
+        return codeApkLite(file).getSplitName();
+    }
+
     private static ApkLite codeApkLite(File file) throws IOException {
-        if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        if (file == null || !Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Not a regular installed APK: " + file);
         }
         ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(
@@ -512,6 +548,36 @@ public final class ApkPackage {
         return mVerifiedSignatures == null ? null : mVerifiedSignatures.clone();
     }
 
+    /** Matches a SHA-256 certificate digest against the verified APK identity. */
+    synchronized boolean hasVerifiedSigningCertificate(byte[] certificate) {
+        Signature[] current = verifiedSignatures();
+        if (current == null) return false;
+        final MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new AssertionError(impossible);
+        }
+        for (Signature signature : current) {
+            if (MessageDigest.isEqual(certificate, digest.digest(signature.toByteArray()))) return true;
+        }
+        // Like Android, only a lone current signer can have signing history.
+        if (current.length != 1 || mVerifiedLineage == null) return false;
+        try {
+            List<X509Certificate> history = mVerifiedLineage.getCertificatesInLineage();
+            if (history.isEmpty() || !current[0].equals(new Signature(
+                    history.get(history.size() - 1).getEncoded()))) return false;
+            for (int i = 0; i < history.size() - 1; i++) {
+                if (MessageDigest.isEqual(certificate, digest.digest(history.get(i).getEncoded()))) {
+                    return true;
+                }
+            }
+        } catch (CertificateEncodingException invalid) {
+            return false;
+        }
+        return false;
+    }
+
     public static Signature[] verifySignatures(String path) {
         VerifiedIdentity identity = verifyIdentity(path);
         return identity == null ? null : identity.signatures.clone();
@@ -587,10 +653,11 @@ public final class ApkPackage {
         }
     }
 
-    public String verifiedSignerSha256() {
+    public synchronized String verifiedSignerSha256() {
+        if (mVerifiedSignerSha256 != null) return mVerifiedSignerSha256;
         Signature[] signatures = verifiedSignatures();
         if (signatures == null || signatures.length != 1) return null;
-        return certificateSha256(signatures[0].toByteArray());
+        return mVerifiedSignerSha256 = certificateSha256(signatures[0].toByteArray());
     }
 
     private static String certificateSha256(byte[] certificate) {
@@ -670,20 +737,28 @@ public final class ApkPackage {
         return certificateSha256(current[0].toByteArray());
     }
 
-    /** Full APK integrity verification, separate from our compatibility cert collection. */
+    /** Official-addon policy over this generation's fully verified, unspoofed identity. */
     synchronized boolean hasVerifiedMicrogSigner() {
         if (mVerifiedMicrogSigner == null) {
-            mVerifiedMicrogSigner = GmsSignatureSpoofing.verifyOfficialApk(apkPath);
+            // verifiedSignerSha256() first performs full content verification, then
+            // caches only on this ApkPackage. Do not derive a second, independent
+            // signer result or share trust with another APK generation. Only the
+            // v1 legacy GSF branch reads the file again, for its exact whole-file pin.
+            mVerifiedMicrogSigner = GmsSignatureSpoofing.MICROG_CERT_SHA256.equals(verifiedSignerSha256())
+                    && (mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V2
+                        || mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3
+                        || mVerifiedSignatureSchemeVersion == SigningDetails.SignatureSchemeVersion.JAR
+                            && GmsSignatureSpoofing.isPinnedLegacyGsf(apkPath));
         }
         return mVerifiedMicrogSigner;
     }
 
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
-        return packageInfo(flags, false);
+        return packageInfo(flags, false, null);
     }
 
-    private PackageInfo packageInfo(long flags, boolean providerQuery) {
+    private PackageInfo packageInfo(long flags, boolean providerQuery, String authority) {
         if ((flags & DIRECT_BOOT) == 0) {
             flags |= DIRECT_BOOT;
         }
@@ -691,13 +766,23 @@ public final class ApkPackage {
         // Include manifest-disabled declarations before applying installed overrides.
         // A provider query also needs both boot states: choose its registered first
         // component before either boot-state or enabled-state filtering.
-        PackageInfo pi = PackageInfoCommonUtils.generate(parsed,
-                flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0),
-                0 /* userId */);
+        long generated = flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0);
+        PackageInfo pi = PackageInfoCommonUtils.generate(parsed, generated, 0 /* userId */);
         installed(pi.applicationInfo, state, flags);
         pi.activities = installedComponents(pi.activities, pi.applicationInfo, flags, state);
         pi.receivers = installedComponents(pi.receivers, pi.applicationInfo, flags, state);
         pi.services = installedComponents(pi.services, pi.applicationInfo, flags, state);
+        if ((flags & PackageManager.GET_PROVIDERS) != 0 && (generated & DIRECT_BOOT) != DIRECT_BOOT) {
+            // Other component lists still use the caller's original boot flags.
+            ProviderInfo[] allProviders = PackageInfoCommonUtils.generate(parsed,
+                    (generated | DIRECT_BOOT) & ~(PackageManager.GET_ACTIVITIES | PackageManager.GET_RECEIVERS
+                            | PackageManager.GET_SERVICES | PackageManager.GET_PERMISSIONS
+                            | PackageManager.GET_CONFIGURATIONS), 0 /* userId */).providers;
+            registerAuthorities(allProviders, authority);
+            pi.providers = filterProviderBootState(allProviders, generated);
+        } else {
+            registerAuthorities(pi.providers, authority);
+        }
         if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
         pi.firstInstallTime = mInstallTime;
@@ -927,10 +1012,82 @@ public final class ApkPackage {
      * common to bind, publication and PackageManager's authority/component queries.
      */
     public List<ProviderInfo> providers(long flags) {
-        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true);
+        return providerList(flags, null);
+    }
+
+    ProviderInfo providerForAuthority(String authority, long flags) {
+        for (ProviderInfo info : providerList(flags, authority)) {
+            if (ContentProviders.hasAuthority(info, authority)) return info;
+        }
+        return null;
+    }
+
+    private List<ProviderInfo> providerList(long flags, String authority) {
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true, authority);
         List<ProviderInfo> result = new ArrayList<>();
         if (pi.providers != null) Collections.addAll(result, pi.providers);
         return result;
+    }
+
+    /**
+     * ComponentResolver.addProvidersLocked registers a package's providers in manifest
+     * order: each authority belongs to the first declaration that names it, a later one
+     * keeps only the authorities still free ("Skipping provider name ..."), and one left
+     * with none has a null authority, so queryContentProviders never binds it. Done
+     * before enabled and direct-boot filtering, as registration happens at scan time.
+     * Authorities shared with another package are not resolved here: ContentProviders
+     * rejects that ambiguity instead of picking an owner by install order. Use the
+     * same first-declaration-per-class rule as the provider queries and index.
+     *
+     * <p>For a syncable provider Android maps the first authority to the class record
+     * and maps the aliases to a non-syncable copy that retains the first authority
+     * if registered. Binding uses the class view; authority lookups select
+     * the record registered under the requested authority.
+     */
+    private static void registerAuthorities(ProviderInfo[] providers, String authority) {
+        if (providers == null) return;
+        Set<String> registered = new HashSet<>();
+        Set<String> components = new HashSet<>();
+        for (ProviderInfo info : providers) {
+            if (!components.add(info.name) || info.authority == null) continue;
+            String[] authorities = info.authority.split(";");
+            String first = null;
+            StringBuilder others = null;
+            boolean skipped = false;
+            for (int i = 0; i < authorities.length; i++) {
+                String name = authorities[i];
+                if (!registered.add(name)) {
+                    skipped = true;
+                    continue;
+                }
+                if (i == 0) {
+                    first = name;
+                } else {
+                    if (others == null) others = new StringBuilder(name);
+                    else others.append(';').append(name);
+                }
+            }
+            String registeredAuthorities = others == null ? first
+                    : first == null ? others.toString() : first + ";" + others;
+            if (info.isSyncable) {
+                boolean classRecord = authority == null || authority.equals(first);
+                info.authority = classRecord ? first : registeredAuthorities;
+                info.isSyncable = classRecord;
+            } else if (skipped) {
+                info.authority = registeredAuthorities;
+            }
+        }
+    }
+
+    private static ProviderInfo[] filterProviderBootState(ProviderInfo[] providers, long flags) {
+        if (providers == null) return null;
+        int count = 0;
+        for (ProviderInfo info : providers) {
+            long state = info.directBootAware ? PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    : PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+            if ((flags & state) != 0) providers[count++] = info;
+        }
+        return count == 0 ? null : count == providers.length ? providers : Arrays.copyOf(providers, count);
     }
 
     private static ProviderInfo[] registeredProviders(ProviderInfo[] providers, long flags) {
@@ -1050,7 +1207,9 @@ public final class ApkPackage {
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
 
-        // A long-lived PM record must not publish a cached graph after XML/jar updates.
+        // A long-lived PM record must not publish a stale graph after XML/jar updates:
+        // the registry's snapshot is checked against the files' metadata and the graph
+        // comes from it, without reading or hashing again while they are unchanged.
         // Ordinary packages keep the cheap immutable empty graph path.
         try {
             SharedLibraryGraph graph = SharedLibraryRegistry.usesNone(parsed) ? sharedLibraries

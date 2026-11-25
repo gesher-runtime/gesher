@@ -10,6 +10,11 @@ spec = importlib.util.spec_from_file_location('command_oracle', Path(__file__).w
 oracle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(oracle)
 
+blocking_spec = importlib.util.spec_from_file_location('blocking_oracle',
+        Path(__file__).with_name('blocking_oracle.py'))
+blocking = importlib.util.module_from_spec(blocking_spec)
+blocking_spec.loader.exec_module(blocking)
+
 
 class Stream:
     def close(self):
@@ -40,6 +45,24 @@ class Reader:
 
 
 class CleanupControls(unittest.TestCase):
+    def test_blocking_commands_use_lf_with_windows_text_defaults(self):
+        # Use a real TextIOWrapper with Windows newline translation on any host.
+        # The native worker compares raw bytes, so a CR must not reach its parser.
+        wire = io.BytesIO()
+        stream = io.TextIOWrapper(wire, encoding='utf-8', newline='\r\n')
+        process = type('ProtocolProcess', (), {'stdin': stream, 'stdout': io.StringIO()})()
+        try:
+            with patch.object(blocking.subprocess, 'Popen', return_value=process):
+                worker = blocking.Worker('unused-no-execution', 'waiter', 'unused', 7, 'normal')
+            for command in ('observe', 'interrupt', 'join'):
+                worker.send(command)
+            worker.reader.join(timeout=2)
+            self.assertFalse(worker.reader.is_alive())
+            self.assertEqual(wire.getvalue(), b'observe\ninterrupt\njoin\n')
+        finally:
+            stream.close()
+            process.stdout.close()
+
     def client(self):
         client = oracle.Client.__new__(oracle.Client)
         client.process = Process()

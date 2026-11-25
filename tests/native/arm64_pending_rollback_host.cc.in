@@ -81,9 +81,12 @@ size_t AllocationCalls() {
 }
 
 namespace Dynarmic {
-enum class HaltReason : unsigned { UserDefined1 = 1, UserDefined2 = 2 };
+enum class HaltReason : unsigned { UserDefined1 = 1, UserDefined2 = 2, UserDefined3 = 4 };
 HaltReason operator|(HaltReason a, HaltReason b) {
   return static_cast<HaltReason>(static_cast<unsigned>(a) | static_cast<unsigned>(b));
+}
+constexpr bool Has(HaltReason reasons, HaltReason test) {
+  return (static_cast<unsigned>(reasons) & static_cast<unsigned>(test)) != 0;
 }
 namespace A64 {
 class UserCallbacks {
@@ -98,13 +101,15 @@ class Jit {
   std::function<void(Jit&)> run;
   std::unordered_map<uintptr_t, uint32_t> code;
   std::array<uint64_t, 31> registers{};
-  uint64_t pc = 0;
+  uint64_t pc = 0, sp = 0;
   unsigned halt = 0;
-  void Run() {
+  // As Dynarmic: the reasons it stopped, which stay set until ClearHalt.
+  Dynarmic::HaltReason Run() {
     REQUIRE(!running && static_cast<bool>(run));
     running = true;
     run(*this);
     running = false;
+    return static_cast<Dynarmic::HaltReason>(halt);
   }
   void ClearCache() {
     REQUIRE(!running);
@@ -126,6 +131,7 @@ class Jit {
     halt |= static_cast<unsigned>(reason);
   }
   uint64_t GetPC() const { return pc; }
+  uint64_t GetSP() const { return sp; }
   uint64_t GetRegister(size_t index) const { return registers.at(index); }
   void SetRegister(size_t index, uint64_t value) { registers.at(index) = value; }
 };
@@ -171,6 +177,7 @@ class Env final : public A64::UserCallbacks {
   std::vector<std::unique_ptr<A64::Jit>> jits_;
   std::vector<uint64_t> code_generations_;
   std::atomic<A64::Jit*> running_jit_{nullptr};
+  std::atomic<bool> signal_interrupt_{false};
   std::atomic<uint64_t> last_syscall_{0};
   ThreadCounters counters_;
   std::function<void(A64::Jit*, void*, int, int)> host_call;
@@ -338,14 +345,14 @@ void TestTrampolineReuse() {
   REQUIRE(slot != nullptr && slot != stable);
   const size_t index = g_tramp_by_fn.at(owned);
   const uint32_t expected_svc = Svc(static_cast<uint32_t>(index + 1));
-  REQUIRE(g_tramps[index].va_list_index == 3);
+  REQUIRE(ReadTrampoline(index).va_list_index == 3);
   g_host_pages[reinterpret_cast<uintptr_t>(owned) & ~uintptr_t{0xfff}] = true;
   Env env;
   slot[0] = kRet;  // A guest-installed in-place hook must not survive reuse.
   env.Dispatch(0, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(slot) == kRet); });
   const unsigned previous_clears = env.jits_[0]->clear_count;
   ApiUnbindHostFunction(owned);
-  REQUIRE(g_tramp_by_fn.count(owned) == 0 && g_tramps[index].host_fn == nullptr);
+  REQUIRE(g_tramp_by_fn.count(owned) == 0 && ReadTrampoline(index).host_fn == nullptr);
   REQUIRE(g_va_functions.count(owned) == 0 && g_host_pages.count(reinterpret_cast<uintptr_t>(owned)) == 0);
   for (size_t i = 0; i < kTrampWords; ++i) REQUIRE(slot[i] == kBrk);
   REQUIRE(BindHost(owned, -1) == slot);
@@ -358,12 +365,12 @@ void TestTrampolineReuse() {
     REQUIRE(BindHost(owned, -1) == slot && g_tramp_by_fn.at(owned) == index);
     REQUIRE(slot[0] == expected_svc && slot[1] == kRet);
     ApiUnbindHostFunction(owned);
-    REQUIRE(g_tramp_by_fn.count(owned) == 0 && g_tramps[index].host_fn == nullptr);
+    REQUIRE(g_tramp_by_fn.count(owned) == 0 && ReadTrampoline(index).host_fn == nullptr);
     for (size_t i = 0; i < kTrampWords; ++i) REQUIRE(slot[i] == kBrk);
   }
   REQUIRE(g_tramp_count.load() == count && AllocationCalls() == calls);
   REQUIRE(g_code_used == used && g_code_pages.size() == pages && g_free_tramps.size() == 1);
-  REQUIRE(BindHost(stable_fn, -1) == stable && g_tramps[g_tramp_by_fn.at(stable_fn)].host_fn == stable_fn);
+  REQUIRE(BindHost(stable_fn, -1) == stable && ReadTrampoline(g_tramp_by_fn.at(stable_fn)).host_fn == stable_fn);
   const uint64_t generation = g_code_generation.load();
   ApiUnbindHostFunction(owned);
   REQUIRE(g_code_generation.load() == generation);

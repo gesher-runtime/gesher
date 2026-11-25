@@ -38,6 +38,8 @@ final class SpellCheckerCatalog {
 
     SpellCheckerCatalog(PackageManagerService packages) { mPackages = packages; }
 
+    ApkPackage owner(String packageName) { return mPackages.get(packageName); }
+
     static final class Entry {
         final ApkPackage owner;
         final SpellCheckerInfo info;

@@ -166,6 +166,12 @@ public final class AccountClientRemovalTest {
         Object fresh=method(svc,"captureCaller",String.class,String.class,boolean.class,int.class,int.class)
                 .invoke(manager,clientName,clientCode,false,uid,124);
         require((Boolean)method(svc,"callerUnchanged",caller).invoke(manager,fresh),"Fresh same-signer caller rejected after epoch retirement");
+        // The removed grant is gone: Android resolves the reinstalled client's
+        // unset visibility to USER_MANAGED_NOT_VISIBLE, which enumerates nothing.
+        require((Integer)method(svc,"visibility",caller,entry).invoke(manager,fresh,provider)
+                        ==AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE
+                &&((Account[])method(svc,"filterAccounts",String.class,caller).invoke(manager,null,fresh)).length==0,
+                "Same-signer reinstall revived the removed client visibility");
         Properties committed=persisted.get();
         require("1".equals(committed.getProperty("count")),"Serialized removal lost an unrelated provider account");
         require(!committed.containsValue(clientKey)&&!committed.containsValue(oldKey),"Serialized state retained old client grants");

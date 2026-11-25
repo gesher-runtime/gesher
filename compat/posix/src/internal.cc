@@ -78,7 +78,11 @@ int ErrnoFromWin32(DWORD error) {
 }
 
 HANDLE HandleFromFd(int fd) {
-  return reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  intptr_t handle = _get_osfhandle(fd);
+  // UCRT uses -2 for an unbound standard descriptor. It is not a native
+  // resource (and must never be mistaken for Win32's current-thread handle).
+  return handle == -1 || handle == -2 || handle == 0
+      ? INVALID_HANDLE_VALUE : reinterpret_cast<HANDLE>(handle);
 }
 
 ULONGLONG MonotonicMicros() {

@@ -404,15 +404,15 @@ static void TestEgl(void) {
   GpuDraw(64, 32);
   int fence = NativeFence();
   struct pollfd pfd = {fence, POLLIN, 0};
-  CHECK(fence >= 0 && poll(&pfd, 1, 0) == 1 && (pfd.revents & POLLIN) != 0,
-        "eglDupNativeFenceFDANDROID: fd %d, signaled when given", fence);
+  CHECK(fence >= 0 && poll(&pfd, 1, 5000) == 1 && (pfd.revents & POLLIN) != 0,
+        "eglDupNativeFenceFDANDROID: fd %d, signals GPU completion", fence);
   // A fence made from that fd: waited for by the server and the client.
   int copy = fence >= 0 ? dup(fence) : -1;
   const EGLint from_fd[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, copy, EGL_NONE};
   EGLSyncKHR imported = p_create_sync(g_display, EGL_SYNC_NATIVE_FENCE_ANDROID, from_fd);
   EGLint type = 0, condition = 0, status = 0;
   CHECK(imported != EGL_NO_SYNC_KHR && p_wait_sync(g_display, imported, 0) == EGL_TRUE &&
-            p_client_wait(g_display, imported, 0, 0) == EGL_CONDITION_SATISFIED_KHR &&
+            p_client_wait(g_display, imported, 0, 5000000000ULL) == EGL_CONDITION_SATISFIED_KHR &&
             p_sync_attrib(g_display, imported, EGL_SYNC_TYPE_KHR, &type) &&
             p_sync_attrib(g_display, imported, EGL_SYNC_CONDITION_KHR, &condition) &&
             p_sync_attrib(g_display, imported, EGL_SYNC_STATUS_KHR, &status) &&

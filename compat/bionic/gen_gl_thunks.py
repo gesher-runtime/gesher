@@ -52,11 +52,13 @@ HEADERS = [
 EXTRA = 'ANGLE gl2ext_angle.h'
 EXTRA_HEADER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             'third_party', 'angle', 'GLES2', 'gl2ext_angle.h')
-# Entry points of extensions ANGLE advertises that a later revision of the
-# extension added and AOSP's gl2ext.h predates (Khronos' gl2ext.h has them).
+# Entry points that ANGLE advertises but the input headers do not declare.
 EXTRA_PROTOTYPES = [
     # GL_EXT_disjoint_timer_query (its later revisions add it)
     'GL_APICALL void GL_APIENTRY glGetInteger64vEXT (GLenum pname, GLint64 *data);',
+    # EGL_ANGLE_feature_control (ANGLE's eglext_angle.h)
+    'EGLAPI EGLBoolean EGLAPIENTRY eglQueryDisplayAttribANGLE (EGLDisplay dpy, EGLint attribute, EGLAttrib *value);',
+    'EGLAPI const char *EGLAPIENTRY eglQueryStringiANGLE (EGLDisplay dpy, EGLint name, EGLint index);',
 ]
 
 CALLBACK_TYPES = ('GLDEBUGPROC', 'GLDEBUGPROCKHR', 'EGLDEBUGPROCKHR', 'EGLSetBlobFuncANDROID',

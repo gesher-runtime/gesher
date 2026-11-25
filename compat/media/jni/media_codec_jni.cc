@@ -10,8 +10,8 @@
 // out as I420 (COLOR_FormatYUV420Planar, also as an Image), or, with an
 // output Surface, is drawn into it (RGBA through ANativeWindow_lock) when
 // the app releases the buffer with render = true; an ImageReader's Surface
-// gets the frame as an Image (media3, ADR 0059: through the camera's frame
-// path, com.gesher.server.CameraFrames).
+// gets the frame as an Image directly through the native reader queue
+// (media3, ADR 0059), without a Java byte-array round trip.
 //
 // Encoders (media3, ADR 0059) are compat/media/encode's behind the same slots:
 // raw input (I420 or NV12 video, 16-bit or float PCM) in ByteBuffers or Images,
@@ -38,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <string>
 #include <thread>
@@ -49,8 +50,10 @@
 #include "../encode/encoder.h"
 #include "../video/input_surface.h"
 #include "../video/video_decoder.h"
+#include "../../devices/camera_frames.h"
 #include "jni_util.h"
 #include "media_jni.h"
+#include "persistent_input_surface.h"
 
 // The ANativeWindow functions dalvikvm defines (docs/graphics.md) and
 // libandroid_runtime's host ANativeWindow_fromSurface.
@@ -336,7 +339,7 @@ Format FormatFromJava(JNIEnv* env, jobjectArray keys, jobjectArray values) {
 // --- ImageReader surfaces ------------------------------------------------------------------
 
 // com.gesher.server.CameraFrames (gesher-app.jar, the boot class path): an ImageReader's
-// Surface is Gesher's in-process queue (compat/devices/camera_frames.cc), fed NV12 frames.
+// Surface is Gesher's in-process queue (compat/devices/camera_frames.cc).
 jclass CameraFramesClass(JNIEnv* env) {
   static jclass cls = [env] {
     jclass local = env->FindClass("com/gesher/server/CameraFrames");
@@ -364,49 +367,12 @@ bool IsReaderSurface(JNIEnv* env, jobject surface) {
   return r == JNI_TRUE;
 }
 
-// A decoded frame into an ImageReader (YUV_420_888 / PRIVATE readers take NV12).
+// A decoded frame into an ImageReader, directly from native I420 storage.
 int DeliverToReader(jobject surface, const VideoFrame& f, int64_t timestamp_ns) {
   JNIEnv* env = AttachedEnv("gesher-codec");
   if (env == nullptr) return android::UNKNOWN_ERROR;
-  jclass cls = CameraFramesClass(env);
-  if (cls == nullptr) return android::UNKNOWN_ERROR;
-  jmethodID m = env->GetStaticMethodID(cls, "deliver", "(Landroid/view/Surface;[BIIJ[B)I");
-  if (m == nullptr) {
-    env->ExceptionClear();
-    return android::UNKNOWN_ERROR;
-  }
-  const int w = f.visible_width() & ~1, h = f.visible_height() & ~1;
-  if (w <= 0 || h <= 0) return android::BAD_VALUE;
-  std::vector<uint8_t> nv12(static_cast<size_t>(w) * h * 3 / 2);
-  for (int y = 0; y < h; y++) {
-    memcpy(nv12.data() + static_cast<size_t>(y) * w,
-           f.y() + static_cast<size_t>(f.crop_top + y) * f.stride_y + f.crop_left, static_cast<size_t>(w));
-  }
-  uint8_t* uv = nv12.data() + static_cast<size_t>(w) * h;
-  for (int y = 0; y < h / 2; y++) {
-    const size_t row = static_cast<size_t>(f.crop_top / 2 + y) * f.stride_uv + f.crop_left / 2;
-    for (int x = 0; x < w / 2; x++) {
-      uv[static_cast<size_t>(y) * w + 2 * x] = f.u()[row + x];
-      uv[static_cast<size_t>(y) * w + 2 * x + 1] = f.v()[row + x];
-    }
-  }
-  if (env->PushLocalFrame(8) < 0) {
-    CheckException(env, "CameraFrames local frame");
-    return android::NO_MEMORY;
-  }
-  jbyteArray a = env->NewByteArray(static_cast<jsize>(nv12.size()));
-  jint result = android::NO_MEMORY;
-  if (a != nullptr) {
-    env->SetByteArrayRegion(a, 0, static_cast<jsize>(nv12.size()),
-                            reinterpret_cast<const jbyte*>(nv12.data()));
-    if (!env->ExceptionCheck()) {
-      result = env->CallStaticIntMethod(cls, m, surface, a, w, h,
-                                        static_cast<jlong>(timestamp_ns), nullptr);
-    }
-  }
-  const bool threw = CheckException(env, "CameraFrames.deliver");
-  env->PopLocalFrame(nullptr);
-  if (threw && result != android::NO_MEMORY) return android::UNKNOWN_ERROR;
+  const int result = android::QueueImageReaderVideoFrame(env, surface, f, timestamp_ns);
+  if (CheckException(env, "ImageReader native delivery")) return android::UNKNOWN_ERROR;
   // CameraFrames distinguishes an unsupported format (1) from a closed or
   // missing consumer (NO_INIT); only the latter invalidates MediaCodec output.
   return result == 1 ? android::BAD_VALUE : result;
@@ -422,7 +388,56 @@ struct Slot {
   int64_t time_us = 0;
   int flags = 0;
   std::shared_ptr<VideoFrame> frame;  // video outputs
+  std::unique_ptr<uint8_t[]> deferred_mem;  // CPU access after removing a Surface
 };
+
+// CPU output exposes the visible part as tightly packed I420. Surface output
+// keeps the decoded frame instead: neither getOutputBuffer nor getOutputImage
+// exposes its bytes, and releaseOutputBuffer renders the owned frame directly.
+void CopyOutputFramePixels(const VideoFrame& f, uint8_t* d) {
+  const int w = f.visible_width(), h = f.visible_height();
+  const int cw = (w + 1) / 2, ch = (h + 1) / 2;
+  for (int y = 0; y < h; y++) {
+    memcpy(d + static_cast<size_t>(y) * w,
+           f.y() + static_cast<size_t>(f.crop_top + y) * f.stride_y + f.crop_left, static_cast<size_t>(w));
+  }
+  uint8_t* du = d + static_cast<size_t>(w) * h;
+  uint8_t* dv = du + static_cast<size_t>(cw) * ch;
+  for (int y = 0; y < ch; y++) {
+    const size_t row = static_cast<size_t>(f.crop_top / 2 + y) * f.stride_uv + f.crop_left / 2;
+    memcpy(du + static_cast<size_t>(y) * cw, f.u() + row, static_cast<size_t>(cw));
+    memcpy(dv + static_cast<size_t>(y) * cw, f.v() + row, static_cast<size_t>(cw));
+  }
+}
+
+size_t OutputFrameBytes(const VideoFrame& f) {
+  const int w = f.visible_width(), h = f.visible_height();
+  return static_cast<size_t>(w) * h
+      + 2 * static_cast<size_t>((w + 1) / 2) * ((h + 1) / 2);
+}
+
+void CopyOutputFrameToBuffer(Slot& slot) {
+  const VideoFrame& f = *slot.frame;
+  const size_t size = OutputFrameBytes(f);
+  if (slot.mem.size() < size) slot.mem.assign(size, 0);
+  CopyOutputFramePixels(f, slot.mem.data());
+}
+
+uint8_t* CpuOutputBytes(JNIEnv* env, Slot& slot) {
+  if (!slot.mem.empty()) return slot.mem.data();
+  if (slot.frame == nullptr) return nullptr;
+  if (slot.deferred_mem == nullptr) {
+    // This JNI target is built without C++ exceptions. Unlike the worker's
+    // existing vector allocation, a lazy accessor must report Java OOM.
+    slot.deferred_mem.reset(new (std::nothrow) uint8_t[OutputFrameBytes(*slot.frame)]);
+    if (slot.deferred_mem == nullptr) {
+      jniThrow(env, "java/lang/OutOfMemoryError", "MediaCodec output frame");
+      return nullptr;
+    }
+    CopyOutputFramePixels(*slot.frame, slot.deferred_mem.get());
+  }
+  return slot.deferred_mem.get();
+}
 
 class Codec {
  public:
@@ -474,6 +489,7 @@ class Codec {
     if (mime.empty()) AMediaFormat_setString(format.get(), "mime", entry_.mime.c_str());
     if (entry_.encoder && !ConfigureEncoder(format, error)) return false;
     input_format_ = std::move(format);
+    video_scaling_mode_ = 1;
     if (entry_.encoder) {
       BeginMetricsLocked();
       configured_ = true;
@@ -526,22 +542,89 @@ class Codec {
 
   jobject CreateInputSurface(JNIEnv* env, std::string* error) {
     std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
-    std::lock_guard<std::mutex> lock(mu_);
-    if (!entry_.encoder || !entry_.video) {
-      *error = "createInputSurface() is for video encoders";
+    int width, height;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      if (!entry_.encoder || !entry_.video) {
+        *error = "createInputSurface() is for video encoders";
+        return nullptr;
+      }
+      if (released_ || fatal_ || !configured_ || started_) {
+        *error = "createInputSurface() must be called after configure() and before start()";
+        return nullptr;
+      }
+      if (input_surface_ != nullptr && persistent_input_ == nullptr)
+        return input_surface_->NewJavaSurface(env);
+      width = enc_params_.width;
+      height = enc_params_.height;
+    }
+    std::unique_ptr<InputSurface> input(gesher::media::CreateInputSurface(width, height));
+    if (input == nullptr) {
+      *error = "cannot create the input Surface";
       return nullptr;
     }
-    if (released_ || !configured_ || started_) {
-      *error = "createInputSurface() must be called after configure() and before start()";
+    jobject surface = input->NewJavaSurface(env);
+    if (surface == nullptr) {
+      *error = "cannot create the Java input Surface";
       return nullptr;
     }
-    if (input_surface_ == nullptr) {
-      input_surface_.reset(gesher::media::CreateInputSurface(enc_params_.width, enc_params_.height));
-      input_surface_->SetCallback([this](const uint32_t* rgba, int w, int h, int64_t ts_ns) {
-        OnSurfaceFrame(rgba, w, h, ts_ns);
-      });
+    input->SetCallback([this](const uint32_t* rgba, int w, int h, int64_t ts_ns) {
+      OnSurfaceFrame(rgba, w, h, ts_ns);
+    });
+    // AOSP's configured-state create/set path may replace an input. Retire the
+    // old consumer outside mu_; a producer callback needs that mutex to return.
+    if (input_surface_ != nullptr) input_surface_->Abandon();
+    std::unique_ptr<InputSurface> retired;
+    std::shared_ptr<PersistentInputSurface> retired_source;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      retired = std::move(input_surface_);
+      retired_source = std::move(persistent_input_);
+      input_surface_ = std::move(input);
     }
-    return input_surface_->NewJavaSurface(env);
+    return surface;
+  }
+
+  bool SetInputSurface(const std::shared_ptr<PersistentInputSurface>& source, std::string* error) {
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
+    int width, height;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      if (released_ || fatal_ || !configured_ || started_ || !entry_.encoder || !entry_.video ||
+          source == nullptr) {
+        *error = "setInputSurface() requires a configured video encoder before start()";
+        return false;
+      }
+      // Repeated calls are permitted while configured. Re-selecting the same
+      // producer keeps the existing exclusive lease and queued producer state.
+      if (source == persistent_input_) return true;
+      width = enc_params_.width;
+      height = enc_params_.height;
+    }
+    auto input = source->Attach(width, height);
+    if (input == nullptr) {
+      *error = "persistent input Surface already has a consumer";
+      return false;
+    }
+    // Source admission and callback installation can wait for source locks.
+    // Keep both outside mu_, including when two codecs try to swap producers.
+    input->SetCallback([this](const uint32_t* rgba, int w, int h, int64_t ts_ns) {
+      OnSurfaceFrame(rgba, w, h, ts_ns);
+    });
+    // First secure the requested source. A failed attachment leaves the
+    // currently selected producer intact. Lifecycle ownership pins the old
+    // input pointer while its callback is quiesced without holding mu_.
+    if (input_surface_ != nullptr) input_surface_->Abandon();
+    std::unique_ptr<InputSurface> retired;
+    std::shared_ptr<PersistentInputSurface> retired_source;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      retired = std::move(input_surface_);
+      retired_source = std::move(persistent_input_);
+      input_surface_ = std::move(input);
+      persistent_input_ = source;
+    }
+    return true;
   }
 
   bool SignalEndOfInputStream(std::string* error) {
@@ -565,6 +648,15 @@ class Codec {
       if (request_sync) force_key_ = true;
       if (bitrate > 0) pending_bitrate_ = bitrate;
     }
+    return true;
+  }
+
+  bool SetVideoScalingMode(int mode) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (released_) return false;
+    // As on Android, a valid call before an output Surface exists has no effect.
+    // Capture the setting with each released frame, not in shared pixel storage.
+    if (has_surface()) video_scaling_mode_ = mode;
     return true;
   }
 
@@ -638,9 +730,14 @@ class Codec {
     StopWorker();
     // Abandon waits for an in-flight producer callback, which takes mu_.
     if (input_surface_ != nullptr) input_surface_->Abandon();
+    // A successor can attach as soon as Abandon returns. Even the retired
+    // lease's destructor must acquire its source lock outside the codec mutex.
+    std::unique_ptr<InputSurface> retired_input;
+    auto retired_source = std::move(persistent_input_);
     std::lock_guard<std::mutex> lock(mu_);
-    input_surface_.reset();
+    retired_input = std::move(input_surface_);
     configured_ = false;
+    video_scaling_mode_ = 1;
     video_enc_.reset();
     audio_enc_.reset();
     surface_frames_.clear();
@@ -806,6 +903,7 @@ class Codec {
     std::unique_ptr<ANativeWindow, decltype(&ANativeWindow_release)> window(
         nullptr, ANativeWindow_release);
     int64_t time_us = 0;
+    int video_scaling_mode = 1;
     uint64_t execution_generation = 0;
     std::shared_ptr<GlobalRef> reader;
     {
@@ -829,6 +927,7 @@ class Codec {
       s.client = false;
       frame = std::move(s.frame);
       time_us = s.time_us;
+      video_scaling_mode = video_scaling_mode_;
       execution_generation = execution_generation_;
       if (render && window_ != nullptr) {
         // SetSurface can release the codec's reference once mu_ is unlocked.
@@ -847,7 +946,7 @@ class Codec {
     static gesher::perf::Site render_site("MediaCodec: render a frame into its Surface");
     const int64_t render_start = gesher::perf::Now();
     const int delivery_status = window != nullptr
-        ? RenderFrame(window.get(), *frame, timestamp_ns)
+        ? RenderFrame(window.get(), *frame, timestamp_ns, video_scaling_mode)
         : DeliverToReader(reader->get(), *frame, timestamp_ns);
     if (window != nullptr) render_site.Add(gesher::perf::Now() - render_start);
     if (delivery_status == android::NO_INIT) {
@@ -924,8 +1023,12 @@ class Codec {
     if (!CheckInitializedLocked(env)) return nullptr;
     if (index < 0 || index >= kSlots || has_surface()) return nullptr;
     Slot& s = outputs_[index];
-    if (s.mem.empty()) return nullptr;
-    jobject b = NewByteBuffer(env, s.mem.data(), s.mem.size(), true);
+    // A Surface can be removed while an output is held. Materialize that
+    // frame only if a CPU accessor subsequently needs it.
+    uint8_t* data = CpuOutputBytes(env, s);
+    if (data == nullptr) return nullptr;
+    const size_t capacity = s.mem.empty() ? OutputFrameBytes(*s.frame) : s.mem.size();
+    jobject b = NewByteBuffer(env, data, capacity, true);
     if (b != nullptr) SetRange(env, b, 0, s.size);
     return b;
   }
@@ -967,11 +1070,13 @@ class Codec {
       } else {
         if (has_surface() || entry_.encoder) return nullptr;
         Slot& s = outputs_[index];
-        if (s.mem.empty() || s.size == 0) return nullptr;
+        if (s.size == 0) return nullptr;
+        uint8_t* data = CpuOutputBytes(env, s);
+        if (data == nullptr) return nullptr;
         w = out_width_;
         h = out_height_;
         t = s.time_us;
-        buffer = NewByteBuffer(env, s.mem.data(), static_cast<size_t>(s.size), true);
+        buffer = NewByteBuffer(env, data, static_cast<size_t>(s.size), true);
       }
     }
     if (buffer == nullptr) return nullptr;
@@ -1329,25 +1434,19 @@ class Codec {
     Slot& s = outputs_[i];
     const int cw = (w + 1) / 2, ch = (h + 1) / 2;
     const size_t size = static_cast<size_t>(w) * h + 2 * static_cast<size_t>(cw) * ch;
-    if (s.mem.size() < size) s.mem.assign(size, 0);
-    // The visible part, tightly packed I420.
-    uint8_t* d = s.mem.data();
-    for (int y = 0; y < h; y++) {
-      memcpy(d + static_cast<size_t>(y) * w,
-             f->y() + static_cast<size_t>(f->crop_top + y) * f->stride_y + f->crop_left, static_cast<size_t>(w));
-    }
-    uint8_t* du = d + static_cast<size_t>(w) * h;
-    uint8_t* dv = du + static_cast<size_t>(cw) * ch;
-    for (int y = 0; y < ch; y++) {
-      size_t row = static_cast<size_t>(f->crop_top / 2 + y) * f->stride_uv + f->crop_left / 2;
-      memcpy(du + static_cast<size_t>(y) * cw, f->u() + row, static_cast<size_t>(cw));
-      memcpy(dv + static_cast<size_t>(y) * cw, f->v() + row, static_cast<size_t>(cw));
-    }
     s.size = static_cast<int>(size);
     s.offset = 0;
     s.time_us = f->time_us;
     s.flags = 0;
     s.frame = std::move(f);
+    s.deferred_mem.reset();
+    if (has_surface()) {
+      // A reused slot may still own CPU storage from an earlier output mode.
+      // Only free slots reach here, so no valid client buffer is invalidated.
+      std::vector<uint8_t>().swap(s.mem);
+    } else {
+      CopyOutputFrameToBuffer(s);
+    }
     Publish(i);
     return true;
   }
@@ -1403,6 +1502,7 @@ class Codec {
     s.time_us = time_us;
     s.flags = kFlagEndOfStream;
     s.frame.reset();
+    s.deferred_mem.reset();
     Publish(i);
   }
 
@@ -1466,15 +1566,28 @@ class Codec {
 
   // The input Surface's frames (the producer's thread): RGBA to I420, queued for the worker.
   void OnSurfaceFrame(const uint32_t* rgba, int w, int h, int64_t ts_ns) {
+    int width, height;
+    uint64_t execution, flush;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      // A persistent producer can keep drawing before start or after EOS.
+      // Reject those frames before allocating or converting an I420 image.
+      if (!started_ || released_ || fatal_ || surface_eos_ || flushed_ || flush_requested_) return;
+      width = enc_params_.width;
+      height = enc_params_.height;
+      execution = execution_generation_;
+      flush = wait_generation_;
+    }
     auto f = std::make_shared<VideoFrame>();
-    f->Allocate(enc_params_.width, enc_params_.height);
+    f->Allocate(width, height);
     RgbaToI420(rgba, w, h, f.get());
     if (ts_ns <= 0) {
       ts_ns = gesher::MonotonicNanos();
     }
     f->time_us = ts_ns / 1000;
     std::lock_guard<std::mutex> lock(mu_);
-    if (!started_ || surface_eos_) return;
+    if (!started_ || released_ || fatal_ || surface_eos_ || flushed_ || flush_requested_ ||
+        execution != execution_generation_ || flush != wait_generation_) return;
     // A consumer that falls behind loses the oldest frames.
     while (surface_frames_.size() >= 8) surface_frames_.pop_front();
     surface_frames_.push_back(std::move(f));
@@ -1725,6 +1838,7 @@ class Codec {
   std::atomic<bool> frame_rendered_{false};
   Format input_format_;
   ANativeWindow* window_ = nullptr;
+  int video_scaling_mode_ = 1;
   Slot inputs_[kSlots];
   Slot outputs_[kSlots];
   std::deque<int> work_;   // queued inputs, in order
@@ -1747,6 +1861,7 @@ class Codec {
   std::unique_ptr<VideoEncoder> video_enc_;
   std::unique_ptr<AudioEncoder> audio_enc_;
   std::unique_ptr<InputSurface> input_surface_;
+  std::shared_ptr<PersistentInputSurface> persistent_input_;  // lifecycle_mu_
   std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
   bool surface_eos_ = false, enc_eos_sent_ = false, force_key_ = false;
   std::optional<int> target_bitrate_;
@@ -1970,6 +2085,24 @@ jobject JNICALL MC_createInputSurface(JNIEnv* env, jobject thiz) {
   return s;
 }
 
+jobject JNICALL MC_createPersistentInputSurface(JNIEnv* env, jclass) {
+  return NewPersistentInputSurface(env);
+}
+
+void JNICALL MC_releasePersistentInputSurface(JNIEnv* env, jclass, jobject surface) {
+  ReleasePersistentInputSurface(env, surface);
+}
+
+void JNICALL MC_setInputSurface(JNIEnv* env, jobject thiz, jobject surface) {
+  auto c = GetCodec(env, thiz);
+  if (c == nullptr) return;
+  auto source = GetPersistentInputSurface(env, surface);
+  if (source == nullptr) return;
+  std::string error;
+  if (!c->SetInputSurface(source, &error))
+    jniThrow(env, "java/lang/IllegalStateException", error.c_str());
+}
+
 jobject JNICALL MC_getFormatNative(JNIEnv* env, jobject thiz, jboolean input) {
   auto c = GetCodec(env, thiz);
   if (c == nullptr) return nullptr;
@@ -2013,7 +2146,16 @@ void JNICALL MC_setParameters(JNIEnv* env, jobject thiz, jobjectArray keys, jobj
     jniThrow(env, "java/lang/IllegalStateException", "setParameters() after release()");
   }
 }
-void JNICALL MC_setVideoScalingMode(JNIEnv*, jobject, jint) {}
+void JNICALL MC_setVideoScalingMode(JNIEnv* env, jobject thiz, jint mode) {
+  auto c = GetCodec(env, thiz);
+  if (c == nullptr) return;
+  if (mode != 1 && mode != 2) {
+    jniThrow(env, "java/lang/IllegalArgumentException", "unrecognized video scaling mode");
+    return;
+  }
+  if (!c->SetVideoScalingMode(mode))
+    jniThrow(env, "java/lang/IllegalStateException", "setVideoScalingMode() after release()");
+}
 
 void JNICALL MC_enableOnFrameRenderedListener(JNIEnv* env, jobject thiz, jboolean enable) {
   if (auto c = GetCodec(env, thiz)) c->EnableFrameRendered(enable);
@@ -2046,6 +2188,11 @@ const JNINativeMethod kCodecMethods[] = {
     {"releaseOutputBuffer", "(IZZJ)V", GESHER_NATIVE(MC_releaseOutputBuffer)},
     {"signalEndOfInputStream", "()V", GESHER_NATIVE(MC_signalEndOfInputStream)},
     {"createInputSurface", "()Landroid/view/Surface;", GESHER_NATIVE(MC_createInputSurface)},
+    {"native_createPersistentInputSurface", "()Landroid/media/MediaCodec$PersistentSurface;",
+     GESHER_NATIVE(MC_createPersistentInputSurface)},
+    {"native_releasePersistentInputSurface", "(Landroid/view/Surface;)V",
+     GESHER_NATIVE(MC_releasePersistentInputSurface)},
+    {"native_setInputSurface", "(Landroid/view/Surface;)V", GESHER_NATIVE(MC_setInputSurface)},
     {"getFormatNative", "(Z)Ljava/util/Map;", GESHER_NATIVE(MC_getFormatNative)},
     {"getOutputFormatNative", "(I)Ljava/util/Map;", GESHER_NATIVE(MC_getOutputFormatNative)},
     {"getBuffers", "(Z)[Ljava/nio/ByteBuffer;", GESHER_NATIVE(MC_getBuffers)},

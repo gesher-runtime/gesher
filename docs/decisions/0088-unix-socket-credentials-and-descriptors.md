@@ -161,6 +161,17 @@ Each phase is a PR with contract tests:
   (`binder_wire.h`, `kHelloRights`). binderd knows the caller by the pipe's
   client process id. Tokens are 128 bits from `BCryptGenRandom`. Datagram pairs
   carry the token after the header (`descriptors` is the count, `size` 40).
+- **Open file descriptions** travel with ordinary files and pipes through both
+  Binder and `SCM_RIGHTS`. The sender pins the file and its shared description
+  until the broker duplicates both; the receiver adopts that pair atomically.
+  Shared status and revocation therefore survive forwarding a BlobStore
+  descriptor from Binder through an AF_UNIX socket. Socket records use their
+  distinct socket metadata and never acquire a file-description section.
+  Binder protocol 4 and rights protocol 5 reject older peers that cannot carry
+  these ownership records. Ordinary Binder files retain all cookie bits.
+  Memfd I/O checks seals on the pinned native file, including stream writes
+  and append's actual EOF, so descriptor-number reuse cannot redirect policy
+  checks to a different file.
 - **Stream pairs are not framed.** A record header cannot keep a nonblocking
   stream `send`'s partial-write result without buffering bytes Gesher would
   then have to flush by itself. Instead, a stream pair's descriptors wait in

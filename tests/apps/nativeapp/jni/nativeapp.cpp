@@ -22,6 +22,8 @@
 
 #include <arpa/inet.h>
 #include <dirent.h>
+#include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -445,6 +447,155 @@ std::string CheckSysconf() {
   return "ok";
 }
 
+// --- APerformanceHint (API 33-36 dynamic lookup; APK targets API 26) ---------------
+
+std::string CheckPerformanceHint(JNIEnv* env) {
+  void* lib = dlopen("libandroid.so", RTLD_NOW);
+  if (lib == nullptr) return Fail("dlopen libandroid.so");
+
+  struct Opaque;
+  using GetManagerFn = Opaque* (*)();
+  using CreateSessionFn = Opaque* (*)(Opaque*, const int32_t*, size_t, int64_t);
+  using CreateSessionConfigFn = int (*)(Opaque*, Opaque*, Opaque**);
+  using GetRateFn = int64_t (*)(Opaque*);
+  using GetMaxGfxFn = int (*)(Opaque*);
+  using UpdateTargetFn = int (*)(Opaque*, int64_t);
+  using ReportDurationFn = int (*)(Opaque*, int64_t);
+  using CloseSessionFn = void (*)(Opaque*);
+  using SetThreadsFn = int (*)(Opaque*, const int32_t*, size_t);
+  using SetBoolFn = int (*)(Opaque*, bool);
+  using ReportDuration2Fn = int (*)(Opaque*, Opaque*);
+  using NotifyWorkloadFn = int (*)(Opaque*, bool, bool, const char*);
+  using BorrowFromJavaFn = Opaque* (*)(JNIEnv*, jobject);
+  using SetSurfacesSessionFn = int (*)(Opaque*, void**, size_t, void**, size_t);
+  using IsSupportedFn = bool (*)(int32_t);
+  using CreateObjFn = Opaque* (*)();
+  using ReleaseObjFn = void (*)(Opaque*);
+  using SetInt64Fn = void (*)(Opaque*, int64_t);
+  using SetTidsFn = void (*)(Opaque*, const int32_t*, size_t);
+  using SetCfgBoolFn = void (*)(Opaque*, bool);
+  using SetSurfacesCfgFn = void (*)(Opaque*, void**, size_t, void**, size_t);
+  using SetAutoTimingFn = void (*)(Opaque*, bool, bool);
+
+  auto sym = [lib](const char* name) { return dlsym(lib, name); };
+  auto get_manager = reinterpret_cast<GetManagerFn>(sym("APerformanceHint_getManager"));
+  auto create_session = reinterpret_cast<CreateSessionFn>(sym("APerformanceHint_createSession"));
+  auto create_using_config =
+      reinterpret_cast<CreateSessionConfigFn>(sym("APerformanceHint_createSessionUsingConfig"));
+  auto get_rate =
+      reinterpret_cast<GetRateFn>(sym("APerformanceHint_getPreferredUpdateRateNanos"));
+  auto get_max_gfx = reinterpret_cast<GetMaxGfxFn>(
+      sym("APerformanceHint_getMaxGraphicsPipelineThreadsCount"));
+  auto update_target =
+      reinterpret_cast<UpdateTargetFn>(sym("APerformanceHint_updateTargetWorkDuration"));
+  auto report_duration =
+      reinterpret_cast<ReportDurationFn>(sym("APerformanceHint_reportActualWorkDuration"));
+  auto close_session = reinterpret_cast<CloseSessionFn>(sym("APerformanceHint_closeSession"));
+  auto set_threads = reinterpret_cast<SetThreadsFn>(sym("APerformanceHint_setThreads"));
+  auto set_eff = reinterpret_cast<SetBoolFn>(sym("APerformanceHint_setPreferPowerEfficiency"));
+  auto report_duration2 =
+      reinterpret_cast<ReportDuration2Fn>(sym("APerformanceHint_reportActualWorkDuration2"));
+  auto notify_inc =
+      reinterpret_cast<NotifyWorkloadFn>(sym("APerformanceHint_notifyWorkloadIncrease"));
+  auto notify_reset =
+      reinterpret_cast<NotifyWorkloadFn>(sym("APerformanceHint_notifyWorkloadReset"));
+  auto notify_spike =
+      reinterpret_cast<NotifyWorkloadFn>(sym("APerformanceHint_notifyWorkloadSpike"));
+  auto borrow_java =
+      reinterpret_cast<BorrowFromJavaFn>(sym("APerformanceHint_borrowSessionFromJava"));
+  auto set_surfaces =
+      reinterpret_cast<SetSurfacesSessionFn>(sym("APerformanceHint_setNativeSurfaces"));
+  auto is_supported = reinterpret_cast<IsSupportedFn>(sym("APerformanceHint_isFeatureSupported"));
+
+  auto wd_create = reinterpret_cast<CreateObjFn>(sym("AWorkDuration_create"));
+  auto wd_release = reinterpret_cast<ReleaseObjFn>(sym("AWorkDuration_release"));
+  auto wd_start =
+      reinterpret_cast<SetInt64Fn>(sym("AWorkDuration_setWorkPeriodStartTimestampNanos"));
+  auto wd_total =
+      reinterpret_cast<SetInt64Fn>(sym("AWorkDuration_setActualTotalDurationNanos"));
+  auto wd_cpu = reinterpret_cast<SetInt64Fn>(sym("AWorkDuration_setActualCpuDurationNanos"));
+  auto wd_gpu = reinterpret_cast<SetInt64Fn>(sym("AWorkDuration_setActualGpuDurationNanos"));
+
+  auto cfg_create = reinterpret_cast<CreateObjFn>(sym("ASessionCreationConfig_create"));
+  auto cfg_release = reinterpret_cast<ReleaseObjFn>(sym("ASessionCreationConfig_release"));
+  auto cfg_tids = reinterpret_cast<SetTidsFn>(sym("ASessionCreationConfig_setTids"));
+  auto cfg_target =
+      reinterpret_cast<SetInt64Fn>(sym("ASessionCreationConfig_setTargetWorkDurationNanos"));
+  auto cfg_eff =
+      reinterpret_cast<SetCfgBoolFn>(sym("ASessionCreationConfig_setPreferPowerEfficiency"));
+  auto cfg_gfx =
+      reinterpret_cast<SetCfgBoolFn>(sym("ASessionCreationConfig_setGraphicsPipeline"));
+  auto cfg_surfaces =
+      reinterpret_cast<SetSurfacesCfgFn>(sym("ASessionCreationConfig_setNativeSurfaces"));
+  auto cfg_auto = reinterpret_cast<SetAutoTimingFn>(sym("ASessionCreationConfig_setUseAutoTiming"));
+
+  bool all_present = get_manager && create_session && create_using_config && get_rate &&
+                     get_max_gfx && update_target && report_duration && close_session &&
+                     set_threads && set_eff && report_duration2 && notify_inc && notify_reset &&
+                     notify_spike && borrow_java && set_surfaces && is_supported && wd_create &&
+                     wd_release && wd_start && wd_total && wd_cpu && wd_gpu && cfg_create &&
+                     cfg_release && cfg_tids && cfg_target && cfg_eff && cfg_gfx && cfg_surfaces &&
+                     cfg_auto;
+  if (!all_present) {
+    dlclose(lib);
+    return Fail("missing APerformanceHint symbol");
+  }
+
+  int32_t tid = 1;
+  Opaque* mgr = get_manager();
+  if (mgr != nullptr || is_supported(0) || get_rate(mgr) != -1 || get_max_gfx(mgr) != 0 ||
+      create_session(mgr, &tid, 1, 16666666) != nullptr ||
+      borrow_java(env, nullptr) != nullptr) {
+    dlclose(lib);
+    return Fail("unexpected non-null manager/session");
+  }
+  if (update_target(nullptr, 16666666) != EINVAL ||
+      report_duration(nullptr, 16666666) != EINVAL ||
+      set_threads(nullptr, &tid, 1) != EINVAL ||
+      set_eff(nullptr, true) != EINVAL ||
+      notify_inc(nullptr, true, false, "inc") != EINVAL ||
+      notify_reset(nullptr, true, true, "reset") != EINVAL ||
+      notify_spike(nullptr, false, true, "spike") != EINVAL ||
+      set_surfaces(nullptr, nullptr, 0, nullptr, 0) != EINVAL) {
+    dlclose(lib);
+    return Fail("null session did not return EINVAL");
+  }
+  Opaque* wd = wd_create();
+  if (wd == nullptr) {
+    dlclose(lib);
+    return Fail("AWorkDuration_create");
+  }
+  wd_start(wd, 100);
+  wd_total(wd, 16000000);
+  wd_cpu(wd, 10000000);
+  wd_gpu(wd, 5000000);
+  int wd_rc = report_duration2(nullptr, wd);
+  wd_release(wd);
+  if (wd_rc != EINVAL) {
+    dlclose(lib);
+    return Fail("reportActualWorkDuration2");
+  }
+
+  Opaque* cfg = cfg_create();
+  if (cfg == nullptr) {
+    dlclose(lib);
+    return Fail("ASessionCreationConfig_create");
+  }
+  cfg_tids(cfg, &tid, 1);
+  cfg_target(cfg, 16666666);
+  cfg_eff(cfg, true);
+  cfg_gfx(cfg, false);
+  cfg_surfaces(cfg, nullptr, 0, nullptr, 0);
+  cfg_auto(cfg, false, false);
+  Opaque* sentinel = reinterpret_cast<Opaque*>(1);
+  int cfg_rc = create_using_config(nullptr, cfg, &sentinel);
+  cfg_release(cfg);
+  close_session(nullptr);
+  dlclose(lib);
+  if (cfg_rc != EINVAL || sentinel != nullptr) return Fail("createSessionUsingConfig");
+  return "ok";
+}
+
 }  // namespace
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -487,6 +638,7 @@ Java_com_gesher_nativeapp_NativeActivity_platformChecks(JNIEnv* env, jclass, job
   out += ", signals=" + CheckSignals();
   out += ", strftime=" + CheckStrftime();
   out += ", sysconf=" + CheckSysconf();
+  out += ", perfhint=" + CheckPerformanceHint(env);
   ATrace_endSection();
   return env->NewStringUTF(out.c_str());
 }

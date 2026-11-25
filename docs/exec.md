@@ -62,6 +62,21 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
     A missing command is 127. Commands come from -c, a script or incremental
     stdin. The status section distinguishes CI-verified cases from pending
     conformance fixes; this is not a claim of complete mksh compatibility.
+    As Android's mksh (`lex.c`, `syn.c`): `[n]&>file` is `[n]>file 2>&n`
+    (likewise `&>>`, `&>|` and `&>&fd`), a foreground redirection, not `&`
+    followed by `>file`; `>&word` needs a descriptor (`sh: >&word: illegal
+    file descriptor name`, status 1). An asynchronous list's stdin is
+    `/dev/null` before its own redirections (mksh `jobs.c`, no job control),
+    so a background command never consumes a script fed on the shell's
+    stdin, as root-check libraries (RootShell, libsuperuser, libsu) do.
+- **The exec log**: `gesher: exec <program> (<kind>) started as pid <pid>`
+  and `gesher: exec <program> failed: error=<errno>, <text>` end with
+  `, <n> args` when there are arguments. Arguments can carry tokens or
+  personal data and these logs are attached to bug reports, so the arguments
+  themselves are logged only with `GESHER_TRACE_EXEC=1`: `, args: <argv[1..]>`,
+  shell words, control bytes escaped, at most 200 bytes of argument text,
+  `... [truncated]` beyond. The child's stdin is never logged. `gesher: exec pid <pid> exited with status
+  <n>` is unchanged; match it to the start line by pid.
 - **Loader additions** (`gesher/elf_loader.h`, additive): `GetExecutableInfo`
   (entry point, program headers, `PT_INTERP`), `SetInitArguments` (what init
   functions are called with; dalvikvm never sets it, so `.so` files there get
@@ -76,31 +91,27 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 - **`system()`, `popen()`/`pclose()`, `posix_spawn()`/`posix_spawnp()`** (with
   its file actions: open, close, dup2, chdir) run programs directly, no fork
   needed; `system`/`popen` through the launcher's `sh -c`.
-- **`fork()`/`vfork()`** are a **vfork-style** child on the calling thread:
-  `fork()` returns 0, the child's fd (`open`, `close`, `dup`, `dup2`, `dup3`,
-  `fcntl` `F_DUPFD`/`F_DUPFD_CLOEXEC`/`F_GETFD`/`F_SETFD`, `close_range`,
-  `closefrom`), environment and `chdir` calls are recorded in the child's own
-  table, and its `exec*()` spawns the program with them while `fork()` returns
-  the child's pid to the parent; its `exit`/`_exit` ends the child. A child that
-  closes every fd above 2 before `exec` (Java's childproc, root checkers) or
-  flips `FD_CLOEXEC` therefore leaves the parent's fds as they were: the child
-  runs in the parent's process, so an unrecorded call would close or change
-  the parent's own fd (on Windows `FD_CLOEXEC` is the handle's inherit flag).
-  An `exec*()` that cannot start the program fails in the child as on Linux:
-  it returns -1 with `errno` (`ENOENT`...) to the child, which goes on, usually
-  to `_exit(127)`; the parent's `fork()` then returns a pid whose `waitpid`
-  status is that exit (it used to return -1 from `fork()`). `close_range` and
-  `closefrom` outside a fork child close this process's fds in the range.
-  The child must only prepare and `exec`/`_exit`, as `vfork` requires.
-  `exec` passes the program the child's fds without the close-on-exec ones
-  (`O_CLOEXEC`, `FD_CLOEXEC` at fork or set by the child's `F_SETFD`, `dup2`
-  clearing it, `dup3`'s flag, `F_DUPFD_CLOEXEC`) (exec2 track: `--fork-fds`).
-  A child that waits for its parent through a pipe before `exec` would wait
-  forever (the parent runs only after it): dart:io's `Process.start`/`run`
-  does, so a Flutter app that runs a program hung its UI thread. A fork child's
-  `read` from an empty pipe this process created therefore returns one byte
-  (0) at once, and the parent's next `write` to that pipe leaves one byte out,
-  so the parent's go-ahead reaches nobody (exec2 track: `--dart-start`).
+- **`fork()` and `vfork()` return `-1` with `ENOSYS`.** A Windows process
+  cannot provide Android's process clone or vfork lifetime by running a
+  purported child inline on its parent's thread. The former inline mechanism,
+  shadow descriptor table, synthetic waitable children, fabricated pipe byte
+  and corresponding discarded write byte have been removed. Applications that
+  require native fork must handle this failure; Gesher does not substitute a
+  different process API on their behalf. The independent `system`, `popen`,
+  `posix_spawn` and Java `ProcessBuilder` implementations remain available.
+- **Inherited open file descriptions** retain their status flags and native
+  shared file position across real `exec`/`posix_spawn` launches. Dup aliases
+  share one description, separate opens remain independent, and changes made
+  with `F_SETFL` in a child or descendant reach the parent's aliases. A pinned
+  startup manifest preserves the full descriptor range and avoids fd reuse
+  between capture and launch. File actions precede the final `FD_CLOEXEC` pass.
+  This transport is used only when the target PE exports the runtime importer;
+  detection reads its export table without loading target code. Ordinary
+  Windows programs receive native handles and a CRT descriptor block. Logical
+  devices, emulated append/nonblocking-pipe status and descriptors above that
+  block's limit fail with `EOPNOTSUPP` instead of silently changing behavior.
+  A native program does not participate in Gesher's later shared `F_SETFL`
+  protocol. Closed standard descriptors are not replaced with NUL for it.
 - **`exec*()` outside a fork** spawns the program with this process's fds,
   environment and working directory, waits and exits with its status (the pid
   changes).
@@ -114,8 +125,18 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   program with none is terminated with 143); **`destroyForcibly()`** kills
   (137), through a new `UNIXProcess` native.
 - **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `id`, `ps`,
-  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, as a bare name or a
-  `/system/bin` path; `sh` is the launcher's shell. `su` stays absent (no root),
+  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, `which`, `mount`, as a bare name or a
+  `/system/bin` path; `sh` is the launcher's shell. `which [-a] NAME...` is
+  toybox's: a name exec runs as one of these programs (or `sh`) is
+  `/system/bin/<name>`, otherwise `$PATH` is searched as exec searches it;
+  no match prints nothing and exits 1 (`which su`); like a device without
+  root tools there is no `/system/xbin/which` or `/system/xbin/mount`. `mount` is toybox's as an
+  app's uid: with no device or directory it lists `/proc/mounts` (the same
+  table Gesher's `/proc/mounts` and `getmntent` serve, currently empty) as
+  `DEVICE on DIR type TYPE (OPTIONS)`; mounting goes through `/etc/fstab`
+  first, as toybox does for a non-root uid, and fails with its message and
+  status 1 (`mount: bad /etc/fstab: ...`, `'DIR' not in fstab`, `'DEV' not
+  user mountable in fstab`, or EPERM from mount(2) for a `user` entry). `su` stays absent (no root),
   getprop/setprop use the shared backend in ADR 0060. Structured logcat and
   the pm/am Binder client are prepared; the new property ABI, log capture and
   command/device assertions still need CI proof.
@@ -129,12 +150,12 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   runners in CI 40338806524; the app variant remains pending. Incompatible layouts, text relocations and unsupported
   instruction forms fail or trap explicitly (ADR 0060). Emulated TLS (API
   <29) and library ELF TLS retain their existing paths.
-- A real `fork()` that does work other than `exec`/`_exit` in the child is not
-  supported (vfork-style only, ADR 0055). Beyond the one-byte go-ahead above, a
-  fork child cannot wait for its parent; `environ` assignments in the child
-  are not recorded (the program gets the environment as it was at fork, with
-  the child's `setenv`/`unsetenv`/`putenv`), and `execve`'s `envp` in a fork
-  child is not used either.
+- Native `fork` and `vfork` are unsupported (`ENOSYS`), including the common
+  fork-then-exec pattern. This affects callers that have no supported spawn
+  path. No child body runs, no PID is invented, and no pipe data is fabricated.
+- `exec*` currently launches a replacement program and waits in the original
+  Windows process. It preserves real descriptor sharing but does not preserve
+  the Linux process identity across image replacement.
 - Exit-status convention: a child that dies of a signal carries a Windows
   exit code of 128 + signal (the posix layer's `kill` and the launcher's
   fault mapping both use it), and `waitForProcessExit` passes such codes
@@ -191,6 +212,11 @@ precise crash cause is inferred. Root coordinates latest integration/merging.
 - Next: final CI on the branch merged with origin/phase4/integration.
 
 _exec2 track (branch `wip/exec2`, ADR 0055):_
+
+The historical fork results below describe the removed inline emulation.
+They are not current capability claims. The current exec2 track separately
+requires `--fork-unsupported` and the real child/grandchild `--ofd-process`
+contracts; neither accepts synthetic input or application exceptions.
 
 - d63005d: process_bionic.cc (fork/vfork, exec*, posix_spawn, system, popen,
   wait*), signals between processes through the mailbox hook,

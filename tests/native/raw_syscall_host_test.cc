@@ -72,6 +72,14 @@ void* LookupBionicSymbol(const char* name) {
 }
 }
 
+#define REGEX_SCALING_REGEX Regex
+#define REGEX_SCALING_MATCH Match
+#define REGEX_SCALING_BEGIN begin
+#define REGEX_SCALING_END end
+#define REGEX_SCALING_ABI BIONIC_SYSV
+#define REGEX_SCALING_CHECK Check
+#include "regex_scaling_contract.inc"
+
 int main() {
   using namespace gesher::bionic;
   int64_t args[6] = {7, -1, 0, -1, 0, 0};
@@ -381,6 +389,7 @@ int main() {
     }
   }
   Check("REG_PEND needs an end pointer", compile(&re, "x", 32) == 16);
+  test_regex_scaling_contracts(compile, execute, free_regex);
   std::printf("raw syscall contracts: %d failures\n", failures);
   return failures != 0;
 }

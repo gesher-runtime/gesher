@@ -13,18 +13,23 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.ArrayDeque;
+import java.util.AbstractList;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.RandomAccess;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 
 /**
  * Activity usage in the managed server. The bounded public event suffix is independent
@@ -48,6 +53,89 @@ final class ActivityUsageHistory implements AutoCloseable {
     record Event(long time, String pkg, String cls, int id, State state) { }
     record Interval(long begin, long end, boolean indexed, List<Total> totals) { }
     record Snapshot(long until, List<Event> events, List<List<Interval>> intervals) { }
+
+    /** Ordered bounded suffix with constant-time indexing across physical wraparound. */
+    private static final class EventBuffer extends AbstractList<Event> implements RandomAccess {
+        private static final int LIFECYCLE_STATES = (1 << State.RESUMED.ordinal())
+                | (1 << State.PAUSED.ordinal()) | (1 << State.STOPPED.ordinal())
+                | (1 << State.TERMINATED.ordinal());
+        private Event[] entries = new Event[0];
+        private int first, size;
+
+        @Override public int size() { return size; }
+
+        @Override public Event get(int index) {
+            Objects.checkIndex(index, size);
+            return entries[(first + index) % entries.length];
+        }
+
+        @Override public boolean add(Event event) {
+            if (size == MAX_ENTRIES) dropFirst();
+            if (size == entries.length) {
+                Event[] grown = new Event[Math.min(MAX_ENTRIES, Math.max(16, size * 2))];
+                for (int i = 0; i < size; i++) grown[i] = get(i);
+                entries = grown;
+                first = 0;
+            }
+            entries[(first + size++) % entries.length] = event;
+            modCount++;
+            return true;
+        }
+
+        void dropFirst() {
+            if (size == 0) throw new IllegalStateException("Empty usage suffix");
+            entries[first] = null;
+            first = (first + 1) % entries.length;
+            size--;
+            modCount++;
+        }
+
+        @Override public void clear() {
+            Arrays.fill(entries, null);
+            first = size = 0;
+            modCount++;
+        }
+
+        @Override public boolean removeIf(Predicate<? super Event> filter) {
+            int kept = 0;
+            for (int i = 0; i < size; i++) {
+                Event event = get(i);
+                if (!filter.test(event)) entries[(first + kept++) % entries.length] = event;
+            }
+            if (kept == size) return false;
+            for (int i = kept; i < size; i++) entries[(first + i) % entries.length] = null;
+            size = kept;
+            if (size == 0) first = 0;
+            modCount++;
+            return true;
+        }
+
+        private int lowerBound(long time) {
+            int low = 0, high = size;
+            while (low < high) {
+                int middle = (low + high) >>> 1;
+                if (get(middle).time < time) low = middle + 1;
+                else high = middle;
+            }
+            return low;
+        }
+
+        List<Event> select(long begin, long end, Set<String> packages, int states) {
+            if (begin >= end || states == 0 || size == 0) return List.of();
+            int from = lowerBound(begin), to = lowerBound(end);
+            int capacity = packages.isEmpty() && (states & LIFECYCLE_STATES) == LIFECYCLE_STATES
+                    ? to - from : Math.min(to - from, 64);
+            List<Event> result = new ArrayList<>(capacity);
+            for (int i = from; i < to; i++) {
+                Event event = get(i);
+                if ((states & (1 << event.state.ordinal())) != 0
+                        && (packages.isEmpty() || packages.contains(event.pkg))) {
+                    result.add(event);
+                }
+            }
+            return result;
+        }
+    }
 
     private static final class Activity {
         final String pkg, cls;
@@ -210,7 +298,7 @@ final class ActivityUsageHistory implements AutoCloseable {
     private final LongSupplier mWallClock, mElapsedClock;
     private final Consumer<IOException> mOnFailure;
     private final Object mWriterLock = new Object();
-    private final ArrayDeque<Event> mHistory = new ArrayDeque<>();
+    private final EventBuffer mHistory = new EventBuffer();
     private final Map<Object, Activity> mActivities = new IdentityHashMap<>();
     private final List<TreeMap<Long, Bucket>> mIntervals = new ArrayList<>(4);
     private final ScheduledExecutorService mWriter;
@@ -329,23 +417,28 @@ final class ActivityUsageHistory implements AutoCloseable {
     }
 
     Snapshot snapshot() {
-        return snapshotForRead(-1, Long.MIN_VALUE, Long.MAX_VALUE, true);
+        return snapshotForRead(-1, Long.MIN_VALUE, Long.MAX_VALUE, true, null, 0);
     }
 
     Snapshot eventSnapshot() {
-        return snapshotForRead(-2, 0, 0, true);
+        return snapshotForRead(-2, Long.MIN_VALUE, Long.MAX_VALUE, true, null, 0);
+    }
+
+    Snapshot eventSnapshot(long begin, long end, Set<String> packages, int states) {
+        return snapshotForRead(-2, begin, end, true, packages, states);
     }
 
     Snapshot querySnapshot(int interval, long begin, long end) {
-        return snapshotForRead(interval, begin, end, false);
+        return snapshotForRead(interval, begin, end, false, null, 0);
     }
 
-    private Snapshot snapshotForRead(int interval, long begin, long end, boolean events) {
+    private Snapshot snapshotForRead(int interval, long begin, long end, boolean events,
+            Set<String> packages, int states) {
         Snapshot result;
         boolean clockChanged;
         synchronized (this) {
             now();
-            result = copySnapshot(mReadTime, interval, begin, end, events);
+            result = copySnapshot(mReadTime, interval, begin, end, events, packages, states);
             clockChanged = mClockGeneration != mSavedClockGeneration;
         }
         if (!clockChanged) return result;
@@ -354,10 +447,22 @@ final class ActivityUsageHistory implements AutoCloseable {
         // report FLUSH_TO_DISK, accrue activity time or roll a day for a read.
         try { persist(); }
         catch (IOException failure) { mOnFailure.accept(failure); }
-        synchronized (this) { return copySnapshot(mReadTime, interval, begin, end, events); }
+        synchronized (this) {
+            return copySnapshot(mReadTime, interval, begin, end, events, packages, states);
+        }
     }
 
     private Snapshot copySnapshot(long time, int selected, long begin, long end, boolean events) {
+        return copySnapshot(time, selected, begin, end, events, null, 0);
+    }
+
+    private Snapshot copySnapshot(long time, int selected, long begin, long end, boolean events,
+            Set<String> packages, int states) {
+        if (selected == -2 && packages != null) {
+            return new Snapshot(time,
+                    mHistory.select(Math.max(begin, time - RETENTION), end, packages, states),
+                    List.of());
+        }
         if (selected == 4) selected = bestInterval(begin);
         List<List<Interval>> result = new ArrayList<>(WIDTHS.length);
         for (int i = 0; i < WIDTHS.length; i++) {
@@ -425,7 +530,7 @@ final class ActivityUsageHistory implements AutoCloseable {
             mSavedClockGeneration = mClockGeneration;
             return;
         }
-        ArrayDeque<Event> shifted = new ArrayDeque<>(mHistory.size());
+        List<Event> shifted = new ArrayList<>(mHistory.size());
         for (Event event : mHistory) {
             long time = event.time + delta;
             if (time >= 0) shifted.add(new Event(time, event.pkg, event.cls, event.id, event.state));
@@ -459,8 +564,7 @@ final class ActivityUsageHistory implements AutoCloseable {
     }
 
     private void add(Event entry) {
-        if (mHistory.size() == MAX_ENTRIES) mHistory.removeFirst();
-        mHistory.addLast(entry);
+        mHistory.add(entry);
     }
 
     private void checkpoint(long time) {
@@ -502,7 +606,7 @@ final class ActivityUsageHistory implements AutoCloseable {
 
     private void prune(long time) {
         long oldestEvent = Math.max(0, time - RETENTION);
-        while (!mHistory.isEmpty() && mHistory.getFirst().time < oldestEvent) mHistory.removeFirst();
+        while (!mHistory.isEmpty() && mHistory.get(0).time < oldestEvent) mHistory.dropFirst();
         for (int i = 0; i < WIDTHS.length; i++) {
             var intervals = mIntervals.get(i);
             long oldest = time - RETAIN[i];

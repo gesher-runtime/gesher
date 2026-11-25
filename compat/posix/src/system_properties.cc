@@ -4,6 +4,7 @@
 // Device boot names isolate volatile properties; persist.* survive a new boot.
 
 #include <gesher/system_properties.h>
+#include <gesher/environment.h>
 
 #include <windows.h>
 
@@ -15,6 +16,7 @@
 #include <cwchar>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -80,6 +82,15 @@ std::wstring Environment(const wchar_t* name) {
   result.resize(count);
   return result;
 }
+// The ordinary device/session and inherited root fit in this stack buffer.
+// Longer supported values retain the general environment reader. Read the
+// actual environment every time: callers may change device boots in-process.
+bool EnvironmentEquals(const wchar_t* name, std::wstring_view expected) {
+  wchar_t buffer[1024];
+  DWORD count = GetEnvironmentVariableW(name, buffer, 1024);
+  if (count >= 1024) return Environment(name) == expected;
+  return count == expected.size() && (!count || std::wmemcmp(buffer, expected.data(), count) == 0);
+}
 std::wstring FullPath(std::wstring path) {
   std::replace(path.begin(), path.end(), L'/', L'\\');
   DWORD size = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
@@ -117,15 +128,15 @@ std::wstring Session() {
     GetSystemTimePreciseAsFileTime(&time);
     uint64_t ticks = (static_cast<uint64_t>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
     session = std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(ticks);
-    if (_wputenv_s(L"GESHER_PROPERTY_SESSION", session.c_str()) != 0) return {};
+    if (SetWideEnvironment(L"GESHER_PROPERTY_SESSION", session.c_str()) != 0) return {};
   }
   return L"single-" + session;
 }
 bool InheritRoot(const std::wstring& session, const std::wstring& root) {
   if (Environment(L"GESHER_PROPERTY_ROOT_SESSION") == session &&
       Environment(L"GESHER_PROPERTY_ROOT") == root) return true;
-  return _wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str()) == 0 &&
-         _wputenv_s(L"GESHER_PROPERTY_ROOT_SESSION", session.c_str()) == 0;
+  return SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str()) == 0 &&
+         SetWideEnvironment(L"GESHER_PROPERTY_ROOT_SESSION", session.c_str()) == 0;
 }
 
 void Put32(std::string* data, uint32_t value) {
@@ -296,13 +307,30 @@ void RemoveOldAreas(const std::wstring& directory, const std::wstring& current) 
   FindClose(find);
 }
 Area* Current() { // LocalMutex is held by every caller.
+  // Map keys and Areas have process lifetime. Avoid rebuilding session/root
+  // strings on every property/log read, but preserve all environment changes
+  // and the existing root inheritance repair on the slow path.
+  static const std::wstring* last_session = nullptr;
+  static Area* last_area = nullptr;
+  if (last_session) {
+    std::wstring_view session(*last_session);
+    bool same = session.starts_with(L"device-")
+        ? EnvironmentEquals(L"GESHER_BINDER", session.substr(7))
+        : EnvironmentEquals(L"GESHER_BINDER", {}) &&
+          EnvironmentEquals(L"GESHER_PROPERTY_SESSION", session.substr(7));
+    if (same && EnvironmentEquals(L"GESHER_PROPERTY_ROOT_SESSION", session) &&
+        EnvironmentEquals(L"GESHER_PROPERTY_ROOT", last_area->root)) return last_area;
+  }
   std::wstring session = Session();
   if (session.empty()) return nullptr;
   auto& cached = Areas();
   auto existing = cached.find(session);
   if (existing != cached.end()) {
     Area* area = existing->second.get();
-    return InheritRoot(session, area->root) ? area : nullptr;
+    if (!InheritRoot(session, area->root)) return nullptr;
+    last_session = &existing->first;
+    last_area = area;
+    return area;
   }
   // A boot's mapping keeps its original data root, as Android's property area
   // does. ART tests temporarily replace ANDROID_DATA for scratch directories;
@@ -347,7 +375,9 @@ Area* Current() { // LocalMutex is held by every caller.
   }
   if (!Refresh(area.get()) || !InheritRoot(session, data)) return nullptr;
   Area* result = area.get();
-  cached.emplace(session, std::move(area));
+  auto inserted = cached.emplace(session, std::move(area));
+  last_session = &inserted.first->first;
+  last_area = result;
   RemoveOldAreas(dir, path);
   return result;
 }
@@ -407,9 +437,17 @@ Area* Refreshed() {
 }
 }  // namespace
 
-void GetAll(const std::string* names, std::string* values, size_t count) {
+Revision CurrentRevision() {
+  std::lock_guard local(LocalMutex());
+  Area* area = Current();
+  if (!area) return {};
+  const auto* header = static_cast<const Header*>(area->view);
+  return {area, __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)};
+}
+void GetAll(const std::string* names, std::string* values, size_t count, Revision* revision) {
   std::lock_guard local(LocalMutex());
   Area* area = Refreshed();
+  if (revision) *revision = area ? Revision{area, area->cached_generation} : Revision{};
   for (size_t i = 0; i < count; ++i) {
     auto found = area ? area->values.find(names[i]) : Snapshot::iterator{};
     values[i] = area && found != area->values.end() ? found->second.text : std::string();

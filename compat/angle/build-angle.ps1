@@ -127,6 +127,15 @@ try {
   if ($got -ne $rcSha) { throw "rc.exe: sha1 $got, expected $rcSha" }
 
   Step 'gn gen'
+  # Private host-only synchronization dispatch. Fence operations enter through
+  # ANGLE's global GL mutex; CPU completion waits never execute in the callback.
+  # Fail on source drift rather than silently building an SDK without the ABI.
+  Copy-Item (Join-Path $PSScriptRoot 'gesher_d3d11_context.cpp') src/libGLESv2/gesher_d3d11_context.cpp
+  $build = Get-Content BUILD.gn -Raw
+  $anchor = 'angle_libGLESv2("libGLESv2") {'
+  if (($build.Split($anchor).Length - 1) -ne 1) { throw 'ANGLE libGLESv2 build anchor changed' }
+  $build.Replace($anchor, "$anchor`n  sources = [ `"src/libGLESv2/gesher_d3d11_context.cpp`" ]") |
+    Set-Content -Encoding utf8NoBOM BUILD.gn
   New-Item -ItemType Directory -Force out/Release | Out-Null
   Copy-Item (Join-Path $PSScriptRoot 'args.gn') out/Release/args.gn
   & buildtools/win/gn.exe gen out/Release
@@ -167,10 +176,17 @@ try {
     Get-Content $l
     ''
   }
+  $gesherNotices = @(
+    '=' * 78
+    'Gesher host synchronization dispatch (compat/angle/gesher_d3d11_context.cpp)'
+    'Copyright 2026 The Gesher Authors; Apache License 2.0'
+    '=' * 78
+  ) + @(Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../LICENSE') -ErrorAction Stop) + @('')
   @("libEGL.dll and libGLESv2.dll are ANGLE (https://chromium.googlesource.com/angle/angle),",
-    "built from commit $Commit. ANGLE is under the BSD license below; the",
-    "third-party code linked into the DLLs follows with its own licenses.", '') +
-    $notices | Set-Content -Encoding utf8 (Join-Path $Out 'NOTICES.txt')
+    "built from commit $Commit with Gesher's host synchronization dispatch.",
+    'ANGLE uses the BSD license below. The Gesher addition and third-party',
+    'code linked into the DLLs follow with their own licenses.', '') +
+    $gesherNotices + $notices | Set-Content -Encoding utf8 (Join-Path $Out 'NOTICES.txt')
   Get-ChildItem -Recurse $Out -File | Format-Table Length, FullName | Out-Host
 } finally {
   Pop-Location

@@ -23,8 +23,12 @@ processes.
 
 ## Decision
 
-A new `compat/bionic/process_bionic.cc`, registered last in the shim so it wraps
-the fd/env/dir entries the other files already provide.
+`compat/bionic/process_bionic.cc` supplies native process APIs, while ordinary
+descriptor, environment and I/O calls use their shared POSIX implementations.
+
+**Amended 2026-11-17:** the earlier inline fork/vfork emulation did not implement
+Android process semantics. This decision now requires an unsupported error
+instead of running a child body in the parent or fabricating synchronization.
 
 - **`system()`, `popen()`/`pclose()`, `posix_spawn()`/`posix_spawnp()`** are
   implemented directly, without fork: each builds the child's fd set (and, for
@@ -32,16 +36,10 @@ the fd/env/dir entries the other files already provide.
   `posix_spawn_file_actions_*` build, since the type is an opaque pointer in
   bionic), environment and working directory, and spawns through `exec_spawn`.
   `system`/`popen` run the launcher's shell (`sh -c`).
-- **`fork()`/`vfork()`** are a **vfork-style child** on the calling thread:
-  `fork()` records the process state and returns 0; the fd, environment and
-  working-directory calls the child then makes are buffered, not applied to this
-  process; its `exec*()` materialises them and spawns the program, and `fork()`
-  returns the child's pid to the "parent"; its `exit()`/`_exit()` ends the child
-  without spawning. `__builtin_setjmp`/`__builtin_longjmp` (a register
-  save/restore with no SEH unwinding, unlike the UCRT's `longjmp`) carry control
-  back to `fork()` across the abandoned child frames, as `vfork` abandons the
-  child's stack. A real `fork()` that then does work other than `exec`/`_exit`
-  is **not supported**, as `vfork` never allowed it.
+- **`fork()` and `vfork()`** fail with `ENOSYS`. There is no address-space
+  clone, independent child PID or validated vfork parent-suspension mechanism.
+  Running an inline callback with a shadow fd table cannot supply these
+  semantics. Synthetic zombies and fabricated/discarded pipe bytes are removed.
 - **`execve`/`execv`/`execvp`/`execvpe`** outside a fork, where Linux replaces
   the image: the shim spawns the program inheriting this process's fds,
   environment and working directory, waits, and exits with its status (the pid
@@ -77,13 +75,16 @@ the fd/env/dir entries the other files already provide.
 
 ## Consequences
 
-- `system`/`popen`/`posix_spawn` are faithful; raw `fork()` is only the
-  vfork-style subset (fork immediately followed by `exec`/`_exit`), which is what
-  NDK code does in practice. Its child runs on the parent's thread until exec, so
-  it must not touch the parent's memory, as `vfork` requires.
-- An `exec*()` that replaces the image keeps the program's behaviour but changes
-  the Windows pid; nothing in Gesher observes a native process's own pid across
-  an exec.
+- `system`, `popen`, `posix_spawn` and Java `ProcessBuilder` retain their
+  independent CreateProcess implementations. Native callers that require fork
+  must handle `ENOSYS`; the runtime does not select a substitute API for them.
+- Real spawned processes share native file offsets and an explicitly inherited
+  open-description state object. `F_SETFL` changes propagate between processes,
+  descriptor numbers survive the startup block's size limit, and file actions
+  execute before close-on-exec filtering. Ordinary streams must route I/O through
+  the same descriptor behavior rather than maintaining private copies of flags.
+- `exec*()` launches a replacement program and waits in the original Windows
+  process. The changed process identity remains a documented compatibility gap.
 - Signals from another process reach a `.so`'s handlers only through `sigaction`
   (the shim's model, 0045); `signal()` dispositions and synchronous fault signals
   are unchanged from docs/native-libs.md.

@@ -11,8 +11,12 @@ ELF guest fixtures. --source-ref is the same-harness old-source control.
 
 The scratch host compiles the actual outer poll, EpollWaiter and nested epoll
 sampling/delivery with Linux eventfds/poll behind the Win32/Winsock seams. It
-checks ownership, recursion, deadlines and allocation budgets without claiming
-Windows scheduling, whole-application memory or native WSAPoll performance.
+also compiles the actual pipe admission/readiness and descriptor guard bodies.
+Its descriptor capture seam owns a real Linux duplicate; the native pipe query
+uses Linux kernel state. It checks ownership, recursion, deadlines and allocation
+budgets without claiming Windows scheduling, OFD publication, whole-application
+memory or native WSAPoll performance. The separate OFD host exercises the full
+production snapshot implementation.
 """
 import argparse
 import hashlib
@@ -35,7 +39,10 @@ def between(text, begin, end):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source-ref')
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--source-ref')
+    source.add_argument('--fd-source', type=Path,
+                        help='use an exact descriptor source for focused negative controls')
     parser.add_argument('--sanitize', action='store_true')
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'c++'))
     parser.add_argument('--case', choices=['epoll', 'vector', 'select', 'scratch'])
@@ -50,8 +57,12 @@ def main():
 
     epoll = read('compat/posix/src/epoll.cc')
     system = read('compat/posix/src/system.cc')
-    fd = read('compat/posix/src/fd.cc')
+    fd = args.fd_source.read_text() if args.fd_source else read('compat/posix/src/fd.cc')
     select = read('compat/posix/src/select.cc')
+    has_pipe_snapshot = 'gesher::PollPipeHandle(' in fd
+    pipe = read('compat/posix/src/pipe_io.cc') if has_pipe_snapshot else ''
+    descriptor_header = read('compat/posix/src/record_lock_descriptors.h') if has_pipe_snapshot else ''
+    descriptors = read('compat/posix/src/record_lock_descriptors.cc') if has_pipe_snapshot else ''
     scratch_header = (read('compat/posix/src/poll_scratch.h')
                       if 'PollScratchLease' in fd or 'PollScratchLease' in epoll else '')
     socket_header = read('compat/posix/src/socket_internal.h')
@@ -60,6 +71,7 @@ def main():
     eventfd_state = between(epoll, eventfd_namespace, '\nnamespace {\n\nstruct Epoll;')
     pieces = {
         'epoll': {
+            '@VIRTUAL_OWNER@': '#define HAS_VIRTUAL_OWNER 1' if 'struct ObjectOwner {' in epoll else '',
             '@EPOLL_STATE@': between(epoll, 'struct Epoll;\n', 'class EpollWaiter {'),
             '@EPOLL_CONVERSION@': between(epoll, '// epoll\'s event bits below', '// Linux permits at most five'),
             '@EPOLL_WAIT@': between(epoll, 'static int EpollWaitImpl(', '\nint epoll_wait('),
@@ -67,19 +79,36 @@ def main():
         'vector': {
             '@VECTOR_HELPERS@': between(system, '// readv/writev on a socket fd:', '}  // namespace\n\nssize_t readv('),
             '@WRITEV@': between(system, 'ssize_t writev(', '\nssize_t preadv('),
-            '@SCALAR_WRITE@': between(fd, 'int write(int fd,', '\nint dup('),
+            '@PWRITEV@': between(system, 'ssize_t pwritev(', '\nssize_t process_vm_readv('),
+            '@SCALAR_WRITE@': (
+                between(fd, 'void ReleaseCanceledSnapshot(', '// The caller owns an exact native object')
+                if 'void ReleaseCanceledSnapshot(' in fd else '') + between(fd, 'int write(int fd,', '\nint dup('),
             '@VIRTUAL_WRITE@': between(epoll, 'bool WriteEventObject(', '\nbool ForgetEventObject('),
         },
         'select': {'@SELECT_SOURCE@': re.sub(r'^#include[^\n]*\n', '', select, flags=re.M)},
         'scratch': {
+            '@VIRTUAL_OWNER@': '#define HAS_VIRTUAL_OWNER 1' if 'struct ObjectOwner {' in epoll else '',
             '@EVENTFD_STATE@': eventfd_state.removeprefix(eventfd_namespace),
             '@EPOLL_STATE@': between(epoll, 'struct Epoll;\n', '// fd -> object,'),
             '@EPOLL_CONVERSION@': between(epoll, '// epoll\'s event bits below', '// Linux permits at most five'),
-            '@POLL_EVENTFD@': between(epoll, 'short PollEventFd(', '\nbool IsNonBlocking('),
-            '@POLL_EPOLL@': between(epoll, 'bool PollEpoll(', '\nstd::shared_ptr<EventFd> LookupEventFd('),
+            '@POLL_EVENTFD@': between(epoll, 'short PollEventFd(',
+                '\nint SampleVirtualEntries(EpollPollScratch& scratch, bool prepare_wait) {'
+                if 'struct ObjectOwner {' in epoll else '\nbool IsNonBlocking('),
+            '@POLL_EPOLL@': between(epoll,
+                'bool PollEpollOwned(' if 'struct ObjectOwner {' in epoll else 'bool PollEpoll(',
+                '\nstd::shared_ptr<EventFd> LookupEventFd('),
             '@POLL_FDS@': between(fd, '// --- poll ', '\nextern "C" int poll('),
             '@EPOLL_WAIT@': between(epoll, 'static int EpollWaitImpl(', '\nint epoll_wait('),
             '@HAS_SCRATCH@': '#define HAS_POLL_SCRATCH 1' if 'PollScratchLease<FdPollScratch>' in fd else '',
+            '@HAS_PIPE_SNAPSHOT@': '#define HAS_OFD_PIPE_POLL 1' if has_pipe_snapshot else '',
+            '@DESCRIPTOR_GUARD_DECLARATION@': between(descriptor_header, 'class DescriptorGuard {',
+                '\n// POSIX result/errno') if has_pipe_snapshot else '',
+            '@DESCRIPTOR_GUARD_BODY@': between(descriptors, 'DescriptorGuard::DescriptorGuard()',
+                '\nint DescriptorFcntl(') if has_pipe_snapshot else '',
+            '@PIPE_ADMISSION@': between(pipe, 'class PipeAdmission {',
+                '\n// I/O stays on the calling thread.') if has_pipe_snapshot else '',
+            '@PIPE_POLL@': between(pipe, 'int PollPipeHandle(', '\nint PipeBytesAvailable(')
+                if has_pipe_snapshot else '',
         },
     }
     # The old source has no vector permission helper. It never calls this
@@ -88,6 +117,10 @@ def main():
         print(path, hashlib.sha256(source.encode()).hexdigest(), flush=True)
     if scratch_header:
         print('poll_scratch.h', hashlib.sha256(scratch_header.encode()).hexdigest(), flush=True)
+    for path, source in [('pipe_io.cc', pipe), ('record_lock_descriptors.h', descriptor_header),
+                         ('record_lock_descriptors.cc', descriptors)]:
+        if source:
+            print(path, hashlib.sha256(source.encode()).hexdigest(), flush=True)
     failed = []
     with tempfile.TemporaryDirectory(prefix='gesher-host-event-loop-') as directory:
         work = Path(directory)
@@ -124,13 +157,18 @@ def main():
     if args.case in (None, 'epoll'):
         # Complete eventfd producers and epoll state complement the declared
         # fairness adapter above, under the same maintained CI gate.
-        command = [sys.executable, str(ROOT / 'tools/test_epoll_eventfd_edges.py'), '--cxx', args.cxx]
-        if args.source_ref:
-            command += ['--source-ref', args.source_ref]
-        if args.sanitize:
-            command += ['--sanitize']
-        if subprocess.run(command, timeout=180).returncode:
-            failed.append('eventfd-edge')
+        # Whole production registry/ctl/owners are exercised independently of
+        # the deliberately numeric descriptor boundaries in the older corpora.
+        for script, case in [('test_epoll_eventfd_edges.py', 'eventfd-edge'),
+                             ('test_epoll_readonly_edges.py', 'readonly-edge'),
+                             ('test_epoll_virtual_owners.py', 'virtual-owner')]:
+            command = [sys.executable, str(ROOT / 'tools' / script), '--cxx', args.cxx]
+            if args.source_ref:
+                command += ['--source-ref', args.source_ref]
+            if args.sanitize:
+                command += ['--sanitize']
+            if subprocess.run(command, timeout=180).returncode:
+                failed.append(case)
     return int(bool(failed))
 
 

@@ -5,10 +5,12 @@ param(
     [string] $CompanionApk,
     [string] $GsfProxyApk,
     [string] $StoreApk,
+    # The microG release the passed APKs are (Setup's own downloads).
+    [string] $Release,
     [switch] $AutoDownload,
     [switch] $InstallStore,
     [switch] $StoreOnly,
-    [string] $ProfileRoot = (Join-Path $env:LOCALAPPDATA 'Gesher'),
+    [string] $ProfileRoot = '',
     [string] $RuntimeDir = $PSScriptRoot,
     [switch] $Disable,
     [switch] $Remove
@@ -16,8 +18,18 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
-$ProfileRoot = [IO.Path]::GetFullPath($ProfileRoot)
 $RuntimeDir = if ($RuntimeDir) { [IO.Path]::GetFullPath($RuntimeDir) } else { $scriptRoot }
+$runtimeFilesHelper = Join-Path $RuntimeDir 'gesher-runtime-files.ps1'
+if (-not (Test-Path -LiteralPath $runtimeFilesHelper -PathType Leaf)) {
+    $runtimeFilesHelper = Join-Path $scriptRoot 'gesher-runtime-files.ps1'
+}
+. $runtimeFilesHelper
+if (-not $ProfileRoot) {
+    $ProfileRoot = Get-GesherProfileRoot $RuntimeDir
+}
+$ProfileRoot = [IO.Path]::GetFullPath($ProfileRoot)
+$portableRoot = Get-GesherPortableRoot $RuntimeDir
+$downloadRoot = if ($portableRoot) { Join-Path $ProfileRoot 'downloads' } else { $env:TEMP }
 $marker = Join-Path $ProfileRoot 'microg.enabled'
 $packages = 'com.google.android.gms', 'com.android.vending', 'com.google.android.gsf'
 function Initialize-MicrogDefaults([string] $ProfileRoot) {
@@ -46,19 +58,35 @@ function Install-AuroraStore {
         $storeTarget = if ($StoreApk -and (Test-Path -LiteralPath $StoreApk)) {
             $StoreApk
         } else {
-            $tmp = Join-Path $env:TEMP "AuroraStore.apk"
+            New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+            $tmp = Join-Path $downloadRoot "AuroraStore-4.8.4.apk"
             if (-not (Test-Path $tmp)) {
                 Write-Host "Downloading Aurora Store..."
-                Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.6.1.apk" -OutFile $tmp -UseBasicParsing
+                $partial = "$tmp.partial"
+                try {
+                    Invoke-WebRequest -Uri "https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk" -OutFile $partial -UseBasicParsing
+                    Move-Item -LiteralPath $partial -Destination $tmp -Force
+                } finally {
+                    if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }
+                }
             }
             $tmp
         }
         Write-Host "Installing Aurora Store..."
-        & (Join-Path $RuntimeDir "gesher-app.ps1") install "$storeTarget"
+        $previousProfile = $env:GESHER_PROFILE
+        $previousPortable = $env:GESHER_PORTABLE
+        try {
+            $env:GESHER_PROFILE = $ProfileRoot
+            & (Join-Path $RuntimeDir "gesher-app.ps1") install "$storeTarget"
+            if ($LASTEXITCODE -ne 0) { throw "Aurora Store installation failed (exit $LASTEXITCODE)." }
+        } finally {
+            $env:GESHER_PROFILE = $previousProfile
+            $env:GESHER_PORTABLE = $previousPortable
+        }
     }
 if ($Disable -and $Remove) { throw (Get-GesherText 'microg_choose') }
 if (($Disable -or $Remove) -and ($GmsCoreApk -or $CompanionApk -or $GsfProxyApk -or
-        $StoreApk -or $AutoDownload -or $InstallStore -or $StoreOnly)) {
+        $Release -or $StoreApk -or $AutoDownload -or $InstallStore -or $StoreOnly)) {
     throw (Get-GesherText 'microg_no_files')
 }
 if ($StoreOnly -or ($InstallStore -and -not $AutoDownload -and -not $GmsCoreApk -and
@@ -81,11 +109,22 @@ if (Test-Path -LiteralPath $ready) {
 }
 if ($Remove) {
     if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker }
+    $releaseFile = Join-Path $ProfileRoot 'microg.release'
+    if (Test-Path -LiteralPath $releaseFile) { Remove-Item -LiteralPath $releaseFile }
     foreach ($package in $packages) {
         # Only known filenames; never recursively remove application/account data.
         foreach ($name in 'base.apk', 'base.apk.new') {
             $file = Join-Path $ProfileRoot "system/priv-app/$package/$name"
             if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file }
+        }
+        # The window icon com.gesher.app.shell.AppShell wrote for the staged addon, and its
+        # folder once empty (an installed update's shortcut record is gesher-app's).
+        $shell = Join-Path $ProfileRoot "data/data/$package/gesher-shell"
+        $icon = Join-Path $shell 'icon.ico'
+        if (-not (Test-Path -LiteralPath (Join-Path $shell 'shortcut.properties')) -and
+                (Test-Path -LiteralPath $icon -PathType Leaf)) {
+            Remove-Item -LiteralPath $icon
+            if (-not @(Get-ChildItem -LiteralPath $shell -Force).Count) { Remove-Item -LiteralPath $shell }
         }
         # Libraries startup extracted from these APKs; only regular .so files in
         # plain (non-reparse) directories, and those directories only once empty.
@@ -109,7 +148,7 @@ if ($Remove) {
 }
 if ($AutoDownload) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $downloadDir = Join-Path $env:TEMP "gesher-microg-downloads"
+    $downloadDir = Join-Path $downloadRoot "gesher-microg-downloads"
     New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
     if (-not $GmsCoreApk) {
         $gmsTarget = Join-Path $downloadDir 'com.google.android.gms.apk'
@@ -148,14 +187,14 @@ foreach ($entry in $entries) {
     }
     $entry.Source = (Resolve-Path -LiteralPath $entry.Source).ProviderPath
 }
+$runtimeFilesHelper = Join-Path $RuntimeDir 'gesher-runtime-files.ps1'
+if (-not (Test-Path -LiteralPath $runtimeFilesHelper -PathType Leaf)) {
+    $runtimeFilesHelper = Join-Path $scriptRoot 'gesher-runtime-files.ps1'
+}
+. $runtimeFilesHelper
 $runtimeDrive = [IO.Path]::GetPathRoot($RuntimeDir).TrimEnd('\').TrimEnd(':')
 function AndroidPath([string] $path) {
-    $full = [IO.Path]::GetFullPath($path) -replace '\\', '/'
-    if ($full -match '^([A-Za-z]):(/.*)$') {
-        if ($Matches[1] -ieq $runtimeDrive) { return $Matches[2] }
-        return "/mnt/$($Matches[1].ToLower())$($Matches[2])"
-    }
-    return $full
+    return ConvertTo-GesherAndroidPath -Path ([IO.Path]::GetFullPath($path)) -BaseDrive $runtimeDrive
 }
 $dalvikvm = Join-Path $RuntimeDir 'dalvikvm.exe'
 if (-not (Test-Path -LiteralPath $dalvikvm)) {
@@ -195,6 +234,8 @@ try {
         $psi.EnvironmentVariables['ANDROID_ROOT'] = AndroidPath "$ProfileRoot/system"
         $psi.EnvironmentVariables['ANDROID_ART_ROOT'] = AndroidPath "$ProfileRoot/art"
         $psi.EnvironmentVariables['ANDROID_DATA'] = AndroidPath "$ProfileRoot/data"
+        $psi.EnvironmentVariables['GESHER_PROFILE'] = $ProfileRoot
+        $psi.EnvironmentVariables['GESHER_PORTABLE'] = if ($portableRoot) { '1' } else { '0' }
         $psi.EnvironmentVariables['ANDROID_I18N_ROOT'] = AndroidPath "$ProfileRoot/i18n"
         $psi.EnvironmentVariables['ANDROID_TZDATA_ROOT'] = AndroidPath "$RuntimeDir/tzdata"
         $process = [Diagnostics.Process]::Start($psi)
@@ -219,6 +260,19 @@ try {
         Move-Item -LiteralPath (Join-Path $slot 'base.apk.new') -Destination (Join-Path $slot 'base.apk') -Force
     }
     Set-Content -LiteralPath $marker -Value 'official-microg-v1' -Encoding ASCII
+    # The release Setup compares to offer a microG update (gesher.iss
+    # MicrogRelease): the one -AutoDownload fetches when no APK was passed, or
+    # the -Release Setup gives for its own downloads; otherwise unknown.
+    $releaseFile = Join-Path $ProfileRoot 'microg.release'
+    $passed = @('GmsCoreApk', 'CompanionApk', 'GsfProxyApk' |
+        Where-Object { $PSBoundParameters.ContainsKey($_) }).Count
+    $stagedRelease = if ($Release) { $Release }
+        elseif ($AutoDownload -and -not $passed) { 'v0.3.17.252432' }
+    if ($stagedRelease) {
+        Set-Content -LiteralPath $releaseFile -Value $stagedRelease -Encoding ASCII
+    } elseif (Test-Path -LiteralPath $releaseFile) {
+        Remove-Item -LiteralPath $releaseFile
+    }
 
     Initialize-MicrogDefaults $ProfileRoot
 

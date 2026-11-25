@@ -182,6 +182,11 @@ public final class WindowSession extends IWindowSession.Stub {
     private long mNextSeq;
     /** The top-level window shown or focused last: a toast's owner. Guarded by mWindows. */
     private AppWindow mActiveRoot;
+    /**
+     * Where an Activity's finish request runs when its window has no Win32 window (and so
+     * no handler) yet: the main thread, as Android delivers the finish. Guarded by mWindows.
+     */
+    private Handler mFinishHandler;
     /** Where each task's window was last (client area on the screen). Guarded by mWindows. */
     private final android.util.SparseArray<Rect> mTaskScreen = new android.util.SparseArray<>();
     /**
@@ -432,12 +437,52 @@ public final class WindowSession extends IWindowSession.Stub {
                 if (w.attrs.token == token
                         && w.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
                     IBinder key = mWindows.keyAt(i);
-                    w.handler.post(() -> close(key));
+                    // An Activity may finish after adding its window but before the window's
+                    // first relayout creates the Win32 window and its handler (an Activity
+                    // that finishes right after onResume): the finish still closes it.
+                    // Never run inline: the close handler finishes the Activity again, from
+                    // inside this finish() and under mWindows.
+                    Handler handler = w.handler != null ? w.handler : finishHandler();
+                    if (handler == null) {
+                        log("window \"" + w.title() + "\": its Activity's finish has no"
+                                + " looper to run on");
+                        return false;
+                    }
+                    handler.post(() -> finishWindow(key));
                     return true;
                 }
             }
         }
         return false;
+    }
+
+    /** The handler for finish requests made before the window's handler exists. */
+    private Handler finishHandler() {
+        if (mFinishHandler == null) {
+            Looper looper = Looper.getMainLooper() != null
+                    ? Looper.getMainLooper() : Looper.myLooper();
+            if (looper != null) mFinishHandler = new Handler(looper);
+        }
+        return mFinishHandler;
+    }
+
+    /**
+     * Closes the window of an Activity that finished (finishLocalActivity), as the user's close
+     * does: through the close handler, whether or not its Win32 window was created yet.
+     */
+    private void finishWindow(IBinder key) {
+        AppWindow w;
+        synchronized (mWindows) {
+            w = mWindows.get(key);
+        }
+        if (w == null) return;  // already removed
+        if (w.nativeWindow != null) {
+            close(key);
+            return;
+        }
+        log("window \"" + w.title() + "\": its Activity finished before its Win32 window"
+                + " was created");
+        mCloseHandler.onClose(this, key, w.attrs);
     }
 
     public void setLifecycleHandler(LifecycleHandler handler) {
@@ -1464,17 +1509,22 @@ public final class WindowSession extends IWindowSession.Stub {
             return w.attrs.token != null ? mWindows.get(w.attrs.token) : null;
         }
         if (type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION) {
-            if (!overActivity) return null;
+            // A floating theme alone does not make a task root a popup. Only a live
+            // Activity in the same known task can own it; a finishing splash (or an
+            // unrelated active task) must not own the replacement Activity's HWND.
+            if (!overActivity || w.taskId < 0) return null;
             AppWindow below = null;
             for (int i = 0; i < mWindows.size(); i++) {
                 AppWindow v = mWindows.valueAt(i);
                 if (v != w && v.shown && v.attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION
-                        && (w.taskId < 0 || v.taskId == w.taskId)
+                        && v.taskId == w.taskId
                         && (below == null || v.seq > below.seq)) {
+                    android.app.Activity a = activity(v.attrs.token);
+                    if (a == null || a.isFinishing() || a.isDestroyed()) continue;
                     below = v;
                 }
             }
-            return below != null ? below : activeRoot();
+            return below;
         }
         if (isApplicationWindow(type)) {
             AppWindow activity = null;
@@ -1776,7 +1826,9 @@ public final class WindowSession extends IWindowSession.Stub {
                     break;
                 }
             }
-            if (at == null && mOneWindow && !isTranslucentOrFloating(w.attrs.token)) {
+            // This is already a top-level window, even when its Activity's theme
+            // is floating. It uses the same app placement policy as other roots.
+            if (at == null && mOneWindow) {
                 for (int i = 0; i < mWindows.size(); i++) {
                     AppWindow v = mWindows.valueAt(i);
                     if (v != w && !v.popup && v.taskId >= 0 && v.taskId != w.taskId && v.shown
@@ -2710,6 +2762,7 @@ public final class WindowSession extends IWindowSession.Stub {
             int seqId) {
         AppWindow w = window(window);
         if (w == null || w.nativeWindow == null) return;
+        boolean first = !w.drawn;
         if (!w.drawn) {
             w.drawn = true;
             log("window \"" + w.title() + "\" " + w.nativeWindow.getWidth() + "x"
@@ -2745,6 +2798,20 @@ public final class WindowSession extends IWindowSession.Stub {
             // a window that is not shown.
             showWindow(w);
         }
+        if (first && isActivityWindow(w.attrs)) {
+            // ActivityRecord.onWindowsDrawn: the Activity's launch is complete for whoever
+            // waits for it (startActivityAndWait), shown on the desktop or hidden.
+            ActivityClientHook.reportWindowsDrawn(w.attrs.token);
+        }
+    }
+
+    /**
+     * An Activity's main window (its token, TYPE_BASE_APPLICATION, also for a dialog-themed
+     * or translucent Activity): not a dialog it shows, its starting window or a system one.
+     */
+    private static boolean isActivityWindow(WindowManager.LayoutParams attrs) {
+        return attrs != null && attrs.token != null
+                && attrs.type == WindowManager.LayoutParams.TYPE_BASE_APPLICATION;
     }
 
     /** {@code [w, h, ARGB...]} as a few ARGB values down the window's first quarter. */

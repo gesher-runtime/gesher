@@ -186,7 +186,9 @@ def provider_name(name):
 def map_records(mapping):
     """Reuse the qualified GNU hierarchy/range gate before reading any RVA."""
     path = ROOT / 'tools/fonts/verify-standalone-link.py'
-    assert factory.sha(path) == '7c52eca57259313f43aeea27e6aefa5e50cde6c0c5ddb4abc2ad6143fbb4af06', 'Qualified map schema parser changed'
+    # 564118b1/eb652ece added explicit local CLI context and Windows command/
+    # response-file handling. map_rows/check_map retain the exact f4fcaa3b bytes.
+    assert factory.sha(path) == 'ae2e1acbf5ce89d0255a601bb9ef49658064ba78f232f2378d34b2285c8424dd', 'Qualified map schema parser changed'
     spec = importlib.util.spec_from_file_location('selected_qualified_gnu_map', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

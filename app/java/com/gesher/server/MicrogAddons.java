@@ -27,6 +27,24 @@ public final class MicrogAddons {
     }
 
     /**
+     * The staged addon {@code packageName} when {@code codePath} (its ApplicationInfo's code
+     * directory) is that addon's own {@code $ANDROID_ROOT/priv-app/<package>} slot, verified
+     * as the system server loads it; null for any other package or directory.
+     */
+    public static ApkPackage stagedAddon(String packageName, String codePath) throws Exception {
+        if (packageName == null || codePath == null || !PACKAGES.contains(packageName)) return null;
+        String androidRoot = System.getenv("ANDROID_ROOT");
+        if (androidRoot == null || androidRoot.isEmpty()) androidRoot = "/system";
+        File slot = new File(androidRoot, "priv-app/" + packageName).getCanonicalFile();
+        if (!slot.equals(new File(codePath).getCanonicalFile())) return null;
+        File apk = new File(slot, "base.apk");
+        if (!java.nio.file.Files.isRegularFile(apk.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return null;
+        }
+        return load(apk, packageName);
+    }
+
+    /**
      * The package manager's native-library setup for a staged {@code priv-app} addon, as
      * at a system package scan: the APK's libraries for its best ABI in
      * {@code <code dir>/lib/<isa>} (stale ones removed), and the package's

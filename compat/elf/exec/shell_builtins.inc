@@ -254,7 +254,9 @@ int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io) {
       sh->pos.insert(sh->pos.end(), args.begin() + 2, args.end());
     }
     ++sh->func_depth;
-    int status = RunProgramString(sh, ReadAll(file->h), *io);
+    bool complete = false;
+    std::string source = ReadAll(file->h, &complete);
+    int status = complete ? RunProgramString(sh, source, *io) : 1;
     --sh->func_depth;
     sh->returning = false;
     if (args.size() > 2) sh->pos = std::move(saved);
@@ -274,6 +276,7 @@ int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io) {
       char c;
       int result = ReadByte(sh, *io, io->fd[0], &c, true);
       if (sh->exiting) return sh->status;
+      if (result == -256) return 1;
       if (result < 0) {
         interrupted = -result;
         break;

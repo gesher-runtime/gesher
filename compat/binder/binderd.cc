@@ -52,6 +52,8 @@
 #include <linux/android/binder.h>
 
 #include "../posix/src/binder_wire.h"
+#include "../framework/app_container.h"
+#include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 
 namespace {
@@ -160,6 +162,7 @@ struct Buffer {
   std::vector<uint8_t> data;
   std::vector<uint64_t> offsets;
   std::vector<uint8_t> extra;
+  std::vector<wire::FileDescription> descriptions;
 };
 
 struct Transaction : Work {
@@ -222,6 +225,8 @@ std::mutex g_lock;
 std::map<uint32_t, std::shared_ptr<Proc>> g_procs;
 Node* g_context_mgr_node = nullptr;
 uint32_t g_next_proc_id = 1;
+// GESHER_SANDBOX=appcontainer (ADR 0090): set once in main, before the first client.
+bool g_sandbox = false;
 uint64_t g_next_buffer_id = 1;
 int g_next_debug_id = 1;
 
@@ -495,6 +500,20 @@ void CloseRemoteHandle(int pid, uint64_t handle) {
   CloseHandle(p);
 }
 
+wire::FileDescription* DescriptionAt(Buffer* buffer, uint64_t offset) {
+  // The manifest is ordered like the validated, strictly increasing offsets.
+  auto found = std::lower_bound(buffer->descriptions.begin(), buffer->descriptions.end(), offset,
+      [](const wire::FileDescription& entry, uint64_t value) { return entry.object_offset < value; });
+  return found != buffer->descriptions.end() && found->object_offset == offset ? &*found : nullptr;
+}
+
+void CloseStagingDescription(Buffer* buffer, uint64_t offset) {
+  if (auto* description = DescriptionAt(buffer, offset)) {
+    CloseRemoteHandle(buffer->proc->pid, description->shared_handle);
+    description->shared_handle = 0;
+  }
+}
+
 // binder_transaction_buffer_release: drops the references a buffer's objects
 // hold, in the receiver's terms.
 void ReleaseBufferObjects(Buffer* buffer) {
@@ -520,6 +539,7 @@ void ReleaseBufferObjects(Buffer* buffer) {
         // Staging handles always belong to the broker. Successful delivery
         // already closes/zeros them; abort/release closes any still present.
         CloseRemoteHandle(proc->pid, fp.binder);
+        CloseStagingDescription(buffer, off);
         break;
       default:
         break;
@@ -640,6 +660,7 @@ struct TransactionData {
   uint64_t buffers_size = 0;
   int32_t copy_error = 0;
   std::vector<uint8_t> extra;
+  std::vector<wire::FileDescription> descriptions;
 };
 
 // Translates the objects of a buffer from the sender's terms (proc) to the
@@ -687,6 +708,17 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
       }
       uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
       if (dup == 0) return BR_FAILED_REPLY;
+      auto* description = DescriptionAt(buffer, off);
+      uint64_t shared = description
+          ? DuplicateRemoteHandle(proc->pid, target_proc->pid, description->shared_handle) : 0;
+      // Sockets and completed native fences are typed handles without an OFD.
+      const bool typed = description && (description->kind == wire::kSocketFileDescription ||
+                                         description->kind == wire::kNativeFenceFileDescription);
+      if (!description || (!typed && shared == 0)) {
+        CloseRemoteHandle(target_proc->pid, dup);
+        return BR_FAILED_REPLY;
+      }
+      description->shared_handle = shared;
       TRACE("proc %u: fd handle %llx -> %llx in proc %u", proc->id,
             (unsigned long long)fp.binder, (unsigned long long)dup, target_proc->id);
       fp.binder = dup;
@@ -819,7 +851,8 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
   }
   gesher::binder_sg::Layout sg_layout;
   if (td.copy_error != 0 ||
-      !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout)) {
+      !gesher::binder_sg::WireLayout(td.data, td.offsets, td.extra.size(), &sg_layout) ||
+      !wire::ValidFileDescriptions(td.data, td.offsets, td.descriptions)) {
     Log("proc %u: invalid transaction user copy or scatter-gather layout", proc->id);
     return fail(BR_FAILED_REPLY);
   }
@@ -843,6 +876,7 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply) 
   buffer->data = std::move(td.data);
   buffer->offsets = std::move(td.offsets);
   buffer->extra = std::move(td.extra);
+  buffer->descriptions = std::move(td.descriptions);
   target_proc->buffers[buffer->id] = buffer;
   t->buffer = buffer;
 
@@ -932,6 +966,7 @@ void CloseStagingFds(Buffer* buffer) {
     object.pad_binder = 0;
     memcpy(buffer->data.data() + offset, &object, sizeof(object));
     CloseRemoteHandle(buffer->proc->pid, staging);
+    CloseStagingDescription(buffer, offset);
   }
 }
 
@@ -1167,14 +1202,22 @@ int ThreadWrite(Proc* proc, Thread* thread, In in, uint32_t* consumed) {
         if (!in.Get(&td.copy_error)) return -EFAULT;
         if (td.copy_error == 0) {
           if (!gesher::binder_sg::Dimensions(td.tr.data_size, td.tr.offsets_size, td.buffers_size)) return -EINVAL;
-          const uint64_t body_size = td.tr.data_size + td.tr.offsets_size + td.buffers_size;
+          uint32_t description_count;
+          if (!in.Get(&description_count) || description_count > td.tr.offsets_size / sizeof(binder_size_t) ||
+              description_count > wire::kMaxFileDescriptions)
+            return -EINVAL;
+          const uint64_t body_size = td.tr.data_size + td.tr.offsets_size + td.buffers_size +
+              static_cast<uint64_t>(description_count) * sizeof(wire::FileDescription);
           if (body_size > static_cast<uint64_t>(in.end - in.p)) return -EFAULT;
           td.data.resize(td.tr.data_size);
           td.offsets.resize(td.tr.offsets_size / sizeof(binder_size_t));
           td.extra.resize(td.buffers_size);
+          td.descriptions.resize(description_count);
           if (!in.Read(td.data.data(), td.data.size()) ||
               !in.Read(td.offsets.data(), td.tr.offsets_size) ||
-              !in.Read(td.extra.data(), td.extra.size())) return -EFAULT;
+              !in.Read(td.extra.data(), td.extra.size()) ||
+              !in.Read(td.descriptions.data(), td.descriptions.size() * sizeof(wire::FileDescription)))
+            return -EFAULT;
         }
         DoTransaction(proc, thread, td, cmd == BC_REPLY || cmd == BC_REPLY_SG);
         break;
@@ -1453,9 +1496,11 @@ retry:
     rs->size += sizeof(tr);
     rs->out.Put(buffer->id);
     rs->out.Put<uint64_t>(buffer->extra.size());
+    rs->out.Put<uint32_t>(static_cast<uint32_t>(buffer->descriptions.size()));
     rs->out.Write(buffer->data.data(), buffer->data.size());
     rs->out.Write(buffer->offsets.data(), tr.offsets_size);
     rs->out.Write(buffer->extra.data(), buffer->extra.size());
+    rs->out.Write(buffer->descriptions.data(), buffer->descriptions.size() * sizeof(wire::FileDescription));
     TRACE("proc %u thread %d: %s %d delivered", proc->id, thread->tid,
           cmd == BR_REPLY ? "reply" : "transaction", t->debug_id);
     if (cmd != BR_REPLY && (t->flags & TF_ONE_WAY) == 0) {
@@ -1533,9 +1578,54 @@ uint64_t RandomKey() {
   return x;
 }
 
+// Whether the client of `pipe` is restricted (GESHER_SANDBOX=appcontainer, ADR 0090):
+// in an AppContainer, or below Medium integrity. The pipe's Low label admits both,
+// and neither may speak for the system. Its token, not its hello, says so: the
+// pipe impersonates the sender of the last message read. A token that cannot be
+// read counts as restricted.
+bool ClientIsRestricted(HANDLE pipe) {
+  if (!ImpersonateNamedPipeClient(pipe)) return true;
+  HANDLE token = nullptr;
+  BOOL opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
+  RevertToSelf();
+  if (!opened) return true;
+  DWORD contained = 1, size = 0;
+  bool restricted =
+      !GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &size) ||
+      contained != 0;
+  if (!restricted) {
+    alignas(TOKEN_MANDATORY_LABEL) BYTE label[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    if (!GetTokenInformation(token, TokenIntegrityLevel, label, sizeof(label), &size)) {
+      restricted = true;
+    } else {
+      PSID sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(label)->Label.Sid;
+      UCHAR count = *GetSidSubAuthorityCount(sid);
+      restricted = count == 0 || *GetSidSubAuthority(sid, count - 1) < SECURITY_MANDATORY_MEDIUM_RID;
+    }
+  }
+  CloseHandle(token);
+  return restricted;
+}
+
 void ServeProc(HANDLE pipe, In in) {
   uint32_t version, pid, uid;
   if (!in.Get(&version) || version != wire::kVersion || !in.Get(&pid) || !in.Get(&uid)) return;
+  if (g_sandbox && ClientIsRestricted(pipe)) {
+    // A first step of kernel-verified identity (ADR 0090, milestone M2 completes it):
+    // a restricted process is an app, at its own pid. It cannot claim a system UID
+    // (SYSTEM_UID 1000 and every other below FIRST_APPLICATION_UID) or another pid.
+    ULONG actual = 0;
+    bool known = GetNamedPipeClientProcessId(pipe, &actual) != FALSE;
+    if (uid < 10000 || !known || actual != pid) {
+      WireReply reply;
+      reply.Put<int32_t>(-EPERM);
+      // The client reads EPERM before the connection closes, not a broken pipe.
+      if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
+      Log("rejected a restricted client: claimed pid %u uid %u, actual pid %lu", pid, uid,
+          actual);
+      return;
+    }
+  }
   auto proc_owner = std::make_shared<Proc>();
   Proc* proc = proc_owner.get();
   {
@@ -1574,6 +1664,8 @@ void ServeProc(HANDLE pipe, In in) {
 struct RightsEntry {
   HANDLE handle;
   uint64_t metadata;
+  HANDLE shared;
+  uint32_t kind;
 };
 
 struct RightsGroup {
@@ -1606,7 +1698,10 @@ void RefreshDoorbell(uint64_t queue) {
 
 // g_rights_lock held.
 void CloseRightsGroup(RightsGroup* group) {
-  for (const RightsEntry& e : group->entries) CloseHandle(e.handle);
+  for (const RightsEntry& e : group->entries) {
+    CloseHandle(e.handle);
+    if (e.shared) CloseHandle(e.shared);
+  }
   g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
   group->entries.clear();
 }
@@ -1616,14 +1711,21 @@ void CloseRightsGroup(RightsGroup* group) {
 // delivered is reported as handle 0, which the receiver reports as a failure.
 void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
   for (const RightsEntry& e : group->entries) {
-    HANDLE out = nullptr;
-    if (!DuplicateHandle(GetCurrentProcess(), e.handle, to, &out, 0, FALSE,
-                         DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE)) {
+    HANDLE out = nullptr, shared = nullptr;
+    bool ok = DuplicateHandle(GetCurrentProcess(), e.handle, to, &out, 0, FALSE,
+                               DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE);
+    if (e.shared && !DuplicateHandle(GetCurrentProcess(), e.shared, to, &shared, 0, FALSE,
+                                    DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE)) ok = false;
+    if (!ok) {
       Log("rights: DuplicateHandle into the receiver failed: %lu", GetLastError());
-      out = nullptr;
+      if (out) DuplicateHandle(to, out, nullptr, nullptr, 0, FALSE, DUPLICATE_CLOSE_SOURCE);
+      if (shared) DuplicateHandle(to, shared, nullptr, nullptr, 0, FALSE, DUPLICATE_CLOSE_SOURCE);
+      out = shared = nullptr;
     }
     reply->Put<uint64_t>(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(out)));
     reply->Put<uint64_t>(e.metadata);
+    reply->Put<uint64_t>(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(shared)));
+    reply->Put<uint32_t>(e.kind);
   }
   g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
   group->entries.clear();
@@ -1661,20 +1763,33 @@ void ServeRights(HANDLE pipe, In in) {
       group->position = position;
       int32_t status = 0;
       for (uint32_t i = 0; i < count; ++i) {
-        uint64_t handle;
-        uint64_t metadata;
-        if (!req.Get(&handle) || !req.Get(&metadata)) {
+        uint64_t handle, metadata, shared_handle;
+        uint32_t kind;
+        if (!req.Get(&handle) || !req.Get(&metadata) || !req.Get(&shared_handle) || !req.Get(&kind) ||
+            handle == 0 || handle > UINTPTR_MAX || shared_handle > UINTPTR_MAX ||
+            (kind == wire::kSocketFileDescription
+              ? shared_handle != 0 || (metadata & 1) == 0
+              : kind == wire::kNativeFenceFileDescription
+              ? shared_handle != 0 || metadata != wire::kCompletedNativeFenceMetadata
+              : kind > 2 || shared_handle == 0 || metadata != 0)) {
           status = -EINVAL;
           break;
         }
-        HANDLE own = nullptr;
+        HANDLE own = nullptr, shared = nullptr;
         if (!DuplicateHandle(client, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)),
                              GetCurrentProcess(), &own, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
           Log("rights: DuplicateHandle from pid %lu failed: %lu", client_pid, GetLastError());
           status = -EBADF;
           break;
         }
-        group->entries.push_back({own, metadata});
+        if (shared_handle && !DuplicateHandle(client,
+              reinterpret_cast<HANDLE>(static_cast<uintptr_t>(shared_handle)), GetCurrentProcess(),
+              &shared, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+          CloseHandle(own);
+          status = -EBADF;
+          break;
+        }
+        group->entries.push_back({own, metadata, shared, kind});
       }
       if (status == 0 &&
           !BCRYPT_SUCCESS(BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(group->token),
@@ -1969,12 +2084,26 @@ int main(int argc, char** argv) {
     Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
   }
 
+  // GESHER_SANDBOX=appcontainer (ADR 0090): an explicit descriptor that admits the
+  // app processes' AppContainers through the binder-client capability and a Low
+  // label, and nothing else beyond this user and SYSTEM. Otherwise the default.
+  SECURITY_ATTRIBUTES pipe_security{sizeof(pipe_security), nullptr, FALSE};
+  g_sandbox = gesher::appcontainer::Enabled();
+  if (g_sandbox) {
+    DWORD error = gesher::appcontainer::BinderPipeSecurity(&pipe_security.lpSecurityDescriptor);
+    if (error != ERROR_SUCCESS) {
+      Log("GESHER_SANDBOX=appcontainer: no pipe security descriptor: %lu", error);
+      return 1;
+    }
+  }
+
   bool first = true;
   for (;;) {
     HANDLE pipe = CreateNamedPipeW(
         name.c_str(), PIPE_ACCESS_DUPLEX | (first ? FILE_FLAG_FIRST_PIPE_INSTANCE : 0),
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-        PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 16, 0, nullptr);
+        PIPE_UNLIMITED_INSTANCES, 1 << 16, 1 << 16, 0,
+        g_sandbox ? &pipe_security : nullptr);
     if (pipe == INVALID_HANDLE_VALUE) {
       DWORD error = GetLastError();
       if (first && (error == ERROR_ACCESS_DENIED || error == ERROR_PIPE_BUSY)) {
@@ -1985,6 +2114,9 @@ int main(int argc, char** argv) {
       return 1;
     }
     if (first) {
+      // Logged once the pipe exists: a first write to stderr can be slow, and
+      // clients wait for the pipe, not for the log.
+      if (g_sandbox) Log("GESHER_SANDBOX=appcontainer: app processes run in AppContainers (experimental)");
       Log("serving device %s", device.c_str());
       fflush(stderr);
     }

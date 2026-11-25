@@ -36,7 +36,7 @@ def main():
     scratch_header = (read('compat/posix/src/poll_scratch.h')
                       if '#include "poll_scratch.h"' in source else None)
     print('production epoll.cc sha256=' + hashlib.sha256(source.encode()).hexdigest(), flush=True)
-    source = re.sub(r'^#include "(?:event_internal|internal|socket_internal|record_lock_descriptors)\.h"\n', '', source, flags=re.M)
+    source = re.sub(r'^#include "(?:event_internal|internal|socket_internal|record_lock_descriptors|native_fence_internal)\.h"\n', '', source, flags=re.M)
     source = source.replace('#include <windows.h>\n', '')
     template = (ROOT / 'tests/native/epoll_eventfd_edges_host.cc.in').read_text()
     if template.count('@EPOLL_SOURCE@') != 1:

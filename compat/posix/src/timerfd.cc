@@ -75,6 +75,9 @@ struct TimerFd {
   int clockid = kMonotonic;
   bool changing = false;
   bool absolute_realtime = false;
+  // Like Linux, an expiration defers periodic rearming until read/gettime.
+  // Pending ticks still catch up from the selected clock without callbacks.
+  bool expired = false;
   int64_t next = 0;
   int64_t interval = 0;
   uint64_t pending = 0;
@@ -119,8 +122,11 @@ struct TimerFd {
     }
     const uint64_t room = std::numeric_limits<uint64_t>::max() - pending;
     pending += std::min(count, room);
-    SetReadable(*readiness, true);
-    changed.notify_all();
+    if (!expired) {
+      expired = true;
+      SetReadable(*readiness, true);
+      changed.notify_all();
+    }
   }
 
   TimerFdSpec Snapshot(int64_t now) {
@@ -132,7 +138,7 @@ struct TimerFd {
   }
 
   void Arm() {
-    if (next == 0 || changing) return;
+    if (next == 0 || changing || expired) return;
     int64_t ticks;
     if (absolute_realtime) {
       // Absolute FILETIME timers track Windows wall-clock adjustments.
@@ -214,6 +220,12 @@ int TimerFdGetTime(int fd, TimerFdSpec* value) {
   if (value == nullptr) return errno = EFAULT, -1;
   std::lock_guard<std::mutex> lock(timer->mutex);
   *value = timer->Snapshot(timer->Now());
+  // gettime forwards and restarts a periodic timer without draining its ticks.
+  // A subsequent expiration is a new edge even while the fd stays readable.
+  if (timer->expired && timer->interval > 0) {
+    timer->expired = false;
+    timer->Arm();
+  }
   return 0;
 }
 
@@ -238,6 +250,7 @@ int TimerFdSetTime(int fd, int flags, const TimerFdSpec* value, TimerFdSpec* pre
   std::lock_guard<std::mutex> lock(timer->mutex);
   if (previous != nullptr) *previous = timer->Snapshot(timer->Now());
   timer->pending = 0;
+  timer->expired = false;
   SetReadable(*timer->readiness, false);
   timer->interval = ToNanos(requested.it_interval);
   timer->absolute_realtime = timer->clockid == kRealtime && (flags & kAbstime) != 0;
@@ -270,6 +283,10 @@ int ReadTimerFd(TimerFd& timer, void* buffer, unsigned int size) {
   const uint64_t value = timer.pending;
   timer.pending = 0;
   SetReadable(*timer.readiness, false);
+  if (timer.expired) {
+    timer.expired = false;
+    timer.Arm();
+  }
   memcpy(buffer, &value, sizeof(value));
   return sizeof(value);
 }

@@ -3,6 +3,7 @@ package com.gesher.server;
 
 import android.app.Activity;
 import android.app.ContentProviderHolder;
+import android.app.IActivityManager;
 import android.app.IApplicationThread;
 import android.app.IServiceConnection;
 import android.app.servertransaction.ClientTransaction;
@@ -224,6 +225,7 @@ public final class PackageEnabledLifecycleFixture {
                 new Class<?>[]{ActivityTaskManagerService.class, PackageManagerService.class,
                         type("NotificationManagerService")}, atm, pm, null);
         final IPackageManager api;
+        final IActivityManager amApi;
         final Object services = get(am, "mServices"), broadcasts = get(am, "mBroadcasts"), providers = get(am, "mProviders");
         final ArrayDeque<Runnable> events = new ArrayDeque<>();
         final List<Intent> notifications = new ArrayList<>();
@@ -235,6 +237,7 @@ public final class PackageEnabledLifecycleFixture {
                 unlocked(); notifications.add(event); broadcast(event, false, null, 0);
             });
             api = binder ? IPackageManager.Stub.asInterface(remote(StandIn.of(IPackageManager.class, pm).asBinder())) : pm;
+            amApi = binder ? IActivityManager.Stub.asInterface(remote(StandIn.of(IActivityManager.class, am).asBinder())) : am;
             processes = (List<Object>)get(atm, "mProcesses");
             pending = (List<?>)get(atm, "mPendingWork");
         }
@@ -561,9 +564,11 @@ public final class PackageEnabledLifecycleFixture {
     }
 
     private static ContentProviderHolder holder(Harness h, String suffix) {
+        return holder(h, suffix, new Binder());
+    }
+    private static ContentProviderHolder holder(Harness h, String suffix, IBinder binder) {
         ProviderInfo info = h.pm.getProviderInfo(part("Provider" + suffix), 0, 0);
         ContentProviderHolder holder = new ContentProviderHolder(info);
-        IBinder binder = new Binder();
         holder.provider = (IContentProvider)Proxy.newProxyInstance(PackageEnabledLifecycleFixture.class.getClassLoader(),
                 new Class<?>[]{IContentProvider.class}, (proxy, method, args) -> {
                     if (method.getName().equals("asBinder")) return binder;
@@ -576,6 +581,181 @@ public final class PackageEnabledLifecycleFixture {
         ContentProviderHolder[] result = new ContentProviderHolder[1];
         as(client, () -> result[0] = h.am.getContentProvider(client.thread, CLIENT, OWNER + ".provider" + suffix, 0, stable));
         return result[0];
+    }
+
+    /** Explicit fixture transport: no ordinary provider's liveness is substituted. */
+    private static final class ProviderBinder extends Binder {
+        final Harness h;
+        boolean alive = true;
+        final java.util.concurrent.atomic.AtomicInteger pings = new java.util.concurrent.atomic.AtomicInteger();
+        Operation onPing;
+        ProviderBinder(Harness h) { this.h = h; }
+        @Override public boolean pingBinder() {
+            h.unlocked(); pings.incrementAndGet();
+            if (onPing != null) try { onPing.run(); }
+            catch (Exception failure) { throw new AssertionError(failure); }
+            return alive;
+        }
+    }
+    private static void reportDeath(Harness h, TestProcess client, IBinder connection) throws Exception {
+        as(client, () -> h.amApi.unstableProviderDied(connection));
+    }
+    private static void expectFailure(Class<? extends Throwable> expected, Operation operation,
+            String reason) throws Exception {
+        try { operation.run(); }
+        catch (Throwable failure) {
+            check(expected.isInstance(failure), reason + ": " + failure); return;
+        }
+        throw new AssertionError(reason + ": no exception");
+    }
+
+    private static void providerDeaths() throws Exception {
+        Harness h = new Harness(); var owner = h.process(OWNER, true);
+        var unstable = h.process(CLIENT, true); var stable = h.process(CLIENT, true);
+        ProviderBinder transport = new ProviderBinder(h); transport.alive = false;
+        ContentProviderHolder a = holder(h, "A", transport), b = holder(h, "B");
+        as(owner, () -> h.am.publishContentProviders(owner.thread, List.of(a, b)));
+        ContentProviderHolder first = acquire(h, unstable, "A", false);
+        ContentProviderHolder second = acquire(h, unstable, "B", false);
+        ContentProviderHolder fixed = acquire(h, stable, "A", true);
+        reportDeath(h, unstable, first.connection);
+        check(!h.processes.contains(owner.record) && (Boolean)get(owner.record, "dead"),
+                "Reported dead provider remained the current process");
+        check(!owner.exiting(), "Unexpected provider death became an intentional force-stop");
+        check(((Map<?, ?>)get(h.providers, "mPublished")).isEmpty(),
+                "Dead provider process retained published authorities");
+        check(h.thread(unstable).providerDeaths.size() == 2
+                && h.thread(unstable).providerDeaths.containsAll(List.of(transport, b.provider.asBinder()))
+                && h.thread(unstable).exits == 0, "Unstable clients did not receive provider invalidation");
+        check(h.thread(stable).exits == 1 && stable.exiting(),
+                "Stable dependent survived its provider's death");
+        check(!h.am.refContentProvider(first.connection, 0, 0)
+                && !h.am.refContentProvider(second.connection, 0, 0)
+                && !h.am.refContentProvider(fixed.connection, 0, 0), "Dead connections survived cleanup");
+        reportDeath(h, unstable, first.connection);
+        invoke(h.atm, "processDied", new Class<?>[]{type("ActivityTaskManagerService$ProcessRecord")}, owner.record);
+        check(h.thread(unstable).providerDeaths.size() == 2 && h.thread(stable).exits == 1
+                && transport.pings.get() == 1, "Duplicate provider/process death notified a client twice");
+        var replacement = h.process(OWNER, true); ContentProviderHolder fresh = holder(h, "A");
+        as(replacement, () -> h.am.publishContentProviders(replacement.thread, List.of(fresh)));
+        ContentProviderHolder recovered = acquire(h, unstable, "A", false);
+        check(recovered != null && recovered.provider.asBinder() == fresh.provider.asBinder()
+                && recovered.connection != first.connection, "Next acquisition reused the dead provider");
+        reportDeath(h, unstable, first.connection);
+        check(h.processes.contains(replacement.record) && h.am.refContentProvider(recovered.connection, 0, 0),
+                "An old connection retired a replacement provider");
+
+        Harness live = new Harness(); var liveOwner = live.process(OWNER, true);
+        var client = live.process(CLIENT, true); var other = live.process(CLIENT, true);
+        ProviderBinder alive = new ProviderBinder(live); ContentProviderHolder liveProvider = holder(live, "A", alive);
+        as(liveOwner, () -> live.am.publishContentProviders(liveOwner.thread, List.of(liveProvider)));
+        ContentProviderHolder liveRef = acquire(live, client, "A", false);
+        reportDeath(live, client, liveRef.connection);
+        check(alive.pings.get() == 1 && live.processes.contains(liveOwner.record)
+                && live.am.refContentProvider(liveRef.connection, 0, 0), "A client's false report killed a live provider");
+        expectFailure(NullPointerException.class, () -> reportDeath(live, client, null), "Null connection was accepted");
+        expectFailure(IllegalArgumentException.class, () -> reportDeath(live, client, new Binder()),
+                "An arbitrary Binder was accepted as a provider connection");
+        expectFailure(SecurityException.class, () -> reportDeath(live, other, liveRef.connection),
+                "Another process could report this client's provider");
+        long identity = Binder.clearCallingIdentity();
+        try {
+            Binder.restoreCallingIdentity(((long)(client.uid + 1) << 32) | client.pid);
+            expectFailure(SecurityException.class, () -> live.amApi.unstableProviderDied(liveRef.connection),
+                    "A mismatched Binder UID inherited a provider connection");
+        } finally { Binder.restoreCallingIdentity(identity); }
+        check(alive.pings.get() == 1, "Invalid ownership probed the provider");
+
+        // A valid record with the same PID/UID must not confer the retired record's capability.
+        int savedPid = nextPid; nextPid = client.pid;
+        TestProcess newer;
+        try { newer = live.process(CLIENT, true); }
+        finally { nextPid = savedPid; }
+        expectFailure(SecurityException.class, () -> reportDeath(live, newer, liveRef.connection),
+                "PID reuse inherited a previous client's connection");
+        check(alive.pings.get() == 1 && live.processes.contains(liveOwner.record), "PID reuse altered provider liveness");
+        providerDeathRaces();
+        concurrentProviderDeaths();
+
+        Harness physical = new Harness(); var dead = physical.process(OWNER, true);
+        var observer = physical.process(CLIENT, true); var dependent = physical.process(CLIENT, true);
+        ContentProviderHolder provider = holder(physical, "A");
+        as(dead, () -> physical.am.publishContentProviders(dead.thread, List.of(provider)));
+        acquire(physical, observer, "A", false); acquire(physical, dependent, "A", true);
+        invoke(physical.atm, "processDied", new Class<?>[]{type("ActivityTaskManagerService$ProcessRecord")}, dead.record);
+        check(physical.thread(observer).providerDeaths.equals(List.of(provider.provider.asBinder()))
+                && physical.thread(dependent).exits == 1,
+                "Physical process death bypassed stable/unstable provider cleanup");
+    }
+
+    private static void providerDeathRaces() throws Exception {
+        for (String race : List.of("publication", "owner-pid", "client-pid", "owner-code", "client-code", "release", "reentry")) {
+            Harness h = new Harness(); var owner = h.process(OWNER, true); var client = h.process(CLIENT, true);
+            ProviderBinder transport = new ProviderBinder(h); transport.alive = false;
+            ContentProviderHolder old = holder(h, "A", transport), replacement = holder(h, "A");
+            as(owner, () -> h.am.publishContentProviders(owner.thread, List.of(old)));
+            ContentProviderHolder held = acquire(h, client, "A", false);
+            AtomicReference<TestProcess> newProcess = new AtomicReference<>();
+            transport.onPing = () -> {
+                if (race.equals("publication")) {
+                    as(owner, () -> h.am.publishContentProviders(owner.thread, List.of(replacement)));
+                } else if (race.equals("owner-pid") || race.equals("client-pid")) {
+                    int savedPid = nextPid; nextPid = race.equals("owner-pid") ? owner.pid : client.pid;
+                    try { newProcess.set(h.process(race.equals("owner-pid") ? OWNER : CLIENT, true)); }
+                    finally { nextPid = savedPid; }
+                } else if (race.equals("owner-code") || race.equals("client-code")) {
+                    Map<String, ApkPackage> packages = new java.util.LinkedHashMap<>((Map<String, ApkPackage>)get(h.pm, "mPackages"));
+                    String replaced = race.equals("owner-code") ? OWNER : CLIENT;
+                    packages.put(replaced, code(replaced)); set(h.pm, "mPackages", packages);
+                } else if (race.equals("release")) {
+                    as(client, () -> h.am.removeContentProvider(held.connection, false));
+                } else {
+                    // Reentrant physical death while the ping is in flight performs cleanup once.
+                    invoke(h.atm, "processDied", new Class<?>[]{type("ActivityTaskManagerService$ProcessRecord")}, owner.record);
+                }
+            };
+            reportDeath(h, client, held.connection);
+            check(transport.pings.get() == 1, "Provider was probed repeatedly for race=" + race);
+            if (race.equals("reentry")) {
+                check(!h.processes.contains(owner.record) && h.thread(client).providerDeaths.equals(List.of(transport)),
+                        "Reentrant death lost or duplicated notification");
+            } else {
+                check(h.processes.contains(owner.record) && !(Boolean)get(owner.record, "dead")
+                        && h.thread(client).providerDeaths.isEmpty(), "Stale death retired a changed lifetime: " + race);
+                if (newProcess.get() != null) check(h.processes.contains(newProcess.get().record)
+                        && !(Boolean)get(newProcess.get().record, "dead"), "Death retired a replacement PID: " + race);
+            }
+        }
+    }
+
+    private static void concurrentProviderDeaths() throws Exception {
+        Harness h = new Harness(); var owner = h.process(OWNER, true);
+        var first = h.process(CLIENT, true); var second = h.process(CLIENT, true);
+        ProviderBinder transport = new ProviderBinder(h); transport.alive = false;
+        ContentProviderHolder published = holder(h, "A", transport);
+        as(owner, () -> h.am.publishContentProviders(owner.thread, List.of(published)));
+        ContentProviderHolder a = acquire(h, first, "A", false), b = acquire(h, second, "A", false);
+        CountDownLatch entered = new CountDownLatch(2), release = new CountDownLatch(1);
+        transport.onPing = () -> { entered.countDown(); check(release.await(3, TimeUnit.SECONDS), "Concurrent ping not released"); };
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread one = new Thread(() -> {
+            try { reportDeath(h, first, a.connection); }
+            catch (Throwable error) { failure.compareAndSet(null, error); }
+        }, "provider-death-one");
+        Thread two = new Thread(() -> {
+            try { reportDeath(h, second, b.connection); }
+            catch (Throwable error) { failure.compareAndSet(null, error); }
+        }, "provider-death-two");
+        one.setDaemon(true); two.setDaemon(true); one.start(); two.start();
+        try { check(entered.await(3, TimeUnit.SECONDS), "Concurrent pings held a lifecycle monitor"); }
+        finally { release.countDown(); }
+        one.join(3000); two.join(3000);
+        check(!one.isAlive() && !two.isAlive() && failure.get() == null,
+                "Concurrent reports did not terminate cleanly: " + failure.get());
+        check(transport.pings.get() == 2 && !h.processes.contains(owner.record)
+                && h.thread(first).providerDeaths.equals(List.of(transport))
+                && h.thread(second).providerDeaths.equals(List.of(transport)),
+                "Concurrent reports duplicated provider retirement or client callbacks");
     }
     private static void providers() throws Exception {
         Harness h = new Harness(); var owner = h.process(OWNER, true); h.start("ServiceB");
@@ -836,6 +1016,7 @@ public final class PackageEnabledLifecycleFixture {
         if (group.equals("all") || group.equals("events")) events();
         if (group.equals("all") || group.equals("broadcasts")) broadcasts();
         if (group.equals("all") || group.equals("providers")) providers();
+        if (group.equals("all") || group.equals("provider-death")) providerDeaths();
         if (group.equals("provider-install")) providerInstallRace();
         if (group.equals("all") || group.equals("activities")) activities();
         if (!useBinder && (group.equals("all") || group.equals("starting"))) startingProcess();

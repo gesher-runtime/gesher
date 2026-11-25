@@ -108,6 +108,18 @@ public final class PackageUninstallTest {
                 new Class<?>[]{PackageManagerService.class,Executor.class,consentType,Supplier.class,transportType,removalType},
                 pm,(Executor)work::add,consent,(Supplier<String>)caller::get,null,removal);
         method(serviceType,"attach",atmType,installerType).invoke(service,atm,installer);
+        // The Windows shell (ADR 0028): a committed removal retires the Start menu shortcut and
+        // URL protocols recorded before it; nothing else touches them.
+        Class<?> shellType=Class.forName(serviceType.getName()+"$DesktopShell");
+        List<String> shellSteps=Collections.synchronizedList(new ArrayList<>());
+        field(serviceType,"mShell").set(service,Proxy.newProxyInstance(shellType.getClassLoader(),new Class<?>[]{shellType},(p,m,a)->{
+            if(m.getName().equals("installed")){shellSteps.add("installed "+a[0]);return null;}
+            require(Thread.holdsLock(installer)&&pm.get(name)!=null,"Shell removal state not captured before removal");
+            shellSteps.add("prepare "+a[0]);return (Runnable)()->{
+                require(!Thread.holdsLock(installer)&&pm.get(name)==null,"Shell retired before removal committed or under its lock");
+                shellSteps.add("retired "+a[0]);
+            };
+        }));
         AtomicReference<Intent> result=new AtomicReference<>();IntentSender receiver=receiver(result);
         VersionedPackage target=new VersionedPackage(name,-1L);
         rejected(()->service.uninstall(target,"foreign.owner",0,receiver,0),SecurityException.class);
@@ -189,6 +201,7 @@ public final class PackageUninstallTest {
         ApkPackage beforeFailure=pm.get(name);
         service.uninstall(target,caller.get(),0,receiver,0);work.remove(0).run();
         require(status(result)==PackageInstaller.STATUS_FAILURE_STORAGE,"Registry failure reported success");
+        require(!shellSteps.toString().contains("retired"),"Failed or refused removal retired the Windows shell: "+shellSteps);
         require(pm.get(name)==beforeFailure&&new File(privateData,"private-marker").isFile()
                 &&new File(deviceData,"private-marker").isFile(),"Failed removal lost publication/data");
         require(Files.readString(new File(data,"system/packages.list").toPath()).contains(name+"\t")&&events.isEmpty(),"Failed removal changed registry/events");
@@ -235,7 +248,8 @@ public final class PackageUninstallTest {
         android.app.job.JobInfo jobInfo=new android.app.job.JobInfo.Builder(7,new ComponentName(name,"fixture.Job"))
                 .setMinimumLatency(100000).setPersisted(true).build();
         Object job=make(jobType,new Class<?>[]{jobsType,String.class,String.class,android.app.job.JobInfo.class},scheduler,name,null,jobInfo);
-        List<Object> jobs=(List<Object>)field(jobsType,"mJobs").get(scheduler);jobs.add(job);
+        List<Object> jobs=(List<Object>)field(jobsType,"mJobs").get(scheduler);
+        synchronized(scheduler){method(jobsType,"addJobLocked",jobType).invoke(scheduler,job);}
         method(jobsType,"persist",jobType).invoke(scheduler,job);
         File persisted=(File)method(jobsType,"persistFile",jobType).invoke(null,job);
         require(persisted.isFile(),"Persisted synthetic job not written");
@@ -256,6 +270,10 @@ public final class PackageUninstallTest {
         caller.set(name);int session=service.createSession(params,name,null,0);IPackageInstallerSession oldSession=service.openSession(session);caller.set(owner.packageName);
         service.uninstall(new VersionedPackage(name,2L),caller.get(),0,receiver,0);work.remove(0).run();
         require(status(result)==PackageInstaller.STATUS_SUCCESS,"Approved ordinary target was not removed");
+        require(shellSteps.size()>=2&&shellSteps.get(shellSteps.size()-1).equals("retired "+name)
+                &&shellSteps.get(shellSteps.size()-2).equals("prepare "+name)
+                &&shellSteps.stream().filter(step->step.startsWith("retired")).count()==1,
+                "Committed removal did not retire the Windows shell once: "+shellSteps);
         drain(eventExecutor);require(eventFailure.get()==null,"Removal callback failed: "+eventFailure.get());
         require(pm.get(name)==null&&!privateData.exists()&&!deviceData.exists(),
                 "Removed package still visible or has reusable CE/DE data");

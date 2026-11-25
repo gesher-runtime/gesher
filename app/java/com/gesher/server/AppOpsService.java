@@ -179,6 +179,11 @@ public final class AppOpsService extends IAppOpsService.Default {
     @Override public int checkOperationForDevice(int code, int uid, String name, String tag, int device) {
         verifyReadableOp(code);
         if (device != 0) return MODE_IGNORED;
+        int mode = restricted(code, uid, name, null, true) ? MODE_IGNORED : checkRawMode(code, uid, name);
+        // Only MODE_FOREGROUND needs process/activity/service state. This API
+        // records no access history, unlike note/start, so an ordinary fixed-mode
+        // check need not rebuild every UID's state under the task/service locks.
+        if (mode != MODE_FOREGROUND) return mode;
         refreshUidStates();
         return effective(code, uid, name);
     }

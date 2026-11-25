@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <gesher/unc_paths.h>
+#include <gesher/environment.h>
 #include "exec_spawn.h"
 
 // Only upstream dalvikvm.cc is compiled with this main rename.
@@ -116,10 +117,9 @@ bool InitializeTemporaryDirectory(const std::vector<std::string>& arguments) {
     std::fprintf(stderr, "dalvikvm: temporary directory is not valid Unicode\n");
     return false;
   }
-  // Libcore and bionic read UTF-8 from the narrow CRT environment; Windows
-  // child processes inherit UTF-16. Publish both before ART starts threads.
-  int error = _putenv_s("TMPDIR", utf8.c_str());
-  if (error != 0 || !SetEnvironmentVariableW(L"TMPDIR", directory.c_str())) {
+  // Libcore and bionic read the same UTF-8 POSIX table; the native shadow is
+  // updated as UTF-16 before ART starts threads.
+  if (gesher::SetWideEnvironment(L"TMPDIR", directory.c_str()) != 0) {
     std::fprintf(stderr, "dalvikvm: cannot initialize the temporary-directory environment\n");
     return false;
   }

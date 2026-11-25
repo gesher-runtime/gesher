@@ -22,7 +22,7 @@
 
 struct HostEvent { bool manual, signaled; };
 using HANDLE = HostEvent*;
-using DWORD = unsigned long;
+using DWORD = uint32_t;
 using ULONGLONG = unsigned long long;
 static constexpr bool TRUE = true, FALSE = false;
 static const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t(-1));
@@ -78,7 +78,14 @@ static int HostRead(int fd, void* buffer, unsigned count) { return int(::read(fd
 static int HostWrite(int fd, const void* buffer, unsigned count) { return int(::write(fd, buffer, count)); }
 
 namespace gesher {
-struct EventFd; struct Inotify; struct TimerFd;
+struct EventFd; struct Inotify; struct TimerFd; class NativeFence;
+// This corpus creates eventfds, not GPU fences. The latter's Win32 descriptor
+// boundary is exercised by the dedicated native-fence Windows fixture.
+static std::shared_ptr<NativeFence> LookupNativeFence(int) { return nullptr; }
+// Records the production ForgetEventObject retirement call; the native fence
+// registry itself is covered by the Windows fence fixture.
+static std::atomic<int> native_fence_forgets{0}, last_native_fence_forget{-1};
+static void ForgetNativeFence(int fd) { ++native_fence_forgets; last_native_fence_forget = fd; }
 struct SocketFd {};
 static bool LookupSocket(int, SocketFd*) { return false; }
 static HANDLE HandleFromFd(int fd) { return HostValid(fd) ? reinterpret_cast<HANDLE>(intptr_t(fd + 1)) : INVALID_HANDLE_VALUE; }
@@ -93,9 +100,15 @@ static int MillisUntil(ULONGLONG deadline) { auto now = MonotonicMicros(); retur
 static void WakePollers() {
   std::lock_guard<std::mutex> lock(host_events_mutex); ++host_epoch; host_events_changed.notify_all();
 }
+#ifdef GESHER_READONLY_EDGES
+void RefreshTimerFd(TimerFd&);
+int ReadTimerFd(TimerFd&, void*, unsigned);
+int ReadInotify(Inotify&, void*, unsigned);
+#else
 static void RefreshTimerFd(TimerFd&) {}
 static int ReadTimerFd(TimerFd&, void*, unsigned) { return errno = EINVAL, -1; }
 static int ReadInotify(Inotify&, void*, unsigned) { return errno = EINVAL, -1; }
+#endif
 static int PollFds(pollfd*, nfds_t, int, HANDLE, bool*);
 namespace record_locks {
 struct DescriptorGuard { std::lock_guard<std::recursive_mutex> guard{host_descriptors}; };
@@ -174,7 +187,19 @@ static void check(const char* label, int passed) {
 }
 #include "epoll_eventfd_edge_test.inc"
 #include "epoll_eventfd_edge_wait_test.inc"
+#ifdef GESHER_READONLY_EDGES
+#include "epoll_readonly_edges_host.cc"
+#else
 int main() {
+  {
+    // Every close path retires a possible native fence identity of that slot
+    // through the same production ForgetEventObject body.
+    int probe = eventfd(0, EFD_NONBLOCK);
+    const int before = gesher::native_fence_forgets.load();
+    check("descriptor close retires its native fence identity through ForgetEventObject",
+          probe >= 0 && close(probe) == 0 && gesher::native_fence_forgets.load() == before + 1 &&
+          gesher::last_native_fence_forget.load() == probe);
+  }
   test_epoll_eventfd_edges();
   test_epoll_eventfd_edge_waits();
   // Actual production wait code must call its blocking boundary a bounded
@@ -200,3 +225,4 @@ int main() {
   printf("eventfd edge production host: %d checks, %d failures\n", checked, failed);
   return failed != 0;
 }
+#endif

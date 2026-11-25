@@ -100,6 +100,7 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   android.app.INotificationManager android.app.IUiModeManager android.hardware.input.IInputManager \
   android.media.IAudioService android.media.IMediaRouterService android.content.IContentService android.os.storage.IStorageManager \
   android.media.session.ISessionManager android.media.session.ISession android.media.session.ISessionController \
+  android.hardware.usb.IUsbManager \
   android.os.IPowerManager android.os.IDeviceIdleController android.os.IThermalService android.app.IAlarmManager android.content.IClipboard \
   com.android.internal.app.IAppOpsService com.android.internal.appwidget.IAppWidgetService \
   com.android.internal.statusbar.IStatusBarService \
@@ -114,11 +115,13 @@ java -XX:+UnlockDiagnosticVMOptions -XX:-BytecodeVerificationRemote -cp "$gencp"
   com.android.internal.telephony.ISub \
   com.android.internal.telephony.ITelephonyRegistry \
   android.app.trust.ITrustManager \
+  android.hardware.biometrics.IAuthService \
   android.content.pm.IShortcutService \
   android.content.pm.ICrossProfileApps \
   android.view.ISensitiveContentProtectionManager \
   android.permission.IPermissionManager \
-  android.content.pm.verify.domain.IDomainVerificationManager
+  android.content.pm.verify.domain.IDomainVerificationManager \
+  android.webkit.IWebViewUpdateService
 # The framework's app-compat changes (@ChangeId fields), for bindApplication's
 # disabledCompatChanges (com.gesher.server.CompatChanges, docs/e2e.md). The annotations
 # have SOURCE retention: they are read from frameworks/base's sources (what the
@@ -207,6 +210,14 @@ mkdir -p "$work/apksig"
 jar --create --file "$(native "$out/gesher-app-classes.jar")" --no-manifest \
   -C "$(native "$work/classes")" . -C "$(native "$work/compat")" . \
   -C "$(native "$work/location")" . -C "$(native "$work/ext")" .
+
+# Every member framework.jar references on a class gesher-app.jar supplies (a module
+# class such as android.bluetooth.BluetoothDevice) must exist on Gesher's class, or the
+# framework path that uses it dies on NoSuchMethodError (issue #303).
+linkcheck=("$(native "$framework")" "$(native "$out/gesher-app-classes.jar")")
+if [[ -n $core ]]; then linkcheck+=("$(native "$core")"); fi
+java "$(native "$root/app/gen/BootLinkCheck.java")" "${linkcheck[@]}" \
+  --allow "$(native "$root/app/gen/boot-link-allow.txt")"
 
 # One dex for all, into a jar.
 ( cd "$work" && find classes compat location ext apksig/com/android/apksig -name '*.class' ) > "$work/dex.txt"

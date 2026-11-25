@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {world, HEAD, OTHER, APP_BOT} = require('./automerge-fixture.js');
 const app = require('./app-qa-status.js');
+const {RELEASE_STATE, RELEASE_RETRY} = require('./label-automerge.js');
 const ACTIONS_BOT = {id: 41898282, login: 'github-actions[bot]', type: 'Bot'};
 const last = (w, context) => w.statuses.filter(s => s.context === context).sort((a, b) => b.id - a.id)[0];
 function setup(contexts = [app.APP_STATUS], extra = {}) {
@@ -19,6 +20,8 @@ function seed(w, contexts) {
     creator: context === app.APP_STATUS ? APP_BOT : ACTIONS_BOT,
     url: `https://api.github.com/repos/o/r/statuses/${HEAD}`});
 }
+const retries = w => w.did('app-dispatch').map(([, args]) => args.client_payload.release_retry)
+  .filter(retry => retry >= 1);
 function noRelease(w) {
   assert.equal(w.nativeMerges.length, 0);
   assert.equal(w.did('nativeMerge').length, 0);
@@ -137,10 +140,122 @@ test('a briefly stale blocked state after the gate write is re-read and released
 
 test('a persistently blocked state is re-read a bounded number of times before deferring', async () => {
   const w = setup(undefined, {nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
-  await w.ciDone();
+  await w.fire('workflow_run', {workflow_run: {event: 'pull_request', head_sha: HEAD, head_repository: {id: 10}}});
+  await w.fire('repository_dispatch', w.dispatches.shift());
   assert.equal(w.pr.state, 'open');
   assert.equal(w.did('nativeMerge').length, 0);
-  assert.equal(w.did('nativeState').length, require('./label-automerge.js').RELEASE_STATE.attempts);
+  assert.equal(w.did('nativeState').length, RELEASE_STATE.attempts);
+  assert.deepEqual(w.dispatches.map(d => d.client_payload),
+    [{pull_request_number: 7, head_sha: HEAD, release_retry: 1}]);
+});
+
+for (const mode of [{name: 'legacy', enabled: false, contexts: [app.STATUS]},
+  {name: 'App required', enabled: true, contexts: [app.APP_STATUS]}]) {
+  test(`${mode.name}: a block that outlasts one pass is released by a queued exact-head retry`, async () => {
+    const w = setup(mode.contexts, {appQaStatus: mode.enabled,
+      nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+    let reads = 0;
+    w.hooks.nativeState = () => { if (++reads === RELEASE_STATE.attempts * (1 + RELEASE_RETRY.pollFactor) + 1) delete w.nativeStateOverride; };
+    await w.ciDone();
+    assert.equal(w.pr.state, 'closed');
+    assert.equal(w.nativeMerges.length, 1);
+    assert.equal(w.nativeMerges[0].stage, 'merge');
+    assert.equal(w.did('nativeWait').length, 0);
+    assert.deepEqual(retries(w), [1, 2]);
+  });
+
+  test(`${mode.name}: a persistent block queues a bounded number of retries and logs it`, async () => {
+    const w = setup(mode.contexts, {appQaStatus: mode.enabled,
+      nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+    await w.ciDone();
+    assert.equal(w.pr.state, 'open');
+    noRelease(w);
+    assert.equal(retries(w).length, RELEASE_RETRY.max);
+    assert.equal(w.did('nativeState').length,
+      RELEASE_STATE.attempts * (1 + RELEASE_RETRY.max * RELEASE_RETRY.pollFactor));
+    assert.ok(w.warnings.some(s => s.includes('BLOCKED') && s.includes('queued release retries')));
+  });
+}
+
+test('a queued release retry is bound to its observed head', async () => {
+  const w = setup(undefined, {nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+  await w.fire('workflow_run', {workflow_run: {event: 'pull_request', head_sha: HEAD, head_repository: {id: 10}}});
+  await w.fire('repository_dispatch', w.dispatches.shift());
+  w.pr.head.sha = OTHER;
+  delete w.nativeStateOverride;
+  const before = w.calls.length;
+  await w.drainDispatches();
+  assert.deepEqual(w.calls.slice(before).map(([name]) => name), ['getPR']);
+  noRelease(w);
+});
+
+test('a failed retry dispatch is logged without revoking the green gate', async () => {
+  const w = setup([app.STATUS], {appQaStatus: false, nativeStateOverride: {mergeStateStatus: 'BLOCKED'},
+    dispatchError: new Error('dispatch denied')});
+  await w.ciDone();
+  assert.equal(w.pr.state, 'open');
+  noRelease(w);
+  assert.equal(last(w, app.STATUS).state, 'success');
+  assert.ok(w.warnings.some(s => s.includes('release retry could not be queued')));
+});
+
+for (const retry of [null, -1, '1', 1.5, 9]) {
+  test(`an invalid release retry count cannot perform writes: ${JSON.stringify(retry)}`, async () => {
+    for (const enabled of [false, true]) {
+      const w = setup(undefined, {appQaStatus: enabled});
+      await assert.rejects(w.fire('repository_dispatch', {action: 'gesher-automerge-reconcile',
+        client_payload: {pull_request_number: 7, head_sha: HEAD, release_retry: retry}}),
+      /Invalid queued PR reconciliation/);
+      assert.deepEqual(w.calls, []);
+    }
+  });
+}
+
+test('BEHIND needs a branch update and queues no retry', async () => {
+  const w = setup([app.STATUS], {appQaStatus: false, nativeStateOverride: {mergeStateStatus: 'BEHIND'}});
+  await w.ciDone();
+  assert.equal(w.pr.state, 'open');
+  noRelease(w);
+  assert.deepEqual(retries(w), []);
+  assert.ok(w.warnings.some(s => s.includes('BEHIND') && s.includes('branch must be updated')));
+});
+
+for (const mode of [{name: 'legacy', enabled: false, contexts: [app.STATUS]},
+  {name: 'App required', enabled: true, contexts: [app.APP_STATUS]}]) {
+  test(`${mode.name}: a recovery run makes one release attempt without starting a retry chain`, async () => {
+    const w = setup(mode.contexts, {appQaStatus: mode.enabled,
+      nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+    await w.ciDone();
+    const before = retries(w).length;
+    const reads = w.did('nativeState').length;
+    await w.sweep();
+    noRelease(w);
+    assert.equal(retries(w).length, before, 'no new chain from the schedule');
+    assert.equal(w.did('nativeState').length - reads, RELEASE_STATE.attempts);
+  });
+}
+
+test('a new label starts a retry chain', async () => {
+  const w = setup([app.STATUS], {appQaStatus: false, nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+  await w.labeled();
+  assert.deepEqual(w.dispatches.map(d => d.client_payload.release_retry), [1]);
+});
+
+test('without the App no retry is queued and the log says so', async () => {
+  const w = setup([app.STATUS], {appQaStatus: false, nativeStateOverride: {mergeStateStatus: 'BLOCKED'}});
+  w.prGithub = undefined;
+  w.repositoryId = 1; w.envRepositoryId = 1;
+  await w.ciDone();
+  noRelease(w);
+  assert.equal(w.dispatches.length, 0);
+  assert.ok(w.warnings.some(s => s.includes('no App token to queue a release retry')));
+});
+
+test('legacy mode still ignores ordinary queued reconciliations', async () => {
+  const w = setup([app.STATUS], {appQaStatus: false});
+  await w.fire('repository_dispatch', {action: 'gesher-automerge-reconcile',
+    client_payload: {pull_request_number: 7, head_sha: HEAD}});
+  assert.deepEqual(w.calls, []);
 });
 
 test('an ambiguous completed merge is read back without cleanup writes or another release', async () => {

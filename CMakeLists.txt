@@ -80,6 +80,8 @@ include(cmake/aosp/graphics.cmake)
 include(compat/windows/windows.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
+# Legacy RenderScript (docs/renderscript.md): libRS's CPU runtime and librs_jni.so.
+include(cmake/aosp/renderscript.cmake)
 # Media (docs/media.md): the audio engine and the framework's media natives.
 include(cmake/aosp/media.cmake)
 # Link Windows audio and video APIs when building media components.
@@ -133,6 +135,25 @@ target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
 add_executable(posix_probe probes/posix/posix_probe.cc)
 target_compile_options(posix_probe PRIVATE -Wall -Wextra -Werror)
 
+# Isolated DLLs for actual Windows dlopen path/search and reference ownership.
+# They live outside executable search directories and are never installed.
+add_library(dlopen_fixture_dependency SHARED tests/native/dlopen_fixture_dependency.c)
+set_target_properties(dlopen_fixture_dependency PROPERTIES
+  PREFIX "" OUTPUT_NAME "gesher-dlopen-dependency" LINK_LIBRARIES "" INTERFACE_LINK_LIBRARIES ""
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dlopen-fixtures")
+target_compile_options(dlopen_fixture_dependency PRIVATE -Wall -Wextra -Werror)
+add_library(dlopen_fixture SHARED tests/native/dlopen_fixture.c)
+set_target_properties(dlopen_fixture PROPERTIES
+  PREFIX "" OUTPUT_NAME "gesher-dlopen-fixture" LINK_LIBRARIES "dlopen_fixture_dependency"
+  INTERFACE_LINK_LIBRARIES ""
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dlopen-fixtures")
+target_compile_options(dlopen_fixture PRIVATE -Wall -Wextra -Werror)
+add_executable(dlopen_windows_test tests/native/dlopen_windows_test.cc)
+target_compile_options(dlopen_windows_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(dlopen_windows_test PRIVATE -municode)
+target_link_libraries(dlopen_windows_test PRIVATE gesher_posix)
+add_dependencies(dlopen_windows_test dlopen_fixture)
+
 # Virtual procfs and sysfs contracts (Roadmap N04, Issue #56).
 add_executable(procfs_sysfs_contract_test tests/native/procfs_sysfs_contract_test.cc)
 target_compile_options(procfs_sysfs_contract_test PRIVATE -Wall -Wextra -Werror)
@@ -155,9 +176,27 @@ add_executable(timerfd_windows_test tests/native/timerfd_windows_test.cc)
 target_compile_options(timerfd_windows_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(timerfd_windows_test PRIVATE gesher_posix)
 
-add_executable(fifo_windows_test tests/native/fifo_windows_test.cc)
-target_compile_options(fifo_windows_test PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(fifo_windows_test PRIVATE gesher_posix)
+# Synthetic clipboard-denial actor; built before the timed Windows fixture.
+# The installer lists its production executables explicitly and excludes this.
+add_executable(clipboard_foreground tests/windows/clipboard/foreground_helper.cc)
+target_compile_options(clipboard_foreground PRIVATE -Wall -Wextra -Werror)
+target_link_options(clipboard_foreground PRIVATE -municode)
+target_link_libraries(clipboard_foreground PRIVATE user32)
+add_executable(file_flags_ofd_test tests/native/file_flags_ofd_test.cc)
+target_compile_options(file_flags_ofd_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(file_flags_ofd_test PRIVATE gesher_posix)
+
+add_executable(stdio_ofd_test tests/native/stdio_ofd_test.cc)
+target_compile_options(stdio_ofd_test PRIVATE -Wall -Wextra -Werror -fno-builtin)
+target_link_libraries(stdio_ofd_test PRIVATE gesher_posix)
+
+add_executable(pipe_kernel_test tests/native/pipe_kernel_test.cc)
+target_compile_options(pipe_kernel_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(pipe_kernel_test PRIVATE gesher_posix)
+
+add_executable(revocable_file_test tests/native/revocable_file_test.cc)
+target_compile_options(revocable_file_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(revocable_file_test PRIVATE gesher_posix)
 
 add_executable(boottime_resume_windows_test tests/native/boottime_resume_windows_test.cc)
 target_compile_options(boottime_resume_windows_test PRIVATE -Wall -Wextra -Werror)
@@ -230,6 +269,11 @@ add_executable(bionic_ftruncate_test tests/native/bionic_ftruncate_test.cc)
 target_compile_options(bionic_ftruncate_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(bionic_ftruncate_test PRIVATE gesher_bionic gesher_elf)
 
+# creat and creat64 through the actual Bionic exports (issue #320).
+add_executable(bionic_creat_test tests/native/bionic_creat_test.cc)
+target_compile_options(bionic_creat_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(bionic_creat_test PRIVATE gesher_bionic gesher_elf)
+
 # Real Bionic stream locks and wide I/O through the exported FILE APIs.
 add_executable(bionic_stdio_contract_test tests/native/bionic_stdio_contract_test.cc)
 target_compile_options(bionic_stdio_contract_test PRIVATE -Wall -Wextra -Werror)
@@ -265,6 +309,18 @@ target_link_libraries(binary128_concurrency PRIVATE gesher_bionic_binary128)
 add_executable(clock_domains_windows_test tests/native/clock_domains_windows_test.cc)
 target_compile_options(clock_domains_windows_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(clock_domains_windows_test PRIVATE gesher_posix)
+
+# dlopen()'s dlerror() text: Android's linker wording for app paths.
+add_executable(dlopen_errors_test tests/native/dlopen_errors_test.cc)
+target_compile_options(dlopen_errors_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(dlopen_errors_test PRIVATE gesher_posix)
+
+# The window-thread watch's clock (compat/input/thread_watch.cc): awake time.
+add_executable(thread_watch_clock_test tests/native/thread_watch_clock_test.cc
+  compat/input/thread_watch.cc)
+target_include_directories(thread_watch_clock_test PRIVATE compat/input)
+target_compile_options(thread_watch_clock_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(thread_watch_clock_test PRIVATE user32)
 
 add_executable(native3_cpu_clock_test tests/native/native3_cpu_clock_test.cc)
 target_compile_options(native3_cpu_clock_test PRIVATE -Wall -Wextra -Werror)

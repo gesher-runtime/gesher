@@ -3,6 +3,7 @@
 
 #include <sys/syscall.h>
 #include <gesher/clocks.h>
+#include <gesher/futex_interrupt.h>
 #include <sys/mman.h>
 
 #include <errno.h>
@@ -16,27 +17,70 @@
 #include <atomic>
 
 namespace {
+struct Bucket;
 struct Waiter {
   volatile int* address;
   uint32_t mask;
   bool private_key;
   Waiter* next = nullptr;
   Waiter* previous = nullptr;
+  // 0 waiting; 1 woken (FUTEX_WAKE/requeue removed it); 2 interrupted
+  // (gesher_futex_interrupt_request; still queued until its owner removes it).
   std::atomic<int> ready{0};
+  // Requeue can move a sleeping stack node more than once. Its owner must
+  // acquire the current bucket before removing it on timeout or returning.
+  std::atomic<Bucket*> bucket{nullptr};
 };
 static_assert(sizeof(std::atomic<int>) == sizeof(int) && std::atomic<int>::is_always_lock_free);
-struct Bucket { Waiter* first = nullptr; Waiter* last = nullptr; };
-SRWLOCK g_futex_lock = SRWLOCK_INIT;
+static_assert(std::atomic<Bucket*>::is_always_lock_free);
+struct alignas(64) Bucket {
+  SRWLOCK lock = SRWLOCK_INIT;
+  Waiter* first = nullptr;
+  Waiter* last = nullptr;
+};
 Bucket g_futex_buckets[64];
 Bucket& BucketFor(const volatile int* address) {
   uintptr_t key = reinterpret_cast<uintptr_t>(address) >> 2;
   return g_futex_buckets[(key ^ (key >> 7)) % 64];
+}
+// Both pointers name elements of the same static array. Acquiring them in
+// array order prevents A->B and B->A requeues from deadlocking. Hash collisions
+// and same-address requeues acquire a single lock.
+class BucketLocks {
+ public:
+  BucketLocks(Bucket& a, Bucket& b)
+      : first_(&a < &b ? &a : &b), second_(&a < &b ? &b : &a) {
+    AcquireSRWLockExclusive(&first_->lock);
+    if (first_ != second_) AcquireSRWLockExclusive(&second_->lock);
+  }
+  ~BucketLocks() {
+    if (first_ != second_) ReleaseSRWLockExclusive(&second_->lock);
+    ReleaseSRWLockExclusive(&first_->lock);
+  }
+  BucketLocks(const BucketLocks&) = delete;
+  BucketLocks& operator=(const BucketLocks&) = delete;
+
+ private:
+  Bucket* first_;
+  Bucket* second_;
+};
+
+Bucket* LockWaiter(Waiter* waiter) {
+  for (;;) {
+    Bucket* bucket = waiter->bucket.load(std::memory_order_acquire);
+    AcquireSRWLockExclusive(&bucket->lock);
+    if (bucket == waiter->bucket.load(std::memory_order_relaxed)) return bucket;
+    // The node moved while we acquired its old bucket. Do not inspect its
+    // address/links under that lock; retry with the published destination.
+    ReleaseSRWLockExclusive(&bucket->lock);
+  }
 }
 void Append(Waiter* waiter) {
   Bucket& b = BucketFor(waiter->address);
   waiter->previous = b.last; waiter->next = nullptr;
   if (b.last) b.last->next = waiter; else b.first = waiter;
   b.last = waiter;
+  waiter->bucket.store(&b, std::memory_order_release);
 }
 void Remove(Waiter* waiter) {
   Bucket& b = BucketFor(waiter->address);
@@ -76,16 +120,39 @@ DWORD Remaining(const Deadline& deadline) {
   DWORD cap = deadline.clock == CLOCK_REALTIME ? 1000 : INFINITE - 1;
   return millis > cap ? cap : static_cast<DWORD>(millis);
 }
+// The calling thread's attached interrupt cell (futex_interrupt.h), if any.
+thread_local gesher_futex_interrupt* t_interrupt = nullptr;
+
+// Consumes a pending interrupt request of `cell`.
+bool TakeInterrupt(gesher_futex_interrupt* cell) {
+  return cell != nullptr && InterlockedExchange(&cell->requested, 0) != 0;
+}
+
 long Wait(volatile int* address, int value, uint32_t mask, bool private_key,
           const Deadline& deadline) {
-  Waiter waiter{address, mask, private_key};
-  AcquireSRWLockExclusive(&g_futex_lock);
+  gesher_futex_interrupt* cell = t_interrupt;
+  if (TakeInterrupt(cell)) return errno = EINTR, -1;
+  Bucket& bucket = BucketFor(address);
+  AcquireSRWLockExclusive(&bucket.lock);
   if (__atomic_load_n(address, __ATOMIC_SEQ_CST) != value) {
-    ReleaseSRWLockExclusive(&g_futex_lock);
+    ReleaseSRWLockExclusive(&bucket.lock);
     return errno = EAGAIN, -1;
   }
+  // The common expected-value mismatch needs no stack waiter initialization.
+  Waiter waiter{address, mask, private_key};
   Append(&waiter);
-  ReleaseSRWLockExclusive(&g_futex_lock);
+  ReleaseSRWLockExclusive(&bucket.lock);
+  if (cell != nullptr) {
+    // Published before the request check below: a requester that sets the
+    // flag after that check finds this node and marks it interrupted.
+    AcquireSRWLockExclusive(&cell->lock);
+    cell->waiter = &waiter;
+    ReleaseSRWLockExclusive(&cell->lock);
+    if (TakeInterrupt(cell)) {
+      int expected = 0;
+      waiter.ready.compare_exchange_strong(expected, 2, std::memory_order_acq_rel);
+    }
+  }
   int result = 0, error = 0;
   for (;;) {
     DWORD millis = Remaining(deadline);
@@ -99,27 +166,38 @@ long Wait(volatile int* address, int value, uint32_t mask, bool private_key,
     // Timeouts are slices (and address waits may wake spuriously). Recompute
     // against the original full-width deadline, including realtime clock steps.
   }
-  AcquireSRWLockExclusive(&g_futex_lock);
-  if (waiter.ready.load(std::memory_order_relaxed)) result = 0;
-  else Remove(&waiter);
+  if (cell != nullptr) {
+    // No requester touches this stack node after it is unpublished.
+    AcquireSRWLockExclusive(&cell->lock);
+    cell->waiter = nullptr;
+    ReleaseSRWLockExclusive(&cell->lock);
+  }
+  Bucket* current = LockWaiter(&waiter);
+  const int state = waiter.ready.load(std::memory_order_relaxed);
+  if (state == 1) {
+    result = 0;  // a wake that raced with an interrupt is still consumed
+  } else {
+    Remove(&waiter);
+    if (state == 2) { result = -1; error = EINTR; }
+  }
   // Wakers signal while holding this lock, so none can access this stack node
   // after the waiting thread releases the lock and returns.
-  ReleaseSRWLockExclusive(&g_futex_lock);
+  ReleaseSRWLockExclusive(&current->lock);
   if (result != 0) errno = error;
   return result;
 }
 long WakeOrRequeue(volatile int* address, int command, int count, uint32_t mask,
                    bool private_key, volatile int* target, int requeue_count, int compare) {
-  AcquireSRWLockExclusive(&g_futex_lock);
+  bool requeue = command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE;
+  Bucket& source = BucketFor(address);
+  BucketLocks locks(source, requeue ? BucketFor(target) : source);
   if (command == FUTEX_CMP_REQUEUE && __atomic_load_n(address, __ATOMIC_SEQ_CST) != compare) {
-    ReleaseSRWLockExclusive(&g_futex_lock);
     return errno = EAGAIN, -1;
   }
-  bool requeue = command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE;
   // Linux's non-PI wake loop can wake one waiter even for a nonpositive count.
   int wake_limit = !requeue && count <= 0 ? 1 : count;
   int woken = 0, moved = 0;
-  for (Waiter* node = BucketFor(address).first; node;) {
+  for (Waiter* node = source.first; node;) {
     Waiter* next = node->next;
     if (node->address == address && node->private_key == private_key && (node->mask & mask)) {
       if (woken < wake_limit) {
@@ -134,7 +212,6 @@ long WakeOrRequeue(volatile int* address, int command, int count, uint32_t mask,
     }
     node = next;
   }
-  ReleaseSRWLockExclusive(&g_futex_lock);
   return static_cast<long>(woken) + moved;
 }
 long FutexOwned(volatile int* address, int op, int value, const timespec* time,
@@ -179,6 +256,43 @@ extern "C" void gesher_futex_owner_anchor_v1() {}
 extern "C" __declspec(dllexport) long gesher_futex_owner_v1(
     volatile int* address, int op, int value, const timespec* time, volatile int* target, int value3) {
   return FutexOwned(address, op, value, time, target, value3);
+}
+
+extern "C" __declspec(dllexport) void gesher_futex_interrupt_attach_v1(gesher_futex_interrupt* cell) {
+  t_interrupt = cell;
+}
+extern "C" __declspec(dllexport) void gesher_futex_interrupt_request_v1(gesher_futex_interrupt* cell) {
+  InterlockedExchange(&cell->requested, 1);
+  AcquireSRWLockExclusive(&cell->lock);
+  if (cell->waiter != nullptr) {
+    auto* waiter = static_cast<Waiter*>(cell->waiter);
+    int expected = 0;
+    if (waiter->ready.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+      InterlockedExchange(&cell->requested, 0);
+      WakeByAddressSingle(&waiter->ready);
+    }
+  }
+  // A WaitOnAddress waiter (the shim's pthread waits) wakes and rechecks.
+  if (cell->address != nullptr) WakeByAddressAll(const_cast<void*>(cell->address));
+  ReleaseSRWLockExclusive(&cell->lock);
+}
+
+namespace {
+template <typename Fn>
+Fn FutexOwnerExport(const char* name) {
+  return reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(nullptr), name)));
+}
+}  // namespace
+
+extern "C" void gesher_futex_interrupt_attach(gesher_futex_interrupt* cell) {
+  using Fn = void (*)(gesher_futex_interrupt*);
+  static Fn owner = FutexOwnerExport<Fn>("gesher_futex_interrupt_attach_v1");
+  if (owner != nullptr) owner(cell);
+}
+extern "C" void gesher_futex_interrupt_request(gesher_futex_interrupt* cell) {
+  using Fn = void (*)(gesher_futex_interrupt*);
+  static Fn owner = FutexOwnerExport<Fn>("gesher_futex_interrupt_request_v1");
+  if (owner != nullptr) owner(cell);
 }
 
 extern "C" long syscall(long number, ...) {

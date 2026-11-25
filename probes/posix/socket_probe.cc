@@ -57,6 +57,57 @@ static sockaddr_in Loopback(unsigned short port) {
   return a;
 }
 
+static void TestInterfaceIoctls() {
+  const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+  CHECK(fd >= 0);
+  if (fd < 0) return;
+
+  ifconf size = {};
+  const int rc = ioctl(fd, SIOCGIFCONF, &size);
+  CHECK(rc == 0);
+  if (rc != 0) {
+    close(fd);
+    return;
+  }
+  CHECK(sizeof(ifreq) == 40 && sizeof(ifconf) == 16);
+  CHECK(size.ifc_len >= static_cast<int>(sizeof(ifreq)));
+  CHECK(size.ifc_len % sizeof(ifreq) == 0);
+
+  ifreq entries[2];
+  memset(entries, 0x5a, sizeof(entries));
+  ifreq sentinel;
+  memcpy(&sentinel, &entries[1], sizeof(sentinel));
+  ifconf list = {};
+  list.ifc_len = sizeof(entries) - 1;
+  list.ifc_req = entries;
+  const bool first_entry = ioctl(fd, SIOCGIFCONF, &list) == 0 &&
+                           list.ifc_len == sizeof(ifreq) &&
+                           memchr(entries[0].ifr_name, '\0', IFNAMSIZ) != nullptr;
+  CHECK(first_entry);
+  CHECK(memcmp(&entries[1], &sentinel, sizeof(sentinel)) == 0);
+  if (!first_entry) {
+    close(fd);
+    return;
+  }
+
+  ifreq& req = entries[0];
+  CHECK(req.ifr_addr.sa_family == AF_INET);
+  const sockaddr expected = req.ifr_addr;
+  CHECK(ioctl(fd, SIOCGIFADDR, &req) == 0);
+  CHECK(memcmp(&req.ifr_addr, &expected, sizeof(expected)) == 0);
+  const unsigned index = if_nametoindex(req.ifr_name);
+  CHECK(index != 0);
+  CHECK(ioctl(fd, SIOCGIFINDEX, &req) == 0);
+  CHECK(static_cast<unsigned>(req.ifr_ifindex) == index);
+  CHECK(ioctl(fd, SIOCGIFCONF, static_cast<ifconf*>(nullptr)) == -1 && errno == EFAULT);
+  list.ifc_req = reinterpret_cast<ifreq*>(1);
+  CHECK(ioctl(fd, SIOCGIFCONF, &list) == -1 && errno == EFAULT);
+  snprintf(req.ifr_name, sizeof(req.ifr_name), "no-such-if");
+  CHECK(ioctl(fd, SIOCGIFADDR, &req) == -1 && errno == ENODEV);
+  CHECK(ioctl(fd, SIOCGIFINDEX, &req) == -1 && errno == ENODEV);
+  close(fd);
+}
+
 static void CheckXattrPaths() {
   // Own the parent so the negative case has exactly one invalid condition:
   // a missing child, with a valid user.* name and output buffer.
@@ -92,8 +143,13 @@ static void CheckXattrPaths() {
   CHECK(rmdir(root) == 0);
 }
 
-int main(int, char** argv) {
+int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
+  TestInterfaceIoctls();
+  if (argc == 2 && strcmp(argv[1], "--interface-ioctl") == 0) {
+    if (fails == 0) puts("interface ioctl checks passed");
+    return fails == 0 ? 0 : 1;
+  }
   // Bad fds fail instead of ending the process.
   CHECK(close(-1) == -1 && errno == EBADF);
   CHECK(close(12345) == -1 && errno == EBADF);

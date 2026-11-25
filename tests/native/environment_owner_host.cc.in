@@ -1,0 +1,270 @@
+// Actual production owner/table with declared Linux replacements for Win32
+// module lookup, initialization and copied CRT writes. No runner env is read.
+#include <atomic>
+#include <cassert>
+#include <cerrno>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <strings.h>
+#include "@ENVIRONMENT_ENCODING_HEADER@"
+
+static int checks, failures;
+static std::atomic<int> fail_allocation{-1};
+static void* borrowed_pointer;
+extern "C" void* __real_malloc(size_t);
+extern "C" void* __real_calloc(size_t, size_t);
+extern "C" void __real_free(void*);
+static bool FailAllocation() {
+  const int left = fail_allocation.load();
+  return left >= 0 && fail_allocation.fetch_sub(1) == 0;
+}
+extern "C" void* __wrap_malloc(size_t size) { return FailAllocation() ? nullptr : __real_malloc(size); }
+extern "C" void* __wrap_calloc(size_t count, size_t size) { return FailAllocation() ? nullptr : __real_calloc(count, size); }
+extern "C" void __wrap_free(void* value) {
+  if (value && value == borrowed_pointer) std::abort();
+  __real_free(value);
+}
+static void check(const char* name, bool ok) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL environment: %s\n", name); }
+}
+static bool equal(const char* value, const char* expected) { return value && std::strcmp(value, expected) == 0; }
+
+using BOOL = int;
+using HMODULE = void*;
+struct INIT_ONCE { std::mutex mutex; bool initialized = false; };
+using PINIT_ONCE = INIT_ONCE*;
+#define INIT_ONCE_STATIC_INIT {}
+#define TRUE 1
+#define FALSE 0
+#define CALLBACK
+#define __declspec(x)
+#define _strnicmp strncasecmp
+static int InitOnceExecuteOnce(PINIT_ONCE once, BOOL (*initialize)(PINIT_ONCE, void*, void**), void*, void**) {
+  std::lock_guard<std::mutex> lock(once->mutex);
+  if (!once->initialized) once->initialized = initialize(once, nullptr, nullptr);
+  return once->initialized;
+}
+static wchar_t* GetEnvironmentStringsW() {
+  static const wchar_t values[] = L"Path=/fixture\0GESHER_OWNER_INITIAL=original\0"
+      L"GESHER_OWNER_SURROGATE=\xd800\0GESHER_OWNER_SUPPLEMENTARY=\xd83d\xde00\0";
+  auto* copy = static_cast<wchar_t*>(std::malloc(sizeof(values)));
+  if (copy) std::memcpy(copy, values, sizeof(values));
+  return copy;
+}
+static void FreeEnvironmentStringsW(wchar_t* value) { std::free(value); }
+static HMODULE GetModuleHandleW(const wchar_t* name) { return reinterpret_cast<HMODULE>(name ? 2 : 1); }
+static void* GetProcAddress(HMODULE, const char*);
+extern "C" int gesher_errno_from_crt(int error) {
+  // Declared CRT-numbering boundary: the owner must report Linux EILSEQ.
+  return error == 42 ? EILSEQ : error;
+}
+
+// The Windows replacement symbols keep their source bodies; only public
+// getenv/putenv names are isolated from this Linux test process's own libc.
+#define getenv adapter_getenv
+#define putenv adapter_putenv
+@ENVIRONMENT_SOURCE@
+#undef getenv
+#undef putenv
+
+static int native_error;
+static int native_calls;
+static char shadow_name[128];
+static char shadow_value[256];
+static bool shadow_present;
+static std::mutex native_mutex;
+static std::atomic<bool> native_attempted{false};
+static std::atomic<int> native_attempts{0};
+static std::atomic<bool> hold_invalid{false}, invalid_entered{false}, release_invalid{false};
+static int CopiedNativeWrite(const char* name, const char* value) {
+  native_attempted.store(true);
+  native_attempts.fetch_add(1);
+  std::lock_guard<std::mutex> lock(native_mutex);
+  ++native_calls;
+  if (value && std::strlen(value) >= 32767 && hold_invalid.load()) {
+    invalid_entered.store(true);
+    while (!release_invalid.load()) std::this_thread::yield();
+  }
+  if (native_error) return native_error;
+  if (!name || !*name || !value || std::strchr(name, '=') || std::strlen(name) >= sizeof(shadow_name) || std::strlen(value) >= sizeof(shadow_value)) return EINVAL;
+  std::strcpy(shadow_name, name);
+  std::strcpy(shadow_value, value);
+  shadow_present = *value != '\0';
+  return 0;
+}
+static int CopiedNativeWideWrite(const wchar_t* name, const wchar_t* value) {
+  char narrow_name[128], narrow_value[256];
+  if (std::wcstombs(narrow_name, name, sizeof(narrow_name)) == size_t(-1) || std::wcstombs(narrow_value, value, sizeof(narrow_value)) == size_t(-1)) return EILSEQ;
+  return CopiedNativeWrite(narrow_name, narrow_value);
+}
+static void* GetProcAddress(HMODULE module, const char* name) {
+  if (module == reinterpret_cast<HMODULE>(1)) return nullptr;  // Local owner.
+  if (std::strcmp(name, "_putenv_s") == 0) return reinterpret_cast<void*>(CopiedNativeWrite);
+  if (std::strcmp(name, "_wputenv_s") == 0) return reinterpret_cast<void*>(CopiedNativeWideWrite);
+  std::abort();
+}
+namespace gesher {
+bool PreserveCrtEnvironment(const char*) { return true; }  // UCRT lifetime is the native CI boundary.
+int WriteNativeEnvironment(const char* name, const char* value) {
+  return RawPutEnvironment(name, value ? value : "");
+}
+int WriteWideNativeEnvironment(const char*, const char*, const wchar_t* name, const wchar_t* value) {
+  return RawPutWideEnvironment(name, value);
+}
+}
+#define BIONIC_SYSV
+int Setenv(const char* name, const char* value, int overwrite) { return gesher::SetEnvironment(name, value, overwrite); }
+int Unsetenv(const char* name) { return gesher::UnsetEnvironment(name); }
+@GUEST_PUTENV@
+
+static const char* Entry(const char* name) {
+  const size_t length = std::strlen(name);
+  char*** slot = gesher::EnvironmentSlot();
+  for (char** item = slot ? *slot : nullptr; item && *item; ++item)
+    if (std::strncmp(*item, name, length) == 0 && (*item)[length] == '=') return *item + length + 1;
+  return nullptr;
+}
+int main(int argc, char** argv) {
+  if (argc == 3 && std::strcmp(argv[1], "--initial-failure") == 0) {
+    fail_allocation.store(std::atoi(argv[2]));
+    check("initializer allocation failure reports failure", gesher::EnvironmentSlot() == nullptr && errno == ENOMEM);
+    fail_allocation.store(-1);
+    check("failed initialization retries without partial publication", equal(gesher::GetEnvironment("GESHER_OWNER_INITIAL"), "original"));
+    return failures ? 1 : 0;
+  }
+  char*** slot = gesher::EnvironmentSlot();
+  check("initial Windows Path is visible as POSIX PATH", equal(gesher::GetEnvironment("PATH"), "/fixture"));
+  check("public/imported getter shares initial table", equal(adapter_getenv("GESHER_OWNER_INITIAL"), "original") && __imp_getenv("GESHER_OWNER_INITIAL") == Entry("GESHER_OWNER_INITIAL"));
+  std::wstring transport;
+  check("native lone surrogate remains WTF8 in POSIX table", equal(Entry("GESHER_OWNER_SURROGATE"), "\xed\xa0\x80"));
+  check("native lone surrogate roundtrips into child UTF16", gesher::DecodeEnvironmentUtf8(Entry("GESHER_OWNER_SURROGATE"), &transport) && transport.size() == 1 && transport[0] == 0xd800);
+  check("native supplementary character remains UTF8 in POSIX table", equal(Entry("GESHER_OWNER_SUPPLEMENTARY"), "\xf0\x9f\x98\x80"));
+  check("supplementary character roundtrips into child UTF16", gesher::DecodeEnvironmentUtf8(Entry("GESHER_OWNER_SUPPLEMENTARY"), &transport) && transport.size() == 2 && transport[0] == 0xd83d && transport[1] == 0xde00);
+  check("malformed environment bytes fail without sanitizing output", !gesher::DecodeEnvironmentUtf8("\xff", &transport) && transport.size() == 2 && transport[0] == 0xd83d && transport[1] == 0xde00);
+  char assignment[] = "GESHER_OWNER_MUTABLE_A=first";
+  borrowed_pointer = assignment;
+  check("guest putenv retains caller buffer", Putenv(assignment) == 0 && Entry("GESHER_OWNER_MUTABLE_A") == std::strchr(assignment, '=') + 1);
+  char* value = std::strchr(assignment, '=') + 1;
+  std::memcpy(value, "after", 6);
+  check("guest and host getters see caller mutation", equal(gesher::GetEnvironment("GESHER_OWNER_MUTABLE_A"), "after") && equal(__imp_getenv("GESHER_OWNER_MUTABLE_A"), "after") && equal(Entry("GESHER_OWNER_MUTABLE_A"), "after"));
+  check("CRT shadow owns a copy", equal(shadow_value, "first"));
+  const char* projection = nullptr;
+  auto project = [](const char* bytes, void* context) { *static_cast<const char**>(context) = bytes; };
+  check("unrelated putenv leaves untouched font native reads", gesher::VisitBorrowedFontEnvironment("ANDROID_ROOT", project, &projection) == 0);
+  assignment[sizeof("GESHER_OWNER_MUTABLE_") - 1] = 'B';
+  check("caller name mutation changes lookup", !gesher::GetEnvironment("GESHER_OWNER_MUTABLE_A") && equal(gesher::GetEnvironment("GESHER_OWNER_MUTABLE_B"), "after"));
+  check("aliased equal setenv detaches caller buffer", gesher::SetEnvironment("GESHER_OWNER_MUTABLE_B", value, 1) == 0);
+  std::memcpy(value, "other", 6);
+  check("owned copied value stays independent", equal(gesher::GetEnvironment("GESHER_OWNER_MUTABLE_B"), "after"));
+  const char* retained = gesher::GetEnvironment("GESHER_OWNER_MUTABLE_B");
+  check("replace using an existing owned value", gesher::SetEnvironment("GESHER_OWNER_MUTABLE_B", retained + 1, 1) == 0 && equal(retained, "after") && equal(Entry("GESHER_OWNER_MUTABLE_B"), "fter"));
+  char empty[] = "GESHER_OWNER_MUTABLE_B=";
+  check("empty putenv is present", Putenv(empty) == 0 && equal(Entry("GESHER_OWNER_MUTABLE_B"), "") && equal(gesher::GetEnvironment("GESHER_OWNER_MUTABLE_B"), ""));
+  bool found_empty = false;
+  gesher::VisitEnvironment([](const char* entry, void* context) {
+    if (std::strcmp(entry, "GESHER_OWNER_MUTABLE_B=") == 0) *static_cast<bool*>(context) = true;
+  }, &found_empty);
+  check("exec snapshot retains empty assignment", found_empty);
+  char remove[] = "GESHER_OWNER_MUTABLE_B";
+  check("putenv without equals removes entry", Putenv(remove) == 0 && !gesher::GetEnvironment(remove));
+  check("old owned value survives remove", equal(retained, "after"));
+  borrowed_pointer = nullptr;
+  for (int failure = 0; failure != 3; ++failure) {
+    char name[80]; std::snprintf(name, sizeof(name), "GESHER_OWNER_FAILURE_%d", failure);
+    char** before = *slot;
+    const int calls = native_calls;
+    fail_allocation.store(failure);
+    const int result = gesher::SetEnvironment(name, "prepared", 1);
+    fail_allocation.store(-1);
+    // The table already has spare capacity; only name/string allocation is required.
+    if (failure < 2) check("preparation failure publishes nothing", result == -1 && errno == ENOMEM && *slot == before && !Entry(name) && native_calls == calls);
+    else check("successful transaction after preparation failures", result == 0 && equal(Entry(name), "prepared"));
+  }
+  native_error = EINVAL;
+  char failed[] = "GESHER_OWNER_INITIAL=failed";
+  char** before = *slot;
+  check("failed native write preserves prior table and value", Putenv(failed) == -1 && errno == EINVAL && *slot == before && equal(Entry("GESHER_OWNER_INITIAL"), "original"));
+  native_error = 42;  // UCRT EILSEQ, distinct from Linux EILSEQ.
+  check("native conversion failure keeps Linux errno and prior value", Putenv(failed) == -1 && errno == EILSEQ && equal(Entry("GESHER_OWNER_INITIAL"), "original"));
+  native_error = 0;
+  char unpublished[] = "GESHER_OWNER_UNPUBLISHED=borrowed";
+  const int before_preparation = native_calls;
+  fail_allocation.store(1);  // New-name storage succeeds; borrowed metadata fails.
+  check("borrowed metadata failure publishes no caller pointer", Putenv(unpublished) == -1 && errno == ENOMEM && !Entry("GESHER_OWNER_UNPUBLISHED") && native_calls == before_preparation);
+  fail_allocation.store(-1);
+  char** saved_entries = *slot;
+  char* external_entries[] = {nullptr};
+  *slot = external_entries;
+  fail_allocation.store(2);  // Name and value succeed; replacement pointer array fails.
+  check("pointer-array failure preserves an externally supplied environ", gesher::SetEnvironment("GESHER_OWNER_ARRAY_FAILURE", "value", 1) == -1 && errno == ENOMEM && *slot == external_entries && !external_entries[0] && native_calls == before_preparation);
+  fail_allocation.store(-1);
+  *slot = saved_entries;
+  const int calls = native_calls;
+  fail_allocation.store(0);
+  check("overwrite zero needs no allocation or native write", gesher::SetEnvironment("GESHER_OWNER_INITIAL", "ignored", 0) == 0 && native_calls == calls);
+  fail_allocation.store(-1);
+  check("native narrow import writes reach owner", __imp__putenv_s("GESHER_OWNER_NATIVE", "narrow") == 0 && equal(Entry("GESHER_OWNER_NATIVE"), "narrow"));
+  check("native wide import writes reach owner", __imp__wputenv_s(L"GESHER_OWNER_NATIVE", L"wide") == 0 && equal(Entry("GESHER_OWNER_NATIVE"), "wide"));
+  char native_assignment[] = "GESHER_OWNER_NATIVE=legacy";
+  check("legacy native import reaches owner", __imp__putenv(native_assignment) == 0 && equal(Entry("GESHER_OWNER_NATIVE"), "legacy"));
+  std::strcpy(std::strchr(native_assignment, '=') + 1, "edited");
+  check("legacy CRT putenv retains its copying semantics", equal(Entry("GESHER_OWNER_NATIVE"), "legacy"));
+  check("native Path casing updates the inherited POSIX PATH", __imp__putenv_s("Path", "changed-path") == 0 && equal(Entry("PATH"), "changed-path") && !Entry("Path"));
+  check("native wide casing updates the same PATH", __imp__wputenv_s(L"path", L"wide-path") == 0 && equal(Entry("PATH"), "wide-path") && !Entry("path"));
+  check("POSIX setters retain case-sensitive names", gesher::SetEnvironment("Path", "distinct", 1) == 0 && equal(Entry("PATH"), "wide-path") && equal(Entry("Path"), "distinct"));
+  check("Windows control getter retains native aliases", gesher::SetEnvironment("COMSPEC", "fixture-shell", 1) == 0 && equal(gesher::GetWindowsEnvironment("ComSpec"), "fixture-shell") && !gesher::GetEnvironment("ComSpec"));
+  check("native empty write retains CRT removal semantics", __imp__putenv_s("GESHER_OWNER_NATIVE", "") == 0 && !Entry("GESHER_OWNER_NATIVE"));
+  check("POSIX empty setenv retains a value", gesher::SetEnvironment("GESHER_OWNER_NATIVE", "", 1) == 0 && equal(Entry("GESHER_OWNER_NATIVE"), ""));
+  check("owned font key keeps immutable native reader path", gesher::SetEnvironment("ANDROID_ROOT", "owned", 1) == 0 && gesher::VisitBorrowedFontEnvironment("ANDROID_ROOT", project, &projection) == 0);
+  char font[] = "android_root=first";
+  check("borrowed font alias selects dynamic projection", Putenv(font) == 0 && gesher::VisitBorrowedFontEnvironment("ANDROID_ROOT", project, &projection) == 1 && equal(projection, "first"));
+  std::strcpy(std::strchr(font, '=') + 1, "after");
+  check("font projection observes mutable alias with POSIX casing intact", gesher::VisitBorrowedFontEnvironment("ANDROID_ROOT", project, &projection) == 1 && equal(projection, "after") && equal(gesher::GetEnvironment("ANDROID_ROOT"), "owned") && equal(gesher::GetEnvironment("android_root"), "after"));
+  font[0] = 'z';
+  check("renamed borrowed font key leaves an absence tombstone", gesher::VisitBorrowedFontEnvironment("ANDROID_ROOT", project, &projection) == 1 && projection == nullptr);
+  check("new owned font write restores immutable reader path", gesher::SetEnvironment("ANDROID_ROOT", "restored", 1) == 0 && gesher::VisitBorrowedFontEnvironment("ANDROID_ROOT", project, &projection) == 0);
+  check("remove renamed caller buffer", gesher::UnsetEnvironment("zndroid_root") == 0);
+  char renamed[80] = "GESHER_OWNER_OLD=first";
+  check("publish unrelated borrowed name", Putenv(renamed) == 0);
+  std::strcpy(renamed, "GESHER_OWNER_CURRENT=first");
+  check("rewriting old name preserves renamed borrowed identity", gesher::SetEnvironment("GESHER_OWNER_OLD", "replacement", 1) == 0);
+  std::strcpy(renamed, "android_root=incoming");
+  check("caller may rename unrelated live storage into a font key", gesher::VisitBorrowedFontEnvironment("ANDROID_ROOT", project, &projection) == 1 && equal(projection, "incoming"));
+  check("later explicit font write wins over an older borrowed alias", gesher::SetEnvironment("ANDROID_ROOT", "latest", 1) == 0 && gesher::VisitBorrowedFontEnvironment("ANDROID_ROOT", project, &projection) == 0);
+  check("remove dynamically renamed font pointer", gesher::UnsetEnvironment("android_root") == 0);
+  for (int i = 0; i != 64; ++i) {
+    char name[80]; std::snprintf(name, sizeof(name), "GESHER_OWNER_GROW_%d", i);
+    check("growth preserves stable exported slot", gesher::SetEnvironment(name, "value", 1) == 0 && gesher::EnvironmentSlot() == slot && equal(retained, "after"));
+  }
+  native_attempted.store(false);
+  std::unique_lock<std::mutex> held(native_mutex);
+  std::thread writer([] { gesher::SetEnvironment("GESHER_OWNER_INITIAL", "changed", 1); });
+  while (!native_attempted.load()) std::this_thread::yield();
+  check("CRT callback reads prior owner without waiting for writer", equal(gesher::GetEnvironment("GESHER_OWNER_INITIAL"), "original"));
+  held.unlock(); writer.join();
+  check("completed writer publishes after native return", equal(Entry("GESHER_OWNER_INITIAL"), "changed"));
+  const std::string invalid(32767, 'x');
+  const int before_invalid = native_attempts.load();
+  check("overwrite zero skips even known-invalid native values", gesher::SetEnvironment("GESHER_OWNER_INITIAL", invalid.c_str(), 0) == 0 && native_attempts.load() == before_invalid);
+  hold_invalid.store(true);
+  std::atomic<int> rejected{0};
+  std::thread invalid_writer([&] { rejected.store(gesher::SetEnvironment("GESHER_OWNER_INITIAL", invalid.c_str(), 1)); });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!invalid_entered.load() && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+  std::thread waiting_writer([] { gesher::SetEnvironment("GESHER_OWNER_INITIAL", "final", 1); });
+  while (native_attempts.load() < before_invalid + 2 && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+  check("invalid callback holds CRT while valid writer reaches CRT boundary", invalid_entered.load() && native_attempts.load() == before_invalid + 2);
+  check("held invalid callback can read the prior owner", equal(gesher::GetEnvironment("GESHER_OWNER_INITIAL"), "changed"));
+  release_invalid.store(true);
+  invalid_writer.join(); waiting_writer.join();
+  check("invalid input never publishes and valid writer completes", rejected.load() == -1 && equal(Entry("GESHER_OWNER_INITIAL"), "final"));
+  std::printf("environment production owner: %d checks, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

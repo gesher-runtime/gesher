@@ -74,9 +74,19 @@ public final class AccountManagerService extends IAccountManager.Default {
     /** AOSP Session budget, including binding and any login Activity continuation. */
     private static final long AUTHENTICATOR_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(15);
 
+    /**
+     * Before the dedicated field, renameAccount stored the previous name under this user-data
+     * key, where setUserData and addAccountExplicitly extras could also write it. Records
+     * without {@link #PREVIOUS_NAME_RECORD} move it out of user data once, on load.
+     */
+    private static final String LEGACY_PREVIOUS_NAME_KEY = "gesher.previousAccountName";
+    private static final String PREVIOUS_NAME_RECORD = "previousNameField";
+
     /** An account's password and user data. */
     private static final class Entry {
         String owner, ownerIdentity, password;
+        /** Set only by renameAccount; never part of the authenticator's user data. */
+        String previousName;
         long authenticatedAt;
         final Map<String, String> data = new LinkedHashMap<>();
         final Map<String, String> tokens = new LinkedHashMap<>();
@@ -169,6 +179,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 Entry old = item.getValue(), copy = new Entry();
                 copy.owner = old.owner; copy.ownerIdentity = old.ownerIdentity;
                 copy.password = old.password; copy.authenticatedAt = old.authenticatedAt;
+                copy.previousName = old.previousName;
                 copy.data.putAll(old.data); copy.tokens.putAll(old.tokens);
                 copy.visibility.putAll(old.visibility); copy.customTokens.putAll(old.customTokens);
                 for (Map.Entry<String, Set<String>> grant : old.tokenGrants.entrySet()) {
@@ -520,13 +531,67 @@ public final class AccountManagerService extends IAccountManager.Default {
                 || AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE.equals(packageName);
     }
 
+    /**
+     * AccountManagerService.resolveAccountVisibility: the authenticator always sees its
+     * accounts; a stored per-client value (bound to the client's code identity) wins;
+     * otherwise the authenticator's legacy default for the client's category applies.
+     * Never VISIBILITY_UNDEFINED.
+     */
     private int visibility(Caller c, Entry e) {
         if (e == null || retiring(e)) return AccountManager.VISIBILITY_NOT_VISIBLE;
         if (owns(c, e)) return AccountManager.VISIBILITY_VISIBLE;
-        // Legacy keys describe policy categories, not grants to every client. Until
-        // Android's permission/target-SDK eligibility policy is implemented here,
-        // retain the existing explicit, code-identity-scoped visibility policy.
-        return e.visibility.getOrDefault(c.key(), AccountManager.VISIBILITY_NOT_VISIBLE);
+        if (c.name == null || c.code == null) return AccountManager.VISIBILITY_NOT_VISIBLE;
+        Integer stored = e.visibility.get(c.key());
+        if (stored != null && stored != AccountManager.VISIBILITY_UNDEFINED) return stored;
+        return legacyVisibility(e, legacyEligible(c, e)
+                ? AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE
+                : AccountManager.PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE);
+    }
+
+    /**
+     * The clients Android gives the authenticator's legacy-visible default: a signature
+     * match with the authenticator, GET_ACCOUNTS_PRIVILEGED, a pre-O app with GET_ACCOUNTS,
+     * or READ_CONTACTS for a type whose authenticator holds WRITE_CONTACTS. No device or
+     * profile owner exists here.
+     */
+    private boolean legacyEligible(Caller c, Entry e) {
+        if (e.ownerIdentity != null && e.ownerIdentity.startsWith("cert:")
+                && e.ownerIdentity.equals(c.code)) return true;
+        ApkPackage pkg = mPm.get(c.name);
+        if (pkg == null) return false;
+        if (permitted(pkg, android.Manifest.permission.GET_ACCOUNTS_PRIVILEGED)) return true;
+        if (pkg.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O
+                && permitted(pkg, android.Manifest.permission.GET_ACCOUNTS,
+                        android.Manifest.permission.GET_ACCOUNTS_PRIVILEGED)) return true;
+        ApkPackage owner = e.owner == null ? null : mPm.get(e.owner);
+        return owner != null && permitted(pkg, android.Manifest.permission.READ_CONTACTS)
+                && permitted(owner, android.Manifest.permission.WRITE_CONTACTS);
+    }
+
+    /** AccountManagerService.isPermittedForPackage: granted, and its app op (if any) allowed. */
+    private boolean permitted(ApkPackage pkg, String... permissions) {
+        for (String permission : permissions) {
+            if (mPm.checkPermission(permission, pkg.packageName, 0)
+                    != PackageManager.PERMISSION_GRANTED) continue;
+            int op = android.app.AppOpsManager.permissionToOpCode(permission);
+            if (op == android.app.AppOpsManager.OP_NONE || appOpAllowed(op, pkg)) return true;
+        }
+        return false;
+    }
+
+    private static boolean appOpAllowed(int op, ApkPackage pkg) {
+        long token = Binder.clearCallingIdentity();
+        try {
+            IBinder binder = android.os.ServiceManager.getService(Context.APP_OPS_SERVICE);
+            if (binder == null) return false;
+            return com.android.internal.app.IAppOpsService.Stub.asInterface(binder)
+                    .checkOperation(op, pkg.uid(), pkg.packageName)
+                    == android.app.AppOpsManager.MODE_ALLOWED;
+        } catch (RemoteException | RuntimeException e) {
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
     }
 
     private static int legacyVisibility(Entry e, String key) {
@@ -535,6 +600,12 @@ public final class AccountManagerService extends IAccountManager.Default {
         return AccountManager.PACKAGE_NAME_KEY_LEGACY_VISIBLE.equals(key)
                 ? AccountManager.VISIBILITY_USER_MANAGED_VISIBLE
                 : AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE;
+    }
+
+    /** Visible, or USER_MANAGED_NOT_VISIBLE (Android's includeUserManagedNotVisible). */
+    private boolean offered(Caller c, Account account, Entry e) {
+        return visible(c, account, e)
+                || visibility(c, e) == AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE;
     }
 
     private boolean visible(Caller c, Account account, Entry e) {
@@ -589,7 +660,10 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (packageName.equals(c.name)) return filterAccounts(type, c);
         // Authenticators query which of their own accounts a client may already
         // see (microG's account provider uses this for calling applications).
-        // This typed delegation never grants visibility or credential access.
+        // As Android's getAccountsByTypeForPackage for the managing authenticator
+        // (includeUserManagedNotVisible), this includes accounts the client may be
+        // offered (USER_MANAGED_NOT_VISIBLE) but not explicit denials. It changes no
+        // visibility and grants no credential access.
         Authenticator authenticator = authenticator(type);
         if (authenticator == null || !authenticator.service.getPackageName().equals(c.name)
                 || !callerUnchanged(c)) throw new SecurityException("Account client mismatch");
@@ -598,7 +672,7 @@ public final class AccountManagerService extends IAccountManager.Default {
         List<Account> result = new ArrayList<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             Account account = item.getKey(); Entry entry = item.getValue();
-            if (type.equals(account.type) && owns(c, entry) && visible(target, account, entry)) {
+            if (type.equals(account.type) && owns(c, entry) && offered(target, account, entry)) {
                 result.add(account);
             }
         }
@@ -871,7 +945,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             if (mAccounts.containsKey(renamed)) {
                 error(response, AccountManager.ERROR_CODE_BAD_ARGUMENTS, "Account already exists"); return;
             }
-            beginMutation(); e.data.put("gesher.previousAccountName", account.name);
+            beginMutation(); e.previousName = account.name;
             e.tokens.clear(); e.customTokens.clear();
             mAccounts.remove(account); mAccounts.put(renamed, e); save();
         }
@@ -881,10 +955,22 @@ public final class AccountManagerService extends IAccountManager.Default {
         result.putString(AccountManager.KEY_ACCOUNT_TYPE, renamed.type); reply(response, result);
     }
 
+    /** Android requires no permission or authenticator signature to read a previous name. */
     @Override
-    public synchronized String getPreviousName(Account account) {
-        Entry e = mAccounts.get(account); requireOwner(caller(null), e);
-        return e.data.get("gesher.previousAccountName");
+    public String getPreviousName(Account account) {
+        java.util.Objects.requireNonNull(account, "account cannot be null");
+        return previousName(caller(null), account);
+    }
+
+    /**
+     * Any client that can see the account reads its previous name. An account hidden from
+     * the client is not disclosed here either, as getAccounts and getAccountsByType do not.
+     */
+    private synchronized String previousName(Caller c, Account account) {
+        if (!callerUnchanged(c)) return null;
+        Entry e = mAccounts.get(account);
+        if (e == null || !visible(c, account, e)) return null;
+        return e.previousName;
     }
 
     // --- passwords, tokens and user data -------------------------------------------------
@@ -2056,6 +2142,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     /** Load the protected data only after the store has authenticated it. */
     private void loadProtectedState(Properties p) {
         mUnclaimedLegacy = p.getProperty("unclaimedLegacy");
+        boolean legacyPreviousName = !"1".equals(p.getProperty(PREVIOUS_NAME_RECORD));
         for (int i = 0; i < count(p, "pendingRemoval.count"); i++) {
             String name = p.getProperty("pendingRemoval." + i);
             if (name == null || name.isEmpty()) throw new IllegalStateException("Invalid account removal record");
@@ -2071,6 +2158,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 throw new IllegalStateException("Invalid protected account ownership");
             }
             e.password = p.getProperty(prefix + "password");
+            e.previousName = p.getProperty(prefix + "previousName");
             e.authenticatedAt = Long.parseLong(p.getProperty(prefix + "authenticatedAt", "0"));
             for (int j = 0; j < count(p, prefix + "data.count"); j++) {
                 e.data.put(p.getProperty(prefix + "data." + j + ".key"),
@@ -2098,6 +2186,11 @@ public final class AccountManagerService extends IAccountManager.Default {
                 e.visibility.put(p.getProperty(prefix + "visibility." + j + ".client"),
                         Integer.parseInt(p.getProperty(prefix + "visibility." + j + ".value")));
             }
+            if (legacyPreviousName) {
+                // Records written before the dedicated field kept the name in user data.
+                String legacy = e.data.remove(LEGACY_PREVIOUS_NAME_KEY);
+                if (e.previousName == null) e.previousName = legacy;
+            }
             mAccounts.put(new Account(name, type), e);
         }
     }
@@ -2121,6 +2214,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 p.setProperty(prefix + "ownerIdentity", e.ownerIdentity);
                 p.setProperty(prefix + "authenticatedAt", Long.toString(e.authenticatedAt));
                 if (e.password != null) p.setProperty(prefix + "password", e.password);
+                if (e.previousName != null) p.setProperty(prefix + "previousName", e.previousName);
                 int j = 0;
                 for (Map.Entry<String, String> data : e.data.entrySet()) {
                     p.setProperty(prefix + "data." + j + ".key", data.getKey());
@@ -2152,6 +2246,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 p.setProperty(prefix + "visibility.count", Integer.toString(j)); i++;
             }
             p.setProperty("count", Integer.toString(i));
+            p.setProperty(PREVIOUS_NAME_RECORD, "1");
             mStoreWriter.write(p);
             mBeforeMutation = null;
         } catch (IOException | RuntimeException e) {

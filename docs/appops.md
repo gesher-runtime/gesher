@@ -255,7 +255,7 @@ and generation-reentry regressions remain required.
 
 The Windows `framework-fixes` track runs the fixture through generated AppOps and
 PermissionChecker Binder Parcel transports. Its required success marker includes
-`482 checks; binder=true`. `tools/test_appops.py` runs the same service contracts on a host JDK
+`489 checks; binder=true`. `tools/test_appops.py` runs the same service contracts on a host JDK
 with the existing declared JNI identity/clock boundary. Its host-only setup also
 supplies the pinned permission definitions, including their background and
 restriction metadata, when framework assets are
@@ -272,7 +272,7 @@ Service removal schedules a UID-state refresh so the published ledger and
 observers transition after settling without requiring a later query.
 
 The 2026-11-18 repair composes the reviewed SAF/task/result changes and typechecks
-288 production Java sources. All 482 host AppOps checks and the original
+288 production Java sources. All 489 host AppOps checks and the original
 independent attribution and foreground-lifecycle assertions pass. The expanded
 fixture rejects the original PR72 implementation at its missing-app-op mapping
 assertion. These are host/source results; the new Windows Binder marker remains

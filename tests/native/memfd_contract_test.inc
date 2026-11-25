@@ -106,6 +106,50 @@ static void test_memfd_route(memfd_create_fn create, const char* route) {
   }
 }
 
+// Writable shared mapping ownership, shared unchanged by guest and Linux tests.
+static void test_memfd_mapping_leases(memfd_create_fn create) {
+  const long page = sysconf(_SC_PAGESIZE);
+  int fd = create("seal-write-last-unmap", MFD_ALLOW_SEALING);
+  char* busy = fd >= 0 && ftruncate(fd, page) == 0
+      ? (char*)mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) : (char*)MAP_FAILED;
+  check("mapping-lease fixture creates writable shared view", busy != MAP_FAILED);
+  if (busy != MAP_FAILED) {
+    errno = 0;
+    check("mapping-lease fixture refuses seal while writable view lives",
+          fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EBUSY);
+    check("mapping-lease fixture unmaps the last page", munmap(busy, page) == 0);
+    check("mapping-lease fixture seals after last unmap", fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == 0);
+  }
+  if (fd >= 0) close(fd);
+
+  // Exercise the same lifetime through the native Windows/Android guest path,
+  // including PunchView's already-unmapped tail and close(fd) after mmap.
+  fd = create("seal-write-punch-dead-tail", MFD_ALLOW_SEALING);
+  char* split = fd >= 0 && ftruncate(fd, page * 4) == 0
+      ? (char*)mmap(NULL, page * 4, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
+      : (char*)MAP_FAILED;
+  check("memfd four-page shared view for partial replacement", split != MAP_FAILED);
+  int survivor = fd >= 0 ? dup(fd) : -1;
+  check("memfd mapping has a surviving seal descriptor", survivor >= 0);
+  if (fd >= 0) close(fd);
+  if (split != MAP_FAILED && survivor >= 0) {
+    errno = 0;
+    check("close of mapped fd does not release the writable-mapping claim",
+          fcntl(survivor, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EBUSY);
+    check("unmap upper half of memfd view", munmap(split + page * 2, page * 2) == 0);
+    errno = 0;
+    check("live lower half still blocks F_SEAL_WRITE",
+          fcntl(survivor, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EBUSY);
+    void* replacement = mmap(split, page * 2, PROT_READ | PROT_WRITE,
+                             MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    check("replace final live half without remapping dead tail", replacement == split);
+    check("dead-tail replacement releases the last memfd write lease",
+          replacement == split && fcntl(survivor, F_ADD_SEALS, F_SEAL_WRITE) == 0);
+  }
+  if (split != MAP_FAILED) check("retire the complete replacement range", munmap(split, page * 4) == 0);
+  if (survivor >= 0) close(survivor);
+}
+
 // Seals (fcntl F_ADD_SEALS/F_GET_SEALS) with Linux's semantics: each seal
 // refuses exactly what it forbids, on every write path, through every
 // descriptor of the file. (ASharedMemory, which libcutils builds on them, is
@@ -134,6 +178,11 @@ static void test_memfd_seals(memfd_create_fn create) {
   check("fallocate inside the size is allowed", fallocate(fd, 0, 0, page) == 0);
   errno = 0;
   check("F_SEAL_GROW refuses fallocate past the end", fallocate(fd, 0, 0, page * 2) == -1 && errno == EPERM);
+  check("enable append on the shared file description", fcntl(fd, F_SETFL, O_APPEND) == 0);
+  errno = 0;
+  check("F_SEAL_GROW checks append's actual end, not pwrite's offset",
+        pwrite(fd, buf, 1, 0) == -1 && errno == EPERM);
+  check("restore ordinary file status", fcntl(fd, F_SETFL, 0) == 0);
 
   char* writable = (char*)mmap(NULL, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   check("a writable shared mapping before the write seal", writable != MAP_FAILED);
@@ -166,6 +215,15 @@ static void test_memfd_seals(memfd_create_fn create) {
         dup_fd >= 0 && (fcntl(dup_fd, F_GET_SEALS) & F_SEAL_FUTURE_WRITE) != 0 &&
             write(dup_fd, buf, 1) == -1 && errno == EPERM);
   if (dup_fd >= 0) close(dup_fd);
+  FILE* stream = fdopen(dup(fd), "w");
+  check("sealed memfd can still be wrapped as a stream", stream != NULL);
+  if (stream != NULL) {
+    check("unbuffered stream setup", setvbuf(stream, NULL, _IONBF, 0) == 0);
+    errno = 0;
+    check("the stream write path obeys the same write seal",
+          fputc('x', stream) == EOF && errno == EPERM && ferror(stream));
+    fclose(stream);
+  }
   check("F_SEAL_SEAL", fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL) == 0);
   errno = 0;
   check("F_SEAL_SEAL refuses further seals", fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EPERM);
@@ -186,7 +244,11 @@ static void test_memfd_seals(memfd_create_fn create) {
   errno = 0;
   check("F_SEAL_WRITE with a writable shared mapping is EBUSY",
         busy != MAP_FAILED && fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == -1 && errno == EBUSY);
-  if (busy != MAP_FAILED) munmap(busy, page);
+  if (busy != MAP_FAILED) {
+    check("unmap the last writable shared memfd page", munmap(busy, page) == 0);
+    check("F_SEAL_WRITE succeeds after the last writable mapping is unmapped",
+          fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE) == 0);
+  }
   if (fd >= 0) close(fd);
 
   fd = create("unsealable", 0);
@@ -209,4 +271,5 @@ static void test_memfd_contracts(void) {
   if (create != NULL) test_memfd_route(create, "direct export");
   test_memfd_route(memfd_from_syscall, "raw architecture syscall");
   test_memfd_seals(create != NULL ? create : memfd_from_syscall);
+  test_memfd_mapping_leases(create != NULL ? create : memfd_from_syscall);
 }

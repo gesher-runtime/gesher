@@ -19,6 +19,8 @@ def main():
         includes.mkdir(parents=True)
         (includes / 'unc_paths.h').write_bytes(
             (root / 'compat/posix/include/gesher/unc_paths.h').read_bytes())
+        (includes / 'environment.h').write_bytes(
+            (root / 'compat/posix/include/gesher/environment.h').read_bytes())
         source = tests / 'entry_test.cc'
         if args.baseline_ref:
             baseline = subprocess.check_output([

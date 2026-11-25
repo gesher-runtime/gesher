@@ -128,9 +128,11 @@ public final class Services {
         services.put(Context.RESTRICTIONS_SERVICE,
                 StandIn.of(android.content.IRestrictionsManager.class,
                         new ApplicationRestrictionsService()).asBinder());
+        java.io.File sharedBlobs = persistentAccounts
+                ? new java.io.File(android.os.Environment.getDataDirectory(), "system/gesher-blobs")
+                : null;
         services.put(Context.BLOB_STORE_SERVICE,
-                StandIn.of(android.app.blob.IBlobStoreManager.class,
-                        new BlobStoreService()).asBinder());
+                new BlobStoreService(pm, am.callers(), sharedBlobs).asBinder());
         services.put(Context.ROLLBACK_SERVICE,
                 StandIn.of(android.content.rollback.IRollbackManager.class,
                         new RollbackManagerService(pm, atm)).asBinder());
@@ -170,7 +172,7 @@ public final class Services {
         // What real apps fetch as they start (docs/e2e.md): without these getSystemService
         // answers null.
         services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
-                new PowerManagerService()).asBinder());
+                new PowerManagerService(am)).asBinder());
         // DeviceIdleManager is also PowerExemptionManager's constructor dependency.
         // Register the real Binder stub in both in-process and system-server modes.
         services.put(Context.DEVICE_IDLE_CONTROLLER, StandIn.of(android.os.IDeviceIdleController.class,
@@ -191,6 +193,9 @@ public final class Services {
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
+        // webviewupdate: the built-in WebView provider's package (WebView2, docs/webview.md).
+        services.put(WebViewUpdateService.NAME, StandIn.of(android.webkit.IWebViewUpdateService.class,
+                new WebViewUpdateService(pm)).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
@@ -208,6 +213,10 @@ public final class Services {
         // classes framework.jar does not have (as IAudioService above).
         services.put(android.os.BatteryStats.SERVICE_NAME,
                 new com.gesher.server.stub.IBatteryStatsStub(new BatteryService.Stats()));
+        // usb: AOSP's UsbService without managers, as on an emulator (UsbService). Phone
+        // apps use UsbManager unchecked; without it getSystemService answered null.
+        services.put(Context.USB_SERVICE, StandIn.of(android.hardware.usb.IUsbManager.class,
+                new UsbService(am.callers())).asBinder());
         // A device without a vibrator (hwsvc2, ADR 0051).
         services.put(Context.VIBRATOR_MANAGER_SERVICE, StandIn.of(
                 android.os.IVibratorManagerService.class, new VibratorManagerService()).asBinder());
@@ -298,9 +307,17 @@ public final class Services {
         services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class,
                 new DeviceServices.TelephonyRegistryService()).asBinder());
-        services.put(Context.TRUST_SERVICE, StandIn.of(
-                android.app.trust.ITrustManager.class,
-                new DeviceServices.TrustService()).asBinder());
+        StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
+                android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
+        services.put(Context.TRUST_SERVICE, trust.asBinder());
+        // auth: BiometricManager and BiometricPrompt (ADR 0091). AOSP registers it on every
+        // device; no biometric sensor, the device credential as trust reports it. A
+        // credential is confirmed by Windows Hello (WindowsHello, null without its natives);
+        // while trust reports no secure device, no prompt reaches it.
+        services.put(Context.AUTH_SERVICE, StandIn.of(
+                android.hardware.biometrics.IAuthService.class,
+                new AuthService(new AuthServiceHost(am, atm, pm, trust.asInterface()),
+                        WindowsHello.create())).asBinder());
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
                 new DeviceServices.ShortcutService(pm, am.callers())).asBinder());
@@ -690,6 +707,10 @@ public final class Services {
             java.io.File path = allocationPath(volumeUuid);
             // No Android cache-reclamation/quota backend is present. Only actually
             // usable host space is offered, retaining Android's low-storage reserve.
+            return allocatableBytes(path, flags);
+        }
+
+        static long allocatableBytes(java.io.File path, int flags) {
             if ((flags & StorageManager.FLAG_ALLOCATE_CACHE_ONLY) != 0) return 0;
             return Math.max(0, path.getUsableSpace() - reservedBytes(path, flags));
         }

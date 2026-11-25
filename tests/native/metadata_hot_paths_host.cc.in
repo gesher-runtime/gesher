@@ -1,0 +1,224 @@
+// Unchanged production metadata bodies, with explicit host boundary adapters.
+#include <array>
+#include <atomic>
+#include <barrier>
+#include <cerrno>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <new>
+#include <stdexcept>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include <pthread.h>
+
+static std::atomic<size_t> allocations{0};
+[[gnu::noinline]] static void* Allocate(size_t size) {
+  allocations.fetch_add(1, std::memory_order_relaxed);
+  if (void* value = std::malloc(size ? size : 1)) return value;
+  throw std::bad_alloc();
+}
+[[gnu::noinline]] static void Release(void* value) { std::free(value); }
+void* operator new(size_t size) { return Allocate(size); }
+void operator delete(void* value) noexcept { Release(value); }
+void operator delete(void* value, size_t) noexcept { Release(value); }
+
+static void Require(bool okay, const char* expression, int line) {
+  if (!okay) {
+    std::fprintf(stderr, "FAIL metadata hot paths line %d: %s\n", line, expression);
+    std::abort();
+  }
+}
+#define REQUIRE(value) Require(value, #value, __LINE__)
+
+// A warmed reader must finish while the registry writer mutex remains held.
+// The timeout is only a deadlock watchdog, not a performance threshold.
+template <class Prepare, class Read>
+static void WithoutRegistryMutex(std::mutex& registry, Prepare prepare, Read read) {
+  std::barrier phase(2);
+  std::mutex completion_mutex;
+  std::condition_variable completion;
+  bool done = false;
+  std::thread worker([&] {
+    prepare(); phase.arrive_and_wait(); phase.arrive_and_wait(); read();
+    { std::lock_guard<std::mutex> lock(completion_mutex); done = true; }
+    completion.notify_one();
+  });
+  phase.arrive_and_wait();
+  std::unique_lock<std::mutex> writer(registry);
+  phase.arrive_and_wait();
+  bool finished;
+  {
+    std::unique_lock<std::mutex> lock(completion_mutex);
+    finished = completion.wait_for(lock, std::chrono::seconds(3), [&] { return done; });
+  }
+  writer.unlock(); worker.join(); REQUIRE(finished);
+}
+
+namespace trampolines {
+constexpr size_t kMaxTramps = 0xfffe;
+// Test-only visibility to force version exhaustion; production ordering and
+// method bodies are unchanged.
+#define private public
+@TRAMPOLINES@
+#undef private
+
+void Test() {
+  int first, second;
+  uint32_t first_code, second_code;
+  const Trampoline a{&first, 1, 2, &first_code}, b{&second, 3, 4, &second_code};
+  const Trampoline retired{nullptr, -1, -1, &first_code};
+  { std::lock_guard<std::mutex> lock(g_tramp_mutex); g_tramps[0].Publish(a); }
+  WithoutRegistryMutex(g_tramp_mutex, [] {}, [&] {
+    const size_t before = allocations.load();
+    for (int i = 0; i < 100000; ++i) {
+      Trampoline value = ReadTrampoline(0);
+      REQUIRE(value.host_fn == a.host_fn && value.va_list_index == 1 && value.pointer_variadic_fixed == 2);
+    }
+    REQUIRE(allocations.load() == before);
+  });
+  std::atomic<bool> stop{false}; std::atomic<size_t> reads{0};
+  std::barrier phase(5); std::array<std::thread, 4> readers;
+  for (auto& reader : readers) reader = std::thread([&] {
+    phase.arrive_and_wait();
+    do {
+      Trampoline value = ReadTrampoline(0);
+      const Trampoline& expected = value.host_fn == a.host_fn ? a : value.host_fn == b.host_fn ? b : retired;
+      REQUIRE(value.host_fn == expected.host_fn && value.va_list_index == expected.va_list_index &&
+              value.pointer_variadic_fixed == expected.pointer_variadic_fixed && value.guest_code == expected.guest_code);
+      reads.fetch_add(1, std::memory_order_relaxed);
+    } while (!stop.load(std::memory_order_relaxed));
+  });
+  phase.arrive_and_wait();
+  for (int i = 0; i < 100000; ++i) {
+    std::lock_guard<std::mutex> lock(g_tramp_mutex);
+    g_tramps[0].Publish(i % 3 == 0 ? retired : i % 3 == 1 ? b : a);
+  }
+  stop.store(true); for (auto& reader : readers) reader.join(); REQUIRE(reads.load() > 0);
+  // Stop a writer halfway through a record change. Readers must wait for
+  // its publication/lock, rather than dispatch a mixed function/ABI pair.
+  std::unique_lock<std::mutex> writer(g_tramp_mutex);
+  const uint64_t version = g_tramps[0].sequence_.load();
+  g_tramps[0].sequence_.store(version + 1);
+  g_tramps[0].host_fn_.store(b.host_fn);
+  std::barrier waiting(2);
+  std::atomic<bool> completed{false};
+  std::thread pending([&] {
+    waiting.arrive_and_wait();
+    Trampoline value = ReadTrampoline(0);
+    REQUIRE(value.host_fn == b.host_fn && value.va_list_index == b.va_list_index &&
+            value.pointer_variadic_fixed == b.pointer_variadic_fixed && value.guest_code == b.guest_code);
+    completed.store(true);
+  });
+  waiting.arrive_and_wait();
+  std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  REQUIRE(!completed.load());
+  g_tramps[0].va_list_index_.store(b.va_list_index);
+  g_tramps[0].pointer_variadic_fixed_.store(b.pointer_variadic_fixed);
+  g_tramps[0].guest_code_.store(b.guest_code);
+  g_tramps[0].sequence_.store(version + 2);
+  writer.unlock(); pending.join(); REQUIRE(completed.load());
+  // Saturation selects the bounded mutex fallback instead of wrapping.
+  g_tramps[0].sequence_.store(UINT64_MAX - 1);
+  { std::lock_guard<std::mutex> lock(g_tramp_mutex); g_tramps[0].Publish(b); }
+  REQUIRE(g_tramps[0].sequence_.load() == UINT64_MAX && ReadTrampoline(0).host_fn == b.host_fn);
+  { std::lock_guard<std::mutex> lock(g_tramp_mutex); g_tramps[0].Publish(a); }
+  REQUIRE(g_tramps[0].sequence_.load() == UINT64_MAX && ReadTrampoline(0).va_list_index == 1);
+  std::printf("PASS trampolines: 100000 stable reads without mutex/allocation; 100000 publish/retire/reuse operations with %zu concurrent coherent reads; paused publication, version exhaustion\n", reads.load());
+}
+}  // namespace trampolines
+
+namespace memfds {
+using HANDLE = void*;
+using __int64 = long long;
+static HANDLE const INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t{-1});
+constexpr uint32_t F_SEAL_WRITE = 8, F_SEAL_FUTURE_WRITE = 16, F_SEAL_GROW = 4;
+struct LARGE_INTEGER { int64_t QuadPart; };
+struct File { bool memfd; uint32_t seals; uint64_t size; };
+std::unordered_map<int, HANDLE> descriptors;
+std::unordered_map<HANDLE, File> files;
+size_t ea_reads = 0;
+HANDLE HandleFromFd(int fd) {
+  auto found = descriptors.find(fd);
+  return found == descriptors.end() ? INVALID_HANDLE_VALUE : found->second;
+}
+bool ReadValue(HANDLE file, uint32_t* value) {
+  ++ea_reads; auto found = files.find(file);
+  if (found == files.end() || !found->second.memfd) return false;
+  *value = found->second.seals; return true;
+}
+constexpr int FILE_CURRENT = 1;
+constexpr unsigned long kErrorIo = 1117;
+unsigned long GetLastError() { return kErrorIo; }
+int ErrnoFromWin32(unsigned long error) { return error == kErrorIo ? EIO : EINVAL; }
+bool SetFilePointerEx(HANDLE file, LARGE_INTEGER, LARGE_INTEGER* position, int method) {
+  if (files.find(file) == files.end() || method != FILE_CURRENT) return false;
+  position->QuadPart = 0; return true;
+}
+bool GetFileSizeEx(HANDLE file, LARGE_INTEGER* size) {
+  auto found = files.find(file); if (found == files.end()) return false;
+  size->QuadPart = found->second.size; return true;
+}
+@MEMFD_REGISTRY@
+@MEMFD_FUNCTIONS@
+@MEMFD_WRITE@
+
+void Test() {
+  int file_tokens[2]; HANDLE sealed = &file_tokens[0], ordinary = &file_tokens[1];
+  files[sealed] = {true, F_SEAL_FUTURE_WRITE, 4096}; files[ordinary] = {false, 0, 4096};
+  descriptors[10] = sealed; descriptors[11] = ordinary; RegisterMemfd(10);
+  WithoutRegistryMutex(g_registry_mutex, [] {}, [&] {
+    const size_t before = allocations.load();
+    for (int i = 0; i < 100000; ++i) {
+      REQUIRE(IsRegisteredMemfd(10) && !IsRegisteredMemfd(11));
+      REQUIRE(MemfdWriteError(11, true, 0, 1) == 0);
+    }
+    REQUIRE(allocations.load() == before && ea_reads == 0);
+  });
+  REQUIRE(MemfdWriteError(10, true, 0, 1) == EPERM && ea_reads == 1);
+  files[sealed].seals = F_SEAL_GROW;
+  REQUIRE(MemfdWriteError(10, false, 4096, 1) == EPERM && MemfdWriteError(10, false, 4095, 1) == 0);
+  files[sealed].seals = F_SEAL_WRITE;  // A different handle/process can add seals.
+  REQUIRE(MemfdWriteError(10, false, 0, 1) == EPERM);
+  descriptors[12] = sealed; CopyMemfdRegistration(10, 12);
+  ForgetMemfd(10); descriptors[10] = ordinary;  // Close/reuse as an ordinary file.
+  size_t before = ea_reads;
+  REQUIRE(MemfdWriteError(10, true, 0, 1) == 0 && ea_reads == before);
+  REQUIRE(MemfdWriteError(12, true, 0, 1) == EPERM);  // Dup retains the memfd.
+  descriptors[12] = ordinary; CopyMemfdRegistration(11, 12);  // dup2 over a memfd.
+  REQUIRE(!IsRegisteredMemfd(12));
+  descriptors[13] = sealed; RegisterMemfdIfSealed(13, sealed);  // Imported handle.
+  REQUIRE(MemfdWriteError(13, true, 0, 1) == EPERM);
+  for (int fd : {63, 64, 65535, 65536, 1000000}) {
+    descriptors[fd] = sealed; RegisterMemfd(fd);
+    REQUIRE(MemfdWriteError(fd, true, 0, 1) == EPERM);
+    ForgetMemfd(fd); descriptors[fd] = ordinary; before = ea_reads;
+    REQUIRE(MemfdWriteError(fd, true, 0, 1) == 0 && ea_reads == before);
+  }
+  REQUIRE(!IsRegisteredMemfd(-1)); RegisterMemfd(-1); ForgetMemfd(-1);
+  // Concurrent descriptors in one atomic word must not lose each other's bits.
+  std::barrier phase(8); std::array<std::thread, 8> threads;
+  for (size_t t = 0; t < threads.size(); ++t) threads[t] = std::thread([&, t] {
+    int fd = 128 + static_cast<int>(t);
+    for (int i = 0; i < 1000; ++i) {
+      RegisterMemfd(fd); phase.arrive_and_wait();
+      for (int n = 128; n < 136; ++n) REQUIRE(IsRegisteredMemfd(n));
+      phase.arrive_and_wait(); ForgetMemfd(fd); phase.arrive_and_wait();
+      for (int n = 128; n < 136; ++n) REQUIRE(!IsRegisteredMemfd(n));
+      phase.arrive_and_wait();
+    }
+  });
+  for (auto& thread : threads) thread.join();
+  ForgetMemfd(13);
+  std::puts("PASS memfd: 100000 ordinary-write checks with live memfd and zero registry mutex/allocation/EA reads; seal updates, dup/dup2, close/reuse, import, high-fd fallback, concurrent bitmap updates");
+}
+}  // namespace memfds
+
+int main() {
+  trampolines::Test(); memfds::Test();
+}
