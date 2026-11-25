@@ -199,6 +199,25 @@ final class SettingsProvider extends ContentProvider {
         }
     }
 
+    /** Server-local view of a global setting; null when absent (or without the provider). */
+    static String globalString(String name) {
+        SettingsProvider provider = sInstance;
+        if (provider == null) return null;
+        synchronized (provider) { return provider.mTables.get(GLOBAL).get(name); }
+    }
+
+    /**
+     * Sets a Settings.Global value from the system server, durably and with observer
+     * notification, as the phone process's Settings.Global.putInt does (the mobile data
+     * switches, docs/telephony.md). Returns false without the provider.
+     */
+    static boolean putGlobal(String name, String value) {
+        SettingsProvider p = sInstance;
+        if (p == null) return false;
+        p.put(GLOBAL, name, value, false);
+        return true;
+    }
+
     /**
      * Sets a Settings.System value from the system server (locale track: TIME_12_24 when
      * Windows' time format changes; ADR 0049).
@@ -270,6 +289,10 @@ final class SettingsProvider extends ContentProvider {
         String recognizer = SpeechRecognitionManagerService.configuredDefault(pm,
                 System.getenv("GESHER_SPEECH_RECOGNIZER"));
         if (recognizer != null) mStore.addDefault(SECURE, Settings.Secure.VOICE_RECOGNITION_SERVICE, recognizer);
+        // AOSP's DatabaseHelper.loadGlobalSettings: mobile data on (ro.com.android.mobiledata
+        // unset). Added to existing stores too, so Settings.Global readers agree with
+        // TelephonyManager (docs/telephony.md, "Mobile data switches").
+        mStore.addDefault(GLOBAL, Settings.Global.MOBILE_DATA, "1");
         // Single-process mode executes app code in the server's own PID and cannot
         // authenticate a privileged writer. Never expose its process to host selection state.
         mTextStore = mPm != null && mPm.hasTransientPackageState() ? null

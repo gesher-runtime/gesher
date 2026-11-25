@@ -5,6 +5,7 @@
 
 #include <gesher/system_properties.h>
 #include <gesher/environment.h>
+#include <gesher/gles_version_property.h>
 
 #include <windows.h>
 
@@ -274,6 +275,9 @@ Snapshot Initial() {
     bool optional = !key.empty() && key.back() == '?';
     if (optional) key = Trim(key.substr(0, key.size() - 1));
     std::string value = Trim(line.substr(equal + 1));
+    // The rule every build.prop loader shares: ro.opengles.version only as a
+    // version Gesher serves, else unset so the probe declares it.
+    if (!ServedBuildProperty(key, value)) continue;
     if (Valid(key, value) && (!optional || !values.count(key))) values[key] = {std::move(value), 1};
   }
   pc_identity();

@@ -47,6 +47,7 @@
 #include "system_linker.h"
 
 #include <gesher/process_name.h>
+#include <gesher/ptrace_state.h>
 
 namespace gesher {
 namespace procfs {
@@ -282,9 +283,9 @@ std::string Status(DWORD tid) {
   s += "Umask:\t0022\n";
   s += Format("State:\t%c (%s)\n", process ? 'R' : ThreadState(tid),
               (process || ThreadState(tid) == 'R') ? "running" : "sleeping");
-  s += Format("Tgid:\t%lu\nNgid:\t0\nPid:\t%lu\nPPid:\t%d\nTracerPid:\t0\n",
+  s += Format("Tgid:\t%lu\nNgid:\t0\nPid:\t%lu\nPPid:\t%d\nTracerPid:\t%d\n",
               static_cast<unsigned long>(pid), static_cast<unsigned long>(process ? pid : tid),
-              static_cast<int>(getppid()));
+              static_cast<int>(getppid()), gesher::ptrace::TracerPid());
   s += Format("Uid:\t%u\t%u\t%u\t%u\nGid:\t%u\t%u\t%u\t%u\n", uid, uid, uid, uid, gid, gid, gid, gid);
   s += Format("FDSize:\t%llu\nGroups:\t\n",
               static_cast<unsigned long long>(std::max<size_t>(64, OpenFds().size())));

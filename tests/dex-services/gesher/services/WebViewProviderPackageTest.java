@@ -61,10 +61,12 @@ public final class WebViewProviderPackageTest {
         current.setAccessible(true);
         current.set(null, thread);
 
-        require(context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WEBVIEW),
-                "The device does not declare its built-in WebView");
-
+        // The built-in WebView is declared exactly when the WebView2 Runtime behind it is
+        // installed (docs/system-features.md): without one WebViews stay empty.
         String runtime = WebView2Host.runtimeVersion();
+        require(context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WEBVIEW)
+                        == (runtime != null),
+                "android.software.webview disagrees with the WebView2 Runtime (" + runtime + ")");
         PackageInfo info = WebView.getCurrentWebViewPackage();
         if (runtime == null) {
             require(info == null, "A WebView package was reported without a WebView2 Runtime");

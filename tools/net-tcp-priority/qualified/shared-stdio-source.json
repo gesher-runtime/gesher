@@ -1,6 +1,6 @@
 {
   "after_sha256": {
-    "compat/bionic/stdio_bionic.cc": "4600f47dcfe09898b8bbc5ac3f030f88414c1c905dee772dc97682612dadc514",
+    "compat/bionic/stdio_bionic.cc": "2ff4ba736e9943b07a555e532682ae2e6ddcaffd115e15f3b1be201c4660b15e",
     "compat/posix/include/gesher/stdio.h": "20e0b97b5333daae70d28bb90190e9e4c4f12921561596bdc94cfee38ee47cd7",
     "compat/posix/include/stdio.h": "f6c4eda0b038078d19877a172476cf817509d957fe2f110f0c5902406691a029",
     "compat/posix/src/stdio_output.cc": "ba5beead2a3e8edb71e67a40fc4ea05f4009fbf8967c4fc5d3d5a5cf9c680984"
@@ -14,7 +14,7 @@
     "compat/posix/src/stdio_output.cc": "7ed987581cbb4b8449293235d0b0fafa8fd6725b06820a97c23924bff949ba97"
   },
   "feature_head": "de1e43c391275137c7b7b25dc170892684d55b5e",
-  "patch_sha256": "254f0205eaee8cd9d7262bd11e58a52b2e249104b5b158d06223cf46db69632d",
+  "patch_sha256": "b8143d0fc5c28fe3ffa451990d1ad81f863b605691606a838d2fe38f24ae7e36",
   "paths": [
     "compat/bionic/stdio_bionic.cc",
     "compat/posix/include/gesher/stdio.h",
