@@ -174,6 +174,22 @@ int StartSubshell(const Shell& sh, const std::string& src, const Io& io,
                io, process, {{63, script->h}});
 }
 
+// An asynchronous list's descriptors. Without job control (this shell never
+// has it) its stdin is /dev/null before its own redirections, as in mksh
+// (jobs.c exchild) and POSIX: a background command must not consume input
+// meant for the commands after it, such as a script on the shell's stdin.
+Io BackgroundIo(const Io& io) {
+  Io background = io;
+  // Opened as a `</dev/null` redirection opens it (Redirect), so the child
+  // receives a descriptor with its open file description.
+  int descriptor = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+  if (descriptor >= 0) {
+    HANDLE null = reinterpret_cast<HANDLE>(_get_osfhandle(descriptor));
+    background.set(0, null, std::make_shared<OwnedHandle>(null, descriptor));
+  }
+  return background;
+}
+
 int RunSubshell(Shell* sh, const std::string& src, Io io, bool background) {
   PROCESS_INFORMATION process = {};
   int failed = StartSubshell(*sh, src, io, &process);
@@ -234,15 +250,23 @@ bool Redirect(Shell* sh, const std::vector<Redir>& redirs, Io* io) {
     }
     const std::string& target = targets[0];
     if (r.op == "<&" || r.op == ">&") {
+      // mksh (exec.c iosetup, main.c check_fd): "sh: >&word: <reason>",
+      // the fd shown only when it is not the operator's default.
+      std::string shown = (r.fd == (r.op == "<&" ? 0 : 1) ? "" : std::to_string(r.fd)) +
+                          r.op + target;
       if (target == "-")
         io->set(r.fd, nullptr);
       else if (target.size() == 1 && IsDigitC(target[0])) {
         int from = target[0] - '0';
-        if (io->fd[from] == nullptr || io->fd[from] == INVALID_HANDLE_VALUE)
+        if (io->fd[from] == nullptr || io->fd[from] == INVALID_HANDLE_VALUE) {
+          ShErr(*sh, *io, shown + ": bad file descriptor");
           return false;
+        }
         io->set(r.fd, io->fd[from], io->owned[from]);
-      } else
+      } else {
+        ShErr(*sh, *io, shown + ": illegal file descriptor name");
         return false;
+      }
       continue;
     }
     int flags = r.op == "<" ? O_RDONLY : r.op == "<>" ? O_RDWR : O_WRONLY;
@@ -572,7 +596,7 @@ int ExecNode(Shell* sh, const NodeP& node, Io io) {
           bool background =
               i < node->terminators.size() && node->terminators[i] == "&";
           status = background
-                       ? RunSubshell(sh, Source(node->children[i]), io, true)
+                       ? RunSubshell(sh, Source(node->children[i]), BackgroundIo(io), true)
                        : ExecNode(sh, node->children[i], io);
           sh->status = status;
           if (sh->exiting || sh->returning || sh->breaking || sh->continuing)

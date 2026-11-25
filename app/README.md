@@ -39,7 +39,8 @@ framework's drawables, adaptive icons included) without installing the app or
 starting the device, written to
 `%LOCALAPPDATA%\Gesher\data\system\apk-icons\<size>-<time>.ico`, recorded in
 `apk-icons.list` (a file that is no APK, or has no drawable icon, is recorded
-with `gesher.ico`, so it is not tried again until it changes), and the shell
+with `gesher.ico`, so it is not tried again until it changes; so is
+framework-res.apk, the platform package `android`, which is no app), and the shell
 is told the file changed. Each run appends a line to
 `%LOCALAPPDATA%\Gesher\logs\apk-icons.log`.
 
@@ -69,7 +70,9 @@ framework.jar lacks (below), which must never shadow real ones.
    library on Windows.
 2. Loads the build.prop (`app/build.prop`, android-16.0.0_r4's
    `BP4A.251205.006`, SDK 36) into `SystemProperties`, before anything
-   initializes `android.os.Build`.
+   initializes `android.os.Build`. Build.MANUFACTURER and Build.MODEL are
+   the PC's own, from SMBIOS, set when the property area is created; the
+   brand and fingerprint are Gesher's ([device-identity.md](../docs/device-identity.md)).
 3. `Looper.prepareMainLooper()`.
 4. `AssetManager.createSystemAssetsInZygoteLocked(false, <framework-res.apk>)`:
    the system assets, from `$ANDROID_ROOT`'s copy. AssetManager's own path,
@@ -388,6 +391,15 @@ One placeholder has behaviour: `android.provider.DeviceConfig`, through which
 framework.jar reads its server-side flags (autofill reads them on resume). It
 keeps flags in the process: nothing sets one, so each read answers the
 caller's default; `setProperty` sets one and tells the namespace's listeners.
+Another reads: `android.os.flagging.AconfigPackage` (and
+`AconfigStorageReadException`), the ConfigInfrastructure module's reader of
+aconfig flag storage, through which the framework's manifest parser
+(`AconfigFlags`) evaluates `android:featureFlag` (framework-res.apk's manifest
+has many; parsing it died on a NoClassDefFoundError). Gesher has no flag
+storage: the values are those its framework was built with, so `load` finds a
+package by its generated `<package>.Flags` class on the boot class path and
+answers its accessors; a package Gesher lacks is `ERROR_PACKAGE_NOT_FOUND`, an
+undeclared flag the caller's default, as on a device.
 
 ## Building
 

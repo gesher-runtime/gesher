@@ -16,10 +16,12 @@ especially "Project scope: the same experience, implemented for Windows".
 - Which Windows mechanisms or real devices implement the requested operation?
   Different internal mechanisms and desktop presentation are expected; explain
   any meaningful application-visible difference, not source-level AOSP parity.
-- Does it introduce synthetic inputs, device simulation, a new desktop default
-  or package-specific behavior? Explain the production/test boundary and link
-  the maintainer decision for a default and add it to CONTRIBUTING.md's
-  examples, or state that it does not.
+- Does it introduce synthetic inputs, device simulation, a new desktop default,
+  a substitution for a missing PC capability, a setting for an alternative
+  operation, or package-specific behavior? Explain the production/test boundary
+  and link the maintainer decision for a default, substitution, or
+  alternative-operation setting and add it to CONTRIBUTING.md's examples, or
+  state that it does not.
 - If project scope is unclear, describe the question and link any relevant
   discussion; the maintainer decides. Otherwise, state "Within project scope".
 

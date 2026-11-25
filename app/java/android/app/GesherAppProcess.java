@@ -59,6 +59,20 @@ public final class GesherAppProcess {
     private GesherAppProcess() {
     }
 
+    /**
+     * ActivityThread.main's "Make sure TrustedCertificateStore looks in the right place for
+     * CA certificates": the user's CA directories, {@code
+     * $ANDROID_DATA/misc/user/<user>/cacerts-added} and {@code cacerts-removed}, which
+     * KeyChain writes on a device and the network security config's
+     * UserCertificateSource reads. Without it Conscrypt's AndroidCAStore looks in
+     * {@code $ANDROID_DATA/misc/keychain} and lists no user-added CA. Gesher writes the
+     * roots installed on this PC there (compat/net/trust_store.cc, docs/network.md).
+     */
+    static void useUserCaCertificates() {
+        com.android.org.conscrypt.TrustedCertificateStore.setDefaultUserDirectory(
+                android.os.Environment.getUserConfigDirectory(android.os.UserHandle.myUserId()));
+    }
+
     private static void log(String message) {
         System.out.println(TAG + ": " + message);
         System.out.flush();
@@ -93,18 +107,23 @@ public final class GesherAppProcess {
     }
 
     /**
-     * {@code android.app.GesherAppProcess --package P --start-seq N [--target-sdk S]}: an app
+     * {@code android.app.GesherAppProcess --package P --start-seq N [--target-sdk S]
+     * [--runtime-flags F]}: an app
      * process the system server started for package P (ActivityThread.main after the
      * zygote's fork). Exits with 0 when the server ends it, 1 on a failure.
      */
     public static void main(String[] args) {
+        // stdout/stderr are the package's .log file: no credentials (docs/logging.md).
+        com.gesher.app.LogRedaction.installStandardStreams();
         int code = 0;
         try {
             String packageName = null;
             long startSeq = 0;
             int targetSdk = 0;
+            int runtimeFlags = 0;
             for (int i = 0; i + 1 < args.length; i += 2) {
                 switch (args[i]) {
+                    case "--runtime-flags": runtimeFlags = Integer.parseInt(args[i + 1]); break;
                     case "--package": packageName = args[i + 1]; break;
                     case "--start-seq": startSeq = Long.parseLong(args[i + 1]); break;
                     case "--target-sdk": targetSdk = Integer.parseInt(args[i + 1]); break;
@@ -117,6 +136,8 @@ public final class GesherAppProcess {
             }
             log("app process for " + packageName + ": pid " + android.os.Process.myPid()
                     + ", start seq " + startSeq);
+            // The zygote's specialisation: not dumpable unless debuggable (ADR 0093).
+            com.gesher.app.ProcessSpecialization.apply(runtimeFlags, TAG);
             String trace = System.getenv("GESHER_APP_METHOD_TRACE");
             if (trace != null && !trace.isEmpty()) {
                 // Debugging: ART's method trace of the whole process, streamed (it survives an
@@ -209,6 +230,8 @@ public final class GesherAppProcess {
             // integration ci run 40003812869).
             android.view.ThreadedRenderer.sRendererEnabled = false;
         }
+
+        useUserCaCertificates();
 
         // ActivityThread.main: the main Looper is prepared (Main.bootstrap), then
         // new ActivityThread().attach(false, startSeq).

@@ -3,6 +3,7 @@
 #include <psapi.h>
 #include "translator.h"
 #include <algorithm>
+#include <cfenv>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 static unsigned checks = 0;
@@ -68,6 +70,17 @@ class Env;
 thread_local Env* t_env_raw = nullptr;
 std::mutex g_envs_mutex;
 std::vector<Env*> g_envs;
+// The translator's scope that keeps the caller's floating-point environment.
+class HostFenvScope {
+ public:
+  HostFenvScope() { std::fegetenv(&saved_); }
+  ~HostFenvScope() { std::fesetenv(&saved_); }
+ private:
+  std::fenv_t saved_;
+};
+// Thread-directed signal registry (gesher_arm64_interrupt_thread).
+std::mutex g_attached_mutex;
+std::unordered_map<DWORD, Env*> g_attached;
 static unsigned profile = 0, constructed = 0, destroyed = 0, cleared = 0;
 unsigned ProfilePeriodMs() { return profile; }
 void StartProfiler() {}
@@ -86,6 +99,7 @@ class Env {
   uint64_t wait_pc_ = 0, wait_start_ = 0;
   DWORD tid_ = 0;
   HANDLE thread_ = nullptr;
+  std::atomic<bool> signal_interrupt_{false};
   std::vector<std::unique_ptr<JitBoundary>> jits_;
   std::vector<size_t> ids_;
   Env() {
@@ -129,14 +143,21 @@ void TestMethods() {
   ApiTlsPublish(first, image1, sizeof(image1), 8192);
   auto* active = new Env;
   profile = 1;
+  std::feclearexcept(FE_ALL_EXCEPT);
   active->Attach();
+  Check(std::fetestexcept(FE_ALL_EXCEPT) == 0,
+        "attachment leaves no floating-point flags in the caller's environment");
   unsigned publications = 1;
   CheckStackPublication(active, publications, "first attachment publishes its actual stack and guard");
   Check(g_tls_blocks.size() == 1 && g_envs.size() == 1, "publish only attached Env");
+  Check(g_attached.size() == 1 && g_attached[GetCurrentThreadId()] == active,
+        "attachment registers the thread for directed signals");
   active->tls_block_[0] = 0x73;
   auto* old = ThreadEnv();
   CheckStackPublication(old, ++publications, "another Env publishes its own distinct stack");
   Check(ThreadEnv() == old, "existing attachment retains its Env");
+  Check(g_attached.size() == 1 && g_attached[GetCurrentThreadId()] == old,
+        "the thread's latest attachment receives its directed signals");
   CheckStackPublication(old, publications, "existing attachment does not republish");
   uint8_t* address = old->tls_block_;
   auto* jit = old->jits_[0].get();
@@ -144,6 +165,7 @@ void TestMethods() {
   std::memset(address, 0x94, kTlsBlockSize);
   t_env.reset();
   Check(g_tls_blocks.size() == 1 && g_envs.size() == 1, "detach before parking");
+  Check(g_attached.empty(), "detach unregisters exactly its own directed-signal entry");
   Check(cleared == 2, "retire exclusive state before pooling");
   Check(Committed(old->stack_base_, Env::kGuardSize) == Env::kGuardSize, "guard remains committed");
   Check(Committed(old->stack_base_ + Env::kGuardSize, Env::kStackSize - Env::kGuardSize) == 0,
