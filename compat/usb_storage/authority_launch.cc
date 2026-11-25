@@ -93,7 +93,8 @@ bool LocalSystemWorker() {
 }
 
 enum class SessionObjectRoot { kBase, kAppContainer };
-DWORD VerifySessionObjects(const AuthorityLaunchSpec& spec, SessionObjectRoot root, Handle* retained) {
+DWORD VerifySessionObjects(const AuthorityLaunchSpec& spec, SessionObjectRoot root, Handle* retained,
+                           ACCESS_MASK access = READ_CONTROL | 0x0001 | 0x0002) {
   HANDLE expected = nullptr;
   const wchar_t* leaf = nullptr;
   switch (root) {
@@ -132,7 +133,7 @@ DWORD VerifySessionObjects(const AuthorityLaunchSpec& spec, SessionObjectRoot ro
   attributes.ObjectName = &name;
   attributes.Attributes = 0x00001000;  // OBJ_DONT_REPARSE
   HANDLE opened = nullptr;
-  const NTSTATUS status = open(&opened, READ_CONTROL | 0x0001 | 0x0002, &attributes);
+  const NTSTATUS status = open(&opened, access, &attributes);
   Handle directory(opened == INVALID_HANDLE_VALUE ? nullptr : opened);
   if (status < 0) {
     const DWORD result = error(status);
@@ -205,6 +206,10 @@ DWORD SortedEnvironment(std::span<const wchar_t> input, std::vector<wchar_t>* ou
 }
 
 bool ValidSpec(const AuthorityLaunchSpec& spec) {
+  // Protected callers supply both independently pinned roots. An expected
+  // leaf cannot turn an incomplete protected request into a legacy launch.
+  if (static_cast<bool>(spec.session_objects) != static_cast<bool>(spec.app_container_objects) ||
+      (spec.expected_package_objects && !spec.app_container_objects)) return false;
   if (!(spec.executable && spec.directory && AbsolutePath(spec.executable) &&
       AbsolutePath(spec.directory) && spec.arguments.size() <= 32767 &&
       spec.arguments.find(L'\0') == std::wstring_view::npos &&
@@ -271,6 +276,211 @@ DWORD VerifyObject(HANDLE object, PACL expected) {
   }
   return ERROR_SUCCESS;
 }
+
+// A protected package root is authority-created and immutable to lowboxes.
+// The private non-lowbox wrapper needs DIRECTORY_ALL_ACCESS on this leaf, but
+// the package only needs to query/traverse and create objects/subdirectories.
+// Inherit-only GA entries give those children their normal object-type rights
+// without giving a lowbox DELETE/WRITE_DAC/WRITE_OWNER on the package root.
+// Children need both the private-user and package grants for lowbox reopening.
+// SYSTEM and administrators able to act as SYSTEM remain trusted. A prior
+// private/desktop-owned leaf is never repaired into this trusted invariant:
+// its creator could still hold a mutation handle granted before such repair.
+class PackageNamespace {
+ public:
+  static constexpr ACCESS_MASK kRead = READ_CONTROL | 0x0001 | 0x0002;
+
+  DWORD Initialize(const AuthorityLaunchSpec& spec, HANDLE base) {
+    const HMODULE native = GetModuleHandleW(L"ntdll.dll");
+    const HMODULE kernel = GetModuleHandleW(L"kernelbase.dll");
+    if (!native || !kernel) return ERROR_MOD_NOT_FOUND;
+    open_ = reinterpret_cast<Open>(GetProcAddress(native, "NtOpenDirectoryObject"));
+    create_ = reinterpret_cast<Create>(GetProcAddress(native, "NtCreateDirectoryObjectEx"));
+    query_ = reinterpret_cast<QuerySecurity>(GetProcAddress(native, "NtQuerySecurityObject"));
+    error_ = reinterpret_cast<NativeError>(GetProcAddress(native, "RtlNtStatusToDosError"));
+    compare_ = reinterpret_cast<Compare>(GetProcAddress(kernel, "CompareObjectHandles"));
+    if (!open_ || !create_ || !query_ || !error_ || !compare_) return ERROR_PROC_NOT_FOUND;
+    wchar_t* package = nullptr;
+    if (!ConvertSidToStringSidW(spec.capabilities.AppContainerSid, &package)) return GetLastError();
+    const LocalMemory package_owner(package);
+    wchar_t* user = nullptr;
+    if (!ConvertSidToStringSidW(spec.desktop_user, &user)) return GetLastError();
+    const LocalMemory user_owner(user);
+    name_ = package;
+    if (name_.empty() || name_.size() > 184 || name_.find_first_of(L"\\/") != std::wstring::npos) {
+      return ERROR_INVALID_SID;
+    }
+    const std::wstring policy = std::wstring(L"O:SYG:SYD:P(A;;0x000f000f;;;SY)(A;OICIIO;GA;;;SY)") +
+        L"(A;;0x000f000f;;;" + user + L")(A;OICIIO;GA;;;" + user + L")(A;;0x0002000f;;;" + package +
+        L")(A;OICIIO;GA;;;" + package + L")S:P(ML;;NW;;;LW)";
+    const DWORD status = MakeDescriptor(policy.c_str(), &policy_);
+    if (status != ERROR_SUCCESS) return status;
+    expected_dacl_ = GetAcl(policy_.get());
+    BOOL present = FALSE, defaulted = FALSE;
+    if (!expected_dacl_ || !GetSecurityDescriptorSacl(policy_.get(), &present, &expected_label_, &defaulted) ||
+        !present || !expected_label_) return ERROR_INVALID_SECURITY_DESCR;
+    shadow_ = base;
+    return ERROR_SUCCESS;
+  }
+
+  DWORD Prepare(const AuthorityLaunchSpec& spec, HANDLE root, Handle* retained, const char** startup_stage) {
+    const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
+    stage("lowbox.verify-package-namespace");
+    NTSTATUS native = 0;
+    DWORD status = OpenLeaf(root, retained, &native);
+    if (status != ERROR_SUCCESS) {
+      if (native != static_cast<NTSTATUS>(0xc0000034) && native != static_cast<NTSTATUS>(0xc000003a)) return status;
+      if (spec.expected_package_objects) return ERROR_NOT_SAME_OBJECT;
+      // A temporary SYSTEM-only create-subdirectory handle is independently
+      // compared to the same root. The authority's retained roots stay read-only;
+      // no parent ACL is changed to create this one canonical SID child.
+      stage("lowbox.create-package-namespace");
+      Handle create_root;
+      status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &create_root, kRead | 0x0008);
+      if (status != ERROR_SUCCESS) return status;
+      UNICODE_STRING name = Name();
+      OBJECT_ATTRIBUTES attributes = Attributes(create_root.get(), &name);
+      attributes.SecurityDescriptor = policy_.get();
+      HANDLE raw = nullptr;
+      // The five-argument native ABI takes a QUERY|TRAVERSE shadow Directory.
+      // Option 1 is the option observed on both supported Windows wrappers;
+      // do not assign it an undocumented semantic name. No OPENIF is supplied.
+      native = create_(&raw, kRead, &attributes, shadow_, 1);
+      Handle created(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
+      if (native == 0) {
+        if (!created) return ERROR_INVALID_HANDLE;
+        retained->reset(created.release());
+      } else if (native == static_cast<NTSTATUS>(0xc0000035)) {
+        // Another authority launch may have won creation. Reopen and apply
+        // the same SYSTEM-owner/exact-policy invariant; never adopt by name.
+        status = OpenLeaf(root, retained);
+        if (status != ERROR_SUCCESS) return status;
+      } else {
+        return native < 0 ? Error(native) : ERROR_INVALID_DATA;
+      }
+    }
+    stage("lowbox.verify-package-namespace");
+    if (spec.expected_package_objects) {
+      status = SamePin(spec.expected_package_objects, retained->get());
+      if (status != ERROR_SUCCESS) return status;
+    }
+    status = VerifyPolicy(retained->get());
+    return status == ERROR_SUCCESS ? Recheck(root, retained->get()) : status;
+  }
+
+  DWORD Recheck(HANDLE root, HANDLE expected) {
+    Handle fresh;
+    DWORD status = OpenLeaf(root, &fresh);
+    if (status != ERROR_SUCCESS) return status;
+    status = SamePin(expected, fresh.get());
+    return status == ERROR_SUCCESS ? VerifyPolicy(fresh.get()) : status;
+  }
+
+ private:
+  using Open = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+  using Create = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, HANDLE, ULONG);
+  using QuerySecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, ULONG, PULONG);
+  using NativeError = ULONG(NTAPI*)(NTSTATUS);
+  using Compare = BOOL(WINAPI*)(HANDLE, HANDLE);
+  static constexpr DWORD kSecurityLimit = 16384;
+  Open open_ = nullptr;
+  Create create_ = nullptr;
+  QuerySecurity query_ = nullptr;
+  NativeError error_ = nullptr;
+  Compare compare_ = nullptr;
+  HANDLE shadow_ = nullptr;
+  std::wstring name_;
+  LocalMemory policy_;
+  PACL expected_dacl_ = nullptr, expected_label_ = nullptr;
+  bool have_control_ = false;
+  SECURITY_DESCRIPTOR_CONTROL control_ = 0;
+
+  DWORD Error(NTSTATUS status) const {
+    const DWORD result = error_(status);
+    return result ? result : ERROR_GEN_FAILURE;
+  }
+  UNICODE_STRING Name() {
+    UNICODE_STRING value{};
+    value.Buffer = name_.data();
+    value.Length = static_cast<USHORT>(name_.size() * sizeof(wchar_t));
+    value.MaximumLength = static_cast<USHORT>(value.Length + sizeof(wchar_t));
+    return value;
+  }
+  static OBJECT_ATTRIBUTES Attributes(HANDLE root, UNICODE_STRING* name) {
+    OBJECT_ATTRIBUTES value{};
+    value.Length = sizeof(value);
+    value.RootDirectory = root;
+    value.ObjectName = name;
+    value.Attributes = 0x00001000;  // OBJ_DONT_REPARSE; no OPENIF/INHERIT/PERMANENT.
+    return value;
+  }
+  DWORD OpenLeaf(HANDLE root, Handle* result, NTSTATUS* native_status = nullptr) {
+    UNICODE_STRING name = Name();
+    OBJECT_ATTRIBUTES attributes = Attributes(root, &name);
+    HANDLE raw = nullptr;
+    const NTSTATUS status = open_(&raw, kRead, &attributes);
+    Handle opened(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
+    if (native_status) *native_status = status;
+    if (status < 0) return Error(status);
+    if (!opened) return ERROR_INVALID_HANDLE;
+    DWORD flags = 0;
+    if (!GetHandleInformation(opened.get(), &flags)) return GetLastError();
+    if (flags & HANDLE_FLAG_INHERIT) return ERROR_ACCESS_DENIED;
+    result->reset(opened.release());
+    return ERROR_SUCCESS;
+  }
+  DWORD SamePin(HANDLE expected, HANDLE actual) const {
+    DWORD flags = 0;
+    if (!GetHandleInformation(expected, &flags)) return GetLastError();
+    if (flags & HANDLE_FLAG_INHERIT) return ERROR_ACCESS_DENIED;
+    return compare_(expected, actual) ? ERROR_SUCCESS : ERROR_NOT_SAME_OBJECT;
+  }
+  static bool Within(const void* value, size_t length, const BYTE* begin, DWORD bytes) {
+    const auto first = reinterpret_cast<ULONG_PTR>(begin), address = reinterpret_cast<ULONG_PTR>(value);
+    return value && address >= first && address - first <= bytes && length <= bytes - (address - first);
+  }
+  static bool SidWithin(PSID sid, const BYTE* begin, DWORD bytes) {
+    if (!Within(sid, 8, begin, bytes)) return false;
+    const DWORD length = 8 + static_cast<DWORD>(*GetSidSubAuthorityCount(sid)) * static_cast<DWORD>(sizeof(DWORD));
+    return Within(sid, length, begin, bytes) && IsValidSid(sid) && GetLengthSid(sid) == length;
+  }
+  static bool AclWithin(PACL acl, const BYTE* begin, DWORD bytes) {
+    return Within(acl, sizeof(ACL), begin, bytes) && acl->AclSize >= sizeof(ACL) &&
+        acl->AceCount <= 16 && Within(acl, acl->AclSize, begin, bytes) && IsValidAcl(acl);
+  }
+  DWORD VerifyPolicy(HANDLE directory) {
+    std::vector<DWORD> storage(kSecurityLimit / sizeof(DWORD));
+    ULONG bytes = 0;
+    const NTSTATUS status = query_(directory, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+        DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION, storage.data(), kSecurityLimit, &bytes);
+    if (status < 0) return Error(status);
+    if (bytes < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || bytes > kSecurityLimit) return ERROR_INVALID_SECURITY_DESCR;
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    PSID owner = nullptr, group = nullptr;
+    PACL dacl = nullptr, label = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    if (!GetSecurityDescriptorControl(storage.data(), &control, &revision) || !(control & SE_SELF_RELATIVE) ||
+        !GetSecurityDescriptorOwner(storage.data(), &owner, &defaulted) ||
+        !GetSecurityDescriptorGroup(storage.data(), &group, &defaulted) ||
+        !GetSecurityDescriptorDacl(storage.data(), &present, &dacl, &defaulted) || !present || !dacl ||
+        !GetSecurityDescriptorSacl(storage.data(), &present, &label, &defaulted) || !present || !label) {
+      return ERROR_INVALID_SECURITY_DESCR;
+    }
+    const auto* begin = reinterpret_cast<const BYTE*>(storage.data());
+    if (!SidWithin(owner, begin, bytes) || !SidWithin(group, begin, bytes) ||
+        !AclWithin(dacl, begin, bytes) || !AclWithin(label, begin, bytes) ||
+        !IsValidSecurityDescriptor(storage.data())) return ERROR_INVALID_SECURITY_DESCR;
+    constexpr WORD protected_lists = SE_DACL_PROTECTED | SE_SACL_PROTECTED;
+    if (!IsWellKnownSid(owner, WinLocalSystemSid) || !IsWellKnownSid(group, WinLocalSystemSid) ||
+        (control & protected_lists) != protected_lists || dacl->AclRevision != expected_dacl_->AclRevision ||
+        label->AclRevision != expected_label_->AclRevision || !SameAcl(expected_dacl_, dacl) ||
+        !SameAcl(expected_label_, label) || (have_control_ && control != control_)) return ERROR_ACCESS_DENIED;
+    control_ = control;
+    have_control_ = true;
+    return ERROR_SUCCESS;
+  }
+};
 
 bool HasOnlyTraversePrivilege(HANDLE token) {
   alignas(TOKEN_PRIVILEGES) BYTE info[128]{};
@@ -455,6 +665,7 @@ AuthorityLaunch::~AuthorityLaunch() {
   Stop(5000);
   if (guest_.hThread) CloseHandle(guest_.hThread);
   if (guest_.hProcess) CloseHandle(guest_.hProcess);
+  if (package_objects_) CloseHandle(package_objects_);
 }
 
 DWORD AuthorityLaunch::Stop(DWORD timeout_milliseconds) {
@@ -564,6 +775,17 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
     status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &app_container_objects_before);
     if (status != ERROR_SUCCESS) return status;
   }
+  PackageNamespace package_namespace;
+  if (spec.app_container_objects) {
+    stage("lowbox.prepare-package-namespace");
+    status = package_namespace.Initialize(spec, session_objects_before.get());
+    Handle package_objects;
+    if (status == ERROR_SUCCESS) {
+      status = package_namespace.Prepare(spec, app_container_objects_before.get(), &package_objects, startup_stage);
+    }
+    if (status != ERROR_SUCCESS) return status;
+    launch->package_objects_ = package_objects.release();
+  }
 
   // The KernelBase wrapper creates the lowbox namespace as well as its token.
   // Keep that per-user work in the verified target context, separate from the
@@ -617,6 +839,9 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
     stage("lowbox.recheck-appcontainer-namespace");
     status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &app_container_objects_after);
     if (status != ERROR_SUCCESS) return status;
+    stage("lowbox.recheck-package-namespace");
+    status = package_namespace.Recheck(app_container_objects_after.get(), launch->package_objects_);
+    if (status != ERROR_SUCCESS) return status;
   }
   status = SealAndVerifyToken(raw_lowbox, desktop, spec, default_acl, startup_stage, false);
   if (status != ERROR_SUCCESS) return status;
@@ -655,6 +880,20 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
     status = SealAndVerifyChild(launch->guest_.hProcess, desktop, spec, default_acl, startup_stage);
   }
   if (status != ERROR_SUCCESS) return status;
+  if (spec.app_container_objects) {
+    // Last admission check while the exact child is still suspended, before
+    // publication lets the authority enroll it or hand it any resource.
+    Handle base, root;
+    stage("launch.recheck-session-namespace");
+    status = VerifySessionObjects(spec, SessionObjectRoot::kBase, &base);
+    if (status != ERROR_SUCCESS) return status;
+    stage("launch.recheck-appcontainer-namespace");
+    status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &root);
+    if (status != ERROR_SUCCESS) return status;
+    stage("launch.recheck-package-namespace");
+    status = package_namespace.Recheck(root.get(), launch->package_objects_);
+    if (status != ERROR_SUCCESS) return status;
+  }
   *result = std::move(launch);
   return ERROR_SUCCESS;
 } catch (const std::bad_alloc&) {

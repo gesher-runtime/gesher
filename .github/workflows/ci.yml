@@ -103,6 +103,7 @@ jobs:
           distribution: temurin
           java-version: '21.0.13'
       - name: Actual protected runtime identity, AppContainer launch and bounded cleanup
+        id: protected_launch_observed
         if: ${{ !cancelled() }}
         timeout-minutes: 3
         shell: cmd
@@ -121,12 +122,22 @@ jobs:
           if not "%GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%"=="0" pwsh -NoLogo -NoProfile -NonInteractive -File tools\ci\protected_profile_diagnostics.ps1 -LogPath usb-protected-launch.log >> usb-protected-launch.log 2>&1
           type usb-protected-launch.log
           exit /b %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+      - name: Protected runtime launch without the native diagnostic observer
+        if: ${{ !cancelled() && steps.protected_launch_observed.outcome == 'success' }}
+        timeout-minutes: 3
+        shell: cmd
+        run: |
+          usb_protected_launch_test.exe --scm-profile-control > usb-protected-launch-unobserved.log 2>&1
+          set "GESHER_PROTECTED_LAUNCH_UNOBSERVED_EXIT=%errorlevel%"
+          >> usb-protected-launch-unobserved.log echo Unobserved protected launch native exit: %GESHER_PROTECTED_LAUNCH_UNOBSERVED_EXIT%
+          type usb-protected-launch-unobserved.log
+          exit /b %GESHER_PROTECTED_LAUNCH_UNOBSERVED_EXIT%
       - name: Preserve early protected launch diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: protected-launch-native-${{ matrix.os }}
-          path: usb-protected-launch.log
+          path: usb-protected-launch*.log
           if-no-files-found: error
       - name: Protected local thread signals under restrictive Windows ACLs
         if: ${{ !cancelled() }}
@@ -474,6 +485,7 @@ jobs:
           python3 tools/test_file_io_contracts.py --sanitize
           python3 tools/test_pipe_io_contracts.py --sanitize
           python3 tools/test_revocable_file_contracts.py --sanitize
+          python3 tools/test_record_lock_liveness.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
@@ -628,6 +640,7 @@ jobs:
           python3 tools/test_media_callback_state.py --sanitize
           python3 tools/test_media_http_contracts.py --sanitize
           python3 tools/test_mf_encoder_input.py --sanitize
+          python3 tools/test_mf_video_output.py --sanitize
           python3 tools/test_media_surface_contracts.py --sanitize
           python3 tools/test_codec_output_storage.py --sanitize
           python3 tools/test_codec_reader_delivery.py --sanitize
@@ -651,6 +664,7 @@ jobs:
           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_receiver_lifetimes.py
           python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
+          python3 tools/test_media_session_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_encoder_selection.py
 
       - name: Android HttpEngine requests over real HTTP sockets
@@ -673,8 +687,10 @@ jobs:
           python3 tools/test_bluetooth_native_contracts.py --sanitize
           python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_bluetooth_sdp_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
 
       - name: Biometric and device-credential auth service contracts (ADR 0091)
         run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"

@@ -34,6 +34,10 @@ struct AuthorityLaunchSpec {
   // The selected session's AppContainerNamedObjects root, under the same
   // authority-only ownership and lifetime rules. Retained access is read-only.
   HANDLE app_container_objects = nullptr;
+  // Optional expected package Directory from an earlier protected launch.
+  // A null value still requires complete protected leaf admission. Only the
+  // all-null namespace path above retains the legacy desktop behavior.
+  HANDLE expected_package_objects = nullptr;
 };
 
 class AuthorityLaunch {
@@ -52,6 +56,8 @@ class AuthorityLaunch {
   HANDLE process() const { return guest_.hProcess; }
   DWORD pid() const { return guest_.dwProcessId; }
   DWORD main_thread_id() const { return guest_.dwThreadId; }
+  // Borrowed non-inheritable read-only Directory; every launch owns its pin.
+  HANDLE package_objects() const { return package_objects_; }
 
   // The authority serializes launch, handle handoff and resume. It retains the
   // launch object for the lifetime of the session. Destruction stops the guest.
@@ -63,6 +69,7 @@ class AuthorityLaunch {
  private:
   AuthorityLaunch() = default;
   PROCESS_INFORMATION guest_{};
+  HANDLE package_objects_ = nullptr;
   bool resumed_ = false;
   bool stop_attempted_ = false;
   DWORD stop_status_ = ERROR_SUCCESS;

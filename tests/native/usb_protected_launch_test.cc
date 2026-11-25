@@ -120,13 +120,24 @@ struct SessionObjectsEvidence {
 struct LeafOpenEvidence { DWORD called = 0, status = ERROR_NOT_READY, opened = 0; };
 struct PackageLeafEvidence {
   DWORD absent_before_launch = 0, captured = 0, control = 0, status = ERROR_NOT_READY;
+  DWORD policy_verified = 0, launch_pin_verified = 0;
+  DWORD object_created = 0, subdirectory_created = 0;
+  DWORD expected_reuse = 0, null_pin_reuse = 0, independent_pin_lifetime = 0;
+  DWORD wrong_type_rejected = 0, wrong_object_rejected = 0, changed_policy_rejected = 0;
   wchar_t path[kNamespacePathCharacters]{};
-  wchar_t security[4096]{};
+  wchar_t security[2048]{}, event_security[1024]{}, directory_security[1024]{};
   // Actual suspended package, distinct package token, filtered desktop.
   LeafOpenEvidence opens[3][std::size(kSessionMutationMasks)]{};
+  LeafOpenEvidence child_opens[2][3]{};
+  DWORD child_denials[2][2]{};
+  DWORD child_used[2]{};
 };
 struct NamespaceCollisionEvidence {
   DWORD attempted = 0, profile_created = 0, absent = 0, status = ERROR_NOT_READY;
+  DWORD system_owner_control_created = 0, system_owner_attempted = 0, system_owner_status = ERROR_NOT_READY;
+  DWORD private_owner_controls = 0, private_owner_status = ERROR_NOT_READY;
+  DWORD private_group_count = 0, private_system_group_attributes = 0;
+  wchar_t private_user[96]{}, private_token_owner[96]{};
   DWORD create_status = ERROR_NOT_READY, desktop_owner = 0, desktop_dacl_changed = 0;
   DWORD private_open_status = ERROR_NOT_READY;
   DWORD launch_called = 0, launch_status = ERROR_NOT_READY, returned_child = 0;
@@ -1311,7 +1322,179 @@ void CopyObjectSecurity(PSECURITY_DESCRIPTOR descriptor, wchar_t (&target)[Size]
   Require(text && returned && returned <= Size, "package-security-sddl-bound", ERROR_MORE_DATA);
   CopyNamespaceText(std::wstring(text), target);
 }
-void ObservePackageLeaf(const std::wstring& path, HANDLE guest, HANDLE other, HANDLE desktop,
+void VerifyPackageLeafPolicy(PSECURITY_DESCRIPTOR descriptor, const storage::AuthorityLaunchSpec& spec) {
+  PSID owner = nullptr, group = nullptr;
+  PACL dacl = nullptr, label = nullptr;
+  BOOL present = FALSE, defaulted = FALSE;
+  SECURITY_DESCRIPTOR_CONTROL control{};
+  DWORD revision = 0;
+  Require(GetSecurityDescriptorOwner(descriptor, &owner, &defaulted) && owner &&
+      IsWellKnownSid(owner, WinLocalSystemSid) &&
+      GetSecurityDescriptorGroup(descriptor, &group, &defaulted) && group &&
+      IsWellKnownSid(group, WinLocalSystemSid), "package-leaf-system-owner-and-group", ERROR_INVALID_OWNER);
+  Require(GetSecurityDescriptorControl(descriptor, &control, &revision) &&
+      (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) == (SE_DACL_PROTECTED | SE_SACL_PROTECTED) &&
+      GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) && present && dacl &&
+      IsValidAcl(dacl) && dacl->AceCount == 6, "package-leaf-protected-exact-acl", ERROR_INVALID_ACL);
+  const DWORD masks[] = {0x000f000f, GENERIC_ALL, 0x000f000f, GENERIC_ALL, 0x0002000f, GENERIC_ALL};
+  const BYTE flags[] = {0, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE,
+      0, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE, 0,
+      OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE};
+  for (DWORD i = 0; i < dacl->AceCount; ++i) {
+    void* raw = nullptr;
+    Require(GetAce(dacl, i, &raw), "package-leaf-actual-ace");
+    const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw);
+    PSID sid = const_cast<DWORD*>(&ace->SidStart);
+    Require(ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags == flags[i] &&
+        ace->Mask == masks[i] && IsValidSid(sid) &&
+        (i < 2 ? IsWellKnownSid(sid, WinLocalSystemSid) :
+         EqualSid(sid, i < 4 ? spec.desktop_user : spec.capabilities.AppContainerSid)),
+        "package-leaf-exact-trustee-mask-and-inheritance", ERROR_INVALID_ACL);
+  }
+  Require(GetSecurityDescriptorSacl(descriptor, &present, &label, &defaulted) && present && label &&
+      IsValidAcl(label) && label->AceCount == 1, "package-leaf-explicit-mandatory-label", ERROR_INVALID_ACL);
+  void* raw = nullptr;
+  Require(GetAce(label, 0, &raw), "package-leaf-label-ace");
+  const auto* ace = static_cast<const SYSTEM_MANDATORY_LABEL_ACE*>(raw);
+  Require(ace->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE && !ace->Header.AceFlags &&
+      ace->Mask == SYSTEM_MANDATORY_LABEL_NO_WRITE_UP &&
+      IsWellKnownSid(const_cast<DWORD*>(&ace->SidStart), WinLowLabelSid),
+      "package-leaf-low-no-write-up-label", ERROR_INVALID_ACL);
+}
+
+void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other, HANDLE desktop,
+    PackageLeafEvidence* evidence) {
+  DWORD status = 0;
+  const Handle parent = OpenSessionDirectory(path, 0x0000000f, guest, &status);
+  Require(status == 0 && parent, "package-leaf-own-create-directory-handle", ERROR_ACCESS_DENIED);
+  // EVENT_TYPE is a native four-byte enum: NotificationEvent=0. Keep this local
+  // ABI declaration independent of WDK-only header types in the host fixture.
+  enum class NativeEventType : int { notification = 0 };
+  using CreateNativeEvent = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, NativeEventType, BOOLEAN);
+  using CreateNativeDirectory = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+  using OpenNative = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
+  const HMODULE native = GetModuleHandleW(L"ntdll.dll");
+  const auto event_create = reinterpret_cast<CreateNativeEvent>(GetProcAddress(native, "NtCreateEvent"));
+  const auto directory_create = reinterpret_cast<CreateNativeDirectory>(GetProcAddress(native, "NtCreateDirectoryObject"));
+  const auto event_open = reinterpret_cast<OpenNative>(GetProcAddress(native, "NtOpenEvent"));
+  Require(event_create && directory_create && event_open, "package-child-create-open-exports", ERROR_PROC_NOT_FOUND);
+  wchar_t event_name[] = L"GesherFixtureEvent", directory_name[] = L"GesherFixtureDirectory";
+  UNICODE_STRING name{};
+  name.Buffer = event_name;
+  name.Length = static_cast<USHORT>(sizeof(event_name) - sizeof(wchar_t));
+  name.MaximumLength = sizeof(event_name);
+  OBJECT_ATTRIBUTES attributes{};
+  attributes.Length = sizeof(attributes);
+  attributes.RootDirectory = parent.get();
+  attributes.ObjectName = &name;
+  attributes.Attributes = 0x00001000;  // No OPENIF, INHERIT or PERMANENT.
+  HANDLE event_raw = nullptr, directory_raw = nullptr;
+  Require(ImpersonateLoggedOnUser(guest), "package-child-create-lowbox-context");
+  const NTSTATUS event_status = event_create(&event_raw, EVENT_ALL_ACCESS, &attributes, NativeEventType::notification, FALSE);
+  const BOOL signaled = event_status == 0 && event_raw ? SetEvent(event_raw) : FALSE;
+  const DWORD waited = signaled ? WaitForSingleObject(event_raw, 0) : WAIT_FAILED;
+  name.Buffer = directory_name;
+  name.Length = static_cast<USHORT>(sizeof(directory_name) - sizeof(wchar_t));
+  name.MaximumLength = sizeof(directory_name);
+  const NTSTATUS directory_status = directory_create(&directory_raw, 0x000f000f, &attributes);
+  if (!RevertToSelf()) std::abort();
+  Handle event(event_raw), directory(directory_raw);
+  Require(event_status == 0 && event && signaled && waited == WAIT_OBJECT_0 &&
+      SessionObjectText(event.get(), ObjectTypeInformation) == L"Event" &&
+      SessionObjectText(event.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) == path + L"\\" + event_name &&
+      SessionObjectAccess(event.get()) == EVENT_ALL_ACCESS,
+      "package-leaf-actual-event-creation-use-and-inherited-access", ERROR_ACCESS_DENIED);
+  evidence->object_created = 1;
+  Require(directory_status == 0 && directory &&
+      SessionObjectText(directory.get(), ObjectTypeInformation) == L"Directory" &&
+      SessionObjectText(directory.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) == path + L"\\" + directory_name &&
+      SessionObjectAccess(directory.get()) == 0x000f000f,
+      "package-leaf-actual-subdirectory-creation-and-inherited-access", ERROR_ACCESS_DENIED);
+  evidence->subdirectory_created = 1;
+  // Temporary named objects would disappear at last close. Independent
+  // authority-side read-only pins keep these exact objects alive while the
+  // creator handles are closed and each actual subject tries to reopen them.
+  HANDLE event_pin_raw = nullptr, directory_pin_raw = nullptr;
+  Require(DuplicateHandle(GetCurrentProcess(), event.get(), GetCurrentProcess(), &event_pin_raw,
+      READ_CONTROL | SYNCHRONIZE, FALSE, 0), "package-child-authority-event-pin");
+  const Handle event_pin(event_pin_raw);
+  Require(DuplicateHandle(GetCurrentProcess(), directory.get(), GetCurrentProcess(), &directory_pin_raw,
+      0x00020003, FALSE, 0), "package-child-authority-directory-pin");
+  const Handle directory_pin(directory_pin_raw);
+  const Local event_sd = SessionObjectSecurity(event_pin.get()), directory_sd = SessionObjectSecurity(directory_pin.get());
+  CopyObjectSecurity(event_sd.get(), evidence->event_security);
+  CopyObjectSecurity(directory_sd.get(), evidence->directory_security);
+  event.reset(); directory.reset();
+
+  const std::wstring child_names[] = {path + L"\\" + event_name, path + L"\\" + directory_name};
+  const HANDLE pins[] = {event_pin.get(), directory_pin.get()}, subjects[] = {guest, other, desktop};
+  const DWORD rights[] = {EVENT_ALL_ACCESS, 0x000f000f};
+  const OpenNative openers[] = {event_open, SessionDirectoryOpen()};
+  const auto reopen = [&](size_t kind, DWORD access, HANDLE subject, DWORD* observed) {
+    UNICODE_STRING child_name{};
+    child_name.Buffer = const_cast<wchar_t*>(child_names[kind].data());
+    child_name.Length = static_cast<USHORT>(child_names[kind].size() * sizeof(wchar_t));
+    child_name.MaximumLength = child_name.Length;
+    OBJECT_ATTRIBUTES child_attributes{};
+    child_attributes.Length = sizeof(child_attributes);
+    child_attributes.ObjectName = &child_name;
+    child_attributes.Attributes = 0x00001000;
+    Require(ImpersonateLoggedOnUser(subject), "package-child-reopen-subject");
+    HANDLE raw = nullptr;
+    const NTSTATUS opened = openers[kind](&raw, access, &child_attributes);
+    if (!RevertToSelf()) std::abort();
+    *observed = static_cast<DWORD>(opened);
+    return Handle(raw);
+  };
+  for (size_t kind = 0; kind < 2; ++kind) {
+    for (size_t actor = 0; actor < 3; ++actor) {
+      auto& row = evidence->child_opens[kind][actor]; row.called = 1;
+      const Handle opened = reopen(kind, rights[kind], subjects[actor], &row.status);
+      row.opened = static_cast<DWORD>(static_cast<bool>(opened));
+      if (actor == 0) {
+        Require(row.status == 0 && opened && SameSessionObject(opened.get(), pins[kind]) &&
+            SessionObjectAccess(opened.get()) == rights[kind],
+            "package-child-own-reopen-exact-object", ERROR_ACCESS_DENIED);
+        Require(ImpersonateLoggedOnUser(guest), "package-child-use-reopened-lowbox-context");
+        BOOL used = FALSE;
+        HANDLE nested_raw = nullptr;
+        if (kind == 0) {
+          used = ResetEvent(opened.get()) && SetEvent(opened.get()) && WaitForSingleObject(opened.get(), 0) == WAIT_OBJECT_0;
+        } else {
+          wchar_t nested_name[] = L"NestedFixtureEvent";
+          UNICODE_STRING nested{static_cast<USHORT>(sizeof(nested_name) - sizeof(wchar_t)),
+              static_cast<USHORT>(sizeof(nested_name)), nested_name};
+          OBJECT_ATTRIBUTES nested_attributes{};
+          nested_attributes.Length = sizeof(nested_attributes);
+          nested_attributes.RootDirectory = opened.get();
+          nested_attributes.ObjectName = &nested;
+          nested_attributes.Attributes = 0x00001000;
+          const NTSTATUS nested_status = event_create(&nested_raw, EVENT_ALL_ACCESS, &nested_attributes,
+              NativeEventType::notification, FALSE);
+          used = nested_status == 0 && nested_raw && SetEvent(nested_raw) && WaitForSingleObject(nested_raw, 0) == WAIT_OBJECT_0;
+        }
+        if (!RevertToSelf()) std::abort();
+        const Handle nested(nested_raw);
+        Require(used != FALSE, "package-child-actual-use-after-own-reopen", ERROR_ACCESS_DENIED);
+        evidence->child_used[kind] = 1;
+      } else {
+        Require(!opened && row.status == 0xc0000022, "package-child-other-subject-reopen-denied", ERROR_ACCESS_DENIED);
+        const DWORD masks[][5] = {{EVENT_MODIFY_STATE, SYNCHRONIZE, DELETE, WRITE_DAC, WRITE_OWNER},
+            {0x0004, 0x0008, DELETE, WRITE_DAC, WRITE_OWNER}};
+        for (DWORD access : masks[kind]) {
+          DWORD denied = 0;
+          const Handle forbidden = reopen(kind, access, subjects[actor], &denied);
+          Require(!forbidden && denied == 0xc0000022,
+              "package-child-other-subject-operation-and-mutation-denied", ERROR_ACCESS_DENIED);
+          ++evidence->child_denials[kind][actor - 1];
+        }
+      }
+    }
+  }
+}
+
+void ObservePackageLeaf(const std::wstring& path, const storage::AuthorityLaunch& launch,
+    const storage::AuthorityLaunchSpec& spec, HANDLE guest, HANDLE other, HANDLE desktop,
     PackageLeafEvidence* evidence) {
   CopyNamespaceText(path, evidence->path);
   DWORD status = 0, flags = 0;
@@ -1329,6 +1512,13 @@ void ObservePackageLeaf(const std::wstring& path, HANDLE guest, HANDLE other, HA
   evidence->control = control;
   CopyObjectSecurity(descriptor.get(), evidence->security);
   evidence->captured = 1;
+  VerifyPackageLeafPolicy(descriptor.get(), spec);
+  evidence->policy_verified = 1;
+  Require(launch.package_objects() && GetHandleInformation(launch.package_objects(), &flags) &&
+      !(flags & HANDLE_FLAG_INHERIT) && SessionObjectAccess(launch.package_objects()) == 0x00020003 &&
+      SameSessionObject(pinned.get(), launch.package_objects()),
+      "package-leaf-launch-owns-exact-readonly-pin", ERROR_NOT_SAME_OBJECT);
+  evidence->launch_pin_verified = 1;
   bool isolated = true;
   const HANDLE subjects[] = {guest, other, desktop};
   for (size_t actor = 0; actor < std::size(subjects); ++actor) {
@@ -1341,22 +1531,133 @@ void ObservePackageLeaf(const std::wstring& path, HANDLE guest, HANDLE other, HA
         Require(SameSessionObject(pinned.get(), opened.get()) &&
             SessionObjectAccess(opened.get()) == kSessionMutationMasks[i],
             "package-leaf-open-exact-object-right", ERROR_NOT_SAME_OBJECT);
-        if (actor != 0) isolated = false;
+        if (actor != 0 || i >= 2) isolated = false;
       } else {
         Require(row.status == 0xc0000022, "package-leaf-open-denial-status", ERROR_INVALID_DATA);
       }
     }
   }
-  // A package may manage its own namespace. Record its individual standard
-  // rights too; do not infer cross-package isolation from a common TokenUser.
+  // The package creates children but cannot mutate this authority-owned root.
+  // Check actual lowbox access; a common TokenUser is not isolation evidence.
   Require(evidence->opens[0][0].opened && evidence->opens[0][1].opened,
       "package-leaf-own-create-positive-control", ERROR_ACCESS_DENIED);
-  Require(isolated, "package-leaf-other-package-and-desktop-mutations-denied", ERROR_ACCESS_DENIED);
+  Require(isolated, "package-leaf-own-standard-and-other-desktop-mutations-denied", ERROR_ACCESS_DENIED);
+  CreatePackageChildren(path, guest, other, desktop, evidence);
   evidence->status = ERROR_SUCCESS;
 }
-Local CollisionSecurity(PSID desktop, PSID private_user, PSID package, bool changed) {
+
+void ObservePackageReuse(HANDLE private_token, const storage::AuthorityLaunchSpec& original,
+    const storage::AuthorityLaunch& first, const std::wstring& path, PackageLeafEvidence* evidence) {
+  HANDLE raw = nullptr;
+  Require(DuplicateHandle(GetCurrentProcess(), first.package_objects(), GetCurrentProcess(), &raw,
+      0x00020003, FALSE, 0), "package-reuse-independent-profile-pin");
+  Handle profile_pin(raw);
+  auto spec = original;
+  spec.expected_package_objects = profile_pin.get();
+  std::unique_ptr<storage::AuthorityLaunch> child;
+  const char* stage = "package-reuse.launch";
+  DWORD created = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
+  Check(created, stage);
+  Require(child && child->package_objects() != profile_pin.get() &&
+      SessionObjectAccess(child->package_objects()) == 0x00020003 &&
+      SameSessionObject(child->package_objects(), first.package_objects()),
+      "package-reuse-launch-owns-independent-readonly-pin", ERROR_NOT_SAME_OBJECT);
+  evidence->expected_reuse = 1;
+  profile_pin.reset();
+  Require(SameSessionObject(child->package_objects(), first.package_objects()) &&
+      WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT,
+      "package-reuse-profile-destruction-does-not-drop-launch-pin", ERROR_NOT_SAME_OBJECT);
+  evidence->independent_pin_lifetime = 1;
+  Check(child->Stop(10000), "package-reuse-stop-suspended-child");
+  child.reset();
+
+  // A fresh Profile has no old pin; complete authentication of an existing
+  // SYSTEM-owned exact-policy leaf still permits a same-package restart.
+  spec.expected_package_objects = nullptr;
+  stage = "package-reuse.new-profile";
+  created = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
+  Check(created, stage);
+  Require(child && SameSessionObject(child->package_objects(), first.package_objects()),
+      "package-reuse-null-pin-still-authenticates-same-leaf", ERROR_NOT_SAME_OBJECT);
+  evidence->null_pin_reuse = 1;
+  Check(child->Stop(10000), "package-reuse-stop-new-profile-child");
+  child.reset();
+
+  const Handle event(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+  Require(static_cast<bool>(event), "package-reuse-wrong-type-control");
+  spec.expected_package_objects = event.get();
+  stage = "package-reuse.wrong-type";
+  DWORD rejected = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
+  Require(rejected == ERROR_NOT_SAME_OBJECT && !child && stage &&
+      std::strcmp(stage, "lowbox.verify-package-namespace") == 0,
+      "package-reuse-wrong-type-pin-rejected-before-wrapper", ERROR_INVALID_DATA);
+  evidence->wrong_type_rejected = 1;
+  spec.expected_package_objects = original.app_container_objects;
+  stage = "package-reuse.wrong-object";
+  rejected = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
+  Require(rejected == ERROR_NOT_SAME_OBJECT && !child && stage &&
+      std::strcmp(stage, "lowbox.verify-package-namespace") == 0,
+      "package-reuse-other-directory-pin-rejected-before-wrapper", ERROR_INVALID_DATA);
+  evidence->wrong_object_rejected = 1;
+
+  // Deliberately alter only this uniquely named fixture-owned leaf under the
+  // trusted SYSTEM caller. Restore it before asserting the result. This is a
+  // live-policy rejection test, never a production repair/adoption operation.
+  DWORD opened = 0;
+  const Handle writable = OpenSessionDirectory(path, READ_CONTROL | WRITE_DAC, nullptr, &opened);
+  Require(opened == 0 && writable && SameSessionObject(writable.get(), first.package_objects()),
+      "package-reuse-own-fixture-policy-handle", ERROR_NOT_SAME_OBJECT);
+  const Local before = SessionObjectSecurity(writable.get());
+  PACL original_acl = nullptr;
+  BOOL present = FALSE, defaulted = FALSE;
+  Require(GetSecurityDescriptorDacl(before.get(), &present, &original_acl, &defaulted) && present && original_acl,
+      "package-reuse-original-policy");
+  EXPLICIT_ACCESSW extra{};
+  extra.grfAccessPermissions = WRITE_DAC;
+  extra.grfAccessMode = GRANT_ACCESS;
+  extra.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+  extra.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+  extra.Trustee.ptstrName = static_cast<LPWSTR>(original.capabilities.AppContainerSid);
+  PACL changed_raw = nullptr;
+  Check(SetEntriesInAclW(1, &extra, original_acl, &changed_raw), "package-reuse-fixture-changed-policy");
+  const Local changed(changed_raw);
+  Check(SetSecurityInfo(writable.get(), SE_KERNEL_OBJECT,
+      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, changed_raw, nullptr),
+      "package-reuse-apply-fixture-policy-change");
+  PSECURITY_DESCRIPTOR applied_raw = nullptr;
+  PACL applied_acl = nullptr;
+  const DWORD read_changed = GetSecurityInfo(writable.get(), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION,
+      nullptr, nullptr, &applied_acl, nullptr, &applied_raw);
+  const Local applied(applied_raw);
+  const bool change_observed = read_changed == ERROR_SUCCESS && applied_acl &&
+      applied_acl->AclSize == changed_raw->AclSize &&
+      std::memcmp(applied_acl, changed_raw, changed_raw->AclSize) == 0 &&
+      (applied_acl->AclSize != original_acl->AclSize ||
+       std::memcmp(applied_acl, original_acl, original_acl->AclSize) != 0);
+  spec.expected_package_objects = first.package_objects();
+  stage = "package-reuse.changed-policy";
+  rejected = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
+  const DWORD restored = SetSecurityInfo(writable.get(), SE_KERNEL_OBJECT,
+      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, original_acl, nullptr);
+  Check(restored, "package-reuse-restore-owned-fixture-policy");
+  Require(change_observed, "package-reuse-live-policy-change-observed", ERROR_INVALID_ACL);
+  const Local after = SessionObjectSecurity(writable.get());
+  VerifyPackageLeafPolicy(after.get(), original);
+  SECURITY_DESCRIPTOR_CONTROL before_control{}, after_control{};
+  DWORD revision = 0;
+  Require(GetSecurityDescriptorControl(before.get(), &before_control, &revision) &&
+      GetSecurityDescriptorControl(after.get(), &after_control, &revision) && before_control == after_control,
+      "package-reuse-fixture-control-restored", ERROR_INVALID_SECURITY_DESCR);
+  Require(rejected == ERROR_ACCESS_DENIED && !child && stage &&
+      std::strcmp(stage, "lowbox.verify-package-namespace") == 0,
+      "package-reuse-pinned-but-changed-policy-rejected", ERROR_INVALID_DATA);
+  evidence->changed_policy_rejected = 1;
+}
+
+Local CollisionSecurity(PSID desktop, PSID private_user, PSID package, bool changed, bool system_owner = false) {
   const std::wstring owner = SidText(desktop);
-  std::wstring text = L"O:" + owner + L"D:P(A;;0x000f000f;;;SY)(A;;0x000f000f;;;" + owner +
+  std::wstring text = L"O:" + (system_owner ? std::wstring(L"SY") : owner) +
+      L"D:P(A;;0x000f000f;;;SY)(A;;0x000f000f;;;" + owner +
       L")(A;;0x000f000f;;;" + SidText(private_user) + L")(A;;0x000f000f;;;" + SidText(package) + L")";
   if (changed) text += L"(A;;0x00020003;;;" + owner + L")";
   text += L"S:(ML;;NW;;;LW)";
@@ -1395,6 +1696,102 @@ void ObserveNamespaceCollision(storage::ProtectedIdentity& identity, HANDLE desk
   attributes.Length = sizeof(attributes);
   attributes.ObjectName = &object_name;
   attributes.Attributes = OBJ_CASE_INSENSITIVE | 0x00001000;  // No OPENIF or PERMANENT.
+  attributes.SecurityDescriptor = descriptor.get();
+  {
+    // Match the wrapper's restricted private user/groups/owner eligibility.
+    // The disposable token object's own query ACL is unrelated to assigning
+    // the owner of this explicitly described Directory.
+    HANDLE private_raw = nullptr;
+    Require(CreateRestrictedToken(identity.token(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
+        0, nullptr, &private_raw), "collision-private-restricted-context");
+    const Handle private_context(private_raw);
+    const auto actual_user = User(private_context.get());
+    Require(EqualSid(const_cast<BYTE*>(actual_user.data()), identity.sid()),
+        "collision-private-actual-user", ERROR_ACCESS_DENIED);
+    CopyNamespaceText(SidText(const_cast<BYTE*>(actual_user.data())), evidence->private_user);
+    alignas(TOKEN_OWNER) BYTE owner_buffer[sizeof(TOKEN_OWNER) + SECURITY_MAX_SID_SIZE]{};
+    DWORD bytes = 0;
+    Require(GetTokenInformation(private_context.get(), TokenOwner, owner_buffer, sizeof(owner_buffer), &bytes),
+        "collision-private-token-owner");
+    PSID token_owner = reinterpret_cast<TOKEN_OWNER*>(owner_buffer)->Owner;
+    Require(BoundedSid(owner_buffer, bytes, token_owner), "collision-private-token-owner-bound", ERROR_INVALID_SID);
+    CopyNamespaceText(SidText(token_owner), evidence->private_token_owner);
+    GetTokenInformation(private_context.get(), TokenGroups, nullptr, 0, &bytes);
+    Require(bytes >= sizeof(TOKEN_GROUPS) && bytes <= 65536, "collision-private-groups-bound", ERROR_INVALID_DATA);
+    std::vector<BYTE> group_buffer(bytes);
+    Require(GetTokenInformation(private_context.get(), TokenGroups, group_buffer.data(), bytes, &bytes),
+        "collision-private-token-groups");
+    const auto* groups = reinterpret_cast<const TOKEN_GROUPS*>(group_buffer.data());
+    Require(groups->GroupCount <= (bytes - offsetof(TOKEN_GROUPS, Groups)) / sizeof(SID_AND_ATTRIBUTES),
+        "collision-private-group-count", ERROR_INVALID_DATA);
+    evidence->private_group_count = groups->GroupCount;
+    for (DWORD i = 0; i < groups->GroupCount; ++i) {
+      const auto& group = groups->Groups[i];
+      Require(BoundedSid(group_buffer.data(), bytes, group.Sid), "collision-private-group-sid", ERROR_INVALID_SID);
+      if (IsWellKnownSid(group.Sid, WinLocalSystemSid)) evidence->private_system_group_attributes |= group.Attributes;
+    }
+    const Local private_control = CollisionSecurity(identity.sid(), identity.sid(), package->value, false);
+    const Local private_forgery = CollisionSecurity(identity.sid(), identity.sid(), package->value, false, true);
+    for (unsigned phase = 0; phase < 3; ++phase) {
+      {
+        attributes.SecurityDescriptor = phase == 1 ? private_forgery.get() : private_control.get();
+        Require(ImpersonateLoggedOnUser(private_context.get()), "collision-private-owner-impersonate");
+        HANDLE probe_raw = nullptr;
+        const NTSTATUS probe_status = create(&probe_raw, 0x000f000f, &attributes);
+        if (!RevertToSelf()) std::abort();
+        const Handle probe(probe_raw);
+        if (phase == 1) {
+          evidence->private_owner_status = static_cast<DWORD>(probe_status);
+          Require(!probe && (probe_status == static_cast<NTSTATUS>(0xc000005a) ||
+              probe_status == static_cast<NTSTATUS>(0xc0000061)),
+              "collision-private-system-owner-assignment-rejected", ERROR_INVALID_OWNER);
+        } else {
+          Require(probe_status == 0 && probe, "collision-private-owner-positive-create", ERROR_ACCESS_DENIED);
+          const Local observed = SessionObjectSecurity(probe.get());
+          PSID owner = nullptr;
+          BOOL defaulted = FALSE;
+          Require(GetSecurityDescriptorOwner(observed.get(), &owner, &defaulted) && owner &&
+              EqualSid(owner, identity.sid()), "collision-private-owner-positive-identity", ERROR_INVALID_OWNER);
+          ++evidence->private_owner_controls;
+        }
+      }
+      RequireAbsentPackage(path, &evidence->absent);
+    }
+    attributes.SecurityDescriptor = descriptor.get();
+  }
+  {
+    Require(ImpersonateLoggedOnUser(desktop), "collision-owner-control-impersonate");
+    HANDLE raw_control = nullptr;
+    const NTSTATUS control_status = create(&raw_control, 0x000f000f, &attributes);
+    if (!RevertToSelf()) std::abort();
+    const Handle control(raw_control);
+    Require(control_status == 0 && control, "collision-owner-control-actual-create", ERROR_ACCESS_DENIED);
+    const Local control_security = SessionObjectSecurity(control.get());
+    PSID owner = nullptr;
+    BOOL defaulted = FALSE;
+    Require(GetSecurityDescriptorOwner(control_security.get(), &owner, &defaulted) && owner &&
+        EqualSid(owner, desktop_sid), "collision-owner-control-actual-desktop-owner", ERROR_INVALID_OWNER);
+    evidence->system_owner_control_created = 1;
+  }
+  RequireAbsentPackage(path, &evidence->absent);
+  // Same parent, requested mask, name and allow ACEs as the positive desktop
+  // creation below, but with SYSTEM explicitly requested as owner. Require an
+  // attributable owner-assignment rejection, not merely a generic access error.
+  // This establishes why a desktop-owned object cannot become an accepted
+  // SYSTEM-owned leaf while its original mutation handles remain open.
+  const Local forged = CollisionSecurity(desktop_sid, identity.sid(), package->value, false, true);
+  attributes.SecurityDescriptor = forged.get();
+  evidence->system_owner_attempted = 1;
+  Require(ImpersonateLoggedOnUser(desktop), "collision-desktop-forged-owner-impersonate");
+  HANDLE forbidden = nullptr;
+  const NTSTATUS forged_status = create(&forbidden, 0x000f000f, &attributes);
+  if (!RevertToSelf()) std::abort();
+  const Handle forbidden_owner(forbidden);
+  evidence->system_owner_status = static_cast<DWORD>(forged_status);
+  Require(!forbidden_owner && (forged_status == static_cast<NTSTATUS>(0xc000005a) ||
+      forged_status == static_cast<NTSTATUS>(0xc0000061)),
+      "collision-desktop-system-owner-assignment-rejected", ERROR_INVALID_OWNER);
+  RequireAbsentPackage(path, &evidence->absent);
   attributes.SecurityDescriptor = descriptor.get();
   Require(ImpersonateLoggedOnUser(desktop), "collision-desktop-create-impersonate");
   HANDLE raw = nullptr;
@@ -1456,7 +1853,8 @@ void ObserveNamespaceCollision(storage::ProtectedIdentity& identity, HANDLE desk
   Require(status == 0 && fresh && SameSessionObject(pinned.get(), fresh.get()),
       "collision-retained-exact-object", ERROR_NOT_SAME_OBJECT);
   evidence->same_object_after = 1;
-  Require(evidence->launch_status != ERROR_SUCCESS && !evidence->returned_child,
+  Require(evidence->launch_status == ERROR_ACCESS_DENIED && !evidence->returned_child &&
+      stage && std::strcmp(stage, "lowbox.verify-package-namespace") == 0,
       "deny-desktop-owned-namespace-collision", ERROR_ACCESS_DENIED);
   evidence->status = ERROR_SUCCESS;
 }
@@ -1466,6 +1864,27 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
       static_cast<unsigned long>(leaf.status), static_cast<unsigned long>(leaf.control), NamespacePathForPrint(leaf.path));
   if (leaf.captured && std::wmemchr(leaf.security, L'\0', std::size(leaf.security)))
     std::printf("Protected package leaf: owner-group-dacl-label=%ls\n", leaf.security);
+  std::printf("Protected package admission: exact-policy=%lu launch-readonly-pin=%lu actual-event=%lu actual-subdirectory=%lu expected-pin-reuse=%lu null-pin-reuse=%lu independent-pin-lifetime=%lu wrong-type-rejected=%lu wrong-object-rejected=%lu changed-policy-rejected=%lu\n",
+      static_cast<unsigned long>(leaf.policy_verified), static_cast<unsigned long>(leaf.launch_pin_verified),
+      static_cast<unsigned long>(leaf.object_created), static_cast<unsigned long>(leaf.subdirectory_created),
+      static_cast<unsigned long>(leaf.expected_reuse), static_cast<unsigned long>(leaf.null_pin_reuse),
+      static_cast<unsigned long>(leaf.independent_pin_lifetime), static_cast<unsigned long>(leaf.wrong_type_rejected),
+      static_cast<unsigned long>(leaf.wrong_object_rejected), static_cast<unsigned long>(leaf.changed_policy_rejected));
+  if (leaf.event_security[0] && std::wmemchr(leaf.event_security, L'\0', std::size(leaf.event_security)))
+    std::printf("Protected package child: kind=event inherited-owner-group-dacl-label=%ls\n", leaf.event_security);
+  if (leaf.directory_security[0] && std::wmemchr(leaf.directory_security, L'\0', std::size(leaf.directory_security)))
+    std::printf("Protected package child: kind=directory inherited-owner-group-dacl-label=%ls\n", leaf.directory_security);
+  constexpr const char* child_subjects[] = {"actual-package", "other-package", "filtered-desktop"};
+  for (size_t kind = 0; kind < 2; ++kind) {
+    for (size_t actor = 0; actor < 3; ++actor) {
+      const auto& row = leaf.child_opens[kind][actor];
+      std::printf("Protected package child reopen: kind=%s subject=%s called=%lu ntstatus=0x%08lx opened=%lu own-use-after-reopen=%lu individual-operation-and-mutation-denials=%lu\n",
+          kind == 0 ? "event" : "directory", child_subjects[actor], static_cast<unsigned long>(row.called),
+          static_cast<unsigned long>(row.status), static_cast<unsigned long>(row.opened),
+          static_cast<unsigned long>(actor == 0 ? leaf.child_used[kind] : 0),
+          static_cast<unsigned long>(actor == 0 ? 0 : leaf.child_denials[kind][actor - 1]));
+    }
+  }
   constexpr const char* subjects[] = {"own-suspended-lowbox", "distinct-package-token-only", "filtered-desktop"};
   for (size_t actor = 0; actor < std::size(subjects); ++actor) {
     for (size_t i = 0; i < std::size(kSessionMutationMasks); ++i) {
@@ -1481,6 +1900,16 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
       static_cast<unsigned long>(collision.create_status), static_cast<unsigned long>(collision.desktop_owner),
       static_cast<unsigned long>(collision.desktop_dacl_changed), static_cast<unsigned long>(collision.private_open_status),
       NamespacePathForPrint(collision.path));
+  std::printf("Protected namespace owner assignment: desktop-create-control=%lu system-owner-attempted=%lu system-owner-ntstatus=0x%08lx trust-limit=SYSTEM-and-administrators-able-to-act-as-SYSTEM\n",
+      static_cast<unsigned long>(collision.system_owner_control_created),
+      static_cast<unsigned long>(collision.system_owner_attempted), static_cast<unsigned long>(collision.system_owner_status));
+  if (std::wmemchr(collision.private_user, L'\0', std::size(collision.private_user)) &&
+      std::wmemchr(collision.private_token_owner, L'\0', std::size(collision.private_token_owner))) {
+    std::printf("Protected namespace private owner assignment: context=DISABLE_MAX_PRIVILEGE-nonlowbox user=%ls token-owner=%ls groups=%lu system-group-attributes=0x%08lx positive-creations=%lu system-owner-ntstatus=0x%08lx\n",
+        collision.private_user, collision.private_token_owner, static_cast<unsigned long>(collision.private_group_count),
+        static_cast<unsigned long>(collision.private_system_group_attributes),
+        static_cast<unsigned long>(collision.private_owner_controls), static_cast<unsigned long>(collision.private_owner_status));
+  }
   if (collision.desktop_dacl_changed && std::wmemchr(collision.security, L'\0', std::size(collision.security)))
     std::printf("Protected namespace collision: owner-group-dacl-label=%ls\n", collision.security);
   std::printf("Protected namespace collision: launch-called=%lu launch-win32=%lu stage=%.*s returned-child=%lu stop-win32=%lu retained-same-object=%lu resumed=0\n",
@@ -1746,7 +2175,11 @@ Evidence RunSystem() {
     observe_isolation([&] { VerifySessionSubject(session_objects, other_token.get(), config.session, &evidence.session_objects.subjects[3]); });
     observe_isolation([&] { VerifySessionSubject(app_container_objects, other_token.get(), config.session, &evidence.app_container_objects.subjects[3]); });
     observe_isolation([&] {
-      try { ObservePackageLeaf(package_object_path, guest_token.get(), other_token.get(), filtered.get(), &evidence.package_leaf); }
+      try { ObservePackageLeaf(package_object_path, *child, spec, guest_token.get(), other_token.get(), filtered.get(), &evidence.package_leaf); }
+      catch (const Failure& failure) { evidence.package_leaf.status = failure.status; throw; }
+    });
+    observe_isolation([&] {
+      try { ObservePackageReuse(identity->token(), spec, *child, package_object_path, &evidence.package_leaf); }
       catch (const Failure& failure) { evidence.package_leaf.status = failure.status; throw; }
     });
     collision_package_name = package_name + L".Collision";

@@ -1,0 +1,243 @@
+diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
+index 8ce83721..5b6ebb59 100644
+--- a/compat/posix/src/internal.h
++++ b/compat/posix/src/internal.h
+@@ -7,0 +8 @@
++#include <memory>
+@@ -203 +204,7 @@ int MemfdGrowError(int fd, uint64_t end);
+-int MemfdSharedMapError(int fd, bool writable, bool* deny_write);
++// A writable mapping of a memfd also yields a lease in *write_lease (which the
++// caller must supply for a writable request): F_SEAL_WRITE answers EBUSY for as
++// long as any lease of the file lives, in any process. The mapping's owner holds
++// the lease until the last page of the mapping is unmapped (or the process
++// dies, when the OS releases it); an error returns no lease.
++int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
++                        std::shared_ptr<void>* write_lease);
+@@ -210 +217,2 @@ int MemfdGrowHandleError(HANDLE file, uint64_t end);
+-int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write);
++int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
++                               std::shared_ptr<void>* write_lease);
+diff --git a/compat/posix/src/memfd_seals.cc b/compat/posix/src/memfd_seals.cc
+index 0697d4a2..72f1adcf 100644
+--- a/compat/posix/src/memfd_seals.cc
++++ b/compat/posix/src/memfd_seals.cc
+@@ -18,4 +18,11 @@
+-// F_SEAL_WRITE requires that no writable shared mapping of the file exists.
+-// Mappings of other processes cannot be counted here: once any process has
+-// mapped the file writable and shared, F_SEAL_WRITE answers EBUSY (as Linux
+-// does while such a mapping exists), even after it is unmapped.
++// F_SEAL_WRITE requires that no writable shared mapping of the file exists,
++// in any process, and answers EBUSY while one does (as Linux does). A writable
++// shared mapping holds a lease for as long as it lives: a shared LockFileEx
++// lock on a byte far beyond the data, taken through a handle of its own (the
++// descriptor may be closed once the mapping exists). Adding F_SEAL_WRITE needs
++// the same byte exclusively: it fails at once if any lease exists, and a
++// mapping made after it sees the seal. mman.cc releases the lease when the
++// last writable page of the mapping is unmapped or the mapping is replaced; the
++// OS releases it when the process dies. Every change of the stored seals reads,
++// checks and writes them under one more such byte, so concurrent additions in
++// different processes cannot overwrite each other.
+@@ -31,0 +39 @@
++#include <memory>
+@@ -43,2 +50,0 @@ constexpr size_t kSealsNameLength = sizeof(kSealsName) - 1;
+-// Internal, never reported: the file has had a writable shared mapping.
+-constexpr uint32_t kWritablyMapped = 0x80000000u;
+@@ -126,9 +132,24 @@ bool WriteValue(HANDLE file, uint32_t value) {
+-// Seals only grow. Another process may add seals at the same time: write,
+-// read back, and repeat until the stored value holds every bit asked for.
+-bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
+-  for (int attempt = 0; attempt < 16; ++attempt) {
+-    uint32_t current = 0;
+-    if (!ReadValue(file, &current)) return errno = EINVAL, false;
+-    if ((current & bits) == bits) {
+-      if (result != nullptr) *result = current;
+-      return true;
++// Two bytes beyond any file's data, next to flock's (system.cc), where LockFileEx
++// locks block nothing but other locks: a shared lock per live writable shared
++// mapping (exclusive while F_SEAL_WRITE is added), and an exclusive lock while
++// the seals are changed. They are polled, never waited on: a blocking
++// LockFileEx holds a synchronous handle against the unlock of another thread.
++constexpr DWORD kLeaseByte = 0xfffffffdu;
++constexpr DWORD kChangeByte = 0xfffffffcu;
++constexpr DWORD kLockByteHigh = 0x7fffffffu;
++// Holders keep a byte for a few extended-attribute calls only.
++constexpr int kLockAttempts = 5000;
++
++// Serializes this process's seal changes and lease requests, so that they never
++// meet through one handle, which Windows lets neither share nor upgrade a lock.
++std::mutex g_seal_mutex;
++
++// ERROR_SUCCESS, or ERROR_LOCK_VIOLATION after the attempts, or another error.
++DWORD LockByte(HANDLE file, DWORD byte, bool exclusive, bool wait) {
++  for (int attempt = 0;; ++attempt) {
++    OVERLAPPED at = {};
++    at.Offset = byte;
++    at.OffsetHigh = kLockByteHigh;
++    if (LockFileEx(file, LOCKFILE_FAIL_IMMEDIATELY | (exclusive ? LOCKFILE_EXCLUSIVE_LOCK : 0), 0, 1,
++                   0, &at)) {
++      return ERROR_SUCCESS;
+@@ -136 +157,3 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
+-    if (!WriteValue(file, current | bits)) return false;
++    const DWORD error = GetLastError();
++    if (error != ERROR_LOCK_VIOLATION || !wait || attempt >= kLockAttempts) return error;
++    Sleep(1);
+@@ -138 +160,0 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
+-  return errno = EAGAIN, false;
+@@ -140,0 +163,64 @@ bool OrValue(HANDLE file, uint32_t bits, uint32_t* result) {
++void UnlockByte(HANDLE file, DWORD byte) {
++  OVERLAPPED at = {};
++  at.Offset = byte;
++  at.OffsetHigh = kLockByteHigh;
++  UnlockFileEx(file, 0, 1, 0, &at);
++}
++
++int LockError(DWORD error, int busy) {
++  return error == ERROR_LOCK_VIOLATION ? busy : ErrnoFromWin32(error);
++}
++
++// One writable shared mapping's claim on its file (see the top of this file).
++class WriteLease {
++ public:
++  WriteLease() = default;
++  WriteLease(const WriteLease&) = delete;
++  WriteLease& operator=(const WriteLease&) = delete;
++  ~WriteLease() {
++    if (own_ == nullptr) return;
++    UnlockByte(own_, kLeaseByte);
++    CloseHandle(own_);
++  }
++  // 0, or the errno that denies the mapping; nothing is held after an error.
++  int Acquire(HANDLE file) {
++    HANDLE own = nullptr;
++    // The same file object under a handle that outlives the descriptor's.
++    if (!DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &own, 0, FALSE,
++                         DUPLICATE_SAME_ACCESS)) {
++      return ErrnoFromWin32(GetLastError());
++    }
++    const DWORD error = LockByte(own, kLeaseByte, false, true);
++    if (error != ERROR_SUCCESS) {
++      CloseHandle(own);
++      return LockError(error, EAGAIN);
++    }
++    own_ = own;
++    return 0;
++  }
++
++ private:
++  HANDLE own_ = nullptr;
++};
++
++// Holds the seals' change byte; Locked() is false (errno set) if it could not.
++class SealChange {
++ public:
++  explicit SealChange(HANDLE file) : file_(file) {
++    const DWORD error = LockByte(file, kChangeByte, true, true);
++    if (error != ERROR_SUCCESS) {
++      errno = LockError(error, EAGAIN);
++      file_ = nullptr;
++    }
++  }
++  SealChange(const SealChange&) = delete;
++  SealChange& operator=(const SealChange&) = delete;
++  ~SealChange() {
++    if (file_ != nullptr) UnlockByte(file_, kChangeByte);
++  }
++  bool Locked() const { return file_ != nullptr; }
++
++ private:
++  HANDLE file_;
++};
++
+@@ -228,3 +314,16 @@ int AddMemfdSeals(int fd, unsigned seals) {
+-  if ((seals & F_SEAL_WRITE) != 0 && (current & F_SEAL_WRITE) == 0 &&
+-      (current & kWritablyMapped) != 0) {
+-    return errno = EBUSY, -1;
++  // Read, check and write under the change byte: another process may be adding
++  // seals, and what it stored since the first read must not be overwritten.
++  std::lock_guard<std::mutex> guard(g_seal_mutex);
++  SealChange change(file);
++  if (!change.Locked()) return -1;
++  if (!ReadValue(file, &current)) return errno = EINVAL, -1;
++  if ((current & F_SEAL_SEAL) != 0) return errno = EPERM, -1;
++  if ((current & seals) == seals) return 0;
++  if ((seals & F_SEAL_WRITE) != 0 && (current & F_SEAL_WRITE) == 0) {
++    // No lease may exist while the seal is stored: a mapping made from now on
++    // finds the seal, and one made before holds its lease and is refused here.
++    const DWORD error = LockByte(file, kLeaseByte, true, false);
++    if (error != ERROR_SUCCESS) return errno = LockError(error, EBUSY), -1;
++    const bool stored = WriteValue(file, current | seals);
++    UnlockByte(file, kLeaseByte);
++    return stored ? 0 : -1;
+@@ -232 +331 @@ int AddMemfdSeals(int fd, unsigned seals) {
+-  return OrValue(file, seals, nullptr) ? 0 : -1;
++  return WriteValue(file, current | seals) ? 0 : -1;
+@@ -295 +394,2 @@ int MemfdGrowError(int fd, uint64_t end) {
+-int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
++int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
++                              std::shared_ptr<void>* write_lease) {
+@@ -296,0 +397 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
++  if (write_lease != nullptr) write_lease->reset();
+@@ -303 +404,9 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
+-  if (writable && (seals & kWritablyMapped) == 0 && !OrValue(file, kWritablyMapped, nullptr)) return errno;
++  if (!writable) return 0;
++  if (write_lease == nullptr) return EINVAL;  // a writable mapping must hold its lease
++  std::lock_guard<std::mutex> guard(g_seal_mutex);
++  auto lease = std::make_shared<WriteLease>();
++  if (const int error = lease->Acquire(file)) return error;
++  // F_SEAL_WRITE cannot be added while the lease is held, so this read stays true.
++  if (!ReadValue(file, &seals)) return EINVAL;
++  if ((seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE)) != 0) return EPERM;  // the lease ends here
++  *write_lease = std::move(lease);
+@@ -307 +416,2 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write) {
+-int MemfdSharedMapError(int fd, bool writable, bool* deny_write) {
++int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
++                        std::shared_ptr<void>* write_lease) {
+@@ -310 +420 @@ int MemfdSharedMapError(int fd, bool writable, bool* deny_write) {
+-  return MemfdSharedMapHandleError(file, writable, deny_write);
++  return MemfdSharedMapHandleError(file, writable, deny_write, write_lease);
+diff --git a/compat/posix/src/mman.cc b/compat/posix/src/mman.cc
+index 01eb82f8..47d539ff 100644
+--- a/compat/posix/src/mman.cc
++++ b/compat/posix/src/mman.cc
+@@ -56,0 +57 @@
++#include <memory>
+@@ -162,0 +164,5 @@ struct Region {
++  // A writable shared view of a memfd: the lease that keeps F_SEAL_WRITE from
++  // being added while any such view lives (memfd_seals.cc). Pieces of a view
++  // share it; the last piece to give up its pages (munmap, MAP_FIXED, mremap)
++  // releases it, so every path that turns a view into a hole must reset it.
++  std::shared_ptr<void> write_lease;
+@@ -313,0 +320 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
++  alias.write_lease = from.write_lease;  // another view of the same writable mapping
+@@ -511,0 +519 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
++  it->second.write_lease.reset();  // the pieces that stay take it back from `view`
+@@ -522,0 +531,8 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
++    bool any_live = false;
++    for (uintptr_t p = from; p < to; p += page) {
++      if (saved[(p - start) / page].live) {
++        any_live = true;
++        break;
++      }
++    }
++    if (!any_live) return;  // already-unmapped pages stay a Kind::kHole placeholder without a view or lease
+@@ -541,0 +558 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
++    r.write_lease = view.write_lease;
+@@ -627,0 +645 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
++          r.write_lease.reset();
+@@ -1598,0 +1617,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
++    // A writable one holds a lease on the file until its pages are unmapped, and
++    // releases it here if the mapping cannot be made.
+@@ -1599,0 +1620 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
++    std::shared_ptr<void> write_lease;
+@@ -1601 +1622 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+-      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write)) {
++      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write, &write_lease)) {
+@@ -1607 +1628 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+-    if (result != MAP_FAILED && deny_write) {
++    if (result != MAP_FAILED && (deny_write || write_lease)) {
+@@ -1610 +1631,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+-        it->second.deny_write = true;
++        if (deny_write) it->second.deny_write = true;
++        if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;
+@@ -1693,0 +1716 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
++      region.write_lease.reset();

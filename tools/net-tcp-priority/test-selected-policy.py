@@ -346,6 +346,51 @@ def preceding_logging_property_source(source):
   subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
   subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
   return (work/path).read_bytes()
+# Releasing a memfd's writable-mapping claim (a LockFileEx lease that lives as
+# long as the writable shared mapping) changes three sources the OFD receipt
+# pins. Reverse only that exact transition to main's bytes at its baseline; the
+# original OFD receipt and every one of its hashes remain unchanged below.
+# This source qualification grants no supplier, controller or runtime approval.
+MEMFD_LEASE_QUALIFICATION='tools/net-tcp-priority/qualified/memfd-lease-source.json'
+MEMFD_LEASE_PATCH='tools/net-tcp-priority/qualified/memfd-lease-source.patch'
+MEMFD_LEASE_QUALIFICATION_SHA256 = '09c88c795011c19d83962f9c6f9e216a61fd296af84c737ee806486434a226ff'
+MEMFD_LEASE_BASELINE='e074b67b2f83ce9128c11713171329e9fbbf6739'
+MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
+def preceding_memfd_lease_sources(usb_block):
+ raw=(ROOT/MEMFD_LEASE_QUALIFICATION).read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==MEMFD_LEASE_QUALIFICATION_SHA256,'memfd lease source qualification changed'
+ qualification=json.loads(raw)
+ assert qualification['baseline']==MEMFD_LEASE_BASELINE and qualification['native_runtime_approval'] is False
+ assert qualification['paths']==MEMFD_LEASE_PATHS
+ assert sorted(qualification['previous_sha256'])==sorted(qualification['source_sha256'])==sorted(MEMFD_LEASE_PATHS)
+ patch=(ROOT/MEMFD_LEASE_PATCH).read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'memfd lease transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==MEMFD_LEASE_PATHS
+ # internal.h also carries this PR's independently pinned USB declarations.
+ # Remove only that exact USB delta first; the unchanged memfd receipt must
+ # then see every byte of main's lease implementation before reversing it.
+ assert set(usb_block).intersection(MEMFD_LEASE_PATHS)=={'compat/posix/src/internal.h'},'USB/memfd qualification overlap changed'
+ current={path:usb_block[path] if path in usb_block else (ROOT/path).read_bytes()
+          for path in MEMFD_LEASE_PATHS}
+ for path in MEMFD_LEASE_PATHS:
+  assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-memfd-lease-qualification-') as temporary:
+  work=Path(temporary)
+  for path in MEMFD_LEASE_PATHS:
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(current[path])
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous={path:(work/path).read_bytes() for path in MEMFD_LEASE_PATHS}
+  # The reversed bytes are exactly the baseline's, and the transition applied
+  # forward to them reproduces every current byte.
+  for path in MEMFD_LEASE_PATHS:
+   assert hashlib.sha256(previous[path]).hexdigest()==qualification['previous_sha256'][path],'memfd lease reverse transition is not the baseline: '+path
+   assert previous[path]==subprocess.check_output(['git','-C',str(ROOT),'show',MEMFD_LEASE_BASELINE+':'+path]),'memfd lease reverse transition is not the baseline: '+path
+  subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in MEMFD_LEASE_PATHS:assert (work/path).read_bytes()==current[path],'memfd lease transition does not reproduce: '+path
+ return previous
 # Bionic's independently reviewed memmem search changes only this include and
 # complete wrapper. Restore those exact bytes before applying the UNCHANGED
 # OFD qualification digest. Pin the new pure-search helper separately: no other
@@ -423,7 +468,10 @@ USB_BLOCK_PATH_BASES.update(dict.fromkeys((
  'compat/libcore/process.cc',
  'compat/posix/src/system.cc',
 ), '5b2af6e4e5de5525791c304de21c2c6a77aebcd2'))
-USB_BLOCK_TRANSITION_SHA256 = '845585277763bfcc7116d9f353b1d05c753d99f04a2416cefbcbbfb50ce54c6a'
+# Preserve main's memfd lease declarations before their separately pinned
+# reverse transition is checked against the original OFD receipt.
+USB_BLOCK_PATH_BASES['compat/posix/src/internal.h'] = 'dcc29a49143c4bd33e0e60a81b25e0e1f2cfc12a'
+USB_BLOCK_TRANSITION_SHA256 = '8ac7ac79f5e8b55fd2fcbe142d8cfed7b136012d1c6f10c4523f1e7f8881f9b4'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
@@ -502,10 +550,13 @@ def preceding_ofd_sources():
         'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
- shared_stdio=preceding_shared_stdio_sources(qualification)
  usb_block=preceding_usb_block_sources(folder)
+ memfd_lease=preceding_memfd_lease_sources(usb_block)
+ shared_stdio=preceding_shared_stdio_sources(qualification)
+ assert memfd_lease.keys().isdisjoint(shared_stdio),'source qualifications overlap'
  for path,digest in qualification['source_sha256'].items():
   if path in shared_stdio: actual=shared_stdio[path]
+  elif path in memfd_lease: actual=memfd_lease[path]
   elif path in usb_block: actual=usb_block[path]
   else: actual=(ROOT/path).read_bytes()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source(actual)
@@ -682,10 +733,11 @@ def check():
  assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
  for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
- print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
+ print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition exact_memfd_lease_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
 def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
+ usb_preceding=preceding_usb_block_sources(ROOT/'tools/net-tcp-priority/qualified')
  cases=[
   ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
@@ -718,23 +770,67 @@ def transition_negative_controls():
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
   (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
+  # The memfd lease transition admits its exact reviewed delta only: the
+  # signature, the seal's exclusive lease probe, the lease's hand-off to split
+  # views, and the pinned reverse transition itself.
+  ('compat/posix/src/internal.h',b'std::shared_ptr<void>* write_lease);',b'std::shared_ptr<void>* lease);'),
+  ('compat/posix/src/memfd_seals.cc',b'LockByte(file, kLeaseByte, true, false)',b'LockByte(file, kLeaseByte, false, false)'),
+  ('compat/posix/src/memfd_seals.cc',b'constexpr int kLockAttempts = 5000;',b'constexpr int kLockAttempts = 50;'),
+  ('compat/posix/src/mman.cc',b'r.write_lease = view.write_lease;',b'r.write_lease.reset();'),
+  ('compat/posix/src/mman.cc',b'if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;',b'if (it->second.kind == Kind::kView) {}'),
+  (MEMFD_LEASE_PATCH,b'@@',b'@x'),
+  (MEMFD_LEASE_PATCH,b'+constexpr int kLockAttempts = 5000;',b'+constexpr int kLockAttempts = 50;'),
  ]
+ def memfd_lease_repin(name,data):
+  # Refresh only the receipt's digest of the mutated file (and the receipt's
+  # own pin); the reverse transition stays the reviewed one.
+  qualification=json.loads(original(ROOT/MEMFD_LEASE_QUALIFICATION))
+  if name==MEMFD_LEASE_PATCH:qualification['patch_sha256']=hashlib.sha256(data).hexdigest()
+  else:qualification['source_sha256'][name]=hashlib.sha256(data).hexdigest()
+  return (json.dumps(qualification,indent=2)+'\n').encode()
+ repinned_memfd_lease=0
  for name,before,after in cases:
   target=ROOT/name
   assert before in original(target),name
   def changed(path):
    raw=original(path)
    return raw.replace(before,after,1) if path==target else raw
-  # A refreshed new-file hash alone cannot authorize property behavior changes:
-  # the pinned reverse transition and original OFD receipt must reject them too.
-  for repin in (False,True) if name=='compat/posix/src/system_properties.cc' else (False,):
-   digest=hashlib.sha256(changed(target)).hexdigest() if repin else PROPERTY_REVISION_SHA256
-   rejected=False
-   with patch.object(Path,'read_bytes',changed), patch.dict(globals(),PROPERTY_REVISION_SHA256=digest):
-    try:check()
-    except (AssertionError,subprocess.CalledProcessError):rejected=True
-   assert rejected,'unqualified mutation accepted: '+name+' repin='+str(repin)
- print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4')
+  # A refreshed new-file hash alone cannot authorize property or memfd lease
+  # behavior changes: the pinned reverse transition and original OFD receipt
+  # must reject them too.
+  lease=name in MEMFD_LEASE_PATHS or name==MEMFD_LEASE_PATCH
+  for repin in (False,True) if name=='compat/posix/src/system_properties.cc' or lease else (False,):
+   pins={'PROPERTY_REVISION_SHA256':PROPERTY_REVISION_SHA256,'MEMFD_LEASE_QUALIFICATION_SHA256':MEMFD_LEASE_QUALIFICATION_SHA256}
+   reads=changed
+   if repin and not lease:pins['PROPERTY_REVISION_SHA256']=hashlib.sha256(changed(target)).hexdigest()
+   if repin and lease:
+    lease_sources=usb_preceding
+    data=changed(target)
+    if name in usb_preceding:
+     # The ordinary mutation above tests the full combined gate. For this
+     # repinned control, test the memfd reversal on its actual input after USB
+     # normalization; the independent USB source pin must not mask a broken
+     # memfd reverse-transition check in the overlapping header.
+     assert before in usb_preceding[name],name
+     data=usb_preceding[name].replace(before,after,1)
+     lease_sources={**usb_preceding,name:data}
+    receipt=memfd_lease_repin(name,data)
+    pins['MEMFD_LEASE_QUALIFICATION_SHA256']=hashlib.sha256(receipt).hexdigest()
+    reads=lambda path,receipt=receipt,changed=changed:receipt if path==ROOT/MEMFD_LEASE_QUALIFICATION else changed(path)
+    repinned_memfd_lease+=1
+   rejected=None
+   with patch.object(Path,'read_bytes',reads), patch.dict(globals(),pins):
+    try:
+     if repin and lease and name in usb_preceding:preceding_memfd_lease_sources(lease_sources)
+     else:check()
+    except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+   assert rejected is not None,'unqualified mutation accepted: '+name+' repin='+str(repin)
+   # A repinned receipt passes its own digest checks, so the rejection must
+   # come from the reverse transition, not from the stale pin.
+   if repin and lease:
+    message=str(rejected)
+    assert 'qualification changed' not in message and 'transition patch changed' not in message and message!=name,(name,message)
+ print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4 repinned_memfd_lease_controls='+str(repinned_memfd_lease))
 if __name__=='__main__':
  import sys
  check()

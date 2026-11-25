@@ -307,11 +307,34 @@ struct Profile {
   HANDLE token;
   std::wstring name;
   container::Sid sid;
+  // Independent of each launch's pin: Entry destroys its Profile before its
+  // launch, and a fresh Profile may reuse a separately authenticated leaf.
+  Handle package_objects;
   DWORD Create() {
     if (!ImpersonateLoggedOnUser(token)) return GetLastError();
     const DWORD status = container::EnsureProfile(name, name, &sid);
     if (!RevertToSelf()) std::abort();
     return status;
+  }
+  DWORD PinPackageObjects(const AuthorityLaunch& launch) {
+    const HANDLE source = launch.package_objects();
+    if (!source) return ERROR_INVALID_HANDLE;
+    using Compare = BOOL(WINAPI*)(HANDLE, HANDLE);
+    const HMODULE base = GetModuleHandleW(L"kernelbase.dll");
+    const auto compare = base ? reinterpret_cast<Compare>(GetProcAddress(base, "CompareObjectHandles")) : nullptr;
+    if (!compare) return ERROR_PROC_NOT_FOUND;
+    if (package_objects) return compare(package_objects.get(), source) ? ERROR_SUCCESS : ERROR_NOT_SAME_OBJECT;
+    HANDLE raw = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &raw,
+        READ_CONTROL | 0x0001 | 0x0002, FALSE, 0)) return GetLastError();
+    Handle retained(raw);
+    DWORD flags = 0;
+    if (!GetHandleInformation(raw, &flags)) return GetLastError();
+    if ((flags & HANDLE_FLAG_INHERIT) || !compare(raw, source)) return ERROR_NOT_SAME_OBJECT;
+    // Startup is sequential; later callers hold Session::mutex_ through Create
+    // and this publication. Never silently replace an already-retained leaf.
+    package_objects = std::move(retained);
+    return ERROR_SUCCESS;
   }
 };
 
@@ -710,8 +733,12 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
   const std::wstring& working = entry->working_directory.empty() ? runtime_ : entry->working_directory;
   const AuthorityLaunchSpec spec{binary.c_str(), working.c_str(), arguments, environment,
       capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
-      identity_->session_objects(), identity_->app_container_objects()};
+      identity_->session_objects(), identity_->app_container_objects(), entry->profile->package_objects.get()};
   status = AuthorityLaunch::Create(identity_->token(), spec, &entry->launch, launch_stage);
+  if (status == ERROR_SUCCESS) {
+    if (launch_stage) *launch_stage = "launch.pin-profile-package-namespace";
+    status = entry->profile->PinPackageObjects(*entry->launch);
+  }
   if (status != ERROR_SUCCESS) return status;
   entry->start_time = CreationTime(entry->launch->process());
   if (!entry->start_time) return ERROR_INVALID_DATA;
@@ -1216,9 +1243,14 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   const std::wstring broker_arguments = L"--gesher-protected-binder " + registration + L" " + listeners + L" " + binder_data_;
   const AuthorityLaunchSpec broker_spec{broker_image.c_str(), runtime_.c_str(), broker_arguments,
       environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
-      identity_->session_objects(), identity_->app_container_objects()};
+      identity_->session_objects(), identity_->app_container_objects(), service_profile_->package_objects.get()};
   startup_stage_ = "runtime.create-binder-broker";
   status = AuthorityLaunch::Create(identity_->token(), broker_spec, &broker_, &launch_stage_);
+  if (status == ERROR_SUCCESS) {
+    startup_stage_ = "runtime.pin-broker-package-namespace";
+    launch_stage_ = "launch.pin-profile-package-namespace";
+    status = service_profile_->PinPackageObjects(*broker_);
+  }
   if (status != ERROR_SUCCESS) return status;
   PSID packages[] = {service_profile_->sid.value};
   startup_stage_ = "runtime.binder-listener-factory";
@@ -1233,9 +1265,14 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
       std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(options_.desktop_session);
   const AuthorityLaunchSpec manager_spec{manager_image.c_str(), runtime_.c_str(), manager_arguments,
       environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
-      identity_->session_objects(), identity_->app_container_objects()};
+      identity_->session_objects(), identity_->app_container_objects(), service_profile_->package_objects.get()};
   startup_stage_ = "runtime.create-service-manager";
   status = AuthorityLaunch::Create(identity_->token(), manager_spec, &manager_, &launch_stage_);
+  if (status == ERROR_SUCCESS) {
+    startup_stage_ = "runtime.pin-manager-package-namespace";
+    launch_stage_ = "launch.pin-profile-package-namespace";
+    status = service_profile_->PinPackageObjects(*manager_);
+  }
   if (status == ERROR_SUCCESS) status = registration_->Register(1, 1000, binder::PeerRole::kContextManager, *manager_);
   if (status == ERROR_SUCCESS) status = manager_->Resume();
   if (status != ERROR_SUCCESS) return status;
@@ -1474,7 +1511,7 @@ std::wstring Utf8(std::string_view text) {
   if (text.empty()) return {};
   const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
   if (size <= 0) return L"(unavailable)";
-  std::wstring result(size, L'\0');
+  std::wstring result(static_cast<size_t>(size), L'\0');
   if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), result.data(), size)) return L"(unavailable)";
   return result;
 }

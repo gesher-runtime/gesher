@@ -996,10 +996,10 @@ index a0a55f2a..a6127946 100644
 +            ? (errno = EACCES, -1) : 0;
 +      }
 diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
-index 8ce83721..71487505 100644
+index 5b6ebb59..11101a73 100644
 --- a/compat/posix/src/internal.h
 +++ b/compat/posix/src/internal.h
-@@ -142,0 +143,3 @@ std::string WindowsZoneId();
+@@ -143,0 +144,3 @@ std::string WindowsZoneId();
 +// A non-inheritable native file object for reserving a CRT descriptor slot.
 +// A contained process can receive a private anonymous pipe's read end.
 +HANDLE OpenFdPlaceholder(bool* pipe = nullptr);
