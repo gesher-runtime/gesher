@@ -710,7 +710,8 @@ if ($codeA -eq 0 -and $codeB -eq 0 -and $started -eq 1 -and $connected -eq 1 -an
 $initialList = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
 $initialListCode = $LASTEXITCODE
 $initialPackageCount = ([regex]::Matches($initialList, '(?m)^package:')).Count
-if ($initialListCode -ne 0 -or -not $initialList.Contains("gesher-app: $initialPackageCount installed packages") -or
+$initialPackageNoun = if ($initialPackageCount -eq 1) { 'package' } else { 'packages' }
+if ($initialListCode -ne 0 -or $initialList -notmatch "(?m)^gesher-app: $initialPackageCount installed $initialPackageNoun\r?$" -or
     $initialList -match '(?m)^package:com\.gesher\.(lifecycle|peer|components) ') {
   Write-Host "FAIL  services: initial package inventory is consistent and contains no install fixtures (exit $initialListCode)"
   Write-Host $initialList
