@@ -32,10 +32,10 @@
     "compat/elf/exec/exec_spawn.cc": "5338d750e3a01d4aaa2bd3adf019342403cb4eb8f2e337e4707f4e0e383362d4",
     "compat/elf/exec/gesher_exec.cc": "5d3dc551f5e1fabafcf6ba4eda3a2cf4a86a6c9268ebdf11fb7aa5979a82dd6e",
     "compat/posix/posix.cmake": "5f6009b3513d7859c7c53af23c47a3497812b04fa81321efca299307c5d7b276",
-    "compat/posix/src/fsops.cc": "abf308572845d0fcfb6f78591a5f63773322e5cafd75641ea73b93da58681b81",
+    "compat/posix/src/fsops.cc": "7667720a41e73fe5c508a2742700bef252d50024fa1849cd15f01b509e67edbd",
     "compat/posix/src/socket.cc": "049354ae6ec312aa487a1d040949a9b366e28c18e770f2ec21653d6a65fec2eb",
     "compat/posix/src/system.cc": "22ffaa16d319618169c3fe8d01e2af155f4299e232943dc211e4ead9c4ebf1dd",
-    "compat/posix/src/unistd.cc": "3bc9bd782e6b25c6d1d5a5bfdcc0fe87a745cfa9bed98d05ea8a5e50aefbb5e5",
+    "compat/posix/src/unistd.cc": "e9b18ef29b462cb62435c59300e37bc8c099ea4f4e726ef0da741a5f6139d5b1",
     "tests/art-temp/entry_test.cc": "53167f5d58aa396f737aa1cf80742ab08967cf9312ef29cd1b01117340024d10",
     "tests/native/ofd_transfer_host_test.cc.in": "191344661c640fc6d1eaeac09a1dcedf4d56a1b0aad26657865320ed936187b7",
     "tools/test_temp_directory.py": "d8583073123077066b161dd24d6c77d37f972093f68c0b93cc8b016935f773b6"
@@ -45,6 +45,6 @@
     "compat/posix/src/storage_policy.cc": "40704f856610896082eac4fe7055ee8634a27860f86504a5874d12ed980cd373",
     "compat/posix/src/storage_policy.h": "b40df105a58d1c17a3144442b9c3b1cf1f2ce69ff71a3bb7f969c979c1d71770"
   },
-  "patch_sha256": "2a7f88f331803ec26f732bc8e8d831db41fe4a767eb97ce66484b53075fdbf5d",
+  "patch_sha256": "d4dde9514b700a42f900d7fb5011aabb6d95303bb52681e65e3fe313568651e3",
   "native_runtime_approval": false
 }
