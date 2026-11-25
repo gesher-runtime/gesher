@@ -118,6 +118,8 @@ public final class Services {
                 StandIn.of(IActivityManager.class, am).asBinder());
         services.put(Context.ACTIVITY_TASK_SERVICE,
                 StandIn.of(IActivityTaskManager.class, atm).asBinder());
+        AlertWindowPolicy alerts = new AlertWindowPolicy(pm, atm);
+        services.put(AlertWindowPolicy.NAME, alerts);
         WindowManagerService wm = new WindowManagerService();
         services.put(Context.WINDOW_SERVICE,
                 StandIn.of(IWindowManager.class, wm).asBinder());
@@ -224,6 +226,10 @@ public final class Services {
         LocationManagerService location = new LocationManagerService(pm, am);
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 location).asBinder());
+        // CountryDetector: Windows' "Country or region" as the locale source
+        // (CountryDetectorService); no network, SIM or location-based country.
+        services.put(Context.COUNTRY_DETECTOR, StandIn.of(android.location.ICountryDetector.class,
+                new CountryDetectorService(WindowsCountry.create())).asBinder());
         services.put(com.gesher.net.IWindowsWifi.NAME,
                 new WifiService(am, atm, pm, () -> location.isLocationEnabledForUser(0)));
         // Bluetooth (docs/bluetooth.md): Windows' radio, its broadcasts and discovery. The
@@ -287,7 +293,7 @@ public final class Services {
         // StorageStatsManager: app and volume sizes for file managers and cleaners.
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,
-                new StorageStatsService(pm)).asBinder());
+                new StorageStatsService(pm, atm::authenticatedPackageCodeForPid)).asBinder());
         services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
                 android.app.admin.IDevicePolicyManager.class,
                 new DeviceServices.DevicePolicyService()).asBinder());
