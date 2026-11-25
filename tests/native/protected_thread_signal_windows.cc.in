@@ -26,6 +26,10 @@
 #include "gesher/futex_interrupt.h"
 #define BIONIC_SYSV
 
+// Explicit process boundary: this fixture creates Windows threads in its initial
+// process. Fork restore and its deferred retirement wait have separate gates.
+namespace gesher { bool InForkedChild() { return false; } }
+
 std::atomic<int> queued_nodes{0};
 extern "C" bool gesher_signal_queue_acquire(bool) { ++queued_nodes; return true; }
 extern "C" void gesher_signal_queue_release() { --queued_nodes; }

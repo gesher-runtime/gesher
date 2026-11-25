@@ -7,6 +7,7 @@
 
 #include <gesher/reserved_names.h>
 #include <gesher/environment.h>
+#include <gesher/storage_policy.h>
 #include <gesher/environment_utf16.h>
 
 #include "../../usb_storage/protected_runtime_client.h"
@@ -763,6 +764,8 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
     return SpawnProtectedCommand(launch, environment, cwd, fds, info, extra_flags);
   }
+  std::wstring storage_environment = gesher::ExternalStorageChildEnvironment(environment);
+  if (!storage_environment.empty()) environment = storage_environment.c_str();
   struct ImagePin {
     HANDLE value = nullptr;
     ~ImagePin() { if (value) CloseHandle(value); }

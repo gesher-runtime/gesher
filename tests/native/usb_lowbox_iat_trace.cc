@@ -490,6 +490,8 @@ TRACE_NOINLINE NTSTATUS NTAPI HookCreateFile(PHANDLE file, ACCESS_MASK access, P
     ULONG options, PVOID ea, ULONG ea_length) noexcept {
   LowboxTraceCall in{}; in.access = access;
   in.flags = disposition;
+  in.file_attributes = file_attributes; in.file_share = share;
+  in.file_options = options; in.file_ea_length = ea_length;
   return Forward(LowboxTraceApi::create_file, in, attributes, file, TRACE_CALLER(), [&] {
     return Original<CreateFileFn>(LowboxTraceApi::create_file)(file, access, attributes, iosb,
         allocation, file_attributes, share, disposition, options, ea, ea_length);
@@ -925,6 +927,12 @@ void PrintLowboxIatTrace(const LowboxIatTraceEvidence& e) noexcept {
         static_cast<unsigned long>(r.name_characters), static_cast<unsigned long>(r.name_truncated), r.name,
         static_cast<unsigned long>(r.target_snapshot_status), static_cast<unsigned long>(r.target_bytes),
         static_cast<unsigned long>(r.target_characters), static_cast<unsigned long>(r.target_truncated), r.target);
+    if (r.api == LowboxTraceApi::create_file) {
+      std::printf("Protected lowbox IAT file: seq=%lu attributes=0x%08lx share=0x%08lx disposition=%lu options=0x%08lx ea-length=%lu\n",
+          static_cast<unsigned long>(r.sequence), static_cast<unsigned long>(r.file_attributes),
+          static_cast<unsigned long>(r.file_share), static_cast<unsigned long>(r.flags),
+          static_cast<unsigned long>(r.file_options), static_cast<unsigned long>(r.file_ea_length));
+    }
   }
   PrintSecurity(e);
 }

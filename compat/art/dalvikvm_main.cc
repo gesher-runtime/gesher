@@ -13,6 +13,7 @@
 #include "../binder/protected_client_startup.h"
 #include "../usb_storage/protected_runtime_client.h"
 #include <gesher/protected_startup.h>
+#include <gesher/storage_policy.h>
 #include "exec_spawn.h"
 
 // Only upstream dalvikvm.cc is compiled with this main rename.
@@ -132,6 +133,7 @@ bool InitializeTemporaryDirectory(const std::vector<std::string>& arguments) {
 }  // namespace
 
 extern "C" int wmain(int argc, wchar_t** wide_argv) {
+  gesher::InitializeExternalStoragePolicy();
   if (argc < 1 || wide_argv == nullptr) return EXIT_FAILURE;
   std::vector<std::string> values;
   values.reserve(static_cast<std::size_t>(argc));

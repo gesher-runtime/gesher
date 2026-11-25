@@ -213,6 +213,10 @@ add_executable(xattr_fd_host_test tests/native/xattr_fd_host_test.cc)
 target_compile_options(xattr_fd_host_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(xattr_fd_host_test PRIVATE gesher_posix advapi32)
 
+add_executable(storage_policy_host_test tests/native/storage_policy_host_test.cc)
+target_compile_options(storage_policy_host_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(storage_policy_host_test PRIVATE gesher_posix sqlite)
+
 add_executable(sqlite_path_test tests/native/sqlite_path_test.cc)
 target_compile_options(sqlite_path_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(sqlite_path_test PRIVATE sqlite)

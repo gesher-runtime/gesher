@@ -58,6 +58,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/unix_rights.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/stat.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/stdio_output.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/storage_policy.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/syscall.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/sysv_shims.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/system.cc
@@ -110,6 +111,7 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_transport_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_usb_block_owner_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_protected_runtime_anchor)
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_storage_policy_anchor_v1)
 # GNU scanf's parser uses public getc/ungetc; retain one stream lock around
 # its complete conversion sequence, including ANSI-mode assembly aliases.
 target_link_options(gesher_posix INTERFACE -Wl,--wrap=__mingw_vfscanf -Wl,--wrap=__mingw_vfwscanf)

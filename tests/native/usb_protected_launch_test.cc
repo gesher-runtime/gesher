@@ -4,6 +4,7 @@
 // lowbox launcher. Internal service/guest modes exist only in this test image.
 #include "../../compat/usb_storage/protected_identity.h"
 #include "../../compat/usb_storage/authority_launch.h"
+#include "../../compat/usb_storage/protected_storage_policy.h"
 #include "../../compat/framework/app_container.h"
 #include "usb_lowbox_iat_trace.h"
 #include "usb_scm_profile_control.h"
@@ -124,6 +125,10 @@ struct PackageLeafEvidence {
   DWORD object_created = 0, subdirectory_created = 0;
   DWORD expected_reuse = 0, null_pin_reuse = 0, independent_pin_lifetime = 0;
   DWORD wrong_type_rejected = 0, wrong_object_rejected = 0, changed_policy_rejected = 0;
+  DWORD pipe_pin_verified = 0, pipe_policy_verified = 0, pipe_positive = 0;
+  DWORD pipe_denials = 0, pipe_reused = 0, pipe_changed_policy_rejected = 0;
+  DWORD policy_own_read = 0, policy_other_denied = 0, policy_write_denials = 0;
+  DWORD policy_replacement = 0, policy_bad_path_denied = 0;
   wchar_t path[kNamespacePathCharacters]{};
   wchar_t security[2048]{}, event_security[1024]{}, directory_security[1024]{};
   // Actual suspended package, distinct package token, filtered desktop.
@@ -1336,7 +1341,8 @@ void CopyObjectSecurity(PSECURITY_DESCRIPTOR descriptor, wchar_t (&target)[Size]
   Require(text && returned && returned <= Size, "package-security-sddl-bound", ERROR_MORE_DATA);
   CopyNamespaceText(std::wstring(text), target);
 }
-void VerifyPackageLeafPolicy(PSECURITY_DESCRIPTOR descriptor, const storage::AuthorityLaunchSpec& spec) {
+void VerifyPackageLeafPolicy(PSECURITY_DESCRIPTOR descriptor, const storage::AuthorityLaunchSpec& spec,
+                             bool pipe = false) {
   PSID owner = nullptr, group = nullptr;
   PACL dacl = nullptr, label = nullptr;
   BOOL present = FALSE, defaulted = FALSE;
@@ -1350,7 +1356,9 @@ void VerifyPackageLeafPolicy(PSECURITY_DESCRIPTOR descriptor, const storage::Aut
       (control & (SE_DACL_PROTECTED | SE_SACL_PROTECTED)) == (SE_DACL_PROTECTED | SE_SACL_PROTECTED) &&
       GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) && present && dacl &&
       IsValidAcl(dacl) && dacl->AceCount == 6, "package-leaf-protected-exact-acl", ERROR_INVALID_ACL);
-  const DWORD masks[] = {0x000f000f, GENERIC_ALL, 0x000f000f, GENERIC_ALL, 0x0002000f, GENERIC_ALL};
+  const DWORD masks[] = {pipe ? 0x001f01ffu : 0x000f000fu, GENERIC_ALL,
+      pipe ? 0x001f01ffu : 0x000f000fu, GENERIC_ALL,
+      pipe ? 0x001201ffu : 0x0002000fu, GENERIC_ALL};
   const BYTE flags[] = {0, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE,
       0, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE, 0,
       OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE};
@@ -1507,6 +1515,183 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
   }
 }
 
+std::wstring PackagePipePath(const storage::AuthorityLaunchSpec& spec) {
+  return L"\\Device\\NamedPipe\\Sessions\\" + std::to_wstring(spec.desktop_session) +
+      L"\\AppContainerNamedObjects\\" + SidText(spec.capabilities.AppContainerSid);
+}
+Handle OpenPackagePipe(const storage::AuthorityLaunchSpec& spec, ACCESS_MASK access,
+                       HANDLE token, DWORD* result) {
+  using Open = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+      PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+  const auto open = reinterpret_cast<Open>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtCreateFile"));
+  Require(open != nullptr, "pipe-leaf-native-open-export", ERROR_PROC_NOT_FOUND);
+  std::wstring path = PackagePipePath(spec);
+  UNICODE_STRING name{};
+  name.Buffer = path.data();
+  name.Length = static_cast<USHORT>(path.size() * sizeof(wchar_t));
+  name.MaximumLength = static_cast<USHORT>(name.Length + sizeof(wchar_t));
+  OBJECT_ATTRIBUTES attributes{};
+  attributes.Length = sizeof(attributes); attributes.ObjectName = &name;
+  attributes.Attributes = 0x1040;  // DONT_REPARSE | CASE_INSENSITIVE; never OPENIF.
+  IO_STATUS_BLOCK iosb{};
+  HANDLE raw = nullptr;
+  if (token) Require(ImpersonateLoggedOnUser(token), "pipe-leaf-open-actual-subject");
+  const NTSTATUS status = open(&raw, access, &attributes, &iosb, nullptr, FILE_ATTRIBUTE_NORMAL,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 1 /* FILE_OPEN */, 1 /* FILE_DIRECTORY_FILE */, nullptr, 0);
+  if (token && !RevertToSelf()) std::abort();
+  *result = static_cast<DWORD>(status);
+  return Handle(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
+}
+void ObservePackagePipe(const storage::AuthorityLaunch& launch, const storage::AuthorityLaunchSpec& spec,
+                        HANDLE guest, HANDLE other, HANDLE desktop, PackageLeafEvidence* evidence) {
+  const HANDLE pipe = launch.package_pipe_objects();
+  DWORD flags = 0;
+  Require(pipe && GetHandleInformation(pipe, &flags) && !(flags & HANDLE_FLAG_INHERIT) &&
+      SessionObjectAccess(pipe) == (READ_CONTROL | SYNCHRONIZE) &&
+      SessionObjectText(pipe, ObjectTypeInformation) == L"File" &&
+      SessionObjectText(pipe, static_cast<OBJECT_INFORMATION_CLASS>(1)) == PackagePipePath(spec),
+      "pipe-leaf-launch-owns-exact-readonly-pin", ERROR_INVALID_HANDLE);
+  evidence->pipe_pin_verified = 1;
+  const Local descriptor = SessionObjectSecurity(pipe);
+  VerifyPackageLeafPolicy(descriptor.get(), spec, true);
+  evidence->pipe_policy_verified = 1;
+  DWORD status = 0;
+  const Handle own = OpenPackagePipe(spec, READ_CONTROL, guest, &status);
+  Require(status == 0 && own, "pipe-leaf-actual-package-read-positive", ERROR_ACCESS_DENIED);
+  evidence->pipe_positive = 1;
+  for (const HANDLE subject : {guest, other, desktop}) {
+    for (const DWORD access : {DELETE, WRITE_DAC, WRITE_OWNER}) {
+      const Handle denied = OpenPackagePipe(spec, access, subject, &status);
+      Require(!denied && status == 0xc0000022, "pipe-leaf-actual-subject-mutation-denied", ERROR_ACCESS_DENIED);
+      ++evidence->pipe_denials;
+    }
+  }
+  for (const HANDLE subject : {other, desktop}) {
+    const Handle denied = OpenPackagePipe(spec, READ_CONTROL, subject, &status);
+    Require(!denied && status == 0xc0000022, "pipe-leaf-other-subject-read-denied", ERROR_ACCESS_DENIED);
+    ++evidence->pipe_denials;
+  }
+}
+
+void ObserveProtectedPolicy(const std::wstring& parent, const storage::AuthorityLaunchSpec& spec,
+                            HANDLE private_token, HANDLE guest, HANDLE other, PackageLeafEvidence* evidence) {
+  const std::wstring root = parent + L"\\policy-fixture";
+  const std::wstring policy_root = root + L"\\system\\storage-policy";
+  const std::wstring own_directory = policy_root + L"\\fixture.own";
+  const std::wstring other_directory = policy_root + L"\\fixture.other";
+  const std::wstring own = own_directory + L"\\policy", replaced = own_directory + L"\\next";
+  const std::wstring foreign = other_directory + L"\\policy";
+  struct Cleanup {
+    std::vector<std::wstring> files, directories;
+    ~Cleanup() {
+      for (const auto& path : files) DeleteFileW(path.c_str());
+      for (auto it = directories.rbegin(); it != directories.rend(); ++it) RemoveDirectoryW(it->c_str());
+    }
+  } cleanup{{own, replaced, foreign}, {root, root + L"\\system", policy_root, own_directory, other_directory}};
+  const std::wstring dacl = L"O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;" + SidText(spec.desktop_user) + L")";
+  PSECURITY_DESCRIPTOR raw = nullptr;
+  Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(dacl.c_str(), SDDL_REVISION_1,
+      &raw, nullptr), "policy-fixture-directory-security");
+  const Local security(raw);
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), raw, FALSE};
+  Require(CreateDirectoryW(root.c_str(), &attributes), "policy-fixture-unique-root");
+  raw = nullptr;
+  Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;OICI;NW;;;LW)", SDDL_REVISION_1,
+      &raw, nullptr), "policy-fixture-low-label");
+  const Local low_label(raw);
+  BOOL present = FALSE, defaulted = FALSE;
+  PACL label = nullptr;
+  Require(GetSecurityDescriptorSacl(raw, &present, &label, &defaulted) && present && label,
+      "policy-fixture-label-present");
+  // Lower only our newly created directory's integrity, using LABEL information;
+  // no SACL audit privilege or process privilege change is involved.
+  std::wstring writable_root = root;
+  Check(SetNamedSecurityInfoW(writable_root.data(), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+      nullptr, nullptr, nullptr, label), "policy-fixture-set-inheritable-low-label");
+  for (size_t i = 1; i < cleanup.directories.size(); ++i) {
+    // Match system_server's common TokenUser ownership on each package's
+    // directory. The parent trust boundary itself remains SYSTEM-created.
+    if (i >= 3) Require(ImpersonateLoggedOnUser(private_token), "policy-fixture-private-directory-creator");
+    const BOOL created = CreateDirectoryW(cleanup.directories[i].c_str(), nullptr);
+    const DWORD error = created ? ERROR_SUCCESS : GetLastError();
+    if (i >= 3 && !RevertToSelf()) std::abort();
+    Check(error, "policy-fixture-directory");
+  }
+  const auto publish = [&](const std::wstring& path, const char* content) {
+    Require(ImpersonateLoggedOnUser(private_token), "policy-fixture-private-file-creator");
+    const Handle file(CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+    const DWORD error = file.get() == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    if (!RevertToSelf()) std::abort();
+    Check(error, "policy-fixture-publish-open");
+    PSID owner = nullptr;
+    PSECURITY_DESCRIPTOR descriptor_raw = nullptr;
+    Check(GetSecurityInfo(file.get(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+        &owner, nullptr, nullptr, nullptr, &descriptor_raw), "policy-fixture-file-owner");
+    const Local descriptor(descriptor_raw);
+    Require(owner && EqualSid(owner, spec.desktop_user), "policy-fixture-real-common-private-owner", ERROR_INVALID_OWNER);
+    const DWORD length = static_cast<DWORD>(std::strlen(content));
+    DWORD written = 0;
+    Require(WriteFile(file.get(), content, length, &written, nullptr) && written == length && FlushFileBuffers(file.get()),
+        "policy-fixture-publish-bytes");
+  };
+  publish(own, "own-initial"); publish(foreign, "other-policy");
+  Check(storage::GrantProtectedStoragePolicy(root, L"fixture.own", spec.capabilities.AppContainerSid),
+      "policy-production-own-directory-grant");
+  Require(storage::GrantProtectedStoragePolicy(root, L"../fixture.other", spec.capabilities.AppContainerSid)
+      == ERROR_INVALID_PARAMETER, "policy-production-path-override-denied", ERROR_INVALID_DATA);
+  evidence->policy_bad_path_denied = 1;
+  const auto open_as = [&](HANDLE token, const std::wstring& path, DWORD access, DWORD* status) {
+    Require(ImpersonateLoggedOnUser(token), "policy-fixture-actual-subject");
+    HANDLE file = CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    *status = file == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+    if (!RevertToSelf()) std::abort();
+    return Handle(file == INVALID_HANDLE_VALUE ? nullptr : file);
+  };
+  const auto read_own = [&](const char* expected) {
+    DWORD status = 0;
+    const Handle file = open_as(guest, own, GENERIC_READ | READ_CONTROL, &status);
+    Require(status == ERROR_SUCCESS && file, "policy-actual-lowbox-read-positive", status);
+    std::array<char, 64> bytes{};
+    DWORD count = 0;
+    Require(ReadFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &count, nullptr) &&
+        std::string_view(bytes.data(), count) == expected, "policy-actual-lowbox-read-published-bytes");
+    PSECURITY_DESCRIPTOR descriptor_raw = nullptr;
+    Check(GetSecurityInfo(file.get(), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+        nullptr, nullptr, nullptr, nullptr, &descriptor_raw), "policy-actual-file-label");
+    const Local descriptor(descriptor_raw);
+    PACL actual = nullptr;
+    Require(GetSecurityDescriptorSacl(descriptor_raw, &present, &actual, &defaulted) && present && actual && actual->AceCount == 1,
+        "policy-file-low-label-present", ERROR_INVALID_ACL);
+    void* ace_raw = nullptr;
+    Require(GetAce(actual, 0, &ace_raw), "policy-file-label-ace");
+    const auto* ace = static_cast<const SYSTEM_MANDATORY_LABEL_ACE*>(ace_raw);
+    Require(ace->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE &&
+        IsWellKnownSid(const_cast<DWORD*>(&ace->SidStart), WinLowLabelSid),
+        "policy-write-denials-not-confounded-by-higher-integrity", ERROR_INVALID_ACL);
+  };
+  read_own("own-initial"); evidence->policy_own_read = 1;
+  DWORD status = 0;
+  const Handle foreign_read = open_as(guest, foreign, GENERIC_READ, &status);
+  Require(!foreign_read && status == ERROR_ACCESS_DENIED, "policy-other-package-metadata-read-denied", status);
+  const Handle other_read = open_as(other, own, GENERIC_READ, &status);
+  Require(!other_read && status == ERROR_ACCESS_DENIED, "policy-other-subject-own-metadata-read-denied", status);
+  evidence->policy_other_denied = 2;
+  constexpr DWORD modification_access[] = {FILE_WRITE_DATA, FILE_APPEND_DATA, DELETE, WRITE_DAC, WRITE_OWNER};
+  for (const auto& path : {own, own_directory, foreign, other_directory}) {
+    for (const DWORD access : modification_access) {
+      const Handle denied = open_as(guest, path, access, &status);
+      Require(!denied && status == ERROR_ACCESS_DENIED, "policy-actual-lowbox-modification-denied", status);
+      ++evidence->policy_write_denials;
+    }
+  }
+  publish(replaced, "own-replacement");
+  Require(MoveFileExW(replaced.c_str(), own.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH),
+      "policy-fixture-atomic-replacement");
+  read_own("own-replacement"); evidence->policy_replacement = 1;
+}
+
 void ObservePackageLeaf(const std::wstring& path, const storage::AuthorityLaunch& launch,
     const storage::AuthorityLaunchSpec& spec, HANDLE guest, HANDLE other, HANDLE desktop,
     PackageLeafEvidence* evidence) {
@@ -1557,6 +1742,7 @@ void ObservePackageLeaf(const std::wstring& path, const storage::AuthorityLaunch
       "package-leaf-own-create-positive-control", ERROR_ACCESS_DENIED);
   Require(isolated, "package-leaf-own-standard-and-other-desktop-mutations-denied", ERROR_ACCESS_DENIED);
   CreatePackageChildren(path, guest, other, desktop, evidence);
+  ObservePackagePipe(launch, spec, guest, other, desktop, evidence);
   evidence->status = ERROR_SUCCESS;
 }
 
@@ -1576,6 +1762,12 @@ void ObservePackageReuse(HANDLE private_token, const storage::AuthorityLaunchSpe
       SessionObjectAccess(child->package_objects()) == 0x00020003 &&
       SameSessionObject(child->package_objects(), first.package_objects()),
       "package-reuse-launch-owns-independent-readonly-pin", ERROR_NOT_SAME_OBJECT);
+  Require(child->package_pipe_objects() && child->package_pipe_objects() != first.package_pipe_objects() &&
+      SessionObjectAccess(child->package_pipe_objects()) == (READ_CONTROL | SYNCHRONIZE),
+      "pipe-reuse-independent-readonly-launch-pin", ERROR_INVALID_HANDLE);
+  const Local pipe_reused = SessionObjectSecurity(child->package_pipe_objects());
+  VerifyPackageLeafPolicy(pipe_reused.get(), spec, true);
+  evidence->pipe_reused = 1;
   evidence->expected_reuse = 1;
   profile_pin.reset();
   Require(SameSessionObject(child->package_objects(), first.package_objects()) &&
@@ -1666,6 +1858,39 @@ void ObservePackageReuse(HANDLE private_token, const storage::AuthorityLaunchSpe
       std::strcmp(stage, "lowbox.verify-package-namespace") == 0,
       "package-reuse-pinned-but-changed-policy-rejected", ERROR_INVALID_DATA);
   evidence->changed_policy_rejected = 1;
+  // Exercise a real NPFS descriptor, not just the normal object Directory.
+  // Only this uniquely named fixture-owned leaf is changed; restore it before
+  // asserting that a second authority launch rejected its otherwise-live name.
+  DWORD pipe_status = 0;
+  const Handle pipe_writable = OpenPackagePipe(original, READ_CONTROL | WRITE_DAC, nullptr, &pipe_status);
+  Require(pipe_status == 0 && pipe_writable, "pipe-reuse-owned-policy-handle", ERROR_ACCESS_DENIED);
+  const Local pipe_before = SessionObjectSecurity(pipe_writable.get());
+  PACL pipe_acl = nullptr;
+  Require(GetSecurityDescriptorDacl(pipe_before.get(), &present, &pipe_acl, &defaulted) && present && pipe_acl,
+      "pipe-reuse-original-policy");
+  PACL pipe_changed_raw = nullptr;
+  Check(SetEntriesInAclW(1, &extra, pipe_acl, &pipe_changed_raw), "pipe-reuse-fixture-changed-policy");
+  const Local pipe_changed(pipe_changed_raw);
+  Check(SetSecurityInfo(pipe_writable.get(), SE_FILE_OBJECT,
+      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, pipe_changed_raw, nullptr),
+      "pipe-reuse-apply-fixture-policy-change");
+  const Local pipe_applied = SessionObjectSecurity(pipe_writable.get());
+  PACL pipe_applied_acl = nullptr;
+  const bool pipe_change_observed = GetSecurityDescriptorDacl(pipe_applied.get(), &present, &pipe_applied_acl, &defaulted) &&
+      present && pipe_applied_acl && SessionAclBytes(pipe_applied_acl) == SessionAclBytes(pipe_changed_raw) &&
+      SessionAclBytes(pipe_applied_acl) != SessionAclBytes(pipe_acl);
+  stage = "pipe-reuse.changed-policy";
+  rejected = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
+  const DWORD pipe_restored = SetSecurityInfo(pipe_writable.get(), SE_FILE_OBJECT,
+      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, pipe_acl, nullptr);
+  Check(pipe_restored, "pipe-reuse-restore-owned-fixture-policy");
+  Require(pipe_change_observed, "pipe-reuse-live-policy-change-observed", ERROR_INVALID_ACL);
+  const Local pipe_after = SessionObjectSecurity(first.package_pipe_objects());
+  VerifyPackageLeafPolicy(pipe_after.get(), original, true);
+  Require(rejected == ERROR_ACCESS_DENIED && !child && stage &&
+      std::strcmp(stage, "lowbox.verify-package-pipe-namespace") == 0,
+      "pipe-reuse-changed-policy-rejected-before-wrapper", ERROR_INVALID_DATA);
+  evidence->pipe_changed_policy_rejected = 1;
 }
 
 Local CollisionSecurity(PSID desktop, PSID private_user, PSID package, bool changed, bool system_owner = false) {
@@ -1886,6 +2111,14 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
       static_cast<unsigned long>(leaf.expected_reuse), static_cast<unsigned long>(leaf.null_pin_reuse),
       static_cast<unsigned long>(leaf.independent_pin_lifetime), static_cast<unsigned long>(leaf.wrong_type_rejected),
       static_cast<unsigned long>(leaf.wrong_object_rejected), static_cast<unsigned long>(leaf.changed_policy_rejected));
+  std::printf("Protected pipe admission: launch-readonly-pin=%lu exact-policy=%lu actual-package-read=%lu mutation-and-other-read-denials=%lu independent-reuse-pin=%lu changed-policy-rejected=%lu\n",
+      static_cast<unsigned long>(leaf.pipe_pin_verified), static_cast<unsigned long>(leaf.pipe_policy_verified),
+      static_cast<unsigned long>(leaf.pipe_positive), static_cast<unsigned long>(leaf.pipe_denials),
+      static_cast<unsigned long>(leaf.pipe_reused), static_cast<unsigned long>(leaf.pipe_changed_policy_rejected));
+  std::printf("Protected policy admission: own-read=%lu other-package-denials=%lu modification-denials=%lu atomic-replacement-read=%lu path-override-denied=%lu\n",
+      static_cast<unsigned long>(leaf.policy_own_read), static_cast<unsigned long>(leaf.policy_other_denied),
+      static_cast<unsigned long>(leaf.policy_write_denials), static_cast<unsigned long>(leaf.policy_replacement),
+      static_cast<unsigned long>(leaf.policy_bad_path_denied));
   if (leaf.event_security[0] && std::wmemchr(leaf.event_security, L'\0', std::size(leaf.event_security)))
     std::printf("Protected package child: kind=event inherited-owner-group-dacl-label=%ls\n", leaf.event_security);
   if (leaf.directory_security[0] && std::wmemchr(leaf.directory_security, L'\0', std::size(leaf.directory_security)))
@@ -2172,7 +2405,8 @@ Evidence RunSystem() {
         (creation.privilege_enabled & SE_PRIVILEGE_ENABLED) && creation.privilege_changes <= 1 &&
         creation.privilege_restore_status == ERROR_SUCCESS && creation.privilege_restored == creation.privilege_before &&
         creation.bind_status == ERROR_SUCCESS && creation.native_called == 1 && creation.native_status == 0 &&
-        creation.context_restore_status == ERROR_SUCCESS,
+        creation.context_restore_status == ERROR_SUCCESS && creation.pipe_create_called == 1 &&
+        creation.pipe_create_status == 0 && creation.pipe_policy_status == ERROR_SUCCESS,
         "authority-package-create-scoped-privilege-and-native-success", ERROR_INVALID_DATA);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
     BOOL contained = FALSE;
@@ -2223,6 +2457,9 @@ Evidence RunSystem() {
     observe_isolation([&] {
       try { ObservePackageLeaf(package_object_path, *child, spec, guest_token.get(), other_token.get(), filtered.get(), &evidence.package_leaf); }
       catch (const Failure& failure) { evidence.package_leaf.status = failure.status; throw; }
+    });
+    observe_isolation([&] {
+      ObserveProtectedPolicy(config.directory, spec, identity->token(), guest_token.get(), other_token.get(), &evidence.package_leaf);
     });
     observe_isolation([&] {
       try { ObservePackageReuse(identity->token(), spec, *child, package_object_path, &evidence.package_leaf); }
@@ -2491,6 +2728,9 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
         static_cast<unsigned long>(creation.privilege_restore_status), static_cast<unsigned long>(creation.bind_status),
         static_cast<unsigned long>(creation.native_called), static_cast<unsigned long>(creation.native_status),
         static_cast<unsigned long>(creation.context_restore_status));
+    std::printf("Protected pipe creation: open-win32=%lu create-called=%lu create-ntstatus=0x%08lx policy-win32=%lu\n",
+        static_cast<unsigned long>(creation.pipe_open_status), static_cast<unsigned long>(creation.pipe_create_called),
+        static_cast<unsigned long>(creation.pipe_create_status), static_cast<unsigned long>(creation.pipe_policy_status));
     std::printf("Protected package creation: actual-process-privileges-unchanged=%lu actual-no-thread-token=%lu context-check-win32=%lu\n",
         static_cast<unsigned long>(evidence.namespace_process_privileges_unchanged),
         static_cast<unsigned long>(evidence.namespace_no_thread_token), static_cast<unsigned long>(evidence.namespace_context_status));

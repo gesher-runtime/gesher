@@ -225,6 +225,7 @@ public final class SystemServer {
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
 
         Main.bootstrap(TAG, buildProp, frameworkRes);
+        if (ProtectedRuntime.enabled()) ExternalStorageAccess.configureProtectedRuntime();
         if (launchInitialApk && (!ProtectedRuntime.enabled() || apks.size() != 1)) {
             throw new SecurityException("Initial protected launch needs one authority-staged APK");
         }
@@ -311,6 +312,7 @@ public final class SystemServer {
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.
         created.am.invalidatePermissionCaches();
+        ExternalStorageAccess.syncAll(created.pm);
         startAppProcessesOnDemand(created.atm, created.pm);
         PersistentDevice device = null;
         if (persistent) {
@@ -402,6 +404,7 @@ public final class SystemServer {
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
                     "GESHER_UID=" + uid,
                     "GESHER_BINDER_UID=" + uid,
+                    "GESHER_APP_PACKAGE=" + packageName,
                     "GESHER_LOG_FILE=" + logFile.getPath() + ".logcat",
                     // The package's AppUserModelID, its Start menu shortcut's (shell track).
                     com.gesher.app.shell.AppShell.ENV_APP_USER_MODEL_ID + "="
@@ -430,13 +433,14 @@ public final class SystemServer {
             // device-wide setting before the app initializes Choreographer.
             android.os.SystemProperties.set("debug.choreographer.vsync", "false");
             if (ProtectedRuntime.enabled()) {
-                return ProtectedRuntime.spawn(pkg, processName, startSeq, targetSdk, env);
+                return ProtectedRuntime.spawn(pm, pkg, processName, startSeq, targetSdk, env);
             }
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
-                return AppSandbox.spawn(command, env, logFile, pkg, packageName,
+                return AppSandbox.spawn(command, env, logFile, pm, pkg, packageName,
                         ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
             }
+            ExternalStorageAccess.syncPackage(pm, pkg);
             return Zygote.spawn(command, env, logFile.getPath(), false);
             }
         });

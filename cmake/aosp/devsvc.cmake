@@ -14,6 +14,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_winusb.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_storage_observation.cc
   ${CMAKE_SOURCE_DIR}/compat/usb_storage/protected_usb_observation.cc
+  ${CMAKE_SOURCE_DIR}/compat/devsvc/url_handlers_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_hardware.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/home_region_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/clipboard_access.cc
@@ -30,5 +31,5 @@ target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/
 # gesher/egl_angle.h: the OpenGL ES version of the default EGL display (egl_gles.cc).
 set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/compat/bionic/include)
-target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32 wtsapi32
+target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32 shlwapi wtsapi32
   iphlpapi cfgmgr32 setupapi winusb)

@@ -14,6 +14,7 @@
 
 #include "internal.h"
 #include "ofd_internal.h"
+#include "storage_policy.h"
 #include <gesher/reserved_names.h>
 
 struct gesher_DIR {
@@ -69,6 +70,10 @@ DIR* Open(const char* name, int fd) {
     delete dir;
     return nullptr;
   } else {
+    if (!gesher::CheckExternalStorageAccess(dir->path, gesher::AccessKind::kRead)) {
+      delete dir;
+      return nullptr;
+    }
     DWORD attrs = GetFileAttributesW(dir->path.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) {
       gesher::FailWithLastError();

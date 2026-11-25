@@ -434,6 +434,7 @@ class PackageSaclPrivilege {
 class PackageNamespace {
  public:
   static constexpr ACCESS_MASK kRead = READ_CONTROL | 0x0001 | 0x0002;
+  static constexpr ACCESS_MASK kPipeRead = READ_CONTROL | SYNCHRONIZE;
 
   DWORD Initialize(const AuthorityLaunchSpec& spec, HANDLE base) {
     const HMODULE native = GetModuleHandleW(L"ntdll.dll");
@@ -445,7 +446,7 @@ class PackageNamespace {
     query_ = reinterpret_cast<QuerySecurity>(GetProcAddress(native, "NtQuerySecurityObject"));
     error_ = reinterpret_cast<NativeError>(GetProcAddress(native, "RtlNtStatusToDosError"));
     compare_ = reinterpret_cast<Compare>(GetProcAddress(kernel, "CompareObjectHandles"));
-    if (!open_ || !create_ || !query_ || !error_ || !compare_) return ERROR_PROC_NOT_FOUND;
+    if (!open_ || !create_ || !create_file_ || !query_ || !error_ || !compare_) return ERROR_PROC_NOT_FOUND;
     wchar_t* package = nullptr;
     if (!ConvertSidToStringSidW(spec.capabilities.AppContainerSid, &package)) return GetLastError();
     const LocalMemory package_owner(package);
@@ -474,11 +475,15 @@ class PackageNamespace {
     BOOL present = FALSE, defaulted = FALSE;
     if (!expected_dacl_ || !GetSecurityDescriptorSacl(policy_.get(), &present, &expected_label_, &defaulted) ||
         !present || !expected_label_) return ERROR_INVALID_SECURITY_DESCR;
+    expected_pipe_dacl_ = GetAcl(pipe_policy_.get());
+    if (!expected_pipe_dacl_ || !GetSecurityDescriptorSacl(pipe_policy_.get(), &present, &expected_pipe_label_, &defaulted) ||
+        !present || !expected_pipe_label_) return ERROR_INVALID_SECURITY_DESCR;
     shadow_ = base;
     return ERROR_SUCCESS;
   }
 
-  DWORD Prepare(const AuthorityLaunchSpec& spec, HANDLE root, Handle* retained, const char** startup_stage) {
+  DWORD Prepare(const AuthorityLaunchSpec& spec, HANDLE root, Handle* retained,
+                Handle* retained_pipe, const char** startup_stage) {
     const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
     struct Result {
       AuthorityNamespaceCreateResult value;
@@ -488,21 +493,35 @@ class PackageNamespace {
     stage("lowbox.verify-package-namespace");
     NTSTATUS native = 0;
     DWORD status = OpenLeaf(root, retained, &native);
-    if (status != ERROR_SUCCESS) {
-      if (native != static_cast<NTSTATUS>(0xc0000034) && native != static_cast<NTSTATUS>(0xc000003a)) return status;
+    const bool create_directory = status != ERROR_SUCCESS;
+    if (create_directory) {
+      if (!Missing(native)) return status;
       if (spec.expected_package_objects) return ERROR_NOT_SAME_OBJECT;
-      // A temporary SYSTEM-only create-subdirectory handle is independently
-      // compared to the same root. The authority's retained roots stay read-only;
-      // no parent ACL is changed to create this one canonical SID child.
-      stage("lowbox.open-package-create-root");
-      Handle create_root;
-      status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &create_root, kRead | 0x0008);
-      observed.value.root_open_status = status;
+    } else {
+      // Reject an untrusted normal namespace before creating its pipe sibling.
+      if (spec.expected_package_objects) {
+        status = SamePin(spec.expected_package_objects, retained->get());
+        if (status != ERROR_SUCCESS) return status;
+      }
+      status = VerifyPolicy(retained->get());
       if (status != ERROR_SUCCESS) return status;
-      UNICODE_STRING name = Name();
-      OBJECT_ATTRIBUTES attributes = Attributes(create_root.get(), &name);
-      attributes.SecurityDescriptor = policy_.get();
-      HANDLE raw = nullptr;
+    }
+    stage("lowbox.open-package-pipe-namespace");
+    NTSTATUS pipe_native = 0;
+    status = OpenPipe(retained_pipe, &pipe_native);
+    observed.value.pipe_open_status = status;
+    const bool create_pipe = status != ERROR_SUCCESS;
+    if (create_pipe && !Missing(pipe_native)) return status;
+    if (create_directory || create_pipe) {
+      Handle create_root;
+      if (create_directory) {
+        // A temporary SYSTEM-only create-subdirectory handle is independently
+        // compared to the same root. No parent ACL is changed.
+        stage("lowbox.open-package-create-root");
+        status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &create_root, kRead | 0x0008);
+        observed.value.root_open_status = status;
+        if (status != ERROR_SUCCESS) return status;
+      }
       PackageSaclPrivilege privilege(&observed.value);
       stage("lowbox.enable-package-sacl-privilege");
       status = privilege.Enable();
@@ -512,49 +531,79 @@ class PackageNamespace {
       status = privilege.Bind();
       observed.value.bind_status = status;
       if (status != ERROR_SUCCESS) return status;
-      // The five-argument native ABI takes a QUERY|TRAVERSE shadow Directory.
-      // Option 1 is the option observed on both supported Windows wrappers;
-      // do not assign it an undocumented semantic name. No OPENIF is supplied.
-      stage("lowbox.create-package-namespace");
-      observed.value.native_called = 1;
-      native = create_(&raw, kRead, &attributes, shadow_, 1);
-      observed.value.native_status = native;
-      Handle created(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
-      NTSTATUS pipe_status = 0;
-      if ((native == 0 || native == static_cast<NTSTATUS>(0xc0000035)) && create_file_) {
-        UNICODE_STRING pipe_name = PipeName();
-        OBJECT_ATTRIBUTES pipe_attributes = Attributes(nullptr, &pipe_name);
-        pipe_attributes.Attributes = 0x00000040;  // OBJ_CASE_INSENSITIVE
-        pipe_attributes.SecurityDescriptor = pipe_policy_.get();
+      Handle created;
+      if (create_directory) {
+        UNICODE_STRING name = Name();
+        OBJECT_ATTRIBUTES attributes = Attributes(create_root.get(), &name);
+        attributes.SecurityDescriptor = policy_.get();
+        HANDLE raw = nullptr;
+        // The five-argument native ABI takes a QUERY|TRAVERSE shadow Directory.
+        // Option 1 is observed on both supported Windows wrappers. No OPENIF.
+        stage("lowbox.create-package-namespace");
+        observed.value.native_called = 1;
+        native = create_(&raw, kRead, &attributes, shadow_, 1);
+        observed.value.native_status = native;
+        created.reset(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
+      } else {
+        native = 0;
+      }
+      Handle pipe_created;
+      if (create_pipe && (native == 0 || native == kCollision)) {
+        UNICODE_STRING name = PipeName();
+        OBJECT_ATTRIBUTES attributes = Attributes(nullptr, &name);
+        attributes.Attributes |= 0x00000040;  // OBJ_CASE_INSENSITIVE
+        attributes.SecurityDescriptor = pipe_policy_.get();
         IO_STATUS_BLOCK iosb{};
-        HANDLE pipe_raw = nullptr;
-        pipe_status = create_file_(&pipe_raw, 0x001f0006, &pipe_attributes, &iosb, nullptr,
-            FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE, 3 /* FILE_OPEN_IF */,
-            1 /* FILE_DIRECTORY_FILE */, nullptr, 0);
-        if (pipe_raw && pipe_raw != INVALID_HANDLE_VALUE) CloseHandle(pipe_raw);
+        HANDLE raw = nullptr;
+        stage("lowbox.create-package-pipe-namespace");
+        observed.value.pipe_create_called = 1;
+        // FILE_CREATE detects a race. An existing directory is reopened and
+        // authenticated below; its descriptor is never silently repaired.
+        pipe_native = create_file_(&raw, 0x001f0006, &attributes, &iosb, nullptr,
+            FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            2 /* FILE_CREATE */, 1 /* FILE_DIRECTORY_FILE */, nullptr, 0);
+        observed.value.pipe_create_status = pipe_native;
+        pipe_created.reset(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
       }
       stage("lowbox.restore-package-create-context");
       const DWORD restored = privilege.Restore();
-      if (native < 0 && native != static_cast<NTSTATUS>(0xc0000035)) {
+      if (native < 0 && native != kCollision) {
         stage("lowbox.create-package-namespace");
-        return Error(native);  // Keep the original error; cleanup has its own result.
+        return Error(native);
       }
-      if (pipe_status < 0) {
+      if (create_pipe && pipe_native < 0 && pipe_native != kCollision) {
         stage("lowbox.create-package-pipe-namespace");
-        return Error(pipe_status);
+        return Error(pipe_native);
       }
       if (restored != ERROR_SUCCESS) return restored;
-      stage("lowbox.create-package-namespace");
-      if (native == 0) {
-        if (!created) return ERROR_INVALID_HANDLE;
-        retained->reset(created.release());
-      } else if (native == static_cast<NTSTATUS>(0xc0000035)) {
-        // Another authority launch may have won creation. Reopen and apply
-        // the same SYSTEM-owner/exact-policy invariant; never adopt by name.
-        status = OpenLeaf(root, retained);
-        if (status != ERROR_SUCCESS) return status;
-      } else {
-        return native < 0 ? Error(native) : ERROR_INVALID_DATA;
+      if (create_directory) {
+        stage("lowbox.create-package-namespace");
+        if (native == 0) {
+          if (!created) return ERROR_INVALID_HANDLE;
+          retained->reset(created.release());
+        } else if (native == kCollision) {
+          status = OpenLeaf(root, retained);
+          if (status != ERROR_SUCCESS) return status;
+        } else {
+          return ERROR_INVALID_DATA;
+        }
+      }
+      if (create_pipe) {
+        stage("lowbox.open-package-pipe-namespace");
+        if (pipe_native == 0) {
+          if (!pipe_created) return ERROR_INVALID_HANDLE;
+          HANDLE read_only = nullptr;
+          if (!DuplicateHandle(GetCurrentProcess(), pipe_created.get(), GetCurrentProcess(),
+              &read_only, kPipeRead, FALSE, 0)) return GetLastError();
+          retained_pipe->reset(read_only);
+        } else if (pipe_native == kCollision) {
+          status = OpenPipe(retained_pipe);
+          if (status != ERROR_SUCCESS) return status;
+        } else {
+          return ERROR_INVALID_DATA;
+        }
+        // The reduced duplicate retains the NPFS directory before the creation
+        // handle closes. No mutation-capable or inheritable handle survives.
       }
     }
     stage("lowbox.verify-package-namespace");
@@ -563,15 +612,20 @@ class PackageNamespace {
       if (status != ERROR_SUCCESS) return status;
     }
     status = VerifyPolicy(retained->get());
-    return status == ERROR_SUCCESS ? Recheck(root, retained->get()) : status;
+    if (status != ERROR_SUCCESS) return status;
+    stage("lowbox.verify-package-pipe-namespace");
+    status = VerifyPipePolicy(retained_pipe->get());
+    observed.value.pipe_policy_status = status;
+    return status == ERROR_SUCCESS ? Recheck(root, retained->get(), retained_pipe->get()) : status;
   }
 
-  DWORD Recheck(HANDLE root, HANDLE expected) {
+  DWORD Recheck(HANDLE root, HANDLE expected, HANDLE pipe) {
     Handle fresh;
     DWORD status = OpenLeaf(root, &fresh);
     if (status != ERROR_SUCCESS) return status;
     status = SamePin(expected, fresh.get());
-    return status == ERROR_SUCCESS ? VerifyPolicy(fresh.get()) : status;
+    if (status == ERROR_SUCCESS) status = VerifyPolicy(fresh.get());
+    return status == ERROR_SUCCESS ? VerifyPipePolicy(pipe) : status;
   }
 
  private:
@@ -583,6 +637,10 @@ class PackageNamespace {
   using NativeError = ULONG(NTAPI*)(NTSTATUS);
   using Compare = BOOL(WINAPI*)(HANDLE, HANDLE);
   static constexpr DWORD kSecurityLimit = 16384;
+  static constexpr NTSTATUS kCollision = static_cast<NTSTATUS>(0xc0000035);
+  static bool Missing(NTSTATUS status) {
+    return status == static_cast<NTSTATUS>(0xc0000034) || status == static_cast<NTSTATUS>(0xc000003a);
+  }
   Open open_ = nullptr;
   Create create_ = nullptr;
   CreateFileFn create_file_ = nullptr;
@@ -593,8 +651,9 @@ class PackageNamespace {
   std::wstring name_, pipe_name_;
   LocalMemory policy_, pipe_policy_;
   PACL expected_dacl_ = nullptr, expected_label_ = nullptr;
-  bool have_control_ = false;
-  SECURITY_DESCRIPTOR_CONTROL control_ = 0;
+  PACL expected_pipe_dacl_ = nullptr, expected_pipe_label_ = nullptr;
+  bool have_control_ = false, have_pipe_control_ = false;
+  SECURITY_DESCRIPTOR_CONTROL control_ = 0, pipe_control_ = 0;
 
   DWORD Error(NTSTATUS status) const {
     const DWORD result = error_(status);
@@ -637,6 +696,28 @@ class PackageNamespace {
     result->reset(opened.release());
     return ERROR_SUCCESS;
   }
+  // KernelBase requests DELETE as part of its full-access directory open.
+  // Sharing permits that trusted wrapper request; the exact package ACL still
+  // denies DELETE/WRITE_DAC/WRITE_OWNER to every lowbox subject.
+  DWORD OpenPipe(Handle* result, NTSTATUS* native_status = nullptr) {
+    UNICODE_STRING name = PipeName();
+    OBJECT_ATTRIBUTES attributes = Attributes(nullptr, &name);
+    attributes.Attributes |= 0x00000040;  // OBJ_CASE_INSENSITIVE
+    IO_STATUS_BLOCK iosb{};
+    HANDLE raw = nullptr;
+    const NTSTATUS status = create_file_(&raw, kPipeRead, &attributes, &iosb, nullptr,
+        FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        1 /* FILE_OPEN */, 1 /* FILE_DIRECTORY_FILE */, nullptr, 0);
+    Handle opened(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
+    if (native_status) *native_status = status;
+    if (status < 0) return Error(status);
+    if (!opened) return ERROR_INVALID_HANDLE;
+    DWORD flags = 0;
+    if (!GetHandleInformation(opened.get(), &flags)) return GetLastError();
+    if (flags & HANDLE_FLAG_INHERIT) return ERROR_ACCESS_DENIED;
+    result->reset(opened.release());
+    return ERROR_SUCCESS;
+  }
   DWORD SamePin(HANDLE expected, HANDLE actual) const {
     DWORD flags = 0;
     if (!GetHandleInformation(expected, &flags)) return GetLastError();
@@ -657,6 +738,16 @@ class PackageNamespace {
         acl->AceCount <= 16 && Within(acl, acl->AclSize, begin, bytes) && IsValidAcl(acl);
   }
   DWORD VerifyPolicy(HANDLE directory) {
+    return VerifyPolicy(directory, expected_dacl_, expected_label_, &have_control_, &control_);
+  }
+  DWORD VerifyPipePolicy(HANDLE pipe) {
+    DWORD flags = 0;
+    if (!pipe || !GetHandleInformation(pipe, &flags)) return ERROR_INVALID_HANDLE;
+    if (flags & HANDLE_FLAG_INHERIT) return ERROR_ACCESS_DENIED;
+    return VerifyPolicy(pipe, expected_pipe_dacl_, expected_pipe_label_, &have_pipe_control_, &pipe_control_);
+  }
+  DWORD VerifyPolicy(HANDLE directory, PACL expected_dacl, PACL expected_label,
+                     bool* have_control, SECURITY_DESCRIPTOR_CONTROL* saved_control) {
     std::vector<DWORD> storage(kSecurityLimit / sizeof(DWORD));
     ULONG bytes = 0;
     const NTSTATUS status = query_(directory, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
@@ -681,11 +772,11 @@ class PackageNamespace {
         !IsValidSecurityDescriptor(storage.data())) return ERROR_INVALID_SECURITY_DESCR;
     constexpr WORD protected_lists = SE_DACL_PROTECTED | SE_SACL_PROTECTED;
     if (!IsWellKnownSid(owner, WinLocalSystemSid) || !IsWellKnownSid(group, WinLocalSystemSid) ||
-        (control & protected_lists) != protected_lists || dacl->AclRevision != expected_dacl_->AclRevision ||
-        label->AclRevision != expected_label_->AclRevision || !SameAcl(expected_dacl_, dacl) ||
-        !SameAcl(expected_label_, label) || (have_control_ && control != control_)) return ERROR_ACCESS_DENIED;
-    control_ = control;
-    have_control_ = true;
+        (control & protected_lists) != protected_lists || dacl->AclRevision != expected_dacl->AclRevision ||
+        label->AclRevision != expected_label->AclRevision || !SameAcl(expected_dacl, dacl) ||
+        !SameAcl(expected_label, label) || (*have_control && control != *saved_control)) return ERROR_ACCESS_DENIED;
+    *saved_control = control;
+    *have_control = true;
     return ERROR_SUCCESS;
   }
 };
@@ -874,6 +965,7 @@ AuthorityLaunch::~AuthorityLaunch() {
   if (guest_.hThread) CloseHandle(guest_.hThread);
   if (guest_.hProcess) CloseHandle(guest_.hProcess);
   if (package_objects_) CloseHandle(package_objects_);
+  if (package_pipe_objects_) CloseHandle(package_pipe_objects_);
 }
 
 DWORD AuthorityLaunch::Stop(DWORD timeout_milliseconds) {
@@ -988,12 +1080,13 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   if (spec.app_container_objects) {
     stage("lowbox.prepare-package-namespace");
     status = package_namespace.Initialize(spec, session_objects_before.get());
-    Handle package_objects;
+    Handle package_objects, package_pipe_objects;
     if (status == ERROR_SUCCESS) {
-      status = package_namespace.Prepare(spec, app_container_objects_before.get(), &package_objects, startup_stage);
+      status = package_namespace.Prepare(spec, app_container_objects_before.get(), &package_objects, &package_pipe_objects, startup_stage);
     }
     if (status != ERROR_SUCCESS) return status;
     launch->package_objects_ = package_objects.release();
+    launch->package_pipe_objects_ = package_pipe_objects.release();
   }
 
   // The KernelBase wrapper creates the lowbox namespace as well as its token.
@@ -1049,7 +1142,7 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
     status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &app_container_objects_after);
     if (status != ERROR_SUCCESS) return status;
     stage("lowbox.recheck-package-namespace");
-    status = package_namespace.Recheck(app_container_objects_after.get(), launch->package_objects_);
+    status = package_namespace.Recheck(app_container_objects_after.get(), launch->package_objects_, launch->package_pipe_objects_);
     if (status != ERROR_SUCCESS) return status;
   }
   status = SealAndVerifyToken(raw_lowbox, desktop, spec, default_acl, startup_stage, false);
@@ -1100,7 +1193,7 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
     status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &root);
     if (status != ERROR_SUCCESS) return status;
     stage("launch.recheck-package-namespace");
-    status = package_namespace.Recheck(root.get(), launch->package_objects_);
+    status = package_namespace.Recheck(root.get(), launch->package_objects_, launch->package_pipe_objects_);
     if (status != ERROR_SUCCESS) return status;
   }
   *result = std::move(launch);

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Exercise exact production local signal routing with real Windows thread DACLs.
 
-Registry population, final handler/frame dispatch, UID, futex/translator notice
-and remote broker authorization are explicit fixture boundaries. Windows thread
+Registry population, final handler/frame dispatch, UID, fork state, futex/translator
+notice and remote broker authorization are explicit fixture boundaries. Windows thread
 security, retained handles, waits, duplication, retirement and the production
 pending container are real. This does not run ART or an AppContainer.
 """

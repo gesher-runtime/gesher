@@ -23,6 +23,8 @@ def main():
             (root / 'compat/posix/include/gesher/environment.h').read_bytes())
         (includes / 'protected_startup.h').write_bytes(
             (root / 'compat/posix/include/gesher/protected_startup.h').read_bytes())
+        (includes / 'storage_policy.h').write_bytes(
+            (root / 'compat/posix/include/gesher/storage_policy.h').read_bytes())
         source = tests / 'entry_test.cc'
         if args.baseline_ref:
             adapter = 'compat/art/dalvikvm_main.cc'

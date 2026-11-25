@@ -63,6 +63,7 @@ struct LowboxTraceCall {
   DWORD name_bytes = 0, name_characters = 0, name_truncated = 0;
   DWORD information_class = 0, buffer_length = 0, security_information = 0;
   DWORD token_type = 0, effective_only = 0, mapped_ntstatus = 0;
+  DWORD file_attributes = 0, file_share = 0, file_options = 0, file_ea_length = 0;
   DWORD target_snapshot_status = ERROR_SUCCESS;
   DWORD target_bytes = 0, target_characters = 0, target_truncated = 0;
   ULONG_PTR source = 0, root = 0, result = 0, shadow = 0;
@@ -71,10 +72,10 @@ struct LowboxTraceCall {
   // Original byte lengths and independent flags disclose either truncation;
   // shortened text never establishes an exact object or link-target identity.
   wchar_t name[96]{};
-  wchar_t target[64]{};
+  wchar_t target[56]{};
 };
 struct LowboxIatTraceEvidence {
-  DWORD version = 3;
+  DWORD version = 4;
   // Caller may set ONLY this metadata field before Begin. It is an expected
   // target session, not a claim that every recorded call had that token/session.
   DWORD expected_target_session = 0;

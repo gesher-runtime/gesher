@@ -21,6 +21,10 @@ struct AuthorityNamespaceCreateResult {
   DWORD bind_status = ERROR_NOT_READY;
   DWORD native_called = 0;
   LONG native_status = 0;
+  DWORD pipe_open_status = ERROR_NOT_READY;
+  DWORD pipe_create_called = 0;
+  LONG pipe_create_status = 0;
+  DWORD pipe_policy_status = ERROR_NOT_READY;
   DWORD context_restore_status = ERROR_NOT_READY;
 };
 
@@ -73,6 +77,9 @@ class AuthorityLaunch {
   DWORD main_thread_id() const { return guest_.dwThreadId; }
   // Borrowed non-inheritable read-only Directory; every launch owns its pin.
   HANDLE package_objects() const { return package_objects_; }
+  // Retains the authenticated NPFS package directory through token conversion
+  // and the child's lifetime. This handle is read-only and never inherited.
+  HANDLE package_pipe_objects() const { return package_pipe_objects_; }
 
   // The authority serializes launch, handle handoff and resume. It retains the
   // launch object for the lifetime of the session. Destruction stops the guest.
@@ -85,6 +92,7 @@ class AuthorityLaunch {
   AuthorityLaunch() = default;
   PROCESS_INFORMATION guest_{};
   HANDLE package_objects_ = nullptr;
+  HANDLE package_pipe_objects_ = nullptr;
   bool resumed_ = false;
   bool stop_attempted_ = false;
   DWORD stop_status_ = ERROR_SUCCESS;

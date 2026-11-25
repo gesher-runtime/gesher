@@ -546,6 +546,9 @@ jobs:
       - name: Durable USB permission identity and failure contracts
         run: python3 tools/test_usb_permission_decisions.py --java-home "$JAVA_HOME"
 
+      - name: Protected storage publication before native application admission
+        run: python3 tools/test_protected_storage_publication.py --java-home "$JAVA_HOME"
+
       - name: Package UID admission, permission and interruption contracts
         run: |
           python3 tools/test_package_uid_isolation.py --java-home "$JAVA_HOME" \
@@ -594,6 +597,20 @@ jobs:
       - name: AppOps and permission data delivery contracts
         run: |
           python3 tools/test_appops.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: External storage consent, publication and directory contracts
+        run: |
+          python3 tools/test_external_storage.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
+      - name: Foreground service manifest permission admission contracts
+        run: |
+          python3 tools/test_foreground_service_admission.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
@@ -822,6 +839,13 @@ jobs:
           python3 tools/test_webview_paths.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
+
+      - name: WebView intent fallback and navigation lifecycle contracts
+        run: |
+          python3 tools/test_webview_intent_fallback.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod
+          python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod
 
       - name: Network registration and message port lifecycle contracts
         run: |

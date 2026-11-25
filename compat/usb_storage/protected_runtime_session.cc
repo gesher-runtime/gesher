@@ -13,6 +13,7 @@
 #include "block_session.h"
 #include "protected_signal.h"
 #include "protected_profile_name.h"
+#include "protected_storage_policy.h"
 #include "protected_tool_paths.h"
 #include "protected_usb_observation.h"
 #include "../framework/app_container.h"
@@ -719,6 +720,10 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
   if (status != ERROR_SUCCESS) return status;
   additions.push_back(L"GESHER_LOG_FILE=" + root_ + L"\\logs\\" +
       (entry->system_server ? L"system_server" : entry->package) + L".logcat");
+  // Freeze scoped-storage identity before any guest constructors run. The
+  // sealed process record also supplies this for every shell descendant;
+  // neither spawn RPC permits clients to override it through environment data.
+  if (!entry->system_server) additions.push_back(L"GESHER_APP_PACKAGE=" + entry->package);
   const std::wstring environment = Environment(entry->uid, additions, temporary);
   container::Sid internet, network;
   std::vector<SID_AND_ATTRIBUTES> caps{{runtime_capability_.value, SE_GROUP_ENABLED}};
@@ -813,6 +818,8 @@ DWORD Session::GrantAppFiles(Entry& entry) {
     status = container::Grant(path, entry.profile->sid.value, FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE, true);
     if (status != ERROR_SUCCESS) return status;
   }
+  status = GrantProtectedStoragePolicy(data_, package, entry.profile->sid.value);
+  if (status != ERROR_SUCCESS) return status;
   const std::wstring properties = data_ + L"\\system\\gesher-properties";
   if (GetFileAttributesW(properties.c_str()) != INVALID_FILE_ATTRIBUTES) {
     status = container::Grant(properties, runtime_capability_.value, FILE_GENERIC_READ, true);

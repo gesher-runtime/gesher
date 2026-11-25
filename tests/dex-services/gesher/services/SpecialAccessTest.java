@@ -226,12 +226,12 @@ public final class SpecialAccessTest {
             check(initial.equals(List.of(
                     "android:system_alert_window\tdenied",
                     "android:request_install_packages\tdenied", "android:write_settings\tdenied",
-                    "android:get_usage_stats\tdenied")),
+                    "android:get_usage_stats\tdenied", "android:manage_external_storage\tdenied")),
                     "Requested special accesses are listed, denied, in Settings' order: " + initial);
             check(rows(pm, PLAIN).isEmpty(), "An app requesting no special access has no switch");
             // A declared permission is not a working backend. Neither supported UI nor
-            // a direct host-shell write may manufacture these two unsupported grants.
-            for (int op : new int[]{AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, AppOpsManager.OP_MANAGE_MEDIA}) {
+            // a direct host-shell write may manufacture this unsupported grant.
+            for (int op : new int[]{AppOpsManager.OP_MANAGE_MEDIA}) {
                 String name = AppOpsManager.opToPublicName(op);
                 String permission = AppOpsManager.opToPermission(op);
                 check(!appSees(pm, ops, op, permission), name + " starts unavailable");
@@ -333,7 +333,8 @@ public final class SpecialAccessTest {
                     () -> ops.setMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP, AppOpsManager.MODE_ALLOWED)));
             as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> setAccess(pm, APP, OVERLAY, true)));
             Object created = make(type("Services$Created"), new Class<?>[]{PackageManagerService.class, atm.getClass(),
-                    am.getClass(), type("ClipboardService"), Map.class}, pm, atm, am, null, new java.util.HashMap<>());
+                    am.getClass(), type("ClipboardService"), type("UsbService"), Map.class},
+                    pm, atm, am, null, null, new java.util.HashMap<>());
             field(type("Services"), "sLast").set(null, created);
             Class<?> deviceType = type("GesherService$Device");
             Object device = Proxy.newProxyInstance(deviceType.getClassLoader(), new Class<?>[]{deviceType}, (proxy, method, args) -> {
@@ -388,7 +389,7 @@ public final class SpecialAccessTest {
                 gesher.transact(queryCode, data, reply, 0);
                 reply.readException();
                 String[] answered = reply.createStringArray();
-                check(answered.length == 4 && answered[0].equals(OVERLAY + "\tallowed"), "The query transaction lists the switches");
+                check(answered.length == 5 && answered[0].equals(OVERLAY + "\tallowed"), "The query transaction lists the switches");
             } finally { data.recycle(); reply.recycle(); }
             check(appSees(pm, ops, AppOpsManager.OP_SYSTEM_ALERT_WINDOW, Manifest.permission.SYSTEM_ALERT_WINDOW),
                     "The host's grant is what the app reads");
@@ -399,12 +400,11 @@ public final class SpecialAccessTest {
             clientConstructor.setAccessible(true);
             Object client = clientConstructor.newInstance(gesher);
             String[] clientRows = (String[])clientCall(client, "specialAccess", APP);
-            check(clientRows.length == 4 && clientRows[0].equals(OVERLAY + "\tallowed"), "Client reads the switches");
+            check(clientRows.length == 5 && clientRows[0].equals(OVERLAY + "\tallowed"), "Client reads the switches");
             check((OVERLAY + "\tdenied").equals(clientCall(client, "setSpecialAccess", APP, OVERLAY, false)), "Client changes a switch");
             check((OVERLAY + "\tallowed").equals(clientCall(client, "setSpecialAccess", APP, OVERLAY, true)), "Client changes it back");
             rejects(IllegalArgumentException.class, () -> clientCall(client, "setSpecialAccess", APP, "android:camera", true));
-            for (String unsupported : new String[]{AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE,
-                    AppOpsManager.OPSTR_MANAGE_MEDIA}) {
+            for (String unsupported : new String[]{AppOpsManager.OPSTR_MANAGE_MEDIA}) {
                 rejects(IllegalArgumentException.class,
                         () -> clientCall(client, "setSpecialAccess", APP, unsupported, true));
                 rejects(IllegalArgumentException.class,
@@ -425,7 +425,7 @@ public final class SpecialAccessTest {
             java.io.PrintStream out = new java.io.PrintStream(printed, true, "UTF-8");
             check((Integer)launcher.invoke(null, client, List.of(APP), out) == 0, "special-access exits 0");
             String text = printed.toString("UTF-8");
-            check(text.startsWith("special-access\t" + OVERLAY + "\tallowed") && text.split("\n").length == 4,
+            check(text.startsWith("special-access\t" + OVERLAY + "\tallowed") && text.split("\n").length == 5,
                     "special-access prints one row per switch: " + text);
             printed.reset();
             check((Integer)launcher.invoke(null, client, List.of(APP, "android:write_settings", "allow"), out) == 0
@@ -435,8 +435,7 @@ public final class SpecialAccessTest {
             printed.reset();
             check((Integer)launcher.invoke(null, client, List.of(APP, "android:camera", "allow"), out) == 1
                     && printed.size() == 0, "A refused change exits 1 with no row");
-            for (String unsupported : new String[]{AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE,
-                    AppOpsManager.OPSTR_MANAGE_MEDIA}) {
+            for (String unsupported : new String[]{AppOpsManager.OPSTR_MANAGE_MEDIA}) {
                 printed.reset();
                 check((Integer)launcher.invoke(null, client, List.of(APP, unsupported, "allow"), out) == 1
                         && printed.size() == 0, "Unsupported access cannot be granted by the launcher: " + unsupported);
@@ -739,7 +738,7 @@ public final class SpecialAccessTest {
                     "A denial survives a restart");
             set(pm, "mAppOps", reopened);
             List<String> afterRestart = rows(pm, APP);
-            check(afterRestart.size() == 4 && afterRestart.get(0).equals(OVERLAY + "\tallowed")
+            check(afterRestart.size() == 5 && afterRestart.get(0).equals(OVERLAY + "\tallowed")
                     && afterRestart.get(2).equals("android:write_settings\tdenied"), "The Control Center reads the restored state: " + afterRestart);
             as(APP_UID, APP_PID, () -> ops.stopWatchingMode(watcher));
         } finally {

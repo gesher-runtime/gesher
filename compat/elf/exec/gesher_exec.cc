@@ -25,6 +25,7 @@
 #include <gesher/elf_loader.h>
 #include <gesher/system_properties.h>
 #include <gesher/environment.h>
+#include <gesher/storage_policy.h>
 #include <gesher/fork.h>
 #include <gesher/protected_startup.h>
 
@@ -510,6 +511,7 @@ int main() {
     const DWORD status = gesher::InitializeProtectedProcessResources();
     if (status != ERROR_SUCCESS) return 1;
   }
+  gesher::InitializeExternalStoragePolicy();
   // Publish the inherited property session before the shell copies its env.
   gesher::properties::Initialize();
   // Bytes in and out unchanged, as on Linux; no Windows error dialogs.

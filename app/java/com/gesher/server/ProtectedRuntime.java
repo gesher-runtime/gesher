@@ -34,9 +34,12 @@ public final class ProtectedRuntime {
         return identity;
     }
 
-    static int spawn(ApkPackage pkg, String processName, long startSeq, int targetSdk,
+    static int spawn(PackageManagerService pm, ApkPackage pkg, String processName, long startSeq, int targetSdk,
             List<String> environment) throws Exception {
         ApkEnrollmentVerifier.Identity identity = verify(pkg);
+        // Publication is required before authority admission. A failed write
+        // must prevent launch, including reuse of a previously enrolled profile.
+        ExternalStorageAccess.syncPackage(pm, pkg);
         String signerSet = String.join("\n", identity.currentSignerSha256());
         String signerDigest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                 .digest(signerSet.getBytes(StandardCharsets.UTF_8)));
@@ -49,6 +52,7 @@ public final class ProtectedRuntime {
                         .filter(value -> !value.startsWith("GESHER_BINDER=")
                                 && !value.startsWith("GESHER_UID=")
                                 && !value.startsWith("GESHER_BINDER_UID=")
+                                && !value.startsWith("GESHER_APP_PACKAGE=")
                                 && !value.startsWith("GESHER_LOG_FILE="))
                         .toArray(String[]::new));
         if (pid <= 0) {

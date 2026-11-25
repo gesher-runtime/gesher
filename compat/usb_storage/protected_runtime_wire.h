@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -67,8 +68,14 @@ inline bool Append(std::vector<std::byte>* data, std::u16string_view text) {
   if (data->size() > kMaximumPayload - bytes) return false;
   const size_t previous = data->size();
   data->resize(previous + bytes);
-  std::memcpy(data->data() + previous, &size, sizeof(size));
-  std::memcpy(data->data() + previous + sizeof(size), text.data(), text.size() * sizeof(char16_t));
+  const auto encoded = std::span(*data).subspan(previous, bytes);
+  std::memcpy(encoded.first<sizeof(size)>().data(), &size, sizeof(size));
+  // A default-constructed empty view may have a null data pointer. Avoid
+  // passing it to memcpy, even for a zero-byte payload.
+  if (!text.empty()) {
+    const auto payload = encoded.subspan<sizeof(size)>();
+    std::memcpy(payload.data(), text.data(), payload.size());
+  }
   return true;
 }
 
