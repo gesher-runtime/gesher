@@ -602,6 +602,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Foreground service manifest permission admission contracts
+        run: |
+          python3 tools/test_foreground_service_admission.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Camera runtime permission and attribution admission
         run: |
           python3 tools/test_camera_permission.py --java-home "$JAVA_HOME" \

@@ -54,17 +54,15 @@ public final class ExternalStorageAccessTest {
         f.set(obj, value);
     }
 
-    private static PackageManagerService createPm(List<ApkPackage> packages) throws Exception {
-        Map<String, IBinder> created = Services.createInProcess(packages);
+    private static PackageManagerService createPm() throws Exception {
+        Map<String, IBinder> created = Services.createInProcess(List.of());
         Services.installInProcess(created);
         Field sLast = Services.class.getDeclaredField("sLast");
         sLast.setAccessible(true);
         Object last = sLast.get(null);
         Field pmField = last.getClass().getDeclaredField("pm");
         pmField.setAccessible(true);
-        PackageManagerService pm = (PackageManagerService) pmField.get(last);
-        admitPackages(pm, packages);
-        return pm;
+        return (PackageManagerService) pmField.get(last);
     }
 
     /** Record the ordinary installer allowlist and publish through the real PM lifecycle. */
@@ -111,7 +109,7 @@ public final class ExternalStorageAccessTest {
         check(!ExternalStorageAccess.declaresPermission(withoutPerm), "package without MANAGE_EXTERNAL_STORAGE");
     }
 
-    private static void testModesAndPersistence(Unsafe unsafe) throws Exception {
+    private static void testModesAndPersistence(Unsafe unsafe, PackageManagerService pm) throws Exception {
         ApkPackage corePkg = makePackage(unsafe, "com.test.core", Process.SYSTEM_UID, 34, false);
         ApkPackage mgrPkg = makePackage(unsafe, "com.test.mgr", 10200, 34, false,
                 Manifest.permission.MANAGE_EXTERNAL_STORAGE);
@@ -128,7 +126,7 @@ public final class ExternalStorageAccessTest {
         ApkPackage scoped34 = makePackage(unsafe, "com.test.scoped34", 10205, 34, false,
                 Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED);
 
-        PackageManagerService pm = createPm(
+        admitPackages(pm,
                 List.of(corePkg, mgrPkg, legacy28, legacy29, media32, media33, scoped34));
 
         // Core UID is manager by default
@@ -280,13 +278,13 @@ public final class ExternalStorageAccessTest {
         return out.toString(StandardCharsets.UTF_8).trim();
     }
 
-    private static void testPathAccessAndMkdirs(Unsafe unsafe) throws Exception {
+    private static void testPathAccessAndMkdirs(Unsafe unsafe, PackageManagerService pm) throws Exception {
         ApkPackage mgrPkg = makePackage(unsafe, "com.test.pathmgr", 10300, 34, false,
                 Manifest.permission.MANAGE_EXTERNAL_STORAGE);
         ApkPackage scopedPkg = makePackage(unsafe, "com.test.pathscoped", 10301, 34, false);
         ApkPackage roPkg = makePackage(unsafe, "com.test.pathro", 10302, 29, true,
                 Manifest.permission.READ_EXTERNAL_STORAGE);
-        PackageManagerService pm = createPm(List.of(mgrPkg, scopedPkg, roPkg));
+        admitPackages(pm, List.of(mgrPkg, scopedPkg, roPkg));
         pm.appOps().setUidMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, mgrPkg.uid(), AppOpsManager.MODE_ALLOWED);
         pm.permissions().grantRuntimePermission(roPkg.packageName,
                 Manifest.permission.READ_EXTERNAL_STORAGE, "default:0", 0);
@@ -328,12 +326,12 @@ public final class ExternalStorageAccessTest {
         // MEDIA_RO: media read allowed, non-media read denied
         ApkPackage mediaPkg = makePackage(unsafe, "com.test.pathmedia", 10303, 33, false,
                 Manifest.permission.READ_MEDIA_IMAGES);
-        PackageManagerService mediaPm = createPm(List.of(mediaPkg));
-        mediaPm.permissions().grantRuntimePermission(mediaPkg.packageName,
+        admitPackages(pm, List.of(mediaPkg));
+        pm.permissions().grantRuntimePermission(mediaPkg.packageName,
                 Manifest.permission.READ_MEDIA_IMAGES, "default:0", 0);
-        check(ExternalStorageAccess.canAccessPath(mediaPm, mediaPkg.uid(), mediaPkg.packageName,
+        check(ExternalStorageAccess.canAccessPath(pm, mediaPkg.uid(), mediaPkg.packageName,
                 sharedRoot + "/Pictures/photo.jpg", false), "MEDIA_RO can read image");
-        check(!ExternalStorageAccess.canAccessPath(mediaPm, mediaPkg.uid(), mediaPkg.packageName,
+        check(!ExternalStorageAccess.canAccessPath(pm, mediaPkg.uid(), mediaPkg.packageName,
                 sharedRoot + "/Download/notes.txt", false), "MEDIA_RO cannot read txt");
 
         // StorageService.mkdirs works for system caller
@@ -346,8 +344,11 @@ public final class ExternalStorageAccessTest {
     public static void main(String[] args) throws Exception {
         Unsafe unsafe = unsafe();
         testDeclaresPermission(unsafe);
-        testModesAndPersistence(unsafe);
-        testPathAccessAndMkdirs(unsafe);
+        // ServiceManager installs its cache once per process. Admit each scenario's
+        // distinct packages into the same graph used by RuntimeCommands and storage.
+        PackageManagerService pm = createPm();
+        testModesAndPersistence(unsafe, pm);
+        testPathAccessAndMkdirs(unsafe, pm);
         System.out.println("ExternalStorageAccessTest passed (" + checks + " checks)");
     }
 }
