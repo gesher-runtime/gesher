@@ -4,6 +4,7 @@ package gesher.services;
 import android.Manifest;
 import android.app.IActivityManager;
 import android.app.IApplicationThread;
+import android.app.IBinderSession;
 import android.app.IServiceConnection;
 import android.app.InvalidForegroundServiceTypeException;
 import android.app.MissingForegroundServiceTypeException;
@@ -205,8 +206,10 @@ public final class ForegroundServiceAdmissionTest {
             am = binder ? IActivityManager.Stub.asInterface(remote(
                     StandIn.of(IActivityManager.class, (IActivityManager) implementation).asBinder()))
                     : (IActivityManager) implementation;
-            notifications.createNotificationChannels(OWNER, new ParceledListSlice<>(List.of(
-                    new NotificationChannel("fgs", "Foreground contract", 3))));
+            if (target >= 26) {
+                notifications.createNotificationChannels(OWNER, new ParceledListSlice<>(List.of(
+                        new NotificationChannel("fgs", "Foreground contract", 3))));
+            }
         }
         void asApp(Work action) throws Exception { asUid(UID, PID, action); }
         void asUid(int uid, int pid, Work action) throws Exception {
@@ -457,7 +460,8 @@ public final class ForegroundServiceAdmissionTest {
         bound.start(true);
         Object beforeBoundTimeout = bound.promotionDeadline();
         IServiceConnection connection = new IServiceConnection.Stub() {
-            @Override public void connected(ComponentName name, IBinder service, boolean dead) { }
+            @Override public void connected(ComponentName name, IBinder service, IBinderSession session,
+                    boolean dead) { }
         };
         bound.asApp(() -> check(bound.am.bindService(bound.thread, null,
                 new Intent().setComponent(SERVICE), null, connection, Context.BIND_AUTO_CREATE,
