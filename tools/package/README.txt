@@ -99,7 +99,7 @@ Without the device, the app alone in one process with stand-in services:
 
 Double-clicking an .apk file (or a split bundle: .xapk, .apks, .apkm,
 .apk+) first asks: a window shows the app's icon, name and version with
-Install (Update, when an older version is installed) and Cancel. Nothing is
+Install (Update, when another version is installed) and Cancel. Nothing is
 installed until you click Install. Check "Create a desktop shortcut" if you
 want one on the desktop as well as in the Start menu. Once it is installed,
 click Open to start the app, or Done to close the window. If the same

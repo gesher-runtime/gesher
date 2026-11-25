@@ -1808,7 +1808,8 @@ jobs:
           # Not installed: the confirmation dialog (the desktop shortcut box shown, unchecked).
           # Cancel installs nothing (exit 1223, ERROR_CANCELLED).
           $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0 -or (Test-Path $lnk) -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $LASTEXITCODE)" }
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -or (Test-Path $lnk) -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $code)" }
           $run = Start-ApkOpen "$app\lifecycle.apk"
           $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Cancel -ExpectDesktopBox $true
           $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk, Cancel'
@@ -1846,6 +1847,20 @@ jobs:
           $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0 -or (Test-Path $desktopLnk) -or (Test-Path $lnk)) { Write-Host $out; throw "gesher-app uninstall left the desktop shortcut $desktopLnk or the Start menu shortcut (exit $LASTEXITCODE)" }
           'PASS  installer: gesher-app uninstall removes the recorded desktop shortcut' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # A desktop shortcut the user deleted stays deleted: a later install and
+          # sync-shortcuts keep the record and make no new one.
+          $out = & "$app\gesher-app.cmd" install "$app\lifecycle.apk" --desktop-shortcut 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $desktopLnk)) { Write-Host $out; throw "gesher-app install --desktop-shortcut made no $desktopLnk (exit $LASTEXITCODE)" }
+          Remove-Item -LiteralPath $desktopLnk -Force
+          $out = (& "$app\gesher-app.cmd" install "$app\lifecycle.apk" 2>&1 | Out-String) + (& "$app\gesher-app.cmd" sync-shortcuts 2>&1 | Out-String)
+          $problems = @()
+          if (Test-Path $desktopLnk) { $problems += 'the deleted desktop shortcut was made again' }
+          if ((Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link') -ne $desktopLnk) { $problems += 'shortcut.properties lost desktop_link' }
+          if ($problems) { Write-Host $out; throw "A deleted desktop shortcut: $($problems -join '; ')" }
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $code)" }
+          'PASS  installer: a desktop shortcut the user deleted is not made again by a later install or sync-shortcuts (desktop_link kept)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Install (the box left unchecked), then Open: launched as the Start menu launches it.
           $run = Start-ApkOpen "$app\lifecycle.apk"
           $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -ExpectDesktopBox $true -Done Open
@@ -2221,6 +2236,16 @@ jobs:
           Set-Content $sentinel 'not Gesher''s'
           # An app id as the system server registers one for an app's toasts (ADR 0038), which uninstalling must remove.
           $null = New-Item 'HKCU:\Software\Classes\AppUserModelId\Gesher.App.com.gesher.ci' -Force
+          # A recorded desktop shortcut, which uninstalling Gesher must remove ([Code]
+          # RemoveDesktopLinks), next to a user's own shortcut, which it must keep.
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          $uninstallDesktopLnk = Join-Path $desktop 'Gesher Lifecycle.lnk'
+          $out = & "$app\gesher-app.cmd" install "$app\lifecycle.apk" --desktop-shortcut 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $uninstallDesktopLnk)) { Write-Host $out; throw "gesher-app install --desktop-shortcut made no $uninstallDesktopLnk before uninstalling Gesher (exit $LASTEXITCODE)" }
+          $desktopSentinel = Join-Path $desktop 'gesher-ci-user-shortcut.lnk'
+          $userLink = (New-Object -ComObject WScript.Shell).CreateShortcut($desktopSentinel)
+          $userLink.TargetPath = "$env:SystemRoot\notepad.exe"
+          $userLink.Save()
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
@@ -2228,6 +2253,10 @@ jobs:
           if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
           if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
           'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path $uninstallDesktopLnk) { throw "Uninstall left the recorded desktop shortcut $uninstallDesktopLnk" }
+          if (-not (Test-Path $desktopSentinel)) { throw "Uninstall removed the user's desktop shortcut $desktopSentinel" }
+          Remove-Item $desktopSentinel
+          'PASS  installer: uninstall removes the apps'' recorded desktop shortcuts and keeps the user''s own' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
           if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }

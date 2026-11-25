@@ -308,6 +308,8 @@ public final class UiMessages {
             case "install_button": value = lang.equals("he") ? "\u05d4\u05ea\u05e7\u05e0\u05d4" : "Install"; break;
             case "update_button": value = lang.equals("he") ? "\u05e2\u05d3\u05db\u05d5\u05df" : "Update"; break;
             case "install_desktop_shortcut": value = lang.equals("he") ? "\u05d9\u05e6\u05d9\u05e8\u05ea \u05e7\u05d9\u05e6\u05d5\u05e8 \u05d3\u05e8\u05da \u05d1\u05e9\u05d5\u05dc\u05d7\u05df \u05d4\u05e2\u05d1\u05d5\u05d3\u05d4" : "Create a desktop shortcut"; break;
+            case "install_unreadable": value = lang.equals("he") ? "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05ea\u05e7\u05d9\u05df \u05d0\u05ea {0}: \u05d6\u05d4 \u05dc\u05d0 \u05d9\u05d9\u05e9\u05d5\u05dd Android \u05e9\u05d2\u05e9\u05e8 \u05d9\u05db\u05d5\u05dc \u05dc\u05e7\u05e8\u05d5\u05d0." : "{0} cannot be installed: it is not an Android app that Gesher can read."; break;
+            case "install_desktop_failed": value = lang.equals("he") ? "\u05e7\u05d9\u05e6\u05d5\u05e8 \u05d4\u05d3\u05e8\u05da \u05d1\u05e9\u05d5\u05dc\u05d7\u05df \u05d4\u05e2\u05d1\u05d5\u05d3\u05d4 \u05dc\u05d0 \u05e0\u05d5\u05e6\u05e8." : "The desktop shortcut was not created."; break;
             case "install_reading": value = lang.equals("he") ? "\u05e7\u05d5\u05e8\u05d0\u2026" : "Reading\u2026"; break;
             case "install_installing": value = lang.equals("he") ? "\u05de\u05ea\u05e7\u05d9\u05df \u05d0\u05ea {0}\u2026" : "Installing {0}\u2026"; break;
             case "install_done_title": value = lang.equals("he") ? "\u05d4\u05d4\u05ea\u05e7\u05e0\u05d4 \u05d4\u05d5\u05e9\u05dc\u05de\u05d4" : "Installation complete"; break;

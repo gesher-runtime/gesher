@@ -399,6 +399,12 @@ public final class AppShell {
         String old = record.getProperty("desktop_link");
         String mine = isDesktopLink(old) ? old : null;
         String link = linkPath(desktop, label, packageName, mine);
+        if (!isDesktopLink(link)) {
+            // Never make a link that uninstall would not remove.
+            log("desktop shortcut for " + packageName + " failed: " + link
+                    + " is not a shortcut in the Desktop folder");
+            return false;
+        }
         if (Shell.exists(link) && !link.equalsIgnoreCase(mine)) {
             log("desktop shortcut for " + packageName + " failed: " + link
                     + " exists and is not this app's");
@@ -444,8 +450,10 @@ public final class AppShell {
         String normalized = path.replace('/', '\\');
         if (!normalized.regionMatches(true, 0, prefix, 0, prefix.length())) return false;
         String name = normalized.substring(prefix.length());
-        return !name.isEmpty() && name.indexOf('\\') < 0 && name.indexOf(':') < 0
-                && !name.startsWith(".") && name.toLowerCase(Locale.ROOT).endsWith(".lnk");
+        // A label may start with a dot (".NET Tools.lnk"): only the name before .lnk must
+        // not be empty, so that every link createDesktopLink makes is one this accepts.
+        return name.length() > ".lnk".length() && name.indexOf('\\') < 0
+                && name.indexOf(':') < 0 && name.toLowerCase(Locale.ROOT).endsWith(".lnk");
     }
 
     /** Whether the package's recorded desktop shortcut is there (apk-info). */
@@ -994,8 +1002,9 @@ public final class AppShell {
         ApkFacts facts = new ApkFacts();
         int code = apkIcon(apk, facts);
         if (facts.packageName == null || facts.error != null || code != 0) {
-            throw new IllegalArgumentException(Zygote.windowsPath(apk.getAbsolutePath())
-                    + " cannot be read as an Android app: "
+            // The first line is the user's (gesher-launch shows it); the detail is for logs.
+            throw new IllegalArgumentException(text("install_unreadable", apk.getName())
+                    + "\n\n" + Zygote.windowsPath(apk.getAbsolutePath()) + ": "
                     + (facts.error != null ? facts.error : "not recorded"));
         }
         java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
@@ -1047,18 +1056,31 @@ public final class AppShell {
                 if (line.startsWith("#")) continue;
                 String[] fields = line.split("\t", -1);
                 if (fields.length < 4 || !fields[0].equals(packageName)) continue;
+                // As Installer.resolveCodePath: this profile's own code directory first, even
+                // when a copied profile's old absolute path still exists.
                 File code = new File(fields[1]);
-                if (!new File(code, "base.apk").isFile()) {
-                    // A moved profile: its code directory under this data directory
-                    // (Installer.resolveCodePath).
-                    code = new File(new File(Device.dataDir(), "app"), code.getName());
+                String name = code.getName();
+                if (!name.isEmpty() && !name.equals(".") && !name.equals("..")) {
+                    File relocated = new File(
+                            new File(new File(Device.dataDir()).getCanonicalFile(), "app"), name);
+                    if (java.nio.file.Files.isDirectory(relocated.toPath(),
+                            java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                            && relocated.equals(relocated.getCanonicalFile())) {
+                        code = relocated;
+                    }
                 }
                 File base = new File(code, "base.apk");
                 if (!base.isFile()) {
                     log("apk-info: " + packageName + " is listed, but " + base + " is missing");
                     return null;
                 }
-                return ApkPackage.parse(base.getPath());
+                ApkPackage installed = ApkPackage.parse(base.getPath());
+                if (!packageName.equals(installed.packageName)) {
+                    log("apk-info: " + base + " is " + installed.packageName + ", not "
+                            + packageName);
+                    return null;
+                }
+                return installed;
             }
         } catch (Throwable t) {
             log("apk-info: the installed " + packageName + " was not read: " + t);

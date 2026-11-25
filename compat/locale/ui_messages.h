@@ -310,6 +310,8 @@ static inline const wchar_t* GesherUiText(enum GesherUiLanguage lang, const char
   if (strcmp(key, "install_button") == 0) return lang == GESHER_UI_HE ? L"\u05d4\u05ea\u05e7\u05e0\u05d4" : L"Install";
   if (strcmp(key, "update_button") == 0) return lang == GESHER_UI_HE ? L"\u05e2\u05d3\u05db\u05d5\u05df" : L"Update";
   if (strcmp(key, "install_desktop_shortcut") == 0) return lang == GESHER_UI_HE ? L"\u05d9\u05e6\u05d9\u05e8\u05ea \u05e7\u05d9\u05e6\u05d5\u05e8 \u05d3\u05e8\u05da \u05d1\u05e9\u05d5\u05dc\u05d7\u05df \u05d4\u05e2\u05d1\u05d5\u05d3\u05d4" : L"Create a desktop shortcut";
+  if (strcmp(key, "install_unreadable") == 0) return lang == GESHER_UI_HE ? L"\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05ea\u05e7\u05d9\u05df \u05d0\u05ea {0}: \u05d6\u05d4 \u05dc\u05d0 \u05d9\u05d9\u05e9\u05d5\u05dd Android \u05e9\u05d2\u05e9\u05e8 \u05d9\u05db\u05d5\u05dc \u05dc\u05e7\u05e8\u05d5\u05d0." : L"{0} cannot be installed: it is not an Android app that Gesher can read.";
+  if (strcmp(key, "install_desktop_failed") == 0) return lang == GESHER_UI_HE ? L"\u05e7\u05d9\u05e6\u05d5\u05e8 \u05d4\u05d3\u05e8\u05da \u05d1\u05e9\u05d5\u05dc\u05d7\u05df \u05d4\u05e2\u05d1\u05d5\u05d3\u05d4 \u05dc\u05d0 \u05e0\u05d5\u05e6\u05e8." : L"The desktop shortcut was not created.";
   if (strcmp(key, "install_reading") == 0) return lang == GESHER_UI_HE ? L"\u05e7\u05d5\u05e8\u05d0\u2026" : L"Reading\u2026";
   if (strcmp(key, "install_installing") == 0) return lang == GESHER_UI_HE ? L"\u05de\u05ea\u05e7\u05d9\u05df \u05d0\u05ea {0}\u2026" : L"Installing {0}\u2026";
   if (strcmp(key, "install_done_title") == 0) return lang == GESHER_UI_HE ? L"\u05d4\u05d4\u05ea\u05e7\u05e0\u05d4 \u05d4\u05d5\u05e9\u05dc\u05de\u05d4" : L"Installation complete";

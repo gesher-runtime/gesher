@@ -1140,6 +1140,14 @@
       "en": "Create a desktop shortcut",
       "he": "יצירת קיצור דרך בשולחן העבודה"
     },
+    "install_unreadable": {
+      "en": "{0} cannot be installed: it is not an Android app that Gesher can read.",
+      "he": "לא ניתן להתקין את {0}: זה לא יישום Android שגשר יכול לקרוא."
+    },
+    "install_desktop_failed": {
+      "en": "The desktop shortcut was not created.",
+      "he": "קיצור הדרך בשולחן העבודה לא נוצר."
+    },
     "install_reading": {
       "en": "Reading…",
       "he": "קורא…"

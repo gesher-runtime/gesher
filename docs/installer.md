@@ -224,8 +224,8 @@ Nothing is installed without the user's consent (issue 519,
 2. The same versionCode is installed: no dialog; gesher-launch runs
    `launch <package>`, as the app's Start menu shortcut does, with its splash.
 3. Otherwise the confirmation dialog, "Install Android app": the app's icon,
-   label and version, "Do you want to install this app?" (or update it, with the
-   installed version), the buttons **Install** (**Update** when the package is
+   label and version, "Do you want to install this app?" (or "update", when another version
+   is installed), the buttons **Install** (**Update** when the package is
    installed) and **Cancel**, and the check box **Create a desktop shortcut**,
    unchecked. Cancel is the default button and has the initial focus, so Enter
    alone does not install. Cancel, Esc and the X install nothing; gesher-launch
@@ -236,7 +236,9 @@ Nothing is installed without the user's consent (issue 519,
    install` installs it; its Start menu shortcut is made as usual.
 5. Only when the install succeeded, a second dialog, "<label> was installed."
    (or updated): **Open** runs `launch <package>` with the splash; **Done** (the
-   default), Esc and the X end it. The app is never started without Open.
+   default), Esc and the X end it. The app is never started without Open. When
+   the box was checked but the record names no desktop shortcut that exists
+   (install printed why), the dialog adds "The desktop shortcut was not created."
 
 A failing step (an unreadable file, a failed install) shows Gesher's error
 dialog with its message and ends with that step's non-zero exit code; nothing
@@ -587,9 +589,9 @@ command line as Explorer would, answering gesher-launch's dialogs with
 it, and a failing `apk-info` or install ends with its exit code and no installed
 dialog. The e2e job opens a real app's APK of its installed version through the
 association (no dialog). After uninstalling, the package job checks that the
-`Gesher.Apk` key, `.apk`'s default and the `OpenWithProgids` entry are gone.
-
-Verified in ci run 39946705097 (package job on windows-2022).
+`Gesher.Apk` key, `.apk`'s default and the `OpenWithProgids` entry are gone,
+and that uninstalling Gesher removes the apps' recorded desktop shortcuts and
+keeps the user's own.
 
 With the Gesher device (ci run 40019524773), the package job also runs the
 installed `gesher-app lifecycle.apk` (the device starts, the APK is installed

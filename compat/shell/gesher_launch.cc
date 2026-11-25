@@ -1134,10 +1134,25 @@ std::wstring FullPath(const std::wstring& path) {
 }
 
 // A new name (no file yet) in the user's temp directory for apk-info's output, or "".
-std::wstring NewInfoFile() {
-  wchar_t dir[MAX_PATH + 1];
-  DWORD n = GetTempPathW(MAX_PATH + 1, dir);
-  if (n == 0 || n > MAX_PATH) return std::wstring();
+// A new file name for apk-info's answer: in the profile's data\system directory when it
+// exists (Gesher's own paths always reach it), else in %TEMP%. Creates no directory: a
+// profile's directories are gesher-app's to make.
+std::wstring NewInfoFile(const std::wstring& data) {
+  std::wstring dir;
+  if (!data.empty()) {
+    const std::wstring system = data + L"\\system";
+    const DWORD attributes = GetFileAttributesW(system.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+      dir = system + L"\\";
+    }
+  }
+  if (dir.empty()) {
+    wchar_t temp[MAX_PATH + 1];
+    DWORD n = GetTempPathW(MAX_PATH + 1, temp);
+    if (n == 0 || n > MAX_PATH) return std::wstring();
+    dir = temp;
+  }
   GUID guid;
   wchar_t text[64];
   if (FAILED(CoCreateGuid(&guid)) || StringFromGUID2(guid, text, 64) == 0) return std::wstring();
@@ -1145,7 +1160,7 @@ std::wstring NewInfoFile() {
   name.erase(std::remove_if(name.begin(), name.end(),
                             [](wchar_t c) { return c == L'{' || c == L'}'; }),
              name.end());
-  return std::wstring(dir) + L"gesher-apk-info-" + name + L".txt";
+  return dir + L"gesher-apk-info-" + name + L".txt";
 }
 
 // GetDataDirectory's portable layout: the marker beside `dir`, or beside the App folder it is.
@@ -1184,7 +1199,7 @@ struct InstallDialog {
 constexpr short kDialogWidth = 300;
 
 short InstallDialogHeight(const InstallDialog& state) {
-  if (!state.confirm) return 110;
+  if (!state.confirm) return 118;
   return state.offer_shortcut ? 144 : 126;
 }
 
@@ -1212,13 +1227,16 @@ bool CreateInstallControls(HWND dialog, InstallDialog* state) {
   const int text_x = state->rtl ? 16 : 64;
   HWND icon = GesherHostControl(dialog, 0, L"STATIC", L"", SS_OWNERDRAW, kAppIconId, icon_x, 14,
                                 40, 36);
+  // The label and the confirmation's version line are one line each: a long one ends in
+  // an ellipsis rather than being cut off.
   HWND heading = GesherHostControl(dialog, StartsRtl(state->label) ? WS_EX_RTLREADING : 0,
-                                   L"STATIC", state->label.c_str(), align,
+                                   L"STATIC", state->label.c_str(), align | SS_ENDELLIPSIS,
                                    GESHER_HOST_MESSAGE_HEADING, text_x, 14, 220, 24);
-  HWND version = GesherHostControl(dialog, reading, L"STATIC", state->version.c_str(), align,
-                                   kVersionTextId, text_x, 40, 220, state->confirm ? 12 : 24);
+  HWND version = GesherHostControl(dialog, reading, L"STATIC", state->version.c_str(),
+                                   align | (state->confirm ? SS_ENDELLIPSIS : 0), kVersionTextId,
+                                   text_x, 40, 220, state->confirm ? 12 : 34);
   if (!icon || !heading || !version) return false;
-  int buttons_y = 72;
+  int buttons_y = 80;
   if (state->confirm) {
     if (!GesherHostControl(dialog, reading, L"STATIC", state->question.c_str(), align,
                            kQuestionTextId, 16, 60, kDialogWidth - 32, 20)) {
@@ -1350,6 +1368,17 @@ INT_PTR RunInstallDialog(InstallDialog* state, const wchar_t* title) {
   return result <= 0 ? IDCANCEL : result;
 }
 
+// Whether the package's shortcut record names a desktop shortcut that exists.
+bool DesktopLinkRecorded(const std::wstring& data, const std::wstring& package) {
+  if (data.empty() || package.empty()) return false;
+  std::string record;
+  if (!ReadBytes(data + L"\\data\\" + package + L"\\gesher-shell\\shortcut.properties", &record)) {
+    return false;
+  }
+  const std::wstring link = PropertiesValue(record, L"desktop_link");
+  return !link.empty() && IsFile(link);
+}
+
 // `gesher-launch <file>`: reads the APK, asks before installing it, offers to open it.
 int RunBareFile(const Runner& runner, const std::wstring& here, const std::wstring& file,
                 bool detached) {
@@ -1359,7 +1388,8 @@ int RunBareFile(const Runner& runner, const std::wstring& here, const std::wstri
   const std::wstring apk = FullPath(file);
   const size_t slash = apk.find_last_of(L"\\/");
   const std::wstring name = slash == std::wstring::npos ? apk : apk.substr(slash + 1);
-  const std::wstring info_file = NewInfoFile();
+  const std::wstring data = GetDataDirectory(here);
+  const std::wstring info_file = NewInfoFile(data);
   if (info_file.empty()) {
     return FailStep(runner, L"No temporary file for reading " + name + L".", nullptr, 1);
   }
@@ -1459,6 +1489,11 @@ int RunBareFile(const Runner& runner, const std::wstring& here, const std::wstri
   done.version = FormatText(
       GesherUiText(language, confirm.update ? "update_done_text" : "install_done_text"),
       Embed(info.label, confirm.rtl));
+  if (confirm.shortcut && !DesktopLinkRecorded(data, info.package)) {
+    // Asked for, but not made (install printed why): say so, never imply it is there.
+    done.version += L"\r\n";
+    done.version += GesherUiText(language, "install_desktop_failed");
+  }
   done.accept = GesherUiText(language, "install_open_button");
   done.cancel = GesherUiText(language, "install_done_button");
   done.icon_path = icon;
