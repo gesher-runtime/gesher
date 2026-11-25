@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'e3e2d2759ce633ecab9d16df23309dca3ffa1c9619717c0c3eb09f061f7ca9a4'
+OFD_QUALIFICATION_SHA256 = '016986ff3a9054b98cd71d5810b9cbc05ff44cccdea86d810265e1ef7976f07c'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -328,7 +328,7 @@ def preceding_shared_stdio_sources(qualification):
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
 # the original OFD receipt and every one of its hashes remain unchanged below.
 # This source qualification grants no supplier, controller or runtime approval.
-PROPERTY_REVISION_SHA256 = 'fc2e4d97ee02d1f32e49aeccd648ee386cd44debf9092b4eef48b0c7e2f1499a'
+PROPERTY_REVISION_SHA256 = '585710b140ba0236108dd859575bf45665b8ff4204cef5e77503427b93b7178b'
 PROPERTY_REVISION_HEADER_SHA256 = '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3'
 PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27'
 def preceding_logging_property_source():

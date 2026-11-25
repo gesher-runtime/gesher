@@ -262,9 +262,11 @@ final class SettingsProvider extends ContentProvider {
         global.put(Settings.Global.WIFI_ON, "0");
         global.put(Settings.Global.BLUETOOTH_ON, "0");
         global.put(Settings.Global.DATA_ROAMING, "0");
-        global.put(Settings.Global.DEVICE_NAME, "Gesher");
+        String deviceName = defaultDeviceName();
+        global.put(Settings.Global.DEVICE_NAME, deviceName);
 
         mStore = new SettingsStore(file, mTables);
+        followComputerName(deviceName);
         String recognizer = SpeechRecognitionManagerService.configuredDefault(pm,
                 System.getenv("GESHER_SPEECH_RECOGNIZER"));
         if (recognizer != null) mStore.addDefault(SECURE, Settings.Secure.VOICE_RECOGNITION_SERVICE, recognizer);
@@ -290,6 +292,55 @@ final class SettingsProvider extends ContentProvider {
         mInfo.flags = ProviderInfo.FLAG_SINGLE_USER;
         // Publish only after all tables are available to server-local readers.
         sInstance = this;
+    }
+
+    /**
+     * Settings.Global.DEVICE_NAME's default (docs/device-identity.md): Windows' computer
+     * name, the PC's own device name; Build.MODEL, Android's own default, only when Windows
+     * gives none.
+     */
+    static String defaultDeviceName() {
+        String name = WindowsHost.computerName();
+        if (name != null && !name.isEmpty()) return name;
+        try {
+            return android.os.Build.MODEL;
+        } catch (RuntimeException | LinkageError noProperties) {  // a host JVM without them
+            return LEGACY_DEVICE_NAME;
+        }
+    }
+
+    /** The fixed DEVICE_NAME every profile stored before it followed the computer name. */
+    static final String LEGACY_DEVICE_NAME = "Gesher";
+    /** The DEVICE_NAME Gesher last derived; a different stored name is the user's own. */
+    static final String DERIVED_DEVICE_NAME = "persist.gesher.device_name";
+
+    /**
+     * Keeps a derived DEVICE_NAME following the computer name (renaming the PC renames the
+     * device), while a name the user set, or deleted, stays. Stored rows include defaults,
+     * so the name Gesher derived is recorded to tell them apart.
+     */
+    private void followComputerName(String name) {
+        String derived = null;
+        try {
+            derived = android.os.SystemProperties.get(DERIVED_DEVICE_NAME, "");
+        } catch (RuntimeException | LinkageError noProperties) {  // a host JVM without them
+        }
+        try {
+            String stored = mTables.get(GLOBAL).get(Settings.Global.DEVICE_NAME);
+            // The fixed legacy name is migrated only in a profile where Gesher never
+            // recorded a derived name; afterwards "Gesher" is a name the user chose.
+            boolean recorded = derived != null && !derived.isEmpty();
+            boolean legacy = LEGACY_DEVICE_NAME.equals(stored) && !recorded;
+            if (stored != null && !name.equals(stored) && (legacy || (recorded && stored.equals(derived)))) {
+                mStore.put(GLOBAL, Settings.Global.DEVICE_NAME, name, false);
+                stored = name;
+            }
+            if (derived != null && name.equals(stored) && !name.equals(derived)) {
+                android.os.SystemProperties.set(DERIVED_DEVICE_NAME, name);
+            }
+        } catch (RuntimeException | LinkageError e) {
+            SystemServer.log("settings: device name not updated: " + e);
+        }
     }
 
     /** What getContentProvider answers for {@code settings}. */

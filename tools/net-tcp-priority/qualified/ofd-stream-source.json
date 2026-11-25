@@ -57,7 +57,7 @@
     "compat/posix/src/errno.cc": "879f452166dd191dc62bc670c5829599cd57a2b3d5037033bd7cc1574639bc51",
     "compat/posix/include/gesher/font_environment.h": "d3e1834350e9b9b79347ad81539c85a203bf333d260094b2d27008cb9c6a9064",
     "compat/posix/src/font_environment.cc": "4b7401dd93967ee63de6072f87b4e535627caef888dfb186a71852807fced499",
-    "compat/posix/src/system_properties.cc": "a7891115d788a0a89745d389325cbe90a0b3b8c940651b2b3940f27693ac9989",
+    "compat/posix/src/system_properties.cc": "55a8d223c0cfad0179d1625fcd0fd71c8a133706ebc6a93cd583187ed334a5de",
     "compat/bionic/posix_bionic.cc": "2c70a33b692e1b4522cf4a686187797e4bc2e37ed01c264410c38e743602c7d8",
     "compat/bionic/shim.cc": "63552f03bc2c4bc80e7b289fc6d26d0ad44ee932a2f3fd707e973278929dd9c5",
     "compat/elf/exec/gesher_exec.cc": "6c86da7c77affc2f18871d4e83adc3175552925c10bdeda3f40523e6e1b2199f",

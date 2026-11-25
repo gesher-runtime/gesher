@@ -299,6 +299,11 @@ jstring WindowsHost_timeZoneKeyName(JNIEnv* env, jclass) {
   return name.empty() ? nullptr : JStr(env, name);
 }
 
+jstring WindowsHost_computerName(JNIEnv* env, jclass) {
+  std::u16string name = dev::ComputerName();
+  return name.empty() ? nullptr : JStr(env, name);
+}
+
 jstring WindowsHost_ianaZone(JNIEnv* env, jclass, jstring windowsId) {
   std::u16string id = dev::IanaZone(Str(env, windowsId));
   return id.empty() ? nullptr : JStr(env, id);
@@ -492,6 +497,7 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeSessionDisplayState", "()I", GESHER_JNI(WindowsHost_sessionDisplayState)},
     {"nativeNetworkState", "()I", GESHER_JNI(WindowsHost_networkState)},
     {"nativeTimeZoneKeyName", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_timeZoneKeyName)},
+    {"nativeComputerName", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_computerName)},
     {"nativeShowToast", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING "ZZ)I",
      GESHER_JNI(WindowsHost_showToast)},
     {"nativeRemoveToast", "(" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING ")I",
