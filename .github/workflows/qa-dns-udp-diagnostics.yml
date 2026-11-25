@@ -1,0 +1,92 @@
+name: DNS UDP candidate before and after
+
+on:
+  push:
+    branches: [palmoni5/qa466-dns-udp-20261125]
+
+permissions:
+  contents: read
+
+jobs:
+  dns-udp:
+    name: Real DNS UDP collision (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    steps:
+      - name: Check out the exact diagnostic driver
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic
+          persist-credentials: false
+          sparse-checkout: .github/diagnostics
+
+      - name: Check out the exact reviewed combined source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: gesher-runtime/gesher
+          ref: 275a830b4edf8fc0032ac9d31b05c256f18d802c
+          path: subject
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.gitattributes
+            /compat/posix/src/network_dns.cc
+            /tests/native/dns_admission_host.cc.in
+            /tools/test_dns_admission.py
+
+      - name: Verify source identity and preserve hashes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $evidence = Join-Path $env:RUNNER_TEMP 'dns-udp-evidence'
+          New-Item -ItemType Directory -Force $evidence | Out-Null
+          $subject = Join-Path $env:GITHUB_WORKSPACE 'subject'
+          $diagnostic = Join-Path $env:GITHUB_WORKSPACE 'diagnostic'
+          $sourceRevision = git -C $subject rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $sourceRevision -ne '275a830b4edf8fc0032ac9d31b05c256f18d802c') { throw 'Unexpected tested source' }
+          $driverRevision = git -C $diagnostic rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $driverRevision -ne $env:GITHUB_SHA) { throw 'Unexpected diagnostic revision' }
+          @("SOURCE_IDENTITY source=$sourceRevision", "DIAGNOSTIC_IDENTITY source=$driverRevision") | Tee-Object -FilePath (Join-Path $evidence 'source-identity.log')
+          foreach ($relative in @('compat/posix/src/network_dns.cc', 'tests/native/dns_admission_host.cc.in', 'tools/test_dns_admission.py')) {
+            $hash = (Get-FileHash -Algorithm SHA256 (Join-Path $subject $relative)).Hash.ToLowerInvariant()
+            "$relative SHA256 $hash" | Tee-Object -Append -FilePath (Join-Path $evidence 'source-identity.log')
+          }
+          $driver = Join-Path $diagnostic '.github/diagnostics/dns-udp-before-after.py'
+          $driverHash = (Get-FileHash -Algorithm SHA256 $driver).Hash.ToLowerInvariant()
+          "diagnostic driver SHA256 $driverHash" | Tee-Object -Append -FilePath (Join-Path $evidence 'source-identity.log')
+
+      - name: Select the real x64 MSVC toolchain
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+
+      - name: Require old-policy failure and fixed full DNS success
+        timeout-minutes: 7
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          if ($env:VSCMD_ARG_TGT_ARCH -ne 'x64') { throw 'Unexpected compiler target' }
+          $evidence = Join-Path $env:RUNNER_TEMP 'dns-udp-evidence'
+          $driver = Join-Path $env:GITHUB_WORKSPACE 'diagnostic/.github/diagnostics/dns-udp-before-after.py'
+          $subject = Join-Path $env:GITHUB_WORKSPACE 'subject'
+          & python -u $driver --repo $subject --output $evidence 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'driver.log')
+          $result = $LASTEXITCODE
+          if ($result -ne 0) { throw "DNS before/after diagnostic failed with exit $result" }
+
+      - name: Preserve exact generated sources and full logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dns-udp-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/dns-udp-evidence/*.log
+            ${{ runner.temp }}/dns-udp-evidence/*.cc
+          if-no-files-found: error
+          retention-days: 7
+
