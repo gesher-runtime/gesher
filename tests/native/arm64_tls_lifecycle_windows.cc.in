@@ -102,6 +102,7 @@ class Env {
   std::atomic<bool> signal_interrupt_{false};
   std::vector<std::unique_ptr<JitBoundary>> jits_;
   std::vector<size_t> ids_;
+  Env* retired_next_ = nullptr;
   Env() {
     ++constructed;
     Check(tls_block_ && stack_base_, "allocate Env memory");
@@ -129,6 +130,29 @@ std::vector<Env*> g_env_pool;
 std::atomic<uint64_t> g_envs_created{0}, g_envs_reused{0};
 size_t EnvPoolLimit() { return 8; }
 @LEASE@
+
+// A thread leaving while a guest fork holds every translator lock: its Env
+// is only retired, lock-free (it keeps its publication), and released
+// (detached, parked or destroyed) by the next ReleaseRetiredEnvs. Otherwise
+// it is released at once (the callers below then check the result).
+void LeaveThread() {
+  static unsigned leaves = 0;
+  if (++leaves % 2 == 0) {
+    t_env.reset();
+    Check(g_retired_envs.load() == nullptr, "a leaving thread releases its Env at once");
+    return;
+  }
+  Env* env = t_env.get();
+  const size_t published = g_envs.size();
+  g_env_pool_mutex.lock();  // as a fork that holds every lock
+  g_fork_holds_all.store(true);
+  t_env.reset();
+  g_fork_holds_all.store(false);
+  g_env_pool_mutex.unlock();
+  Check(g_retired_envs.load() == env && g_envs.size() == published, "a leaving thread only retires its Env during a fork");
+  ReleaseRetiredEnvs();
+  Check(g_retired_envs.load() == nullptr, "retired Env released after the fork");
+}
 
 void CheckStackPublication(const Env* env, unsigned calls, const char* message) {
   if (enforce)
@@ -163,7 +187,7 @@ void TestMethods() {
   auto* jit = old->jits_[0].get();
   Check(g_tls_blocks.size() == 2 && g_envs.size() == 2, "track both active Env blocks");
   std::memset(address, 0x94, kTlsBlockSize);
-  t_env.reset();
+  LeaveThread();
   Check(g_tls_blocks.size() == 1 && g_envs.size() == 1, "detach before parking");
   Check(g_attached.empty(), "detach unregisters exactly its own directed-signal entry");
   Check(cleared == 2, "retire exclusive state before pooling");
@@ -188,7 +212,7 @@ void TestMethods() {
     Check(address[first + i] == (i < sizeof(image1) ? image1[i] : 0), "restore initial TLS image and zero BSS");
   for (size_t i = 0; i < 7000; ++i)
     Check(address[second + i] == (i < sizeof(image2) ? image2[i] : 0), "restore TLS image published while parked");
-  t_env.reset();
+  LeaveThread();
   for (unsigned failure : {1u, 2u}) {
     const unsigned before = destroyed;
     fail_commit = failure;
@@ -202,20 +226,20 @@ void TestMethods() {
     }
     Check(Committed(fresh->tls_block_, kTlsBlockSize) == kTlsBlockSize, "failed reuse creates attached usable Env");
     Check(g_tls_blocks.size() == 2 && g_envs.size() == 2, "failed Env is not published");
-    t_env.reset();
+    LeaveThread();
   }
   auto* retained = ThreadEnv();
   CheckStackPublication(retained, ++publications, "retained Env stack is published on attachment");
   retained->tls_block_[0] = 0x85;
   fail_decommit = 2; // Stack decommit succeeds, but TLS decommit is denied.
-  t_env.reset();
+  LeaveThread();
   fail_decommit = 0;
   Check(Committed(retained->tls_block_, kTlsBlockSize) == kTlsBlockSize,
         "failed TLS decommit leaves readable committed memory");
   Check(ThreadEnv() == retained && retained->tls_block_[0] == 0,
         "normal Attach resets retained TLS even if decommit failed");
   CheckStackPublication(retained, ++publications, "reused Env republishes after failed TLS decommit");
-  t_env.reset();
+  LeaveThread();
   active->Detach();
   delete active;
   for (Env* env : g_env_pool) delete env;

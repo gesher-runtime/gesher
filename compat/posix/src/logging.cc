@@ -11,6 +11,10 @@
 #include <initializer_list>
 #include <limits>
 #include <memory>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher::logging {
 namespace {
@@ -546,3 +550,9 @@ std::string Format(const Entry& entry, const std::string& format) {
   return result;
 }
 }  // namespace gesher::logging
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): Android log writes in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, SRWLOCK, gesher::logging::Cached().lock);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, SRWLOCK, gesher::logging::Priorities().lock);
+#endif

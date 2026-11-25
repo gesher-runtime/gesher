@@ -61,6 +61,10 @@
 
 #include "binder_internal.h"
 #include "internal.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 #include "revocable_internal.h"
 
 // Dedicated failure object only; normal production route is fixed Win32.
@@ -1581,6 +1585,12 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
   // likewise cannot alter the session or a committed snapshot.
   gesher::DescriptorSnapshotPtr snapshot;
   const bool binder_mapping = (flags & MAP_ANONYMOUS) == 0 && gesher::IsBinderFd(fd);
+  // A binder fd a forked child inherited maps nothing there (Linux's binder
+  // refuses an mmap from a process other than the one that opened it).
+  if (binder_mapping && !gesher::BinderFdOwnedHere(fd)) {
+    errno = EINVAL;
+    return MAP_FAILED;
+  }
   if ((flags & MAP_ANONYMOUS) == 0 && !binder_mapping) {
     snapshot = gesher::CaptureDescriptor(fd);
     if (!snapshot) return MAP_FAILED;
@@ -2195,3 +2205,36 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
 }
 
 }  // extern "C"
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): mmap/munmap/mprotect in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, state().lock);
+// The child inherited every writable memfd mapping: each lease (once per
+// mapping, shared by its views) is taken again by the child, so F_SEAL_WRITE
+// stays EBUSY while the child maps the file, as on Linux.
+namespace {
+bool LeasesTry(void*) { return true; }
+void LeasesUnlock(void*) {}
+void LeasesChild(void*) {
+  std::set<void*> renewed;
+  for (auto& entry : state().regions) {
+    void* lease = entry.second.write_lease.get();
+    if (lease != nullptr && renewed.insert(lease).second) gesher::RenewMemfdWriteLeaseInChild(lease);
+  }
+}
+const gesher::ForkLockOps kLeaseForkOps = {&LeasesTry, &LeasesUnlock, &LeasesChild};
+int g_lease_fork_anchor = 0;
+const gesher::ForkLockRegistration g_fork_memfd_leases(gesher::kForkOrderLeaf, "memfd write leases",
+                                                       []() -> void* { return &g_lease_fork_anchor; },
+                                                       &kLeaseForkOps);
+}  // namespace
+
+namespace gesher {
+bool ForkHasMemfdWriteLeases() {
+  for (auto& entry : state().regions) {
+    if (entry.second.write_lease) return true;
+  }
+  return false;
+}
+}  // namespace gesher
+#endif

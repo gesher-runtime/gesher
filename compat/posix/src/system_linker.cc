@@ -324,8 +324,13 @@ std::wstring FinalPath(const std::wstring& path) {
   return StripPrefix(final);
 }
 
-std::once_flag g_file_once;
+// The file and the mapping are made once, under these locks rather than
+// std::call_once, so that a guest fork (ADR 0092) can hold them: a forked
+// child never inherits one half made by a thread it does not have.
+std::mutex g_file_mutex;
 std::atomic<bool> g_file_ready{false};
+std::mutex g_mapped_mutex;
+std::atomic<bool> g_mapped{false};
 std::wstring g_file;
 
 std::wstring HashName() {
@@ -399,7 +404,10 @@ std::string Image() {
 }
 
 const std::wstring& File() {
-  std::call_once(g_file_once, [] {
+  if (g_file_ready.load(std::memory_order_acquire)) return g_file;
+  std::lock_guard<std::mutex> once(g_file_mutex);
+  if (g_file_ready.load(std::memory_order_relaxed)) return g_file;
+  [] {
     const std::wstring data = DataDirectory();
     if (!data.empty()) {
       const std::string image = Image();
@@ -425,8 +433,8 @@ const std::wstring& File() {
       }
       Prune(root, name);
     }
-    g_file_ready.store(true, std::memory_order_release);
-  });
+  }();
+  g_file_ready.store(true, std::memory_order_release);
   return g_file;
 }
 
@@ -501,8 +509,10 @@ int RefuseChangeHandle(HANDLE h) {
 }
 
 void EnsureMapped() {
-  static std::once_flag once;
-  std::call_once(once, [] {
+  if (g_mapped.load(std::memory_order_acquire)) return;
+  std::lock_guard<std::mutex> once(g_mapped_mutex);
+  if (g_mapped.load(std::memory_order_relaxed)) return;
+  [] {
     const std::wstring& file = File();
     if (file.empty()) return;
     HANDLE h = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
@@ -522,7 +532,20 @@ void EnsureMapped() {
         std::memcmp(view, image.data(), image.size()) != 0) {
       UnmapViewOfFile(view);
     }
-  });
+  }();
+  g_mapped.store(true, std::memory_order_release);
 }
 
 }  // namespace gesher::system_linker
+
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the loader's identity that stat and open of
+// /system/bin/linker64 report, in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::system_linker::g_identity_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::system_linker::g_file_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::system_linker::g_mapped_mutex);
+#endif
