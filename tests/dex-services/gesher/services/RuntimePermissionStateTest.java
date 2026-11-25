@@ -1016,6 +1016,13 @@ public final class RuntimePermissionStateTest {
                 && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, old.uid(), old.packageName, null)
                         == AppOpsManager.MODE_FOREGROUND,
                 "a restricted legacy permission without an exemption lost its grant or supplied its AppOp");
+        for (String restricted : List.of(BACKGROUND, STORAGE)) {
+            Object row = reviewRow(h.policy, old, restricted);
+            check(!(Boolean)call(row, "changeable", new Class<?>[0])
+                    && !(Boolean)call(row, "enabled", new Class<?>[0])
+                    && List.of(restricted).equals(call(row, "permissions", new Class<?>[0])),
+                    "Unexempt legacy restriction appeared enabled or adjustable in permission review: " + restricted);
+        }
         // Even a review made while the restriction applied does not survive dropping it: AOSP
         // restorePermissionState requires a new review for a legacy app's exempted permission.
         h.policy.updatePermissionFlags(old.packageName, BACKGROUND, review, 0, true, "default:0", 0);
@@ -1128,6 +1135,13 @@ public final class RuntimePermissionStateTest {
 
     private interface ReviewChoice {
         int decide(String owner, String[] groups, boolean[] enabled, boolean[] changeable);
+    }
+
+    private static Object reviewRow(PermissionPolicy policy, ApkPackage owner, String permission) throws Exception {
+        for (Object row : (List<?>)call(policy, "pendingReviewGroups", new Class<?>[]{ApkPackage.class}, owner)) {
+            if (((List<?>)call(row, "permissions", new Class<?>[0])).contains(permission)) return row;
+        }
+        throw new AssertionError("Permission review omitted " + permission);
     }
 
     private static Object reviewController(Harness h, Executor ordinary, Executor review,
@@ -1282,6 +1296,101 @@ public final class RuntimePermissionStateTest {
         var updated = review(concurrent, racing); queue.remove(0).run();
         check(updated.get() && attempts.get() == 2, "Fresh managed-state review could not complete after retry");
         retire(h, racing);
+    }
+
+    /** Restrictions are enforced states, not editable grants or fabricated user denials. */
+    private static void legacyReviewRestricted(Harness h) throws Exception {
+        int reviewFlag = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+        int revoked = PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
+        List<String> restricted = List.of(BACKGROUND, STORAGE, READ_LOG, WRITE_LOG, OUTGOING);
+        ApkPackage legacy = pkg("fixture.permission.legacy.reviewrestricted", UID + 26, 22, (byte)14);
+        call(legacy, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, List.of());
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, legacy);
+        // Preserve an existing explicit denial on one restricted permission, and
+        // the absence of any user decision on all the others.
+        h.policy.updatePermissionFlags(legacy.packageName, STORAGE, revoked | USER_SET,
+                revoked | USER_SET, true, "default:0", 0);
+        h.policy.updatePermissionFlags(legacy.packageName, BACKGROUND, reviewFlag, 0, true, "default:0", 0);
+        Object blockedSibling = reviewRow(h.policy, legacy, BACKGROUND);
+        Object location = reviewRow(h.policy, legacy, FINE);
+        check(!(Boolean)call(blockedSibling, "changeable", new Class<?>[0])
+                && !(Boolean)call(blockedSibling, "enabled", new Class<?>[0])
+                && (Boolean)call(location, "changeable", new Class<?>[0])
+                && (Boolean)call(location, "mixed", new Class<?>[0])
+                && !((List<?>)call(location, "permissions", new Class<?>[0])).contains(BACKGROUND),
+                "Mixed review concealed a previously reviewed restriction or included it in the adjustable group");
+        h.policy.updatePermissionFlags(legacy.packageName, BACKGROUND, reviewFlag, reviewFlag, true, "default:0", 0);
+        Map<String, Integer> before = new java.util.LinkedHashMap<>();
+        for (String permission : restricted) before.put(permission, flagsOf(h.policy, legacy.packageName, permission));
+        List<Runnable> queue = new ArrayList<>();
+        Object requests = reviewController(h, queue::add, queue::add, (owner, labels, enabled, changeable) -> {
+            int enforced = 0;
+            for (int i = 0; i < labels.length; i++) {
+                if (!changeable[i]) {
+                    enforced++;
+                    check(!enabled[i] && restricted.stream().anyMatch(labels[i]::contains),
+                            "Restricted review row was not visibly disabled with its own permission label");
+                    enabled[i] = true; // Even an inconsistent backend cannot grant this row.
+                } else {
+                    enabled[i] = false;
+                }
+            }
+            check(enforced == restricted.size(), "Review did not disclose each enforced restriction");
+            return ALLOWED;
+        });
+        var accepted = review(requests, legacy); queue.remove(0).run();
+        check(accepted.get() && !(Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, legacy),
+                "Acknowledging enforced restrictions did not complete review");
+        for (String permission : restricted) {
+            check(flagsOf(h.policy, legacy.packageName, permission) == (before.get(permission) & ~reviewFlag),
+                    "Acknowledging an enforced restriction fabricated or erased a user choice: " + permission);
+        }
+        check(appOp(h.policy, AppOpsManager.OP_READ_EXTERNAL_STORAGE, legacy.uid()) == AppOpsManager.MODE_IGNORED
+                && appOp(h.policy, AppOpsManager.OP_READ_CALL_LOG, legacy.uid()) == AppOpsManager.MODE_IGNORED,
+                "Acknowledging restricted review enabled a withheld storage or call-log AppOp");
+        retire(h, legacy);
+
+        for (boolean exemptAfterPrompt : List.of(true, false)) {
+            ApkPackage racing = pkg("fixture.permission.legacy.reviewexemption" + exemptAfterPrompt,
+                    UID + (exemptAfterPrompt ? 27 : 28), 22, (byte)15);
+            call(racing, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class},
+                    exemptAfterPrompt ? List.of() : List.of(BACKGROUND, STORAGE));
+            call(h.pm, "add", new Class<?>[]{ApkPackage.class}, racing);
+            AtomicInteger attempts = new AtomicInteger();
+            Object concurrent = reviewController(h, queue::add, queue::add, (owner, labels, enabled, changeable) -> {
+                if (attempts.getAndIncrement() == 0) {
+                    for (String permission : List.of(BACKGROUND, STORAGE)) {
+                        boolean changed = exemptAfterPrompt
+                                ? h.policy.addAllowlistedRestrictedPermission(racing.packageName, permission,
+                                        PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0)
+                                : h.policy.removeAllowlistedRestrictedPermission(racing.packageName, permission,
+                                        PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0);
+                        check(changed, "Exemption race did not change the actual installer allowlist");
+                    }
+                }
+                return ALLOWED;
+            });
+            int cameraBefore = flagsOf(h.policy, racing.packageName, CAMERA);
+            var stale = review(concurrent, racing); queue.remove(0).run();
+            check(!stale.get() && flagsOf(h.policy, racing.packageName, CAMERA) == cameraBefore
+                    && (Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, racing),
+                    "Installer exemption change silently committed an obsolete permission-review screen");
+            for (String permission : List.of(BACKGROUND, STORAGE)) {
+                Object row = reviewRow(h.policy, racing, permission);
+                check((Boolean)call(row, "changeable", new Class<?>[0]) == exemptAfterPrompt
+                        && (Boolean)call(row, "enabled", new Class<?>[0]) == exemptAfterPrompt,
+                        "Fresh review did not reflect the changed installer exemption: " + permission);
+            }
+            var retry = review(concurrent, racing); queue.remove(0).run();
+            check(retry.get() && attempts.get() == 2,
+                    "Fresh review could not proceed after the installer exemption changed");
+            check(appOp(h.policy, AppOpsManager.OP_FINE_LOCATION, racing.uid())
+                            == (exemptAfterPrompt ? AppOpsManager.MODE_ALLOWED : AppOpsManager.MODE_FOREGROUND)
+                    && appOp(h.policy, AppOpsManager.OP_READ_EXTERNAL_STORAGE, racing.uid())
+                            == (exemptAfterPrompt ? AppOpsManager.MODE_ALLOWED : AppOpsManager.MODE_IGNORED),
+                    "Reviewed hard/legacy-soft restrictions disagreed with their current exemption");
+            retire(h, racing);
+        }
     }
     private static final class Prompts {
         final List<String> foreground = new ArrayList<>(), background = new ArrayList<>();
@@ -1544,7 +1653,7 @@ public final class RuntimePermissionStateTest {
         binder = binderTransport; checks = 0;
         Harness harness = new Harness();
         exemptions(harness); legacyRestricted(harness); legacyReview(harness); legacyReviewCoordinator(harness);
-        legacyReviewManaged(harness);
+        legacyReviewManaged(harness); legacyReviewRestricted(harness);
         decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
         backgroundConsent(harness);
         installerAllowlist(harness);

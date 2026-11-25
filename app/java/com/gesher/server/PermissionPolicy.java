@@ -1045,13 +1045,13 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             PermissionState state = permissionState(expected.uid(), name, members, info);
             String group = RuntimePermissionGroups.group(info);
             String key = group != null ? group : name;
-            boolean fixed = (state.flags & (PackageManager.FLAG_PERMISSION_SYSTEM_FIXED
+            boolean immutable = state.restricted || (state.flags & (PackageManager.FLAG_PERMISSION_SYSTEM_FIXED
                     | PackageManager.FLAG_PERMISSION_POLICY_FIXED)) != 0;
-            // A previously reviewed fixed sibling must remain visible when a new
-            // permission in its logical group needs review after an update.
+            // A previously reviewed fixed or restricted sibling must remain visible
+            // when another permission in its logical group needs review.
             if ((state.flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) == 0
-                    && !(fixed && reviewedGroups.contains(key))) continue;
-            if (fixed) {
+                    && !(immutable && reviewedGroups.contains(key))) continue;
+            if (immutable) {
                 // Review clears the temporary review gate, never the enforced
                 // grant/revocation. Show that effective state as an immutable row.
                 boolean enabled = state.granted && !state.restricted
@@ -1098,7 +1098,9 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                 String key = group != null ? group : name;
                 boolean enabled = enabledGroups.contains(key);
                 int flags = state.flags & ~PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
-                if ((flags & (PackageManager.FLAG_PERMISSION_SYSTEM_FIXED
+                // An enforced restriction is not a user denial. Acknowledging
+                // this row clears review without fabricating or erasing consent.
+                if (!state.restricted && (flags & (PackageManager.FLAG_PERMISSION_SYSTEM_FIXED
                         | PackageManager.FLAG_PERMISSION_POLICY_FIXED)) == 0) {
                     if (enabled) {
                         flags &= ~PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
