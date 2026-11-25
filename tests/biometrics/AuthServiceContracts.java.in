@@ -1156,7 +1156,7 @@ public final class AuthServiceContracts {
                     () -> new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, new byte[] {1}),
                     () -> { }, accepted -> { });
         }, (owner, pid, cancel, done) -> watches.incrementAndGet());
-        check(noOwner.create("missing-owner", PID).status == HelloKeyBackend.NOT_FOREGROUND
+        check(noOwner.create("missing-owner", PID).result.status == HelloKeyBackend.NOT_FOREGROUND
                         && starts.get() == 0 && watches.get() == 0,
                 "key enrollment without an owner never starts a native create or watcher");
 
@@ -1199,18 +1199,57 @@ public final class AuthServiceContracts {
                     throw new AssertionError(e);
                 }
             });
-            HelloKeyBackend.Result result = hello.create("owned-create", PID);
+            HelloKeyBackend.Creation creation = hello.create("owned-create", PID);
+            HelloKeyBackend.Result result = creation.result;
             boolean watchStopped = stopped.await(3, java.util.concurrent.TimeUnit.SECONDS);
             check(watchedIdentity.get() && watchStopped,
                     "key enrollment watches its captured owner during await and stops after completion");
+            check(canceled ? accepted.equals(List.of(false)) : accepted.isEmpty(),
+                    "successful public-key delivery retains native creation until enrollment commits");
+            if (!canceled) creation.commit();
+            creation.close();
+            creation.close();
             check(releaseCalls.get() == 1 && accepted.equals(List.of(!canceled)),
-                    "native create receives exactly one final accepted/canceled handoff disposition");
+                    "native create receives exactly one final committed/rejected enrollment disposition");
             check(canceled
                             ? result.status == HelloKeyBackend.USER_CANCELED && result.data == null
                                     && cancelCalls.get() == 1 && Arrays.equals(publicKey, new byte[3])
                             : result.status == HelloKeyBackend.SUCCESS && result.data == publicKey
                                     && cancelCalls.get() == 0,
                     "owner loss rejects a racing successful create; a live owner keeps its public key");
+        }
+
+        for (boolean commit : new boolean[] {false, true}) {
+            AtomicInteger cancels = new AtomicInteger();
+            List<Boolean> accepted = new ArrayList<>();
+            WindowsHelloKey.Request request = new WindowsHelloKey.Request(
+                    () -> new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, new byte[] {8}),
+                    cancels::incrementAndGet, accepted::add);
+            WindowsHelloKey hello = new WindowsHelloKey(pid -> 73,
+                    (name, pid) -> request, (owner, pid, cancel, done) -> { },
+                    (work, name) -> work.run());
+            HelloKeyBackend.Creation creation = hello.create("retained-enrollment", PID);
+            // The old create watch may still be returning while the first signature
+            // has started its separate owner watch. Its late cancel cannot revoke
+            // the already delivered creation behind that enrollment's back.
+            request.cancel();
+            check(creation.result.status == HelloKeyBackend.SUCCESS && accepted.isEmpty()
+                            && cancels.get() == 0,
+                    "a delivered creation retains ownership and ignores its finished watch's late cancel");
+            if (commit) {
+                creation.commit();
+                creation.commit();
+            }
+            creation.close();
+            creation.close();
+            check(accepted.equals(List.of(commit)),
+                    "closing an uncommitted creation rejects it; a committed creation stays accepted");
+            if (!commit) {
+                boolean rejected = false;
+                try { creation.commit(); } catch (IllegalStateException expected) { rejected = true; }
+                check(rejected && accepted.equals(List.of(false)),
+                        "a closed creation cannot later accept a key being cleaned up");
+            }
         }
 
         List<Boolean> disposition = new ArrayList<>();
@@ -1291,7 +1330,7 @@ public final class AuthServiceContracts {
             HelloKeyBackend.Result result = null;
             Throwable escaped = null;
             try {
-                result = hello.create("failed-watch", 42);
+                result = hello.create("failed-watch", 42).result;
             } catch (RuntimeException | Error failure) {
                 escaped = failure;
             }
@@ -1327,10 +1366,150 @@ public final class AuthServiceContracts {
                 "cleanup exceptions cannot skip the rejected native disposition or await twice");
     }
 
+    static void keySignatureWaiterFailures() {
+        for (Throwable original : new Throwable[] {
+                new IllegalStateException("scripted signature thread startup failure"),
+                new OutOfMemoryError("scripted signature thread allocation failure")}) {
+            AtomicInteger starts = new AtomicInteger(), waits = new AtomicInteger();
+            AtomicInteger cancels = new AtomicInteger(), callbacks = new AtomicInteger();
+            List<Boolean> released = new ArrayList<>();
+            byte[] signature = {3, 4, 5};
+            WindowsHelloKey hello = new WindowsHelloKey(pid -> 73, (name, pid) -> {
+                throw new AssertionError("signature started a creation");
+            }, (owner, pid, cancel, done) -> {
+                throw new AssertionError("unstarted signature started an owner watch");
+            }, (work, name) -> {
+                if (original instanceof Error) throw (Error) original;
+                throw (RuntimeException) original;
+            }, (name, pid, data) -> {
+                starts.incrementAndGet();
+                return new WindowsHelloKey.Request(() -> {
+                    waits.incrementAndGet();
+                    return new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, signature);
+                }, cancels::incrementAndGet, released::add);
+            });
+            Throwable caught = null;
+            try {
+                hello.sign("unwatched-signature", 42, new byte[] {9},
+                        result -> callbacks.incrementAndGet());
+            } catch (RuntimeException | Error failure) {
+                caught = failure;
+            }
+            check(caught == original && starts.get() == 1 && callbacks.get() == 0,
+                    "signature waiter startup failure preserves its original exception without a callback");
+            check(waits.get() == 1 && cancels.get() == 1 && released.equals(List.of(false))
+                            && Arrays.equals(signature, new byte[3]),
+                    "unstarted signature waiter cancels, awaits and rejects the native signature exactly once");
+        }
+
+        IllegalStateException startFailure = new IllegalStateException("signature waiter did not start");
+        IllegalArgumentException cancelFailure = new IllegalArgumentException("signature cancel failed");
+        OutOfMemoryError awaitFailure = new OutOfMemoryError("signature handoff failed");
+        AtomicInteger waits = new AtomicInteger();
+        List<Boolean> released = new ArrayList<>();
+        WindowsHelloKey unstarted = new WindowsHelloKey(pid -> 73, (name, pid) -> null,
+                (owner, pid, cancel, done) -> { }, (work, name) -> { throw startFailure; },
+                (name, pid, data) -> new WindowsHelloKey.Request(() -> {
+                    waits.incrementAndGet();
+                    throw awaitFailure;
+                }, () -> { throw cancelFailure; }, released::add));
+        Throwable caught = null;
+        try {
+            unstarted.sign("cleanup-failure", 42, new byte[0], result -> {
+                throw new AssertionError("unstarted waiter called back");
+            });
+        } catch (RuntimeException | Error failure) {
+            caught = failure;
+        }
+        check(caught == startFailure && Arrays.equals(startFailure.getSuppressed(),
+                        new Throwable[] {cancelFailure, awaitFailure})
+                        && waits.get() == 1 && released.equals(List.of(false)),
+                "signature startup failure stays primary and cleanup failures cannot skip release");
+
+        for (boolean failOwnerStart : new boolean[] {true, false}) {
+            AtomicInteger awaited = new AtomicInteger(), canceled = new AtomicInteger();
+            List<Boolean> dispositions = new ArrayList<>();
+            List<HelloKeyBackend.Result> results = new ArrayList<>();
+            java.util.concurrent.atomic.AtomicReference<Runnable> waiter =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<Runnable> watch =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicBoolean watchDone =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+            byte[] signature = {8, 9};
+            WindowsHelloKey hello = new WindowsHelloKey(pid -> 73, (name, pid) -> null,
+                    (owner, pid, cancel, done) -> watchDone.set(done.get()),
+                    (work, name) -> {
+                        if (name.startsWith("keystore-hello-owner-")) {
+                            watch.set(work);
+                            if (failOwnerStart) throw new OutOfMemoryError("owner thread did not start");
+                        } else {
+                            waiter.set(work);
+                        }
+                    }, (name, pid, data) -> new WindowsHelloKey.Request(() -> {
+                        awaited.incrementAndGet();
+                        if (!failOwnerStart) throw new IllegalStateException("signature native await failed");
+                        return new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, signature);
+                    }, canceled::incrementAndGet, dispositions::add));
+            HelloKeyBackend.Operation operation = hello.sign("waiter-failure", 42,
+                    new byte[] {1}, results::add);
+            check(results.isEmpty() && waiter.get() != null,
+                    "a signature waits for its scheduled waiter before delivering a result");
+            Throwable escaped = null;
+            try {
+                waiter.get().run();
+            } catch (RuntimeException | Error failure) {
+                escaped = failure;
+            }
+            check(escaped == null && results.size() == 1
+                            && results.get(0).status == HelloKeyBackend.FAILED
+                            && results.get(0).data == null,
+                    "signature await or owner-start failure completes FAILED once without escaping its server thread");
+            operation.cancel();
+            watch.get().run();
+            check(awaited.get() == 1 && canceled.get() == (failOwnerStart ? 1 : 0)
+                            && dispositions.equals(List.of(false)) && watchDone.get()
+                            && (!failOwnerStart || Arrays.equals(signature, new byte[2])),
+                    "failed signature completion never re-awaits a released handle and ends its owner watch");
+        }
+
+        for (boolean hasOwner : new boolean[] {false, true}) {
+            AtomicInteger starts = new AtomicInteger(), watches = new AtomicInteger();
+            AtomicInteger cancels = new AtomicInteger();
+            List<Boolean> dispositions = new ArrayList<>();
+            List<HelloKeyBackend.Result> results = new ArrayList<>();
+            java.util.concurrent.atomic.AtomicReference<Runnable> waiter =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            WindowsHelloKey hello = new WindowsHelloKey(pid -> hasOwner ? 73 : 0,
+                    (name, pid) -> null, (owner, pid, cancel, done) -> watches.incrementAndGet(),
+                    (work, name) -> {
+                        if (name.startsWith("keystore-hello-owner-")) work.run();
+                        else waiter.set(work);
+                    }, (name, pid, data) -> {
+                        starts.incrementAndGet();
+                        return new WindowsHelloKey.Request(
+                                () -> new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, new byte[] {7}),
+                                cancels::incrementAndGet, dispositions::add);
+                    });
+            HelloKeyBackend.Operation operation = hello.sign("ordinary-signature", 42,
+                    new byte[] {1}, results::add);
+            check(results.isEmpty(), "ordinary signature completion uses the scheduled waiter");
+            waiter.get().run();
+            operation.cancel();
+            check(results.size() == 1 && results.get(0).status == (hasOwner
+                            ? HelloKeyBackend.SUCCESS : HelloKeyBackend.NOT_FOREGROUND)
+                            && starts.get() == (hasOwner ? 1 : 0)
+                            && watches.get() == (hasOwner ? 1 : 0) && cancels.get() == 0
+                            && dispositions.equals(hasOwner ? List.of(true) : List.of()),
+                    "signature waiter preserves successful delivery and refuses native entry without an owner");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         keyRequestCancellation();
         keyCreateOwnership();
         keyWatchFailures();
+        keySignatureWaiterFailures();
         unavailable();
         available();
         keystore();
