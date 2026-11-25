@@ -67,3 +67,52 @@ rewritten timing entries, and ordered dispatch including the final control.
 These checks establish the observation protocol only. Actual Windows outcomes
 must be attached to the tested commit and runtime versions before interpreting
 either primitive.
+
+## Actual execution: 2026-11-25
+
+The [successful run 45583346318](https://github.com/gesher-runtime/gesher/actions/runs/45583346318)
+tested commit `6c104766a73d0778747111898744326f22e00ade`, tree
+`c1e2b95ede34478ac428ee82bfadff07e85a351a`. Both loader variants compiled with
+llvm-mingw/Clang 23.1.3; the worker diagnostic used the static loader and SDK
+`1.0.4258.31`. The build also passed the 159 isolated script checks. Build job
+`139098618964` produced artifact `15007701553`; its ZIP SHA-256 was
+`53c914f8e98b5f155b993d5f1388c762e230854afdcde94818322e0130d562c0`.
+
+| Windows job | Actual WebView2 runtime | Diagnostic result |
+| --- | --- | --- |
+| [2022 / 139098916455](https://github.com/gesher-runtime/gesher/actions/runs/45583346318/job/139098916455) | `131.0.2903.86` | Controls and observations passed |
+| [2025 / 139098916473](https://github.com/gesher-runtime/gesher/actions/runs/45583346318/job/139098916473) | `157.0.4341.46` | Controls and observations passed |
+
+Both runtimes produced the same outcomes:
+
+| Case | Initial fetch / body | HTTP status / body bytes | Original-path server requests |
+| --- | --- | --- | --- |
+| Pass-through | Resolved / complete | 200 / 11 | 1 |
+| Supplied response | Resolved / complete | 200 / 8 | 0 |
+| HTTP-error control | Resolved / complete | 403 / 6 | 0 |
+| First-read `STG_E_READFAULT` | Resolved / complete | 200 / 0 | 0 |
+| First-read `E_ABORT` | Resolved / complete | 200 / 0 | 0 |
+| Mid-body `STG_E_READFAULT` | Resolved / complete | 200 / 65536 | 0 |
+| Deferred URI mutation | **Rejected with `TypeError` / no body** | No HTTP response / 0 | **0** |
+| Synchronous handler `E_ABORT` | **Resolved / complete** | **200 / 19** | **1** |
+| Same-worker follow-up | Resolved / complete | 200 / 15 | 1 |
+
+For deferred URI mutation, `put_Uri` and `Complete` returned `S_OK`; the exact
+unregistered non-network URI was read back after the handler had returned.
+The worker reported `TypeError: Failed to fetch`, `timedOut=false`,
+`aborted=false`, empty response URL, and no response body. Its original and final
+JavaScript request URLs and the one resource-timing entry all retained the
+original HTTP URL; the timing initiator was `fetch`. No external URI launch or
+unknown origin request occurred. All nine observations used the same worker
+identity within each job, including the successful final fetch. Controller
+closure returned `S_OK`; guard removal after closure returned the expected
+closed-object `0x8007139f` in both jobs.
+
+The [machine-readable receipt](webview-worker-denial-2026-11-25.json) preserves
+every case's exact JSON observation, independent counters, relevant native
+operation lines, job links and decoded-log hashes. These results establish a
+deferred denial candidate for the measured same-origin GET boundary. They also
+disprove synchronous handler `E_ABORT` as a denial mechanism on these runtimes:
+the original request was sent and its response consumed. None of the unmeasured
+contracts listed above is closed by this result, and no production worker
+capability was enabled.
