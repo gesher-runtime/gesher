@@ -124,10 +124,10 @@ function Set-AppSeparateWindows([string] $pkg, [bool] $separate) {
     [IO.File]::WriteAllLines($script:AppWindowsFile, $lines, [Text.UTF8Encoding]::new($false))
 }
 
-# A proxy setting as ProxySetting.parse saves it: 'direct', 'windows' or host:port (an
-# http:// prefix and a trailing slash dropped); $null when it is not one. The port is read
-# as Integer.parseInt reads it (a sign, then decimal digits of any script) so that every
-# setting the runtime accepts is shown and saved unchanged.
+# A proxy setting as ProxySetting.parse saves it: 'direct', 'windows', host:port (HTTP),
+# or socks5://host:port. SOCKS aliases have strict endpoint syntax and default port 1080.
+# The existing HTTP port is read as Integer.parseInt reads it (a sign, then decimal
+# digits of any script) so that accepted HTTP settings are shown and saved unchanged.
 function ConvertTo-ProxyValue([string] $value) {
     if ($null -eq $value) { return $null }
     # String.trim: every character up to U+0020.
@@ -136,6 +136,54 @@ function ConvertTo-ProxyValue([string] $value) {
     # Ordinal, as String.equals: -in and -eq would ignore characters such as a soft hyphen.
     if ([Array]::IndexOf([string[]]@('direct', 'none', 'off'), $lower) -ge 0) { return 'direct' }
     if ([Array]::IndexOf([string[]]@('windows', 'default'), $lower) -ge 0) { return 'windows' }
+    foreach ($prefix in 'socks5://', 'socks://', 'socks5=', 'socks=') {
+        if (-not $lower.StartsWith($prefix, [StringComparison]::Ordinal)) { continue }
+        $v = $v.Substring($prefix.Length)
+        if ($v.EndsWith('/', [StringComparison]::Ordinal)) { $v = $v.Substring(0, $v.Length - 1) }
+        $digits = $null
+        if ($v.StartsWith('[', [StringComparison]::Ordinal)) {
+            $close = $v.IndexOf(']')
+            if ($close -lt 0) { return $null }
+            $hostName = $v.Substring(0, $close + 1)
+            if ($close + 1 -lt $v.Length) {
+                if ($v[$close + 1] -ne [char]':') { return $null }
+                $digits = $v.Substring($close + 2)
+            }
+            if ($hostName -cnotmatch '\A\[[0-9A-Fa-f:.]+\]\z') { return $null }
+            $ip = $null
+            if (-not [Net.IPAddress]::TryParse($hostName.Substring(1, $hostName.Length - 2), [ref]$ip) -or
+                    $ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetworkV6) { return $null }
+        } else {
+            $colon = $v.IndexOf(':')
+            $hostName = if ($colon -lt 0) { $v } else { $v.Substring(0, $colon) }
+            if ($colon -ge 0) { $digits = $v.Substring($colon + 1) }
+            if (-not $hostName -or $hostName.Length -gt 253) { return $null }
+            $name = if ($hostName.EndsWith('.', [StringComparison]::Ordinal)) { $hostName.Substring(0, $hostName.Length - 1) } else { $hostName }
+            foreach ($label in $name.Split('.')) {
+                if ($label -cnotmatch '\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\z') { return $null }
+            }
+            if ($name -cmatch '\A[0-9]+(?:\.[0-9]+){3}\z') {
+                foreach ($octet in $name.Split('.')) {
+                    [long] $number = 0
+                    foreach ($digit in $octet.ToCharArray()) {
+                        $number = $number * 10 + ([int]$digit - [int][char]'0')
+                        if ($number -gt 255) { return $null }
+                    }
+                }
+            }
+        }
+        [int] $port = 1080
+        if ($null -ne $digits) {
+            if ($digits -cnotmatch '\A[0-9]+\z') { return $null }
+            $port = 0
+            foreach ($digit in $digits.ToCharArray()) {
+                $port = $port * 10 + ([int]$digit - [int][char]'0')
+                if ($port -gt 65535) { return $null }
+            }
+            if ($port -lt 1) { return $null }
+        }
+        return "socks5://${hostName}:$port"
+    }
     if ($lower.StartsWith('http://', [StringComparison]::Ordinal)) { $v = $v.Substring(7) }
     if ($v.EndsWith('/', [StringComparison]::Ordinal)) { $v = $v.Substring(0, $v.Length - 1) }
     $colon = $v.LastIndexOf(':')
@@ -246,8 +294,8 @@ function ConvertTo-PropertiesValue([string] $text) {
     return $out.ToString()
 }
 
-# The saved settings: key 'proxy' (every app) or 'proxy.<package>' -> 'direct', 'windows' or
-# host:port. As with Properties, the last line of a key wins; then ProxySetting.parse. None
+# The saved settings: key 'proxy' (every app) or 'proxy.<package>' -> 'direct', 'windows',
+# host:port or socks5://host:port. As with Properties, the last line wins, then ProxySetting.parse. None
 # when the file is not in Properties form, as ProxySetting.load.
 function Get-ProxySettings {
     $settings = [System.Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
@@ -284,7 +332,7 @@ function Set-ProxySetting([string] $pkg, [string] $value) {
     }
     $lines = [System.Collections.Generic.List[string]]::new()
     if (-not (Test-Path -LiteralPath $script:ProxyFile)) {
-        $lines.Add('#Gesher''s proxy: gesher-app proxy [PACKAGE] host:port|direct|windows')
+        $lines.Add('#Gesher''s proxy: gesher-app proxy [PACKAGE] host:port|socks5://host:port|direct|windows')
     }
     for ($n = 0; $n -lt $file.Lines.Count; $n++) { if (-not $drop.Contains($n)) { $lines.Add($file.Lines[$n]) } }
     if ($value) {
