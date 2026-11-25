@@ -868,16 +868,16 @@ char* realpath(const char* path, char* resolved_path) {
     errno = ENOENT;
     return nullptr;
   }
-  if (kind == gesher::PathKind::kFile && gesher::system_linker::IsFile(wpath)) {
-    out = gesher::system_linker::kPath;  // Gesher's ELF loader, by its name
-  } else if (kind == gesher::PathKind::kFile) {
+  if (kind == gesher::PathKind::kFile) {
     HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (h == INVALID_HANDLE_VALUE) {
       gesher::FailWithLastError();
       return nullptr;
     }
-    bool ok = FinalPath(h, &out);
+    // Gesher's ELF loader by its name, however it was reached (system_linker.h).
+    bool ok = gesher::system_linker::IsFileHandle(h) ? (out = gesher::system_linker::kPath, true)
+                                                      : FinalPath(h, &out);
     CloseHandle(h);
     if (!ok) return nullptr;
   } else if (kind != gesher::PathKind::kVirtual) {

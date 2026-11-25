@@ -390,6 +390,14 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
                                             : (errno = EINVAL, false);
       CloseHandle(h);
       if (!ok) return -1;
+      // A link made to /system/bin/linker64 stores the file's Windows path:
+      // read back the name it was made with.
+      std::wstring linked;
+      if (!target.empty() && target[0] == '/' &&
+          gesher::MapPath(target.c_str(), &linked) == PathKind::kFile &&
+          gesher::system_linker::IsFilePath(linked)) {
+        target = gesher::system_linker::kPath;
+      }
       break;
     }
     case PathKind::kMissing:
@@ -592,6 +600,7 @@ int fchmod(int fd, mode_t mode) {
   if (operation.Error()) return errno = operation.Error(), -1;
   HANDLE h = snapshot->handle;
   if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
+  if (gesher::system_linker::RefuseChangeHandle(h) != 0) return -1;
   HANDLE writable = ReOpenFile(h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                FILE_FLAG_BACKUP_SEMANTICS);

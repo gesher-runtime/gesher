@@ -18,6 +18,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 #include <windows.h>
 
@@ -423,7 +424,97 @@ static void TestExec(const std::wstring& data) {
   printf("PASS  running the file itself fails to link (exit %lu)\n", static_cast<unsigned long>(status));
 }
 
+// Other names and descriptors that reach the file: a symbolic link to the
+// name (Linux allows it; writes through it are EROFS), fds opened read-only
+// through the name, extended attributes.
+static void TestOtherNames(const std::wstring& data) {
+  printf("changes through other names and descriptors\n");
+  const char* name = "/system/bin/linker64";
+  const std::string before = ReadPath(name);
+  const std::string link = ex::Narrow(data + L"\\to-linker64");
+  if (symlink(name, link.c_str()) == 0) {
+    CHECK_EROFS(open(link.c_str(), O_WRONLY));
+    CHECK_EROFS(open(link.c_str(), O_RDWR | O_TRUNC));
+    CHECK_EROFS(open(link.c_str(), O_WRONLY | O_APPEND));
+    CHECK(ReadPath(link.c_str()) == before);
+    char target[4096] = {};
+    const ssize_t n = readlink(link.c_str(), target, sizeof(target) - 1);
+    CHECK(n > 0 && std::string(target, static_cast<size_t>(n)) == name);
+    if (n <= 0 || std::string(target, static_cast<size_t>(n)) != name) {
+      fprintf(stderr, "readlink: n=%d errno=%d %s\n", static_cast<int>(n), errno, target);
+    }
+    char resolved[4096];
+    CHECK(realpath(link.c_str(), resolved) != nullptr && strcmp(resolved, name) == 0);
+    CHECK_EROFS(setxattr(link.c_str(), "user.gesher", "v", 1, 0));
+    printf("PASS  a symbolic link to it: readable, readlink and realpath name it, writes EROFS\n");
+  } else {
+    printf("SKIP  symbolic links need developer mode or a privilege here (errno %d)\n", errno);
+  }
+  CHECK_EROFS(setxattr(name, "user.gesher", "v", 1, 0));
+  CHECK_EROFS(lsetxattr(name, "user.gesher", "v", 1, 0));
+  CHECK_EROFS(removexattr(name, "user.gesher"));
+  CHECK_EROFS(lremovexattr(name, "user.gesher"));
+  const int fd = open(name, O_RDONLY);
+  CHECK(fd >= 0);
+  if (fd >= 0) {
+    CHECK_EROFS(fchmod(fd, 0644));
+    CHECK_EROFS(futimens(fd, nullptr));
+    CHECK_EROFS(utimensat(fd, "", nullptr, AT_EMPTY_PATH));
+    CHECK_EROFS(fsetxattr(fd, "user.gesher", "v", 1, 0));
+    CHECK_EROFS(fremovexattr(fd, "user.gesher"));
+    close(fd);
+  }
+  CHECK(ReadPath(name) == before);
+  const DWORD attributes = GetFileAttributesW(FindFile(data).c_str());
+  CHECK(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) == 0);
+  // Names Linux would not resolve to the file.
+  CHECK(open("/system/bin/linker64/.", O_RDONLY) < 0);
+  CHECK(open("/system/bin/missing/../linker64", O_RDONLY) < 0);
+  printf("PASS  xattrs, fchmod, futimens, utimensat(AT_EMPTY_PATH) through the name or an fd: EROFS\n");
+}
+
+// Without a file (its directory cannot be made), changing opens of the name
+// are still EROFS, and reading it finds nothing.
+static int NoFileChild(const char* data) {
+  const std::wstring blocker = ex::Widen(data) + L"\\blocker";
+  HANDLE h = CreateFileW(blocker.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+  if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+  SetEnvironmentVariableW(L"ANDROID_DATA", blocker.c_str());
+  struct stat st {};
+  errno = 0;
+  if (stat("/system/bin/linker64", &st) == 0 || errno != ENOENT) return 1;
+  errno = 0;
+  if (open("/system/bin/linker64", O_WRONLY | O_CREAT, 0644) != -1 || errno != EROFS) return 2;
+  return 0;
+}
+
+static void TestNoFile(const std::wstring& data) {
+  printf("no file\n");
+  wchar_t self[MAX_PATH];
+  GetModuleFileNameW(nullptr, self, MAX_PATH);
+  std::wstring command;
+  ex::AppendQuoted(&command, self);
+  command += L" --no-file ";
+  ex::AppendQuoted(&command, data);
+  STARTUPINFOW si = {};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi = {};
+  const BOOL started = CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                                      nullptr, nullptr, &si, &pi);
+  CHECK(started);
+  if (!started) return;
+  WaitForSingleObject(pi.hProcess, 30000);
+  DWORD status = 99;
+  GetExitCodeProcess(pi.hProcess, &status);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  CHECK(status == 0);
+  printf("PASS  without a file: ENOENT to read, EROFS to create (status %lu)\n",
+         static_cast<unsigned long>(status));
+}
+
 int main(int argc, char** argv) {
+  if (argc == 3 && strcmp(argv[1], "--no-file") == 0) return NoFileChild(argv[2]);
   if (argc == 3 && strcmp(argv[1], "--use") == 0) {
     // A second process using the name (TestTemporaryPrune).
     SetEnvironmentVariableW(L"ANDROID_DATA", ex::Widen(argv[2]).c_str());
@@ -446,6 +537,8 @@ int main(int argc, char** argv) {
   TestDlopen();
   TestExec(data);
   TestTemporaryPrune(data);
+  TestOtherNames(data);
+  TestNoFile(data);
   if (g_failed != 0) {
     printf("system_linker_test: %d of %d checks failed\n", g_failed, g_checks);
     return 1;

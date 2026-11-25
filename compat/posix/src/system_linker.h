@@ -3,6 +3,8 @@
 // docs/decisions/0096-elf-loader-as-system-linker64.md).
 #pragma once
 
+#include <windows.h>
+
 #include <string>
 
 namespace gesher::system_linker {
@@ -34,9 +36,21 @@ bool IsName(const char* path);
 // system on Android; 0 otherwise.
 int RefuseChange(const char* path);
 
-// Whether `windows` (a Windows path, with or without \\?\) is File(), so that
-// /proc/self/maps, /proc/self/fd and realpath name it as kPath.
+// Whether `windows` (a Windows path, with or without \\?\) is the final path
+// of File(), so that /proc/self/maps, /proc/self/fd and readlink name it as
+// kPath. A process that has not used the name compares with the file where
+// File() puts it, if it exists, without writing it.
 bool IsFile(const std::wstring& windows);
+
+// The same by file identity (volume serial number and file index), whatever
+// name or fd reached the file: a symbolic link to it, a descriptor of it.
+bool IsFileInfo(const BY_HANDLE_FILE_INFORMATION& info);
+bool IsFileHandle(HANDLE h);
+bool IsFilePath(const std::wstring& windows);
+
+// RefuseChange for calls on an fd or handle (fchmod, futimens, fsetxattr,
+// fremovexattr): -1 with errno EROFS when `h` is the file; 0 otherwise.
+int RefuseChangeHandle(HANDLE h);
 
 // Maps File() read-only for the rest of the process's life, once, as the
 // dynamic linker is mapped in every Android process. /proc/self/maps calls it

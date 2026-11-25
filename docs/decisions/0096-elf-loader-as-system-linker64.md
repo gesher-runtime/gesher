@@ -67,18 +67,38 @@ examples. It is generic: every process, no package or packer is singled out.
   `libart.so` is (0086): a process that has one mapped keeps it, and a file
   holding other bytes is replaced. Image directories unused for a week and
   temporary files of processes that no longer run are pruned. The name is
-  matched after dropping empty and `.` components and resolving `..`
-  (`/system//bin/../bin/linker64` is the same file); a trailing slash is not
-  the file.
+  matched as the kernel walks it: empty and `.` components are skipped and
+  `..` goes back through `system` and `bin` (`/system//bin/../bin/linker64` is
+  the same file); another directory on the way (`/system/bin/x/../linker64`,
+  ENOENT on Linux) or anything after `linker64` (a trailing slash,
+  `linker64/.`: ENOTDIR) is not the file.
 - **Read-only through the name.** `/system` is a read-only file system on
   Android, so every call that would change the file or its name through
   `/system/bin/linker64` fails with `EROFS` (`system_linker::RefuseChange`):
   `open`/`openat`/`creat` for writing, appending or truncation, `unlink`,
   `unlinkat`, `remove`, `rename`/`renameat` from or to it, `link` from or to
   it, `symlink` onto it, `chmod`/`fchmodat`, `chown` and
-  `utimes`/`utimensat`. Reads are unaffected. The file on disk has no
-  read-only attribute, so ordinary cleanups of Gesher's data directory (the
-  uninstaller, `remove_all`) remove it.
+  `utimes`/`utimensat` and `setxattr`/`lsetxattr`/`removexattr`/
+  `lremovexattr`. A changing `open` of the name is `EROFS` even when the file
+  could not be written. Reads are unaffected.
+- **Read-only by any other way to it.** Linux lets a symbolic link point
+  into `/system` and refuses writes through it; so does Gesher. By file
+  identity (volume serial number and file index, `IsFileInfo`):
+  - `OpenFile` refuses a writing open of the file under any name with
+    `EROFS`. A process that uses the name holds the file open without sharing
+    write access for its lifetime, and a mapped file cannot be truncated, so
+    such opens fail before the file changes; the identity check also turns
+    those failures into `EROFS`.
+  - `fchmod`, `futimens` (and `utimensat(fd, "", AT_EMPTY_PATH)`),
+    `fsetxattr` and `fremovexattr` on an fd of the file are `EROFS`, as are
+    the path xattr calls through a link.
+  - `readlink` of a link made to `/system/bin/linker64` gives
+    `/system/bin/linker64` (the link stores the file's Windows path), and
+    `realpath` of the link gives the name as well.
+  A process that never used the name and finds no file has nothing to
+  protect, and does not look again. The file on disk has no read-only
+  attribute, so ordinary cleanups of Gesher's data directory (the uninstaller,
+  `remove_all`) remove it.
 - **No `/system/bin/linker`.** Gesher has no 32-bit support; a 64-bit-only
   device has no 32-bit linker either.
 - **In `/proc/self/maps`.** `Maps()` first maps the file read-only, once, for
@@ -137,10 +157,13 @@ examples. It is generic: every process, no package or packer is singled out.
 - Only the name `/system/bin/linker64` is mapped (as `/system/fonts` is):
   `/apex/com.android.runtime/bin/linker64` and `/system/bin` as a directory
   do not exist. The `exec` special case matches the exact string only.
-- The name refuses changes; the file on disk does not: an app running with
-  the user's token can change it through its Windows path as it can any of
-  the user's files (0090). The next process that uses the name writes it
-  again, and maps only bytes equal to the image.
+- Gesher's own names and descriptors refuse changes; Windows does not: an
+  app calling Win32 directly with the user's token can change the file through
+  its Windows path, as it can any of the user's files (0090), unless a process
+  using the name holds it. A truncating open through a link while no such
+  process runs and nothing has it mapped would truncate it before the
+  identity check. The next process that uses the name writes it again, and
+  maps only bytes equal to the image.
 - `/proc/self/maps` names the view `/system/bin/linker64` only when the data
   directory is on a volume with a drive letter (`MappedFile` translates
   device paths through drive letters).
@@ -153,7 +176,10 @@ examples. It is generic: every process, no package or packer is singled out.
   `/system/bin/linker`, other spellings of the name, `EROFS` from each
   changing call above with the file unchanged and not read-only, the maps
   line (name, offset, inode, the mapped bytes, mapped once), `/proc/self/fd`,
-  `realpath`, the loader refusing the image, the launch `linker64 PROGRAM
+  `realpath`, a symbolic link to the name (writes `EROFS`, `readlink` and
+  `realpath` name it), xattr and fd-based changes (`EROFS`), names Linux
+  would not resolve, a process without the file (`EROFS` to create), the
+  loader refusing the image, the launch `linker64 PROGRAM
   ARGS` prepares (equal to PROGRAM's own), the `ENOEXEC` cases, that
   gesher-exec refuses to run the file, and pruning (an old image directory, a
   dead process's temporary file, kept ones). The procfs and SQLite path

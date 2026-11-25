@@ -328,6 +328,69 @@ std::once_flag g_file_once;
 std::atomic<bool> g_file_ready{false};
 std::wstring g_file;
 
+std::wstring HashName() {
+  const std::string image = BuildImage();
+  uint32_t fnv = 2166136261u;
+  for (unsigned char c : image) fnv = (fnv ^ c) * 16777619u;
+  wchar_t name[16];
+  std::swprintf(name, 16, L"%08x", fnv);
+  return name;
+}
+
+// The file holding the image, as this process knows it: its final path and
+// its file identity (volume serial number and file index). Calls that change
+// a file through another name (a symbolic link, an fd) compare identities.
+struct Identity {
+  bool known = false;
+  std::wstring path;
+  DWORD volume = 0, high = 0, low = 0;
+};
+std::mutex g_identity_mutex;
+bool g_identity_probed = false;
+Identity g_identity;
+
+void LearnLocked(const std::wstring& path) {
+  HANDLE h = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return;
+  BY_HANDLE_FILE_INFORMATION info;
+  if (GetFileInformationByHandle(h, &info)) {
+    g_identity.known = true;
+    g_identity.volume = info.dwVolumeSerialNumber;
+    g_identity.high = info.nFileIndexHigh;
+    g_identity.low = info.nFileIndexLow;
+    std::wstring final(32768, L'\0');
+    DWORD n = GetFinalPathNameByHandleW(h, final.data(), static_cast<DWORD>(final.size()),
+                                        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n != 0 && n < final.size()) {
+      final.resize(n);
+      g_identity.path = StripPrefix(final);
+    }
+  }
+  CloseHandle(h);
+}
+
+// The identity, from File() when this process used the name, otherwise from
+// the file where File() would put it, looked up once without writing it (a
+// process that never used the name and finds no file has nothing to protect).
+template <typename F>
+bool WithIdentity(F f) {
+  std::lock_guard<std::mutex> lock(g_identity_mutex);
+  if (!g_identity.known && !g_identity_probed) {
+    g_identity_probed = true;
+    if (g_file_ready.load(std::memory_order_acquire)) {
+      if (!g_file.empty()) LearnLocked(g_file);
+    } else {
+      const std::wstring data = DataDirectory();
+      if (!data.empty()) {
+        LearnLocked(data + L"\\system\\gesher-linker\\" + HashName() + L"\\linker64");
+      }
+    }
+  }
+  return g_identity.known && f(g_identity);
+}
+
 }  // namespace
 
 std::string Image() {
@@ -342,16 +405,24 @@ const std::wstring& File() {
       const std::string image = Image();
       // A directory per image: a process that has an older one mapped keeps
       // it, and a file is never rewritten while mapped.
-      uint32_t fnv = 2166136261u;
-      for (unsigned char c : image) fnv = (fnv ^ c) * 16777619u;
-      wchar_t name[16];
-      std::swprintf(name, 16, L"%08x", fnv);
+      const std::wstring name = HashName();
       const std::wstring root = data + L"\\system\\gesher-linker";
       const std::wstring dir = root + L"\\" + name;
       MakeDirectories(dir);
       MarkUsed(dir);
       const std::wstring path = dir + L"\\linker64";
-      if (Place(path, image)) g_file = FinalPath(path);
+      if (Place(path, image)) {
+        g_file = FinalPath(path);
+        // Held for the process's life without sharing write access: while a
+        // process that uses the name runs, no other name or process can open
+        // the file for writing (OpenFile reports EROFS for it).
+        CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        std::lock_guard<std::mutex> lock(g_identity_mutex);
+        g_identity = Identity();
+        g_identity_probed = true;
+        if (!g_file.empty()) LearnLocked(g_file);
+      }
       Prune(root, name);
     }
     g_file_ready.store(true, std::memory_order_release);
@@ -363,29 +434,28 @@ bool IsName(const char* path) {
   if (path == nullptr || path[0] != '/' || path[1] == '/') return false;
   const size_t length = std::strlen(path);
   if (path[length - 1] == '/') return false;  // a directory: ENOTDIR on Linux
-  // The components after dropping empty and "." ones and resolving "..", as
-  // the kernel walks them (no symbolic link is on the way).
+  // The components, walked as the kernel walks them: empty and "." ones are
+  // skipped and ".." goes back, but only through system and bin (another
+  // directory does not exist there: ENOENT), and nothing follows linker64
+  // ("linker64/." is ENOTDIR).
   static constexpr std::string_view kParts[] = {"system", "bin", "linker64"};
-  std::string_view parts[3];
   size_t count = 0;
   std::string_view rest(path);
   while (!rest.empty()) {
     const size_t slash = rest.find('/');
     const std::string_view part = rest.substr(0, slash);
     rest = slash == std::string_view::npos ? std::string_view() : rest.substr(slash + 1);
-    if (part.empty() || part == ".") continue;
+    if (part.empty()) continue;
+    if (count == 3) return false;
+    if (part == ".") continue;
     if (part == "..") {
       if (count > 0) --count;
       continue;
     }
-    if (count == 3) return false;
-    parts[count++] = part;
+    if (part != kParts[count]) return false;
+    ++count;
   }
-  if (count != 3) return false;
-  for (size_t i = 0; i < 3; ++i) {
-    if (parts[i] != kParts[i]) return false;
-  }
-  return true;
+  return count == 3;
 }
 
 int RefuseChange(const char* path) {
@@ -395,10 +465,39 @@ int RefuseChange(const char* path) {
 }
 
 bool IsFile(const std::wstring& windows) {
-  // Only a process that used the name (MapPath, EnsureMapped) can have the
-  // file open or mapped; others never create it here.
-  if (!g_file_ready.load(std::memory_order_acquire) || g_file.empty()) return false;
-  return _wcsicmp(StripPrefix(windows).c_str(), g_file.c_str()) == 0;
+  const std::wstring path = StripPrefix(windows);
+  return WithIdentity([&](const Identity& id) {
+    return !id.path.empty() && _wcsicmp(path.c_str(), id.path.c_str()) == 0;
+  });
+}
+
+bool IsFileInfo(const BY_HANDLE_FILE_INFORMATION& info) {
+  return WithIdentity([&](const Identity& id) {
+    return info.dwVolumeSerialNumber == id.volume && info.nFileIndexHigh == id.high &&
+           info.nFileIndexLow == id.low;
+  });
+}
+
+bool IsFileHandle(HANDLE h) {
+  BY_HANDLE_FILE_INFORMATION info;
+  return h != nullptr && h != INVALID_HANDLE_VALUE && GetFileType(h) == FILE_TYPE_DISK &&
+         GetFileInformationByHandle(h, &info) && IsFileInfo(info);
+}
+
+bool IsFilePath(const std::wstring& windows) {
+  HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  const bool is = IsFileHandle(h);
+  CloseHandle(h);
+  return is;
+}
+
+int RefuseChangeHandle(HANDLE h) {
+  if (!IsFileHandle(h)) return 0;
+  errno = EROFS;
+  return -1;
 }
 
 void EnsureMapped() {

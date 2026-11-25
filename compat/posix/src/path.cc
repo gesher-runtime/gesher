@@ -215,6 +215,14 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   }
   if (h == INVALID_HANDLE_VALUE) {
     DWORD error = GetLastError();
+    // Gesher's ELF loader reached by another name (a symbolic link): a
+    // process using it holds it against writers, and a mapped file cannot be
+    // truncated. Read-only, as through its own name.
+    if ((access & GENERIC_WRITE) != 0 &&
+        (error == ERROR_SHARING_VIOLATION || error == ERROR_USER_MAPPED_FILE) &&
+        system_linker::IsFilePath(path)) {
+      return errno = EROFS, -1;
+    }
     DWORD existing = GetFileAttributesW(path.c_str());
     if (error == ERROR_ACCESS_DENIED && existing != INVALID_FILE_ATTRIBUTES &&
         (existing & FILE_ATTRIBUTE_DIRECTORY) != 0) {
@@ -228,8 +236,12 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     return errno = ELOOP, -1;
   }
   BY_HANDLE_FILE_INFORMATION info;
-  bool directory = GetFileInformationByHandle(h, &info) &&
-                   (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  const bool have_info = GetFileInformationByHandle(h, &info) != 0;
+  bool directory = have_info && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  if (have_info && (access & GENERIC_WRITE) != 0 && !directory && system_linker::IsFileInfo(info)) {
+    CloseHandle(h);
+    return errno = EROFS, -1;
+  }
   if ((flags & O_DIRECTORY) != 0 && !directory) {
     CloseHandle(h);
     return errno = ENOTDIR, -1;
@@ -261,15 +273,15 @@ int OpenDevice(PathKind kind, int flags) {
 int OpenPath(const char* path, int flags, mode_t mode) {
   if (path == nullptr) return errno = EFAULT, -1;
   if (*path == '\0') return errno = ENOENT, -1;
+  // /system is read-only on Android (system_linker.h).
+  if (((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC) != 0) &&
+      system_linker::RefuseChange(path) != 0) {
+    return -1;
+  }
   std::wstring windows;
   PathKind kind = MapPath(path, &windows);
   switch (kind) {
     case PathKind::kFile:
-      // /system is read-only on Android (system_linker.h).
-      if (((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC) != 0) &&
-          system_linker::RefuseChange(path) != 0) {
-        return -1;
-      }
       return OpenFile(windows, flags, mode);
     case PathKind::kNull:
     case PathKind::kZero:
@@ -730,6 +742,7 @@ int futimens(int fd, const struct timespec times[2]) {
   if (!snapshot) return -1;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
+  if (gesher::system_linker::RefuseChangeHandle(snapshot->handle) != 0) return -1;
   return SetHandleTimes(snapshot->handle, times);
 }
 
