@@ -7,13 +7,15 @@
 //   <build-dir>/webview_document_script_test.exe
 //
 // Includes compat/webview/webview_host.cc directly to exercise the actual
-// production DoAfterDocumentScript, ApplyDocumentScript, DrainDocumentScriptWaiters,
-// and Fail helpers against an in-process fake ICoreWebView2.
+// production dispatch, completion, cancellation and readiness helpers against an
+// in-process fake ICoreWebView2 on the real Windows STA. No renderer is created.
 #include "../../compat/webview/webview_host.cc"
 
 #include <assert.h>
 
 #include <deque>
+#include <chrono>
+#include <future>
 #include <map>
 #include <string>
 #include <vector>
@@ -146,6 +148,11 @@ class FakeWebView2 final : public ICoreWebView2 {
   }
   HRESULT STDMETHODCALLTYPE RemoveScriptToExecuteOnDocumentCreated(LPCWSTR id) override {
     ++remove_calls;
+    if (FAILED(next_remove_hr)) {
+      HRESULT hr = next_remove_hr;
+      next_remove_hr = S_OK;
+      return hr;
+    }
     if (id != nullptr) installed_scripts.erase(id);
     return S_OK;
   }
@@ -245,7 +252,7 @@ class FakeWebView2 final : public ICoreWebView2 {
     return E_NOTIMPL;
   }
 
-  void CompleteNextAdd(HRESULT hr) {
+  void CompleteNextAdd(HRESULT hr, bool missing_id = false) {
     assert(!pending_adds.empty());
     PendingAddScript next = std::move(pending_adds.front());
     pending_adds.pop_front();
@@ -254,7 +261,7 @@ class FakeWebView2 final : public ICoreWebView2 {
       id = L"script-" + std::to_wstring(++next_id);
       installed_scripts[id] = next.script;
     }
-    next.handler->Invoke(hr, SUCCEEDED(hr) ? id.c_str() : nullptr);
+    next.handler->Invoke(hr, SUCCEEDED(hr) && !missing_id ? id.c_str() : nullptr);
   }
 
   std::vector<std::wstring> ActiveScripts() const {
@@ -268,32 +275,59 @@ class FakeWebView2 final : public ICoreWebView2 {
   int remove_calls = 0;
   int next_id = 0;
   HRESULT next_add_hr = S_OK;
+  HRESULT next_remove_hr = S_OK;
   std::deque<PendingAddScript> pending_adds;
   std::map<std::wstring, std::wstring> installed_scripts;
   std::vector<NavigationRecord> navigations;
 };
 
+void OnSta(std::function<void()> fn) {
+  auto completion = std::make_shared<std::promise<void>>();
+  auto done = completion->get_future();
+  PostToWebViewThread([fn = std::move(fn), completion] {
+    fn();
+    completion->set_value();
+  });
+  assert(done.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+  done.get();
+}
+
 void DispatchOnReady(const std::shared_ptr<Host::Impl>& impl, std::function<void(Host::Impl*)> fn) {
-  if (impl->destroyed || impl->closing || impl->failed) return;
-  if (!impl->ready) {
-    impl->pending.push_back(std::move(fn));
-    return;
-  }
-  if (impl->document_script_in_flight) {
-    impl->document_script_waiters.push_back(std::move(fn));
-    return;
-  }
-  fn(impl.get());
+  DoAfterDocumentScript(impl, std::move(fn));
+  OnSta([] {});
+}
+
+void DispatchNavigation(const std::shared_ptr<Host::Impl>& impl, std::function<void(Host::Impl*)> fn) {
+  DoNavigation(impl, std::move(fn));
+  OnSta([] {});
 }
 
 void DrainPending(const std::shared_ptr<Host::Impl>& impl) {
-  impl->ready = true;
-  auto pending = std::move(impl->pending);
-  impl->pending.clear();
-  for (auto& fn : pending) {
-    if (impl->destroyed) break;
-    fn(impl.get());
+  OnSta([impl] { impl->ready = true; DrainPendingOperations(impl.get()); });
+}
+
+void CompleteAdd(FakeWebView2* fake, HRESULT hr, bool missing_id = false) {
+  OnSta([=] { fake->CompleteNextAdd(hr, missing_id); });
+}
+
+class ErrorListener final : public Listener {
+ public:
+  int failures = 0;
+  void OnEvent(int32_t type, int64_t, int32_t, const std::wstring&, const std::wstring&,
+               const std::wstring&, const std::vector<uint8_t>*) override {
+    if (type == kFailed) ++failures;
   }
+  bool OnNavigationStarting(const std::wstring&, bool, bool, int64_t) override { return false; }
+  void OnResourceRequest(int64_t, const std::wstring&, const std::wstring&, const std::wstring&,
+                         int32_t, bool) override {}
+  std::wstring OnBridgeCall(const std::wstring&, const std::wstring&, const std::wstring&) override { return L""; }
+  void OnDestroyed() override {}
+};
+
+size_t NavigationCount(FakeWebView2* fake) {
+  return std::count_if(fake->navigations.begin(), fake->navigations.end(), [](const auto& record) {
+    return record.kind != L"stop";
+  });
 }
 
 void PendingStartupCoalescingAndOrdering() {
@@ -306,25 +340,13 @@ void PendingStartupCoalescingAndOrdering() {
 
   // Simulate !ready queue: SetDocumentScript(script1) -> SetDocumentScript(script2) -> Navigate.
   DispatchOnReady(impl, [script1](Host::Impl* i) {
-    if (i->document_script_in_flight) {
-      i->document_script_waiters.push_back([script1](Host::Impl* j) { ApplyDocumentScript(j, script1); });
-    } else {
-      ApplyDocumentScript(i, script1);
-    }
+    ApplyDocumentScript(i, script1);
   });
   DispatchOnReady(impl, [script2](Host::Impl* i) {
-    if (i->document_script_in_flight) {
-      i->document_script_waiters.push_back([script2](Host::Impl* j) { ApplyDocumentScript(j, script2); });
-    } else {
-      ApplyDocumentScript(i, script2);
-    }
+    ApplyDocumentScript(i, script2);
   });
-  DispatchOnReady(impl, [](Host::Impl* i) {
-    if (i->document_script_in_flight) {
-      i->document_script_waiters.push_back([](Host::Impl* j) { j->webview->Navigate(L"https://app.example/index.html"); });
-    } else {
-      i->webview->Navigate(L"https://app.example/index.html");
-    }
+  DispatchNavigation(impl, [](Host::Impl* i) {
+    i->webview->Navigate(L"https://app.example/index.html");
   });
 
   DrainPending(impl);
@@ -337,7 +359,7 @@ void PendingStartupCoalescingAndOrdering() {
   assert(impl->document_script_in_flight);
 
   // Completing script1 installs script1, immediately removes it, and starts script2.
-  fake->CompleteNextAdd(S_OK);
+  CompleteAdd(fake, S_OK);
   assert(fake->remove_calls == 1);
   assert(fake->add_calls == 2);
   assert(fake->pending_adds.size() == 1);
@@ -346,7 +368,7 @@ void PendingStartupCoalescingAndOrdering() {
   assert(impl->document_script_in_flight);
 
   // Completing script2 installs script2 and flushes Navigate with ONLY script2 active.
-  fake->CompleteNextAdd(S_OK);
+  CompleteAdd(fake, S_OK);
   assert(!impl->document_script_in_flight);
   assert(fake->navigations.size() == 1);
   assert(fake->navigations[0].kind == L"navigate");
@@ -360,16 +382,16 @@ void InterleavedNavigationsAndEmptyClear() {
   impl->webview = Com<ICoreWebView2>(fake, false);
   impl->ready = true;
 
-  ApplyDocumentScript(impl.get(), L"s1");
-  DispatchOnReady(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/1"); });
+  DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L"s1"); });
+  DispatchNavigation(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/1"); });
   DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L"s2"); });
-  DispatchOnReady(impl, [](Host::Impl* i) { i->webview->NavigateToString(L"<h1>two</h1>"); });
+  DispatchNavigation(impl, [](Host::Impl* i) { i->webview->NavigateToString(L"<h1>two</h1>"); });
   DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L""); });
-  DispatchOnReady(impl, [](Host::Impl* i) { i->webview->Reload(); });
+  DispatchNavigation(impl, [](Host::Impl* i) { i->webview->Reload(); });
 
   assert(fake->navigations.empty());
 
-  fake->CompleteNextAdd(S_OK);
+  CompleteAdd(fake, S_OK);
   assert(fake->navigations.size() == 1);
   assert(fake->navigations[0].kind == L"navigate");
   assert(fake->navigations[0].active_scripts == std::vector<std::wstring>{L"s1"});
@@ -377,7 +399,7 @@ void InterleavedNavigationsAndEmptyClear() {
   assert(fake->pending_adds.size() == 1);
   assert(fake->pending_adds.front().script == L"s2");
 
-  fake->CompleteNextAdd(S_OK);
+  CompleteAdd(fake, S_OK);
   assert(fake->navigations.size() == 3);
   assert(fake->navigations[1].kind == L"navigateToString");
   assert(fake->navigations[1].active_scripts == std::vector<std::wstring>{L"s2"});
@@ -386,29 +408,60 @@ void InterleavedNavigationsAndEmptyClear() {
   assert(!impl->document_script_in_flight);
 }
 
-void AddScriptFailuresDoNotDeadlock() {
+void ScriptFailuresBlockDependentNavigation() {
+  // Async failure, immediate failure, startup failure, missing ID, and old-script removal failure.
+  for (int mode = 0; mode < 5; ++mode) {
+    auto impl = std::make_shared<Host::Impl>();
+    auto* fake = new FakeWebView2();
+    ErrorListener listener;
+    impl->listener = &listener;
+    impl->webview = Com<ICoreWebView2>(fake, false);
+    impl->ready = mode != 2;
+    if (mode == 4) {
+      DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L"old-settings"); });
+      CompleteAdd(fake, S_OK);
+      fake->next_remove_hr = E_FAIL;
+    }
+    if (mode == 1 || mode == 2) fake->next_add_hr = E_FAIL;
+    DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L"required-settings"); });
+    DispatchNavigation(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/never"); });
+    if (!impl->ready) DrainPending(impl);
+    if (!fake->pending_adds.empty()) CompleteAdd(fake, mode == 3 ? S_OK : E_FAIL, mode == 3);
+    assert(listener.failures == 1);
+    assert(impl->failed && !impl->document_script_in_flight);
+    assert(NavigationCount(fake) == 0);
+    assert(impl->document_script_waiters.empty());
+  }
+}
+
+void StopCancelsQueuedLoadsAndPreservesSettings() {
+  for (bool ready : {false, true}) {
+    auto impl = std::make_shared<Host::Impl>();
+    auto* fake = new FakeWebView2();
+    impl->webview = Com<ICoreWebView2>(fake, false);
+    impl->ready = ready;
+    DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L"first-settings"); });
+    DispatchNavigation(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/canceled"); });
+    DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L"last-settings"); });
+    OnSta([impl] { StopNavigation(impl.get()); });
+    assert(fake->navigations.size() == 1 && fake->navigations[0].kind == L"stop");
+    if (!ready) DrainPending(impl);
+    CompleteAdd(fake, S_OK);
+    CompleteAdd(fake, S_OK);
+    assert(NavigationCount(fake) == 0);
+    assert(fake->ActiveScripts() == std::vector<std::wstring>{L"last-settings"});
+    DispatchNavigation(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/new"); });
+    assert(NavigationCount(fake) == 1 && fake->navigations.back().target == L"https://example.test/new");
+  }
   auto impl = std::make_shared<Host::Impl>();
   auto* fake = new FakeWebView2();
   impl->webview = Com<ICoreWebView2>(fake, false);
   impl->ready = true;
-
-  // Async failure: waiting navigation still runs.
-  ApplyDocumentScript(impl.get(), L"s1");
-  DispatchOnReady(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/after-async-fail"); });
-  assert(fake->navigations.empty());
-  fake->CompleteNextAdd(E_FAIL);
-  assert(!impl->document_script_in_flight);
-  assert(fake->navigations.size() == 1);
-  assert(fake->navigations[0].target == L"https://example.test/after-async-fail");
-  assert(fake->navigations[0].active_scripts.empty());
-
-  // Sync failure: in-flight flag clears and subsequent navigation runs immediately.
-  fake->next_add_hr = E_FAIL;
-  ApplyDocumentScript(impl.get(), L"s2");
-  assert(!impl->document_script_in_flight);
-  DispatchOnReady(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/after-sync-fail"); });
-  assert(fake->navigations.size() == 2);
-  assert(fake->navigations[1].target == L"https://example.test/after-sync-fail");
+  DispatchNavigation(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/active"); });
+  DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L"new-settings"); });
+  OnSta([impl] { StopNavigation(impl.get()); });
+  assert(fake->navigations.back().kind == L"stop" && fake->pending_adds.size() == 1);
+  CompleteAdd(fake, S_OK);
 }
 
 void ClosingOrFailedDropsWaiters() {
@@ -417,15 +470,15 @@ void ClosingOrFailedDropsWaiters() {
   impl->webview = Com<ICoreWebView2>(fake, false);
   impl->ready = true;
 
-  ApplyDocumentScript(impl.get(), L"s1");
-  DispatchOnReady(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/never"); });
+  DispatchOnReady(impl, [](Host::Impl* i) { ApplyDocumentScript(i, L"s1"); });
+  DispatchNavigation(impl, [](Host::Impl* i) { i->webview->Navigate(L"https://example.test/never"); });
   assert(impl->document_script_waiters.size() == 1);
 
-  Fail(impl.get(), E_FAIL, L"test fail");
+  OnSta([impl] { Fail(impl.get(), E_FAIL, L"test fail"); });
   assert(!impl->document_script_in_flight);
   assert(impl->document_script_waiters.empty());
 
-  fake->CompleteNextAdd(S_OK);
+  CompleteAdd(fake, S_OK);
   assert(fake->navigations.empty());
   assert(impl->document_script_id.empty());
 }
@@ -435,7 +488,9 @@ void ClosingOrFailedDropsWaiters() {
 int main() {
   PendingStartupCoalescingAndOrdering();
   InterleavedNavigationsAndEmptyClear();
-  AddScriptFailuresDoNotDeadlock();
+  ScriptFailuresBlockDependentNavigation();
+  StopCancelsQueuedLoadsAndPreservesSettings();
   ClosingOrFailedDropsWaiters();
-  puts("webview_document_script_test: startup ordering, interleaved navigations, failure recovery, and lifecycle cleanup passed");
+  assert(Host::ShutdownIdle(10000) == 1);
+  puts("webview_document_script_test: actual startup, script, cancellation, failure, and lifecycle queues passed");
 }

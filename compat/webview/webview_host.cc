@@ -512,6 +512,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   uint64_t document_script_generation = 0;
   bool document_script_in_flight = false;
   std::deque<std::function<void(Impl*)>> document_script_waiters;
+  uint64_t navigation_generation = 0;
   std::wstring bridge_endpoint;
   bool bridge_guarded = false;
   uint64_t bridge_generation = 0;
@@ -570,6 +571,17 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   std::set<std::wstring> listened;  // ListenDevTools' events
   // Run once this (service) host is ready or has failed.
   std::vector<std::function<void(ICoreWebView2*)>> service_waiting;
+
+  // Popup handoffs wait for both controller creation and document scripts.
+  // Keep their completion here, separately from work queues that may be dropped.
+  uint64_t new_window_ticket = 0;
+  std::map<uint64_t, std::function<void(ICoreWebView2*)>> pending_new_windows;
+
+  void CancelPendingNewWindows() {
+    auto waiting = std::move(pending_new_windows);
+    pending_new_windows.clear();
+    for (auto& entry : waiting) entry.second(nullptr);
+  }
 
   void Report(int32_t type, int64_t id = 0, int32_t arg = 0, const std::wstring& a = {},
               const std::wstring& b = {}, const std::wstring& c = {},
@@ -887,6 +899,7 @@ bool OriginStorageKey(const std::wstring& origin, std::wstring* key) {
 
 void Fail(Impl* impl, HRESULT hr, const std::wstring& what) {
   impl->failed = true;
+  impl->CancelPendingNewWindows();
   impl->pending.clear();
   impl->document_script_waiters.clear();
   impl->document_script_in_flight = false;
@@ -909,6 +922,15 @@ void Do(const std::shared_ptr<Impl>& impl, std::function<void(Impl*)> fn) {
   });
 }
 
+void DrainPendingOperations(Impl* impl) {
+  auto pending = std::move(impl->pending);
+  impl->pending.clear();
+  for (auto& fn : pending) {
+    if (impl->destroyed || impl->closing || impl->failed) break;
+    fn(impl);
+  }
+}
+
 void DrainDocumentScriptWaiters(Impl* impl) {
   while (!impl->document_script_waiters.empty() && !impl->document_script_in_flight) {
     if (impl->destroyed || impl->closing || impl->failed || !impl->webview) {
@@ -921,20 +943,65 @@ void DrainDocumentScriptWaiters(Impl* impl) {
   }
 }
 
+void QueueAfterDocumentScript(Impl* impl, std::function<void(Impl*)> fn) {
+  if (impl->destroyed || impl->closing || impl->failed || !impl->webview) return;
+  if (impl->document_script_in_flight) {
+    impl->document_script_waiters.push_back(std::move(fn));
+    return;
+  }
+  fn(impl);
+}
+
 void DoAfterDocumentScript(const std::shared_ptr<Impl>& impl, std::function<void(Impl*)> fn) {
   Do(impl, [fn = std::move(fn)](Impl* impl) mutable {
-    if (impl->document_script_in_flight) {
-      impl->document_script_waiters.push_back(std::move(fn));
+    QueueAfterDocumentScript(impl, std::move(fn));
+  });
+}
+
+void DoNavigation(const std::shared_ptr<Impl>& impl, std::function<void(Impl*)> fn) {
+  PostToWebViewThread([impl, fn = std::move(fn)]() mutable {
+    if (impl->destroyed || impl->closing || impl->failed) return;
+    if (impl->ready && impl->webview && !impl->document_script_in_flight) {
+      // Already on the STA: no cancellation wrapper or extra allocation is
+      // needed when this operation can be handed to the renderer immediately.
+      fn(impl.get());
       return;
     }
-    fn(impl);
+    // Capture on the STA before either queue. Stop can invalidate a navigation
+    // even while the controller or its document settings are still being created.
+    uint64_t generation = impl->navigation_generation;
+    auto after_ready = [generation, fn = std::move(fn)](Impl* impl) mutable {
+      QueueAfterDocumentScript(impl, [generation, fn = std::move(fn)](Impl* impl) {
+        if (generation != impl->navigation_generation) return;
+        fn(impl);
+      });
+    };
+    if (!impl->ready) impl->pending.push_back(std::move(after_ready));
+    else after_ready(impl.get());
   });
+}
+
+void StopNavigation(Impl* impl) {
+  if (impl->destroyed || impl->closing) return;
+  ++impl->navigation_generation;
+  impl->CancelPendingNewWindows();
+  if (impl->webview) impl->webview->Stop();
+}
+
+void FailDocumentScript(Impl* impl, HRESULT hr, const std::wstring& operation) {
+  if (impl->webview) impl->webview->Stop();
+  Fail(impl, hr, operation);
 }
 
 void ApplyDocumentScript(Impl* impl, const std::wstring& script) {
   if (impl->destroyed || impl->closing || impl->failed || !impl->webview) return;
   if (!impl->document_script_id.empty()) {
-    impl->webview->RemoveScriptToExecuteOnDocumentCreated(impl->document_script_id.c_str());
+    HRESULT removed = impl->webview->RemoveScriptToExecuteOnDocumentCreated(
+        impl->document_script_id.c_str());
+    if (FAILED(removed)) {
+      FailDocumentScript(impl, removed, L"Remove document settings script");
+      return;
+    }
     impl->document_script_id.clear();
   }
   uint64_t generation = ++impl->document_script_generation;
@@ -953,21 +1020,27 @@ void ApplyDocumentScript(Impl* impl, const std::wstring& script) {
               impl->document_script_waiters.clear();
               return S_OK;
             }
-            if (SUCCEEDED(error) && id != nullptr) {
-              if (generation != impl->document_script_generation) {
-                // Replaced while it was being added.
-                impl->webview->RemoveScriptToExecuteOnDocumentCreated(id);
-              } else {
-                impl->document_script_id = id;
+            if (FAILED(error) || id == nullptr || *id == L'\0') {
+              FailDocumentScript(impl.get(), FAILED(error) ? error : E_FAIL,
+                                 L"Add document settings script");
+              return S_OK;
+            }
+            if (generation != impl->document_script_generation) {
+              // Replaced while it was being added.
+              HRESULT removed = impl->webview->RemoveScriptToExecuteOnDocumentCreated(id);
+              if (FAILED(removed)) {
+                FailDocumentScript(impl.get(), removed, L"Remove superseded document settings script");
+                return S_OK;
               }
+            } else {
+              impl->document_script_id = id;
             }
             DrainDocumentScriptWaiters(impl.get());
             return S_OK;
           })
           .get());
   if (FAILED(hr)) {
-    impl->document_script_in_flight = false;
-    DrainDocumentScriptWaiters(impl);
+    FailDocumentScript(impl, hr, L"Add document settings script");
   }
 }
 
@@ -1201,6 +1274,13 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           -> HRESULT {
                         auto impl = weak.lock();
                         if (!impl || impl->destroyed) return S_OK;
+                        if (impl->failed || impl->closing) {
+                          args->put_Cancel(TRUE);
+                          UINT64 nav = 0;
+                          args->get_NavigationId(&nav);
+                          impl->cancelled.insert(nav);
+                          return S_OK;
+                        }
                         // Capture handed work before the client can issue newer API loads.
                         // This navigation may retire only work already handed
                         // over when its start arrived, not that newer work.
@@ -1497,7 +1577,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         // No browser window of WebView2's own: the app decides
                         // (WebChromeClient.onCreateWindow; CompleteNewWindow).
                         args->put_Handled(TRUE);
-                        if (impl->destroyed) return S_OK;
+                        if (impl->destroyed || impl->closing || impl->failed) return S_OK;
                         CoString uri;
                         args->get_Uri(uri.Put());
                         BOOL user = FALSE;
@@ -1847,12 +1927,7 @@ void OnController(const std::shared_ptr<Impl>& impl, HRESULT hr,
   CoString version;
   if (impl->env) impl->env->get_BrowserVersionString(version.Put());
   impl->Report(kReady, 0, 0, version.str());
-  auto pending = std::move(impl->pending);
-  impl->pending.clear();
-  for (auto& fn : pending) {
-    if (impl->destroyed) break;
-    fn(impl.get());
-  }
+  DrainPendingOperations(impl.get());
   auto waiting = std::move(impl->service_waiting);
   impl->service_waiting.clear();
   for (auto& w : waiting) w(impl->webview.get());
@@ -2039,6 +2114,7 @@ bool FinishDestroy(const std::shared_ptr<Impl>& impl) {
     if (!impl->bridge_acknowledgments.empty()) return false;
     bool ok = true;
     impl->destroyed = true;
+    impl->CancelPendingNewWindows();
     // Bridge deferrals have been denied while the controller was still alive;
     // JavaScript consumed their responses and acknowledged them before this close.
     for (auto& r : impl->requests) r.second.deferral->Complete();
@@ -2155,6 +2231,7 @@ void Host::Destroy() {
   PostToWebViewThread([impl] {
     if (impl->destroyed || impl->closing) return;
     impl->closing = true;
+    impl->CancelPendingNewWindows();
     impl->bridge_guarded = false;
     // Detach before the Android parent window is destroyed; retain a hidden
     // controller until its synchronous XHR has actually consumed our denial.
@@ -2182,7 +2259,7 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
   if (!body.empty() && !method.empty() && method != L"GET") {
     bytes = std::make_shared<const std::vector<uint8_t>>(std::move(body));
   }
-  DoAfterDocumentScript(impl_, [url, headers, method, body = std::move(bytes), number](Impl* impl) {
+  DoNavigation(impl_, [url, headers, method, body = std::move(bytes), number](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = E_FAIL;
     Com<ICoreWebView2_2> wv2;
@@ -2216,7 +2293,7 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
 }
 
 void Host::NavigateToString(const std::wstring& html) {
-  DoAfterDocumentScript(impl_, [html](Impl* impl) {
+  DoNavigation(impl_, [html](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = impl->webview->NavigateToString(html.c_str());
     if (FAILED(hr)) {
@@ -2249,7 +2326,7 @@ void Host::Run(Command command) {
         impl->webview->Reload();
         break;
       case kStop:
-        impl->webview->Stop();
+        StopNavigation(impl);
         break;
       case kGoBack:
         impl->api_navigation = true;
@@ -2279,10 +2356,12 @@ void Host::Run(Command command) {
   };
   switch (command) {
     case kReload:
-    case kStop:
     case kGoBack:
     case kGoForward:
-      DoAfterDocumentScript(impl_, std::move(run));
+      DoNavigation(impl_, std::move(run));
+      break;
+    case kStop:
+      PostToWebViewThread([impl = impl_, run = std::move(run)] { run(impl.get()); });
       break;
     case kFocus:
     case kBlur:
@@ -2552,7 +2631,8 @@ void Host::CompleteNewWindow(int64_t id, Host* window) {
     Impl::Deferred d;
     if (!opener->Undefer(id, &d)) return;
     Com<ICoreWebView2NewWindowRequestedEventArgs> args;
-    if (wv != nullptr && d.args.As(IID_ICoreWebView2NewWindowRequestedEventArgs, &args)) {
+    if (wv != nullptr && !opener->destroyed && !opener->closing && !opener->failed
+        && d.args.As(IID_ICoreWebView2NewWindowRequestedEventArgs, &args)) {
       HRESULT hr = args->put_NewWindow(wv);
       if (FAILED(hr)) opener->Report(kFailed, 0, static_cast<int32_t>(hr), L"put_NewWindow: " + Hex(hr));
     }
@@ -2564,15 +2644,23 @@ void Host::CompleteNewWindow(int64_t id, Host* window) {
   }
   std::shared_ptr<Impl> target = window->impl_;
   PostToWebViewThread([target, finish] {
-    if (target->destroyed || target->failed) {
+    if (target->destroyed || target->closing || target->failed) {
       finish(nullptr);
-    } else if (target->ready) {
-      finish(target->webview.get());
-    } else {
-      // Once the new WebView's controller exists (and its settings and
-      // document scripts, posted before, are applied).
-      target->pending.push_back([finish](Impl* t) { finish(t->webview.get()); });
+      return;
     }
+    const uint64_t ticket = ++target->new_window_ticket;
+    target->pending_new_windows.emplace(ticket, finish);
+    auto after_ready = [ticket](Impl* t) {
+      QueueAfterDocumentScript(t, [ticket](Impl* ready) {
+        auto found = ready->pending_new_windows.find(ticket);
+        if (found == ready->pending_new_windows.end()) return;
+        auto complete = std::move(found->second);
+        ready->pending_new_windows.erase(found);
+        complete(ready->webview.get());
+      });
+    };
+    if (target->ready) after_ready(target.get());
+    else target->pending.push_back(std::move(after_ready));
   });
 }
 
