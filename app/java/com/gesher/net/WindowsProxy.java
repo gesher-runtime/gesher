@@ -152,13 +152,61 @@ public final class WindowsProxy {
             String scheme = eq > 0 ? part.substring(0, eq).toLowerCase(java.util.Locale.ROOT) : "";
             String server = eq > 0 ? part.substring(eq + 1) : part;
             int sep = server.indexOf("://");
-            if (sep >= 0) server = server.substring(sep + 3);
+            if (sep >= 0) {
+                if (scheme.isEmpty()) scheme = server.substring(0, sep).toLowerCase(java.util.Locale.ROOT);
+                server = server.substring(sep + 3);
+            }
             if (server.endsWith("/")) server = server.substring(0, server.length() - 1);
+            if (scheme.equals("socks") || scheme.equals("socks5") || scheme.equals("socks4") || scheme.equals("ftp")) continue;
             if (scheme.isEmpty() || scheme.equals("http")) return server;
             if (scheme.equals("https") && https == null) https = server;
-            if (first == null && !scheme.equals("socks") && !scheme.equals("ftp")) first = server;
+            if (first == null) first = server;
         }
         return https != null ? https : first != null ? first : "";
+    }
+
+    /**
+     * The SOCKS5 proxy of a WinINet / GESHER_PROXY string: "socks=host:port",
+     * "socks5=host:port", "socks5://host:port", or "socks://host:port".
+     */
+    static String socksServerFor(String proxy) {
+        if (proxy == null || proxy.isEmpty()) return "";
+        for (String part : proxy.split("[;\\s]+")) {
+            if (part.isEmpty()) continue;
+            int eq = part.indexOf('=');
+            String scheme = eq > 0 ? part.substring(0, eq).toLowerCase(java.util.Locale.ROOT) : "";
+            String server = eq > 0 ? part.substring(eq + 1) : part;
+            int sep = server.indexOf("://");
+            if (sep >= 0) {
+                if (scheme.isEmpty()) scheme = server.substring(0, sep).toLowerCase(java.util.Locale.ROOT);
+                server = server.substring(sep + 3);
+            }
+            if (server.endsWith("/")) server = server.substring(0, server.length() - 1);
+            if (scheme.equals("socks") || scheme.equals("socks5")) return server;
+        }
+        return "";
+    }
+
+    private static void applySocks(Config c) {
+        String server = c != null ? socksServerFor(c.proxy) : "";
+        if (server.isEmpty()) {
+            System.clearProperty("socksProxyHost");
+            System.clearProperty("socksProxyPort");
+            System.clearProperty("socksProxyVersion");
+            return;
+        }
+        int colon = server.lastIndexOf(':');
+        String host = colon > 0 ? server.substring(0, colon) : server;
+        int port = 1080;
+        try {
+            if (colon > 0) port = Integer.parseInt(server.substring(colon + 1));
+        } catch (NumberFormatException ignored) {
+            port = 1080;
+        }
+        System.setProperty("socksProxyHost", host);
+        System.setProperty("socksProxyPort", String.valueOf(port));
+        System.setProperty("socksProxyVersion", "5");
+        System.out.println("gesher-net: SOCKS5 proxy: " + host + ":" + port);
     }
 
     /**
@@ -246,6 +294,7 @@ public final class WindowsProxy {
         } catch (RuntimeException | LinkageError e) {
             System.out.println("gesher-net: setHttpProxyConfiguration: " + e);
         }
+        applySocks(c);
         String own = ProxySetting.ofProcess();
         if (own != null) {
             System.out.println("gesher-net: Gesher's proxy (" + ProxySetting.ENV + "=" + own
