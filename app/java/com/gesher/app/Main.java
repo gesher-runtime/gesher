@@ -413,7 +413,9 @@ public final class Main {
         }
         AssetManager.createSystemAssetsInZygoteLocked(false, frameworkRes);
 
-        android.app.GesherSettingsContext.prepare();
+        // An app process that goes on with ActivityThread.main has no main Looper yet;
+        // its settings context comes from that ActivityThread (GesherSettingsContext.get).
+        if (!activityThreadMain) android.app.GesherSettingsContext.prepare();
 
         // 5. android.webkit.WebView on WebView2 (docs/webview.md): Gesher's
         //    WebViewFactoryProvider, set before any app code runs.

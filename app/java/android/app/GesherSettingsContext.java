@@ -28,13 +28,17 @@ public final class GesherSettingsContext {
         if (context != null) return context;
         synchronized (GesherSettingsContext.class) {
             if (sContext == null) {
-                if (sMainThread == null) throw new IllegalStateException("Settings context was not prepared");
+                // An app process that entered through ActivityThread.main (ADR 0098) has
+                // its own ActivityThread, made on the main Looper, in place of a prepared one.
+                ActivityThread thread = sMainThread != null ? sMainThread
+                        : ActivityThread.currentActivityThread();
+                if (thread == null) throw new IllegalStateException("Settings context was not prepared");
                 // The provider is acquired after services are available, often on a
                 // Binder worker without a Looper. Use the captured main-thread identity
                 // synchronously: system_server's main thread serves Binder, not a Looper.
                 long identity = Binder.clearCallingIdentity();
                 try {
-                    sContext = ContextImpl.createSystemContext(sMainThread);
+                    sContext = ContextImpl.createSystemContext(thread);
                 } finally {
                     Binder.restoreCallingIdentity(identity);
                 }

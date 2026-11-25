@@ -349,13 +349,15 @@ framework.jar is compiled against those modules' API stubs
 ([framework-build.md](../docs/framework-build.md)) and does not contain them,
 so without them the initializer, and with it every `getSystemService`, would
 fail. `app/compat-java` has a no-op initializer for each module not in
-framework.jar (Connectivity, Wi-Fi, Bluetooth, NFC, AppSearch, Health,
-Stats, Media, Scheduling, SDK sandbox, AdServices, UWB, Safety Center,
-Nearby, OnDevicePersonalization, OnDeviceIntelligence, DeviceLock,
-Virtualization, ConfigInfrastructure, EnhancedConfirmation, Profiling,
-Ranging, and the telephony module's `TelephonyServicesInitializer`) and
-empty placeholders for `LocationManager`, `CountryDetector` and
-`TetheringManager`. Those services are simply not registered. The framework's
+framework.jar (Connectivity, Wi-Fi, AppSearch, Health, Scheduling, SDK
+sandbox, AdServices, UWB, Safety Center, Nearby, OnDevicePersonalization,
+OnDeviceIntelligence, DeviceLock, Virtualization, ConfigInfrastructure,
+EnhancedConfirmation, Ranging, and the telephony module's
+`TelephonyServicesInitializer`) and empty placeholders for `LocationManager`,
+`CountryDetector` and `TetheringManager`. Those services are simply not
+registered. The Stats, Media, NFC, Profiling and Bluetooth initializers are in
+`app/java`: `ActivityThread.main`'s `initializeMainlineModules` hands each its
+service manager once (ADR 0098), which they keep as the modules do. The framework's
 app-process path reaches a few more module classes; `app/java` has
 placeholders for them (they need framework types): `android.net.TrafficStats`
 (`handleBindApplication` calls `init`; no traffic accounting),
