@@ -31,6 +31,10 @@
 #include "native_fence_internal.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 namespace {
@@ -345,3 +349,8 @@ bool RightsDue(uint16_t port, uint64_t end) {
 }
 
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_mutex);
+#endif

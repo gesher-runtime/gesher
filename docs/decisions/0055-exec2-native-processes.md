@@ -36,6 +36,14 @@ instead of running a child body in the parent or fabricating synchronization.
   `posix_spawn_file_actions_*` build, since the type is an opaque pointer in
   bionic), environment and working directory, and spawns through `exec_spawn`.
   `system`/`popen` run the launcher's shell (`sh -c`).
+**Amended 2026-11-24 ([0092](0092-arm64-guest-fork.md)):** in translated
+arm64 code, `fork()`, `vfork()`, `_Fork()` and fork-like raw `clone` make a
+real child process (`RtlCloneUserProcess`); `wait4`/`waitpid` honour
+`__WCLONE`/`__WALL`, report a child as soon as it ended (waiting on the
+children's handles), reap children at their exit when SIGCHLD is ignored or
+has `SA_NOCLDWAIT`, reject unknown options with `EINVAL` and fill `rusage`,
+for every caller. The points below stay for x86-64 code.
+
 - **`fork()` and `vfork()`** fail with `ENOSYS`. There is no address-space
   clone, independent child PID or validated vfork parent-suspension mechanism.
   Running an inline callback with a shadow fd table cannot supply these
@@ -72,6 +80,11 @@ instead of running a child body in the parent or fabricating synchronization.
   absent (no root). `sh` is the launcher's shell, extended where apps need it.
 - **Static executables** (`ET_EXEC`, no `PT_INTERP`): `ENOEXEC`. They make Linux
   system calls directly, which the loader and shim do not provide.
+
+**Amended 2026-11-24 ([0093](0093-cross-process-ptrace.md)):** `wait4`
+also reports the stops and exits of the caller's ptrace tracees, through one
+hook (`PtraceWaitPoll`) before the children are scanned; a tracee that is also
+a child is reported once, by the child's own entry. `__WALL` is accepted.
 
 ## Consequences
 

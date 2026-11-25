@@ -14,6 +14,8 @@ namespace gesher::usb_storage {
 struct ProtectedSignalMailbox {
   volatile LONG64 pending;
   volatile LONG senders[65];
+  volatile LONG forked;
+  volatile LONG64 owner_created;
 };
 
 class ProtectedSignalChannel {

@@ -207,6 +207,52 @@ void Records(const std::wstring& path) {
   Check(ordered, "concurrent appends preserve each writer's order");
   Check(DeleteFileW(archive.c_str()), "archive cleanup");
 }
+#if LOGGING_HAS_REDACTION
+struct RedactionVector { const char* input; const char* expected; };
+#define REDACTION_VECTOR(input, expected) {input, expected},
+constexpr RedactionVector kRedactionVectors[] = {
+#include "redaction_vectors.inc"
+};
+#undef REDACTION_VECTOR
+// Credentials never reach the persisted record stream; framing stays consistent.
+void Redaction() {
+  std::string error;
+  for (const auto& vector : kRedactionVectors) {
+    std::string out = "kept:";
+    bool changed = gesher::logging::RedactCredentials(vector.input, std::strlen(vector.input), &out);
+    bool expected_change = std::strcmp(vector.input, vector.expected) != 0;
+    Check(changed == expected_change && out == (changed ? std::string("kept:") + vector.expected : "kept:"),
+          (std::string("redaction vector: ") + vector.input).c_str());
+    std::string again;
+    Check(!gesher::logging::RedactCredentials(vector.expected, std::strlen(vector.expected), &again) && again.empty(),
+          "redaction is idempotent");
+  }
+  Check(gesher::logging::Clear(&error), "clear before redacted records");
+  for (const auto& vector : kRedactionVectors) gesher::logging::Record(0, 3, "GmsAuth", vector.input);
+  // A message that grows past the 4096-byte field is cut at the field's bound.
+  std::string grown = std::string(4085, 'm') + " Passwd=xy";
+  gesher::logging::Record(0, 6, "grown", grown.c_str());
+  gesher::logging::Record(0, 4, "after", "still framed");
+  std::vector<gesher::logging::Entry> values;
+  size_t count = sizeof(kRedactionVectors) / sizeof(kRedactionVectors[0]);
+  Check(gesher::logging::Read(&values, &error) && values.size() == count + 2, "redacted records parse with consistent lengths");
+  if (values.size() == count + 2) {
+    bool all = true;
+    for (size_t i = 0; i < count; ++i) all &= values[i].text == kRedactionVectors[i].expected && values[i].tag == "GmsAuth";
+    Check(all, "every recorded message holds the redacted text");
+    std::string expected_grown = (std::string(4085, 'm') + " Passwd=<redacted>").substr(0, 4096);
+    Check(values[count].text == expected_grown && values[count].text.find("xy") == std::string::npos,
+          "redaction growth is bounded by the record field");
+    Check(values[count + 1].text == "still framed", "record after a grown message follows intact");
+  }
+  bool secret = false;
+  for (const auto& value : values) {
+    secret |= (value.text.find("SYNTHETIC") != std::string::npos || value.text.find("Synthetic") != std::string::npos) &&
+              value.text.find(" stay") == std::string::npos;
+  }
+  Check(!secret, "no synthetic secret value remains in the file");
+}
+#endif
 #ifdef _WIN32
 #if LOGGING_HAS_ENVIRONMENT_OWNER
 bool OwnerMatchesNative(const char* name, const wchar_t* wide_name) {
@@ -365,6 +411,9 @@ int main(int argc, char** argv) {
   PropertyEnvironmentOwner();
 #endif
   Priorities(); Records(path);
+#if LOGGING_HAS_REDACTION
+  Redaction();
+#endif
 #ifdef _WIN32
   WindowsIdentity(session);
 #endif

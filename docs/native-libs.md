@@ -96,7 +96,28 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   the method bodies it left out of the dex file back in. When an app loads such
   a shell (`libexec*.so`), `compat/bionic/art_shim.cc` writes and loads a small
   ELF `libart.so` exporting that symbol, and ART's `LoadClass`
-  (`patches/art/0800`) calls it first. `GESHER_ART_SHIM=0` turns it off.
+  (`patches/art/0800`) calls it first. For NetEase Yidun's arm64 shell
+  (`libnesec.so`) it writes two arm64 stand-ins instead: `libart.so`
+  (`LoadClass`, `Runtime::DisableVerifier`, `IsVerificationEnabled`,
+  `IsVerificationSoftFail`, `OatHeader::kOatVersion`, `Runtime::instance_`)
+  and `libdexfile.so` (`DexFileLoader::OpenCommon`, which ART calls through
+  the stand-in, `patches/art/0802` and `0803`). `GESHER_ART_SHIM=0` turns it
+  off.
+
+- **The ELF loader as `/system/bin/linker64`**
+  ([0096](decisions/0096-elf-loader-as-system-linker64.md)). The loader is
+  the process's dynamic linker, so it has Android's name for one:
+  `/system/bin/linker64` is a file (read-only through that name: `EROFS`)
+  whose ELF header says ELF64,
+  little-endian, `EM_X86_64` (the machine the loader runs natively) and names
+  itself as Gesher's ELF loader (a `Gesher` note, `.comment`), and
+  `/proc/self/maps` lists a mapping of it in every process, as a 64-bit
+  device does (`compat/posix/src/system_linker.cc`). There is no
+  `/system/bin/linker`: Gesher runs no 32-bit code. Code that reads the
+  linker's `e_machine` or looks for `/bin/linker64` in its maps to choose its
+  libraries (Ijiami's Java shell does both) then picks x86-64.
+  `linker64 PROGRAM ARGS` runs PROGRAM; the file itself has no code, and the
+  loader refuses to `dlopen` it.
 
 - **360 Jiagu shells pick their library by the device's ABI**
   ([0095](decisions/0095-jiagu-shell-abi-selection.md)). The stub copies
@@ -370,7 +391,12 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     is not provided.
     `EGL_DEFAULT_DISPLAY` is ANGLE's Direct3D 11 display on the hardware
     adapter, else WARP (`GESHER_EGL_DEVICE=warp` forces WARP; the choice is
-    printed as `gesher EGL: default display: ...`). `eglCreateWindowSurface`
+    printed as `gesher EGL: default display: ...`, with the adapter and the
+    OpenGL ES version the device declares for it). ES 3.0 only on a GPU:
+    without one, WARP is capped at feature level 10_0, ES 2.0 only (no ES 3
+    config, ES 3 contexts refused with `EGL_BAD_MATCH`). Processes after the
+    system server's probe give exactly the boot's `ro.opengles.version`, and no
+    context above it (docs/system-features.md). `eglCreateWindowSurface`
     (and the platform forms) takes the `ANativeWindow*` and creates ANGLE's
     window surface on its HWND (`gesher_window_hwnd`), holding a reference
     to the window until `eglDestroySurface`. Android-only config attributes
@@ -993,6 +1019,44 @@ Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
   path (pseudo handles, `PlatformLibraryHandle`), bare names searched in app
   library dirs (noted by `jni_bridge.cc`) and `$LD_LIBRARY_PATH`; `dlsym`
   falls back to the shim table for RTLD_DEFAULT and library handles.
+- `cxx_bionic.cc`: bionic's `libstdc++.so` (the platform library on every
+  device, and the NDK's "system" C++ runtime). It registers exactly the LP64
+  exports of `bionic/libc/libstdc++.map.txt` (android-16.0.0_r4):
+  `_ZSt7nothrow`; `_Znwm`, `_Znam` and their `RKSt9nothrow_t` forms;
+  `_ZdlPv`, `_ZdaPv` and their nothrow forms; `__cxa_guard_acquire`,
+  `__cxa_guard_release`, `__cxa_guard_abort`; `__cxa_pure_virtual`. The sized
+  deletes that bionic's `new.cpp` defines are local in the map and are not
+  exported. `dlopen("libstdc++.so")` (probe `__cxa_guard_acquire`) succeeds
+  because of them; before, it failed with "library not found" (the NetEase
+  Yidun packer's `libnesec.so` opens it). Semantics follow bionic:
+  - operator new/new[] call the shim's `malloc` (so their memory crosses with
+    `free`, and `malloc`'s with operator delete); on failure they end the
+    process as `async_safe_fatal` does ("new failed to allocate N bytes",
+    "new[] ..."): stderr, the log (tag `libc`, FATAL), the abort message,
+    then `abort()` (a SIGABRT handler runs). The nothrow forms return null.
+    Delete calls `free`;
+  - the guards use bionic's state word in the first four bytes of the 64-bit
+    guard (0 not started, 1 complete, 0x100 underway, 0x200 underway with a
+    waiter), so the compiler's inline check of the first byte (bit 0 on
+    arm64) agrees. A waiter sleeps in `WaitOnAddress` on the word while it
+    is 0x200, as bionic's futex wait does; release/abort wake every waiter
+    when one announced itself;
+  - `__cxa_pure_virtual` ends the process with bionic's message.
+
+  An arm64 guest calls the same entry points through its host-call
+  trampolines (integer and pointer arguments only, no guest-specific form).
+  Symbol lookup is unchanged: relocations search the object, its dependencies
+  and every loaded object before the shim, and `dlsym(RTLD_DEFAULT)` searches
+  loaded objects first, so an app's own `libc++_shared.so` (or a static
+  libc++) keeps its operator new and guards. As for every platform library,
+  `dlsym` on any platform handle reaches the whole shim table, and a
+  translated guest's bound import and the `dlsym` result are different
+  addresses for the same host function (trampoline vs. host entry).
+  Tests: `tests/native/libstdcxx_test.cc` (x86_64 via `elf_load_test`,
+  arm64-v8a via `arm64_elf_test`: exports, new/delete, the guard protocol,
+  eight threads racing on a guard with abort and retry, compiler-generated
+  guards) and `tests/native/libstdcxx_order_test.cc` (an app library with
+  `libc++_shared.so`). The fatal paths are not exercised.
 - `compat/arm64/dll/guest_libc.cc`: the ~50 fallbacks removed (now in the
   shim); pseudo dlopen handles removed; kept arm64-specific: stat/epoll,
   syscalls (+inotify, flock numbers), setjmp, getauxval, FP environment, and

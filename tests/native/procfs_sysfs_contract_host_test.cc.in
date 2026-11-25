@@ -224,6 +224,13 @@ struct Entry {
 };
 }  // namespace procfs
 
+// system_linker.cc is not part of this fixture: no file, nothing mapped.
+namespace system_linker {
+inline constexpr char kPath[] = "/system/bin/linker64";
+static inline bool IsFile(const std::wstring&) { return false; }
+static inline void EnsureMapped() {}
+}  // namespace system_linker
+
 }  // namespace gesher
 
 static inline int memfd_create(const char* /*name*/, unsigned int /*flags*/) {

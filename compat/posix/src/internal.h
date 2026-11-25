@@ -219,5 +219,8 @@ int MemfdResizeHandleError(HANDLE file, uint64_t new_size);
 int MemfdGrowHandleError(HANDLE file, uint64_t end);
 int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
                                std::shared_ptr<void>* write_lease);
+// In a forked child (ADR 0092): a write lease the child inherited with its
+// mapping becomes the child's own (its byte-range lock was the parent's).
+void RenewMemfdWriteLeaseInChild(void* write_lease);
 
 }  // namespace gesher

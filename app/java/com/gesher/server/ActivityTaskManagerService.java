@@ -121,7 +121,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         info.reqKeyboardType = config.keyboard;
         info.reqNavigation = config.navigation;
         info.reqInputFeatures = 0;
-        info.reqGlEsVersion = android.os.SystemProperties.getInt("ro.opengles.version", 0x20000);
+        // ro.opengles.version, the same value getSystemAvailableFeatures gives.
+        info.reqGlEsVersion = PackageManagerService.glEsVersion();
         return info;
     }
 
@@ -148,6 +149,195 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** A fixed ms-settings: page for an Android Settings screen (SettingsIntents). */
     static volatile java.util.function.Predicate<String> sOpenSettingsPage = WindowsHost::openUrl;
+
+    /** Per-app Settings screens' results, answered as the Control Center's details close. */
+    private volatile SettingsResults mSettingsResults;
+    private final Object mSettingsResultsLock = new Object();
+
+    SettingsResults settingsResults() {
+        SettingsResults results = mSettingsResults;
+        if (results != null) return results;
+        synchronized (mSettingsResultsLock) {
+            if (mSettingsResults == null) {
+                mSettingsResults = new SettingsResults((pending, code) -> {
+                    // A fast host close must wait for launch admission to finish
+                    // and the covered Activity's pause transaction to be scheduled.
+                    synchronized (mLaunchLock) {
+                        ControlCenter.forgetResult(pending.token);
+                        if (pending.continuation != null) pending.continuation.accept(pending.hostClosed);
+                        if (pending.requestCode >= 0) {
+                            deliverResult((ActivityRecord) pending.source, pending.resultWho,
+                                    pending.requestCode, code, null, (ProcessRecord) pending.process);
+                        }
+                    }
+                });
+            }
+            return mSettingsResults;
+        }
+    }
+
+    /**
+     * While a host Settings dialog is in front of the caller's task, pause its
+     * activity through the same lifecycle path as the native document picker.
+     */
+    private Runnable coverWithSettings(ActivityRecord source, ProcessRecord sourceProcess, Intent intent) {
+        ActivityRecord covered;
+        ProcessRecord process;
+        boolean pauseNow;
+        synchronized (this) {
+            if (source.app != sourceProcess || source.finishing || !activityEnabled(source)
+                    || !mActivities.contains(source) || mHiddenTasks.contains(source.taskId)) return null;
+            covered = topOf(source.taskId);
+            process = covered == null ? null : covered.app;
+            if (process == null || process.exiting || process.dead || process.pidSuperseded) return null;
+            pauseNow = covered.state == State.RESUMED || covered.state == State.RESUMING
+                    || covered.state == State.LAUNCHING;
+            if (!pauseNow && !covered.resumeAfterNativeUi) return null;
+            covered.nativeUiCount++;
+            covered.resumeAfterNativeUi = true;
+            updateIdle();
+        }
+        Runnable release = () -> finishSettingsCover(covered);
+        try {
+            if (pauseNow) pause(covered, false,
+                    (intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
+            updateTopResumed();
+            return release;
+        } catch (RuntimeException | Error failure) {
+            release.run();
+            throw failure;
+        }
+    }
+
+    private void finishSettingsCover(ActivityRecord covered) {
+        synchronized (mLaunchLock) {
+            boolean resumeCovered = false, restartTask = false;
+            AppTaskRecord task = null;
+            synchronized (this) {
+                if (--covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
+                        && covered.state != State.PAUSING) {
+                    covered.resumeAfterNativeUi = false;
+                    if (!covered.finishing && covered.state != State.DESTROYED
+                            && mActivities.contains(covered) && activityEnabled(covered)
+                            && topOf(covered.taskId) == covered && !mHiddenTasks.contains(covered.taskId)) {
+                        ProcessRecord current = covered.app;
+                        resumeCovered = current != null && processByPid(current.pid) == current
+                                && !current.exiting && !current.dead && !current.pidSuperseded;
+                        // The cover belongs to the retained ActivityRecord. If it is still in
+                        // front, removing the cover can also restart it after process death.
+                        task = mAppTasks.get(covered.taskId);
+                        restartTask = current == null && task != null && !mTaskOrder.isEmpty()
+                                && mTaskOrder.get(mTaskOrder.size() - 1) == covered.taskId;
+                    }
+                }
+                updateIdle();
+                notifyAll();
+            }
+            if (restartTask) moveTaskToFront(covered.taskId, task);
+            else if (resumeCovered) { realStartActivity(covered); resume(covered); }
+            updateTopResumed();
+        }
+    }
+
+    /** The Activity that launched the confirmation remains covered until the user decides. */
+    final class InstallConfirmationVisit {
+        private final ActivityRecord source;
+        private final ProcessRecord process;
+        private final String resultWho;
+        private final int requestCode;
+        private boolean resultDelivered;
+        private Runnable releaseCover;
+        private boolean completed;
+
+        InstallConfirmationVisit(IBinder sourceToken, ProcessRecord expectedProcess,
+                String resultWho, int requestCode) {
+            synchronized (ActivityTaskManagerService.this) {
+                ActivityRecord record = sourceToken == null ? null : forToken(sourceToken);
+                ProcessRecord app = record == null ? null : record.app;
+                boolean attached = app != null && app == expectedProcess
+                        && processByPid(app.pid) == app && !app.exiting && !app.dead
+                        && mActivities.contains(record) && !record.finishing
+                        && record.state != State.DESTROYED;
+                this.source = attached ? record : null;
+                this.process = attached ? app : null;
+            }
+            this.resultWho = resultWho;
+            this.requestCode = requestCode;
+        }
+
+        void detachResult() {
+            deliver(false);
+        }
+
+        private void deliver(boolean confirmed) {
+            if (resultDelivered || source == null || requestCode < 0) return;
+            resultDelivered = true;
+            deliverResult(source, resultWho, requestCode,
+                    confirmed ? android.app.Activity.RESULT_OK : android.app.Activity.RESULT_CANCELED,
+                    null, process);
+        }
+
+        void cover(Intent intent) {
+            if (source != null) releaseCover = coverWithSettings(source, process, intent);
+        }
+
+        void finish(boolean confirmed) {
+            synchronized (mLaunchLock) {
+                if (completed) return;
+                completed = true;
+                try {
+                    deliver(confirmed);
+                } finally {
+                    if (releaseCover != null) releaseCover.run();
+                }
+            }
+        }
+    }
+
+    /** Opens the unknown-source choice for an already committed installer continuation. */
+    boolean openInstallSourceSettings(String packageName, Intent launchIntent,
+            InstallConfirmationVisit visit, java.util.function.Consumer<Boolean> complete) {
+        // Host completion cannot pass admission and pause under mLaunchLock.
+        SettingsResults results = settingsResults();
+        SettingsResults.Pending pending = new SettingsResults.Pending(null, null,
+                null, -1, SettingsResults.UNKNOWN_SOURCES, packageName);
+        pending.continuation = complete;
+        String token = results.register(pending);
+        if (token == null) return false;
+        if (!ControlCenter.open(packageName, token, results::cancel)) {
+            results.discard(token);
+            return false;
+        }
+        visit.cover(launchIntent);
+        return true;
+    }
+
+    /** A dialog is now visible in this exact Control Center host process. */
+    public int settingsScreensShown(int pid, long startedAt, String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.shown(new SettingsResults.Panel(pid, startedAt), tokens);
+    }
+
+    /** The Control Center closed the app details it showed for these requests. */
+    public int settingsScreensClosed(String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.closed(null, tokens);
+    }
+
+    public int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.closed(new SettingsResults.Panel(pid, startedAt), tokens);
+    }
+
+    /** The user turned a special access switch in the Control Center (SpecialAccess). */
+    public void specialAccessToggled(String packageName, String opName, boolean allowed,
+            int panelPid, long panelStartedAt, String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        if (results != null && tokens.length > 0) {
+            results.toggled(new SettingsResults.Panel(panelPid, panelStartedAt), tokens,
+                    packageName, opName, allowed);
+        }
+    }
 
     /** STARTED: made visible again without being resumed (StartActivityItem). */
     enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STARTED, STOPPING,
@@ -372,8 +562,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Accepted system Settings requests, including queued/headless windows. Guarded by this. */
     private final java.util.Set<ExactAlarmSettingsSession> mExactAlarmSettingsSessions = new java.util.HashSet<>();
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
-    private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
+    private final Set<NativeUiActivity> mNativeUiActivities = new HashSet<>();
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
+    private final ThreadLocal<ProcessRecord> mVerifiedIntentSenderSource = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedPublication = new ThreadLocal<>();
     private Runnable mBeforeActivityPublication; // Server-local retirement race fixture.
@@ -385,6 +576,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private AccountChooser.Dialog mAccountDialog; // server-local synthetic fixture injection
     private final Map<Object, DocumentSession> mDocumentPickers = new HashMap<>();
     private DocumentPicker.Backend mDocumentDialog = DocumentPicker.WINDOWS;
+    private volatile PrintManagerService mPrint;
     private final Map<Object, IntentChoice> mIntentChoosers = new HashMap<>();
     private IntentChooser.Dialog mIntentChooserDialog = IntentChooser.HOST; // server-local UI fixture only
     private int mNextTaskId = 1;
@@ -556,6 +748,42 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     void attachShortcuts(DesktopShortcutService shortcuts) {
         if (mAm != null) mAm.attachShortcuts(shortcuts);
+    }
+
+    void attachPrint(PrintManagerService print) {
+        mPrint = print;
+    }
+
+    /**
+     * PrintManager starts its job's dialog IntentSender from the printing activity. As
+     * PrintSpooler's PrintActivity, the dialog covers that activity (paused until the
+     * job leaves its dialog); Windows' print dialog is owned by the app's window.
+     */
+    private int startPrintDialog(String creator, Intent intent, IBinder resultToToken) {
+        PrintManagerService print = mPrint;
+        if (print == null) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        final NativeUiActivity cover;
+        synchronized (this) {
+            ActivityRecord source = resultToToken == null ? null : forToken(resultToToken);
+            if (source != null && (source.finishing || source.state == State.DESTROYED)) source = null;
+            cover = new NativeUiActivity(source);
+        }
+        int ownerPid = cover.coveredProcess == null ? 0 : cover.coveredProcess.pid;
+        boolean started;
+        try {
+            started = print.startDialog(creator, intent, ownerPid, cover::awaitPause,
+                    () -> cover.finish(() -> { }));
+        } catch (RuntimeException | Error failure) {
+            cover.finish(() -> { });
+            throw failure;
+        }
+        if (!started) {
+            cover.finish(() -> { });
+            return ActivityManager.START_CANCELED;
+        }
+        cover.pauseCovered((intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
+        updateTopResumed();
+        return ActivityManager.START_SUCCESS;
     }
 
     synchronized boolean shortcutForeground(int uid) {
@@ -1417,12 +1645,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             Intent intent = intents[intents.length - 1];
             intent.setFlags((intent.getFlags() & ~mask) | (flagsValues & mask));
             Bundle launchOptions = activityOptions(mergedOptions, shareIdentity);
-            if (intents.length > 1) {
-                return withVerifiedCreator(creator, creatorLive, callerLive,
-                        () -> startActivities(null, creator, null, intents, types, resultTo, launchOptions, 0));
+            ProcessRecord previous = mVerifiedIntentSenderSource.get();
+            mVerifiedIntentSenderSource.set(source == null ? null : process);
+            try {
+                if (intents.length > 1) {
+                    return withVerifiedCreator(creator, creatorLive, callerLive,
+                            () -> startActivities(null, creator, null, intents, types, resultTo, launchOptions, 0));
+                }
+                return startActivityForVerifiedCreator(creator, intent, types[0],
+                        creatorLive, resultTo, resultWho, requestCode, launchOptions, callerLive);
+            } finally {
+                if (previous == null) mVerifiedIntentSenderSource.remove();
+                else mVerifiedIntentSenderSource.set(previous);
             }
-            return startActivityForVerifiedCreator(creator, intent, types[0],
-                    creatorLive, resultTo, resultWho, requestCode, launchOptions, callerLive);
         });
     }
 
@@ -2478,14 +2713,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
-    /** A native consent activity covers the app and keeps a headless device alive. */
-    private final class BluetoothActivity {
+    /**
+     * Native system UI that covers the app as an activity would (Bluetooth consent, the
+     * print dialog) and keeps a headless device alive.
+     */
+    private final class NativeUiActivity {
         final ActivityRecord covered;
         final ProcessRecord coveredProcess;
         final boolean needsPause;
 
         // Constructed under the activity monitor; only completion releases the reservation.
-        BluetoothActivity(ActivityRecord source) {
+        NativeUiActivity(ActivityRecord source) {
             ActivityRecord top = source == null ? focusedTaskTopLocked() : topOf(source.taskId);
             covered = top != null && top.app != null ? top : null;
             coveredProcess = covered == null ? null : covered.app;
@@ -2495,7 +2733,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 covered.nativeUiCount++;
                 covered.resumeAfterNativeUi = true;
             }
-            mBluetoothActivities.add(this);
+            mNativeUiActivities.add(this);
             updateIdle();
         }
 
@@ -2505,7 +2743,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             synchronized (ActivityTaskManagerService.this) {
                 // A detached result callback may already have finished its caller.
                 // Admit the pause atomically and retain this process's thread.
-                if (!needsPause || !mBluetoothActivities.contains(this) || covered.finishing
+                if (!needsPause || !mNativeUiActivities.contains(this) || covered.finishing
                         || !mActivities.contains(covered) || !activityEnabled(covered)
                         || covered.app != coveredProcess || coveredProcess == null
                         || processByPid(coveredProcess.pid) != coveredProcess
@@ -2529,7 +2767,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (covered == null) return;
             synchronized (ActivityTaskManagerService.this) {
                 long until = SystemClock.uptimeMillis() + 500;
-                while (mBluetoothActivities.contains(this) && covered.app == coveredProcess
+                while (mNativeUiActivities.contains(this) && covered.app == coveredProcess
                         && covered.state == State.PAUSING) {
                     long left = until - SystemClock.uptimeMillis();
                     if (left <= 0) break;
@@ -2545,7 +2783,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         void finish(Runnable deliver) {
             boolean resumeCovered = false;
             synchronized (ActivityTaskManagerService.this) {
-                if (!mBluetoothActivities.remove(this)) return;
+                if (!mNativeUiActivities.remove(this)) return;
                 if (covered != null && --covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
                         && covered.state != State.PAUSING) {
                     covered.resumeAfterNativeUi = false;
@@ -2584,7 +2822,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final String targetWho;
         final int targetCode;
         final boolean forwarded, cancelResult;
-        final BluetoothActivity activity;
+        final NativeUiActivity activity;
         synchronized (this) {
             source = resultToToken == null ? null : forToken(resultToToken);
             if (resultToToken != null && (source == null || source.app == null
@@ -2624,7 +2862,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             cancelResult = recipient != null && ((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
                     || source.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE);
-            activity = new BluetoothActivity(source);
+            activity = new NativeUiActivity(source);
         }
         // After a result is forwarded/detached (or none was requested), the system UI
         // owns its work. A trampoline may finish or die without canceling that request.
@@ -2765,6 +3003,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (!matchingThread) throw new SecurityException("Unrecognized activity caller thread");
             }
         }
+        if (PackageInstallerService.isConfirmationIntent(intent)) {
+            boolean systemCreator = internalCreator && "android".equals(originalName)
+                    && originalCallerCode == null;
+            if (internalCreator && (delegated == null || !delegated.getAsBoolean()
+                    || originalCallerCode == null && !systemCreator)) {
+                return ActivityManager.START_CANCELED;
+            }
+            ProcessRecord source = internalCreator ? mVerifiedIntentSenderSource.get() : originalProcess;
+            boolean newTask = (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
+            var visit = new InstallConfirmationVisit(resultToToken, source, resultWho, requestCode);
+            return mPm.packageInstallerService().openConfirmation(intent, visit, newTask,
+                    internalCreator ? originalCallerCode : null, systemCreator);
+        }
         if (intent != null && PackageManager.ACTION_REQUEST_PERMISSIONS.equals(intent.getAction())) {
             return requestPermissions(caller, callingPackage, intent, resultToToken,
                     resultWho, requestCode);
@@ -2833,6 +3084,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 return requestBluetoothState(intent, verifiedCaller, originalProcess,
                         internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
             }
+            if (requiredTask == null && PrintManagerService.handles(intent)) {
+                return startPrintDialog(verifiedCaller, intent, resultToToken);
+            }
             if (DocumentPicker.handles(intent)) {
                 return startDocumentPicker(caller, originalName, intent, resolvedType,
                         resultToToken, resultWho, requestCode, launchTaskId, requiredTask);
@@ -2864,20 +3118,78 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 synchronized (mPm) {
                     settings = SettingsIntents.resolve(intent, pkg -> mPm.get(pkg) != null);
                 }
+                if (settings != null && settings.controlCenter && settings.packageName != null
+                        && android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS.equals(action)
+                        && !internalCreator && resultToToken != null) {
+                    // An app's own App info while one of its background permissions awaits
+                    // the user's choice (microG asks this way): on Android that page offers
+                    // the choice; here the background dialog does, and the result follows it.
+                    final ActivityRecord source = forToken(resultToToken);
+                    final ProcessRecord process;
+                    final boolean callerOwnsSource;
+                    synchronized (this) {
+                        // source.app and its thread change while a process attaches or dies.
+                        process = source == null ? null : source.app;
+                        IApplicationThread thread = process == null ? null : process.thread;
+                        callerOwnsSource = thread != null && caller != null && process.pid == originalPid
+                                && caller.asBinder().equals(thread.asBinder());
+                    }
+                    final ApkPackage captured = mPm.get(settings.packageName);
+                    if (callerOwnsSource && settings.packageName.equals(source.info.packageName)
+                            && captured != null && captured.uid() == originalUid
+                            && mPermissionRequests.backgroundSettings(captured, () -> {
+                                synchronized (ActivityTaskManagerService.this) {
+                                    if (requestCode < 0 || source.app != process || source.finishing
+                                            || source.state == State.DESTROYED || !mActivities.contains(source)
+                                            || mPm.get(settings.packageName) != captured) return;
+                                }
+                                // deliverResult rechecks the process under its own lock.
+                                deliverResult(source, resultWho, requestCode,
+                                        android.app.Activity.RESULT_CANCELED, null, process);
+                            })) {
+                        SystemServer.log("startActivity: " + action + ": background permission choice for "
+                                + settings.packageName);
+                        return ActivityManager.START_SUCCESS;
+                    }
+                }
                 if (settings != null) {
-                    boolean opened = settings.controlCenter
-                            ? ControlCenter.open(settings.packageName)
-                            : sOpenSettingsPage.test(settings.windowsUri);
-                    SystemServer.log("startActivity: " + action + ": " + settings
-                            + (opened ? " opened" : " unavailable"));
-                    if (!opened) return ActivityManager.START_INTENT_NOT_RESOLVED;
-                    // Settings answers a startActivityForResult when the user leaves it;
-                    // Windows' page reports nothing, so the request is not left waiting.
+                    // Settings answers a startActivityForResult when the user leaves it.
                     // Only to an activity of the calling process: another app's token
                     // must not receive a result it did not ask for.
                     ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
-                    if (source != null && requestCode >= 0 && source.app != null
-                            && source.app.pid == originalPid) {
+                    ProcessRecord sourceProcess = source != null ? source.app : null;
+                    boolean ownActivity = sourceProcess != null && sourceProcess == originalProcess
+                            && sourceProcess.pid == originalPid;
+                    boolean wantsResult = ownActivity && requestCode >= 0;
+                    // Wait for the details to close, even when the app only requested a
+                    // lifecycle transition. Windows' external Settings pages and the
+                    // Control Center's main view do not report completion.
+                    SettingsResults.Pending pending = ownActivity && settings.controlCenter
+                            && settings.packageName != null
+                            ? new SettingsResults.Pending(source, sourceProcess, resultWho,
+                                    requestCode, action, settings.packageName)
+                            : null;
+                    String token = pending == null ? null : settingsResults().register(pending);
+                    if (pending != null && token == null) return ActivityManager.START_CANCELED;
+                    // The opener can cancel admission before the host shows the visit.
+                    // Normal queue publication never replaces another package's request.
+                    java.util.function.Consumer<String> replaced = old -> {
+                        SettingsResults results = mSettingsResults;
+                        if (results != null) results.cancel(old);
+                    };
+                    boolean opened = settings.controlCenter
+                            ? ControlCenter.open(settings.packageName, token, replaced)
+                            : sOpenSettingsPage.test(settings.windowsUri);
+                    SystemServer.log("startActivity: " + action + ": " + settings
+                            + (opened ? " opened" : " unavailable")
+                            + (token != null ? " (waiting for details to close)" : ""));
+                    if (!opened) {
+                        if (token != null) settingsResults().discard(token);
+                        return ActivityManager.START_INTENT_NOT_RESOLVED;
+                    }
+                    if (pending != null) {
+                        pending.releaseCover = coverWithSettings(source, sourceProcess, intent);
+                    } else if (wantsResult) {
                         deliverResult(source, resultWho, requestCode,
                                 android.app.Activity.RESULT_CANCELED, null);
                     }
@@ -3840,7 +4152,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (mAm != null) mPm.appOps().requestUidStateRefresh();
         if (hasActivityLocked() || !mIntentChoosers.isEmpty() || !mAccountChoosers.isEmpty()
                 || !mExactAlarmSettingsSessions.isEmpty() || !mDocumentPickers.isEmpty()
-                || !mBluetoothActivities.isEmpty()) {
+                || !mNativeUiActivities.isEmpty()) {
             mIdleSince = 0;
         } else if (mIdleSince == 0) {
             mIdleSince = SystemClock.uptimeMillis();

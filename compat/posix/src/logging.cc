@@ -8,8 +8,13 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <initializer_list>
 #include <limits>
 #include <memory>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher::logging {
 namespace {
@@ -261,6 +266,134 @@ int TagPriority(const char* tag, size_t length) {
   }
   return property;
 }
+// Credential redaction (docs/logging.md). One pass over the message, without
+// a regex engine: prefixed token formats are tested where their first letter
+// occurs, credential-named keys only at '=' and ':' separators.
+constexpr char kRedacted[] = "<redacted>";
+constexpr size_t kRedactedSize = sizeof(kRedacted) - 1;
+bool Alphanumeric(unsigned char c) {
+  return (c >= '0' && c <= '9') || ((c | 0x20) >= 'a' && (c | 0x20) <= 'z');
+}
+// Base64/base64url/URL-safe token characters.
+bool TokenChar(unsigned char c) {
+  return Alphanumeric(c) || c == '-' || c == '.' || c == '_' || c == '~' || c == '+' || c == '/' || c == '=';
+}
+bool KeyChar(unsigned char c) { return Alphanumeric(c) || c == '_' || c == '-'; }
+bool Blank(char c) { return c == ' ' || c == '\t'; }
+// Where an unquoted key=value value ends (query strings, toString() fields, headers).
+bool ValueEnd(char c) {
+  return Blank(c) || c == '\r' || c == '\n' || c == ',' || c == ';' || c == '&' || c == ')' ||
+         c == '}' || c == ']' || c == '"' || c == '\'';
+}
+// Whether |size| bytes at |text| equal the lower-case ASCII |word|, ignoring case.
+bool SameWord(const char* text, size_t size, const char* word) {
+  size_t length = std::strlen(word);
+  if (size != length) return false;
+  for (size_t i = 0; i < length; ++i) {
+    unsigned char c = static_cast<unsigned char>(text[i]);
+    if ((c >= 'A' && c <= 'Z' ? c | 0x20 : c) != static_cast<unsigned char>(word[i])) return false;
+  }
+  return true;
+}
+bool EndsWithWord(const char* text, size_t size, const char* word) {
+  size_t length = std::strlen(word);
+  return size >= length && SameWord(text + size - length, length, word);
+}
+bool CredentialKey(const char* key, size_t size) {
+  if (!size) return false;
+  for (const char* suffix : {"token", "secret", "password", "passwd", "cookie"}) {
+    if (EndsWithWord(key, size, suffix)) return true;
+  }
+  for (const char* name : {"authorization", "auth", "apikey", "api_key"}) {
+    if (SameWord(key, size, name)) return true;
+  }
+  return false;
+}
+// Header-style values ("Bearer x", "a=1; b=2") run to the end of the line.
+bool LineValue(const char* key, size_t size) {
+  return SameWord(key, size, "authorization") || EndsWithWord(key, size, "cookie");
+}
+// The secret bytes [*begin, *end) a credential starting at |at| holds, if any.
+bool Secret(const char* s, size_t n, size_t at, size_t* begin, size_t* end) {
+  unsigned char c = static_cast<unsigned char>(s[at]);
+  bool boundary = at == 0 || !Alphanumeric(static_cast<unsigned char>(s[at - 1]));
+  // Google OAuth access tokens, Android master tokens, OAuth exchange codes and
+  // refresh tokens. "1//" is common in other text, so it needs a token's length.
+  static constexpr struct { const char* prefix; size_t length, minimum; bool boundary; } kPrefixes[] = {
+      {"ya29.", 5, 1, false}, {"aas_et/", 7, 1, false}, {"oauth2_4/", 9, 1, false}, {"1//", 3, 20, true}};
+  for (const auto& token : kPrefixes) {
+    if (c != static_cast<unsigned char>(token.prefix[0]) || (token.boundary && !boundary) ||
+        n - at < token.length || std::memcmp(s + at, token.prefix, token.length) != 0) {
+      continue;
+    }
+    size_t j = at + token.length;
+    while (j < n && TokenChar(static_cast<unsigned char>(s[j]))) ++j;
+    if (j - (at + token.length) >= token.minimum) {
+      *begin = at + token.length;
+      *end = j;
+      return true;
+    }
+  }
+  if ((c | 0x20) == 'b' && boundary && n - at > 7 && SameWord(s + at, 6, "bearer") && Blank(s[at + 6])) {
+    size_t v = at + 6;
+    while (v < n && Blank(s[v])) ++v;
+    size_t j = v;
+    while (j < n && TokenChar(static_cast<unsigned char>(s[j]))) ++j;
+    if (j > v) {
+      *begin = v;
+      *end = j;
+      return true;
+    }
+  }
+  if (c != '=' && c != ':') return false;
+  // key=value, key: value, "key": "value", key='value', and the JSON forms
+  // inside an escaped JSON string (\"key\":\"value\").
+  size_t k = at;
+  while (k > 0 && Blank(s[k - 1])) --k;
+  bool quoted_key = k > 0 && (s[k - 1] == '"' || s[k - 1] == '\'');
+  if (quoted_key) {
+    --k;
+    if (k > 0 && s[k - 1] == '\\') --k;
+  }
+  size_t key_end = k;
+  while (k > 0 && key_end - k < 64 && KeyChar(static_cast<unsigned char>(s[k - 1]))) --k;
+  if (!CredentialKey(s + k, key_end - k)) return false;
+  // "auth: ..." is a common message prefix; auth=... and "auth": "..." hold a value.
+  if (c == ':' && !quoted_key && SameWord(s + k, key_end - k, "auth")) return false;
+  size_t v = at + 1;
+  while (v < n && Blank(s[v])) ++v;
+  size_t j = v;
+  bool nested = v + 1 < n && s[v] == '\\' && (s[v + 1] == '"' || s[v + 1] == '\'');
+  if (nested || (v < n && (s[v] == '"' || s[v] == '\''))) {
+    // A quoted value ends at its closing quote, not at an escaped one. In an
+    // escaped string each \x is one character of the quoted text.
+    v += nested;
+    char quote = s[v];
+    j = ++v;
+    bool escape = false;
+    while (j < n) {
+      size_t unit = nested && s[j] == '\\' && j + 1 < n ? 2 : 1;
+      char c = s[j + unit - 1];
+      if (c == '\n' || c == '\r' || (!escape && c == quote)) break;
+      escape = !escape && c == '\\';
+      j += unit;
+    }
+  } else if (LineValue(s + k, key_end - k)) {
+    while (j < n && s[j] != '\n' && s[j] != '\r') ++j;
+    while (j > v && Blank(s[j - 1])) --j;
+  } else {
+    while (j < n && !ValueEnd(s[j])) ++j;
+  }
+  // Already redacted (an earlier sink, or a scrubbed file): unchanged.
+  if (j == v || (j - v == kRedactedSize && std::memcmp(s + v, kRedacted, kRedactedSize) == 0)) return false;
+  // A state, not a credential (setCookie: true, hasToken=false, password=null).
+  for (const char* word : {"true", "false", "null"}) {
+    if (SameWord(s + v, j - v, word)) return false;
+  }
+  *begin = v;
+  *end = j;
+  return true;
+}
 }  // namespace
 
 int Priority(char letter) {
@@ -275,6 +408,27 @@ char PriorityLetter(int priority) {
   constexpr char letters[] = "??VDIWEFS";
   return priority >= 0 && priority <= 8 ? letters[priority] : '?';
 }
+bool RedactCredentials(const char* text, size_t size, std::string* out) {
+  if (!text) return false;
+  size_t copied = 0;
+  bool changed = false;
+  for (size_t at = 0; at < size;) {
+    size_t begin, end;
+    // Most bytes cannot start a credential: a prefix's first letter, Bearer's, '=' or ':'.
+    char c = text[at];
+    bool start = c == 'y' || c == 'a' || c == 'o' || c == '1' || c == 'b' || c == 'B' || c == '=' || c == ':';
+    if (!start || !Secret(text, size, at, &begin, &end)) {
+      ++at;
+      continue;
+    }
+    changed = true;
+    out->append(text + copied, begin - copied);
+    out->append(kRedacted, kRedactedSize);
+    copied = at = end;
+  }
+  if (changed) out->append(text + copied, size - copied);
+  return changed;
+}
 bool IsLoggable(int priority, const char* tag, size_t length, int fallback, int minimum) {
   int property = TagPriority(tag, length);
   constexpr int kAndroidLogDefault = 1;  // android_LogPriority's default sentinel
@@ -286,6 +440,13 @@ void Record(int buffer, int priority, const char* tag, const char* text) {
   auto destination = CurrentDestination(nullptr);
   if (!destination) return;
   size_t tag_size = tag ? strnlen(tag, 4096) : 0, text_size = text ? strnlen(text, 4096) : 0;
+  // Credentials never reach the file. Only a message holding one allocates;
+  // the record's length fields describe the redacted text.
+  std::string redacted;
+  if (RedactCredentials(text, text_size, &redacted)) {
+    text = redacted.data();
+    text_size = std::min<size_t>(redacted.size(), 4096);
+  }
   Header header{kMagic, static_cast<uint32_t>(sizeof(Header) + tag_size + text_size), 0,
                 GetCurrentProcessId(), GetCurrentThreadId(), priority, buffer,
                 static_cast<uint32_t>(tag_size), static_cast<uint32_t>(text_size)};
@@ -411,3 +572,9 @@ std::string Format(const Entry& entry, const std::string& format) {
   return result;
 }
 }  // namespace gesher::logging
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): Android log writes in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, SRWLOCK, gesher::logging::Cached().lock);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, SRWLOCK, gesher::logging::Priorities().lock);
+#endif

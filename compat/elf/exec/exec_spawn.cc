@@ -1,6 +1,8 @@
 // gesher: starting programs the way Linux's execvp would (exec_spawn.h).
 
 #include "exec_spawn.h"
+
+#include <gesher/fork.h>
 #include "pe_exports.h"
 
 #include <gesher/reserved_names.h>
@@ -26,6 +28,7 @@ namespace gesher::exec {
 namespace {
 
 constexpr int kEIO = 5;
+constexpr int kEAGAIN = 11;
 constexpr int kENAMETOOLONG = 36;
 // CreateProcessW's limit on a command line, in characters with the NUL.
 constexpr size_t kMaxCommandLine = 32767;
@@ -349,6 +352,10 @@ int ErrnoFromWin32(DWORD error) {
       return kENOMEM;
     case ERROR_FILENAME_EXCED_RANGE:
       return kENAMETOOLONG;
+    case ERROR_BAD_LENGTH:  // a forked child's request too large (gesher/fork.h)
+      return kE2BIG;
+    case ERROR_TIMEOUT:     // its root busy for too long
+      return kEAGAIN;
     case ERROR_INVALID_HANDLE:
       return kEBADF;
     case ERROR_INVALID_PARAMETER:
@@ -467,6 +474,21 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
     // the same scoped block channel as any other admitted Android command.
     // Missing tools remain ENOENT; no format/check success is synthesized.
     return LaunchFile(file, head, argv, dir, depth, launch);
+  }
+  if (prog == "/system/bin/linker64") {
+    // Android's dynamic linker run as a program, `linker64 PROGRAM [ARGS...]`:
+    // PROGRAM (a path, not looked up in PATH) runs with ARGS. The name is
+    // Gesher's ELF loader (compat/posix/src/system_linker.h), which does that
+    // for an ELF program. No program, linker64's own options or a program
+    // that is not ELF fail the exec instead (Android's linker prints an error).
+    if (depth > 0 || argv.size() < 2 || argv[1].empty() || argv[1][0] == '-') return kENOEXEC;
+    const std::vector<std::string> program(argv.begin() + 1, argv.end());
+    Launch inner;
+    int r = PrepareProgram(program[0], program, dir, depth + 1, false, &inner, path_override);
+    if (r != 0) return r;
+    if (inner.kind != "elf" && inner.kind != "tool") return kENOEXEC;
+    *launch = inner;
+    return 0;
   }
   std::string tool = ToolName(prog);
   if (!tool.empty() && (search || prog.find('/') != std::string::npos)) {
@@ -773,7 +795,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   // stdio placeholders and the manifest. A bookkeeping allocation must never
   // strand a newly duplicated handle outside the cleanup owner.
   const size_t selected = std::min(fds.size(), static_cast<size_t>(count));
-  owned.values.reserve(selected * (transport ? 2 : 1) + (transport ? 4 : 0));
+  owned.values.reserve(selected * (transport ? 3 : 1) + (transport ? 4 : 0));
   std::vector<gesher::DescriptorSnapshotPtr> snapshots(static_cast<size_t>(count));
   std::vector<std::unique_ptr<gesher::NativeFileDescriptionExport>> native_exports;
   for (const ChildFd& file : fds) {
@@ -819,6 +841,14 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
     }
     entries.push_back({fd, static_cast<uint32_t>(snapshot->kind), reinterpret_cast<uintptr_t>(inherited_description),
                        reinterpret_cast<uintptr_t>(file)});
+    if (snapshot->kind == gesher::DescriptorKind::kFifo) {
+      // The child inherits a reference to the FIFO's ring with its
+      // description, so buffered bytes survive this process closing its
+      // copies or exiting before the child has bound the ring.
+      HANDLE ring = gesher::FifoRingSection(snapshot);
+      if (!ring) return errno_error();
+      if (!inheritable(ring)) return GetLastError();
+    }
   }
   uint32_t closed_stdio = 0;
   for (int fd = 0; fd < 3; ++fd) {
@@ -912,9 +942,22 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   if (!(extra_flags & (CREATE_NEW_CONSOLE | CREATE_NO_WINDOW | DETACHED_PROCESS)))
     flags |= owned.values.empty() ? DETACHED_PROCESS : CREATE_NO_WINDOW;
   if (attributes) flags |= EXTENDED_STARTUPINFO_PRESENT;
-  BOOL started = CreateProcessW(launch.application.c_str(), command_line.data(), nullptr, nullptr, attributes ? TRUE : FALSE,
-      flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, info);
-  DWORD error = started ? ERROR_SUCCESS : GetLastError();
+  DWORD error = ERROR_SUCCESS;
+  BOOL started = FALSE;
+  if (gesher::InForkedChild()) {
+    // A forked child cannot call CreateProcess: its root creates the process
+    // with this child as its parent (gesher/fork.h, ADR 0092).
+    error = gesher::BrokeredCreateProcess(launch.application.c_str(), command_line.c_str(), environment,
+                                          cwd.empty() ? nullptr : cwd.c_str(), flags, startup.StartupInfo,
+                                          owned.values.data(), owned.values.size(), info);
+    started = error == ERROR_SUCCESS;
+  } else {
+    gesher::AcquireSpawnLock();
+    started = CreateProcessW(launch.application.c_str(), command_line.data(), nullptr, nullptr, attributes ? TRUE : FALSE,
+        flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, info);
+    error = started ? ERROR_SUCCESS : GetLastError();
+    gesher::ReleaseSpawnLock();
+  }
   if (started) for (auto& reservation : native_exports) reservation->Commit();
   return error;
 } catch (const std::bad_alloc&) {

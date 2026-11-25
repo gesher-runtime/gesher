@@ -45,8 +45,14 @@
 #include "ofd_internal.h"
 #include "revocable_internal.h"
 #include "record_lock_descriptors.h"
+#include "system_linker.h"
 
 #include <gesher/process_name.h>
+#include <gesher/ptrace_state.h>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 namespace procfs {
@@ -282,9 +288,9 @@ std::string Status(DWORD tid) {
   s += "Umask:\t0022\n";
   s += Format("State:\t%c (%s)\n", process ? 'R' : ThreadState(tid),
               (process || ThreadState(tid) == 'R') ? "running" : "sleeping");
-  s += Format("Tgid:\t%lu\nNgid:\t0\nPid:\t%lu\nPPid:\t%d\nTracerPid:\t0\n",
+  s += Format("Tgid:\t%lu\nNgid:\t0\nPid:\t%lu\nPPid:\t%d\nTracerPid:\t%d\n",
               static_cast<unsigned long>(pid), static_cast<unsigned long>(process ? pid : tid),
-              static_cast<int>(getppid()));
+              static_cast<int>(getppid()), gesher::ptrace::TracerPid());
   s += Format("Uid:\t%u\t%u\t%u\t%u\nGid:\t%u\t%u\t%u\t%u\n", uid, uid, uid, uid, gid, gid, gid, gid);
   s += Format("FDSize:\t%llu\nGroups:\t\n",
               static_cast<unsigned long long>(std::max<size_t>(64, OpenFds().size())));
@@ -459,7 +465,10 @@ std::string MappedFile(void* address) {
   for (const auto& dm : drives) {
     size_t t = dm.target.size();
     if (path.size() > t && _wcsnicmp(path.c_str(), dm.target.c_str(), t) == 0 && path[t] == L'\\') {
-      return LinuxPath((dm.drive + path.substr(t)).c_str());
+      const std::wstring windows = dm.drive + path.substr(t);
+      // Gesher's ELF loader, by its Android name (system_linker.h).
+      if (system_linker::IsFile(windows)) return system_linker::kPath;
+      return LinuxPath(windows.c_str());
     }
   }
   return Narrow(path.c_str());
@@ -467,8 +476,11 @@ std::string MappedFile(void* address) {
 
 // /proc/self/maps: one line per run of pages with the same state, as
 // VirtualQuery reports them; reserved address space is "---p", as Linux shows
-// a PROT_NONE mapping.
+// a PROT_NONE mapping. Gesher's ELF loader is mapped as /system/bin/linker64
+// first, as the dynamic linker is in every Android process: this is the only
+// place its mapping can be seen, so it is made the first time it is asked for.
 std::string Maps() {
+  system_linker::EnsureMapped();
   std::string s;
   SYSTEM_INFO si;
   GetSystemInfo(&si);
@@ -746,8 +758,9 @@ std::string ReadOrCreateBootId(const std::wstring& data, const std::wstring& key
 
 // Each device boot has an independently persisted ID. A process outside a
 // device has its own ID. Never return a private ID for an admitted device.
+std::mutex g_boot_id_lock;
 std::string BootId() {
-  static std::mutex lock;
+  std::mutex& lock = g_boot_id_lock;
   static std::string standalone_id, device_id;
   static std::wstring device_session;
   const std::wstring binder = EnvironmentValue(L"GESHER_BINDER");
@@ -1068,7 +1081,7 @@ bool FdTarget(int fd, std::string* target) {
       DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
       if (n == 0) return FailWithLastError(), false;
       if (n >= 32768) return errno = ENAMETOOLONG, false;
-      *target = LinuxPath(buf);
+      *target = system_linker::IsFile(buf) ? std::string(system_linker::kPath) : LinuxPath(buf);
       return true;
     }
     case FILE_TYPE_PIPE:
@@ -1234,3 +1247,9 @@ extern "C" void gesher_set_process_argv0(const char* name) {
   std::lock_guard<std::mutex> lock(gesher::procfs::g_argv0_mutex);
   gesher::procfs::g_argv0 = name != nullptr ? name : "";
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::procfs::g_argv0_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::procfs::g_boot_id_lock);
+#endif

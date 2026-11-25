@@ -27,14 +27,22 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
   new working directory, as after the child's `chdir`); a bare name is looked
   up in `PATH` (Windows' `;` list, or a Linux `:` list), with `.exe`, `.com`,
   `.cmd`, `.bat` tried for names without an extension. By the file's contents:
-  - an **ELF x86-64** file runs in `gesher-exec.exe --elf` (below); other ELF
-    machines (arm64) fail with `ENOEXEC`;
+  - an **ELF64 little-endian x86-64 or arm64** file runs in
+    `gesher-exec.exe --elf` (below; arm64 through the translator,
+    [arm64.md](arm64.md)); other ELF machines, and static executables
+    (`ET_EXEC`, which make Linux system calls themselves, ADR 0055), fail with
+    `ENOEXEC`;
   - a **PE** image (`MZ`) runs as itself; a **`.cmd`/`.bat`** through
     `cmd.exe /d /s /c`;
   - **`sh`, `/system/bin/sh`, `/bin/sh`** (also `/system/xbin`, `/vendor/bin`)
     and **`#!...sh` scripts** run in gesher-exec's shell; other `#!`
     interpreters are looked up like programs; a text file without `#!` runs
     with the shell, as the JDK's `execvp` fallback does;
+  - **`/system/bin/linker64 PROGRAM [ARGS...]`**, Android's way of running a
+    program through the dynamic linker (here Gesher's ELF loader, ADR 0096),
+    runs PROGRAM (a path; an ELF executable or one of the tools below) with
+    ARGS; without a program, with one of linker64's options or with a program
+    that is not ELF it is `ENOEXEC`;
   - anything else is `ENOEXEC`; a directory is `EACCES`; nothing found is
     `ENOENT`.
 - **The launcher** (`compat/elf/exec/gesher_exec.cc`, `gesher-exec.exe` next
@@ -91,7 +99,10 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 - **`system()`, `popen()`/`pclose()`, `posix_spawn()`/`posix_spawnp()`** (with
   its file actions: open, close, dup2, chdir) run programs directly, no fork
   needed; `system`/`popen` through the launcher's `sh -c`.
-- **`fork()` and `vfork()` return `-1` with `ENOSYS`.** A Windows process
+- **`fork()` and `vfork()` in x86-64 code return `-1` with `ENOSYS`.** In
+  translated arm64 code they, `_Fork` and fork-like raw `clone` make a real
+  child process with `RtlCloneUserProcess`, and `wait4` reports its status
+  ([ADR 0092](decisions/0092-arm64-guest-fork.md)). A Windows process
   cannot provide Android's process clone or vfork lifetime by running a
   purported child inline on its parent's thread. The former inline mechanism,
   shadow descriptor table, synthetic waitable children, fabricated pipe byte
@@ -114,7 +125,13 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   protocol. Closed standard descriptors are not replaced with NUL for it.
 - **`exec*()` outside a fork** spawns the program with this process's fds,
   environment and working directory, waits and exits with its status (the pid
-  changes).
+  changes). The list forms take their argv as bionic's `execl.cpp` does, from
+  x86-64 code and from translated arm64 code alike, including list items past
+  the argument registers that the caller passes on the stack: `execl` runs the
+  path as `execv` does; `execlp` looks a bare name up in `PATH` as `execvp`
+  does; `execle` takes the envp that follows the list's null and runs the path
+  with it as `execve` does, not with `environ`, and a null envp there is an
+  empty environment.
 - **`waitpid`/`wait`/`wait4`** return Linux's status word
   (`WIFEXITED`/`WIFSIGNALED`); a child's exit raises `SIGCHLD`.
 - **`kill(pid, sig)` to another process** (any Gesher process, children
@@ -169,8 +186,8 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   runners in CI 40338806524; the app variant remains pending. Incompatible layouts, text relocations and unsupported
   instruction forms fail or trap explicitly (ADR 0060). Emulated TLS (API
   <29) and library ELF TLS retain their existing paths.
-- Native `fork` and `vfork` are unsupported (`ENOSYS`), including the common
-  fork-then-exec pattern. This affects callers that have no supported spawn
+- Native `fork` and `vfork` in x86-64 code are unsupported (`ENOSYS`),
+  including the common fork-then-exec pattern (arm64 code: ADR 0092). This affects callers that have no supported spawn
   path. No child body runs, no PID is invented, and no pipe data is fabricated.
 - `exec*` currently launches a replacement program and waits in the original
   Windows process. It preserves real descriptor sharing but does not preserve
@@ -184,6 +201,24 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   are not supported (`ENOEXEC`).
 - Windows programs get the command line quoted for the CRT's rules; a
   Windows program's exit code is passed through unchanged (it may exceed 255).
+- Known differences of the `exec*` path from bionic, unchanged for now:
+  - `ENOEXEC` does not fall back to `/system/bin/sh`. bionic's
+    `execvp`/`execvpe` retry a file the kernel rejects with the shell; here a
+    file whose first bytes contain a NUL and that is not a supported ELF or PE
+    image fails with `ENOEXEC`. A text file without `#!` instead runs in the
+    launcher's shell for every form, `execv`/`execve` included, where bionic
+    would return `ENOEXEC`.
+  - With `PATH` unset, `execvp`/`execlp`/`execvpe` do not use bionic's
+    `_PATH_DEFPATH`: an unset or empty `PATH` is read as a single empty entry,
+    so a bare name is looked up only in the current directory (apart from the
+    `/system/bin` tools above).
+  - A `#!` script with an interpreter other than `sh` gets the caller's
+    `argv[0]` after the interpreter and its option, where Linux passes the
+    script's path; `#!...sh` scripts are run by path.
+  - An ELF program run without a device session (standalone `gesher-exec`)
+    sets its own `GESHER_PROPERTY_SESSION` for the property backend, so even an
+    empty environment (`execle`/`execve` with a null or empty envp) shows that
+    one variable to the program.
 
 ## Status and next steps
 

@@ -25,6 +25,7 @@
 #include <gesher/elf_loader.h>
 #include <gesher/system_properties.h>
 #include <gesher/environment.h>
+#include <gesher/fork.h>
 #include <gesher/protected_startup.h>
 
 #include "../../binder/protected_client_startup.h"
@@ -136,11 +137,15 @@ GetauxvalFn g_shim_getauxval = nullptr;
     }
   }
   fflush(nullptr);
+  // A forked child runs no DLL detach routines (ADR 0092): they may close
+  // handles the clone did not inherit.
+  if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), static_cast<UINT>(status) & 0xff);
   ExitProcess(static_cast<UINT>(status) & 0xff);
 }
 
 // _exit()/_Exit(): no handlers and no stdio flush, as on Linux.
 [[noreturn]] void SYSV UnderscoreExit(int status) {
+  if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), static_cast<UINT>(status) & 0xff);
   ExitProcess(static_cast<UINT>(status) & 0xff);
 }
 
@@ -210,9 +215,12 @@ LONG WINAPI OnUnhandled(EXCEPTION_POINTERS* info) {
                                                : "SIGABRT";
   fprintf(stderr, "%s: terminated by %s (exception 0x%08lx)\n", g_name, what,
           info->ExceptionRecord->ExceptionCode);
+  // A forked child dies as Linux kills it: no stdio flush, and an exit code
+  // its parent reads as the signal (gesher/fork.h).
+  if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), gesher::ForkSignalExitCode(status - 128));
   fflush(stdout);
   fflush(stderr);
-  ExitProcess(static_cast<UINT>(status));
+  ExitProcess(gesher::SignalExitCode(status - 128));
 }
 
 // The same as a vectored handler, last in line: faults in the program's code
@@ -238,9 +246,10 @@ LONG CALLBACK OnFatal(EXCEPTION_POINTERS* info) {
 // abort() (the shim's runs the program's SIGABRT handler first, then the
 // CRT's abort, which raises the CRT's SIGABRT): 128 + SIGABRT.
 void OnCrtAbort(int) {
+  if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), gesher::ForkSignalExitCode(kSigabrt));
   fflush(stdout);
   fflush(stderr);
-  ExitProcess(128 + kSigabrt);
+  ExitProcess(gesher::SignalExitCode(kSigabrt));
 }
 
 // LD_LIBRARY_PATH's directories (':' or ';' separated; "C:/x" kept whole).

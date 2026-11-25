@@ -8,6 +8,10 @@
 #include "pipe_io.h"
 
 #include <gesher/file_description.h>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
@@ -15,6 +19,7 @@
 #include <bcrypt.h>
 
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cstring>
 #include <new>
@@ -250,7 +255,9 @@ int ImportStartup(Table* state) try {
   for (uint32_t index = 0; !error && index < header.count; ++index) {
     ofd_transfer::Entry entry{};
     std::memcpy(&entry, bytes + sizeof(header) + static_cast<size_t>(index) * sizeof(entry), sizeof(entry));
-    if (!ValidSlot(entry.descriptor) || entry.kind > static_cast<uint32_t>(DescriptorKind::kRandom) ||
+    if (!ValidSlot(entry.descriptor) ||
+        (entry.kind > static_cast<uint32_t>(DescriptorKind::kRandom) &&
+         entry.kind != static_cast<uint32_t>(DescriptorKind::kFifo)) ||
         entry.shared_handle == 0 || entry.shared_handle > UINTPTR_MAX ||
         entry.file_handle == 0 || entry.file_handle > UINTPTR_MAX || state->entries[entry.descriptor]) {
       error = EINVAL;
@@ -606,6 +613,9 @@ int AttachFileDescription(const DescriptorSnapshotPtr& snapshot, bool close_on_e
 int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
   if (InitializeSnapshotFlags(snapshot) < 0) return -1;
   if (snapshot->kind == DescriptorKind::kUnshareable) return snapshot->description->Flags();
+  // A FIFO's status is wholly its shared description's (fifo.cc); its
+  // placeholder pipe has no native mode to agree with.
+  if (snapshot->kind == DescriptorKind::kFifo) return snapshot->description->Flags();
   if (GetFileType(snapshot->handle) == FILE_TYPE_PIPE && !snapshot->description->KnownPipeStatus())
     return errno = EOPNOTSUPP, -1;
   const int flags = snapshot->description->Flags();
@@ -653,6 +663,15 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
   auto& description = *snapshot->description;
   const HANDLE file = snapshot->handle;
   std::lock_guard<std::mutex> lock(description.mutex);
+  if (snapshot->kind == DescriptorKind::kFifo) {
+    // fifo.cc reads O_NONBLOCK from the shared flags on every operation.
+    // Direct I/O, atime suppression and SIGIO have no FIFO implementation.
+    const int old_flags = description.Flags();
+    if (((arg ^ old_flags) & O_DIRECT) != 0) return errno = EINVAL, -1;
+    if (((arg ^ old_flags) & (O_NOATIME | O_ASYNC)) != 0) return errno = EOPNOTSUPP, -1;
+    description.SetFlags((old_flags & ~kModifiableStatusFlags) | (arg & kModifiableStatusFlags));
+    return 0;
+  }
   for (;;) {
     const int old_flags = description.Flags();
     if ((old_flags & O_PATH) != 0) return errno = EBADF, -1;
@@ -855,3 +874,9 @@ struct StartupImport {
 StartupImport startup_import;
 }  // namespace
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the descriptor table is consistent in the child.
+GESHER_FORK_LOCK_PTR(gesher::kForkOrderDescriptors, std::mutex,
+                     gesher::table != nullptr ? &gesher::table->mutex : nullptr);
+#endif

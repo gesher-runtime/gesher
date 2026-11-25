@@ -18,6 +18,9 @@
 //     cat, id, ps, getprop, setprop, logcat, pm, am, kill, sleep, which,
 //     mount, toybox), as a bare name
 //     or a /system/bin path, run as `gesher-exec --tool <name>`;
+//   - /system/bin/linker64 PROGRAM [ARGS...] (Gesher's ELF loader under
+//     Android's name, ADR 0096) runs PROGRAM, an ELF executable or tool, as
+//     above; without one it is ENOEXEC;
 //   - a static executable (ET_EXEC) is ENOEXEC (ADR 0055).
 //
 // Paths are UTF-8; a Linux path without a drive is on the current drive, as

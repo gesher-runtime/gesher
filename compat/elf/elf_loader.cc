@@ -28,6 +28,11 @@
 #include <windows.h>
 
 #include <gesher/arm64_runtime.h>
+// The fork set (gesher/fork.h); a host test that compiles this file alone
+// supplies a stub of it, or none.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 #include "fs_rewrite.h"
 #include "tls.h"
@@ -277,6 +282,9 @@ class LoaderMutex {
     mutex_.unlock();
   }
   static bool HeldByThisThread() { return held_ > 0; }
+  // The lock itself, for the fork set (gesher/fork.h): the fork only tries
+  // it, and the forking thread's own count stays right in the child.
+  std::recursive_mutex& native() { return mutex_; }
 
  private:
   std::recursive_mutex mutex_;
@@ -294,6 +302,20 @@ UnresolvedHandler g_unresolved_handler = nullptr;
 // dl_iterate_phdr callbacks running on this thread (ForEachLoaded): an unmap
 // from inside one does not wait for other callbacks.
 thread_local int t_callback_depth = 0;
+// The reserved objects this thread's running callbacks are for, innermost
+// last, each with how many nested callbacks in a row are for it
+// (CallbackScope): a forked child keeps only the forking thread's callbacks
+// counted in Library::in_callback (ElfForkChild). Nesting on one object takes
+// one entry at any depth; only more than this many alternations between
+// objects go unlisted (then the child counts fewer, never more: its
+// decrements stop at zero, so nothing waits for ever).
+struct CallbackEntry {
+  Library* lib;
+  int count;
+};
+constexpr int kCallbackStack = 64;
+thread_local CallbackEntry t_callback_libs[kCallbackStack];
+thread_local int t_callback_libs_count = 0;
 // Callbacks running for reserved objects end here (Library::in_callback).
 std::mutex g_callbacks_mutex;
 std::condition_variable g_callbacks_cv;
@@ -2058,13 +2080,28 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
   // runs no host cleanups) and leaves the count raised (docs/native-libs.md).
   struct CallbackScope {
     Library* lib;
-    explicit CallbackScope(Library* l) : lib(l) { ++t_callback_depth; }
+    bool listed = false;
+    explicit CallbackScope(Library* l) : lib(l) {
+      ++t_callback_depth;
+      if (lib == nullptr) return;
+      if (t_callback_libs_count > 0 && t_callback_libs[t_callback_libs_count - 1].lib == lib) {
+        ++t_callback_libs[t_callback_libs_count - 1].count;
+        listed = true;
+      } else if (t_callback_libs_count < kCallbackStack) {
+        t_callback_libs[t_callback_libs_count++] = {lib, 1};
+        listed = true;
+      }
+    }
     ~CallbackScope() {
       --t_callback_depth;
+      if (listed && --t_callback_libs[t_callback_libs_count - 1].count == 0) --t_callback_libs_count;
       if (lib == nullptr) return;
       {
         std::lock_guard<std::mutex> lock(g_callbacks_mutex);
-        lib->in_callback.fetch_sub(1);
+        // Never below zero (an unlisted callback in a forked child).
+        int n = lib->in_callback.load();
+        while (n > 0 && !lib->in_callback.compare_exchange_weak(n, n - 1)) {
+        }
       }
       g_callbacks_cv.notify_all();
     }
@@ -2135,6 +2172,34 @@ void SetBionicResolver(SymbolResolver resolver) {
   g_resolver = std::move(resolver);
 }
 
+// Gesher's ELF loader under Android's name, /system/bin/linker64
+// (compat/posix/src/system_linker.cc, ADR 0096): an ELF64 file whose PT_NOTE
+// holds a "Gesher" note of type 1. It is this process's dynamic linker, not a
+// library: it has no code and no symbols, so dlopen refuses it instead of
+// returning an empty object.
+bool IsGesherLinkerImage(const uint8_t* data, size_t size) {
+  if (size < sizeof(Elf64_Ehdr)) return false;
+  const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
+  if (std::memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0 || ehdr->e_ident[EI_CLASS] != ELFCLASS64 ||
+      ehdr->e_phentsize != sizeof(Elf64_Phdr) || ehdr->e_phoff > size ||
+      ehdr->e_phnum > (size - ehdr->e_phoff) / sizeof(Elf64_Phdr)) {
+    return false;
+  }
+  const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
+  for (int i = 0; i < ehdr->e_phnum; ++i) {
+    if (phdr[i].p_type != PT_NOTE || phdr[i].p_offset > size || phdr[i].p_filesz < 20 ||
+        phdr[i].p_filesz > size - phdr[i].p_offset) {
+      continue;
+    }
+    const uint8_t* note = data + phdr[i].p_offset;
+    uint32_t namesz, type;
+    std::memcpy(&namesz, note, 4);
+    std::memcpy(&type, note + 8, 4);
+    if (namesz == 7 && type == 1 && std::memcmp(note + 12, "Gesher", 7) == 0) return true;
+  }
+  return false;
+}
+
 Library* Load(const char* path, std::string* error, const LoadOptions& options) {
   std::lock_guard<LoaderMutex> operation(g_mutex);
   // Name the object by its file base name.
@@ -2148,6 +2213,12 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
   }
   FileImage image;
   if (!OpenImage(path, &image, error)) return nullptr;
+  if (IsGesherLinkerImage(image.data, image.size)) {
+    Fail(error, std::string(path) +
+                    " is Gesher's ELF loader (/system/bin/linker64): the process's own dynamic "
+                    "linker, not a library to load");
+    return nullptr;
+  }
   return LoadCommon(name.c_str(), path, image.data, image.size, image.fd, error, options);
 }
 
@@ -2326,6 +2397,7 @@ void ForgetReservedMappings(const void* addr, size_t length) {
 
 bool SetupThreadTls() { return TlsSetupThread(); }
 
+
 bool GetExecutableInfo(Library* library, ExecutableInfo* info) {
   if (library == nullptr || info == nullptr) return false;
   info->entry = library->entry;
@@ -2360,3 +2432,41 @@ FsRewriteCounts FsRewrites(Library* library) {
 }
 
 }  // namespace gesher::elf
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the list of loaded objects is complete in a forked
+// child. A fork from a library constructor holds the recursive lock in outer
+// frames: the child's thread is given it at that depth.
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, std::recursive_mutex, gesher::elf::g_mutex.native());
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, std::mutex, gesher::elf::g_data_mutex);
+// Objects in a caller's reservation (munmap and MAP_FIXED look them up), and
+// the wait for their callbacks.
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, std::mutex, gesher::elf::g_reserved_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, std::mutex, gesher::elf::g_callbacks_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::condition_variable, gesher::elf::g_callbacks_cv);
+// In a forked child only the forking thread exists: each reserved object's
+// count of running dl_iterate_phdr callbacks becomes this thread's own (the
+// other threads' callbacks will never end, and an unmap of the reservation
+// would wait for them for ever).
+namespace {
+bool ElfForkTry(void*) { return true; }
+void ElfForkUnlock(void*) {}
+void ElfForkChild(void*) {
+  using namespace gesher::elf;
+  auto own = [](Library* lib) {
+    int n = 0;
+    for (int i = 0; i < t_callback_libs_count; ++i) {
+      if (t_callback_libs[i].lib == lib) n += t_callback_libs[i].count;
+    }
+    return n;
+  };
+  for (Library* lib : Loaded()) lib->in_callback.store(own(lib));
+  for (Library* lib : g_reserved_objects) lib->in_callback.store(own(lib));
+}
+const gesher::ForkLockOps kElfForkOps = {&ElfForkTry, &ElfForkUnlock, &ElfForkChild};
+int g_elf_fork_anchor = 0;
+const gesher::ForkLockRegistration g_fork_elf_callbacks(gesher::kForkOrderLeaf, "ELF callback counts",
+                                                        []() -> void* { return &g_elf_fork_anchor; },
+                                                        &kElfForkOps);
+}  // namespace
+#endif

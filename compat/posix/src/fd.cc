@@ -1031,3 +1031,13 @@ extern "C" int ppoll(struct pollfd* fds, nfds_t nfds, const struct timespec* tim
   }
   return poll(fds, nfds, ms);
 }
+
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the socket table and descriptor waiters.
+GESHER_FORK_LOCK(gesher::kForkOrderDescriptors, std::mutex, gesher::table_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, waiters_mutex);
+#endif

@@ -60,9 +60,13 @@ Examples:
 | Let the user select which real Windows camera is used, and describe its physical mounting. | Within scope. |
 | Report a PC camera not configured as rear as Android's front camera. | Within scope: a desktop default. A PC's camera faces the user; `GESHER_CAMERA_REAR_ID` marks a rear one. |
 | Report a camera's orientation relative to the display rotation of the Activity using it, since Windows delivers frames upright for the monitor. | Within scope: a desktop adaptation. The frames and the capture are real. |
-| Expose Gesher's stationary accelerometer (gravity only) on a PC without motion sensors. | Within scope: a desktop default. Real motion sensors replace it, it is documented and `GESHER_SENSOR_FALLBACK=0` turns it off. |
+| Expose Gesher's stationary accelerometer (gravity only) on a PC without motion sensors. | Within scope: a desktop default. Real motion sensors replace it, it is documented and `GESHER_SENSOR_FALLBACK=0` turns it off. It declares no `android.hardware.sensor.*` feature: only real sensors do. |
+| Present Gesher's ELF loader as `/system/bin/linker64` (ELF64, x86-64) in the file system and in every process's `/proc/self/maps`. | Within scope: a desktop adaptation decided by the maintainer (ADR 0096). The loader is the process's real dynamic linker and runs x86-64 code natively; the file names itself as Gesher's, has no code, and there is no 32-bit `/system/bin/linker`. |
 | Substitute a similar available PC capability for a missing one (such as exposing a regular PC camera as a rear camera) with maintainer approval. | Within scope once approved by the maintainer and listed here as a decided adaptation (no setting required). |
 | Provide an alternative operation for a missing PC capability (such as choosing an existing image from the PC for a camera capture) via an explicit, documented setting with maintainer approval. | Within scope once approved by the maintainer, gated behind an explicit setting, and listed here as a decided adaptation. |
+| Let the user choose an image from the PC instead of a live camera capture, for `ACTION_IMAGE_CAPTURE` and Camera/Camera2 (a PC usually has no rear camera for photographing a document), through the Control Center setting "Allow choosing an image from the PC instead of taking a photo" (off by default, docs/devices.md). While the setting is on, the camera list shows an additional rear camera, "Gesher Image Picker", whose frames are the selected image (it counts for `FEATURE_CAMERA`), and with a PC camera present the user is asked, each time an app opens it, which to use. | Within scope: a maintainer-approved alternative operation for a missing PC capability, gated behind an explicit, documented setting (maintainer decision, PR #487). |
+| Report the device's identity: the PC's real manufacturer and model (SMBIOS) as `Build.MANUFACTURER`/`Build.MODEL`, Gesher's own brand, product, device and fingerprint, and the Windows computer name as the device name. | Within scope: maintainer decision (2026-11-25). Gesher does not impersonate another device (it no longer reports a Pixel 8); firmware placeholders fall back to the baseboard's names, then to `Gesher`/`PC`, never another vendor's; a virtual machine reports its hypervisor's values; a device name the user set stays. See [docs/device-identity.md](docs/device-identity.md). |
+| Make an app process non-dumpable unless the app is debuggable or profileable from the shell, as zygote specialization does, so `ptrace` permissions follow Android's. | Within scope: Android's real default (maintainer decision, 2026-11-24). |
 | Implement an Android file-selection request with a Windows file picker. | Within scope: the user picks a file, as asked. |
 | Answer a camera capture request with a file picker or a saved image presented as a fresh capture. | Outside scope: a different operation, unless enabled by a maintainer-approved, documented setting for a missing PC capability. |
 | Report success for an operation that did not run (a capture, a payment, an autofocus). | Outside scope. |
@@ -93,12 +97,16 @@ it is removed or redesigned.
   code generated with AI. Generated explanations and passing tests are not
   substitutes for reviewing its behavior.
 
-Submit contributions under the applicable project license. Gesher uses
-[Apache License 2.0](LICENSE); see also the
-[licensing decision](docs/decisions/0001-license.md). Identify third-party code,
-its source and license, retain required notices, and ensure you have the right
-to contribute it, including any necessary employer permission. Follow the
-licensing decision's restrictions on copying code from other projects.
+Gesher is now licensed under a proprietary All Rights Reserved license
+([LICENSE](LICENSE)); public redistribution with or without modifications is
+prohibited without prior written permission. Every contributor must sign the
+[Contributor License Agreement](.github/cla/CLA.md) once by posting the
+required signature comment on their pull request (`I have read the CLA Document
+and I hereby sign the CLA`) before the PR can be merged. Identify third-party
+code, its source and license, retain required notices, and ensure you have the
+right to contribute it, including any necessary employer permission. Follow the
+[licensing decision](docs/decisions/0001-license.md)'s restrictions on copying
+code from other projects.
 
 ## Required review: scope before correctness
 

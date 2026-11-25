@@ -105,6 +105,7 @@ int register_gesher_surface_parcel(JNIEnv* env);  // compat/framework/surface_pa
 int register_gesher_devices(JNIEnv* env);  // compat/devices/devices_jni.cc (devices track)
 int register_gesher_WindowsHost(JNIEnv* env);  // compat/devsvc/devsvc_natives.cc (devsvc track)
 int register_gesher_usb(JNIEnv* env);
+int register_gesher_print(JNIEnv* env);  // compat/print/print_jni.cc (docs/print.md)
 
 // libutils' androidSetThreadName, which libbinder's ProcessState names its
 // pooled threads with, comes from libutils' pthread Threads.cpp (system/core
@@ -1288,6 +1289,7 @@ static const struct {
     {"gesher_devices", "android/hardware/SystemSensorManager", register_gesher_devices},
     {"gesher_WindowsHost", "com/gesher/server/WindowsHost", register_gesher_WindowsHost},
     {"gesher_usb", "android/hardware/usb/UsbDeviceConnection", register_gesher_usb},
+    {"gesher_print", "com/gesher/server/WindowsPrint", register_gesher_print},
     {"gesher_NativeCanary", "gesher/NativeCanary", register_gesher_NativeCanary},
 };
 

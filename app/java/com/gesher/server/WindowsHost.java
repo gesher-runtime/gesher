@@ -280,6 +280,40 @@ public final class WindowsHost {
         catch (UnsatisfiedLinkError unavailable) { return 0; }
     }
 
+    /**
+     * Display-off time without input as {@link #jobIdleMillis()} reads it, or
+     * {@link DeviceConstraints#NOT_OFF} unless Windows reported the session display OFF. Unlike
+     * jobIdleMillis, a display that has just gone off (0) is told apart from one that is on.
+     */
+    public static long jobIdleReading() {
+        if (sessionDisplayState() != DISPLAY_STATE_OFF) return DeviceConstraints.NOT_OFF;
+        return jobIdleMillis();
+    }
+
+    /**
+     * The hardware behind system features (compat/devsvc/devsvc_hardware.cc,
+     * docs/system-features.md): {touch digitizer contacts (0 without a touch digitizer),
+     * audio render endpoints active or unplugged, wired Ethernet interfaces}, -1 for a count Windows
+     * could not give; null without the natives.
+     */
+    public static int[] hardwareSummary() {
+        if (!available()) return null;
+        try { return nativeHardwareSummary(); }
+        catch (UnsatisfiedLinkError unavailable) { return null; }
+    }
+
+    /**
+     * The OpenGL ES version the default EGL display gives (compat/bionic/egl_gles.cc,
+     * docs/system-features.md): 0x30000 on a hardware Direct3D 11 device with ES 3.0,
+     * 0x20000 on WARP or a GPU without ES 3.0, 0 without ANGLE or a Direct3D device;
+     * -1 without the natives.
+     */
+    public static int glEsVersion() {
+        if (!available()) return -1;
+        try { return nativeGlEsVersion(); }
+        catch (UnsatisfiedLinkError unavailable) { return -1; }
+    }
+
     /** Bits: 1 connected, 2 internet, 4 metered; -1 if unknown. */
     public static int networkState() {
         return available() ? nativeNetworkState() : -1;
@@ -288,6 +322,16 @@ public final class WindowsHost {
     /** The Windows time zone's key name, or null. */
     public static String timeZoneKeyName() {
         return available() ? nativeTimeZoneKeyName() : null;
+    }
+
+    /**
+     * Windows' computer name as Settings > System > About shows it (the physical DNS host
+     * name, case kept), or null: Settings.Global.DEVICE_NAME (docs/device-identity.md).
+     */
+    public static String computerName() {
+        if (!available()) return null;
+        try { return nativeComputerName(); }
+        catch (UnsatisfiedLinkError unavailable) { return null; }
     }
 
     // --- toasts ---------------------------------------------------------------------------
@@ -492,7 +536,10 @@ public final class WindowsHost {
     private static native long nativeJobIdleMillis();
     private static native int nativeSessionDisplayState();
     private static native int nativeNetworkState();
+    private static native int[] nativeHardwareSummary();
+    private static native int nativeGlEsVersion();
     private static native String nativeTimeZoneKeyName();
+    private static native String nativeComputerName();
     private static native int nativeShowToast(String appId, String tag, String group,
             String xml, boolean suppressPopup, boolean high);
     private static native int nativeRemoveToast(String appId, String tag, String group);

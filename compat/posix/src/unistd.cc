@@ -20,6 +20,8 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "internal.h"
 #include "ofd_internal.h"
@@ -28,8 +30,10 @@
 #include "revocable_internal.h"
 #include "binder_internal.h"
 #include "event_internal.h"
+#include "fifo_internal.h"
 #include "record_lock_descriptors.h"
 #include "pipe_io.h"
+#include "system_linker.h"
 
 namespace {
 
@@ -293,6 +297,7 @@ long fpathconf(int fd, int name) {
 }
 
 int chown(const char* path, uid_t owner, gid_t group) {
+  if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   struct stat st;
   if (stat(path, &st) != 0) return -1;
   return CheckOwner(owner, group);
@@ -360,22 +365,128 @@ int pipe(int fds[2]) { return pipe2(fds, 0); }
 // Only files are flushed: FlushFileBuffers on a pipe waits until the reader
 // has read everything, where Linux fails at once with EINVAL (pipes, sockets,
 // character devices).
+//
+// Linux fsync and fdatasync flush a regular file's data whatever the
+// descriptor's access mode (an O_RDONLY descriptor included: programs fsync
+// every file of a tree they wrote by opening each for reading, or a file they
+// made read-only). FlushFileBuffers needs a handle with write access. A
+// descriptor without one is flushed, in order of preference:
+//  1. through a second handle to the same file opened for writing (ReOpenFile).
+//     It is used only for this flush and never reaches the descriptor, so the
+//     descriptor stays read-only (the rule of PositionedDescriptorIo).
+//  2. through another descriptor of this process open for writing on the same
+//     file, when Windows refuses that handle: a read-only file
+//     (FILE_ATTRIBUTE_READONLY, Gesher's mode 0444), an ACL that denies
+//     writing, another open that does not share writing, or a read-only
+//     volume (ERROR_WRITE_PROTECT; Linux's ext4 and f2fs fsync succeed on a
+//     file of a read-only mount).
+//  3. otherwise by writing the file's cached data back through a read-only
+//     mapping of it (FlushViewOfFile), the one flush Windows offers without
+//     write access. It waits for the cached data to reach the device, but
+//     does not make the file system commit the file's metadata or the device
+//     flush its own write cache, as FlushFileBuffers does. A process that may
+//     not open the file for writing cannot ask Windows for more; failing would
+//     report an error Linux never gives for this call (EACCES), while the
+//     data is as durable as Windows lets this process make it. The common case
+//     (a file written and closed earlier, then made read-only) has no
+//     metadata left to commit beyond what NTFS's lazy writer and journal
+//     already handle.
+namespace {
+// FlushFileBuffers through another descriptor of this process that is open
+// for writing on `file`. False if there is none.
+bool FlushThroughWritableAlias(const gesher::record_locks::File& file, int* result) {
+  std::vector<std::pair<int, gesher::DescriptorSnapshotPtr>> descriptors;
+  if (gesher::CaptureDescriptors(&descriptors, true) != 0) return false;
+  for (const auto& [fd, snapshot] : descriptors) {
+    if (!snapshot || GetFileType(snapshot->handle) != FILE_TYPE_DISK) continue;
+    gesher::FileOperationLease operation(snapshot);
+    if (operation.Error()) continue;
+    uint32_t access = 0;
+    if (gesher::record_locks::HandleAccess(snapshot->handle, &access) != 0 ||
+        (access & (FILE_WRITE_DATA | FILE_APPEND_DATA)) == 0) continue;
+    gesher::record_locks::File identity{};
+    if (gesher::record_locks::FileIdentity(snapshot->handle, &identity) != 0 || !(identity == file))
+      continue;
+    *result = FlushFileBuffers(snapshot->handle) ? 0 : gesher::FailWithLastError();
+    return true;
+  }
+  return false;
+}
+
+// Writes the file's cached data back to the device through read-only views.
+int WriteBackCachedData(HANDLE file) {
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(file, &size)) return gesher::FailWithLastError();
+  if (size.QuadPart == 0) return 0;  // nothing cached; an empty file cannot be mapped
+  HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+  if (mapping == nullptr) return gesher::FailWithLastError();
+  // Windows of 256 MiB (a multiple of the allocation granularity) bound the
+  // address space a large file needs.
+  constexpr uint64_t kWindow = uint64_t{256} << 20;
+  const uint64_t total = static_cast<uint64_t>(size.QuadPart);
+  int result = 0;
+  for (uint64_t at = 0; at < total && result == 0; at += kWindow) {
+    const SIZE_T length = static_cast<SIZE_T>(total - at < kWindow ? total - at : kWindow);
+    void* view = MapViewOfFile(mapping, FILE_MAP_READ, static_cast<DWORD>(at >> 32),
+                               static_cast<DWORD>(at), length);
+    if (view == nullptr) { result = gesher::FailWithLastError(); break; }
+    if (!FlushViewOfFile(view, 0)) result = gesher::FailWithLastError();
+    UnmapViewOfFile(view);
+  }
+  const int saved = errno;
+  CloseHandle(mapping);
+  errno = saved;
+  return result;
+}
+}  // namespace
+
 int fsync(int fd) {
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return -1;
   int block_result;
   if (gesher::usb_block::Sync(snapshot, &block_result)) return block_result;
+  gesher::record_locks::File identity{};
+  {
+    gesher::FileOperationLease operation(snapshot);
+    if (operation.Error()) return errno = operation.Error(), -1;
+    // An O_PATH descriptor refers to a file without opening it: Linux's fsync
+    // (fdget) does not accept it, as read and write do not.
+    const int flags = gesher::FileDescriptionIoFlags(snapshot);
+    if (flags < 0) return -1;
+    if ((flags & O_PATH) != 0) return errno = EBADF, -1;
+    const HANDLE h = snapshot->handle;
+    if (GetFileType(h) != FILE_TYPE_DISK) return errno = EINVAL, -1;
+    // A directory (opened for reading, as Linux programs do to fsync a rename):
+    // NTFS journals its entries; FlushFileBuffers would need write access.
+    BY_HANDLE_FILE_INFORMATION info;
+    if (GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      return 0;
+    }
+    uint32_t access = 0;
+    if (gesher::record_locks::HandleAccess(h, &access) != 0 ||
+        (access & (FILE_WRITE_DATA | FILE_APPEND_DATA)) != 0) {
+      return FlushFileBuffers(h) ? 0 : gesher::FailWithLastError();
+    }
+    HANDLE writable = ReOpenFile(h, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+    if (writable != INVALID_HANDLE_VALUE) {
+      const BOOL flushed = FlushFileBuffers(writable);
+      const DWORD error = flushed ? ERROR_SUCCESS : GetLastError();
+      CloseHandle(writable);
+      if (!flushed) return errno = gesher::ErrnoFromWin32(error), -1;
+      return 0;
+    }
+    const DWORD error = GetLastError();
+    if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION &&
+        error != ERROR_WRITE_PROTECT)
+      return errno = gesher::ErrnoFromWin32(error), -1;
+    if (int failed = gesher::record_locks::FileIdentity(h, &identity)) return errno = failed, -1;
+  }
+  // Without this descriptor's lease: each alias takes its own.
+  int result = 0;
+  if (FlushThroughWritableAlias(identity, &result)) return result;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
-  const HANDLE h = snapshot->handle;
-  if (GetFileType(h) != FILE_TYPE_DISK) return errno = EINVAL, -1;
-  // A directory (opened for reading, as Linux programs do to fsync a rename):
-  // NTFS journals its entries; FlushFileBuffers would need write access.
-  BY_HANDLE_FILE_INFORMATION info;
-  if (GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-    return 0;
-  }
-  return FlushFileBuffers(h) ? 0 : gesher::FailWithLastError();
+  return WriteBackCachedData(snapshot->handle);
 }
 int gesher_ftruncate(int fd, off_t length) {
   if (length < 0) return errno = EINVAL, -1;
@@ -780,13 +891,15 @@ char* realpath(const char* path, char* resolved_path) {
     return nullptr;
   }
   if (kind == gesher::PathKind::kFile) {
-    HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    HANDLE h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                               FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS);
     if (h == INVALID_HANDLE_VALUE) {
       gesher::FailWithLastError();
       return nullptr;
     }
-    bool ok = FinalPath(h, &out);
+    // Gesher's ELF loader by its name, however it was reached (system_linker.h).
+    bool ok = gesher::system_linker::IsFileHandle(h) ? (out = gesher::system_linker::kPath, true)
+                                                      : FinalPath(h, &out);
     CloseHandle(h);
     if (!ok) return nullptr;
   } else if (kind != gesher::PathKind::kVirtual) {

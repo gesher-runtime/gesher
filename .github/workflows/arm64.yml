@@ -225,6 +225,12 @@ jobs:
           "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror \
             -Wl,-soname,libfilesystem_contract.so \
             -o dist-arm64/filesystem_contract_arm64.so tests/native/filesystem_contract_guest.c
+          # bionic's libstdc++.so from a translated guest (the NDK's "system"
+          # C++ runtime): dlopen/dlsym, new/delete and the static-local guards.
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++" \
+            -shared -fPIC -O2 -std=c++17 -fno-exceptions -fno-rtti -fno-stack-protector \
+            -Wall -Wextra -Werror -nostdlib++ -Wl,-soname,liblibstdcxx_test.so \
+            -o dist-arm64/libstdcxx_test_arm64.so tests/native/libstdcxx_test.cc -lstdc++ -ldl
           # The guest-ABI checks: ELF TLS (TLSDESC), setjmp, struct stat and
           # epoll_event, syscall numbers, auxv, atomics, va_list, host pointers;
           # and the perf kernel (docs/arm64.md).
@@ -237,6 +243,16 @@ jobs:
             -o dist-arm64/arm64-fpsr-exec tests/native/arm64_fpsr_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
           "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -o dist-arm64/arm64-env-exec tests/native/arm64_env_exec.c /tmp/arm64-fpcr-reference.o -ldl -lm
+          # fork/vfork/clone/wait4 in guest code: real child processes (ADR 0092).
+          "$cc" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-arm64/arm64-fork-exec tests/native/arm64_fork_exec.c
+          "$cc" -O2 -Wall -Wextra -Werror \
+            -o dist-arm64/arm64-fork-adversarial tests/native/arm64_fork_adversarial.c
+          "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror -Wl,-soname,libarm64forkctor.so \
+            -o dist-arm64/libarm64forkctor.so tests/native/arm64_fork_ctor_lib.c
+          # The same checks inside dalvikvm (gesher.Arm64Fork).
+          "$cc" -shared -fPIC -DARM64_FORK_JNI -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -Wl,-soname,libarm64fork.so -o dist-arm64/libarm64fork.so tests/native/arm64_fork_exec.c
           # Step 3/4 (guest JNI): natives found by name and registered, calling
           # back into ART through the guest JNIEnv/JavaVM proxy tables; a guest
           # thread attached to the VM.
@@ -296,6 +312,12 @@ jobs:
           set -euo pipefail
           mkdir -p work/jni-classes work/jni-dex
           javac --release 11 -encoding UTF-8 -d work/jni-classes tests/native/java/gesher/Arm64Jni.java
+          mkdir -p work/fork-classes work/fork-dex
+          javac --release 11 -encoding UTF-8 -d work/fork-classes tests/native/java/gesher/Arm64Fork.java \
+            tests/native/java/gesher/Arm64ForkChurn.java
+          java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
+            --output work/fork-dex $(find work/fork-classes -name '*.class')
+          cp work/fork-dex/classes.dex dist-arm64/arm64-fork.dex
           java -cp r8.jar com.android.tools.r8.D8 --release --min-api 26 \
             --output work/jni-dex $(find work/jni-classes -name '*.class')
           cp work/jni-dex/classes.dex dist-arm64/arm64-jni.dex

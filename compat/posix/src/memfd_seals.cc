@@ -42,6 +42,10 @@
 
 #include "internal.h"
 #include "record_lock_liveness.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 namespace {
@@ -181,6 +185,15 @@ class WriteLease {
     if (own_ == nullptr) return;
     UnlockByte(own_, kLeaseByte);
     CloseHandle(own_);
+  }
+  // In a forked child (ADR 0092): the child inherited the mapping and this
+  // handle, but the byte-range lock is the parent's. The child takes its own
+  // shared lock, so F_SEAL_WRITE stays EBUSY while the child maps the file.
+  void RenewInChild() {
+    if (own_ != nullptr && LockByte(own_, kLeaseByte, false, true) != ERROR_SUCCESS) {
+      CloseHandle(own_);  // no lease the child could release
+      own_ = nullptr;
+    }
   }
   // 0, or the errno that denies the mapping; nothing is held after an error.
   int Acquire(HANDLE file) {
@@ -413,6 +426,10 @@ int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
   return 0;
 }
 
+void RenewMemfdWriteLeaseInChild(void* write_lease) {
+  if (write_lease != nullptr) static_cast<WriteLease*>(write_lease)->RenewInChild();
+}
+
 int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
                         std::shared_ptr<void>* write_lease) {
   HANDLE file = HandleFromFd(fd);
@@ -421,3 +438,9 @@ int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
 }
 
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_registry_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_seal_mutex);
+#endif

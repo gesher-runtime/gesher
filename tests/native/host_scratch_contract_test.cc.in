@@ -245,7 +245,7 @@ struct OpenFileDescription {
   bool KnownPipeStatus() const { return ::fcntl(fd, F_GETFL) >= 0; }
   int Flags() const { return ::fcntl(fd, F_GETFL); }
 };
-enum class DescriptorKind { kFile, kUnshareable };
+enum class DescriptorKind { kFile, kUnshareable, kFifo };
 struct DescriptorSnapshot {
   HANDLE handle = INVALID_HANDLE_VALUE;
   std::shared_ptr<OpenFileDescription> description;
@@ -286,6 +286,8 @@ static int QueryPipe(HANDLE handle, void* output, ULONG size, FILE_INFORMATION_C
       static_cast<ULONG>(bytes), static_cast<ULONG>(capacity - bytes)};
   return 0;
 }
+// FIFO descriptors (fifo.cc) are outside this host pipe boundary.
+[[maybe_unused]] static int PollFifo(const DescriptorSnapshotPtr&, short, short*) { std::abort(); }
 @PIPE_ADMISSION@
 @PIPE_POLL@
 #endif

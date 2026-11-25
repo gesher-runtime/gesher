@@ -4,7 +4,9 @@
 # library (android_runtime.cc registers them). Toasts are WinRT, reached through
 # combase's functions found at run time (devsvc_toast.c, C: mingw-w64's WinRT
 # headers have a usable C form only); the clipboard, power requests and the
-# event window are user32/kernel32; the network list manager is COM.
+# event window are user32/kernel32; the network list manager is COM. The
+# hardware behind system features (devsvc_hardware.cc) is user32, MMDevice and
+# iphlpapi.
 target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_win32.cc
@@ -12,6 +14,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_winusb.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_storage_observation.cc
   ${CMAKE_SOURCE_DIR}/compat/usb_storage/protected_usb_observation.cc
+  ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_hardware.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/home_region_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/clipboard_access.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_toast.c
@@ -24,5 +27,8 @@ set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
                     ${CMAKE_SOURCE_DIR}/compat/usb_storage/protected_usb_observation.cc
   APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devsvc)
+# gesher/egl_angle.h: the OpenGL ES version of the default EGL display (egl_gles.cc).
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
+  APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/compat/bionic/include)
 target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32 wtsapi32
-  cfgmgr32 setupapi winusb)
+  iphlpapi cfgmgr32 setupapi winusb)
