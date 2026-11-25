@@ -2,7 +2,7 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="{DynamicResource Text_cp_title}"
-        Width="920" Height="920" MinWidth="800" MinHeight="600"
+        Width="920" Height="960" MinWidth="800" MinHeight="600"
         WindowStartupLocation="CenterScreen"
         FlowDirection="{DynamicResource PanelFlowDirection}"
         FontFamily="Segoe UI, Tahoma, Arial"
@@ -70,11 +70,14 @@
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <Border Name="Box" Width="16" Height="16" CornerRadius="4" BorderThickness="1"
-                                    BorderBrush="#98A2B3" Background="#FFFFFF" VerticalAlignment="Center">
-                                <Path Name="Mark" FlowDirection="LeftToRight" Data="M 3,7.5 L 6,10.5 L 11.5,4"
-                                      Stroke="#FFFFFF" StrokeThickness="2" StrokeStartLineCap="Round"
-                                      StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
+                            <Border Name="FocusRing" CornerRadius="6" BorderThickness="2" Padding="1"
+                                    BorderBrush="Transparent" Margin="-3" VerticalAlignment="Center">
+                                <Border Name="Box" Width="16" Height="16" CornerRadius="4" BorderThickness="1"
+                                        BorderBrush="#98A2B3" Background="#FFFFFF">
+                                    <Path Name="Mark" FlowDirection="LeftToRight" Data="M 3,7.5 L 6,10.5 L 11.5,4"
+                                          Stroke="#FFFFFF" StrokeThickness="2" StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
+                                </Border>
                             </Border>
                             <ContentPresenter Grid.Column="1" Margin="7,0,0,0" VerticalAlignment="Center" RecognizesAccessKey="True"/>
                         </Grid>
@@ -82,14 +85,13 @@
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Box" Property="BorderBrush" Value="#1570EF"/>
                             </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Box" Property="BorderBrush" Value="#1570EF"/>
-                                <Setter TargetName="Box" Property="BorderThickness" Value="2"/>
-                            </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="Box" Property="Background" Value="#1570EF"/>
                                 <Setter TargetName="Box" Property="BorderBrush" Value="#1570EF"/>
                                 <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="FocusRing" Property="BorderBrush" Value="#84ADFF"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.5"/>
@@ -226,7 +228,9 @@
         <!-- Drag to give the applications more or less room; double-click restores. -->
         <GridSplitter Name="AppsSplitter" Grid.Row="2" Height="16" HorizontalAlignment="Stretch" VerticalAlignment="Center"
                       ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" ShowsPreview="False"
-                      Cursor="SizeNS" Focusable="False" ToolTip="{DynamicResource Text_cp_apps_splitter_tip}">
+                      Cursor="SizeNS" Focusable="True" KeyboardIncrement="24" FocusVisualStyle="{x:Null}"
+                      AutomationProperties.Name="{DynamicResource Text_cp_apps_splitter_tip}"
+                      ToolTip="{DynamicResource Text_cp_apps_splitter_tip}">
             <GridSplitter.Template>
                 <ControlTemplate TargetType="GridSplitter">
                     <Border Name="Track" Background="Transparent">
@@ -239,6 +243,10 @@
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
                             <Setter TargetName="Grip" Property="Background" Value="#1570EF"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Grip" Property="Background" Value="#1570EF"/>
+                            <Setter TargetName="Grip" Property="Height" Value="6"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -279,6 +287,7 @@
                     <TextBlock Name="AppSearchPlaceholder" Text="{DynamicResource Text_cp_apps_search_placeholder}"
                                FontSize="13" Foreground="#98A2B3" VerticalAlignment="Center" Margin="32,0,30,0" IsHitTestVisible="False"/>
                     <Button Name="BtnClearAppSearch" Content="&#x2715;" ToolTip="{DynamicResource Text_cp_apps_search_clear}"
+                            AutomationProperties.Name="{DynamicResource Text_cp_apps_search_clear}"
                             HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,4,0" Padding="6,2"
                             FontSize="11" BorderThickness="0" Background="Transparent" Foreground="#667085" Visibility="Collapsed"/>
                 </Grid>

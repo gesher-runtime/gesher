@@ -2183,8 +2183,7 @@ $btnInstallApk.Add_Click({
 })
 
 # Drag & Drop Handler
-$window.Add_Drop({
-    param($sender, $e)
+function Invoke-PanelFileDrop($e) {
     if ($script:IsBusy) { return }
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
@@ -2192,6 +2191,25 @@ $window.Add_Drop({
         if ($packages.Count) {
             [void](Start-PanelAction 'Install' @{ Files = $packages } (Get-GesherText 'cp_installing' @([IO.Path]::GetFileName($packages[0]))))
         }
+    }
+}
+$window.Add_Drop({ param($sender, $e) Invoke-PanelFileDrop $e })
+# A text box refuses dropped files on its own; files dropped on the search box
+# install like anywhere else in the window, while dragged text still searches.
+$searchFileDragOver = {
+    param($sender, $e)
+    if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $e.Effects = if ($window.AllowDrop) { [System.Windows.DragDropEffects]::Copy } else { [System.Windows.DragDropEffects]::None }
+        $e.Handled = $true
+    }
+}
+$script:AppSearchView.Box.Add_PreviewDragEnter($searchFileDragOver)
+$script:AppSearchView.Box.Add_PreviewDragOver($searchFileDragOver)
+$script:AppSearchView.Box.Add_PreviewDrop({
+    param($sender, $e)
+    if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $e.Handled = $true
+        Invoke-PanelFileDrop $e
     }
 })
 
