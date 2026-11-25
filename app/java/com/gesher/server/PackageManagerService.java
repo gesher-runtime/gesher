@@ -1202,7 +1202,10 @@ public final class PackageManagerService extends IPackageManager.Default {
             // No runtime natives (a host JVM loading the class): no radio to report.
         }
         try {
-            addCameraFeatures(FEATURES, WindowsCamera.devices());
+            // The selected-image camera counts while the Control Center's setting is on at
+            // the device's start (CameraImageSource): an app may take a "photo" with it.
+            addCameraFeatures(FEATURES, CameraImageSource.withPicker(WindowsCamera.devices(),
+                    CameraImageFallback.enabled()));
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no cameras to report.
         }

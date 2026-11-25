@@ -48,6 +48,8 @@ $script:PanelLogFile = Join-Path $root 'logs/control-panel.log'
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 # Gesher's own proxy (ProxySetting.java, docs/network.md): proxy=<every app>, proxy.<package>=<one app>.
 $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
+# Gesher's camera settings: image_picker_fallback=true.
+$script:CameraFile = Join-Path $root 'data/system/camera.properties'
 
 $isHe = ($script:GesherUiLanguage -eq 'he')
 $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
@@ -59,6 +61,40 @@ $script:ActionState = @{ Worker = $null; Completing = $false; Closed = $false }
 $script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{} }
 $script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; PendingFirst = $null; Tick = 0; WasVisible = $false; RecoveryAt = $null }
 $script:MetadataMonitor = $null
+$script:UpdatingCameraView = $false
+
+# Camera image-picker fallback setting (data/system/camera.properties).
+function Get-CameraImagePickerEnabled {
+    if ([string]::IsNullOrEmpty($script:CameraFile) -or -not (Test-Path -LiteralPath $script:CameraFile)) { return $false }
+    $enabled = $false
+    try {
+        foreach ($line in Get-Content -LiteralPath $script:CameraFile) {
+            if ($line -match '^\s*image_picker_fallback\s*[=:]\s*(.+?)\s*$') {
+                $enabled = ($Matches[1].Trim().ToLowerInvariant() -eq 'true')
+            }
+        }
+    } catch { return $false }
+    return $enabled
+}
+
+function Set-CameraImagePickerEnabled([bool] $enabled) {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if (Test-Path -LiteralPath $script:CameraFile) {
+        foreach ($line in Get-Content -LiteralPath $script:CameraFile) {
+            if ($line -match '^\s*image_picker_fallback\s*[=:]') { continue }
+            $lines.Add($line)
+        }
+    } else {
+        $lines.Add('#Gesher camera settings')
+    }
+    if ($enabled) { $lines.Add('image_picker_fallback=true') }
+    $directory = Split-Path -Parent $script:CameraFile
+    if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
+    # The system server reads the file at any time: write a sibling, then move it into place.
+    $temporary = $script:CameraFile + '.tmp'
+    [IO.File]::WriteAllLines($temporary, $lines, [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporary -Destination $script:CameraFile -Force
+}
 
 # Packages whose tasks are windows of their own (AppWindows.java's file).
 function Get-SeparateWindowApps {
@@ -358,6 +394,7 @@ function Get-StateStamp {
         Get-FileStamp (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
         Get-FileStamp $script:AppWindowsFile
         Get-FileStamp $script:ProxyFile
+        Get-FileStamp $script:CameraFile
     ) -join '|')
 }
 
@@ -386,6 +423,7 @@ function Update-PanelMetadataWatch {
         (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
         $script:AppWindowsFile
         $script:ProxyFile
+        $(if (-not [string]::IsNullOrEmpty($script:CameraFile)) { $script:CameraFile })
     ) + @($script:ViewState.AppFiles)
     $script:MetadataMonitor.SetFiles($root, [string[]]$paths)
 }
@@ -561,6 +599,7 @@ $btnProxyAll = $window.FindName('BtnProxyAll')
 $updateVersionText = $window.FindName('UpdateVersionText')
 $updateStatusText = $window.FindName('UpdateStatusText')
 $automaticUpdateChecks = $window.FindName('AutomaticUpdateChecks')
+$cameraImagePickerFallback = $window.FindName('CameraImagePickerFallback')
 $btnCheckUpdate = $window.FindName('BtnCheckUpdate')
 $btnInstallUpdate = $window.FindName('BtnInstallUpdate')
 $btnCancelUpdate = $window.FindName('BtnCancelUpdate')
@@ -572,8 +611,8 @@ $panelLayout = $window.FindName('PanelLayout')
 
 function Update-PanelWindowLayout {
     # A short or scaled display can scroll the complete dashboard. Its app list
-    # keeps a useful viewport rather than being squeezed behind the update card.
-    $panelLayout.Height = [Math]::Max(640, $panelScroll.ActualHeight - 48)
+    # keeps a useful viewport rather than being squeezed behind the update and camera cards.
+    $panelLayout.Height = [Math]::Max(740, $panelScroll.ActualHeight - 48)
 }
 
 function Set-Busy([bool] $busy, [string] $msg = '') {
@@ -752,6 +791,7 @@ function Refresh-Dashboard {
     if (-not $script:LiveState.PendingSince) { Request-PanelMetadataRefresh }
     Update-DeviceView (Get-DeviceStatus)
     Update-MicrogView (Get-MicrogStatus)
+    if (Get-Command Update-CameraView -ErrorAction SilentlyContinue) { Update-CameraView }
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
@@ -1841,6 +1881,27 @@ $btnInstallUpdate.Add_Click({
 $btnCancelUpdate.Add_Click({ Request-PanelUpdateCancellation })
 $automaticUpdateChecks.Add_Checked({ Set-PanelAutomaticUpdateChecks $true })
 $automaticUpdateChecks.Add_Unchecked({ Set-PanelAutomaticUpdateChecks $false })
+
+function Update-CameraView {
+    if ($null -eq $cameraImagePickerFallback) { return }
+    $script:UpdatingCameraView = $true
+    try { $cameraImagePickerFallback.IsChecked = [bool](Get-CameraImagePickerEnabled) }
+    finally { $script:UpdatingCameraView = $false }
+}
+
+function Set-PanelCameraImagePickerFallback([bool] $enabled) {
+    if ($script:UpdatingCameraView) { return }
+    try {
+        Set-CameraImagePickerEnabled $enabled
+        $statusMessage.Text = Get-GesherText 'cp_camera_image_picker_saved'
+    } catch {
+        Show-ModernMessageDialog -Title (Get-GesherText 'cp_title') -Message (Get-GesherText 'cp_camera_image_picker_failed' @($_.Exception.Message)) -IsError $true
+        Update-CameraView
+    }
+}
+
+$cameraImagePickerFallback.Add_Checked({ Set-PanelCameraImagePickerFallback $true })
+$cameraImagePickerFallback.Add_Unchecked({ Set-PanelCameraImagePickerFallback $false })
 $btnUpdateNotes.Add_Click({
     try {
         if ($script:UpdateState.Release) { Start-Process -FilePath $script:UpdateState.Release.Url }

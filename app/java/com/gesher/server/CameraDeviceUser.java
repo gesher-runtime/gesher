@@ -170,6 +170,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private Thread mThread;
     private CameraCallbacks.Retained mProducerLifetime;
     private WindowsCamera.Capture mCapture;
+    /** This client's camera-or-image answer (CameraImageSource), kept across reopens. */
+    private final CameraImageSource.Choice mSourceChoice = new CameraImageSource.Choice();
     /** The size {@link #mCapture} was opened for (the largest stream's then). */
     private Size mCaptureFor;
     /**
@@ -757,8 +759,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     /** Opens the device at its offered size nearest to {@code size}, as mCapture. */
     private void open(Size size) throws WindowsCamera.OpenException {
         long start = SystemClock.elapsedRealtime();
-        WindowsCamera.Capture capture = WindowsCamera.open(mDevice.id, size.getWidth(),
-                size.getHeight());
+        WindowsCamera.Capture capture = CameraImageSource.open(mDevice.id, size.getWidth(),
+                size.getHeight(), mSourceChoice);
         mCapture = capture;
         mCaptureFor = size;
         startAutoFocus(capture);
@@ -806,7 +808,8 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     /** A new source starts the AF state machine again (mode applied on the next frame). */
     private void startAutoFocus(WindowsCamera.Capture capture) {
-        mAutoFocus = mDevice.autofocus
+        // A selected image (CameraImageSource) has no lens: as a fixed-focus camera.
+        mAutoFocus = mDevice.autofocus && !capture.isFrame()
                 ? new CameraAutoFocus(CameraAutoFocus.lensOf(capture, mCameraId)) : null;
     }
 

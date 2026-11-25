@@ -148,6 +148,22 @@
       "en": "Cancel",
       "he": "ביטול"
     },
+    "camera_source_title": {
+      "en": "Camera or image from the PC?",
+      "he": "מצלמה או תמונה מהמחשב?"
+    },
+    "camera_source_camera": {
+      "en": "Use the PC camera",
+      "he": "שימוש במצלמת המחשב"
+    },
+    "camera_source_image": {
+      "en": "Choose an image from the PC",
+      "he": "בחירת תמונה מהמחשב"
+    },
+    "camera_pick_title": {
+      "en": "Choose an image for the camera",
+      "he": "בחירת תמונה עבור המצלמה"
+    },
     "no_device": {
       "en": "no Gesher device is running",
       "he": "סביבת גשר אינה פועלת"
@@ -1035,6 +1051,26 @@
     "cp_update_reopen_failed": {
       "en": "The update is installed. Close and reopen the control center from the Start menu.",
       "he": "העדכון מותקן. סגור את לוח הבקרה ופתח אותו מחדש מתפריט התחל."
+    },
+    "cp_camera_title": {
+      "en": "Camera",
+      "he": "מצלמה"
+    },
+    "cp_camera_image_picker": {
+      "en": "Allow choosing an image from the PC instead of taking a photo",
+      "he": "אפשר בחירת תמונה מהמחשב במקום צילום במצלמה"
+    },
+    "cp_camera_image_picker_hint": {
+      "en": "Off by default. When on, an app that takes a photo or opens the camera can use an image you choose from the PC instead; when the PC has a camera, you are asked which to use. Applies the next time an app opens the camera. Whether the device reports a camera, and the camera app on a PC without one, follow after Gesher restarts.",
+      "he": "כבוי כברירת מחדל. כשהאפשרות פועלת, יישום שמצלם או פותח את המצלמה יכול להשתמש במקום זאת בתמונה שתבחר מהמחשב; כשיש למחשב מצלמה, תישאל במה להשתמש. חל בפעם הבאה שיישום פותח את המצלמה. דיווח המכשיר על קיום מצלמה, ויישום המצלמה במחשב ללא מצלמה, מתעדכנים לאחר הפעלה מחדש של גשר."
+    },
+    "cp_camera_image_picker_saved": {
+      "en": "Camera setting saved.",
+      "he": "הגדרת המצלמה נשמרה."
+    },
+    "cp_camera_image_picker_failed": {
+      "en": "Could not save the camera setting: {0}",
+      "he": "שמירת הגדרת המצלמה נכשלה: {0}"
     }
   }
 }
