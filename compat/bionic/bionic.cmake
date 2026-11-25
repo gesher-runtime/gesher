@@ -10,6 +10,7 @@ target_compile_options(gesher_bionic_unicode PRIVATE -Wall -Wextra -Werror)
 
 add_library(gesher_bionic STATIC
   ${CMAKE_CURRENT_LIST_DIR}/art_shim.cc
+  ${CMAKE_CURRENT_LIST_DIR}/cxx_bionic.cc
   ${CMAKE_CURRENT_LIST_DIR}/dns_wire.cc
   ${CMAKE_CURRENT_LIST_DIR}/extra_bionic.cc
   ${CMAKE_CURRENT_LIST_DIR}/extra_sys_bionic.cc
