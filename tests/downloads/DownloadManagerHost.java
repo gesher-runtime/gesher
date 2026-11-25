@@ -149,7 +149,14 @@ public final class DownloadManagerHost {
 
     // ---- the system around the provider ------------------------------------------------
 
-    static final class Clock { final AtomicLong offset = new AtomicLong(); long now() { return System.currentTimeMillis() + offset.get(); } }
+    static final class Clock {
+        final AtomicLong offset = new AtomicLong();
+        volatile Long fixedNow;
+        long now() {
+            Long fixed = fixedNow;
+            return fixed != null ? fixed : System.currentTimeMillis() + offset.get();
+        }
+    }
 
     static final class Broadcast {
         final String packageName, className; final boolean publicApi; final long id;
@@ -647,7 +654,25 @@ public final class DownloadManagerHost {
             check(busyInfo.status == Downloads.Impl.STATUS_WAITING_TO_RETRY && busyInfo.numFailed == 1
                     && busyInfo.retryAfter == DownloadTransfer.MIN_RETRY_AFTER * 1000,
                     "503 waits to retry with Retry-After clamped to 30 s");
-            check(f.queue.minimumLatency(busyInfo) >= 30_000, "the retry is delayed, not immediate");
+            // Remaining latency subtracts elapsed time from lastMod; it need not still
+            // be 30 seconds when this thread observes the completed 503 response.
+            // Freeze only these calculations after awaitIdle, keeping the real HTTP
+            // transfer and scheduler checks elsewhere on their ordinary clock.
+            clock.fixedNow = busyInfo.lastMod;
+            try {
+                long initial = f.queue.minimumLatency(busyInfo);
+                check(initial >= 30_000 && initial < 45_000,
+                        "retry deadline starts at 30 seconds plus bounded jitter");
+                clock.fixedNow = busyInfo.lastMod + 15_000;
+                long remaining = f.queue.minimumLatency(busyInfo);
+                check(remaining >= 15_000 && remaining < 30_000,
+                        "retry latency subtracts 15 elapsed seconds from its deadline");
+                clock.fixedNow = busyInfo.lastMod + 45_000;
+                check(f.queue.minimumLatency(busyInfo) == 0,
+                        "retry latency is zero after the latest permitted deadline");
+            } finally {
+                clock.fixedNow = null;
+            }
             check(f.broadcastsFor(busy).isEmpty(), "a waiting download is not completed");
             f.requests.delete(app, ContentUris.withAppendedId(Downloads.Impl.CONTENT_URI, busy), null, null);
             check(f.broadcastsFor(busy).size() == 1, "removing an unfinished download sends the completion broadcast");
