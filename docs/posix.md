@@ -189,6 +189,26 @@ closed three of this layer's leftovers:
   `IN_OPEN`, `IN_ACCESS` and `IN_CLOSE_NOWRITE` never come; `IN_MOVE_SELF`
   only for a watched file; a watched directory moved elsewhere is not
   reported.
+- `fsync`/`fdatasync` without write access (`src/unistd.cc`). Linux flushes a
+  regular file through any descriptor, an `O_RDONLY` one included;
+  `FlushFileBuffers` needs a writable handle. A read-only descriptor is
+  flushed through a second handle opened for writing (`ReOpenFile`), else
+  through another descriptor of this process open for writing on the same
+  file. When neither exists (the file is read-only, mode `0444`, or an ACL
+  denies writing, or another open does not share writing, or the volume is
+  read-only, and this process has no writable descriptor for it), `fsync`
+  returns 0 after writing the cached data back through a read-only mapping
+  (`FlushViewOfFile`). That waits for the data to reach the device, but **does
+  not make NTFS commit the file's metadata** (its size and times in the
+  directory entry are updated later, lazily) **and does not flush the
+  device's write cache**. A power loss right after such an `fsync` can lose
+  what the call promised on Linux. Windows offers no stronger flush without
+  write access; failing instead would return an error (`EACCES`) that Linux
+  never gives for this call. `file_flags_ofd_test` covers the second handle,
+  the writable alias (mode `0444` and a denying ACL) and the read-only mapping
+  (mode `0444`, a denying ACL and an open that does not share writing); the
+  read-only volume (`ERROR_WRITE_PROTECT`) shares the alias and mapping code
+  but is not tested, since CI has no read-only volume to open.
 - `signal()` is still the CRT's; signal dispositions set with it are not seen
   by `kill` from another process (use `sigaction`).
 - `/proc/<pid>` exists only for this process; `/proc/self/maps` has no

@@ -225,6 +225,12 @@ jobs:
           "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror \
             -Wl,-soname,libfilesystem_contract.so \
             -o dist-arm64/filesystem_contract_arm64.so tests/native/filesystem_contract_guest.c
+          # bionic's libstdc++.so from a translated guest (the NDK's "system"
+          # C++ runtime): dlopen/dlsym, new/delete and the static-local guards.
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++" \
+            -shared -fPIC -O2 -std=c++17 -fno-exceptions -fno-rtti -fno-stack-protector \
+            -Wall -Wextra -Werror -nostdlib++ -Wl,-soname,liblibstdcxx_test.so \
+            -o dist-arm64/libstdcxx_test_arm64.so tests/native/libstdcxx_test.cc -lstdc++ -ldl
           # The guest-ABI checks: ELF TLS (TLSDESC), setjmp, struct stat and
           # epoll_event, syscall numbers, auxv, atomics, va_list, host pointers;
           # and the perf kernel (docs/arm64.md).

@@ -628,6 +628,9 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
         if (isRemovalPending(className.getPackageName())) return null;
+        if (userId == 0 && PackageInstallerService.CONFIRM_ACTIVITY.equals(className)) {
+            return mInstallerService.confirmationInfo();
+        }
         ApkPackage p = get(className.getPackageName());
         if (p == null && userId == 0 && ExactAlarmAccessRequests.PACKAGE.equals(className.getPackageName())) {
             ActivityInfo nativeActivity = exactAlarmAccessRequests().activityInfo(className, flags);
@@ -671,6 +674,12 @@ public final class PackageManagerService extends IPackageManager.Default {
     // A query spanning multiple records must not straddle an atomic enabled-state
     // batch. These readers do metadata/filter work only, never application callbacks.
     private synchronized List<ResolveInfo> query(Intent intent, String resolvedType, long flags, int userId) {
+        if (userId == 0 && PackageInstallerService.isConfirmationIntent(intent)) {
+            ResolveInfo confirmation = new ResolveInfo();
+            confirmation.activityInfo = mInstallerService.confirmationInfo();
+            confirmation.isDefault = true;
+            return List.of(confirmation);
+        }
         if (ExactAlarmAccessRequests.handles(intent, resolvedType)) {
             if (userId != 0) return new ArrayList<>();
             Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
@@ -1506,19 +1515,52 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public boolean canRequestPackageInstalls(String packageName, int userId) {
-        if (userId != 0 || packageName == null || isRemovalPending(packageName)) {
-            return false;
+        if (userId != 0 || packageName == null) return false;
+        // The answer reveals a user decision. Authenticate the attached installation,
+        // not merely its numeric UID: a retired process retains that UID after reinstall.
+        // Capture the ATM identity before taking PM, then read one current generation.
+        int callingUid = Binder.getCallingUid();
+        // Standalone mode serves the app in this process; a local PID is not authority.
+        if (callingUid != android.os.Process.SYSTEM_UID
+                && callingUid != android.os.Process.ROOT_UID) {
+            ApkPackage caller = installSourceCaller(callingUid);
+            synchronized (this) {
+                ApkPackage owner = get(packageName);
+                if (caller == null || owner == null || get(caller.packageName) != caller
+                        || isRemovalPending(caller.packageName) || caller.uid() != callingUid
+                        || !sameInstallSourceIdentity(caller, owner)) {
+                    throw new SecurityException("Caller does not own package " + packageName);
+                }
+                return canRequestPackageInstallsInternal(packageName);
+            }
         }
+        return canRequestPackageInstallsInternal(packageName);
+    }
+
+    /** canRequestPackageInstalls for the server's own use (no caller to check). */
+    boolean canRequestPackageInstallsInternal(String packageName) {
+        if (packageName == null || isRemovalPending(packageName)) return false;
         if ("android".equals(packageName)) {
             return true;
         }
         ApkPackage pkg = get(packageName);
-        // Android exposes this capability only to installers targeting O or later.
-        // Gesher permits the request; PackageInstallerService still asks the host
-        // for fresh consent on every commit, regardless of this query's result.
-        return pkg != null && pkg.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.O
-                && pkg.parsed.getRequestedPermissions()
-                .contains(android.Manifest.permission.REQUEST_INSTALL_PACKAGES);
+        // Android exposes this capability only to installers targeting O or later that
+        // request REQUEST_INSTALL_PACKAGES. As in AOSP (canRequestPackageInstallsInternal,
+        // ExternalSourcesPolicy) an INSTALL_PACKAGES holder may; any other app only once
+        // the user allowed "Install unknown apps" (OP_REQUEST_INSTALL_PACKAGES MODE_ALLOWED),
+        // which Gesher's Control Center offers (SpecialAccess). PackageInstallerService
+        // still asks the host for fresh consent on every commit, whatever this answers.
+        if (pkg == null || pkg.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O
+                || !pkg.parsed.getRequestedPermissions()
+                        .contains(android.Manifest.permission.REQUEST_INSTALL_PACKAGES)) {
+            return false;
+        }
+        if (mPermissions.checkPermission(packageName, android.Manifest.permission.INSTALL_PACKAGES)
+                == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }
+        return appOps().checkRawMode(android.app.AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
+                pkg.uid(), packageName) == android.app.AppOpsManager.MODE_ALLOWED;
     }
 
     @Override
@@ -1683,6 +1725,10 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     private final PackageInstallerService mInstallerService = new PackageInstallerService(this);
+
+    PackageInstallerService packageInstallerService() {
+        return mInstallerService;
+    }
 
     private java.io.File appMetadata(String packageName, int userId) {
         if (userId != 0) throw new SecurityException("Only user 0 is supported");
