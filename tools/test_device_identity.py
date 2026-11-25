@@ -73,12 +73,34 @@ def check_build_prop(path: Path) -> int:
     return checks
 
 
+def check_windows_track_placeholders() -> int:
+    """43-exec2.ps1 skips the SMBIOS comparison for exactly the header's placeholders."""
+    header = (ROOT / 'compat/posix/include/gesher/device_identity.h').read_text(encoding='utf-8')
+    track = (ROOT / 'tests/windows/tracks/43-exec2.ps1').read_text(encoding='utf-8')
+
+    def c_list(name: str) -> list[str]:
+        block = re.search(name + r'\[\] = \{(.*?)\};', header, re.S)
+        assert block, f'{name} not found in device_identity.h'
+        return re.findall(r'"([^"]*)"', block.group(1))
+
+    def ps_list(name: str) -> list[str]:
+        block = re.search(r'\$' + name + r' = @\((.*?)\)', track, re.S)
+        assert block, f'${name} not found in 43-exec2.ps1'
+        return re.findall(r"'([^']*)'", block.group(1))
+
+    assert ps_list('identityPlaceholders') == c_list('kPlaceholders'), \
+        '43-exec2.ps1 placeholders differ from device_identity.h kPlaceholders'
+    assert ps_list('identityPlaceholderPrefixes') == c_list('kPrefixes'), \
+        '43-exec2.ps1 placeholder prefixes differ from device_identity.h kPrefixes'
+    return 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'c++'))
     parser.add_argument('--sanitize', action='store_true')
     args = parser.parse_args()
-    checks = check_build_prop(ROOT / 'app/build.prop')
+    checks = check_build_prop(ROOT / 'app/build.prop') + check_windows_track_placeholders()
     print(f'build.prop identity checks passed: {checks}', flush=True)
     with tempfile.TemporaryDirectory(prefix='gesher-device-identity-') as temporary:
         # Only the production header: compat/posix/include also replaces libc

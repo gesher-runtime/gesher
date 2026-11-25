@@ -167,6 +167,15 @@ public final class SettingsProviderContractTest {
         checkerSubtypeGeneration(file, loaded);
         deviceName(new File(file.getParentFile(), "device-name.bin"));
     }
+    /** Sets persist.gesher.device_name; false on a host JVM without system properties. */
+    private static boolean derivedName(String name) {
+        try {
+            android.os.SystemProperties.set("persist.gesher.device_name", name);
+            return name.equals(android.os.SystemProperties.get("persist.gesher.device_name", ""));
+        } catch (RuntimeException | LinkageError hostJvm) {
+            return false;
+        }
+    }
     private static String global(ContentProvider p, String name) {
         return p.call("GET_global", name, null).getString("value");
     }
@@ -190,20 +199,21 @@ public final class SettingsProviderContractTest {
         }
         ContentProvider p = provider(file);
         check(expected.equals(global(p, "device_name")), "Fresh profile device name");
+        // A profile from before the device name followed the computer name: no derived
+        // name recorded, the fixed "Gesher" stored.
         p.call("PUT_global", "device_name", value("Gesher"));
+        boolean properties = derivedName("");
         check(expected.equals(global(provider(file), "device_name")), "Legacy fixed default follows the computer name");
-        // As if Gesher derived OLD-PC-NAME before the PC was renamed.
-        provider(file).call("PUT_global", "device_name", value("OLD-PC-NAME"));
-        boolean properties;
-        try {
-            android.os.SystemProperties.set("persist.gesher.device_name", "OLD-PC-NAME");
-            properties = "OLD-PC-NAME".equals(android.os.SystemProperties.get("persist.gesher.device_name"));
-        } catch (RuntimeException | LinkageError hostJvm) {
-            properties = false;
-        }
         if (properties) {
-            check(expected.equals(global(provider(file), "device_name")), "Renamed PC renames a derived device name");
             check(expected.equals(android.os.SystemProperties.get("persist.gesher.device_name")), "Derived name recorded");
+            // Once Gesher derived a name, "Gesher" is a name the user chose.
+            provider(file).call("PUT_global", "device_name", value("Gesher"));
+            check("Gesher".equals(global(provider(file), "device_name")), "User's device name Gesher stays");
+            // As if Gesher derived OLD-PC-NAME before the PC was renamed.
+            provider(file).call("PUT_global", "device_name", value("OLD-PC-NAME"));
+            check(derivedName("OLD-PC-NAME"), "Derived name set");
+            check(expected.equals(global(provider(file), "device_name")), "Renamed PC renames a derived device name");
+            check(expected.equals(android.os.SystemProperties.get("persist.gesher.device_name")), "Derived name recorded again");
         }
         provider(file).call("PUT_global", "device_name", value("Kitchen tablet"));
         check("Kitchen tablet".equals(global(provider(file), "device_name")), "User's device name stays");

@@ -98,13 +98,36 @@ if ($propOut -match 'fallback-value') {
 $identityBinder = $env:GESHER_BINDER
 $identitySession = $env:GESHER_PROPERTY_SESSION
 $identityRoot = $env:ANDROID_ROOT
-$identityPlaceholder = '^(|to be filled by o\.?e\.?m\.?|system manufacturer|system product name|default string|not applicable|not specified|none|n/a|unknown|o\.?e\.?m\.?)$'
+# Placeholder() in compat/posix/include/gesher/device_identity.h, the same
+# lists (tools/test_device_identity.py checks that they match): a value it treats
+# as a firmware placeholder is not expected verbatim.
+$identityPlaceholders = @(
+  'to be filled by o.e.m.', 'to be filled by o.e.m', 'to be filled by oem', 'system manufacturer',
+  'system manufacture', 'system product name', 'system product', 'system name', 'system version',
+  'system family', 'system sku', 'system serial number', 'default string', 'default',
+  'not applicable', 'not specified', 'not available', 'not defined', 'none', 'n/a', 'na',
+  'unknown', 'undefined', 'invalid', 'empty', 'null', 'oem', 'o.e.m.', 'oem name', 'oem product',
+  'manufacturer', 'product name', 'product', 'board manufacturer', 'board product name',
+  'base board manufacturer', 'base board product name', 'baseboard manufacturer',
+  'baseboard product name', 'motherboard', 'mainboard', 'family', 'sku', '123456789', '1234567890',
+  '0123456789', 'chassis manufacturer', 'x.x', 'insyde', 'insyde corp.')
+$identityPlaceholderPrefixes = @('type1', 'type2 - ', 'type2-')
+function IdentityPlaceholder([string]$value) {
+  if (-not $value) { return $true }
+  if ($value -notmatch '[0-9A-Za-z]|[^\x00-\x7f]') { return $true }
+  if ($value -cmatch '^([\x00-\x7f])\1*$') { return $true }
+  if ($identityPlaceholders -contains $value) { return $true }
+  foreach ($prefix in $identityPlaceholderPrefixes) {
+    if ($value.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
 $computer = Get-CimInstance Win32_ComputerSystem
 $computerProduct = Get-CimInstance Win32_ComputerSystemProduct
 $expectedManufacturer = "$($computer.Manufacturer)".Trim() -replace '\s+', ' '
 $expectedModel = "$($computer.Model)".Trim() -replace '\s+', ' '
 $lenovoVersion = "$($computerProduct.Version)".Trim() -replace '\s+', ' '
-if ($expectedManufacturer -eq 'LENOVO' -and $lenovoVersion -notmatch $identityPlaceholder -and $lenovoVersion -ne 'LENOVO') {
+if ($expectedManufacturer -eq 'LENOVO' -and -not (IdentityPlaceholder $lenovoVersion) -and $lenovoVersion -ne 'LENOVO') {
   $expectedModel = $lenovoVersion
 }
 $systemRoot = (Resolve-Path (Join-Path $root 'system')).Path
@@ -133,10 +156,10 @@ try {
     }
     if ($props['ro.build.flavor'] -ne 'gesher-user') { $problems += "ro.build.flavor=$($props['ro.build.flavor'])" }
     if (-not $props['ro.product.manufacturer'] -or -not $props['ro.product.model']) { $problems += 'manufacturer or model unset' }
-    if ($expectedManufacturer -notmatch $identityPlaceholder -and $props['ro.product.manufacturer'] -cne $expectedManufacturer) {
+    if (-not (IdentityPlaceholder $expectedManufacturer) -and $props['ro.product.manufacturer'] -cne $expectedManufacturer) {
       $problems += "manufacturer $($props['ro.product.manufacturer']) is not SMBIOS's $expectedManufacturer"
     }
-    if ($expectedModel -notmatch $identityPlaceholder -and $props['ro.product.model'] -cne $expectedModel) {
+    if (-not (IdentityPlaceholder $expectedModel) -and $props['ro.product.model'] -cne $expectedModel) {
       $problems += "model $($props['ro.product.model']) is not SMBIOS's $expectedModel"
     }
     if ($listing -match '(?i)shiba|pixel 8|\[google\]') { $problems += 'a Pixel 8 identity remains' }

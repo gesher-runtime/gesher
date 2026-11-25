@@ -101,11 +101,12 @@ name, as Android's own default is the model.
 
 Settings rows are stored with their defaults, so Gesher records the name it
 derived in `persist.gesher.device_name`. At each start a stored name that is the
-recorded one, or the fixed `Gesher` every profile stored before this change, is
-replaced by the current computer name (renaming the PC renames the device); any
-other stored name is the user's and stays, and a deleted setting stays deleted.
-A user who named the device exactly `Gesher` before this change gets the
-computer name.
+recorded one is replaced by the current computer name (renaming the PC renames
+the device); so is the fixed `Gesher` every profile stored before this change,
+once, while no derived name is recorded. Any other stored name is the user's and
+stays, a name the user sets to `Gesher` afterwards stays, and a deleted setting
+stays deleted. A user who named the device exactly `Gesher` before this change
+gets the computer name.
 
 The Bluetooth adapter's name is the name Windows gives the radio (the computer
 name); Windows owns it and `setName` returns false ([bluetooth.md](bluetooth.md)).

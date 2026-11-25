@@ -327,8 +327,11 @@ final class SettingsProvider extends ContentProvider {
         }
         try {
             String stored = mTables.get(GLOBAL).get(Settings.Global.DEVICE_NAME);
-            if (stored != null && !name.equals(stored)
-                    && (LEGACY_DEVICE_NAME.equals(stored) || stored.equals(derived))) {
+            // The fixed legacy name is migrated only in a profile where Gesher never
+            // recorded a derived name; afterwards "Gesher" is a name the user chose.
+            boolean recorded = derived != null && !derived.isEmpty();
+            boolean legacy = LEGACY_DEVICE_NAME.equals(stored) && !recorded;
+            if (stored != null && !name.equals(stored) && (legacy || (recorded && stored.equals(derived)))) {
                 mStore.put(GLOBAL, Settings.Global.DEVICE_NAME, name, false);
                 stored = name;
             }
