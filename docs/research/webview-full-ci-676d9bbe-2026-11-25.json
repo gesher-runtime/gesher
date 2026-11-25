@@ -1,0 +1,516 @@
+{
+  "schema_version": 1,
+  "purpose": "Completed full CI for the published integration; not runtime acceptance of the later partition-deletion candidate",
+  "repository": "gesher-runtime/gesher",
+  "pull_request": 391,
+  "account": "palmoni5",
+  "run_id": 45582630374,
+  "run_attempt": 1,
+  "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374",
+  "head_sha": "676d9bbe9221052d0d474393223cc584883f15a6",
+  "head_tree": "03be4717ca13f922d0880f684be63fa7e51fbbd1",
+  "verified_test_merge_sha": "849b7897cf3bdd15df165953db4f1c2b01440fab",
+  "source_identity_job": 139096215763,
+  "status": "completed",
+  "conclusion": "success",
+  "completed_at_utc": "2026-11-25T09:44:33Z",
+  "job_counts": {
+    "total": 81,
+    "success": 75,
+    "skipped": 6,
+    "failure": 0
+  },
+  "jobs": [
+    {
+      "id": 139096215537,
+      "name": "automerge-script",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096215537"
+    },
+    {
+      "id": 139096215763,
+      "name": "source-identity",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096215763"
+    },
+    {
+      "id": 139096256014,
+      "name": "artifact-preflight",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256014"
+    },
+    {
+      "id": 139096256275,
+      "name": "api37-report-tests",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256275"
+    },
+    {
+      "id": 139096256357,
+      "name": "build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256357"
+    },
+    {
+      "id": 139096256377,
+      "name": "windows-host-contracts (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256377"
+    },
+    {
+      "id": 139096256411,
+      "name": "windows-host-contracts (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256411"
+    },
+    {
+      "id": 139096256499,
+      "name": "asm-port",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256499"
+    },
+    {
+      "id": 139096256517,
+      "name": "compile-selected-minimum",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256517"
+    },
+    {
+      "id": 139096256545,
+      "name": "linux-reference",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256545"
+    },
+    {
+      "id": 139096256593,
+      "name": "native3-locks-reference",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256593"
+    },
+    {
+      "id": 139096256646,
+      "name": "build-framework-assets",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256646"
+    },
+    {
+      "id": 139096256903,
+      "name": "union-services / controlled-worker (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096256903"
+    },
+    {
+      "id": 139096257122,
+      "name": "bluetooth / probe-build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096257122"
+    },
+    {
+      "id": 139096257275,
+      "name": "union-services / controlled-worker (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096257275"
+    },
+    {
+      "id": 139096257486,
+      "name": "binder2-sg-fixtures / modes-build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096257486"
+    },
+    {
+      "id": 139096257975,
+      "name": "union-native-blocking / preflight",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096257975"
+    },
+    {
+      "id": 139096258117,
+      "name": "posix / build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258117"
+    },
+    {
+      "id": 139096258128,
+      "name": "union-tsf / preflight",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258128"
+    },
+    {
+      "id": 139096258272,
+      "name": "libs / build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258272"
+    },
+    {
+      "id": 139096258476,
+      "name": "native-libs / native-libs",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258476"
+    },
+    {
+      "id": 139096258479,
+      "name": "exec / exec",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258479"
+    },
+    {
+      "id": 139096258554,
+      "name": "angle / build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258554"
+    },
+    {
+      "id": 139096258623,
+      "name": "graphics / build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258623"
+    },
+    {
+      "id": 139096258690,
+      "name": "surfaces / apps",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258690"
+    },
+    {
+      "id": 139096258735,
+      "name": "framework / runner-route",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258735"
+    },
+    {
+      "id": 139096258855,
+      "name": "native2 / native2",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096258855"
+    },
+    {
+      "id": 139096259113,
+      "name": "arm64 / fpsr-reference / reference",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096259113"
+    },
+    {
+      "id": 139096323157,
+      "name": "framework / host-tools",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096323157"
+    },
+    {
+      "id": 139096370653,
+      "name": "union-native-blocking / compile",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096370653"
+    },
+    {
+      "id": 139096392474,
+      "name": "union-tsf / controller (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096392474"
+    },
+    {
+      "id": 139096392575,
+      "name": "union-tsf / controller (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096392575"
+    },
+    {
+      "id": 139096415197,
+      "name": "angle / probe-build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096415197"
+    },
+    {
+      "id": 139096416905,
+      "name": "arm64 / build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096416905"
+    },
+    {
+      "id": 139096445975,
+      "name": "bluetooth / probe-run (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096445975"
+    },
+    {
+      "id": 139096446084,
+      "name": "bluetooth / probe-run (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096446084"
+    },
+    {
+      "id": 139096635643,
+      "name": "union-tsf / compile",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096635643"
+    },
+    {
+      "id": 139096661315,
+      "name": "angle / probe",
+      "conclusion": "skipped",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096661315"
+    },
+    {
+      "id": 139096728146,
+      "name": "posix / test",
+      "conclusion": "skipped",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096728146"
+    },
+    {
+      "id": 139096945654,
+      "name": "graphics / probe",
+      "conclusion": "skipped",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139096945654"
+    },
+    {
+      "id": 139097132358,
+      "name": "framework / framework",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139097132358"
+    },
+    {
+      "id": 139097221147,
+      "name": "union-native-blocking / windows (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139097221147"
+    },
+    {
+      "id": 139097221304,
+      "name": "union-native-blocking / windows (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139097221304"
+    },
+    {
+      "id": 139097226704,
+      "name": "union-tsf / windows (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139097226704"
+    },
+    {
+      "id": 139097226746,
+      "name": "union-tsf / windows (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139097226746"
+    },
+    {
+      "id": 139097233131,
+      "name": "libs / test",
+      "conclusion": "skipped",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139097233131"
+    },
+    {
+      "id": 139097618095,
+      "name": "arm64 / smoke",
+      "conclusion": "skipped",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139097618095"
+    },
+    {
+      "id": 139098870213,
+      "name": "supplier-correlation",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139098870213"
+    },
+    {
+      "id": 139098870414,
+      "name": "native3-locks-regression (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139098870414"
+    },
+    {
+      "id": 139098870780,
+      "name": "native3-locks-regression (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139098870780"
+    },
+    {
+      "id": 139099190960,
+      "name": "windows (windows-2022, selected-minimum)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139099190960"
+    },
+    {
+      "id": 139099190989,
+      "name": "windows (windows-2025, selected-minimum)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139099190989"
+    },
+    {
+      "id": 139103943062,
+      "name": "media / media",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139103943062"
+    },
+    {
+      "id": 139103943084,
+      "name": "boot-image / compile",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139103943084"
+    },
+    {
+      "id": 139103943644,
+      "name": "webview / build",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139103943644"
+    },
+    {
+      "id": 139104353598,
+      "name": "binder2-sg-regression (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139104353598"
+    },
+    {
+      "id": 139104353612,
+      "name": "binder2-sg-regression (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139104353612"
+    },
+    {
+      "id": 139104685281,
+      "name": "webview / probe",
+      "conclusion": "skipped",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139104685281"
+    },
+    {
+      "id": 139104937337,
+      "name": "core-suppliers",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139104937337"
+    },
+    {
+      "id": 139104937443,
+      "name": "web3-query-regression (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139104937443"
+    },
+    {
+      "id": 139104937474,
+      "name": "package",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139104937474"
+    },
+    {
+      "id": 139104937577,
+      "name": "web3-query-regression (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139104937577"
+    },
+    {
+      "id": 139105457322,
+      "name": "test-windowing (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457322"
+    },
+    {
+      "id": 139105457350,
+      "name": "test-media (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457350"
+    },
+    {
+      "id": 139105457387,
+      "name": "test-contracts (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457387"
+    },
+    {
+      "id": 139105457396,
+      "name": "test-desktop (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457396"
+    },
+    {
+      "id": 139105457413,
+      "name": "test-services (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457413"
+    },
+    {
+      "id": 139105457416,
+      "name": "test-native (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457416"
+    },
+    {
+      "id": 139105457445,
+      "name": "test-services (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457445"
+    },
+    {
+      "id": 139105457457,
+      "name": "test-desktop (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457457"
+    },
+    {
+      "id": 139105457470,
+      "name": "test-compilation (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457470"
+    },
+    {
+      "id": 139105457495,
+      "name": "test-native (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457495"
+    },
+    {
+      "id": 139105457518,
+      "name": "test-compilation (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457518"
+    },
+    {
+      "id": 139105457527,
+      "name": "test-windowing (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457527"
+    },
+    {
+      "id": 139105457548,
+      "name": "test-media (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457548"
+    },
+    {
+      "id": 139105457585,
+      "name": "test-contracts (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139105457585"
+    },
+    {
+      "id": 139107897423,
+      "name": "e2e (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139107897423"
+    },
+    {
+      "id": 139107897437,
+      "name": "e2e (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139107897437"
+    },
+    {
+      "id": 139115282926,
+      "name": "test (windows-2025)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139115282926"
+    },
+    {
+      "id": 139115283038,
+      "name": "test (windows-2022)",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139115283038"
+    },
+    {
+      "id": 139115351794,
+      "name": "ci-required",
+      "conclusion": "success",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45582630374/job/139115351794"
+    }
+  ],
+  "scope_limits": [
+    "The full suite applies to published head 676d9bbe and its recorded test-merge source.",
+    "The new production full-key deletion and later worker-denial scope matrix require their own exact-head Windows evidence.",
+    "No public Service Worker capability or full WebStorage.getOrigins implementation is claimed."
+  ]
+}

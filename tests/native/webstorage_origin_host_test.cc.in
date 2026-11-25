@@ -1,6 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
-// Actual production parsing/dispatch with a recording COM boundary. No WebView,
-// profile, browser process or network connection is created, even by old code.
+// Actual parsing/public admission with a recording deletion-queue boundary;
+// actual quota dispatch with a recording COM boundary. No browser is created.
+// Backend deletion/lifecycle is tested by --storage-delete, not this recorder.
 #include "com_util.h"
 #include <urlmon.h>
 #include <shlwapi.h>
@@ -72,6 +73,17 @@ bool PostGlobal(std::function<void(const GlobalWork&)> fn) {
   return true;
 }
 
+struct RecordedDeletion {
+  std::wstring origin;
+  int64_t id;
+  GlobalWork lease;
+};
+std::vector<RecordedDeletion> recorded_deletions;
+[[maybe_unused]] void QueueOriginStorageDelete(const GlobalWork& operation,
+                                               std::wstring origin, int64_t id) {
+  recorded_deletions.push_back({std::move(origin), id, operation});
+}
+
 // These helpers are extracted byte-for-byte from webview_host.cc.
 @JSON_STRING@
 @ORIGIN_STORAGE_KEY@
@@ -82,15 +94,16 @@ class Host {
   static bool QueryOriginStorage(const std::wstring& origin, int64_t callback_id);
 };
 
-// The only source substitution changes the COM receiver type to RecordingCore.
-// Admission, captures, method/parameters, HRESULT handling and leases are actual
-// production code. The real COM callback implementation comes from com_util.h.
+// The only source substitution changes COM receiver types to RecordingCore.
+// The actual public deletion method must validate before its recording queue.
+// Quota dispatch, callback/HRESULT handling and leases remain actual code.
 @CLEAR_ORIGIN_DATA@
 @QUERY_ORIGIN_STORAGE@
 
 void Reset() {
   core.callback.Reset();
-  Check(live_work == 0, "completed operation released its lease");
+  recorded_deletions.clear();
+  Check(live_work == 0, "recording boundary released retained admission leases");
   core.result = S_OK;
   core.calls = 0;
   core.method.clear();
@@ -121,18 +134,11 @@ void ValidOrigins() {
     Check(OriginStorageKey(item.input, &key), "valid origin accepted by native parser");
     Check(key == item.key, "canonical first-party storage key");
     Check(Host::ClearOriginData(item.input, 41), "valid origin dispatched");
-    Check(submissions == 1 && core.calls == 1, "exactly one scoped request");
-    Check(core.method == L"Storage.clearDataForStorageKey", "validated CDP endpoint");
-    Check(core.parameters == L"{\"storageKey\":" + JsonString(item.key) +
-          L",\"storageTypes\":\"file_systems,indexeddb\"}", "exact origin and type scope");
-    Check(completions == 0 && live_work == 1, "async work retains lease");
-    if (core.callback) {
-      core.callback->Invoke(S_OK, L"{}");
-      Check(completions == 1 && completed_status == S_OK && completed_id == 41,
-            "successful completion");
-      core.callback->Invoke(S_OK, L"{}");
-      Check(completions == 1 && live_work == 0, "duplicate completion releases only once");
-    }
+    Check(submissions == 1 && recorded_deletions.size() == 1, "exactly one queued deletion");
+    Check(!recorded_deletions.empty() && recorded_deletions.front().origin == item.key &&
+          recorded_deletions.front().id == 41, "canonical origin and callback passed to backend");
+    Check(completions == 0 && live_work == 1, "queued operation receives its admission lease");
+    Check(core.calls == 0, "admission does not bypass the full deletion backend");
   }
 }
 
@@ -155,7 +161,8 @@ void InvalidOrigins() {
     std::wstring key = L"old key";
     Check(!OriginStorageKey(input, &key) && key.empty(), "invalid origin has no storage key");
     Check(!Host::ClearOriginData(input, 17), "direct Host rejects invalid origin");
-    Check(submissions == 0 && core.calls == 0, "invalid origin never enters work queue");
+    Check(submissions == 0 && core.calls == 0 && recorded_deletions.empty(),
+          "invalid origin never enters work queue");
     Check(completions == 0 && live_work == 0, "rejection has no callback or lease");
   }
 }
@@ -164,27 +171,17 @@ void FailuresAndEncoding() {
   Reset();
   accept = false;
   Check(!Host::ClearOriginData(L"https://example.invalid", 8), "admission failure propagated");
-  Check(core.calls == 0 && completions == 0 && live_work == 0, "rejected admission is inert");
+  Check(recorded_deletions.empty() && core.calls == 0 && completions == 0 && live_work == 0,
+        "rejected admission is inert");
 
   Reset();
-  available = false;
-  Check(Host::ClearOriginData(L"https://example.invalid", 9), "unavailable browser admitted task");
-  Check(core.calls == 0 && completions == 1 && FAILED(completed_status) && live_work == 0,
-        "unavailable browser reports failure and releases lease");
-
-  Reset();
-  core.result = E_FAIL;
-  Check(Host::ClearOriginData(L"https://example.invalid", 10), "failing COM request admitted");
-  Check(completions == 1 && completed_status == E_FAIL && live_work == 0,
-        "immediate COM failure releases lease");
-  if (core.callback) core.callback->Invoke(S_OK, L"{}");
-  Check(completions == 1, "late callback cannot repeat immediate failure");
-
-  Reset();
-  Check(Host::ClearOriginData(L"https://example.invalid", 11), "async failure admitted");
-  if (core.callback) core.callback->Invoke(E_INVALIDARG, L"{}");
-  Check(completions == 1 && completed_status == E_INVALIDARG && live_work == 0,
-        "async CDP failure releases lease");
+  Check(Host::ClearOriginData(L"https://example.invalid", 10), "first independent deletion admitted");
+  Check(Host::ClearOriginData(L"http://other.invalid:8080", 11), "second independent deletion admitted");
+  Check(recorded_deletions.size() == 2 && live_work == 2 && completions == 0,
+        "separate admissions retain separate operation leases");
+  Check(recorded_deletions.size() == 2 && recorded_deletions[0].id == 10 && recorded_deletions[1].id == 11 &&
+        recorded_deletions[1].origin == L"http://other.invalid:8080/",
+        "queued origins and callbacks remain paired");
 
   Check(JsonString(std::wstring(L"\"\\\n\r\t\0", 6)) == L"\"\\\"\\\\\\n\\r\\t\\u0000\"",
         "JSON string escapes preserve property boundaries");

@@ -4,23 +4,48 @@
 
 Account: `palmoni5`. The continuation remains in existing draft
 [PR391](https://github.com/gesher-runtime/gesher/pull/391).
-The branch now incorporates main
-`a0291539acd9fef036a305c23a0cd33dd297048a` and the successful runtime diagnostic
-`908d99eb480b6d40480235e13c678fb791e7e636`.
+The requested scope is compatibility, stability and performance. Security
+concerns from any existing separate review are documentation-only unresolved
+notes; no security fixes or clearance are asserted. Do not request a merge or
+automatic merge, and do not treat this continuation as ready for final approval.
+The draft combines the continuation with reviewed main snapshot
+`a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a`. Its actual storage data/lifecycle
+evidence belongs to `18c1f8135ac82f4dbc8ba3ea36f8fb5dec93f9b9`; the complete
+gate at that source remains failed as detailed below. The combined current-main
+integration must receive its own CI result. Earlier integration
+`676d9bbe9221052d0d474393223cc584883f15a6` incorporated main
+`a0291539acd9fef036a305c23a0cd33dd297048a` and successful diagnostic
+`908d99eb480b6d40480235e13c678fb791e7e636`; its green full CI is historical
+evidence for that source only.
 
 - PR381 and PR399 have already merged. Their R1, graphics and usage production
   changes are retained exactly from main; PR388 is externally closed, not
   merged. The continuation does not reopen it or repeat those implementations.
-- The nine remaining production differences from the pinned main are WebView
-  files. Their contents still match the previously published `4fe77c03`
-  continuation; worker entry points remain unavailable. Main's later WebView
-  provider allocation improvement is retained.
+- At that published integration, the nine remaining production differences
+  from the pinned main are WebView files, matching the earlier `4fe77c03`
+  continuation. Main's later WebView provider allocation improvement is retained.
+  The subsequent candidate adds partition-aware production deletion and its
+  actual-Host acceptance fixture; worker entry points remain unavailable.
 - The [fresh open-PR audit](../research/webview-open-prs-2026-11-25.json) fetched
   all 86 listed pull refs and inspected their file diffs. PR493 advanced between
   listing and fetch; both identities are recorded and its fetched code was
   inspected. PR414 is the only other open PR intersecting the remaining
   production files: its change converts profile paths in `Host::Configure` and
   is independent of the storage/worker continuation. No other PR was changed.
+- A [follow-up audit](../research/webview-open-prs-refresh-2026-11-25.json)
+  re-listed all 87 open PRs and recomputed every file intersection against the
+  expanded production candidate. It fetched all 13 new or changed pull refs;
+  PR478 and PR452 moved during that refresh, and both listed/fetched identities
+  are retained. Unchanged head/base pairs reuse their previously fetched exact
+  objects. PR414 remains the only other production-file intersection, with its
+  same independent profile-path conversion. New PR501 and the updated branches
+  do not duplicate this WebView implementation.
+- The [12:57 UTC refresh](../research/webview-open-prs-refresh-2026-11-25T1257Z.json)
+  records 77 open PRs, one new and eleven changed head/base pairs. Its main
+  snapshot is `a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a`; the sixteen new
+  first-parent commits touch none of this continuation's paths. PR414 remains
+  independent. New PR506 changes intent-navigation fallback in a different
+  provider file and does not duplicate storage deletion or worker gating.
 - The corrected quota experiment passed its complete persisted/live/deletion/
   payload sequence on WebView2 131 and 157 in actual Windows run 45498551083.
   The [runtime report](../research/webview-runtime-results-2026-11-25.md) and
@@ -31,10 +56,10 @@ The branch now incorporates main
   faults produced successfully consumed HTTP 200 bodies. It does not qualify
   Android network-error behavior, cache modes or progressive streaming.
 
-The reconstruction preserves main's complete selected-source qualification
-policy and every workflow file. Only the four successful quota-probe repair/
-test files are imported from the diagnostic branch; its temporary push trigger
-is excluded. Independent inspection found no reconstruction defects. The
+The published reconstruction preserves main's complete selected-source
+qualification policy and every workflow file. It imported the four successful
+quota-probe repair/test files without the diagnostic-only branch push trigger.
+Independent inspection found no reconstruction defects. The
 reconciled actual player suite passed 240 checks with ASan, UBSan and
 float-cast-overflow instrumentation, including main's large-timestamp regression
 and the continuation's feeder-room/starvation cases. LeakSanitizer alone was
@@ -43,9 +68,94 @@ The unchanged current-main selected-source policy also passes on this combined
 tree (`TCP_SELECTED_POLICY_PASS`); it starts no native processes and does not
 replace the Windows acceptance gates.
 
-These checks and the historical runs below do not substitute for full CI on the
-newly published integration. Full WebStorage and worker completion remain open;
-the current continuation is not ready for final approval.
+Full CI for that integration completed successfully in
+[run 45582630374](https://github.com/gesher-runtime/gesher/actions/runs/45582630374):
+75 successful jobs and six conditional skips, zero failures. Its independently
+recorded test-merge source is `849b7897cf3bdd15df165953db4f1c2b01440fab`.
+The [complete job receipt](../research/webview-full-ci-676d9bbe-2026-11-25.json)
+retains all 81 job identities and results. Both Windows windowing and media
+tracks passed, including the existing public per-origin storage acceptance.
+This evidence does not qualify the later production partition-deletion candidate.
+
+The draft includes the production-deletion candidate for review with the
+unresolved acceptance finding recorded below. Its first isolated attempt at
+`c1785510` exposed an invalid nonempty-default-profile
+assumption, which was corrected. Later attempts at `346ce277` and `7a41155f`
+stalled while seeding the cross-origin nested frame, before Host admission.
+Replacing the legacy resource filters with document-source-aware filters at
+`107d7fa57c3daf66511d475ceeb09ec907c969cb`, tree
+`f9266df78377922a5c3f3ef37988362c03c9c13c`, allowed all fourteen keys, including
+the real nested `^31` key, to be seeded and discovered on both runtimes.
+
+Attempt 1 of
+[run 45597266059](https://github.com/gesher-runtime/gesher/actions/runs/45597266059)
+failed in the existing cold controller-setup gate before storage execution.
+The unchanged exact-head retry reached production deletion, but both native
+processes exited with access violation `0xC0000005`. Runtime 157 logged two
+ordered, exactly-once successful STA callbacks before the crash; runtime 131
+did not reach that summary. Neither completed the required deletion/preservation,
+network-isolation or shutdown sequence. This is an active crash investigation,
+not runtime acceptance. The
+[exact attempt-2 receipt](../research/webview-runtime-qualification-107d7fa5-attempt2.json),
+including both cached-log hashes and source/artifact identities, retains those
+observations. The
+[actual-Host fixture contract](../research/webstorage-production-delete-qualification.md)
+and its gates remain intact.
+
+The next actual run, [45602648001](https://github.com/gesher-runtime/gesher/actions/runs/45602648001),
+at `33fc2e50af97c95023e350ac4c8ba1e2d6d5e877` again reached fourteen real keys
+and reproduced the crash. Both actual exception stacks fault in a later
+`EmbeddedBrowserWebView.dll` message dispatch. The common executable caller
+RVA `0x531ab` was matched against the exact downloaded probe, where it returns
+from `DispatchMessageW`; the responsible ownership defect remains unproven.
+The separate fault self-test produced the intended code, failing exit and
+caller stack, but its wrapper rejected the additional system flag in `0x81`.
+The corrected wrapper checks the required flag bit and retains every other
+control and actual storage acceptance condition.
+
+At `6ff0bd78325e5bb2086a9f02c18d7bb091381eef`,
+[run 45609391658](https://github.com/gesher-runtime/gesher/actions/runs/45609391658)
+passed the fault-control gate on runtime 131 and reproduced the storage crash.
+The retained runtime DLL matches its actual loaded PE/CodeView identity. Its
+response dispatcher invokes a callback and then removes the same response
+entry, matching the real fault stack. This supports testing owner-STA cleanup
+after callback return, with the admitted work lease, completion ordering and
+shutdown drain retained. The [focused report](../research/webview-storage-crash-6ff0bd78.md)
+does not claim a proven cause or fix. Windows 2025 stopped at the earlier DLL
+controller-setup deadline and supplied no storage result in that run.
+
+The deferred-cleanup candidate at `18c1f8135ac82f4dbc8ba3ea36f8fb5dec93f9b9`
+ran in [45618078011](https://github.com/gesher-runtime/gesher/actions/runs/45618078011).
+Runtime 131 in attempt 1 and runtime 157 in a single unchanged-source retry of
+its startup-blocked job completed all five successful ordered STA callbacks,
+nine deletions, five preserved full payloads, localStorage/cookie/OPFS checks
+and accepted-work shutdown draining without the prior access violation.
+Ordinary concurrent fetches progressed in every operation phase without errors.
+The [combined result receipt](../research/webview-storage-results-18c1f813.md)
+preserves these observations without treating the complete gate as passed.
+
+Both fixtures still fail the combined resolver-or-observer network-isolation
+check. Their aggregate final counters cannot identify the responsible component
+or protocol; the actual post-seeding baseline and first-failure phase are not
+logged. The final positive network control and network-stop checks were not
+reached. This is an unresolved review-only finding under the user's scope:
+no network/isolation implementation or test relaxation is included. The draft
+remains blocked from final approval and no merge/automerge is requested.
+
+The expanded worker experiment at `7a41155f` and repeated at `107d7fa5` observed
+initial rejection for same-origin POST, observed final redirect target and
+concurrent denial. POST-only CORS denial leaked a preflight; Close-before-Complete
+leaked the full original POST. The [earlier receipt](../research/webview-worker-denial-7a41155f.md)
+retains those positive and negative outcomes. At `33fc2e50`, both runtimes also
+completed the new OPTIONS-denial and Complete-before-Close experiments. Both
+produced initial `TypeError`, zero original target requests, preserved request
+identities and a successful same-worker follow-up. The actual OPTIONS callback
+was observed; the ordering variant completed while the owner was still live,
+then removed its filters and closed immediately without pumping. The
+[new exact report and receipt](../research/webview-worker-denial-33fc2e50.md)
+retain those measured alternatives alongside the unchanged negative controls.
+These are bounded worker experiments. Full origin enumeration and worker
+completion remain open; the continuation is not ready for final approval.
 
 ## Historical validation record — 23–24 November 2026
 

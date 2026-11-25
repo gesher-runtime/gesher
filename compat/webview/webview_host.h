@@ -282,7 +282,10 @@ class Host {
   static bool DeleteCookies(int32_t which, int64_t callback_id);
   // COREWEBVIEW2_BROWSING_DATA_KINDS.
   static bool ClearBrowsingData(int32_t kinds, int64_t callback_id);
-  // HTTP(S) WebStorage origin: first-party file systems and IndexedDB only.
+  // HTTP(S) WebStorage origin: file systems and IndexedDB for the first-party
+  // origin and third-party keys embedded under its actual schemeful site.
+  // Uses the live profile inventory and private owned controllers; admitted
+  // errors/timeouts report failure through kGlobalDone, never partial success.
   // Invalid/unsupported serialized origins are rejected without a callback.
   static bool ClearOriginData(const std::wstring& origin, int64_t callback_id);
   // A first-party HTTP(S) origin's actual Chromium quota-manager measurement.

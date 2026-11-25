@@ -128,6 +128,20 @@ jobs:
         run: |
           & .\query-pool-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Actual UIA query pool lifecycle controls failed' }
+      - name: Build actual Windows speech recognition contracts (docs/speech-recognition.md)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\speech\speech_recognition_windows_test.cc compat\devices\speech_recognition_win.cc /Fe:speech-recognition-windows.exe ole32.lib uuid.lib
+      - name: SAPI recognizers enumerate and recognize handed-over PCM without a microphone
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\speech-recognition-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech recognition contracts failed' }
+      - name: Speech recognition service contracts on Windows' JVM (docs/speech-recognition.md)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Java DNS admission and completion ownership on Windows
         if: ${{ !cancelled() }}
         shell: bash
@@ -136,6 +150,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
+      - name: DownloadManager provider, queue and transfer contracts on a Windows JVM
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
       - name: Build actual app identity restart implementation
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib
@@ -166,6 +184,45 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/clipboard/Publication.ps1
+      - name: Build actual Windows WebAuthn contracts (ADR 0093)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\credentials\webauthn_windows_test.cc compat\devices\webauthn_win.cc /Fe:webauthn-windows.exe user32.lib
+      - name: WebAuthn API version, cancellation ids, error names and owner refusal without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\webauthn-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows WebAuthn contracts failed' }
+      - name: Build actual Windows speech synthesis contracts (docs/tts.md)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\tts\tts_windows_test.cc compat\devices\speech_win.cc compat\devices\winrt.cc /Fe:tts-windows.exe ole32.lib uuid.lib
+      - name: Windows voices enumerate and synthesize PCM without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\tts-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech synthesis contracts failed' }
+      - name: Text-to-speech engine contracts on Windows' JVM (docs/tts.md)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
+      - name: Print jobs and the PrintDocumentAdapter lifecycle (host harness)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_print_spooler_contracts.py --java-home "$JAVA_HOME"
+      - name: Build actual Windows printer enumeration, capabilities and PDF printing
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /Icompat\devices compat\print\print_win32.cc compat\devices\winrt.cc tests\print\print_windows_test.cc /Fe:print-windows-test.exe winspool.lib comdlg32.lib gdi32.lib user32.lib ole32.lib
+      - name: Print a generated PDF to Microsoft Print to PDF without UI
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          & .\print-windows-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows print host contracts failed' }
       - name: Build actual Windows Hello verifier contracts (ADR 0091)
         if: ${{ !cancelled() }}
         shell: cmd
@@ -204,6 +261,31 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
+      - name: MediaStore provider over real SQLite and NTFS paths, file-move rollback and crash recovery
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
+      - name: Build actual Windows caption style reader (ClosedCaptionProperties)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc compat\devices\winrt.cc tests\captioning\caption_windows_test.cc /Fe:caption-test.exe ole32.lib uuid.lib
+      - name: Caption style values and PropertiesChanged watch lifetime against real Windows
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\caption-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows caption style checks failed' }
+      - name: Build production caption reader with scripted Windows SDK properties
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc tests\captioning\caption_read_test.cc /Fe:caption-read-test.exe ole32.lib uuid.lib
+      - name: Caption defaults, required computed colors and failure lifetime contracts
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\caption-read-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Caption Read boundary contracts failed' }
+
       - name: Build actual Windows Country or region lookup
         if: ${{ !cancelled() }}
         shell: cmd
@@ -577,8 +659,14 @@ jobs:
       - name: Android HttpEngine requests over real HTTP sockets
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
 
+      - name: DownloadManager provider, queue and transfer over real HTTP sockets
+        run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
+
       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
         run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+
+      - name: MediaStore provider ownership, pending items, queries and scanning over real SQLite
+        run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
 
       - name: WebStorage origin, owned WebView responses and running-task contracts
         run: |
@@ -599,6 +687,12 @@ jobs:
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
 
+      - name: Credential Manager passkey contracts (ADR 0093)
+        run: python3 tools/test_credential_manager_contracts.py --java-home "$JAVA_HOME"
+      - name: Text-to-speech engine contracts (docs/tts.md)
+        run: python3 tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
+      - name: Speech recognition service contracts (docs/speech-recognition.md)
+        run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Biometric and device-credential auth service contracts (ADR 0091)
         run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
 
@@ -613,6 +707,9 @@ jobs:
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
+
+      - name: Caption style contracts (AOSP android-16 Settings.Secure and CaptionStyle)
+        run: python3 tools/test_captioning_contracts.py --java-home "$JAVA_HOME"
 
       - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
         run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
@@ -1337,7 +1434,7 @@ jobs:
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
           foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'android.test.base.jar', 'android.test.mock.jar', 'android.test.runner.jar', 'etc\permissions\android.test.runner.xml', 'licenses\JUNIT-CPL-NOTICES.txt', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk') {
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk', 'gesher-tts.apk', 'gesher-stt.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String

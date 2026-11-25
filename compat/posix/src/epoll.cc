@@ -34,6 +34,10 @@
 #include "poll_scratch.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 
@@ -952,3 +956,10 @@ int EpollWaitWithObserver(int epfd, epoll_event* events, int maxevents, int time
   return EpollWaitImpl(epfd, events, maxevents, timeout, observer, context);
 }
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): epoll/eventfd registries in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::epoll_graph_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::epolls_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::objects_mutex);
+#endif

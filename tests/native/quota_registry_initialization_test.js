@@ -44,9 +44,12 @@ async function main() {
   assert.equal(completed.value.initialized, true);
   assert.equal(completed.value.partitions, '1'); ++checks;
 
+  const manyPartitions = await execute({method: async () => ({error: null, partitions: Array(65).fill({})})});
+  assert.equal(manyPartitions.initialized, true, 'complete discovery must not have a fixed partition cap');
+  assert.equal(manyPartitions.partitions, '65', 'discovery must preserve the full partition count'); ++checks;
+
   for (const result of [null, {}, {error: 'disk discovery failed', partitions: []},
-                        {error: null, partitions: null}, {error: null, partitions: []},
-                        {error: null, partitions: Array(65).fill({})}]) {
+                        {error: null, partitions: null}, {error: null, partitions: []}]) {
     await assert.rejects(execute({method: async () => result}), /IndexedDB discovery/); ++checks;
   }
   await assert.rejects(execute({method: async () => { throw Error('native reply rejected'); }}),

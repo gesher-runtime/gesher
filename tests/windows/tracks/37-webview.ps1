@@ -167,6 +167,7 @@ if (-not (Get-Command RunTimed -CommandType Function -ErrorAction SilentlyContin
   }
 }
 . "$PSScriptRoot/../webview/QuotaRegistry.ps1"
+. "$PSScriptRoot/../webview/StorageDelete.ps1"
 . "$PSScriptRoot/../webview/WorkerResponse.ps1"
 
 # --- 2. webapp.apk ----------------------------------------------------------

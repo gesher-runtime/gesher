@@ -3,6 +3,10 @@
 
 #include "webview_host.h"
 #include "owned_stream.h"
+#include "cdp_json.h"
+#include "storage_key_selection.h"
+#include "storage_registry_scripts.h"
+#include "environment_options.h"
 
 #include <shobjidl.h>
 #include <bcrypt.h>
@@ -317,74 +321,6 @@ Com<ICoreWebView2Environment> g_env;
 HRESULT g_env_error = S_OK;
 std::vector<std::function<void(ICoreWebView2Environment*, HRESULT)>> g_env_waiting;
 
-// ICoreWebView2EnvironmentOptions, as WebView2EnvironmentOptions.h would
-// give with WRL.
-class EnvironmentOptions final : public ICoreWebView2EnvironmentOptions {
- public:
-  explicit EnvironmentOptions(std::wstring args) : args_(std::move(args)) {}
-
-  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override {
-    if (out == nullptr) return E_POINTER;
-    if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_ICoreWebView2EnvironmentOptions)) {
-      *out = static_cast<ICoreWebView2EnvironmentOptions*>(this);
-      AddRef();
-      return S_OK;
-    }
-    *out = nullptr;
-    return E_NOINTERFACE;
-  }
-  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
-  ULONG STDMETHODCALLTYPE Release() override {
-    ULONG n = --refs_;
-    if (n == 0) delete this;
-    return n;
-  }
-  HRESULT STDMETHODCALLTYPE get_AdditionalBrowserArguments(LPWSTR* value) override {
-    return Copy(args_, value);
-  }
-  HRESULT STDMETHODCALLTYPE put_AdditionalBrowserArguments(LPCWSTR value) override {
-    args_ = value != nullptr ? value : L"";
-    return S_OK;
-  }
-  HRESULT STDMETHODCALLTYPE get_Language(LPWSTR* value) override { return Copy(language_, value); }
-  HRESULT STDMETHODCALLTYPE put_Language(LPCWSTR value) override {
-    language_ = value != nullptr ? value : L"";
-    return S_OK;
-  }
-  HRESULT STDMETHODCALLTYPE get_TargetCompatibleBrowserVersion(LPWSTR* value) override {
-    return Copy(target_, value);
-  }
-  HRESULT STDMETHODCALLTYPE put_TargetCompatibleBrowserVersion(LPCWSTR value) override {
-    target_ = value != nullptr ? value : L"";
-    return S_OK;
-  }
-  HRESULT STDMETHODCALLTYPE get_AllowSingleSignOnUsingOSPrimaryAccount(BOOL* allow) override {
-    if (allow == nullptr) return E_POINTER;
-    *allow = FALSE;
-    return S_OK;
-  }
-  HRESULT STDMETHODCALLTYPE put_AllowSingleSignOnUsingOSPrimaryAccount(BOOL) override {
-    return S_OK;
-  }
-
- private:
-  ~EnvironmentOptions() = default;
-  static HRESULT Copy(const std::wstring& s, LPWSTR* out) {
-    if (out == nullptr) return E_POINTER;
-    size_t bytes = (s.size() + 1) * sizeof(wchar_t);
-    *out = static_cast<LPWSTR>(CoTaskMemAlloc(bytes));
-    if (*out == nullptr) return E_OUTOFMEMORY;
-    memcpy(*out, s.c_str(), bytes);
-    return S_OK;
-  }
-  std::atomic<ULONG> refs_{1};
-  std::wstring args_;
-  std::wstring language_;
-  // The oldest runtime Gesher's host works with: newer interfaces are asked
-  // for with QueryInterface and used when the runtime has them.
-  std::wstring target_ = L"86.0.616.0";
-};
-
 // Calls fn with the environment (or null and the error), creating it first.
 // The WebView thread.
 void WithEnvironment(std::function<void(ICoreWebView2Environment*, HRESULT)> fn) {
@@ -411,12 +347,8 @@ void WithEnvironment(std::function<void(ICoreWebView2Environment*, HRESULT)> fn)
     if (!g_proxy_args.empty()) args = args.empty() ? g_proxy_args : args + L" " + g_proxy_args;
     g_env_started = true;
   }
-  // Chromium stops drawing windows it thinks are covered or off the desktop
-  // (tests show windows off it); an app's WebView draws whenever it is shown.
-  std::wstring all = L"--disable-features=CalculateNativeWinOcclusion "
-                     L"--disable-backgrounding-occluded-windows";
-  if (!args.empty()) all += L" " + args;
-  Com<ICoreWebView2EnvironmentOptions> options(new EnvironmentOptions(all), false);
+  Com<ICoreWebView2EnvironmentOptions> options(
+      new EnvironmentOptions(HostBrowserArguments(args)), false);
   auto finish = [](HRESULT hr, ICoreWebView2Environment* env) {
     if (SUCCEEDED(hr) && env != nullptr) {
       g_env = Com<ICoreWebView2Environment>(env);
@@ -2000,6 +1932,8 @@ void WithCookieManager(int64_t callback_id,
   });
 }
 
+#include "origin_storage_delete.h"
+
 }  // namespace
 
 // --- Host ------------------------------------------------------------------
@@ -2937,33 +2871,7 @@ bool Host::ClearOriginData(const std::wstring& origin, int64_t callback_id) {
   std::wstring key;
   if (!OriginStorageKey(origin, &key)) return false;
   return PostGlobal([key = std::move(key), callback_id](const GlobalWork& operation) {
-    WithCoreWebView([operation, key, callback_id](ICoreWebView2* wv) {
-      if (wv == nullptr) {
-        ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(E_FAIL), L"");
-        return;
-      }
-      // Chromium AwQuotaManagerBridge::DeleteOriginFramework clears just these
-      // quota-managed types. The profile-wide API would erase unrelated origins.
-      // Unlike clearDataForOrigin, this method rejects invalid/opaque keys;
-      // clearDataForOrigin treats an opaque origin as profile-wide deletion.
-      const std::wstring params = L"{\"storageKey\":" + JsonString(key) +
-          L",\"storageTypes\":\"file_systems,indexeddb\"}";
-      auto pending = std::make_shared<GlobalCompletion>(operation);
-      HRESULT hr = wv->CallDevToolsProtocolMethod(
-          L"Storage.clearDataForStorageKey", params.c_str(),
-          GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
-                          [pending, callback_id](HRESULT error, LPCWSTR) -> HRESULT {
-                            GlobalWork work = std::move(pending->operation);
-                            if (!work) return S_OK;
-                            ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(error), L"");
-                            return S_OK;
-                          })
-              .get());
-      if (FAILED(hr)) {
-        GlobalWork work = std::move(pending->operation);
-        if (work) ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr), L"");
-      }
-    });
+    QueueOriginStorageDelete(operation, key, callback_id);
   });
 }
 

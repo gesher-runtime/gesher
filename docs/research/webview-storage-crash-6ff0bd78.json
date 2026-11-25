@@ -1,0 +1,1264 @@
+{
+  "schemaVersion": 1,
+  "run": 45609391658,
+  "attempt": 1,
+  "actor": "palmoni5",
+  "url": "https://github.com/gesher-runtime/gesher/actions/runs/45609391658",
+  "sourceCommit": "6ff0bd78325e5bb2086a9f02c18d7bb091381eef",
+  "sourceTree": "a4bbccc863326b05b730b98bf8a86213b194e901",
+  "localTreeEquivalentCommit": "fd175ac545fc7fc2ae155de1132e30cdc6ef7a48",
+  "createdAt": "2026-11-25T11:58:48Z",
+  "updatedAt": "2026-11-25T12:01:16Z",
+  "workflowConclusion": "failure",
+  "scope": "Ordinary crash and lifecycle diagnosis only. This receipt changes no production code, capability or acceptance gate; the continuation remains draft, with no merge or auto-merge.",
+  "evidenceMethod": "Only cached logs/tool-result content and already retained artifacts were read. Logs were checked byte-for-byte against saved tool results. Archive digests and extracted members were independently verified. The copied DLL PE/CodeView identity, runtime-function ranges, literals and every instruction byte in the three retained disassembly samples were checked against the actual retained binaries. Log anchors are one-based physical lines; text omits timestamps. Internal function names are not inferred from nearest-export labels or unavailable PDBs.",
+  "build": {
+    "job": 139188660878,
+    "conclusion": "success",
+    "log": {
+      "file": "storage-delete-45609391658-build-139188660878.log",
+      "bytes": 27417,
+      "sha256": "04683a722e22d713dd3fb6c4e4378a040cd0c6988e8c2e3747ce7f1f5b7236c7",
+      "lines": 344
+    },
+    "checkoutEvidence": {
+      "line": 112,
+      "text": "6ff0bd78325e5bb2086a9f02c18d7bb091381eef"
+    }
+  },
+  "metadataFiles": [
+    {
+      "file": "storage-delete-45609391658-run-discovery.json",
+      "bytes": 28318,
+      "sha256": "ab628cd4ab730af2a8546203217a12f362acbbe2a051b6714a0875ccbe5c2532"
+    },
+    {
+      "file": "storage-delete-45609391658-jobs.json",
+      "bytes": 8077,
+      "sha256": "2d5b74186ff604eba71828f169085ad72cc0769bdaa9afc01cb5336655931790"
+    },
+    {
+      "file": "storage-delete-45609391658-artifacts.json",
+      "bytes": 3844,
+      "sha256": "22359f79752ad297d16a92c7585f608b502900e526d3a58f2292df99127df5de"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 15019896217,
+      "name": "webview-native-exception-windows-2022",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45609391658/artifacts/15019896217",
+      "archive": {
+        "file": "webview-native-exception-windows-2022-45609391658.zip",
+        "bytes": 2408942,
+        "sha256": "dfd64e7f779fdb6fe0e131dba99bca4dd2d95d64f221e7b3cfe2b31439266fb7"
+      },
+      "metadataDigest": "sha256:dfd64e7f779fdb6fe0e131dba99bca4dd2d95d64f221e7b3cfe2b31439266fb7",
+      "uploadEvidence": [
+        {
+          "line": 2506,
+          "text": "SHA256 digest of uploaded artifact zip is dfd64e7f779fdb6fe0e131dba99bca4dd2d95d64f221e7b3cfe2b31439266fb7"
+        },
+        {
+          "line": 2509,
+          "text": "Artifact webview-native-exception-windows-2022 has been successfully uploaded! Final size is 2408942 bytes. Artifact ID is 15019896217"
+        }
+      ],
+      "uploadedByJob": 139189279086,
+      "extractedMembersByteIdenticalToArchive": [
+        {
+          "file": "webview-native-exception-windows-2022-45609391658/EmbeddedBrowserWebView.dll",
+          "bytes": 5368400,
+          "sha256": "fa7b92b1895be8ee165c08db635143181aa030a505fc6567fd7978171e1550d7"
+        },
+        {
+          "file": "webview-native-exception-windows-2022-45609391658/runtime-module.json",
+          "bytes": 690,
+          "sha256": "58d588e62b7008a318ca0e171350486faba86c2ced3aec872a7b1a4b2018c160"
+        }
+      ]
+    },
+    {
+      "id": 15018658435,
+      "name": "webview",
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45609391658/artifacts/15018658435",
+      "archive": {
+        "file": "webview-45609391658.zip",
+        "bytes": 2859618,
+        "sha256": "915d4daaec7bfb4048d6c406aeba2eea7b30c56ca55d76a517a1a9052cd2fb77"
+      },
+      "metadataDigest": "sha256:915d4daaec7bfb4048d6c406aeba2eea7b30c56ca55d76a517a1a9052cd2fb77",
+      "uploadEvidence": [
+        {
+          "line": 320,
+          "text": "SHA256 digest of uploaded artifact zip is 915d4daaec7bfb4048d6c406aeba2eea7b30c56ca55d76a517a1a9052cd2fb77"
+        },
+        {
+          "line": 323,
+          "text": "Artifact webview has been successfully uploaded! Final size is 2859618 bytes. Artifact ID is 15018658435"
+        }
+      ],
+      "uploadedByJob": 139188660878,
+      "extractedMembersByteIdenticalToArchive": [
+        {
+          "file": "webview-45609391658/webview2_probe.exe",
+          "bytes": 4256768,
+          "sha256": "e8edcb67d76843ee4128e9e2e8f76875da0a74a1ca6e98f9d05c4b6d1debde14"
+        }
+      ]
+    }
+  ],
+  "jobs": [
+    {
+      "os": "windows-2022",
+      "job": 139189279086,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45609391658/job/139189279086",
+      "conclusion": "failure",
+      "liveStorageStep": {
+        "name": "Live storage deletion and worker response qualification",
+        "status": "completed",
+        "conclusion": "failure",
+        "number": 8
+      },
+      "log": {
+        "file": "storage-delete-45609391658-windows-2022-139189279086.log",
+        "bytes": 275944,
+        "sha256": "3ec632963e9eaae41ecdecd55163fc867d4fde0720f50f4915508d8fbba062f9",
+        "lines": 2526
+      },
+      "sourceAndArtifactEvidence": [
+        {
+          "line": 102,
+          "text": "6ff0bd78325e5bb2086a9f02c18d7bb091381eef"
+        },
+        {
+          "line": 122,
+          "text": "SHA256 digest of downloaded artifact is 915d4daaec7bfb4048d6c406aeba2eea7b30c56ca55d76a517a1a9052cd2fb77"
+        }
+      ]
+    },
+    {
+      "os": "windows-2025",
+      "job": 139189278857,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45609391658/job/139189278857",
+      "conclusion": "failure",
+      "liveStorageStep": {
+        "name": "Live storage deletion and worker response qualification",
+        "status": "completed",
+        "conclusion": "skipped",
+        "number": 8
+      },
+      "log": {
+        "file": "storage-delete-45609391658-windows-2025-139189278857.log",
+        "bytes": 24626,
+        "sha256": "37a7de2c9936d88b87a9d7c6a49084c592ae199a07e148873933d3015034e23d",
+        "lines": 261
+      },
+      "sourceAndArtifactEvidence": [
+        {
+          "line": 102,
+          "text": "6ff0bd78325e5bb2086a9f02c18d7bb091381eef"
+        },
+        {
+          "line": 122,
+          "text": "SHA256 digest of downloaded artifact is 915d4daaec7bfb4048d6c406aeba2eea7b30c56ca55d76a517a1a9052cd2fb77"
+        }
+      ],
+      "startupEvidence": [
+        {
+          "line": 153,
+          "text": "INFO  browser-session: sdk=1.0.4258.31 loader=WebView2Loader.dll (no Fetch or worker activation)"
+        },
+        {
+          "line": 154,
+          "text": "INFO  browser-session: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-browser-session-{21FF35C6-7621-4026-8B29-B782365CD41B}"
+        },
+        {
+          "line": 155,
+          "text": "INFO  browser-session: CreateEnvironment completion hr=0x00000000 json="
+        },
+        {
+          "line": 156,
+          "text": "INFO  browser-session: CreateEnvironment immediate hr=0x00000000 json="
+        },
+        {
+          "line": 157,
+          "text": "INFO  browser-session: runtime version immediate hr=0x00000000 json=157.0.4341.46"
+        },
+        {
+          "line": 158,
+          "text": "INFO  browser-session: CreateController immediate hr=0x00000000 json="
+        },
+        {
+          "line": 159,
+          "text": "FAIL  browser-session: controller setup failed or timed out"
+        },
+        {
+          "line": 160,
+          "text": "FAIL  browser-session: harness failure; no Fetch or worker capability established"
+        },
+        {
+          "line": 161,
+          "text": "INFO  browser-session: CreateController completion hr=0x00000000 json="
+        },
+        {
+          "line": 164,
+          "text": "INFO  browser-session: late controller.Close immediate hr=0x00000000 json="
+        },
+        {
+          "line": 185,
+          "text": "FAIL  webview2_probe_dll exit 1"
+        }
+      ],
+      "staticControllerCompletionEvidence": {
+        "line": 195,
+        "text": "INFO  browser-session: CreateController completion hr=0x00000000 json="
+      }
+    }
+  ],
+  "windows2022": {
+    "runtime": "131.0.2903.86",
+    "sdk": "1.0.4258.31",
+    "loader": "static (WebView2LoaderStatic.lib)",
+    "selfTest": {
+      "passed": true,
+      "passingGateExpectedExit": -532217855,
+      "code": "0xE0470001",
+      "flags": "0x00000081",
+      "passEvidence": {
+        "line": 637,
+        "text": "PASS  storage-delete: native fault diagnostic control preserved the failing exit and actual exception stack"
+      },
+      "actualExceptionEvidence": [
+        {
+          "line": 638,
+          "text": "native-exception: code=0xe0470001 flags=0x00000081 thread=1452 parameters=2 access=0x47534852 target=0x53544143"
+        },
+        {
+          "line": 639,
+          "text": "native-exception: fault[0] pc=0x00007ffa239af22c sp=0x0000000000000000 module=KERNELBASE.dll base=0x00007ffa23970000 rva=0x3f22c"
+        },
+        {
+          "line": 640,
+          "text": "native-exception: module-path=C:\\Windows\\System32\\KERNELBASE.dll"
+        },
+        {
+          "line": 641,
+          "text": "native-exception: image base=0x7ffa23970000 timestamp=0xa09087d7 size=0x371000 machine=0x8664"
+        },
+        {
+          "line": 642,
+          "text": "native-exception: codeview pdb=kernelbase.pdb key=0792E1E7A24BB52249313BF74137D2B11"
+        },
+        {
+          "line": 643,
+          "text": "native-exception: rax=0x1bd04118b50 rbx=0x7ff67ae406f0 rcx=0x0 rdx=0x7ffa2607a8c1 rsi=0x1bd0412f950 rdi=0x1 r8=0x7ffa2607a8c1 r9=0x40"
+        },
+        {
+          "line": 644,
+          "text": "native-exception: frame[0] pc=0x00007ffa239af22c sp=0x0000005bbb1bf290 module=KERNELBASE.dll base=0x00007ffa23970000 rva=0x3f22c"
+        },
+        {
+          "line": 645,
+          "text": "native-exception: frame[2] pc=0x00007ff67ac818d6 sp=0x0000005bbb1bf370 module=webview2_probe.exe base=0x00007ff67ac80000 rva=0x18d6"
+        },
+        {
+          "line": 646,
+          "text": "native-exception: frame[3] pc=0x00007ff67ac8110d sp=0x0000005bbb1bf7e0 module=webview2_probe.exe base=0x00007ff67ac80000 rva=0x110d"
+        },
+        {
+          "line": 647,
+          "text": "native-exception: frame[4] pc=0x00007ffa25284f80 sp=0x0000005bbb1bf860 module=KERNEL32.DLL base=0x00007ffa25270000 rva=0x14f80"
+        },
+        {
+          "line": 648,
+          "text": "native-exception: frame[5] pc=0x00007ffa260dedcb sp=0x0000005bbb1bf890 module=ntdll.dll base=0x00007ffa26060000 rva=0x7edcb"
+        }
+      ],
+      "exitEvidenceLimit": "The successful exact-exit wrapper gate confirms the expected failing subprocess exit; the successful log does not print a separate numeric exit line."
+    },
+    "storage": {
+      "actualHostQualificationAttempted": true,
+      "seededKeys": 14,
+      "seedEvidence": {
+        "line": 1436,
+        "text": "PASS  storage-delete: all-written positive=14 removed=0"
+      },
+      "nestedKeyEvidence": {
+        "line": 1388,
+        "text": "INFO  storage-delete: observed nested registry key=https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/^31"
+      },
+      "actualRegistryInventory": {
+        "entries": [
+          {
+            "bucketId": "1",
+            "name": "_default",
+            "storageKey": "https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/",
+            "usage": "23748"
+          },
+          {
+            "bucketId": "2",
+            "name": "_default",
+            "storageKey": "https://storage-c-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid",
+            "usage": "15248"
+          },
+          {
+            "bucketId": "3",
+            "name": "_default",
+            "storageKey": "https://storage-b-6ec0858df00d429d92dc12e7642ef634.invalid/",
+            "usage": "23748"
+          },
+          {
+            "bucketId": "4",
+            "name": "_default",
+            "storageKey": "https://storage-c-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-b-6ec0858df00d429d92dc12e7642ef634.invalid",
+            "usage": "15248"
+          },
+          {
+            "bucketId": "5",
+            "name": "_default",
+            "storageKey": "https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-b-6ec0858df00d429d92dc12e7642ef634.invalid",
+            "usage": "15246"
+          },
+          {
+            "bucketId": "6",
+            "name": "_default",
+            "storageKey": "https://child.storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/",
+            "usage": "15362"
+          },
+          {
+            "bucketId": "7",
+            "name": "_default",
+            "storageKey": "https://storage-d-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid",
+            "usage": "15248"
+          },
+          {
+            "bucketId": "8",
+            "name": "_default",
+            "storageKey": "https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid:8443/",
+            "usage": "15352"
+          },
+          {
+            "bucketId": "9",
+            "name": "_default",
+            "storageKey": "https://storage-e-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid",
+            "usage": "15248"
+          },
+          {
+            "bucketId": "10",
+            "name": "_default",
+            "storageKey": "http://127.0.0.1:60465/",
+            "usage": "15187"
+          },
+          {
+            "bucketId": "11",
+            "name": "_default",
+            "storageKey": "https://storage-c-6ec0858df00d429d92dc12e7642ef634.invalid/^0http://127.0.0.1",
+            "usage": "15250"
+          },
+          {
+            "bucketId": "12",
+            "name": "_default",
+            "storageKey": "https://127.0.0.1:60465/",
+            "usage": "15189"
+          },
+          {
+            "bucketId": "13",
+            "name": "_default",
+            "storageKey": "https://storage-d-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://127.0.0.1",
+            "usage": "15250"
+          },
+          {
+            "bucketId": "14",
+            "name": "_default",
+            "storageKey": "https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/^31",
+            "usage": "15250"
+          }
+        ],
+        "globalUsage": "230574"
+      },
+      "inventoryEvidence": {
+        "line": 1402,
+        "text": "INFO  quota-registry: Runtime.evaluate hr=0x00000000 json={\"result\":{\"type\":\"object\",\"value\":{\"entries\":[{\"bucketId\":\"1\",\"name\":\"_default\",\"storageKey\":\"https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/\",\"usage\":\"23748\"},{\"bucketId\":\"2\",\"name\":\"_default\",\"storageKey\":\"https://storage-c-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid\",\"usage\":\"15248\"},{\"bucketId\":\"3\",\"name\":\"_default\",\"storageKey\":\"https://storage-b-6ec0858df00d429d92dc12e7642ef634.invalid/\",\"usage\":\"23748\"},{\"bucketId\":\"4\",\"name\":\"_default\",\"storageKey\":\"https://storage-c-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-b-6ec0858df00d429d92dc12e7642ef634.invalid\",\"usage\":\"15248\"},{\"bucketId\":\"5\",\"name\":\"_default\",\"storageKey\":\"https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-b-6ec0858df00d429d92dc12e7642ef634.invalid\",\"usage\":\"15246\"},{\"bucketId\":\"6\",\"name\":\"_default\",\"storageKey\":\"https://child.storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/\",\"usage\":\"15362\"},{\"bucketId\":\"7\",\"name\":\"_default\",\"storageKey\":\"https://storage-d-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid\",\"usage\":\"15248\"},{\"bucketId\":\"8\",\"name\":\"_default\",\"storageKey\":\"https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid:8443/\",\"usage\":\"15352\"},{\"bucketId\":\"9\",\"name\":\"_default\",\"storageKey\":\"https://storage-e-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid\",\"usage\":\"15248\"},{\"bucketId\":\"10\",\"name\":\"_default\",\"storageKey\":\"http://127.0.0.1:60465/\",\"usage\":\"15187\"},{\"bucketId\":\"11\",\"name\":\"_default\",\"storageKey\":\"https://storage-c-6ec0858df00d429d92dc12e7642ef634.invalid/^0http://127.0.0.1\",\"usage\":\"15250\"},{\"bucketId\":\"12\",\"name\":\"_default\",\"storageKey\":\"https://127.0.0.1:60465/\",\"usage\":\"15189\"},{\"bucketId\":\"13\",\"name\":\"_default\",\"storageKey\":\"https://storage-d-6ec0858df00d429d92dc12e7642ef634.invalid/^0https://127.0.0.1\",\"usage\":\"15250\"},{\"bucketId\":\"14\",\"name\":\"_default\",\"storageKey\":\"https://storage-a-6ec0858df00d429d92dc12e7642ef634.invalid/^31\",\"usage\":\"15250\"}],\"globalUsage\":\"230574\"}}}"
+      },
+      "ordinaryNetworkStartedEvidence": {
+        "line": 1500,
+        "text": "PASS  storage-delete: ordinary-network control started on unrelated origin with real no-store fetch"
+      },
+      "exitSigned": -1073741819,
+      "exitHex": "0xC0000005",
+      "failureEvidence": {
+        "line": 1502,
+        "text": "FAIL  storage-delete: production qualification failed (exit=-1073741819 qualified=0 missing=34 final-callback-checks=0)"
+      },
+      "productionCallbackSummaryObserved": false,
+      "finalPreservationObserved": false,
+      "storageQualified": false,
+      "duplicateOutputLimit": "The failed wrapper echoes the same captured output. Later seed/registry lines are not a second execution."
+    },
+    "crash": {
+      "exceptionCode": "0xC0000005",
+      "accessKind": "read",
+      "reportedTarget": "0xffffffffffffffff",
+      "thread": 4932,
+      "faultModule": "EmbeddedBrowserWebView.dll",
+      "faultRva": "0x353752",
+      "actualRecordAndStack": [
+        {
+          "line": 1930,
+          "text": "native-exception: code=0xc0000005 flags=0x00000000 thread=4932 parameters=2 access=0x0 target=0xffffffffffffffff"
+        },
+        {
+          "line": 1931,
+          "text": "native-exception: fault[0] pc=0x00007ff9f0123752 sp=0x0000000000000000 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x353752"
+        },
+        {
+          "line": 1932,
+          "text": "native-exception: module-path=C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\131.0.2903.86\\EBWebView\\x64\\EmbeddedBrowserWebView.dll"
+        },
+        {
+          "line": 1933,
+          "text": "native-exception: image base=0x7ff9efdd0000 timestamp=0x6750fb41 size=0x538000 machine=0x8664"
+        },
+        {
+          "line": 1934,
+          "text": "native-exception: codeview pdb=EmbeddedBrowserWebView.dll.pdb key=85974DE890A28FCF4C4C44205044422E1"
+        },
+        {
+          "line": 1935,
+          "text": "native-exception: rax=0x4f20faffaf8cffff rbx=0x735000095b18 rcx=0x735000095b18 rdx=0x4f20faffaf8cffff rsi=0x7e23efe850 rdi=0x73500005e670 r8=0x73500005e670 r9=0x1"
+        },
+        {
+          "line": 1936,
+          "text": "native-exception: frame[0] pc=0x00007ff9f0123752 sp=0x0000007e23efe780 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x353752"
+        },
+        {
+          "line": 1937,
+          "text": "native-exception: frame[2] pc=0x00007ff9f00f96d4 sp=0x0000007e23efe7b0 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x3296d4"
+        },
+        {
+          "line": 1938,
+          "text": "native-exception: frame[3] pc=0x00007ff9efeb0e68 sp=0x0000007e23efe900 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0xe0e68"
+        },
+        {
+          "line": 1939,
+          "text": "native-exception: frame[4] pc=0x00007ff9f00d9b8a sp=0x0000007e23efe950 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x309b8a"
+        },
+        {
+          "line": 1940,
+          "text": "native-exception: frame[5] pc=0x00007ff9f0065396 sp=0x0000007e23efec80 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x295396"
+        },
+        {
+          "line": 1941,
+          "text": "native-exception: frame[6] pc=0x00007ff9f006458a sp=0x0000007e23efed70 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x29458a"
+        },
+        {
+          "line": 1942,
+          "text": "native-exception: frame[7] pc=0x00007ff9f0064e71 sp=0x0000007e23efee00 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x294e71"
+        },
+        {
+          "line": 1943,
+          "text": "native-exception: frame[8] pc=0x00007ff9f0064b37 sp=0x0000007e23efef90 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x294b37"
+        },
+        {
+          "line": 1944,
+          "text": "native-exception: frame[9] pc=0x00007ff9f006473b sp=0x0000007e23eff070 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x29473b"
+        },
+        {
+          "line": 1945,
+          "text": "native-exception: frame[10] pc=0x00007ff9f006458a sp=0x0000007e23eff2a0 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x29458a"
+        },
+        {
+          "line": 1946,
+          "text": "native-exception: frame[11] pc=0x00007ff9f0063ba5 sp=0x0000007e23eff330 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x293ba5"
+        },
+        {
+          "line": 1947,
+          "text": "native-exception: frame[12] pc=0x00007ff9f00632b8 sp=0x0000007e23eff490 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x2932b8"
+        },
+        {
+          "line": 1948,
+          "text": "native-exception: frame[13] pc=0x00007ff9eff65694 sp=0x0000007e23eff520 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x195694"
+        },
+        {
+          "line": 1949,
+          "text": "native-exception: frame[14] pc=0x00007ff9f007b781 sp=0x0000007e23eff570 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x2ab781"
+        },
+        {
+          "line": 1950,
+          "text": "native-exception: frame[15] pc=0x00007ff9f007b781 sp=0x0000007e23eff5a0 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x2ab781"
+        },
+        {
+          "line": 1951,
+          "text": "native-exception: frame[16] pc=0x00007ff9f00630ff sp=0x0000007e23eff5d0 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x2930ff"
+        },
+        {
+          "line": 1952,
+          "text": "native-exception: frame[17] pc=0x00007ff9f004a5a4 sp=0x0000007e23eff660 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x27a5a4"
+        },
+        {
+          "line": 1953,
+          "text": "native-exception: frame[18] pc=0x00007ff9efe9c5f8 sp=0x0000007e23eff710 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0xcc5f8"
+        },
+        {
+          "line": 1954,
+          "text": "native-exception: frame[19] pc=0x00007ff9efe9c456 sp=0x0000007e23eff780 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0xcc456"
+        },
+        {
+          "line": 1955,
+          "text": "native-exception: frame[20] pc=0x00007ff9efe9bc8d sp=0x0000007e23eff8c0 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0xcbc8d"
+        },
+        {
+          "line": 1956,
+          "text": "native-exception: frame[21] pc=0x00007ff9f0077f5c sp=0x0000007e23eff940 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x2a7f5c"
+        },
+        {
+          "line": 1957,
+          "text": "native-exception: frame[22] pc=0x00007ff9f0077e40 sp=0x0000007e23eff980 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x2a7e40"
+        },
+        {
+          "line": 1958,
+          "text": "native-exception: frame[23] pc=0x00007ff9effd1eef sp=0x0000007e23effa10 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x201eef"
+        },
+        {
+          "line": 1959,
+          "text": "native-exception: frame[24] pc=0x00007ffa25340089 sp=0x0000007e23effa40 module=USER32.dll base=0x00007ffa25330000 rva=0x10089"
+        },
+        {
+          "line": 1960,
+          "text": "native-exception: frame[25] pc=0x00007ffa2533fa02 sp=0x0000007e23effbd0 module=USER32.dll base=0x00007ffa25330000 rva=0xfa02"
+        },
+        {
+          "line": 1961,
+          "text": "native-exception: frame[26] pc=0x00007ff67acd392b sp=0x0000007e23effc50 module=webview2_probe.exe base=0x00007ff67ac80000 rva=0x5392b"
+        },
+        {
+          "line": 1962,
+          "text": "native-exception: frame[27] pc=0x00007ffa25284f80 sp=0x0000007e23effd60 module=KERNEL32.DLL base=0x00007ffa25270000 rva=0x14f80"
+        },
+        {
+          "line": 1963,
+          "text": "native-exception: frame[28] pc=0x00007ffa260dedcb sp=0x0000007e23effd90 module=ntdll.dll base=0x00007ffa26060000 rva=0x7edcb"
+        }
+      ],
+      "registerEvidence": {
+        "line": 1935,
+        "text": "native-exception: rax=0x4f20faffaf8cffff rbx=0x735000095b18 rcx=0x735000095b18 rdx=0x4f20faffaf8cffff rsi=0x7e23efe850 rdi=0x73500005e670 r8=0x73500005e670 r9=0x1"
+      },
+      "postCallbackCallerEvidence": {
+        "line": 1937,
+        "text": "native-exception: frame[2] pc=0x00007ff9f00f96d4 sp=0x0000007e23efe7b0 module=EmbeddedBrowserWebView.dll base=0x00007ff9efdd0000 rva=0x3296d4"
+      },
+      "ownerDispatchEvidence": {
+        "line": 1961,
+        "text": "native-exception: frame[26] pc=0x00007ff67acd392b sp=0x0000007e23effc50 module=webview2_probe.exe base=0x00007ff67ac80000 rva=0x5392b"
+      },
+      "causeProven": false
+    },
+    "runtimeImage": {
+      "copiedFile": {
+        "file": "webview-native-exception-windows-2022-45609391658/EmbeddedBrowserWebView.dll",
+        "bytes": 5368400,
+        "sha256": "fa7b92b1895be8ee165c08db635143181aa030a505fc6567fd7978171e1550d7"
+      },
+      "manifestFile": {
+        "file": "webview-native-exception-windows-2022-45609391658/runtime-module.json",
+        "bytes": 690,
+        "sha256": "58d588e62b7008a318ca0e171350486faba86c2ced3aec872a7b1a4b2018c160"
+      },
+      "manifest": {
+        "sourcePath": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\131.0.2903.86\\EBWebView\\x64\\EmbeddedBrowserWebView.dll",
+        "file": "EmbeddedBrowserWebView.dll",
+        "bytes": 5368400,
+        "sha256": "fa7b92b1895be8ee165c08db635143181aa030a505fc6567fd7978171e1550d7",
+        "fileVersion": "131.0.2903.86",
+        "productVersion": "131.0.2903.86",
+        "run": "45609391658",
+        "sourceCommit": "6ff0bd78325e5bb2086a9f02c18d7bb091381eef",
+        "identityLines": [
+          "native-exception: image base=0x7ff9efdd0000 timestamp=0x6750fb41 size=0x538000 machine=0x8664\r",
+          "native-exception: codeview pdb=EmbeddedBrowserWebView.dll.pdb key=85974DE890A28FCF4C4C44205044422E1\r"
+        ]
+      },
+      "loadedEvidence": [
+        {
+          "line": 1932,
+          "text": "native-exception: module-path=C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\131.0.2903.86\\EBWebView\\x64\\EmbeddedBrowserWebView.dll"
+        },
+        {
+          "line": 1933,
+          "text": "native-exception: image base=0x7ff9efdd0000 timestamp=0x6750fb41 size=0x538000 machine=0x8664"
+        },
+        {
+          "line": 1934,
+          "text": "native-exception: codeview pdb=EmbeddedBrowserWebView.dll.pdb key=85974DE890A28FCF4C4C44205044422E1"
+        }
+      ],
+      "copiedPe": {
+        "machine": "0x8664",
+        "timestamp": "0x6750fb41",
+        "sizeOfImage": "0x538000",
+        "preferredBase": "0x180000000",
+        "codeView": {
+          "guid": "85974DE8-90A2-8FCF-4C4C-44205044422E",
+          "age": 1,
+          "pdb": "EmbeddedBrowserWebView.dll.pdb",
+          "key": "85974DE890A28FCF4C4C44205044422E1"
+        }
+      },
+      "loadedAndCopiedIdentityMatches": true,
+      "identityLimit": "The installed DLL copied from the observed module path matches the loaded PE/CodeView metadata. No whole in-memory image hash or private-object snapshot was captured."
+    }
+  },
+  "windows2025": {
+    "runtime": "157.0.4341.46",
+    "storageAttempted": false,
+    "selfTestAttempted": false,
+    "result": "The preceding DLL browser-session controller setup failed or timed out. Its late completion and Close returned S_OK. The subsequent static probe created its controller, but the earlier failed step caused live storage qualification to be skipped. This run supplies no runtime-157 storage result."
+  },
+  "binaryAnalysis": {
+    "mappingFile": {
+      "file": "storage-delete-45609391658-runtime131-dispatch-mapping.json",
+      "bytes": 696,
+      "sha256": "0914cfa4e194f6578d2c89408a72233d6502cb61c9e0b40d24f918429e74526b"
+    },
+    "mapping": {
+      "artifact": "15019896217",
+      "dll_sha256": "fa7b92b1895be8ee165c08db635143181aa030a505fc6567fd7978171e1550d7",
+      "runtime_functions": [
+        {
+          "target_rva": "0x353752",
+          "begin_rva": "0x35373e",
+          "end_rva": "0x35378f",
+          "unwind_rva": "0x4bd120"
+        },
+        {
+          "target_rva": "0x3296d4",
+          "begin_rva": "0x32927c",
+          "end_rva": "0x329731",
+          "unwind_rva": "0x4c5164"
+        }
+      ],
+      "dispatch_literals": [
+        {
+          "rva": "0x425aa0",
+          "length": 2,
+          "text": "id"
+        },
+        {
+          "rva": "0x42ecc0",
+          "length": 6,
+          "text": "method"
+        },
+        {
+          "rva": "0x4371ee",
+          "length": 19,
+          "text": "Fetch.requestPaused"
+        }
+      ]
+    },
+    "peInspectionFile": {
+      "file": "storage-delete-45609391658-runtime131-pe-identity.txt",
+      "bytes": 10445,
+      "sha256": "f990a7d5a40e5187d07eaa733badce2f4387bc9b62c34a145d7ab3c6452887e1"
+    },
+    "disassembly": [
+      {
+        "file": "storage-delete-45609391658-fault-function-disassembly.txt",
+        "bytes": 2123,
+        "sha256": "9b839f28dfa8708e80c7190a2db94579b3d9fc2899fd8d0e7772752a4e7febb6",
+        "allListedInstructionBytesVerified": 28,
+        "instructions": [
+          {
+            "line": 10,
+            "rva": "0x353746",
+            "bytes": "49 8b 50 08",
+            "instruction": "movq 0x8(%r8), %rdx"
+          },
+          {
+            "line": 13,
+            "rva": "0x35374f",
+            "bytes": "48 89 d0",
+            "instruction": "movq %rdx, %rax"
+          },
+          {
+            "line": 14,
+            "rva": "0x353752",
+            "bytes": "48 8b 12",
+            "instruction": "movq (%rdx), %rdx"
+          },
+          {
+            "line": 17,
+            "rva": "0x35375a",
+            "bytes": "48 89 06",
+            "instruction": "movq %rax, (%rsi)"
+          },
+          {
+            "line": 21,
+            "rva": "0x353765",
+            "bytes": "48 ff 49 10",
+            "instruction": "decq 0x10(%rcx)"
+          },
+          {
+            "line": 24,
+            "rva": "0x353770",
+            "bytes": "e8 dc f3 df ff",
+            "instruction": "callq 0x180152b51"
+          }
+        ]
+      },
+      {
+        "file": "storage-delete-45609391658-response-caller-disassembly.txt",
+        "bytes": 18901,
+        "sha256": "8f8a28c80e56e96e7db78e02a3d3b7c59afd25945c2225bbbc63353041f91692",
+        "allListedInstructionBytesVerified": 275,
+        "instructions": [
+          {
+            "line": 42,
+            "rva": "0x329321",
+            "bytes": "48 8d 0d 78 c7 0f 00",
+            "instruction": "leaq 0xfc778(%rip), %rcx"
+          },
+          {
+            "line": 53,
+            "rva": "0x32935a",
+            "bytes": "48 8d 0d 5f 59 10 00",
+            "instruction": "leaq 0x10595f(%rip), %rcx"
+          },
+          {
+            "line": 71,
+            "rva": "0x32939d",
+            "bytes": "48 8d 5e 10",
+            "instruction": "leaq 0x10(%rsi), %rbx"
+          },
+          {
+            "line": 75,
+            "rva": "0x3293aa",
+            "bytes": "39 41 20",
+            "instruction": "cmpl %eax, 0x20(%rcx)"
+          },
+          {
+            "line": 85,
+            "rva": "0x3293c7",
+            "bytes": "e9 a7 02 00 00",
+            "instruction": "jmp 0x180329673"
+          },
+          {
+            "line": 150,
+            "rva": "0x3294f9",
+            "bytes": "48 8d 15 ee dc 10 00",
+            "instruction": "leaq 0x10dcee(%rip), %rdx"
+          },
+          {
+            "line": 241,
+            "rva": "0x329681",
+            "bytes": "48 8d 77 28",
+            "instruction": "leaq 0x28(%rdi), %rsi"
+          },
+          {
+            "line": 242,
+            "rva": "0x329685",
+            "bytes": "48 8b 0e",
+            "instruction": "movq (%rsi), %rcx"
+          },
+          {
+            "line": 247,
+            "rva": "0x32969c",
+            "bytes": "48 c7 47 28 00 00 00 00",
+            "instruction": "movq $0x0, 0x28(%rdi)"
+          },
+          {
+            "line": 248,
+            "rva": "0x3296a4",
+            "bytes": "48 8b 41 08",
+            "instruction": "movq 0x8(%rcx), %rax"
+          },
+          {
+            "line": 250,
+            "rva": "0x3296b0",
+            "bytes": "ff 15 12 d6 18 00",
+            "instruction": "callq *0x18d612(%rip)"
+          },
+          {
+            "line": 252,
+            "rva": "0x3296b9",
+            "bytes": "e8 e2 2b e6 ff",
+            "instruction": "callq 0x18018c2a0"
+          },
+          {
+            "line": 255,
+            "rva": "0x3296c9",
+            "bytes": "48 89 d9",
+            "instruction": "movq %rbx, %rcx"
+          },
+          {
+            "line": 256,
+            "rva": "0x3296cc",
+            "bytes": "49 89 f8",
+            "instruction": "movq %rdi, %r8"
+          },
+          {
+            "line": 257,
+            "rva": "0x3296cf",
+            "bytes": "e8 6a a0 02 00",
+            "instruction": "callq 0x18035373e"
+          },
+          {
+            "line": 258,
+            "rva": "0x3296d4",
+            "bytes": "48 89 f1",
+            "instruction": "movq %rsi, %rcx"
+          },
+          {
+            "line": 259,
+            "rva": "0x3296d7",
+            "bytes": "e8 c4 2b e6 ff",
+            "instruction": "callq 0x18018c2a0"
+          },
+          {
+            "line": 261,
+            "rva": "0x3296df",
+            "bytes": "e8 a8 8a f9 ff",
+            "instruction": "callq 0x1802c218c"
+          }
+        ]
+      },
+      {
+        "file": "storage-delete-45609391658-owner-dispatch-disassembly.txt",
+        "bytes": 1795,
+        "sha256": "703fa14b9d366ea0e7c50672c7dfed5b481067376c750ebf7364a91cc97375f9",
+        "allListedInstructionBytesVerified": 23,
+        "instructions": [
+          {
+            "line": 16,
+            "rva": "0x53911",
+            "bytes": "4c 8b 35 a0 00 16 00",
+            "instruction": "movq 0x1600a0(%rip), %r14"
+          },
+          {
+            "line": 22,
+            "rva": "0x53928",
+            "bytes": "41 ff d6",
+            "instruction": "callq *%r14"
+          },
+          {
+            "line": 23,
+            "rva": "0x5392b",
+            "bytes": "48 89 f9",
+            "instruction": "movq %rdi, %rcx"
+          }
+        ]
+      }
+    ],
+    "instructionOrder": [
+      {
+        "rva": "0x32969c",
+        "observation": "The selected node field at +0x28 is cleared after its callback pointer is moved to a local."
+      },
+      {
+        "rva": "0x3296b0",
+        "observation": "An indirect call uses the function pointer loaded at 0x3296a4 from callback object +0x8."
+      },
+      {
+        "rva": "0x3296b9",
+        "observation": "After that call returns, a helper operates on the local callback holder."
+      },
+      {
+        "rva": "0x3296cf",
+        "observation": "The same selected node is then passed to the helper beginning at 0x35373e. The actual stack contains its return address 0x3296d4."
+      },
+      {
+        "rva": "0x353752",
+        "observation": "The faulting instruction reads through RDX while following node links; the captured RDX is 0x4f20faffaf8cffff."
+      }
+    ],
+    "inference": "The parsed id lookup, selected node, callback dispatch and subsequent link/count updates are consistent with a runtime response-callback registry whose node is removed after the callback returns. This supports deferring owner/controller cleanup beyond the SDK callback stack, but does not by itself identify the callback, the writer of the invalid link, or the full root cause.",
+    "noPdbFunctionNamesUsed": true
+  },
+  "sourceEvidence": [
+    {
+      "file": "compat/webview/origin_storage_delete.h",
+      "sha256": "dea2911ec2a5952f4fcc3c87131deb4210c432c9304f7573c2948bc0bf5b37cd",
+      "sourceTree": "a4bbccc863326b05b730b98bf8a86213b194e901",
+      "excerpts": [
+        {
+          "line": 104,
+          "text": "  HRESULT Close(View* view) {"
+        },
+        {
+          "line": 105,
+          "text": "    HRESULT result = S_OK;"
+        },
+        {
+          "line": 106,
+          "text": "    if (view->resource_handler && view->core) {"
+        },
+        {
+          "line": 107,
+          "text": "      result = view->core->remove_WebResourceRequested(view->resources);"
+        },
+        {
+          "line": 108,
+          "text": "      view->resource_handler = false;"
+        },
+        {
+          "line": 109,
+          "text": "    }"
+        },
+        {
+          "line": 110,
+          "text": "    if (view->controller) {"
+        },
+        {
+          "line": 111,
+          "text": "      HRESULT hr = view->controller->Close();"
+        },
+        {
+          "line": 112,
+          "text": "      if (SUCCEEDED(result)) result = hr;"
+        },
+        {
+          "line": 113,
+          "text": "    }"
+        },
+        {
+          "line": 114,
+          "text": "    view->core.Reset();"
+        },
+        {
+          "line": 115,
+          "text": "    view->controller.Reset();"
+        },
+        {
+          "line": 116,
+          "text": "    return result;"
+        },
+        {
+          "line": 117,
+          "text": "  }"
+        },
+        {
+          "line": 118,
+          "text": ""
+        },
+        {
+          "line": 119,
+          "text": "  void Finish(HRESULT hr, const std::wstring& where) {"
+        },
+        {
+          "line": 120,
+          "text": "    if (finished) return;"
+        },
+        {
+          "line": 121,
+          "text": "    auto self = shared_from_this();"
+        },
+        {
+          "line": 122,
+          "text": "    finished = true;"
+        },
+        {
+          "line": 123,
+          "text": "    if (timer) { KillTimer(g_task_window, kTimer); timer = false; }"
+        },
+        {
+          "line": 124,
+          "text": "    if (pending) pending->then = {};"
+        },
+        {
+          "line": 125,
+          "text": "    pending.reset();"
+        },
+        {
+          "line": 126,
+          "text": "    // An in-flight SDK creation retains its separate lease until its callback"
+        },
+        {
+          "line": 127,
+          "text": "    // can close a late controller. A merely queued creation has no such lease."
+        },
+        {
+          "line": 128,
+          "text": "    if (creation) creation->then = {};"
+        },
+        {
+          "line": 129,
+          "text": "    creation.reset();"
+        },
+        {
+          "line": 130,
+          "text": "    HRESULT navigation_closed = DetachNavigation();"
+        },
+        {
+          "line": 131,
+          "text": "    HRESULT private_closed = Close(&resolver);"
+        },
+        {
+          "line": 132,
+          "text": "    HRESULT ordinary_closed = Close(&inventory);"
+        },
+        {
+          "line": 133,
+          "text": "    environment.Reset();"
+        },
+        {
+          "line": 134,
+          "text": "    if (SUCCEEDED(hr) && FAILED(navigation_closed)) hr = navigation_closed;"
+        },
+        {
+          "line": 135,
+          "text": "    if (SUCCEEDED(hr) && FAILED(private_closed)) hr = private_closed;"
+        },
+        {
+          "line": 136,
+          "text": "    if (SUCCEEDED(hr) && FAILED(ordinary_closed)) hr = ordinary_closed;"
+        },
+        {
+          "line": 137,
+          "text": "    GlobalWork work = std::move(operation);"
+        },
+        {
+          "line": 138,
+          "text": "    ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr),"
+        },
+        {
+          "line": 139,
+          "text": "                 SUCCEEDED(hr) ? L\"\" : L\"WebStorage origin deletion: \" + where);"
+        },
+        {
+          "line": 140,
+          "text": "    if (g_origin_delete.get() == this) g_origin_delete.reset();"
+        },
+        {
+          "line": 141,
+          "text": "    NextOriginStorageDelete();"
+        },
+        {
+          "line": 253,
+          "text": "    if (finished) return;"
+        },
+        {
+          "line": 254,
+          "text": "    Arm();"
+        },
+        {
+          "line": 255,
+          "text": "    auto call = std::make_shared<PendingCall>();"
+        },
+        {
+          "line": 256,
+          "text": "    call->then = std::move(then);"
+        },
+        {
+          "line": 257,
+          "text": "    pending = call;"
+        },
+        {
+          "line": 258,
+          "text": "    std::weak_ptr<OriginStorageDelete> weak = shared_from_this();"
+        },
+        {
+          "line": 259,
+          "text": "    auto complete = [weak, call, method = std::wstring(method)](HRESULT hr, LPCWSTR json) {"
+        },
+        {
+          "line": 260,
+          "text": "      auto self = weak.lock();"
+        },
+        {
+          "line": 261,
+          "text": "      auto then = std::move(call->then);"
+        },
+        {
+          "line": 262,
+          "text": "      if (!self || self->finished || !then) return;"
+        },
+        {
+          "line": 263,
+          "text": "      if (self->pending == call) self->pending.reset();"
+        },
+        {
+          "line": 264,
+          "text": "      if (!self->Check(hr, method.c_str())) return;"
+        },
+        {
+          "line": 265,
+          "text": "      size_t length = 0;"
+        },
+        {
+          "line": 266,
+          "text": "      while (json && length <= kJsonLimit && json[length]) ++length;"
+        },
+        {
+          "line": 267,
+          "text": "      Json result;"
+        },
+        {
+          "line": 268,
+          "text": "      if (!json || !cdp_json::JsonReader(std::wstring_view(json, length), kJsonLimit, 16384).Read(&result) ||"
+        },
+        {
+          "line": 269,
+          "text": "          result.kind != L'{' || result.fields.contains(L\"error\") || result.fields.contains(L\"code\")) {"
+        },
+        {
+          "line": 270,
+          "text": "        self->Finish(E_FAIL, L\"malformed DevTools result\"); return;"
+        },
+        {
+          "line": 271,
+          "text": "      }"
+        },
+        {
+          "line": 272,
+          "text": "      then(result);"
+        },
+        {
+          "line": 273,
+          "text": "    };"
+        },
+        {
+          "line": 274,
+          "text": "    Com<ICoreWebView2> retained(view.core);"
+        },
+        {
+          "line": 275,
+          "text": "    HRESULT hr = retained->CallDevToolsProtocolMethod(method, params.c_str(),"
+        },
+        {
+          "line": 276,
+          "text": "        GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,"
+        },
+        {
+          "line": 277,
+          "text": "            [complete](HRESULT result, LPCWSTR json) -> HRESULT {"
+        },
+        {
+          "line": 278,
+          "text": "              complete(result, json); return S_OK;"
+        }
+      ]
+    },
+    {
+      "file": "tests/windows/webview/StorageDelete.ps1",
+      "sha256": "d82560f78841b28b9828da5224332d4fffb9f56db9bfd192e3d4e38676f6c713",
+      "sourceTree": "a4bbccc863326b05b730b98bf8a86213b194e901",
+      "excerpts": [
+        {
+          "line": 40,
+          "text": "  # This separate pre-COM control never substitutes for the storage operation."
+        },
+        {
+          "line": 41,
+          "text": "  $faultControl = RunTimed \"$Dir/webview2_probe.exe\" @('--native-exception-self-test') 15"
+        },
+        {
+          "line": 42,
+          "text": "  $faultExit = $LASTEXITCODE"
+        },
+        {
+          "line": 43,
+          "text": "  $faultRows = [regex]::Matches($faultControl, '(?m)^native-exception: code=0xe0470001 flags=0x([0-9a-f]{8}) thread=[1-9][0-9]* parameters=2 access=0x47534852 target=0x53544143\\r?$')"
+        },
+        {
+          "line": 44,
+          "text": "  $faultCode = $faultRows.Count"
+        },
+        {
+          "line": 45,
+          "text": "  # Windows may add reserved system flags (the actual runs report 0x81)."
+        },
+        {
+          "line": 46,
+          "text": "  # Require EXCEPTION_NONCONTINUABLE without constraining those system bits."
+        },
+        {
+          "line": 47,
+          "text": "  $noncontinuable = $faultCode -eq 1 -and"
+        },
+        {
+          "line": 48,
+          "text": "      (([Convert]::ToUInt32($faultRows[0].Groups[1].Value, 16) -band 1) -ne 0)"
+        },
+        {
+          "line": 49,
+          "text": "  $faultAddress = [regex]::Matches($faultControl, '(?im)^native-exception: fault\\[0\\] pc=0x[0-9a-f]+ sp=0x[0-9a-f]+ module=[^ <]+\\.dll base=0x[0-9a-f]+ rva=0x[0-9a-f]+\\r?$').Count"
+        },
+        {
+          "line": 50,
+          "text": "  $probeFrames = [regex]::Matches($faultControl, '(?im)^native-exception: frame\\[[1-9][0-9]*\\] pc=0x[0-9a-f]+ sp=0x[0-9a-f]+ module=webview2_probe\\.exe base=0x[0-9a-f]+ rva=0x[0-9a-f]*[1-9a-f][0-9a-f]*\\r?$').Count"
+        },
+        {
+          "line": 51,
+          "text": "  if ($faultExit -ne -532217855 -or -not $noncontinuable -or $faultAddress -ne 1 -or $probeFrames -lt 1) {"
+        },
+        {
+          "line": 52,
+          "text": "    Write-Host \"FAIL  storage-delete: native fault diagnostic control failed (exit=$faultExit code=$faultCode noncontinuable=$noncontinuable address=$faultAddress probe-frames=$probeFrames)\""
+        },
+        {
+          "line": 53,
+          "text": "    $script:failed++"
+        },
+        {
+          "line": 54,
+          "text": "  } else {"
+        },
+        {
+          "line": 55,
+          "text": "    Write-Host 'PASS  storage-delete: native fault diagnostic control preserved the failing exit and actual exception stack'"
+        },
+        {
+          "line": 56,
+          "text": "  }"
+        },
+        {
+          "line": 57,
+          "text": "  Write-Host $faultControl"
+        },
+        {
+          "line": 58,
+          "text": "  $output = RunTimed \"$Dir/webview2_probe.exe\" @('--storage-delete') 690"
+        },
+        {
+          "line": 59,
+          "text": "  $exit = $LASTEXITCODE"
+        },
+        {
+          "line": 60,
+          "text": "  ($output -split \"`n\" | Where-Object { $_ -match '^(PASS|FAIL|INFO) ' }) | Out-Host"
+        },
+        {
+          "line": 61,
+          "text": "  $qualified = [regex]::Matches($output, '(?m)^PASS  storage-delete: QUALIFIED production=Host::ClearOriginData persisted_baseline=5 full_keys=14 deleted=9 preserved=5 localStorage=14 cookies=6 fileSystems=2 callbacks=5 browser_exit=true\\r?$').Count"
+        },
+        {
+          "line": 62,
+          "text": "  $patterns = @("
+        },
+        {
+          "line": 63,
+          "text": "    'PASS  storage-delete: network before positive-control requests=1 accepted-connections=[1-9][0-9]*',"
+        }
+      ]
+    }
+  ],
+  "candidate": {
+    "localCommit": "2857fb1bc03eb4906868de0827f6a4e7f56fc231",
+    "localTree": "a3984c23fd853b2d651b50f0888395bee1bf42a1",
+    "description": "Defer final controller/handler cleanup to the existing owner task queue after marking the operation terminal; retain the active operation and GlobalWork until that finalization, including during shutdown drain.",
+    "basis": "The executed Finish path closes controllers synchronously, and a DevTools completion can call it inline; the exact runtime dispatch bytes retain their node until after callback return.",
+    "runtimeAcceptance": false,
+    "rootCauseConfirmedByCandidate": false,
+    "requiredEvidence": "The unchanged actual Host deletion fixture must finish with all deletion, preserved-data, callbacks, concurrent ordinary-network, browser-exit and shutdown-drain gates satisfied on both runtimes."
+  },
+  "limitations": [
+    "A successful native exception control proves diagnostic behavior, not storage deletion.",
+    "Fourteen seeded keys and a started ordinary network control do not prove deletion, preserved data or uninterrupted networking during the failed operation.",
+    "The absence of a printed callback summary is not proof that no native callback ever ran.",
+    "The copied runtime image identity and exact instruction order do not establish which earlier action made the node link invalid.",
+    "The internal response-registry description is an inference from retained bytes and literals; no PDB was used to name private runtime functions.",
+    "Windows 2025 stopped before the storage step; its startup failure is separate from the Windows 2022 access violation.",
+    "A deferred cleanup candidate remains unaccepted until the unchanged real Windows qualification passes."
+  ]
+}

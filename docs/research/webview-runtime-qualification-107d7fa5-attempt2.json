@@ -1,0 +1,706 @@
+{
+  "schemaVersion": 1,
+  "run": 45597266059,
+  "attempt": 2,
+  "url": "https://github.com/gesher-runtime/gesher/actions/runs/45597266059/attempts/2",
+  "sourceCommit": "107d7fa57c3daf66511d475ceeb09ec907c969cb",
+  "sourceTree": "f9266df78377922a5c3f3ef37988362c03c9c13c",
+  "sourceIdentity": "Checkout SHA is printed in each job; tree verified against the local Git object. Failed Windows jobs were retried with the original build artifact.",
+  "evidenceMethod": "Read only the already cached complete job logs and corresponding saved tool results; no new download. SHA256 covers the exact saved UTF-8 log bytes. Anchors are one-based physical log lines, including timestamps and blank lines; anchor text omits the timestamp.",
+  "duplicateOutputHandling": "The PowerShell failure handler echoes the same storage subprocess output after its failure summary. Storage anchors and seed counts below use the first copy before that summary, not a second execution.",
+  "overallResult": "Both Windows test jobs failed. The actual storage subprocess crashed with exit -1073741819 (0xC0000005); worker diagnostics subsequently completed in separate subprocesses.",
+  "storageResult": "All 14 real storage keys, including the nested A-to-B-to-A /^31 key, were seeded and measured on both runtimes. Production deletion is NOT qualified: no post-deletion inventory, final preservation, shutdown/drain or final browser-exit result was reached.",
+  "workerResult": "The existing 11-case scope matrix repeated its five outcomes on both runtimes, including the CORS preflight and Close-before-Complete failures. No production worker capability was enabled.",
+  "unrunWorkerFollowup": {
+    "sourceCommit": "ee17eadeb45c43aebbad84d6ece6a2b060ac6f61",
+    "sourceTree": "bebba56aa92e96dd00fc280727a9965e978b3c04",
+    "cases": [
+      "cors-preflight-deny",
+      "teardown-complete-deny",
+      "teardown-complete-followup"
+    ],
+    "status": "Not included in this executed source; no runtime result for these new variants is established by this receipt."
+  },
+  "artifact": {
+    "id": 15013338305,
+    "url": "https://github.com/gesher-runtime/gesher/actions/runs/45597266059/artifacts/15013338305",
+    "zipBytes": 2842543,
+    "uploadedSha256": "6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19",
+    "buildJob": 139146534048,
+    "buildJobUrl": "https://github.com/gesher-runtime/gesher/actions/runs/45597266059/job/139146534048",
+    "buildLog": {
+      "file": "storage-delete-45597266059-build-139146534048.log",
+      "sha256": "2bb9e5a4c0cca5946751122bed4685088f3e9da134d02aae623c080416625c15",
+      "bytes": 27333,
+      "lineCount": 343
+    },
+    "uploadEvidence": [
+      {
+        "line": 319,
+        "text": "SHA256 digest of uploaded artifact zip is 6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19"
+      },
+      {
+        "line": 322,
+        "text": "Artifact webview has been successfully uploaded! Final size is 2842543 bytes. Artifact ID is 15013338305"
+      }
+    ]
+  },
+  "limits": [
+    "0xC0000005 identifies the observed process exit code; these logs contain no faulting instruction, module or stack, so they do not establish the crash cause.",
+    "The runtime 157 callback summary establishes the first two ordered S_OK completions on the Host STA under the pinned fixture checks. Callback IDs 101/102 are fixed by that source; individual IDs were not printed. Absence of a runtime 131 summary does not prove that no callback ran.",
+    "Seed-time localStorage/cookie/OPFS checks are not evidence of preservation after production deletion. The ordinary network control started, but no during-deletion isolation summary completed.",
+    "No final storage QUALIFIED marker, five-callback check, accepted-operation shutdown drain, final payload/mask preservation, or resolver escape-sentinel result was reached.",
+    "The worker redirect result covers the final target while one initial redirect GET reached the origin. The late-allow gate is diagnostic, not the production Java callback or permission path.",
+    "Worker observations cover the two recorded runtimes and this fixture only. Cached responses, incremental upload streams, real Java callback ownership and broader lifecycles remain unqualified.",
+    "Loopback request/byte counters are fixture-origin observations, not system-wide packet or DNS telemetry."
+  ],
+  "jobs": [
+    {
+      "os": "windows-2022",
+      "job": 139149103447,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45597266059/job/139149103447",
+      "result": "failure",
+      "runtime": "131.0.2903.86",
+      "sdk": "1.0.4258.31",
+      "loader": "static (WebView2LoaderStatic.lib)",
+      "log": {
+        "file": "storage-delete-45597266059-attempt2-windows-2022-139149103447.log",
+        "sha256": "d090813ec3e8999c1ac6a0eb2aae0e2d1f3d3494809aeabf82372d5b2b278cf3",
+        "bytes": 260563,
+        "lineCount": 2444
+      },
+      "identityEvidence": [
+        {
+          "line": 202,
+          "text": "107d7fa57c3daf66511d475ceeb09ec907c969cb"
+        },
+        {
+          "line": 739,
+          "text": "INFO  storage-delete: sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib) profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-3d90036d0a144f12b9bc3a7aa8f23e72"
+        },
+        {
+          "line": 2216,
+          "text": "INFO  worker-denial: runtime=131.0.2903.86 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+        }
+      ],
+      "artifactExpectedSha256": "6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19",
+      "artifactDownloadedSha256": "6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19",
+      "artifactEvidence": [
+        {
+          "line": 218,
+          "text": "- webview (ID: 15013338305, Size: 2842543, Expected Digest: sha256:6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19)"
+        },
+        {
+          "line": 222,
+          "text": "SHA256 digest of downloaded artifact is 6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19"
+        }
+      ],
+      "storage": {
+        "firstOutputLines": [
+          739,
+          1588
+        ],
+        "profile": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-3d90036d0a144f12b9bc3a7aa8f23e72",
+        "persistedBaselineBeforeOriginRevisit": 5,
+        "baselineEvidence": [
+          {
+            "line": 1133,
+            "text": "PASS  storage-delete: persisted-baseline positive=5 removed=0"
+          },
+          {
+            "line": 1135,
+            "text": "PASS  storage-delete: five persisted keys discovered after browser exit before origin revisit"
+          }
+        ],
+        "actualSeedWrites": [
+          {
+            "name": "A-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 869
+          },
+          {
+            "name": "C-under-A",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 889
+          },
+          {
+            "name": "B-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 925
+          },
+          {
+            "name": "C-under-B",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 945
+          },
+          {
+            "name": "A-under-B",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 971
+          },
+          {
+            "name": "subdomain-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1153
+          },
+          {
+            "name": "D-under-subdomain",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1171
+          },
+          {
+            "name": "port-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1207
+          },
+          {
+            "name": "E-under-port",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1225
+          },
+          {
+            "name": "HTTP-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1261
+          },
+          {
+            "name": "C-under-HTTP",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1279
+          },
+          {
+            "name": "HTTPS-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1315
+          },
+          {
+            "name": "D-under-HTTPS",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1333
+          },
+          {
+            "name": "A-through-B-under-A",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1429
+          }
+        ],
+        "nestedKey": "https://storage-a-3d90036d0a144f12b9bc3a7aa8f23e72.invalid/^31",
+        "nestedResourceEvidence": [
+          {
+            "line": 1417,
+            "text": "INFO  storage-delete: nested-resource method=GET uri=https://storage-b-3d90036d0a144f12b9bc3a7aa8f23e72.invalid/storage.html source=1 owned=true"
+          },
+          {
+            "line": 1419,
+            "text": "INFO  storage-delete: nested-resource method=GET uri=https://storage-a-3d90036d0a144f12b9bc3a7aa8f23e72.invalid/storage.html source=1 owned=true"
+          }
+        ],
+        "nestedKeyEvidence": {
+          "line": 1475,
+          "text": "INFO  storage-delete: observed nested registry key=https://storage-a-3d90036d0a144f12b9bc3a7aa8f23e72.invalid/^31"
+        },
+        "fullKeyInventory": 14,
+        "allWrittenEvidence": {
+          "line": 1523,
+          "text": "PASS  storage-delete: all-written positive=14 removed=0"
+        },
+        "ordinaryNetworkStartedEvidence": {
+          "line": 1587,
+          "text": "PASS  storage-delete: ordinary-network control started on unrelated origin with real no-store fetch"
+        },
+        "callbackSummariesObserved": [],
+        "callbackEvidence": [],
+        "lastNativeEvidenceBeforeFailure": {
+          "line": 1587,
+          "text": "PASS  storage-delete: ordinary-network control started on unrelated origin with real no-store fetch"
+        },
+        "exitSigned": -1073741819,
+        "exitHex": "0xC0000005",
+        "failureEvidence": {
+          "line": 1589,
+          "text": "FAIL  storage-delete: production qualification failed (exit=-1073741819 qualified=0 missing=34 final-callback-checks=0)"
+        },
+        "qualified": false,
+        "postDeletionInventoryObserved": false,
+        "finalPreservationObserved": false,
+        "duringDeletionNetworkIsolationObserved": false,
+        "finalShutdownDrainObserved": false,
+        "finalBrowserExitObserved": false
+      },
+      "worker": {
+        "matrixCases": 11,
+        "workerIdentity": "5ec29787-4717-4688-80d0-49058488bd92",
+        "sameWorkerForAllCases": true,
+        "noTimeoutOrAbort": true,
+        "outcomes": [
+          {
+            "case": "post-deny",
+            "initialTypeError": true,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 0,
+            "preflightRequests": 0,
+            "outcome": "network-rejection-observed",
+            "actualFetch": "rejected",
+            "actualBody": "none",
+            "actualStatus": 0,
+            "workerMessageLine": 2244,
+            "summaryEvidence": {
+              "line": 2406,
+              "text": "INFO  worker-denial: result case=post-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            }
+          },
+          {
+            "case": "cors-deny",
+            "initialTypeError": true,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 0,
+            "preflightRequests": 1,
+            "outcome": "not-qualified",
+            "actualFetch": "rejected",
+            "actualBody": "none",
+            "actualStatus": 0,
+            "workerMessageLine": 2264,
+            "summaryEvidence": {
+              "line": 2408,
+              "text": "INFO  worker-denial: result case=cors-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=1 outcome=not-qualified"
+            }
+          },
+          {
+            "case": "redirect-deny",
+            "initialTypeError": true,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 0,
+            "preflightRequests": 0,
+            "outcome": "network-rejection-observed",
+            "actualFetch": "rejected",
+            "actualBody": "none",
+            "actualStatus": 0,
+            "workerMessageLine": 2284,
+            "summaryEvidence": {
+              "line": 2410,
+              "text": "INFO  worker-denial: result case=redirect-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            }
+          },
+          {
+            "case": "parallel-deny",
+            "initialTypeError": true,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 0,
+            "preflightRequests": 0,
+            "outcome": "network-rejection-observed",
+            "actualFetch": "rejected",
+            "actualBody": "none",
+            "actualStatus": 0,
+            "workerMessageLine": 2308,
+            "summaryEvidence": {
+              "line": 2412,
+              "text": "INFO  worker-denial: result case=parallel-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            }
+          },
+          {
+            "case": "teardown-deny",
+            "initialTypeError": false,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 1,
+            "preflightRequests": 0,
+            "outcome": "not-qualified",
+            "actualFetch": "resolved",
+            "actualBody": "complete",
+            "actualStatus": 200,
+            "workerMessageLine": 2346,
+            "summaryEvidence": {
+              "line": 2414,
+              "text": "INFO  worker-denial: result case=teardown-deny initial-typeerror=no request-identity=yes timing-identity=yes target-network=1 preflight-network=0 outcome=not-qualified"
+            }
+          }
+        ],
+        "independentEvidence": [
+          {
+            "line": 2022,
+            "text": "PASS  worker-response: independent HTTP byte accounting controls verified"
+          },
+          {
+            "line": 2368,
+            "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/teardown-deny body-bytes=32768 complete=yes"
+          },
+          {
+            "line": 2376,
+            "text": "INFO  worker-denial: origin=B method=OPTIONS path=/denial/network/cors-deny body-bytes=0 complete=yes"
+          },
+          {
+            "line": 2380,
+            "text": "INFO  worker-denial: unknown-origin-requests=0 origin-a-connections=11 origin-b-connections=4"
+          },
+          {
+            "line": 2382,
+            "text": "INFO  worker-denial: received-http-bytes-a=137353 received-http-bytes-b=34897 unattributed-http-bytes=0"
+          },
+          {
+            "line": 2416,
+            "text": "INFO  worker-denial: parallel-reverse-completions=2 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0"
+          },
+          {
+            "line": 2418,
+            "text": "INFO  worker-denial: redirect-start-network=1 redirect-target-callback=yes; observed WebView2 routing only; Android redirect parity unqualified"
+          },
+          {
+            "line": 2420,
+            "text": "PASS  worker-denial: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled"
+          }
+        ],
+        "newEe17VariantsExecuted": false,
+        "productionCapabilityEnabled": false
+      },
+      "jobFailureEvidence": {
+        "line": 2428,
+        "text": "##[error]Process completed with exit code 1."
+      }
+    },
+    {
+      "os": "windows-2025",
+      "job": 139149104127,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45597266059/job/139149104127",
+      "result": "failure",
+      "runtime": "157.0.4341.46",
+      "sdk": "1.0.4258.31",
+      "loader": "static (WebView2LoaderStatic.lib)",
+      "log": {
+        "file": "storage-delete-45597266059-attempt2-windows-2025-139149104127.log",
+        "sha256": "6c81dfff0c715d49d803304921d9898231e0aaebf5dca60845190628971eda11",
+        "bytes": 255574,
+        "lineCount": 2349
+      },
+      "identityEvidence": [
+        {
+          "line": 101,
+          "text": "107d7fa57c3daf66511d475ceeb09ec907c969cb"
+        },
+        {
+          "line": 638,
+          "text": "INFO  storage-delete: sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib) profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-ca9d066d2a2747b3a2ee891ddffe8f8c"
+        },
+        {
+          "line": 2121,
+          "text": "INFO  worker-denial: runtime=157.0.4341.46 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+        }
+      ],
+      "artifactExpectedSha256": "6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19",
+      "artifactDownloadedSha256": "6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19",
+      "artifactEvidence": [
+        {
+          "line": 117,
+          "text": "- webview (ID: 15013338305, Size: 2842543, Expected Digest: sha256:6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19)"
+        },
+        {
+          "line": 121,
+          "text": "SHA256 digest of downloaded artifact is 6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19"
+        }
+      ],
+      "storage": {
+        "firstOutputLines": [
+          638,
+          1491
+        ],
+        "profile": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-ca9d066d2a2747b3a2ee891ddffe8f8c",
+        "persistedBaselineBeforeOriginRevisit": 5,
+        "baselineEvidence": [
+          {
+            "line": 1032,
+            "text": "PASS  storage-delete: persisted-baseline positive=5 removed=0"
+          },
+          {
+            "line": 1034,
+            "text": "PASS  storage-delete: five persisted keys discovered after browser exit before origin revisit"
+          }
+        ],
+        "actualSeedWrites": [
+          {
+            "name": "A-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 768
+          },
+          {
+            "name": "C-under-A",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 788
+          },
+          {
+            "name": "B-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 824
+          },
+          {
+            "name": "C-under-B",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 844
+          },
+          {
+            "name": "A-under-B",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 870
+          },
+          {
+            "name": "subdomain-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1052
+          },
+          {
+            "name": "D-under-subdomain",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1070
+          },
+          {
+            "name": "port-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1106
+          },
+          {
+            "name": "E-under-port",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1124
+          },
+          {
+            "name": "HTTP-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1160
+          },
+          {
+            "name": "C-under-HTTP",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1178
+          },
+          {
+            "name": "HTTPS-first-party",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1214
+          },
+          {
+            "name": "D-under-HTTPS",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1232
+          },
+          {
+            "name": "A-through-B-under-A",
+            "bytes": 262144,
+            "databaseClosed": true,
+            "line": 1328
+          }
+        ],
+        "nestedKey": "https://storage-a-ca9d066d2a2747b3a2ee891ddffe8f8c.invalid/^31",
+        "nestedResourceEvidence": [
+          {
+            "line": 1314,
+            "text": "INFO  storage-delete: nested-resource method=GET uri=https://storage-b-ca9d066d2a2747b3a2ee891ddffe8f8c.invalid/storage.html source=1 owned=true"
+          },
+          {
+            "line": 1318,
+            "text": "INFO  storage-delete: nested-resource method=GET uri=https://storage-a-ca9d066d2a2747b3a2ee891ddffe8f8c.invalid/storage.html source=1 owned=true"
+          }
+        ],
+        "nestedKeyEvidence": {
+          "line": 1374,
+          "text": "INFO  storage-delete: observed nested registry key=https://storage-a-ca9d066d2a2747b3a2ee891ddffe8f8c.invalid/^31"
+        },
+        "fullKeyInventory": 14,
+        "allWrittenEvidence": {
+          "line": 1422,
+          "text": "PASS  storage-delete: all-written positive=14 removed=0"
+        },
+        "ordinaryNetworkStartedEvidence": {
+          "line": 1486,
+          "text": "PASS  storage-delete: ordinary-network control started on unrelated origin with real no-store fetch"
+        },
+        "callbackSummariesObserved": [
+          2
+        ],
+        "callbackEvidence": [
+          {
+            "line": 1488,
+            "text": "PASS  storage-delete: production callbacks=2 ordered=true exactly-once=true owner-STA=true"
+          }
+        ],
+        "lastNativeEvidenceBeforeFailure": {
+          "line": 1490,
+          "text": "INFO  quota-registry: Runtime.evaluate hr=0x00000000 json="
+        },
+        "exitSigned": -1073741819,
+        "exitHex": "0xC0000005",
+        "failureEvidence": {
+          "line": 1492,
+          "text": "FAIL  storage-delete: production qualification failed (exit=-1073741819 qualified=0 missing=33 final-callback-checks=0)"
+        },
+        "qualified": false,
+        "postDeletionInventoryObserved": false,
+        "finalPreservationObserved": false,
+        "duringDeletionNetworkIsolationObserved": false,
+        "finalShutdownDrainObserved": false,
+        "finalBrowserExitObserved": false
+      },
+      "worker": {
+        "matrixCases": 11,
+        "workerIdentity": "97d030ae-abef-44f5-a821-1129378f2e8b",
+        "sameWorkerForAllCases": true,
+        "noTimeoutOrAbort": true,
+        "outcomes": [
+          {
+            "case": "post-deny",
+            "initialTypeError": true,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 0,
+            "preflightRequests": 0,
+            "outcome": "network-rejection-observed",
+            "actualFetch": "rejected",
+            "actualBody": "none",
+            "actualStatus": 0,
+            "workerMessageLine": 2149,
+            "summaryEvidence": {
+              "line": 2311,
+              "text": "INFO  worker-denial: result case=post-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            }
+          },
+          {
+            "case": "cors-deny",
+            "initialTypeError": true,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 0,
+            "preflightRequests": 1,
+            "outcome": "not-qualified",
+            "actualFetch": "rejected",
+            "actualBody": "none",
+            "actualStatus": 0,
+            "workerMessageLine": 2169,
+            "summaryEvidence": {
+              "line": 2313,
+              "text": "INFO  worker-denial: result case=cors-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=1 outcome=not-qualified"
+            }
+          },
+          {
+            "case": "redirect-deny",
+            "initialTypeError": true,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 0,
+            "preflightRequests": 0,
+            "outcome": "network-rejection-observed",
+            "actualFetch": "rejected",
+            "actualBody": "none",
+            "actualStatus": 0,
+            "workerMessageLine": 2189,
+            "summaryEvidence": {
+              "line": 2315,
+              "text": "INFO  worker-denial: result case=redirect-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            }
+          },
+          {
+            "case": "parallel-deny",
+            "initialTypeError": true,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 0,
+            "preflightRequests": 0,
+            "outcome": "network-rejection-observed",
+            "actualFetch": "rejected",
+            "actualBody": "none",
+            "actualStatus": 0,
+            "workerMessageLine": 2213,
+            "summaryEvidence": {
+              "line": 2317,
+              "text": "INFO  worker-denial: result case=parallel-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            }
+          },
+          {
+            "case": "teardown-deny",
+            "initialTypeError": false,
+            "requestIdentity": true,
+            "timingIdentity": true,
+            "targetRequests": 1,
+            "preflightRequests": 0,
+            "outcome": "not-qualified",
+            "actualFetch": "resolved",
+            "actualBody": "complete",
+            "actualStatus": 200,
+            "workerMessageLine": 2251,
+            "summaryEvidence": {
+              "line": 2319,
+              "text": "INFO  worker-denial: result case=teardown-deny initial-typeerror=no request-identity=yes timing-identity=yes target-network=1 preflight-network=0 outcome=not-qualified"
+            }
+          }
+        ],
+        "independentEvidence": [
+          {
+            "line": 1927,
+            "text": "PASS  worker-response: independent HTTP byte accounting controls verified"
+          },
+          {
+            "line": 2273,
+            "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/teardown-deny body-bytes=32768 complete=yes"
+          },
+          {
+            "line": 2281,
+            "text": "INFO  worker-denial: origin=B method=OPTIONS path=/denial/network/cors-deny body-bytes=0 complete=yes"
+          },
+          {
+            "line": 2285,
+            "text": "INFO  worker-denial: unknown-origin-requests=0 origin-a-connections=11 origin-b-connections=4"
+          },
+          {
+            "line": 2287,
+            "text": "INFO  worker-denial: received-http-bytes-a=137654 received-http-bytes-b=35069 unattributed-http-bytes=0"
+          },
+          {
+            "line": 2321,
+            "text": "INFO  worker-denial: parallel-reverse-completions=2 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0"
+          },
+          {
+            "line": 2323,
+            "text": "INFO  worker-denial: redirect-start-network=1 redirect-target-callback=yes; observed WebView2 routing only; Android redirect parity unqualified"
+          },
+          {
+            "line": 2325,
+            "text": "PASS  worker-denial: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled"
+          }
+        ],
+        "newEe17VariantsExecuted": false,
+        "productionCapabilityEnabled": false
+      },
+      "jobFailureEvidence": {
+        "line": 2333,
+        "text": "##[error]Process completed with exit code 1."
+      }
+    }
+  ]
+}

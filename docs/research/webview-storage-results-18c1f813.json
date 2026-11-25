@@ -1,0 +1,786 @@
+{
+  "schemaVersion": 1,
+  "run": 45618078011,
+  "url": "https://github.com/gesher-runtime/gesher/actions/runs/45618078011",
+  "actor": "palmoni5",
+  "sourceCommit": "18c1f8135ac82f4dbc8ba3ea36f8fb5dec93f9b9",
+  "sourceTree": "6555b82331f00d603c87e9e00df555ad8f11319b",
+  "localTreeEquivalentCommit": "d9c5585888731484f2bdcd0567a1f66bd1b32807",
+  "createdAt": "2026-11-25T12:53:15Z",
+  "updatedAt": "2026-11-25T13:08:00Z",
+  "latestAttempt": 2,
+  "workflowConclusion": "failure",
+  "fullStorageQualified": false,
+  "scope": "Ordinary storage and lifecycle outcome receipt. The final sentinel finding remains review-only under the requested scope. No network policy, isolation, bypass, acceptance gate or capability is changed; no merge or auto-merge is requested.",
+  "evidenceMethod": "Cached exact-run logs and already retained artifacts only. Each complete log is byte-identical to its cached connector content. ZIP digest matches upload and metadata; all extracted members match the ZIP. Anchors use one-based physical lines and omit timestamps. First captured storage output is counted once; echoed failure output is not an additional execution.",
+  "productionChange": {
+    "candidateCommit": "2857fb1bc03eb4906868de0827f6a4e7f56fc231",
+    "description": "Mark terminal in the SDK callback, then finalize checked cleanup, report completion and advance the queue on the existing owner STA while retaining the admitted lease.",
+    "sourceBlobs": {
+      "compat/webview/origin_storage_delete.h": "2ec43f18d9dcb6e07b32c97196ccdffe62f0a0a6",
+      "probes/webview/storage_delete_probe.h": "1ddf38a3595deb0a634f1abbad56c11b7e68e61d",
+      "probes/webview/worker_response_server.cc": "d87460f7fa3ded42041a0575f936653325696209",
+      "tests/windows/webview/StorageDelete.ps1": "732107fe8e97f04be714d1be9479a02ef05621ce",
+      ".github/workflows/webview.yml": "14ac012ef70be423b0f16f4abae51675fc71049f"
+    },
+    "unchangedComparedWithPreviousHead": [
+      "probes/webview/storage_delete_probe.h",
+      "probes/webview/worker_response_server.cc",
+      "tests/windows/webview/StorageDelete.ps1",
+      ".github/workflows/webview.yml"
+    ]
+  },
+  "build": {
+    "job": 139218593155,
+    "conclusion": "success",
+    "log": {
+      "file": "storage-delete-45618078011-build-139218593155.log",
+      "bytes": 27338,
+      "sha256": "41a84bccb8eafda7f6b6ce8613986076634db425ea16f90acdd9e250c50f6fe8",
+      "lines": 343
+    },
+    "checkoutEvidence": {
+      "line": 112,
+      "text": "18c1f8135ac82f4dbc8ba3ea36f8fb5dec93f9b9"
+    }
+  },
+  "artifact": {
+    "id": 15022464196,
+    "name": "webview",
+    "url": "https://github.com/gesher-runtime/gesher/actions/runs/45618078011/artifacts/15022464196",
+    "archive": {
+      "file": "webview-45618078011.zip",
+      "bytes": 2861155,
+      "sha256": "45d80e711bb77156dd739437d3328eabc0bdedccd0b2c9ccfd98a54559c110fc"
+    },
+    "metadataDigest": "sha256:45d80e711bb77156dd739437d3328eabc0bdedccd0b2c9ccfd98a54559c110fc",
+    "extractedMembers": [
+      {
+        "file": "WebView2Loader.dll",
+        "bytes": 194912,
+        "sha256": "3426dcc55fdfb8b5e7ac623cf33b4ccf283fbf68a0c5a65bddfdb4d749a8abee"
+      },
+      {
+        "file": "webstorage_native_contracts.exe",
+        "bytes": 941056,
+        "sha256": "18e2f483c0a5f013e0261b498719f4431522a75142bc23c3b2a4a772a67a10ca"
+      },
+      {
+        "file": "webstorage_native_negative.exe",
+        "bytes": 941056,
+        "sha256": "971a93ce18e4addd4c04a1412bc43996c342d37e80dd51aca51339d35b4a96f1"
+      },
+      {
+        "file": "webview2_probe.exe",
+        "bytes": 4261888,
+        "sha256": "2783f5533b590ad17abc6483e3512b2ba15a071463e5229caef4734baadcab55"
+      },
+      {
+        "file": "webview2_probe_dll.exe",
+        "bytes": 2545152,
+        "sha256": "eac862484e8e51800847ec8ec6a039d3e1735fa330245593aa6571ed107e5be9"
+      },
+      {
+        "file": "webview_owned_stream_test.exe",
+        "bytes": 859136,
+        "sha256": "772db4d145c44a7558a001908012ca19e87345c18b6766bcd5e12aca2adbbb30"
+      }
+    ],
+    "uploadEvidence": [
+      {
+        "line": 319,
+        "text": "SHA256 digest of uploaded artifact zip is 45d80e711bb77156dd739437d3328eabc0bdedccd0b2c9ccfd98a54559c110fc"
+      },
+      {
+        "line": 322,
+        "text": "Artifact webview has been successfully uploaded! Final size is 2861155 bytes. Artifact ID is 15022464196"
+      }
+    ]
+  },
+  "executions": [
+    {
+      "runner": "windows-2022",
+      "runtime": "131.0.2903.86",
+      "attempt": 1,
+      "job": 139219879436,
+      "jobUrl": "https://github.com/gesher-runtime/gesher/actions/runs/45618078011/job/139219879436",
+      "jobConclusion": "failure",
+      "log": {
+        "file": "storage-delete-45618078011-windows-2022-139219879436.log",
+        "bytes": 382964,
+        "sha256": "fe64a0b6d7cc6145fcc7a11bd039349ad00d2db9dd629ceafe3e1f06485f07d6",
+        "lines": 3470
+      },
+      "storageAttempted": true,
+      "fullStorageQualified": false,
+      "processExit": 1,
+      "storageNativeExceptionObserved": false,
+      "checkoutEvidence": {
+        "line": 204,
+        "text": "18c1f8135ac82f4dbc8ba3ea36f8fb5dec93f9b9"
+      },
+      "artifactDownloadEvidence": [
+        {
+          "line": 224,
+          "text": "SHA256 digest of downloaded artifact is 45d80e711bb77156dd739437d3328eabc0bdedccd0b2c9ccfd98a54559c110fc"
+        }
+      ],
+      "capture": {
+        "firstLine": 754,
+        "lastLine": 2195,
+        "note": "First captured storage output only. The failure wrapper later echoes the same output; that is not another execution."
+      },
+      "sdkAndProfile": {
+        "line": 754,
+        "text": "INFO  storage-delete: sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib) profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-69aadb9142004ecab1ae0f3229f9fba0"
+      },
+      "ordinaryProfiles": [
+        {
+          "line": 810,
+          "text": "INFO  storage-delete: ordinary-profile=\"\" path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-69aadb9142004ecab1ae0f3229f9fba0\\EBWebView\\Default"
+        },
+        {
+          "line": 1066,
+          "text": "INFO  storage-delete: ordinary-profile=\"\" path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-69aadb9142004ecab1ae0f3229f9fba0\\EBWebView\\Default"
+        },
+        {
+          "line": 1582,
+          "text": "INFO  storage-delete: ordinary-profile=\"\" path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-69aadb9142004ecab1ae0f3229f9fba0\\EBWebView\\Default"
+        },
+        {
+          "line": 1666,
+          "text": "INFO  storage-delete: ordinary-profile=\"\" path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-69aadb9142004ecab1ae0f3229f9fba0\\EBWebView\\Default"
+        }
+      ],
+      "nativeExceptionControl": {
+        "line": 739,
+        "text": "PASS  storage-delete: native fault diagnostic control preserved the failing exit and actual exception stack"
+      },
+      "intentionalExceptionRecord": {
+        "line": 740,
+        "text": "native-exception: code=0xe0470001 flags=0x00000081 thread=1820 parameters=2 access=0x47534852 target=0x53544143"
+      },
+      "measurements": [
+        {
+          "line": 1148,
+          "text": "PASS  storage-delete: persisted-baseline positive=5 removed=0"
+        },
+        {
+          "line": 1412,
+          "text": "PASS  storage-delete: expanded-origins positive=13 removed=0"
+        },
+        {
+          "line": 1538,
+          "text": "PASS  storage-delete: all-written positive=14 removed=0"
+        },
+        {
+          "line": 1766,
+          "text": "PASS  storage-delete: after-A positive=9 removed=5"
+        },
+        {
+          "line": 1824,
+          "text": "PASS  storage-delete: sentinel-preserved positive=9 removed=5"
+        },
+        {
+          "line": 1880,
+          "text": "PASS  storage-delete: after-HTTPS positive=7 removed=7"
+        },
+        {
+          "line": 1974,
+          "text": "PASS  storage-delete: after-HTTP positive=5 removed=9"
+        }
+      ],
+      "persistedBeforeRevisit": {
+        "line": 1150,
+        "text": "PASS  storage-delete: five persisted keys discovered after browser exit before origin revisit"
+      },
+      "observedNestedKey": {
+        "line": 1490,
+        "text": "INFO  storage-delete: observed nested registry key=https://storage-a-69aadb9142004ecab1ae0f3229f9fba0.invalid/^31"
+      },
+      "productionBeforeOrdinaryRevisit": {
+        "line": 1768,
+        "text": "PASS  storage-delete: production discovered and deleted persisted partitions before ordinary origin revisit"
+      },
+      "callbackSummaries": [
+        {
+          "line": 1604,
+          "text": "PASS  storage-delete: production callbacks=2 ordered=true exactly-once=true owner-STA=true"
+        },
+        {
+          "line": 1770,
+          "text": "PASS  storage-delete: production callbacks=3 ordered=true exactly-once=true owner-STA=true"
+        },
+        {
+          "line": 1826,
+          "text": "PASS  storage-delete: production callbacks=4 ordered=true exactly-once=true owner-STA=true"
+        },
+        {
+          "line": 1918,
+          "text": "PASS  storage-delete: production callbacks=5 ordered=true exactly-once=true owner-STA=true"
+        },
+        {
+          "line": 2174,
+          "text": "PASS  storage-delete: production callbacks=5 ordered=true exactly-once=true owner-STA=true"
+        }
+      ],
+      "finalContents": [
+        {
+          "line": 1992,
+          "text": "PASS  storage-delete: absent A-first-party bytes=0 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2002,
+          "text": "PASS  storage-delete: absent C-under-A bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2020,
+          "text": "PASS  storage-delete: read B-first-party bytes=262144 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2030,
+          "text": "PASS  storage-delete: read C-under-B bytes=262144 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2038,
+          "text": "PASS  storage-delete: read A-under-B bytes=262144 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2056,
+          "text": "PASS  storage-delete: read subdomain-first-party bytes=262144 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2064,
+          "text": "PASS  storage-delete: absent D-under-subdomain bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2082,
+          "text": "PASS  storage-delete: read port-first-party bytes=262144 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2090,
+          "text": "PASS  storage-delete: absent E-under-port bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2108,
+          "text": "PASS  storage-delete: absent HTTP-first-party bytes=0 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2116,
+          "text": "PASS  storage-delete: absent C-under-HTTP bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2134,
+          "text": "PASS  storage-delete: absent HTTPS-first-party bytes=0 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2142,
+          "text": "PASS  storage-delete: absent D-under-HTTPS bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2172,
+          "text": "PASS  storage-delete: absent A-through-B-under-A bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        }
+      ],
+      "finalFileSystems": [
+        {
+          "line": 1994,
+          "text": "PASS  storage-delete: filesystem absent A-first-party bytes=0 writable-closed=true"
+        },
+        {
+          "line": 2022,
+          "text": "PASS  storage-delete: filesystem read B-first-party bytes=8192 writable-closed=true"
+        }
+      ],
+      "shutdown": {
+        "line": 1926,
+        "text": "PASS  storage-delete: shutdown drained accepted deletion pending-observed=true joined=true later-admission=rejected"
+      },
+      "browserProcessExitRecords": [
+        {
+          "line": 1010,
+          "text": "INFO  quota-registry: browser process exited pid=4428"
+        },
+        {
+          "line": 1544,
+          "text": "INFO  quota-registry: browser process exited pid=5544"
+        },
+        {
+          "line": 2186,
+          "text": "INFO  quota-registry: browser process exited pid=2848"
+        },
+        {
+          "line": 2188,
+          "text": "INFO  quota-registry: browser process exited pid=2848"
+        }
+      ],
+      "earlyNetworkPositiveControl": {
+        "line": 866,
+        "text": "PASS  storage-delete: network before positive-control requests=1 accepted-connections=2"
+      },
+      "ordinaryNetworkProgress": [
+        {
+          "line": 1610,
+          "text": "PASS  storage-delete: ordinary-network phase=A failures=0 completed-during=37 independently-counted=true"
+        },
+        {
+          "line": 1776,
+          "text": "PASS  storage-delete: ordinary-network phase=sentinel failures=0 completed-during=27 independently-counted=true"
+        },
+        {
+          "line": 1832,
+          "text": "PASS  storage-delete: ordinary-network phase=HTTPS failures=0 completed-during=24 independently-counted=true"
+        },
+        {
+          "line": 1924,
+          "text": "PASS  storage-delete: ordinary-network phase=HTTP failures=0 completed-during=16 independently-counted=true"
+        }
+      ],
+      "sentinel": {
+        "connections": 5,
+        "requests": 2,
+        "receivedBytes": 3214,
+        "unattributedBytes": 1797,
+        "healthy": false,
+        "record": {
+          "line": 2190,
+          "text": "INFO  storage-delete: sentinel-final connections=5 requests=2 received-bytes=3214 unattributed-bytes=1797 healthy=false"
+        },
+        "scope": "Post-cleanup counters, not a measured production-only delta. The actual pre-production baseline is unlogged."
+      },
+      "failedGate": {
+        "line": 2176,
+        "text": "FAIL  quota-registry: production resolver or observer escaped the owned resource isolation"
+      },
+      "cleanupSentinelFailure": {
+        "line": 2192,
+        "text": "FAIL  quota-registry: loopback sentinel failed or did not stop cleanly"
+      },
+      "storageFailure": {
+        "line": 2194,
+        "text": "FAIL  storage-delete: actual production deletion qualification failed; no support inferred from an unavailable route"
+      },
+      "finalWrapper": {
+        "line": 2196,
+        "text": "FAIL  storage-delete: production qualification failed (exit=1 qualified=0 missing=3 final-callback-checks=2)"
+      },
+      "laterUnreachedProofs": [
+        "PASS  storage-delete: resolver-origin-network-connections=0 independent-positive-control=true",
+        "PASS  storage-delete: network after positive-control",
+        "PASS  storage-delete: ordinary-network stopped"
+      ]
+    },
+    {
+      "runner": "windows-2025",
+      "runtime": "157.0.4341.46",
+      "attempt": 1,
+      "job": 139219879492,
+      "jobUrl": "https://github.com/gesher-runtime/gesher/actions/runs/45618078011/job/139219879492",
+      "jobConclusion": "failure",
+      "log": {
+        "file": "storage-delete-45618078011-windows-2025-139219879492.log",
+        "bytes": 24628,
+        "sha256": "a7057ae214d3f0edf5653957fcd907e51eb49fd8c730cac769f0cb58b46bfbe6",
+        "lines": 261
+      },
+      "storageAttempted": false,
+      "fullStorageQualified": false,
+      "checkoutEvidence": {
+        "line": 102,
+        "text": "18c1f8135ac82f4dbc8ba3ea36f8fb5dec93f9b9"
+      },
+      "artifactDownloadEvidence": [
+        {
+          "line": 122,
+          "text": "SHA256 digest of downloaded artifact is 45d80e711bb77156dd739437d3328eabc0bdedccd0b2c9ccfd98a54559c110fc"
+        }
+      ],
+      "storageStep": {
+        "name": "Live storage deletion and worker response qualification",
+        "status": "completed",
+        "conclusion": "skipped",
+        "number": 8
+      },
+      "startupEvidence": [
+        {
+          "line": 153,
+          "text": "INFO  browser-session: sdk=1.0.4258.31 loader=WebView2Loader.dll (no Fetch or worker activation)"
+        },
+        {
+          "line": 157,
+          "text": "INFO  browser-session: runtime version immediate hr=0x00000000 json=157.0.4341.46"
+        },
+        {
+          "line": 159,
+          "text": "FAIL  browser-session: controller setup failed or timed out"
+        },
+        {
+          "line": 160,
+          "text": "FAIL  browser-session: harness failure; no Fetch or worker capability established"
+        },
+        {
+          "line": 161,
+          "text": "INFO  browser-session: CreateController completion hr=0x00000000 json="
+        },
+        {
+          "line": 162,
+          "text": "INFO  browser-session: late controller.Close immediate hr=0x00000000 json="
+        },
+        {
+          "line": 185,
+          "text": "FAIL  webview2_probe_dll exit 1"
+        },
+        {
+          "line": 189,
+          "text": "INFO  browser-session: sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib) (no Fetch or worker activation)"
+        },
+        {
+          "line": 193,
+          "text": "INFO  browser-session: runtime version immediate hr=0x00000000 json=157.0.4341.46"
+        },
+        {
+          "line": 195,
+          "text": "INFO  browser-session: CreateController completion hr=0x00000000 json="
+        }
+      ],
+      "limit": "The DLL controller deadline followed by late S_OK/Close is startup evidence only. No storage or exception-control subprocess ran."
+    },
+    {
+      "runner": "windows-2025",
+      "runtime": "157.0.4341.46",
+      "attempt": 2,
+      "job": 139225908726,
+      "jobUrl": "https://github.com/gesher-runtime/gesher/actions/runs/45618078011/job/139225908726",
+      "jobConclusion": "failure",
+      "log": {
+        "file": "storage-delete-45618078011-attempt2-windows-2025-139225908726.log",
+        "bytes": 383590,
+        "sha256": "eacd8fbf9e5a4e7320b5eec0d253b2e0be2db62009b37b406e36d518000d7980",
+        "lines": 3470
+      },
+      "storageAttempted": true,
+      "fullStorageQualified": false,
+      "processExit": 1,
+      "storageNativeExceptionObserved": false,
+      "checkoutEvidence": {
+        "line": 204,
+        "text": "18c1f8135ac82f4dbc8ba3ea36f8fb5dec93f9b9"
+      },
+      "artifactDownloadEvidence": [
+        {
+          "line": 224,
+          "text": "SHA256 digest of downloaded artifact is 45d80e711bb77156dd739437d3328eabc0bdedccd0b2c9ccfd98a54559c110fc"
+        }
+      ],
+      "capture": {
+        "firstLine": 754,
+        "lastLine": 2195,
+        "note": "First captured storage output only. The failure wrapper later echoes the same output; that is not another execution."
+      },
+      "sdkAndProfile": {
+        "line": 754,
+        "text": "INFO  storage-delete: sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib) profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-aabd2b5f946b4ab0ab9a559417cd49e5"
+      },
+      "ordinaryProfiles": [
+        {
+          "line": 810,
+          "text": "INFO  storage-delete: ordinary-profile=\"\" path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-aabd2b5f946b4ab0ab9a559417cd49e5\\EBWebView\\Default"
+        },
+        {
+          "line": 1066,
+          "text": "INFO  storage-delete: ordinary-profile=\"\" path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-aabd2b5f946b4ab0ab9a559417cd49e5\\EBWebView\\Default"
+        },
+        {
+          "line": 1582,
+          "text": "INFO  storage-delete: ordinary-profile=\"\" path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-aabd2b5f946b4ab0ab9a559417cd49e5\\EBWebView\\Default"
+        },
+        {
+          "line": 1666,
+          "text": "INFO  storage-delete: ordinary-profile=\"\" path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-storage-delete-aabd2b5f946b4ab0ab9a559417cd49e5\\EBWebView\\Default"
+        }
+      ],
+      "nativeExceptionControl": {
+        "line": 739,
+        "text": "PASS  storage-delete: native fault diagnostic control preserved the failing exit and actual exception stack"
+      },
+      "intentionalExceptionRecord": {
+        "line": 740,
+        "text": "native-exception: code=0xe0470001 flags=0x00000081 thread=6460 parameters=2 access=0x47534852 target=0x53544143"
+      },
+      "measurements": [
+        {
+          "line": 1148,
+          "text": "PASS  storage-delete: persisted-baseline positive=5 removed=0"
+        },
+        {
+          "line": 1412,
+          "text": "PASS  storage-delete: expanded-origins positive=13 removed=0"
+        },
+        {
+          "line": 1538,
+          "text": "PASS  storage-delete: all-written positive=14 removed=0"
+        },
+        {
+          "line": 1766,
+          "text": "PASS  storage-delete: after-A positive=9 removed=5"
+        },
+        {
+          "line": 1824,
+          "text": "PASS  storage-delete: sentinel-preserved positive=9 removed=5"
+        },
+        {
+          "line": 1880,
+          "text": "PASS  storage-delete: after-HTTPS positive=7 removed=7"
+        },
+        {
+          "line": 1974,
+          "text": "PASS  storage-delete: after-HTTP positive=5 removed=9"
+        }
+      ],
+      "persistedBeforeRevisit": {
+        "line": 1150,
+        "text": "PASS  storage-delete: five persisted keys discovered after browser exit before origin revisit"
+      },
+      "observedNestedKey": {
+        "line": 1490,
+        "text": "INFO  storage-delete: observed nested registry key=https://storage-a-aabd2b5f946b4ab0ab9a559417cd49e5.invalid/^31"
+      },
+      "productionBeforeOrdinaryRevisit": {
+        "line": 1768,
+        "text": "PASS  storage-delete: production discovered and deleted persisted partitions before ordinary origin revisit"
+      },
+      "callbackSummaries": [
+        {
+          "line": 1604,
+          "text": "PASS  storage-delete: production callbacks=2 ordered=true exactly-once=true owner-STA=true"
+        },
+        {
+          "line": 1770,
+          "text": "PASS  storage-delete: production callbacks=3 ordered=true exactly-once=true owner-STA=true"
+        },
+        {
+          "line": 1826,
+          "text": "PASS  storage-delete: production callbacks=4 ordered=true exactly-once=true owner-STA=true"
+        },
+        {
+          "line": 1918,
+          "text": "PASS  storage-delete: production callbacks=5 ordered=true exactly-once=true owner-STA=true"
+        },
+        {
+          "line": 2174,
+          "text": "PASS  storage-delete: production callbacks=5 ordered=true exactly-once=true owner-STA=true"
+        }
+      ],
+      "finalContents": [
+        {
+          "line": 1992,
+          "text": "PASS  storage-delete: absent A-first-party bytes=0 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2002,
+          "text": "PASS  storage-delete: absent C-under-A bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2020,
+          "text": "PASS  storage-delete: read B-first-party bytes=262144 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2030,
+          "text": "PASS  storage-delete: read C-under-B bytes=262144 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2038,
+          "text": "PASS  storage-delete: read A-under-B bytes=262144 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2056,
+          "text": "PASS  storage-delete: read subdomain-first-party bytes=262144 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2064,
+          "text": "PASS  storage-delete: absent D-under-subdomain bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2082,
+          "text": "PASS  storage-delete: read port-first-party bytes=262144 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2090,
+          "text": "PASS  storage-delete: absent E-under-port bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2108,
+          "text": "PASS  storage-delete: absent HTTP-first-party bytes=0 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2116,
+          "text": "PASS  storage-delete: absent C-under-HTTP bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2134,
+          "text": "PASS  storage-delete: absent HTTPS-first-party bytes=0 localStorage=preserved cookies=preserved closed=true"
+        },
+        {
+          "line": 2142,
+          "text": "PASS  storage-delete: absent D-under-HTTPS bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        },
+        {
+          "line": 2172,
+          "text": "PASS  storage-delete: absent A-through-B-under-A bytes=0 localStorage=preserved cookies=not-tested closed=true"
+        }
+      ],
+      "finalFileSystems": [
+        {
+          "line": 1994,
+          "text": "PASS  storage-delete: filesystem absent A-first-party bytes=0 writable-closed=true"
+        },
+        {
+          "line": 2022,
+          "text": "PASS  storage-delete: filesystem read B-first-party bytes=8192 writable-closed=true"
+        }
+      ],
+      "shutdown": {
+        "line": 1926,
+        "text": "PASS  storage-delete: shutdown drained accepted deletion pending-observed=true joined=true later-admission=rejected"
+      },
+      "browserProcessExitRecords": [
+        {
+          "line": 1010,
+          "text": "INFO  quota-registry: browser process exited pid=696"
+        },
+        {
+          "line": 1544,
+          "text": "INFO  quota-registry: browser process exited pid=8308"
+        },
+        {
+          "line": 2186,
+          "text": "INFO  quota-registry: browser process exited pid=6464"
+        },
+        {
+          "line": 2188,
+          "text": "INFO  quota-registry: browser process exited pid=6464"
+        }
+      ],
+      "earlyNetworkPositiveControl": {
+        "line": 866,
+        "text": "PASS  storage-delete: network before positive-control requests=1 accepted-connections=3"
+      },
+      "ordinaryNetworkProgress": [
+        {
+          "line": 1610,
+          "text": "PASS  storage-delete: ordinary-network phase=A failures=0 completed-during=33 independently-counted=true"
+        },
+        {
+          "line": 1776,
+          "text": "PASS  storage-delete: ordinary-network phase=sentinel failures=0 completed-during=19 independently-counted=true"
+        },
+        {
+          "line": 1832,
+          "text": "PASS  storage-delete: ordinary-network phase=HTTPS failures=0 completed-during=20 independently-counted=true"
+        },
+        {
+          "line": 1924,
+          "text": "PASS  storage-delete: ordinary-network phase=HTTP failures=0 completed-during=15 independently-counted=true"
+        }
+      ],
+      "sentinel": {
+        "connections": 6,
+        "requests": 1,
+        "receivedBytes": 2454,
+        "unattributedBytes": 1709,
+        "healthy": false,
+        "record": {
+          "line": 2190,
+          "text": "INFO  storage-delete: sentinel-final connections=6 requests=1 received-bytes=2454 unattributed-bytes=1709 healthy=false"
+        },
+        "scope": "Post-cleanup counters, not a measured production-only delta. The actual pre-production baseline is unlogged."
+      },
+      "failedGate": {
+        "line": 2176,
+        "text": "FAIL  quota-registry: production resolver or observer escaped the owned resource isolation"
+      },
+      "cleanupSentinelFailure": {
+        "line": 2192,
+        "text": "FAIL  quota-registry: loopback sentinel failed or did not stop cleanly"
+      },
+      "storageFailure": {
+        "line": 2194,
+        "text": "FAIL  storage-delete: actual production deletion qualification failed; no support inferred from an unavailable route"
+      },
+      "finalWrapper": {
+        "line": 2196,
+        "text": "FAIL  storage-delete: production qualification failed (exit=1 qualified=0 missing=3 final-callback-checks=2)"
+      },
+      "laterUnreachedProofs": [
+        "PASS  storage-delete: resolver-origin-network-connections=0 independent-positive-control=true",
+        "PASS  storage-delete: network after positive-control",
+        "PASS  storage-delete: ordinary-network stopped"
+      ]
+    }
+  ],
+  "retryScope": "One Windows2025 job retry at unchanged source/artifact and unchanged deadlines/order/gates. Windows2022 evidence is the original attempt1 execution.",
+  "latestAttemptInheritedJobEntries": [
+    {
+      "id": 139225910095,
+      "originalExecutionJob": 139218593155,
+      "name": "build"
+    },
+    {
+      "id": 139225911333,
+      "originalExecutionJob": 139219879436,
+      "name": "probe (windows-2022)"
+    }
+  ],
+  "attributionLimit": {
+    "baseline": "storage_delete_probe.h:580 records Connections after all seed/restart work, but does not print that value or contemporaneous byte/health counters.",
+    "comparison": "The combined final check at lines643-645 follows both production deletion calls and ordinary observer readback navigations.",
+    "finalCounters": "Lines669-676 stop both servers and then print cumulative counters; these are not a production-only observation window.",
+    "serverAccounting": "worker_response_server.cc:239-250 records nonempty unclassified input as unattributed bytes and sets sticky unhealthy. These logs do not record its contents or first-failure phase.",
+    "conclusion": "The gate failed. Neither responsible component/phase nor traffic protocol can be assigned from the retained counters. The early printed positive-control counts are not the final comparison baseline."
+  },
+  "limits": [
+    "Both tested storage executions completed the data/callback/shutdown sequence without the earlier native access violation, but both failed the complete unchanged acceptance gate.",
+    "One actual storage execution per runtime is reported; no claim about all possible callback, profile or timing interleavings is made.",
+    "After-operation positive network control and final ordinary-network stop proof were not reached after the combined sentinel failure.",
+    "The Windows2025 attempt1 startup timeout is preserved; its late S_OK does not establish where the shared startup deadline was spent.",
+    "No exact PDB name or full causation claim is inferred from the prior runtime instruction evidence.",
+    "No full getOrigins/per-key quota contract or worker capability is qualified by this receipt."
+  ],
+  "metadataFiles": [
+    {
+      "file": "storage-delete-45618078011-run-discovery.json",
+      "bytes": 28574,
+      "sha256": "94bf917d5109d129696d98294a81e98a2a9581eab28aba0e6ba31cdbf1046063"
+    },
+    {
+      "file": "storage-delete-45618078011-run-terminal.json",
+      "bytes": 28388,
+      "sha256": "4a247c9f8c59f24141ca5087d0158ba27340f35a9e7759ddad2297efad91f1fe"
+    },
+    {
+      "file": "storage-delete-45618078011-jobs.json",
+      "bytes": 8077,
+      "sha256": "41e3ce4fc3c0b8d6a8fbbe52f5ee8b08bb6ad2777d4f848b8fde1cb56a53a14f"
+    },
+    {
+      "file": "storage-delete-45618078011-attempt2-initial-jobs.json",
+      "bytes": 6174,
+      "sha256": "d98460f252f956a6e50d3e6d748378e5a889be2ce224857e399b4eb7e7d8a3df"
+    },
+    {
+      "file": "storage-delete-45618078011-attempt2-jobs.json",
+      "bytes": 8077,
+      "sha256": "c672ebd43101cb5653df9057995f9a3cd87a69d0b3521f9facd6ece48eaa3f24"
+    },
+    {
+      "file": "storage-delete-45618078011-attempt2-run-terminal.json",
+      "bytes": 28560,
+      "sha256": "67a6dfebab2929e9c815af8b0c44daf299a2fa9576069ac6b7d111f170abb4d8"
+    },
+    {
+      "file": "storage-delete-45618078011-attempt2-artifacts.json",
+      "bytes": 2250,
+      "sha256": "ca39d1d64035b3b7df1a4516509b6b05ffe8cbb8d67b2582463f47b69fc6d613"
+    }
+  ]
+}

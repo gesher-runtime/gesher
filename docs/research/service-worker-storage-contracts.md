@@ -1,10 +1,90 @@
 # Inert service-worker preparation and WebStorage measurements
 
+## Runtime update — 25 November 2026
+
+[Actual run 45583346318](https://github.com/gesher-runtime/gesher/actions/runs/45583346318)
+established a bounded deferred-denial primitive at source
+`6c104766a73d0778747111898744326f22e00ade` on WebView2 131.0.2903.86 and
+157.0.4341.46. Changing a retained worker request to a fresh unregistered
+nonnetwork URI after `Invoke` returned produced an initial `fetch` `TypeError`,
+zero complete-header original-origin requests, unchanged JavaScript request/resource-timing
+identity, no timeout/abort or external launch, and a successful later request
+from the same worker. Synchronous handler `E_ABORT` did not cancel; all three
+response-stream failures also remained successful HTTP responses.
+
+The expanded [exact report and receipt](webview-worker-denial-7a41155f.md) at
+`7a41155fc31285b803a9bf4d422c89622f9ad4d0`,
+[run 45593812298](https://github.com/gesher-runtime/gesher/actions/runs/45593812298),
+adds independent accounting of partial HTTP requests and received bytes. Both
+runtimes observed genuine initial rejection with original request/timing identity
+and zero denied-target requests for a full same-origin POST, an observed final
+redirect target and concurrent requests. The redirect's initial request was
+intentionally allowed; Android redirect parity remains unqualified.
+
+Two measured negative controls remain: denying only the CORS POST allowed one
+OPTIONS request, and closing the owner before completing its deferral allowed
+the original complete 32 KiB POST to reach the server. Those outcomes recurred
+at `107d7fa57c3daf66511d475ceeb09ec907c969cb` in attempt 2 of
+[run 45597266059](https://github.com/gesher-runtime/gesher/actions/runs/45597266059).
+
+The separate alternatives now have actual Windows evidence at
+`33fc2e50af97c95023e350ac4c8ba1e2d6d5e877` in
+[run 45602648001](https://github.com/gesher-runtime/gesher/actions/runs/45602648001).
+On both runtimes, denying the actual worker OPTIONS request produced initial
+`TypeError`, no later POST callback and zero OPTIONS/POST requests at the
+independently observed origin. A fresh-profile experiment completed the deferral
+while its owner was live, then immediately removed both filters and closed the
+owner on the same STA turn, without pumping or waiting for an acknowledgement.
+It likewise produced initial `TypeError`, zero original POST requests and a
+successful follow-up from the same worker. Both preserved the original request
+and timing identities. The [exact report and receipt](webview-worker-denial-33fc2e50.md)
+retain the full twelve-case matrix, separate three-case ordering experiment,
+original negative controls, actual message sequence and socket observations.
+
+These results supersede the older absence of runtime evidence below. They do
+not supply cache modes, unrestricted streaming or a complete production worker
+implementation; the public gates remain unavailable.
+
+The separately qualified quota registry now backs a candidate production
+partition-aware origin deletion operation with owned ordinary/InPrivate
+controllers. Its [full-key contract record](webstorage-full-key-contract-2026-11-25.md)
+states the implementation and actual-Host acceptance requirement. At `107d7fa5`
+and `33fc2e50`, both Windows runtimes seeded and discovered all fourteen actual
+keys, then the native process crashed during production deletion. The later
+fault stacks locate an asynchronous `EmbeddedBrowserWebView.dll` dispatch;
+the actual probe executable frame returns from `DispatchMessageW`. They do not
+yet establish the responsible lifetime defect. Successful completion callbacks
+before the crash do not establish deletion/preservation acceptance.
+At `6ff0bd78`, the runtime 131 faulting DLL was retained and matched to its loaded
+PE/CodeView identity. Its response dispatcher performs entry removal after
+invoking the callback; the current terminal callback can close that controller
+before returning. A narrow owner-STA deferred-cleanup candidate addresses this
+observed ordering boundary and still requires full actual-Host acceptance.
+The [focused crash report](webview-storage-crash-6ff0bd78.md) records the evidence
+and separates runtime 157's earlier startup-only failure in that run.
+The deferred-cleanup source at `18c1f813` subsequently completed all five
+callbacks, nine deletions, five preserved keys, sentinel payloads, OPFS and
+shutdown drain on actual runtimes 131 and 157 without the earlier access
+violation. The [combined results](webview-storage-results-18c1f813.md) also
+record that both full fixtures still failed the resource-isolation gate.
+Its aggregate counters cannot attribute the traffic to the production resolver
+versus the observer/control fixture. This unresolved network/isolation finding
+is review-only under the requested scope; no policy fix or gate relaxation is
+included, and complete production acceptance is not claimed.
+Full origin enumeration still needs effective quotas for arbitrary full storage
+keys.
+
+The continuation is limited to compatibility, stability and performance. Any
+security concerns already raised by a separate review remain unresolved review
+notes; this work neither implements security fixes nor asserts their clearance.
+PR391 remains a draft, with no merge or automatic-merge request.
+
 ## Delivered behavior and remaining scope
 
 This change replaces constant zero quota/usage answers with actual Chromium
 storage measurements. The prepared service-worker request bridge is unavailable:
-its WebView2 response API cannot preserve Android request-failure semantics.
+its retained HTTP-response failure path does not preserve Android's network
+error, and the newly measured denial primitive is not a complete worker backend.
 All worker feature flags are withheld, both provider controller getters throw
 before initialization, and native activation rejects admission before scheduling
 work or installing a filter. The retained dispatch code is inert preparation,
@@ -18,7 +98,7 @@ remains incomplete.
 | Prepared worker internals | The retained request/settings/response helpers have isolated component coverage. They do not establish a supported worker capability, faithful failures, complete streaming or working file/content routing. |
 | Worker capability reporting | All `SERVICE_WORKER_*` flags are withheld. `SupportLib.Factory.getSupportedFeatures()` returns a copy of the supported-feature list and performs no worker initialization. |
 | Storage usage/quota | `Storage.getUsageAndQuota` on a real controller, including the hidden controller when no public WebView exists. Native URLMON admission validates/canonicalizes HTTP(S) tuple origins. Java returns the requested numeric field once on the caller's Looper; malformed data, failed initialization, rejected admission and backend errors yield Android's zero query-failure value. |
-| Storage deletion | Existing origin admission and `Storage.clearDataForStorageKey` deletion are preserved; origin deletion still targets `file_systems,indexeddb`. Existing delete-all behavior is unchanged. |
+| Storage deletion | Existing origin admission delegates to an owned asynchronous operation that discovers actual full keys, derives sites using the runtime, and calls `Storage.clearDataForStorageKey` for the selected original keys. The mask remains `file_systems,indexeddb`; delete-all is unchanged. Actual-Host acceptance is separate from the historical raw-CDP experiment. |
 | Full origin enumeration | Still unsupported. `getOrigins` retains the previous empty result, which must not be interpreted as an audited empty profile. No visited-origin or cookie list is substituted for Chromium's storage-key registry. |
 
 ### Why both provider and native activation are unavailable
@@ -54,7 +134,7 @@ contract. CDP's target-level cache disable switch cannot implement the full set
 of modes either. The retained settings helper rejects unsupported setters;
 neither it nor `SERVICE_WORKER_CACHE_MODE` is exposed as available.
 
-### Network failure is still an explicit limitation
+### The prepared failure path still needs replacement
 
 WebView2's stable `WebResourceRequested` args do not expose request cancellation.
 The retained native dispatch helper installs an HTTP 403 before calling Java
@@ -73,14 +153,74 @@ it. The prepared synthetic-response bridge rejects bodies larger than 64 MiB
 instead of truncating them; unrestricted streaming needs a separate design and
 runtime validation before worker support can be claimed.
 
+#### Response streaming and cancellation boundary
+
+The reviewed SDK `1.0.4258.31` documents an additional precondition in
+`ICoreWebView2WebResourceResponse::get_Content`: all response bytes must already
+be available when the request deferral completes. The same rule appears in
+[Microsoft's response-content reference](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2webresourceresponse?view=webview2-1.0.4258.31#get_content).
+A ring buffer that receives future bytes after `Complete` does not satisfy that
+documented contract. Making the COM stream agile or reading on a background
+thread does not remove the precondition.
+
+The current inert transport also has explicit implementation limits:
+
+- [Java dispatch](../../app/java/com/gesher/app/webview/GesherServiceWorkers.java)
+  drains the application's stream on a shared two-thread request pool, rejects
+  more than 64 MiB and submits one final `byte[]` after EOF.
+- [JNI](../../compat/webview/webview_jni.cc) copies that final array into a native
+  vector. There is no begin/chunk/credit/EOF/error/cancel protocol.
+- [Native request ownership](../../compat/webview/webview_host.cc) ends when the
+  first response consumes its pending request ID and completes the deferral.
+  Timeout and cancellation remove native pending requests without notifying
+  the Java producer; there is no continuing body-producer registry or lease.
+- [OwnedStream](../../compat/webview/owned_stream.h) exposes immutable, fully
+  materialized bytes with accurate size and independent clone cursors. Its
+  thread-safe ownership does not establish future-byte production or backpressure.
+
+A complete owned file spool could bound memory and remove the finite 64 MiB
+limit, but it would still wait for EOF. It would not establish progressive
+delivery, nor make a slow or nonterminating application stream complete. The
+actual first-read/mid-body fault results above also show that merely returning
+an `IStream::Read` error did not produce the required worker failure on the two
+tested runtimes. The pre-response URI-denial experiment supplies no evidence
+about a failure after response delivery has begun.
+
+The Java try-with-resources ordering has a separate cancellation limit. If a
+read throws, `close()` executes before the outer catch submits failure; a blocked
+close can therefore delay failure indefinitely. After a successful read, the
+native response is submitted before close, but a blocked close still occupies
+one of the two request threads. A future transport could wake native consumers,
+reject late chunks and schedule one close outside native locks and the STA.
+It cannot assume that arbitrary application `read()` or `close()` methods will
+terminate; attempted native cancellation and observed Java close completion
+must be recorded separately.
+
+Before a supported progressive route could be exposed, real ART/Java/JNI/native/
+WebView2 acceptance would need the following independent observations:
+
+| Case | Required observation |
+| --- | --- |
+| Progress before EOF | The producer waits for a real consumer acknowledgement of a prefix before emitting the tail; the worker must consume that prefix before EOF. |
+| Large and unknown-length bodies | Exact bytes beyond 64 MiB, preserved metadata and measured Java/native buffer high-water marks independent of total length. |
+| Read failure | Actual initial-fetch/body-read errors before the first byte and after a consumed prefix, compared with Android; no successful truncated body. |
+| Blocked application close | Native cancellation and unrelated requests complete while close is blocked; release the fixture latch and verify exactly-once eventual close. |
+| Concurrency and late activity | Same-URL bodies remain independent; cancellation, duplicate EOF, late chunks and stale request generations cannot revive another body. |
+| Owner and browser shutdown | Actual consumer abort, blocked-read wakeup and ownership cleanup without joining arbitrary application code from the STA. |
+
+No such new transport or engine capability is claimed by the current source.
+
 #### Independent check of a CDP alternative
 
 An independent review inspected both the pinned SDK 1.0.4258.31 and stable
 1.0.4370.26. Neither request-event interface has cancellation or a CDP request ID.
 The newer service-worker management interface adds lifecycle/messaging, not a
 before-start request interception guarantee. Changing an HRESULT, inventing a
-status code, failing a response stream or rewriting the request URL is not an
-established equivalent of an initial network failure.
+status code, or failing a response stream was not an established equivalent of
+an initial network failure. The later deferred URI experiment above supplies
+actual evidence for its stated GET boundary. The expanded POST, CORS, redirect,
+concurrency and teardown results above further delimit that primitive; they do
+not establish a complete worker contract.
 
 CDP `Fetch.failRequest` is a real network-failure primitive, including
 `AccessDenied`, on a request owned by `Fetch.requestPaused`. WebView2's
