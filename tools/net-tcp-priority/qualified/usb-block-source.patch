@@ -1,5 +1,5 @@
 diff --git a/compat/art/dalvikvm_main.cc b/compat/art/dalvikvm_main.cc
-index 66d85f2a..3285645d 100644
+index 66d85f2ab..3285645d4 100644
 --- a/compat/art/dalvikvm_main.cc
 +++ b/compat/art/dalvikvm_main.cc
 @@ -12,0 +13,3 @@
@@ -41,7 +41,7 @@ index 66d85f2a..3285645d 100644
 +    }
 +  }
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index ee26bfc0..5d718848 100644
+index ee26bfc04..5d7188480 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -40,0 +41 @@
@@ -281,41 +281,41 @@ index ee26bfc0..5d718848 100644
 +#endif
 +  }
 diff --git a/compat/bionic/process_bionic.cc b/compat/bionic/process_bionic.cc
-index 57385c1d..85c47001 100644
+index 576e95da8..dfd5f2bbb 100644
 --- a/compat/bionic/process_bionic.cc
 +++ b/compat/bionic/process_bionic.cc
 @@ -21,0 +22 @@
 +#include "program_break.h"
-@@ -177,0 +179,6 @@ int BIONIC_SYSV ForkUnsupported() { return errno = ENOSYS, -1; }
+@@ -264,0 +266,6 @@ int BIONIC_SYSV ForkUnsupported() { return errno = ENOSYS, -1; }
 +int BIONIC_SYSV DaemonUnsupported(int, int) { return errno = ENOSYS, -1; }
 +
 +ProgramBreak& ProcessBreak() { static ProgramBreak value; return value; }
 +void* BIONIC_SYSV Sbrk(intptr_t increment) { return ProcessBreak().Increment(increment); }
 +int BIONIC_SYSV Brk(void* address) { return ProcessBreak().Set(address); }
 +
-@@ -632,0 +640,3 @@ void RegisterProcess(SymbolTable& t) {
+@@ -1146,0 +1154,3 @@ void RegisterProcess(SymbolTable& t) {
 +  E("daemon", DaemonUnsupported);
 +  E("sbrk", Sbrk);
 +  E("brk", Brk);
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index d02d0421..7a53e410 100644
+index bef1a5a4c..b66d8f5c4 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
-@@ -9,0 +10,5 @@
+@@ -11,0 +12,5 @@
 +#include "../../usb_storage/protected_runtime_client.h"
 +#include "../../usb_storage/protected_tool_paths.h"
 +
 +#include <shellapi.h>
 +
-@@ -10,0 +16 @@
+@@ -12,0 +18 @@
 +#include <array>
-@@ -89,0 +96,5 @@ bool IsShName(const std::string& name) {
+@@ -92,0 +99,5 @@ bool IsShName(const std::string& name) {
 +bool IsSuName(const std::string& name) {
 +  return name == "su" || name == "/system/bin/su" || name == "/system/xbin/su" ||
 +         name == "/bin/su";
 +}
 +
-@@ -92,3 +103,4 @@ std::string ToolName(const std::string& name) {
+@@ -95,3 +106,4 @@ std::string ToolName(const std::string& name) {
 -  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id",
 -                                       "ps",      "pm", "am", "kill",   "sleep", "toybox",
 -                                       "which",   "mount"};
@@ -323,7 +323,7 @@ index d02d0421..7a53e410 100644
 +                                       "dd", "basename", "tr", "ps", "pm", "am", "kill",
 +                                       "sleep", "toybox", "blockdev", "grep", "awk", "sync",
 +                                       "umount", "which", "mount"};
-@@ -112,0 +125,22 @@ std::string ToolName(const std::string& name) {
+@@ -115,0 +128,22 @@ std::string ToolName(const std::string& name) {
 +std::wstring FilesystemTool(const std::string& name) {
 +  if (!gesher::usb_storage::ProtectedRuntimeEnabled()) return {};
 +  std::string base = name;
@@ -346,15 +346,15 @@ index d02d0421..7a53e410 100644
 +  return directory + L"filesystem-tools\\bin\\" + file;
 +}
 +
-@@ -170,0 +205 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
+@@ -173,0 +208 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
 +    if (!CanLoadExecutableElf(path)) return kEACCES;
-@@ -371 +406,4 @@ std::wstring LauncherPath() {
+@@ -378 +413,4 @@ std::wstring LauncherPath() {
 -  const char* env = gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
 +  // The protected authority starts its own installed executable. A guest
 +  // setting cannot redirect that route to a different native image.
 +  const char* env = gesher::usb_storage::ProtectedRuntimeEnabled()
 +                        ? nullptr : gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
-@@ -385,0 +424,14 @@ std::wstring LauncherPath() {
+@@ -392,0 +431,14 @@ std::wstring LauncherPath() {
 +bool CanLoadExecutableElf(const std::wstring& path) {
 +  const bool protected_runtime = gesher::usb_storage::ProtectedRuntimeEnabled();
 +  if (!protected_runtime) return true;
@@ -369,7 +369,7 @@ index d02d0421..7a53e410 100644
 +  return gesher::usb_storage::ProtectedElfPolicy(path, runtime, protected_runtime, credentials, uid, gid);
 +}
 +
-@@ -390,0 +443,9 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
+@@ -397,0 +450,9 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
 +  if (IsSuName(prog) && gesher::usb_storage::ProtectedRuntimeEnabled()) {
 +    launch->kind = "su";
 +    launch->application = LauncherPath();
@@ -379,7 +379,7 @@ index d02d0421..7a53e410 100644
 +    AppendArgs(&launch->command_line, argv, 1);
 +    return Finish(launch);
 +  }
-@@ -399,0 +461,10 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
+@@ -406,0 +468,10 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
 +  if (const std::wstring file = FilesystemTool(prog); !file.empty()) {
 +    std::string head;
 +    const int error = Probe(file, &head);
@@ -390,12 +390,12 @@ index d02d0421..7a53e410 100644
 +    // Missing tools remain ENOENT; no format/check success is synthesized.
 +    return LaunchFile(file, head, argv, dir, depth, launch);
 +  }
-@@ -465,0 +537,4 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
+@@ -487,0 +559,4 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
 +  if (const std::wstring file = FilesystemTool(name); !file.empty()) {
 +    std::string head;
 +    return Probe(file, &head) == 0 ? file : std::wstring{};
 +  }
-@@ -484,0 +560,30 @@ std::vector<std::string> FindAllInPath(const std::string& name, const std::strin
+@@ -506,0 +582,30 @@ std::vector<std::string> FindAllInPath(const std::string& name, const std::strin
 +  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
 +    // These names bypass PATH in PrepareProgram. Discovery must use the same
 +    // aliases and admission, and cannot substitute a PATH file when a sealed
@@ -426,7 +426,7 @@ index d02d0421..7a53e410 100644
 +      found.push_back(name);
 +    return found;
 +  }
-@@ -516,0 +622,96 @@ bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
+@@ -538,0 +644,96 @@ bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
 +namespace {
 +
 +DWORD DescriptorError() {
@@ -523,36 +523,36 @@ index d02d0421..7a53e410 100644
 +
 +}  // namespace
 +
-@@ -539,0 +741,3 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+@@ -561,0 +763,3 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
 +  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
 +    return SpawnProtectedCommand(launch, environment, cwd, fds, info, extra_flags);
 +  }
 diff --git a/compat/elf/exec/exec_spawn.h b/compat/elf/exec/exec_spawn.h
-index dd088ea5..7697edd4 100644
+index 692d3b401..ae23a7adb 100644
 --- a/compat/elf/exec/exec_spawn.h
 +++ b/compat/elf/exec/exec_spawn.h
-@@ -64,0 +65,5 @@ std::wstring LauncherPath();
+@@ -67,0 +68,5 @@ std::wstring LauncherPath();
 +// Every ELF entry, including an in-process exec/spawn transition, checks the
 +// authenticated protected UID/GID. Root commands may load only the six sealed
 +// installed filesystem helpers. Ordinary Android process execution is unchanged.
 +bool CanLoadExecutableElf(const std::wstring& path);
 +
-@@ -88,0 +94,3 @@ std::wstring FindInPath(const std::string& name, const std::string& path);
+@@ -91,0 +97,3 @@ std::wstring FindInPath(const std::string& name, const std::string& path);
 +// Supported explicit paths are resolved directly. In an authenticated protected
 +// process, reserved su/filesystem aliases use their actual protected route;
 +// an unavailable sealed helper never falls back to a different PATH executable.
 diff --git a/compat/elf/exec/gesher_exec.cc b/compat/elf/exec/gesher_exec.cc
-index cd785799..d84fe784 100644
+index 1df87adfa..6346392be 100644
 --- a/compat/elf/exec/gesher_exec.cc
 +++ b/compat/elf/exec/gesher_exec.cc
-@@ -27,0 +28,4 @@
+@@ -28,0 +29,4 @@
 +#include <gesher/protected_startup.h>
 +
 +#include "../../binder/protected_client_startup.h"
 +#include "../../usb_storage/protected_runtime_client.h"
-@@ -37,0 +42 @@
+@@ -38,0 +43 @@
 +#include <unistd.h>
-@@ -345,0 +351,7 @@ int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
+@@ -354,0 +360,7 @@ int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
 +  // This guard is deliberately at the final loader entry, not only in the
 +  // authority's direct --elf parser. Encoded spawn and future exec transitions
 +  // cannot carry UID 0 into a package-controlled ELF image.
@@ -560,7 +560,7 @@ index cd785799..d84fe784 100644
 +    std::fprintf(stderr, "gesher-exec: ELF image is not authorized for this protected process\n");
 +    return 126;
 +  }
-@@ -378,0 +391,23 @@ int RunArguments(const std::vector<std::string>& args) {
+@@ -387,0 +400,23 @@ int RunArguments(const std::vector<std::string>& args) {
 +  if (!args.empty() && args[0] == "--su") {
 +    uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
 +    if (!gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid) || uid != 0 || gid != 0) {
@@ -584,19 +584,19 @@ index cd785799..d84fe784 100644
 +    }
 +    return ex::RunShell(shell);
 +  }
-@@ -396,2 +431,3 @@ int RunArguments(const std::vector<std::string>& args) {
+@@ -405,2 +440,3 @@ int RunArguments(const std::vector<std::string>& args) {
 -    if (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
 -        (launch.kind == "script" && launch.application == ex::LauncherPath())) {
 +    if (!gesher::usb_storage::ProtectedRuntimeEnabled() &&
 +        (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
 +         (launch.kind == "script" && launch.application == ex::LauncherPath()))) {
-@@ -407 +443,4 @@ int RunArguments(const std::vector<std::string>& args) {
+@@ -416 +452,4 @@ int RunArguments(const std::vector<std::string>& args) {
 -    // PE/batch programs keep the existing wait-and-propagate convention.
 +    // A protected encoded spawn must expose its resolved target to the
 +    // authority and receive a fresh exact-process grant. It never executes an
 +    // arbitrary resolved image inline with the wrapper's credentials.
 +    // Ordinary PE/batch programs keep the wait-and-propagate convention.
-@@ -434,0 +474,30 @@ int main() {
+@@ -443,0 +483,30 @@ int main() {
 +  int argc = 0;
 +  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
 +  if (!wargv || argc < 1) return 1;
@@ -627,14 +627,14 @@ index cd785799..d84fe784 100644
 +    const DWORD status = gesher::InitializeProtectedProcessResources();
 +    if (status != ERROR_SUCCESS) return 1;
 +  }
-@@ -447,5 +515,0 @@ int main() {
+@@ -456,5 +524,0 @@ int main() {
 -  int argc = 0;
 -  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
 -  std::vector<std::string> args;
 -  for (int i = 1; i < argc; ++i) args.push_back(ex::Narrow(wargv[i]));
 -  LocalFree(wargv);
 diff --git a/compat/elf/exec/gesher_shell.cc b/compat/elf/exec/gesher_shell.cc
-index c685d5cd..f5bf8b07 100644
+index c685d5cdd..f5bf8b078 100644
 --- a/compat/elf/exec/gesher_shell.cc
 +++ b/compat/elf/exec/gesher_shell.cc
 @@ -29,0 +30 @@
@@ -691,7 +691,7 @@ index c685d5cd..f5bf8b07 100644
 +        }
 +        next.push_back(std::move(joined));
 diff --git a/compat/elf/exec/shell_execute.inc b/compat/elf/exec/shell_execute.inc
-index e11b0310..e44309e2 100644
+index e11b03107..e44309e23 100644
 --- a/compat/elf/exec/shell_execute.inc
 +++ b/compat/elf/exec/shell_execute.inc
 @@ -163,0 +164,8 @@ int StartSubshell(const Shell& sh, const std::string& src, const Io& io,
@@ -729,7 +729,7 @@ index e11b0310..e44309e2 100644
 +  if (op == "-f") return S_ISREG(info.st_mode);
 +  if (op == "-s") return info.st_size != 0;
 diff --git a/compat/libcore/process.cc b/compat/libcore/process.cc
-index e2968332..7155e09a 100644
+index e2968332d..7155e09ae 100644
 --- a/compat/libcore/process.cc
 +++ b/compat/libcore/process.cc
 @@ -46,0 +47,2 @@
@@ -769,7 +769,7 @@ index e2968332..7155e09a 100644
 +  }
 +  if (creation) gesher::usb_storage::ProtectedSignal(static_cast<uint32_t>(pid), creation, kSigkill);
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index 3492add7..f8239d99 100644
+index 3ccaf503b..4edbc56e3 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
 @@ -3,0 +4,4 @@ add_library(gesher_posix STATIC
@@ -779,15 +779,15 @@ index 3492add7..f8239d99 100644
 +  ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
 @@ -4,0 +9 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/binder_transport.cc
-@@ -40,0 +46 @@ add_library(gesher_posix STATIC
+@@ -43,0 +49 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/protected_startup.cc
-@@ -93,0 +100,5 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
+@@ -101,0 +108,5 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
 +# Native bootstrap routes belong to the executable even when Binder and JNI
 +# callers are linked into separate AOSP DLLs.
 +target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_transport_anchor_v1)
 +target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_usb_block_owner_anchor_v1)
 +target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_protected_runtime_anchor)
-@@ -115,0 +127,6 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
+@@ -123,0 +135,6 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
 +set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc PROPERTIES
 +  COMPILE_OPTIONS "-fexceptions")
 +set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../usb_storage/protected_runtime_client.cc PROPERTIES
@@ -795,16 +795,16 @@ index 3492add7..f8239d99 100644
 +set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/protected_startup.cc PROPERTIES
 +  COMPILE_OPTIONS "-fexceptions")
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
-index 2fe5f43b..23a90145 100644
+index 57a022ef9..7c19a8175 100644
 --- a/compat/posix/src/binder.cc
 +++ b/compat/posix/src/binder.cc
 @@ -30,0 +31 @@
 +#include <gesher/application_shared_memory.h>
-@@ -34,0 +36 @@
+@@ -38,0 +40 @@
 +#include "binder_transport.h"
-@@ -118,0 +121 @@ HANDLE ConnectPipe(const std::wstring& name) {
+@@ -122,0 +125 @@ HANDLE ConnectPipe(const std::wstring& name) {
 +  if (const auto* endpoint = ProtectedBinderEndpoint()) return OpenProtectedBinder(*endpoint);
-@@ -356,0 +360,15 @@ bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
+@@ -364,0 +368,15 @@ bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
 +      if (ProtectedBinderEndpoint()) {
 +        // Offer only the exact file object. The authenticated broker admits it
 +        // only from the registered system server and only when it matches the
@@ -820,7 +820,7 @@ index 2fe5f43b..23a90145 100644
 +        pins->push_back(std::move(snapshot));
 +        return;
 +      }
-@@ -418,0 +437,12 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
+@@ -426,0 +445,12 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
 +      } else if (description.kind == wire::kApplicationSharedMemoryDescription) {
 +        // A protected-only typed transfer. Derive a fresh local description
 +        // from the reduced kernel handle; never adopt a producer's writable
@@ -833,7 +833,7 @@ index 2fe5f43b..23a90145 100644
 +          }
 +        }
 +        CloseHandle(owned);
-@@ -762,0 +793,50 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
+@@ -770,0 +801,50 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 +bool UsesProtectedBinder() { return ProtectedBinderEndpoint() != nullptr; }
 +
 +int PublishApplicationSharedMemory(int fd, size_t size) {
@@ -884,21 +884,21 @@ index 2fe5f43b..23a90145 100644
 +  return result;
 +}
 +
-@@ -763,0 +844,6 @@ bool BinderDeviceExists() {
+@@ -771,0 +852,6 @@ bool BinderDeviceExists() {
 +  if (const auto* endpoint = ProtectedBinderEndpoint()) {
 +    HANDLE pipe = OpenProtectedBinder(*endpoint);
 +    if (pipe == INVALID_HANDLE_VALUE) return false;
 +    CloseHandle(pipe);
 +    return true;
 +  }
-@@ -773,2 +859,3 @@ int OpenBinder(int flags) {
+@@ -781,2 +867,3 @@ int OpenBinder(int flags) {
 -  std::wstring name = PipeName();
 -  if (name.empty()) return errno = ENOENT, -1;
 +  const bool is_protected = ProtectedBinderEndpoint() != nullptr;
 +  std::wstring name = is_protected ? std::wstring() : PipeName();
 +  if (!is_protected && name.empty()) return errno = ENOENT, -1;
 diff --git a/compat/posix/src/binder_file_descriptions.h b/compat/posix/src/binder_file_descriptions.h
-index 5c1adbf0..6483aa56 100644
+index 5c1adbf00..6483aa560 100644
 --- a/compat/posix/src/binder_file_descriptions.h
 +++ b/compat/posix/src/binder_file_descriptions.h
 @@ -30,0 +31 @@ inline bool ValidFileDescriptions(const void* data, size_t data_size,
@@ -906,7 +906,7 @@ index 5c1adbf0..6483aa56 100644
 @@ -34,0 +36 @@ inline bool ValidFileDescriptions(const void* data, size_t data_size,
 +         : application_memory ? description.shared_handle != 0 || object.pad_flags != 0
 diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
-index 50a85fb8..049f1e45 100644
+index 50a85fb80..049f1e455 100644
 --- a/compat/posix/src/binder_wire.h
 +++ b/compat/posix/src/binder_wire.h
 @@ -44 +44 @@ constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
@@ -924,7 +924,7 @@ index 50a85fb8..049f1e45 100644
 +  // -> {magic, version, source_handle (u64), exact_size (u64)}; <- {Win32 status}
 +  kPublishApplicationSharedMemory = 12,
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
-index c001fa73..1c28a60b 100644
+index a8fb022e2..153ab18cf 100644
 --- a/compat/posix/src/fd.cc
 +++ b/compat/posix/src/fd.cc
 @@ -32,0 +33,2 @@
@@ -985,18 +985,18 @@ index c001fa73..1c28a60b 100644
 +    return true;
 +  }
 diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
-index a0a55f2a..a6127946 100644
+index cd046541a..5874aedae 100644
 --- a/compat/posix/src/fsops.cc
 +++ b/compat/posix/src/fsops.cc
 @@ -27,0 +28 @@
 +#include "usb_block_internal.h"
-@@ -295,0 +297,4 @@ int Access(const char* path, int mode, bool follow) {
+@@ -300,0 +302,4 @@ int Access(const char* path, int mode, bool follow) {
 +      if (type == S_IFBLK) {
 +        return (mode & X_OK) != 0 || ((mode & W_OK) != 0 && !gesher::usb_block::Writable())
 +            ? (errno = EACCES, -1) : 0;
 +      }
 diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
-index 5b6ebb59..11101a73 100644
+index 1b662913d..fc71c3841 100644
 --- a/compat/posix/src/internal.h
 +++ b/compat/posix/src/internal.h
 @@ -143,0 +144,3 @@ std::string WindowsZoneId();
@@ -1004,37 +1004,37 @@ index 5b6ebb59..11101a73 100644
 +// A contained process can receive a private anonymous pipe's read end.
 +HANDLE OpenFdPlaceholder(bool* pipe = nullptr);
 diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
-index 09fd4596..90f62555 100644
+index c1495ced5..2142c6826 100644
 --- a/compat/posix/src/ofd.cc
 +++ b/compat/posix/src/ofd.cc
-@@ -607,0 +608 @@ int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
+@@ -614,0 +615 @@ int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
 +  if (snapshot->kind == DescriptorKind::kUnshareable) return snapshot->description->Flags();
-@@ -658 +659,2 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
+@@ -677 +678,2 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
 -    const DWORD type = GetFileType(file);
 +    const DWORD type = snapshot->kind == DescriptorKind::kUnshareable
 +        ? FILE_TYPE_CHAR : GetFileType(file);
 diff --git a/compat/posix/src/ofd_internal.h b/compat/posix/src/ofd_internal.h
-index 60751ade..4994c926 100644
+index 437dc5182..355e19ac3 100644
 --- a/compat/posix/src/ofd_internal.h
 +++ b/compat/posix/src/ofd_internal.h
 @@ -9,0 +10 @@
 +#include <string>
 @@ -14,0 +16 @@ struct RevocableFileGroup;
 +namespace usb_block { struct Description; }
-@@ -42,0 +45,4 @@ struct OpenFileDescription {
+@@ -43,0 +46,4 @@ struct OpenFileDescription {
 +  std::shared_ptr<usb_block::Description> usb_block;
 +  // Immutable after publication. A virtual directory is a local capability,
 +  // marked kUnshareable so no raw NUL backing handle can escape as a directory.
 +  std::wstring virtual_directory;
 diff --git a/compat/posix/src/procfs.cc b/compat/posix/src/procfs.cc
-index ee975dc8..d7a649e8 100644
+index efd62e3b8..9c6cc3c84 100644
 --- a/compat/posix/src/procfs.cc
 +++ b/compat/posix/src/procfs.cc
 @@ -43,0 +44 @@
 +#include "usb_block_internal.h"
-@@ -794,0 +796 @@ struct Node {
+@@ -807,0 +809 @@ struct Node {
 +  std::string usb_content;
-@@ -812,0 +815,99 @@ Node Lookup(const std::wstring& name, bool list) {
+@@ -825,0 +828,99 @@ Node Lookup(const std::wstring& name, bool list) {
 +  if (p.size() >= 3 && p[0] == "sys" && p[1] == "dev" && p[2] == "block") {
 +    if (!usb_block::Attached()) return n;
 +    if (p.size() == 3) {
@@ -1134,14 +1134,14 @@ index ee975dc8..d7a649e8 100644
 +    }
 +    return n;
 +  }
-@@ -934,0 +1036 @@ std::string Content(const Node& n) {
+@@ -947,0 +1049 @@ std::string Content(const Node& n) {
 +  if (!n.usb_content.empty()) return n.usb_content;
-@@ -1002,0 +1105 @@ bool ReadLink(const std::wstring& name, std::string* target) {
+@@ -1015,0 +1118 @@ bool ReadLink(const std::wstring& name, std::string* target) {
 +  if (n.link == "usb-alias") { *target = n.usb_content; return true; }
-@@ -1037,0 +1141,2 @@ int Open(const std::wstring& name, int flags) {
+@@ -1050,0 +1154,2 @@ int Open(const std::wstring& name, int flags) {
 +  if (n.type == S_IFBLK) return usb_block::OpenNode(
 +      Narrow(name.substr(name.find_last_of(L'/') + 1).c_str()), flags);
-@@ -1056 +1161,15 @@ int Open(const std::wstring& name, int flags) {
+@@ -1069 +1174,15 @@ int Open(const std::wstring& name, int flags) {
 -  if (n.type == kDir) return errno = (flags & O_ACCMODE) != O_RDONLY ? EISDIR : EOPNOTSUPP, -1;
 +  if (n.type == kDir) {
 +    if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) return errno = EISDIR, -1;
@@ -1159,7 +1159,7 @@ index ee975dc8..d7a649e8 100644
 +    return fd;
 +  }
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index 2f1b7477..11da4d09 100644
+index 7198a5794..78b24e5a1 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
 @@ -40,0 +41 @@
@@ -1174,10 +1174,10 @@ index 2f1b7477..11da4d09 100644
 +    return 0;
 +  }
 diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
-index 8e960fbb..93cd9828 100644
+index 877217bc6..406ce51fd 100644
 --- a/compat/posix/src/system_properties.cc
 +++ b/compat/posix/src/system_properties.cc
-@@ -25,0 +26,22 @@ namespace {
+@@ -28,0 +29,22 @@ namespace {
 +bool ProtectedSystemServer() {
 +  // The executable publishes this role only after the authority authenticates
 +  // its exact suspended creation handle and native resource bootstrap finishes.
@@ -1200,32 +1200,32 @@ index 8e960fbb..93cd9828 100644
 +  return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle));
 +}
 +
-@@ -26,0 +49,2 @@ constexpr DWORD kCapacity = 4 * 1024 * 1024;
+@@ -29,0 +52,2 @@ constexpr DWORD kCapacity = 4 * 1024 * 1024;
 +// Match the previous format's maximum payload. Each area now has two banks.
 +constexpr DWORD kPayloadCapacity = kCapacity - 4 * sizeof(uint32_t);
-@@ -28 +52 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
+@@ -31 +55 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
 -constexpr uint32_t kVersion = 2;
 +constexpr uint32_t kVersion = 3;
-@@ -41 +65,5 @@ struct Header {
+@@ -44 +68,5 @@ struct Header {
 -  uint32_t used;
 +  uint32_t used[2];
 +};
 +struct AreaLayout {
 +  Header header;
 +  char banks[2][kPayloadCapacity];
-@@ -42,0 +71,2 @@ struct Header {
+@@ -45,0 +74,2 @@ struct Header {
 +static_assert(sizeof(AreaLayout) == sizeof(Header) + 2 * kPayloadCapacity);
 +constexpr DWORD kAreaSize = sizeof(AreaLayout);
-@@ -61,0 +92 @@ struct Area {
+@@ -64,0 +95 @@ struct Area {
 +  bool read_only = false;
-@@ -68,0 +100,6 @@ bool Valid(const std::string& name, const std::string& value);
+@@ -71,0 +103,6 @@ bool Valid(const std::string& name, const std::string& value);
 +bool InAppContainer() {
 +  DWORD contained = 0, size = 0;
 +  return GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
 +                             &contained, sizeof(contained), &size) && contained != 0;
 +}
 +
-@@ -94,0 +132,9 @@ std::wstring FullPath(std::wstring path) {
+@@ -97,0 +135,9 @@ std::wstring FullPath(std::wstring path) {
 +  // Android/Java uses the canonical /mnt/<drive> form (ADR 0045). Passing
 +  // that form directly to GetFullPathNameW would resolve it as a directory
 +  // named "mnt" on the current drive, outside the intended Android root.
@@ -1235,13 +1235,13 @@ index 8e960fbb..93cd9828 100644
 +    path = std::wstring(1, path[5]) + L":" +
 +        (path.size() == 6 ? L"/" : path.substr(6));
 +  }
-@@ -212 +258,4 @@ bool Persist(const std::wstring& path, const std::string* name, const Value* val
+@@ -215 +261,4 @@ bool Persist(const std::wstring& path, const std::string* name, const Value* val
 -  mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-persist-" + Key(path)).c_str());
 +  // Protected system_server is the sole writer. The shared unnamed mutex is
 +  // recursive for this thread when Current() calls persistence while locked.
 +  mutex.value = ProtectedSystemServer() ? ProtectedWriterMutex() :
 +      CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-persist-" + Key(path)).c_str());
-@@ -264,8 +313,22 @@ bool Refresh(Area* area) {
+@@ -287,8 +336,22 @@ bool Refresh(Area* area) {
 -  const auto* header = static_cast<Header*>(area->view);
 -  if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
 -  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
@@ -1272,7 +1272,7 @@ index 8e960fbb..93cd9828 100644
 +  // A writer can publish repeatedly while the reader is copying a snapshot.
 +  // Keep the last coherent values, and retry the new generation on next use.
 +  return area->cached_generation != 0;
-@@ -275,10 +338,17 @@ bool Publish(Area* area, Snapshot values) {
+@@ -298,10 +361,17 @@ bool Publish(Area* area, Snapshot values) {
 -  if (data.size() > kCapacity - sizeof(Header)) return false;
 -  auto* header = static_cast<Header*>(area->view);
 -  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_RELAXED) + 1;
@@ -1300,15 +1300,15 @@ index 8e960fbb..93cd9828 100644
 +    header->magic = kMagic;
 +    header->version = kVersion;
 +  }
-@@ -353,2 +423,3 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -376,2 +446,3 @@ Area* Current() { // LocalMutex is held by every caller.
 -  std::wstring path = dir + L"\\" + Key(session) + L".area";
 -  if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
 +  // The previous format has a single bank. Keep an older live process from
 +  // attaching to the new layout during a runtime upgrade.
 +  std::wstring path = dir + L"\\" + Key(session + L"/3") + L".area";
-@@ -356,0 +428 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -379,0 +451 @@ Area* Current() { // LocalMutex is held by every caller.
 +  area->read_only = InAppContainer() && !ProtectedSystemServer();
-@@ -358 +430,6 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -381 +453,6 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
 +  if (!area->read_only) {
 +    if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
@@ -1316,7 +1316,7 @@ index 8e960fbb..93cd9828 100644
 +        CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
 +    if (!area->mutex.value) return nullptr;
 +  }
-@@ -360,3 +437,4 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -383,3 +460,4 @@ Area* Current() { // LocalMutex is held by every caller.
 -  if (!lock.held) return nullptr;
 -  area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
 -                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
@@ -1324,21 +1324,21 @@ index 8e960fbb..93cd9828 100644
 +  area->file.value = CreateFileW(path.c_str(), area->read_only ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
 +                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
 +                                 area->read_only ? OPEN_EXISTING : OPEN_ALWAYS,
-@@ -365 +443,2 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -388 +466,2 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
 +  area->mapping.value = CreateFileMappingW(area->file.value, nullptr,
 +      area->read_only ? PAGE_READONLY : PAGE_READWRITE, 0, area->read_only ? 0 : kAreaSize, nullptr);
-@@ -367 +446,2 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -390 +469,2 @@ Area* Current() { // LocalMutex is held by every caller.
 -  area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
 +  area->view = MapViewOfFile(area->mapping.value, area->read_only ? FILE_MAP_READ : FILE_MAP_ALL_ACCESS,
 +                            0, 0, kAreaSize);
-@@ -370 +450 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -393 +473 @@ Area* Current() { // LocalMutex is held by every caller.
 -  if (!header->magic) {
 +  if (!area->read_only && !__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) {
-@@ -381 +461 @@ Area* Current() { // LocalMutex is held by every caller.
+@@ -404 +484 @@ Area* Current() { // LocalMutex is held by every caller.
 -  RemoveOldAreas(dir, path);
 +  if (!result->read_only) RemoveOldAreas(dir, path);
-@@ -422,6 +502,2 @@ namespace {
+@@ -445,6 +525,2 @@ namespace {
 -// few properties (log.tag.*). Without the cross-process mutex, this reads only
 -// the header's 32-bit generation (one aligned load) and never the shared
 -// values: when it equals the generation this process last decoded under the
@@ -1347,48 +1347,48 @@ index 8e960fbb..93cd9828 100644
 -// different generation takes the mutex and decodes again.
 +// few properties (log.tag.*). Refresh uses the unlocked generation fast path
 +// and decodes a bank only when another process has published new values.
-@@ -432,3 +508,2 @@ Area* Refreshed() {
+@@ -455,3 +531,2 @@ Area* Refreshed() {
 -  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) != area->cached_generation) {
 -    MutexLock lock(area->mutex.value);
 -    if (!lock.held || !Refresh(area)) return nullptr;
 +  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) == area->cached_generation) {
 +    return area;
-@@ -436 +511,2 @@ Area* Refreshed() {
+@@ -459 +534,2 @@ Area* Refreshed() {
 -  return area;
 +  MutexLock lock(area->mutex.value);
 +  return (area->read_only || lock.held) && Refresh(area) ? area : nullptr;
-@@ -470 +546 @@ bool Set(const std::string& name, const std::string& value) {
+@@ -493 +569 @@ bool Set(const std::string& name, const std::string& value) {
 -  if (!area) return false;
 +  if (!area || area->read_only) return false;
-@@ -479 +555 @@ bool Set(const std::string& name, const std::string& value) {
+@@ -502 +578 @@ bool Set(const std::string& name, const std::string& value) {
 -  if (Encode(values).size() > kCapacity - sizeof(Header)) return false;
 +  if (Encode(values).size() > kPayloadCapacity) return false;
-@@ -485,4 +561,2 @@ Snapshot List() {
+@@ -508,4 +584,2 @@ Snapshot List() {
 -  Area* area = Current();
 -  if (!area) return {};
 -  MutexLock lock(area->mutex.value);
 -  return lock.held && Refresh(area) ? area->values : Snapshot{};
 +  Area* area = Refreshed();
 +  return area ? area->values : Snapshot{};
-@@ -492,4 +566,2 @@ uint32_t AreaSerial() {
+@@ -515,4 +589,2 @@ uint32_t AreaSerial() {
 -  Area* area = Current();
 -  if (!area) return 0;
 -  MutexLock lock(area->mutex.value);
 -  return lock.held && Refresh(area) ? area->cached_generation : 0;
 +  Area* area = Refreshed();
 +  return area ? area->cached_generation : 0;
-@@ -523 +595 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
+@@ -546 +618 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
 -      if (!lock.held || !Refresh(area)) return false;
 +      if ((!area->read_only && !lock.held) || !Refresh(area)) return false;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
-index 1f7b51ec..94286116 100644
+index afca78ee2..2098ce7bf 100644
 --- a/compat/posix/src/unistd.cc
 +++ b/compat/posix/src/unistd.cc
-@@ -24,0 +25,3 @@
+@@ -26,0 +27,3 @@
 +#include "ofd_internal.h"
 +#include "usb_block_internal.h"
 +#include "../../usb_storage/protected_runtime_client.h"
-@@ -47 +50,11 @@ uid_t AppUid() {
+@@ -51 +54,11 @@ uid_t AppUid() {
 -#define kAppUid AppUid()
 +uid_t CurrentUid() {
 +  uint32_t uid = 0, gid = 0;
@@ -1401,53 +1401,53 @@ index 1f7b51ec..94286116 100644
 +      ? static_cast<gid_t>(gid) : AppUid();
 +}
 +#define kAppUid CurrentUid()
-@@ -264 +277 @@ int CheckOwner(uid_t owner, gid_t group) {
+@@ -268 +281 @@ int CheckOwner(uid_t owner, gid_t group) {
 -  bool same_group = group == static_cast<gid_t>(-1) || group == kAppUid;
 +  bool same_group = group == static_cast<gid_t>(-1) || group == CurrentGid();
-@@ -298 +311 @@ int seteuid(uid_t uid) { return setuid(uid); }
+@@ -303 +316 @@ int seteuid(uid_t uid) { return setuid(uid); }
 -int setgid(gid_t gid) { return gid == kAppUid ? 0 : (errno = EPERM, -1); }
 +int setgid(gid_t gid) { return gid == CurrentGid() ? 0 : (errno = EPERM, -1); }
-@@ -319,2 +332,2 @@ int setregid(gid_t rgid, gid_t egid) {
+@@ -324,2 +337,2 @@ int setregid(gid_t rgid, gid_t egid) {
 -  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == kAppUid) &&
 -            (egid == static_cast<gid_t>(-1) || egid == kAppUid);
 +  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == CurrentGid()) &&
 +            (egid == static_cast<gid_t>(-1) || egid == CurrentGid());
-@@ -328,2 +341,2 @@ uid_t geteuid(void) { return kAppUid; }
+@@ -333,2 +346,2 @@ uid_t geteuid(void) { return kAppUid; }
 -gid_t getgid(void) { return kAppUid; }
 -gid_t getegid(void) { return kAppUid; }
 +gid_t getgid(void) { return CurrentGid(); }
 +gid_t getegid(void) { return CurrentGid(); }
-@@ -352,0 +366,2 @@ int fsync(int fd) {
+@@ -432,0 +446,2 @@ int fsync(int fd) {
 +  int block_result;
 +  if (gesher::usb_block::Sync(snapshot, &block_result)) return block_result;
-@@ -575,0 +591,3 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool
+@@ -686,0 +702,3 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool
 +  int block_result;
 +  if (gesher::usb_block::Io(snapshot, buf, want, writing, offset, &block_result)) return block_result;
 +  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
-@@ -660,0 +679,3 @@ off_t lseek(int fd, off_t offset, int whence) {
+@@ -771,0 +790,3 @@ off_t lseek(int fd, off_t offset, int whence) {
 +  int64_t block_result;
 +  if (gesher::usb_block::Seek(snapshot, offset, whence, &block_result)) return block_result;
 +  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
-@@ -800,0 +822,4 @@ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void
+@@ -913,0 +935,4 @@ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void
 +  int block_result;
 +  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, offset, &block_result)) {
 +    return block_result;
 +  }
 diff --git a/compat/posix/src/unix_rights.cc b/compat/posix/src/unix_rights.cc
-index c5042673..4b11868f 100644
+index c26e8900e..e5b6f589a 100644
 --- a/compat/posix/src/unix_rights.cc
 +++ b/compat/posix/src/unix_rights.cc
 @@ -26,0 +27 @@
 +#include "binder_transport.h"
-@@ -124,0 +126 @@ bool Call(Request& request, Reply* reply) {
+@@ -128,0 +130 @@ bool Call(Request& request, Reply* reply) {
 +  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
-@@ -195,0 +198 @@ void* MapBrokerSection(const wchar_t* prefix, DWORD access, size_t size) {
+@@ -199,0 +202 @@ void* MapBrokerSection(const wchar_t* prefix, DWORD access, size_t size) {
 +  if (ProtectedBinderEndpoint()) return nullptr;
-@@ -251,0 +255,2 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
+@@ -255,0 +259,2 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
 +  // The private data endpoint provisions no shared rights sections.
 +  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
 diff --git a/tests/art-temp/entry_test.cc b/tests/art-temp/entry_test.cc
-index 6b226dd4..a2144c7f 100644
+index 6b226dd4d..a2144c7f0 100644
 --- a/tests/art-temp/entry_test.cc
 +++ b/tests/art-temp/entry_test.cc
 @@ -9,0 +10 @@
@@ -1536,17 +1536,17 @@ index 6b226dd4..a2144c7f 100644
 +            "duplicate routing must not silently replace a native security decision");
 +#endif
 diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
-index 30d03bc8..d183da9d 100644
+index ea5796bb4..4b5533959 100644
 --- a/tests/native/ofd_transfer_host_test.cc.in
 +++ b/tests/native/ofd_transfer_host_test.cc.in
-@@ -515,0 +516,6 @@ bool VisitEnvironment(void (*visit)(const char*, void*), void* context) {
+@@ -527,0 +528,6 @@ DWORD BrokeredCreateProcess(const wchar_t*, const wchar_t*, const wchar_t*, cons
 +namespace gesher::usb_storage {
 +// The ordinary OFD corpus has no protected authority. A single routing check
 +// enables this explicit boundary and verifies the service refusal is final.
 +static bool protected_runtime = false;
 +static bool ProtectedRuntimeEnabled() { return protected_runtime; }
 +}
-@@ -539,0 +546,16 @@ struct ChildFd { int fd; HANDLE handle; gesher::DescriptorSnapshotPtr snapshot{}
+@@ -551,0 +558,16 @@ struct ChildFd { int fd; HANDLE handle; gesher::DescriptorSnapshotPtr snapshot{}
 +static unsigned protected_calls;
 +static const Launch* protected_launch;
 +static const wchar_t* protected_environment;
@@ -1563,7 +1563,7 @@ index 30d03bc8..d183da9d 100644
 +  // authority identity/admission is covered by the separate Windows tests.
 +  return ERROR_ACCESS_DENIED;
 +}
-@@ -681,0 +704,28 @@ static void PeCapabilities() {
+@@ -694,0 +717,28 @@ static void PeCapabilities() {
 +static void ProtectedRouting() {
 +  gesher::exec::Launch launch{L"not-an-installed-image.exe", L"arbitrary guest command"};
 +  // A high raw descriptor must never reach ordinary handle inheritance after
@@ -1592,10 +1592,10 @@ index 30d03bc8..d183da9d 100644
 +  gesher::exec::protected_info = nullptr;
 +}
 +
-@@ -684,0 +735 @@ int main(int argc, char** argv) {
+@@ -697,0 +748 @@ int main(int argc, char** argv) {
 +  ProtectedRouting();
 diff --git a/tools/test_environment_lookup_contracts.py b/tools/test_environment_lookup_contracts.py
-index f2407351..82fdde56 100644
+index f24073515..82fdde569 100644
 --- a/tools/test_environment_lookup_contracts.py
 +++ b/tools/test_environment_lookup_contracts.py
 @@ -4,3 +4,4 @@
@@ -1700,7 +1700,7 @@ index f2407351..82fdde56 100644
 @@ -195,0 +274 @@ def main():
 +    if args.negative_role_control: print('Focused system-server guard mutation; this is not Windows execution.')
 diff --git a/tools/test_temp_directory.py b/tools/test_temp_directory.py
-index 9c65429d..8adecaae 100644
+index 9c65429d2..8adecaae1 100644
 --- a/tools/test_temp_directory.py
 +++ b/tools/test_temp_directory.py
 @@ -23,0 +24,2 @@ def main():

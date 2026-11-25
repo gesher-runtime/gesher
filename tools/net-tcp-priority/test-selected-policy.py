@@ -497,7 +497,27 @@ USB_BLOCK_PATH_BASES.update(dict.fromkeys((
 # Preserve main's memfd lease declarations before their separately pinned
 # reverse transition is checked against the original OFD receipt.
 USB_BLOCK_PATH_BASES['compat/posix/src/internal.h'] = 'dcc29a49143c4bd33e0e60a81b25e0e1f2cfc12a'
-USB_BLOCK_TRANSITION_SHA256 = '64eaa41add6ebac878adf2e48504a952fcecfd0627b57b8fb7f7773fa7bd2274'
+# Re-pin files updated in main through a62bd9a0a (arm64 fork, FIFO, etc.).
+USB_BLOCK_PATH_BASES.update(dict.fromkeys((
+ 'compat/bionic/process_bionic.cc',
+ 'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/exec_spawn.h',
+ 'compat/elf/exec/gesher_exec.cc',
+ 'compat/posix/posix.cmake',
+ 'compat/posix/src/binder.cc',
+ 'compat/posix/src/fd.cc',
+ 'compat/posix/src/fsops.cc',
+ 'compat/posix/src/internal.h',
+ 'compat/posix/src/ofd.cc',
+ 'compat/posix/src/ofd_internal.h',
+ 'compat/posix/src/procfs.cc',
+ 'compat/posix/src/system.cc',
+ 'compat/posix/src/system_properties.cc',
+ 'compat/posix/src/unistd.cc',
+ 'compat/posix/src/unix_rights.cc',
+ 'tests/native/ofd_transfer_host_test.cc.in',
+), 'a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a'))
+USB_BLOCK_TRANSITION_SHA256 = 'a753d6f95e1d9693a5d6e6924736e4bd2f978ac145100db678dbbd21f2fdea7d'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
@@ -651,7 +671,7 @@ GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::ws::LocalAddressCac
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='2a768b3c11112a2fd6d7bd378953aa44efc77984941b3e498b4aa4bd2694bf4e'
+REVIEWED_PATCH_SHA256='ee4583db58b83515430b5a4333cb95d3ef037ddc5731f5ad0f7958ba858a8e55'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
