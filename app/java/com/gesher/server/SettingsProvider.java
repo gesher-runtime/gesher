@@ -342,17 +342,26 @@ final class SettingsProvider extends ContentProvider {
             // does not become a privileged writer when its attachment is absent.
             throw new SecurityException("Unrecognized settings writer identity");
         }
+        int uid = Binder.getCallingUid();
         ApkPackage owner = mPm.get(actual);
-        if (owner == null || mPm.isRemovalPending(actual) || owner.uid() != Binder.getCallingUid()) {
+        if (owner == null || mPm.isRemovalPending(actual) || owner.uid() != uid) {
             throw new SecurityException("Unrecognized application Binder identity");
+        }
+        // Package UIDs survive replacement and reinstallation. Decide only for the
+        // installation this live process runs, so a process left from an earlier
+        // installation never writes with its replacement's AppOp or permission.
+        if (mCallers.packageCodeForPid(pid, uid) != owner) {
+            throw new SecurityException("Settings writer belongs to a retired installation");
         }
         // AOSP's system-table special access is an AppOp for ordinary apps.
         // Secure/global still require the actual privileged permission; its holders
         // may also write system settings independently of the special-access AppOp.
         if (mPm.permissions().checkPermission(actual, android.Manifest.permission.WRITE_SECURE_SETTINGS)
-                == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requireCurrentWriter(pid, uid, owner);
+            return;
+        }
         if (SYSTEM.equals(table)) {
-            int uid = Binder.getCallingUid();
             String attribution = getCallingAttributionTag();
             int mode;
             long identity = Binder.clearCallingIdentity();
@@ -362,9 +371,23 @@ final class SettingsProvider extends ContentProvider {
             } finally { Binder.restoreCallingIdentity(identity); }
             if (mode == AppOpsManager.MODE_ALLOWED || mode == AppOpsManager.MODE_DEFAULT
                     && mPm.permissions().checkPermission(actual, android.Manifest.permission.WRITE_SETTINGS)
-                        == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requireCurrentWriter(pid, uid, owner);
+                return;
+            }
         }
         throw new SecurityException("Settings write permission denied");
+    }
+
+    /**
+     * A grant can only follow the installation it was made to: if the writer's installation
+     * is still current after the decision was read, the decision was not its replacement's.
+     */
+    private void requireCurrentWriter(int pid, int uid, ApkPackage owner) {
+        if (mCallers.packageCodeForPid(pid, uid) != owner || mPm.get(owner.packageName) != owner
+                || mPm.isRemovalPending(owner.packageName)) {
+            throw new SecurityException("Settings writer was replaced while its access was checked");
+        }
     }
 
     @Override

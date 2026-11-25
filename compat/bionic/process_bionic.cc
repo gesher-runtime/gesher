@@ -218,27 +218,55 @@ int BIONIC_SYSV Execve(const char* path, char* const argv[], char* const envp[])
 int BIONIC_SYSV Execv(const char* path, char* const argv[]) {
   return DoExec(path, argv, nullptr, false);
 }
-// The System V trampoline and the ARM64 bridge both supply the argument list
-// after path and argv[0]. Execv shares path resolution, environment and errors.
-extern "C" int BIONIC_SYSV gesher_bionic_vexecl(const char* path, const char* first,
-                                               SysvVaList* args) {
-  std::vector<char*> argv{const_cast<char*>(first)};
-  while (auto* argument = reinterpret_cast<char*>(NextGp(args))) {
-    argv.push_back(argument);
-  }
-  argv.push_back(nullptr);
-  return Execv(path, argv.data());
-}
-
-extern "C" void gesher_bionic_execl();
-asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execl", "gesher_bionic_vexecl", "16", "%rdx"));
-
 int BIONIC_SYSV Execvp(const char* file, char* const argv[]) {
   return DoExec(file, argv, nullptr, true);
 }
 int BIONIC_SYSV Execvpe(const char* file, char* const argv[], char* const envp[]) {
   return DoExec(file, argv, envp, true);
 }
+
+// The list forms take argv as variadic pointers up to a null one; execle's
+// envp follows that null (bionic's execl.cpp). The System V trampoline and the
+// ARM64 bridge both supply the argument list after path and argv[0] (NextGp
+// reads either va_list); the vector forms share path resolution, environment
+// and errors.
+std::vector<char*> ListArgv(const char* first, SysvVaList* args) {
+  std::vector<char*> argv{const_cast<char*>(first)};
+  if (first != nullptr) {
+    while (auto* argument = reinterpret_cast<char*>(NextGp(args))) {
+      argv.push_back(argument);
+    }
+    argv.push_back(nullptr);
+  }
+  return argv;
+}
+
+extern "C" int BIONIC_SYSV gesher_bionic_vexecl(const char* path, const char* first,
+                                               SysvVaList* args) {
+  std::vector<char*> argv = ListArgv(first, args);
+  return Execv(path, argv.data());
+}
+extern "C" int BIONIC_SYSV gesher_bionic_vexeclp(const char* file, const char* first,
+                                                SysvVaList* args) {
+  std::vector<char*> argv = ListArgv(first, args);
+  return Execvp(file, argv.data());
+}
+extern "C" int BIONIC_SYSV gesher_bionic_vexecle(const char* path, const char* first,
+                                                SysvVaList* args) {
+  std::vector<char*> argv = ListArgv(first, args);
+  auto envp = reinterpret_cast<char* const*>(NextGp(args));
+  // A null envp is an empty environment for execve, not the caller's.
+  static char* const kEmpty[] = {nullptr};
+  return Execve(path, argv.data(), envp != nullptr ? envp : kEmpty);
+}
+
+// Two fixed arguments (path or file, argv[0]), the va_list in %rdx.
+extern "C" void gesher_bionic_execl();
+extern "C" void gesher_bionic_execlp();
+extern "C" void gesher_bionic_execle();
+asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execl", "gesher_bionic_vexecl", "16", "%rdx"));
+asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execlp", "gesher_bionic_vexeclp", "16", "%rdx"));
+asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execle", "gesher_bionic_vexecle", "16", "%rdx"));
 
 // --- waitpid / wait / wait4 ----------------------------------------------------
 
@@ -632,10 +660,15 @@ void RegisterProcess(SymbolTable& t) {
   E("vfork", ForkUnsupported);
   E("execve", Execve);
   E("execv", Execv);
-  E("execl", gesher_bionic_execl);
-  E("__gesher_vexecl", gesher_bionic_vexecl);
   E("execvp", Execvp);
   E("execvpe", Execvpe);
+  E("execl", gesher_bionic_execl);
+  E("execlp", gesher_bionic_execlp);
+  E("execle", gesher_bionic_execle);
+  // The va_list forms, for the arm64 translator (guest_libc.cc).
+  E("__gesher_vexecl", gesher_bionic_vexecl);
+  E("__gesher_vexeclp", gesher_bionic_vexeclp);
+  E("__gesher_vexecle", gesher_bionic_vexecle);
   E("waitpid", Waitpid);
   E("wait", Wait);
   E("wait4", Wait4);
