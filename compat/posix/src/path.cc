@@ -281,6 +281,12 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     h = CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     &inherit, disposition, attributes, nullptr);
     if (h != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) break;
+    // Gesher's ELF loader, held against writers by a process using it, is
+    // not a brief open to wait out (below).
+    if (attempt == 0 && (access & GENERIC_WRITE) != 0 &&
+        system_linker::IsFilePath(path, true, true)) {
+      return errno = EROFS, -1;
+    }
     Sleep(1);
   }
   if (h == INVALID_HANDLE_VALUE) {
@@ -291,7 +297,7 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     // truncated. Read-only, as through its own name.
     if ((access & GENERIC_WRITE) != 0 &&
         (error == ERROR_SHARING_VIOLATION || error == ERROR_USER_MAPPED_FILE) &&
-        system_linker::IsFilePath(path)) {
+        system_linker::IsFilePath(path, true, true)) {
       return errno = EROFS, -1;
     }
     DWORD existing = GetFileAttributesW(path.c_str());
@@ -309,7 +315,7 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   BY_HANDLE_FILE_INFORMATION info;
   const bool have_info = GetFileInformationByHandle(h, &info) != 0;
   bool directory = have_info && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-  if (have_info && (access & GENERIC_WRITE) != 0 && !directory && system_linker::IsFileInfo(info)) {
+  if ((access & GENERIC_WRITE) != 0 && !directory && system_linker::IsFileHandle(h)) {
     CloseHandle(h);
     return errno = EROFS, -1;
   }
@@ -801,6 +807,11 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
                              FILE_FLAG_BACKUP_SEMANTICS |
                                  ((flags & AT_SYMLINK_NOFOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0));
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+      // Gesher's ELF loader through a link to it (system_linker.h).
+      if (gesher::system_linker::RefuseChangeHandle(h) != 0) {
+        CloseTimeHandle(h);
+        return errno = EROFS, -1;
+      }
       const int result = SetHandleTimes(h, times);
       CloseTimeHandle(h);
       return result;
