@@ -2,7 +2,7 @@
 // (docs/native-libs.md, ADR 0057): POSIX semaphores, scheduling parameters,
 // pthread spinlocks/barriers and the timed and attribute forms the core lacks,
 // resource usage, utime/utimes, clock_nanosleep, sysinfo, prctl, getrandom,
-// memfd_create, madvise, dup3, tgkill, flock and lockf, statfs, the xattr
+// memfd_create, madvise, dup3, flock and lockf, statfs, the xattr
 // family, the mount table and mount. Registered (from
 // RegisterExtra) before the core files, so their definitions win.
 
@@ -618,12 +618,6 @@ int BIONIC_SYSV PosixMadvise(void*, size_t, int) { return 0; }
 int BIONIC_SYSV Dup3(int oldfd, int newfd, int flags) {
   return dup3(oldfd, newfd, flags);
 }
-int BIONIC_SYSV Tgkill(int, int tid, int sig) {
-  if (tid != static_cast<int>(GetCurrentThreadId())) return errno = kESRCH, -1;
-  static auto raise_fn = Shim<int(BIONIC_SYSV*)(int)>("raise");
-  return raise_fn != nullptr ? raise_fn(sig) : (errno = kENOSYS, -1);
-}
-int BIONIC_SYSV Tkill(int tid, int sig) { return Tgkill(0, tid, sig); }
 int BIONIC_SYSV Flock(int fd, int op) { return flock(fd, op); }
 // lockf shares fcntl's process-owned record locks. The production descriptor
 // path implements nonblocking operations; blocking F_SETLKW is not wired yet.
@@ -1133,8 +1127,6 @@ void RegisterExtraSys(SymbolTable& t) {
   E("munlockall", Munlockall);
   E("mincore", Mincore);
   E("dup3", Dup3);
-  E("tgkill", Tgkill);
-  E("tkill", Tkill);
   E("flock", Flock);
   E("lockf", Lockf);
   E("lockf64", Lockf);
