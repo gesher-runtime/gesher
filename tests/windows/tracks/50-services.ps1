@@ -704,8 +704,8 @@ if ($codeA -eq 0 -and $codeB -eq 0 -and $started -eq 1 -and $connected -eq 1 -an
   $failed++
 }
 
-# Bundled packages depend on this PC's real capabilities (for example, speech
-# providers). Record their inventory before adding our fixtures, then require
+# Bundled packages depend on this PC's real capabilities (for example, installed
+# speech engines). Record their inventory before adding our fixtures, then require
 # exactly two additional packages throughout the install/uninstall checks.
 $initialList = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
 $initialListCode = $LASTEXITCODE

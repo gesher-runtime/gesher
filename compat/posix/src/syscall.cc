@@ -14,6 +14,10 @@
 #include <time.h>
 #include <windows.h>
 
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 #include <atomic>
 
 namespace {
@@ -330,3 +334,34 @@ extern "C" long syscall(long number, ...) {
   va_end(args);
   return result;
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the futex buckets. The child's copies of the lists
+// hold the parent's other threads' waiters, which the child does not have: a
+// wake there must not be spent on them.
+namespace {
+bool FutexBucketsTryLock(void*) {
+  for (size_t i = 0; i < 64; ++i) {
+    if (!TryAcquireSRWLockExclusive(&g_futex_buckets[i].lock)) {
+      while (i-- > 0) ReleaseSRWLockExclusive(&g_futex_buckets[i].lock);
+      return false;
+    }
+  }
+  return true;
+}
+void FutexBucketsUnlock(void*) {
+  for (Bucket& bucket : g_futex_buckets) ReleaseSRWLockExclusive(&bucket.lock);
+}
+void FutexBucketsChild(void*) {
+  for (Bucket& bucket : g_futex_buckets) {
+    InitializeSRWLock(&bucket.lock);
+    bucket.first = bucket.last = nullptr;
+  }
+}
+const gesher::ForkLockOps kFutexBucketOps = {&FutexBucketsTryLock, &FutexBucketsUnlock,
+                                             &FutexBucketsChild};
+const gesher::ForkLockRegistration g_fork_futex_buckets(
+    gesher::kForkOrderLeaf, "futex buckets", []() -> void* { return g_futex_buckets; },
+    &kFutexBucketOps);
+}  // namespace
+#endif

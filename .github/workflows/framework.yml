@@ -512,6 +512,11 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/app/gesher-camera" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
+          # Gesher Text-to-speech (docs/tts.md): the TextToSpeechService engine over Windows' voices.
+          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/app/gesher-tts" tests/apps/lifecycle/build.sh out/app \
+            --framework-res out/framework-res/framework-res.apk \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar
           # Gesher Speech Recognition (docs/speech-recognition.md): the RecognitionService over Windows' recognizers.
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/app/gesher-stt" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
@@ -934,6 +939,7 @@ jobs:
           cp out/app/popupapp.apk dist-framework/
           cp out/app/split-package-fixtures.zip dist-framework/
           cp out/app/gesher-camera.apk dist-framework/
+          cp out/app/gesher-tts.apk dist-framework/
           cp out/app/gesher-stt.apk dist-framework/
           cp out/app/rtlapp.apk dist-framework/
           cp out/app/imeapp.apk dist-framework/

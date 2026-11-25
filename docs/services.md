@@ -47,6 +47,13 @@ app). `GESHER_BINDER_TRACE=1` makes binderd trace every transaction on stderr;
 device starts stream an ART method trace to `<dir>/<package>-<pid>.trace`,
 which survives an abort (it found the HealthConnectManager placeholder's need).
 
+## MediaStore
+
+`MediaStoreProvider` serves `content://media` (MediaStore's Images, Video, Audio,
+Downloads and Files collections over the shared volume) from the system server, with
+Android's scoped-storage ownership, pending items and scanner; see
+[media-provider.md](media-provider.md).
+
 ## Restricted permissions at installation
 
 An installer's restricted-permission allowlist makes declared permissions eligible

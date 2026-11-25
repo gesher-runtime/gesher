@@ -16,6 +16,7 @@ FRAMEWORK.update('icon-base.apk icon-density.apk icon-bundle.apks icon-bundle.xa
 FRAMEWORK.add('crashnotice.apk')
 FRAMEWORK.add('hellocred.apk')
 FRAMEWORK.add('gesher-stt.apk')
+FRAMEWORK.add('gesher-tts.apk')
 
 def assemble(source, dest, ledger, owner, prefix='', exclude=()):
     source, dest, ledger = Path(source).resolve(), Path(dest).resolve(), Path(ledger).resolve()
