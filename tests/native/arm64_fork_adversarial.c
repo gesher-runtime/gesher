@@ -2,7 +2,7 @@
 // Usage: arm64-fork-adversarial <mode> [n] [case]
 //   contend N [case]  N forks while three threads hammer one system call path
 //                     (malloc, mmap, stdio, thread, env, prop, dlopen, exit,
-//                     epoll); the child uses the same path. A child that hangs
+//                     epoll, fifo); the child uses the same path. A child that hangs
 //                     5 s or fails is counted. Exit 1 on any.
 //   killrace N [sig]  a signal sent to a child right after fork reaches its
 //                     handler (the child's mailbox exists before fork returns)
@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/system_properties.h>
 #include <sys/wait.h>
@@ -208,6 +209,21 @@ static void* t_epoll(void* a) {
   }
   return NULL;
 }
+// One FIFO the threads open and close (O_RDWR: no wait for a peer) and the
+// child opens anew: its ring and the process's table of rings (ADR 0097).
+static char g_fifo[64];
+static void* t_fifo(void* a) {
+  (void)a;
+  while (!atomic_load(&g_stop)) {
+    int fd = open(g_fifo, O_RDWR | O_NONBLOCK);
+    if (fd >= 0) {
+      char c;
+      if (write(fd, "f", 1) == 1) read(fd, &c, 1);
+      close(fd);
+    }
+  }
+  return NULL;
+}
 static void* t_malloc(void* a) {
   (void)a;
   while (!atomic_load(&g_stop)) { void* p = malloc(1 << (rand() % 20)); free(p); }
@@ -236,6 +252,15 @@ static int child_action(const char* what) {
     e.events = EPOLLIN;
     if (ep < 0 || ev < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, ev, &e) != 0) return 3;
     return epoll_wait(ep, &e, 1, 1000) == 1 ? 0 : 4;
+  }
+  if (!strcmp(what, "fifo")) {
+    int fd = open(g_fifo, O_RDWR | O_NONBLOCK);
+    if (fd < 0) return 3;
+    char c = 0;
+    // The parent's threads share the ring: another reader may take the byte.
+    if (write(fd, "c", 1) != 1) return 4;
+    read(fd, &c, 1);
+    return close(fd) == 0 ? 0 : 5;
   }
   return 0;
 }
@@ -300,10 +325,14 @@ int main(int argc, char** argv) {
     struct { const char* name; thread_fn fn; } cases[] = {
         {"malloc", t_malloc}, {"mmap", t_mmap}, {"stdio", t_stdio}, {"thread", t_threads},
         {"env", t_env}, {"prop", t_prop}, {"dlopen", t_dlopen}, {"exit", t_atexit},
-        {"epoll", t_epoll}};
+        {"epoll", t_epoll}, {"fifo", t_fifo}};
+    snprintf(g_fifo, sizeof g_fifo, "arm64-fork-adversarial-fifo-%d", (int)getpid());
+    unlink(g_fifo);
+    if (mkfifo(g_fifo, 0600) != 0) printf("mkfifo failed errno=%d\n", errno);
     int bad = 0;
     for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; ++i)
       if (!strcmp(which, "all") || !strcmp(which, cases[i].name)) bad += contend(cases[i].fn, cases[i].name, n);
+    unlink(g_fifo);
     return bad ? 1 : 0;
   }
   if (!strcmp(mode, "dupstdio")) {
