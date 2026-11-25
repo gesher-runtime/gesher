@@ -249,7 +249,7 @@ public final class Launcher {
             case "install": {
                 if (rest.size() != 1) return usage();
                 ensureDevice(true);
-                install(gesher(), rest.get(0));
+                install(gesher(), rest.get(0), true);
                 return 0;
             }
             case "uninstall": {
@@ -636,9 +636,14 @@ public final class Launcher {
     // --- packages ----------------------------------------------------------------------
 
     private static String install(GesherService.Client gesher, String apk) throws Exception {
+        return install(gesher, apk, false);
+    }
+
+    private static String install(GesherService.Client gesher, String apk, boolean explicitInstall)
+            throws Exception {
         File f = new File(apk);
         if (!f.isFile()) throw new IllegalArgumentException(text("no_file", apk));
-        String[] r = gesher.install(f.getAbsolutePath());
+        String[] r = gesher.install(f.getAbsolutePath(), explicitInstall);
         switch (r[1]) {
             case "unchanged":
                 log(text("unchanged", r[0], r[2]));

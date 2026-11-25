@@ -543,6 +543,11 @@ public final class SystemServer {
         }
 
         @Override
+        public String[] install(String apk, boolean explicitInstall) throws Exception {
+            return mInstaller.install(apk, explicitInstall);
+        }
+
+        @Override
         public boolean uninstall(String packageName) throws Exception {
             return mInstaller.uninstall(packageName);
         }

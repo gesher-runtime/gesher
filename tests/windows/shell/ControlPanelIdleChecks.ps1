@@ -38,18 +38,20 @@ function Assert-UiThread {
     if ([Threading.Thread]::CurrentThread.ManagedThreadId -ne $script:UiThread) { throw 'Metadata work crossed the WPF dispatcher thread' }
 }
 function Get-StateStamp { Assert-UiThread; $script:Scans.State++; & $script:ReadState }
-function Get-AppFilesStamp { Assert-UiThread; $script:Scans.Apps++; & $script:ReadApps }
+function Get-AppFilesStamp([hashtable] $ReadStamps = $null) { Assert-UiThread; $script:Scans.Apps++; & $script:ReadApps $ReadStamps }
 function Get-DeviceStatus { Assert-UiThread; $script:Scans.Process++; & $script:ReadDevice }
 function Get-MicrogStatus { $false }
 function Update-DeviceView([bool] $running) { Assert-UiThread; $script:ShownDevice = $running }
 function Update-MicrogView([bool] $enabled) { Assert-UiThread }
 function Update-StoreView($installed) { Assert-UiThread }
-function Get-InstalledApps {
+function Get-InstalledApps([hashtable] $ReadStamps = $null) {
     Assert-UiThread
     $script:Scans.List++
     foreach ($package in [IO.File]::ReadAllLines($script:PackagesPath)) {
         if (-not $package) { continue }
         $shortcut = Join-Path $root "data/data/$package/gesher-shell/shortcut.properties"
+        $null = Get-FileStamp $shortcut $ReadStamps
+        $null = Get-FileStamp (Join-Path $root "data/data/$package/gesher-shell/icon.ico") $ReadStamps
         $label = if ([IO.File]::Exists($shortcut)) { [IO.File]::ReadAllText($shortcut) } else { $package }
         [pscustomobject]@{ Package = $package; Label = $label }
     }
@@ -152,6 +154,7 @@ try {
     Refresh-Dashboard
     $window.Show()
     Pump-Until { $script:LiveState.WasVisible -and -not $script:LiveState.PendingSince } 'Initial visible view did not settle'
+    Write-Host "Initial WPF snapshot: list=$($script:Scans.List) draws=$script:Draws notifications=$script:Notifications generation=$($script:MetadataMonitor.Generation)"
     Assert-Idle ($script:Scans.List -eq 1 -and $script:Draws -eq 1) 'Quiet WPF first show repeated its initial list read or render'
     Assert-Idle ($script:ShownPackages -contains 'fixture.alpha') 'Initial application view is stale'
     Assert-Idle ($script:MetadataMonitor.WatcherCount -ge 1 -and $script:MetadataMonitor.WatcherCount -le 8) 'Watcher handle budget is invalid'
