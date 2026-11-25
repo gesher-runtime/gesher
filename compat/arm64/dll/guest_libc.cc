@@ -37,6 +37,7 @@
 #include <cstdlib>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <cstring>
 #include <string>
@@ -83,14 +84,106 @@ struct GuestThreadStart {
 void ReleaseGuestThreadStart(GuestThreadStart* start) {
   if (start->references.fetch_sub(1, std::memory_order_acq_rel) == 1) delete start;
 }
-// fork()/vfork() fail with EAGAIN in guest code. The shim's fork is
-// vfork-style (ADR 0055): the child runs on, and the second return goes back
-// to the host frame that called fork, but the guest's registers are then
-// the child's, not the parent's. A failure Linux also gives (RLIMIT_NPROC)
-// is safer. Ijiami's anti-debug check forks a child that sends itself
-// SIGABRT; run in this process, that killed the app (ADR 0086).
-int GESHER_SYSV GuestFork() {
-  SetErrno(11);  // EAGAIN
+// --- fork, vfork, clone (ADR 0092) -------------------------------------------------
+// A real child process: the bionic shim clones this process
+// (RtlCloneUserProcess) with its locks and the translator's held (the hooks),
+// and the child, with this thread only, returns from the same host call to
+// the same guest code with 0, the parent with the child's pid. It runs on
+// this thread's Env (its guest stack, TLS and Jits) in its own copy of the
+// address space.
+constexpr int kSigchld = 17;
+constexpr int kEINVAL = 22;
+
+// CLONE_CHILD_CLEARTID's word in a raw clone's child (its forking thread).
+thread_local uint64_t t_clear_child_tid = 0;
+void* g_host_syscall = nullptr;
+void* g_exit_thread = nullptr;
+
+struct ForkHooks {
+  int (GESHER_SYSV* try_prepare)();
+  void (GESHER_SYSV* parent)();
+  void (GESHER_SYSV* child)();
+  int (GESHER_SYSV* mapping)(int op);  // the guest mapping lock: 0 try, 1 unlock, 2 child
+};
+// The guest mapping lock (below) for the shim's fork rounds.
+int GESHER_SYSV GuestMappingForFork(int op);
+const ForkHooks kForkHooks = {&TryForkPrepare, &ForkParent, &ForkChild, &GuestMappingForFork};
+using ShimFork = int(GESHER_SYSV*)(int, int, const ForkHooks*);
+ShimFork g_shim_fork = nullptr;
+
+int ForkProcess(int exit_signal, bool run_atfork) {
+  if (g_shim_fork == nullptr) {
+    SetErrno(kENOSYS);
+    return -1;
+  }
+  ReleaseRetiredForFork();
+  return g_shim_fork(exit_signal, run_atfork ? 1 : 0, &kForkHooks);
+}
+
+// fork(), and vfork() as a copy too (POSIX allows it; the child of vfork
+// may only exec or _exit, which a copy also serves). pthread_atfork
+// handlers run around both; _Fork runs none.
+int GESHER_SYSV GuestFork() { return ForkProcess(kSigchld, true); }
+int GESHER_SYSV GuestUnderscoreFork() { return ForkProcess(kSigchld, false); }
+
+// clone(2), arm64's argument order: flags, newsp, parent_tid, tls, child_tid.
+// A fork-like clone (no CLONE_VM, no CLONE_THREAD) makes a real child as
+// fork does, with the exit signal in CSIGNAL (0: none; such a "clone child"
+// is waited for with __WCLONE or __WALL). Thread-style clones and flags this
+// process model cannot give (shared memory, descriptor table or fs info,
+// a new TLS, vfork suspension, namespaces, tracing) stay ENOSYS, as every
+// clone was before. CLONE_CHILD_SETTID and CLONE_CHILD_CLEARTID (bionic's own
+// fork uses both) act on the child's copy of the word: its thread id is
+// stored there, and cleared (with a futex wake) when that thread leaves by the
+// raw exit system call. Returns the raw result (-errno).
+constexpr uint64_t kCloneVm = 0x100, kCloneSighand = 0x800, kCloneThread = 0x10000,
+                   kCloneParentSettid = 0x100000, kCloneChildCleartid = 0x200000,
+                   kCloneDetached = 0x400000, kCloneUntraced = 0x800000,
+                   kCloneChildSettid = 0x1000000, kCsignal = 0xff;
+int64_t GuestClone(const uint64_t a[6]) {
+  const uint64_t flags = a[0];
+  // Linux's own validity checks first.
+  if ((flags & kCloneThread) != 0 && (flags & kCloneSighand) == 0) return -kEINVAL;
+  if ((flags & kCloneSighand) != 0 && (flags & kCloneVm) == 0) return -kEINVAL;
+  const int exit_signal = static_cast<int>(flags & kCsignal);
+  if (exit_signal > 64) return -kEINVAL;
+  constexpr uint64_t kSupported = kCsignal | kCloneParentSettid | kCloneChildSettid |
+                                  kCloneChildCleartid | kCloneDetached | kCloneUntraced;
+  if ((flags & ~kSupported) != 0) return -kENOSYS;
+  int pid = ForkProcess(exit_signal, false);
+  if (pid < 0) {
+    int* e = HostErrno();
+    return -(e != nullptr && *e != 0 ? *e : kENOSYS);
+  }
+  // The kernel ignores a fault writing these words; so does WriteProcessMemory.
+  if (pid > 0 && (flags & kCloneParentSettid) != 0) {
+    const int32_t value = pid;
+    WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(a[2]), &value, sizeof(value), nullptr);
+  }
+  if (pid == 0 && (flags & kCloneChildSettid) != 0) {
+    // The child's thread id, as its gettid() returns it.
+    const int32_t value = static_cast<int32_t>(GetCurrentThreadId());
+    WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(a[4]), &value, sizeof(value), nullptr);
+  }
+  if (pid == 0 && (flags & kCloneChildCleartid) != 0) t_clear_child_tid = a[4];
+  return pid;
+}
+
+// The raw exit system call: CLONE_CHILD_CLEARTID's word is cleared and woken
+// (FUTEX_WAKE, one waiter) as the thread leaves, then the shim ends it.
+int64_t GuestRawExit(int64_t code) {
+  if (t_clear_child_tid != 0) {
+    const int32_t zero = 0;
+    if (WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(t_clear_child_tid), &zero,
+                           sizeof(zero), nullptr) &&
+        g_host_syscall != nullptr) {
+      reinterpret_cast<int64_t(GESHER_SYSV*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
+                                             int64_t)>(g_host_syscall)(202, static_cast<int64_t>(t_clear_child_tid),
+                                                                       1 /*FUTEX_WAKE*/, 1, 0, 0, 0);
+    }
+  }
+  if (g_exit_thread != nullptr) reinterpret_cast<void(GESHER_SYSV*)(int)>(g_exit_thread)(static_cast<int>(code));
+  SetErrno(kENOSYS);
   return -1;
 }
 
@@ -420,8 +513,10 @@ const SyscallMap kSyscalls[] = {
     {82, "fsync", 'i'},       {83, "fdatasync", 'i'},    {94, "_exit", 'i'},
     {85, "timerfd_create", 'i'}, {86, "timerfd_settime", 'i'}, {87, "timerfd_gettime", 'i'},
     {101, "nanosleep", 'i'},  {113, "clock_gettime", 'i'}, {114, "clock_getres", 'i'},
+    {117, "__gesher_ptrace_syscall", 'l'}, {260, "wait4", 'i'},
     {124, "sched_yield", 'i'}, {123, "sched_getaffinity", 'i'}, {129, "kill", 'i'},
-    {131, "tgkill", 'i'},     {132, "sigaltstack", 'i'}, {160, "uname", 'i'},
+    {130, "tkill", 'i'},      {131, "tgkill", 'i'},     {132, "sigaltstack", 'i'},
+    {160, "uname", 'i'},
     {163, "getrlimit", 'i'},
     {165, "getrusage", 'i'},  {167, "prctl", 'i'},       {169, "gettimeofday", 'i'},
     {172, "getpid", 'i'},     {173, "getppid", 'i'},     {174, "getuid", 'i'},
@@ -431,9 +526,9 @@ const SyscallMap kSyscalls[] = {
     {228, "mlock", 'i'},      {229, "munlock", 'i'},     {230, "mlockall", 'i'},
     {231, "munlockall", 'i'},  {233, "madvise", 'i'},     {278, "getrandom", 'l'},
     {279, "memfd_create", 'i'}, {284, "mlock2", 'i'},
+    {260, "wait4", 'i'},
 };
 std::unordered_map<uint32_t, std::pair<void*, char>> g_syscalls;
-void* g_host_syscall = nullptr;
 
 // mprotect/mmap: the host never runs guest code (guest code pages are not
 // executable, so a host call of a guest function pointer faults into its
@@ -457,23 +552,148 @@ constexpr int kProtWrite = 2;
 constexpr int kProtExec = 4;
 void* g_mprotect = nullptr;
 void* g_mmap = nullptr;
+void* g_munmap = nullptr;
 
 int GuestProt(int prot) { return (prot & kProtExec) != 0 ? (prot & ~kProtExec) | kProtRead : prot; }
+
+// Each guest mprotect/mmap/munmap/mremap changes the host mapping and the
+// translator's record of it as one step: otherwise two threads changing the
+// same page (RW in one, R-X in the other) could leave the record clean R-X
+// while the page is writable. Held over the translator's broadcast too, so a
+// later R-X of the same pages cannot see them clean before every Jit has the
+// range. Lock order: this, then the translator's protection record, regions,
+// live-Jit list, a Jit's page record and dynarmic's own mutex; none of those
+// is held while a guest mapping call is made.
+std::mutex g_guest_mapping_mutex;
+
+// A guest fork (ADR 0092) holds it across the clone, so no thread is between
+// a host mapping change and the record of it. The shim's fork takes it at the
+// start of each round, after the pthread_atfork prepare handlers (which may
+// map memory under their own locks, as on Linux, where they run before any
+// kernel lock) and before the fork set. It is the outermost lock of a guest
+// mapping call, and the threads of such a call keep it while they wait for
+// gesher-base's mapping lock, which the fork set tries; so the shim tries it
+// for a short slice at the start of a round (op 0, 1 when taken) rather than
+// only once, and a round that does not get it, like one that fails, gives
+// everything back and yields: a thread that holds it while it waits for
+// something the forking thread holds (a dl_iterate_phdr callback's fork while
+// another thread unmaps that object) is never waited for without bound, and
+// the fork fails with EAGAIN at the fork set's deadline instead. A library
+// constructor that maps under the ELF loader's lock (which the fork only
+// tries) goes on between rounds. The parent and child handlers run after it
+// is given back.
+int GESHER_SYSV GuestMappingForFork(int op) {
+  if (op == 0) return g_guest_mapping_mutex.try_lock() ? 1 : 0;
+  if (op == 1) {
+    g_guest_mapping_mutex.unlock();
+  } else {
+    new (&g_guest_mapping_mutex) std::mutex();  // the parent's waiters are not the child's
+  }
+  return 1;
+}
+
+using GuestMappingLock = std::lock_guard<std::mutex>;
 
 int GESHER_SYSV GuestMprotect(void* addr, size_t len, int prot) {
   int host_prot = GuestProt(prot);
   if (InTranslatorCode(addr, len)) host_prot = kProtRead | kProtWrite;
+  GuestMappingLock lock(g_guest_mapping_mutex);
   int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t, int)>(g_mprotect)(addr, len,
                                                                               host_prot);
+  // A conservative choice, not a Linux guarantee: arm64 Linux syncs the
+  // instruction cache only for a page it has not seen executable yet, and a
+  // program that rewrites code that already ran must use IC IVAU. Packers'
+  // inline hooks (mprotect RWX, write, mprotect R-X) often rely on the page
+  // change alone, so the translations of pages that were writable or not
+  // executable before this call are dropped; a range that stays R-X keeps them.
+  if (r == 0) GuestProtectionChanged(addr, len, (prot & kProtExec) != 0,
+                                     (prot & kProtWrite) != 0, false);
   if (r == 0 && (prot & kProtExec) != 0) AddGuestCode(addr, len);
   return r;
 }
 
 void* GESHER_SYSV GuestMmap(void* addr, size_t len, int prot, int flags, int fd, int64_t off) {
+  GuestMappingLock lock(g_guest_mapping_mutex);
   void* p = reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, int, int, int, int64_t)>(g_mmap)(
       addr, len, GuestProt(prot), flags, fd, off);
-  if (p != reinterpret_cast<void*>(-1) && (prot & kProtExec) != 0) AddGuestCode(p, len);
+  if (p == reinterpret_cast<void*>(-1)) return p;
+  // New contents: an executable mapping may reuse an address (MAP_FIXED, or
+  // one an unmapped library or JIT buffer had) whose old code was translated.
+  GuestProtectionChanged(p, len, (prot & kProtExec) != 0, (prot & kProtWrite) != 0, true);
+  if ((prot & kProtExec) != 0) AddGuestCode(p, len);
   return p;
+}
+
+// The pages' last guest protection no longer describes their contents.
+int GESHER_SYSV GuestMunmap(void* addr, size_t len) {
+  GuestMappingLock lock(g_guest_mapping_mutex);
+  int r = reinterpret_cast<int(GESHER_SYSV*)(void*, size_t)>(g_munmap)(addr, len);
+  if (r == 0) ForgetGuestProtection(addr, len);
+  return r;
+}
+
+// mremap gives both ranges new contents (a move copies the source, which is
+// unmapped or, with MREMAP_DONTUNMAP, reads back as zeros): a translation of
+// either is stale, and neither keeps the guest's last protection record. A
+// guest may move a buffer of new code over pages that ran older code and then
+// make it R-X. Shrinking in place unmaps the tail.
+constexpr int kMremapFixed = 2;
+void* g_mremap = nullptr;
+
+void* GESHER_SYSV GuestMremap(void* addr, size_t old_size, size_t new_size, int flags,
+                              void* target) {
+  GuestMappingLock lock(g_guest_mapping_mutex);
+  void* p = reinterpret_cast<void*(GESHER_SYSV*)(void*, size_t, size_t, int, void*)>(g_mremap)(
+      addr, old_size, new_size, flags, (flags & kMremapFixed) != 0 ? target : nullptr);
+  if (p == reinterpret_cast<void*>(-1)) return p;
+  if (p == addr) {
+    if (new_size < old_size) {
+      ForgetGuestProtection(static_cast<uint8_t*>(addr) + new_size, old_size - new_size);
+    }
+    return p;
+  }
+  GuestMappingMoved(addr, old_size, p, new_size);
+  return p;
+}
+
+struct KernelSigaction {
+  uint64_t handler;
+  uint64_t flags;
+  uint64_t restorer;
+  uint64_t mask;
+};
+struct ShimSigaction {
+  int32_t flags;
+  int32_t pad;
+  uint64_t handler;
+  uint64_t mask;
+  uint64_t restorer;
+};
+void* g_sigaction = nullptr;
+
+int64_t GuestRtSigaction(int sig, const KernelSigaction* in, KernelSigaction* out,
+                         uint64_t sigsetsize) {
+  if (sigsetsize != 8) {
+    SetErrno(kEINVAL);
+    return -1;
+  }
+  ShimSigaction act{}, old{};
+  if (in != nullptr) {
+    act.flags = static_cast<int32_t>(in->flags);
+    act.handler = in->handler;
+    act.mask = in->mask;
+    act.restorer = in->restorer;
+  }
+  int r = reinterpret_cast<int(GESHER_SYSV*)(int, const ShimSigaction*, ShimSigaction*)>(g_sigaction)(
+      sig, in != nullptr ? &act : nullptr, out != nullptr ? &old : nullptr);
+  if (r != 0) return -1;
+  if (out != nullptr) {
+    out->handler = old.handler;
+    out->flags = static_cast<uint32_t>(old.flags);
+    out->restorer = old.restorer;
+    out->mask = old.mask;
+  }
+  return 0;
 }
 
 // libc-style result: -1 with errno set on failure.
@@ -508,12 +728,39 @@ int64_t DoSyscall(uint64_t nr, const int64_t a[6]) {
       if (g_mprotect == nullptr) break;
       return GuestMprotect(reinterpret_cast<void*>(a[0]), static_cast<size_t>(a[1]),
                            static_cast<int>(a[2]));
+    case 215:  // munmap
+      if (g_munmap == nullptr) break;
+      return GuestMunmap(reinterpret_cast<void*>(a[0]), static_cast<size_t>(a[1]));
+    case 216:  // mremap
+      if (g_mremap == nullptr) break;
+      return reinterpret_cast<int64_t>(GuestMremap(reinterpret_cast<void*>(a[0]),
+                                                   static_cast<size_t>(a[1]),
+                                                   static_cast<size_t>(a[2]),
+                                                   static_cast<int>(a[3]),
+                                                   reinterpret_cast<void*>(a[4])));
     case 222:  // mmap
       if (g_mmap == nullptr) break;
       return reinterpret_cast<int64_t>(GuestMmap(reinterpret_cast<void*>(a[0]),
                                                  static_cast<size_t>(a[1]), static_cast<int>(a[2]),
                                                  static_cast<int>(a[3]), static_cast<int>(a[4]),
                                                  a[5]));
+    case 134:  // rt_sigaction(sig, act, oact, sigsetsize): the kernel's
+               // struct (handler, flags, restorer, mask), bionic's LP64 one
+               // (flags, handler, mask, restorer) in the shim.
+      if (g_sigaction == nullptr) break;
+      return GuestRtSigaction(static_cast<int>(a[0]), reinterpret_cast<const KernelSigaction*>(a[1]),
+                              reinterpret_cast<KernelSigaction*>(a[2]), static_cast<uint64_t>(a[3]));
+    case 220: {  // clone (syscall(2): the child goes on in the caller's frame)
+      const uint64_t args[6] = {static_cast<uint64_t>(a[0]), static_cast<uint64_t>(a[1]),
+                                static_cast<uint64_t>(a[2]), static_cast<uint64_t>(a[3]),
+                                static_cast<uint64_t>(a[4]), static_cast<uint64_t>(a[5])};
+      const int64_t r = GuestClone(args);
+      if (r >= 0) return r;
+      SetErrno(static_cast<int>(-r));
+      return -1;
+    }
+    case 93:  // exit (the calling thread)
+      return GuestRawExit(a[0]);
     case 168:  // getcpu(cpu, node, cache)
       if (a[0] != 0) *reinterpret_cast<uint32_t*>(a[0]) = 0;
       if (a[1] != 0) *reinterpret_cast<uint32_t*>(a[1]) = 0;
@@ -743,6 +990,7 @@ void* GuestSymbol(const char* name) {
 }
 
 int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
+  if (nr == 220) return GuestClone(args);  // clone: raw result already
   int64_t a[6];
   for (int i = 0; i < 6; ++i) a[i] = static_cast<int64_t>(args[i]);
   int64_t r = DoSyscall(nr, a);
@@ -759,6 +1007,11 @@ bool InitGuestLibc() {
   AddPointerVariadicFunction(Host("sscanf"), Host("vsscanf"), 2);
   AddPointerVariadicFunction(Host("fscanf"), Host("vfscanf"), 2);
   AddPointerVariadicFunction(Host("scanf"), Host("vscanf"), 1);
+  // execl/execlp/execle: argv as variadic pointers (and execle's envp after
+  // the null), read by the shim's va_list forms.
+  AddPointerVariadicFunction(Host("execl"), Host("__gesher_vexecl"), 2);
+  AddPointerVariadicFunction(Host("execlp"), Host("__gesher_vexeclp"), 2);
+  AddPointerVariadicFunction(Host("execle"), Host("__gesher_vexecle"), 2);
 
   for (const char* name : {"ns_name_ntop", "ns_name_uncompress", "dn_expand"}) {
     std::string entry = std::string("__gesher_arm64_") + name;
@@ -808,10 +1061,21 @@ bool InitGuestLibc() {
 
   g_mprotect = Host("mprotect");
   g_mmap = Host("mmap");
+  g_munmap = Host("munmap");
   if (g_mprotect) Override("mprotect", reinterpret_cast<void*>(&GuestMprotect));
+  if (g_munmap) Override("munmap", reinterpret_cast<void*>(&GuestMunmap));
+  g_mremap = Host("mremap");
+  if (g_mremap) Override("mremap", reinterpret_cast<void*>(&GuestMremap));
   if (g_mmap) {
     Override("mmap", reinterpret_cast<void*>(&GuestMmap));
     Override("mmap64", reinterpret_cast<void*>(&GuestMmap));
+  }
+
+  if (void* writes = Host("__gesher_ptrace_code_writes")) {
+    SetExternalCodeWrites(reinterpret_cast<const void*(GESHER_SYSV*)()>(writes)());
+    if (void* set_hook = Host("__gesher_ptrace_set_halt_hook")) {
+      reinterpret_cast<void(GESHER_SYSV*)(void(GESHER_SYSV*)())>(set_hook)(&HaltForExternalWrites);
+    }
   }
 
   g_host_syscall = Host("syscall");
@@ -821,7 +1085,12 @@ bool InitGuestLibc() {
   g_open = Host("open");
   g_openat = Host("openat");
   g_fcntl = Host("fcntl");
+  g_shim_fork = reinterpret_cast<ShimFork>(Host("__gesher_fork"));
+  g_exit_thread = Host("__gesher_exit_thread");
+  g_signal_exit_code = reinterpret_cast<unsigned(GESHER_SYSV*)(int)>(Host("__gesher_signal_exit_code"));
   for (const char* n : {"fork", "vfork"}) Override(n, reinterpret_cast<void*>(&GuestFork));
+  Override("_Fork", reinterpret_cast<void*>(&GuestUnderscoreFork));
+  g_sigaction = Host("sigaction");
 
   g_spawn_addopen = Host("posix_spawn_file_actions_addopen");
   if (g_open) {

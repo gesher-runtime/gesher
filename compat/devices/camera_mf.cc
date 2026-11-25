@@ -48,6 +48,45 @@ constexpr DWORD kStartupLite = 1;                // MFSTARTUP_LITE
 
 constexpr char kTestId[] = "gesher-test";
 
+// IAMCameraControl (strmif.h), which Media Foundation's video capture source
+// answers to QueryInterface: the driver's camera controls (usbvideo.sys maps
+// CameraControl_Focus to UVC's Focus (Absolute) and Focus, Auto controls).
+// Declared here, as the GUIDs above are, rather than through strmif.h.
+constexpr GUID kIidCameraControl = {0xc6e13370, 0x30ac, 0x11d0,
+                                    {0xa1, 0x8c, 0x00, 0xa0, 0xc9, 0x11, 0x89, 0x56}};
+struct AmCameraControl : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE GetRange(LONG property, LONG* min, LONG* max, LONG* step,
+                                             LONG* default_value, LONG* flags) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Set(LONG property, LONG value, LONG flags) = 0;
+  virtual HRESULT STDMETHODCALLTYPE Get(LONG property, LONG* value, LONG* flags) = 0;
+};
+constexpr LONG kCameraControlFocus = 6;  // CameraControl_Focus
+constexpr LONG kCameraControlAuto = 1;   // CameraControl_Flags_Auto
+constexpr LONG kCameraControlManual = 2; // CameraControl_Flags_Manual
+
+AmCameraControl* CameraControlOf(IMFMediaSource* source) {
+  AmCameraControl* control = nullptr;
+  if (source == nullptr ||
+      FAILED(source->QueryInterface(kIidCameraControl, reinterpret_cast<void**>(&control)))) {
+    return nullptr;
+  }
+  return control;
+}
+
+// Whether the device's focus really runs automatically and can be locked: the
+// driver's focus control reports both the automatic and the manual flag over a
+// range of lens positions. A fixed-focus camera has no focus control (or only
+// a manual one), and keeps Android's fixed-focus description.
+bool HasAutofocus(IMFMediaSource* source) {
+  AmCameraControl* control = CameraControlOf(source);
+  if (control == nullptr) return false;
+  LONG min = 0, max = 0, step = 0, def = 0, caps = 0;
+  HRESULT hr = control->GetRange(kCameraControlFocus, &min, &max, &step, &def, &caps);
+  control->Release();
+  return SUCCEEDED(hr) && (caps & kCameraControlAuto) != 0 &&
+         (caps & kCameraControlManual) != 0 && max > min;
+}
+
 struct Api {
   HRESULT(WINAPI* MFStartup)(ULONG version, DWORD flags) = nullptr;
   HRESULT(WINAPI* MFCreateAttributes)(IMFAttributes** attributes, UINT32 size) = nullptr;
@@ -647,13 +686,14 @@ std::vector<Device> FindDevices(std::string* status) {
       IMFSourceReader* reader = nullptr;
       if (SUCCEEDED(NewReader(devices[i], &source, &reader))) {
         d.sizes = NativeSizes(reader);
+        d.autofocus = HasAutofocus(source);
         SafeRelease(reader);
         source->Shutdown();
         SafeRelease(source);
       }
       devices[i]->ShutdownObject();
       if (d.id.empty() || d.sizes.empty()) continue;
-      *status += ", " + d.name;
+      *status += ", " + d.name + (d.autofocus ? " (autofocus)" : "");
       list.push_back(d);
     }
     FreeDevices(devices, count);
@@ -697,6 +737,8 @@ class MfCapture : public Capture {
  public:
   ~MfCapture() override {
     read_trace_.Log();
+    RestoreFocus();
+    SafeRelease(camera_control_);
     SafeRelease(reader_);
     if (source_ != nullptr) source_->Shutdown();
     SafeRelease(source_);
@@ -705,7 +747,57 @@ class MfCapture : public Capture {
   HRESULT Init(IMFActivate* device, int w, int h) {
     HRESULT hr = NewReader(device, &source_, &reader_);
     if (FAILED(hr)) return hr;
+    camera_control_ = CameraControlOf(source_);
+    if (camera_control_ != nullptr) {
+      // The focus as the device had it: restored on close, so Gesher's AF does not leave
+      // the webcam in manual focus for other programs (UVC keeps control values).
+      EnsureCom();
+      initial_focus_saved_ = SUCCEEDED(camera_control_->Get(
+          kCameraControlFocus, &initial_focus_, &initial_focus_flags_));
+    }
     return Configure(w, h);
+  }
+
+  void RestoreFocus() {
+    if (camera_control_ == nullptr || !initial_focus_saved_ || !focus_changed_) return;
+    EnsureCom();
+    std::lock_guard<std::mutex> lock(focus_mutex_);
+    camera_control_->Set(kCameraControlFocus, initial_focus_,
+                         (initial_focus_flags_ & kCameraControlAuto) != 0 ? kCameraControlAuto
+                                                                          : kCameraControlManual);
+  }
+
+  HRESULT Focus(int op, long* value, long* flags) override {
+    *value = 0;
+    *flags = 0;
+    if (camera_control_ == nullptr) return E_NOTIMPL;
+    EnsureCom();
+    std::lock_guard<std::mutex> lock(focus_mutex_);
+    LONG position = 0, current = 0;
+    HRESULT hr = camera_control_->Get(kCameraControlFocus, &position, &current);
+    if (op != kFocusGet) focus_changed_ = true;
+    if (op == kFocusAuto) {
+      if (FAILED(hr)) {
+        // No current position to pass along: the driver's default.
+        LONG min = 0, max = 0, step = 0, caps = 0;
+        hr = camera_control_->GetRange(kCameraControlFocus, &min, &max, &step, &position, &caps);
+      }
+      if (SUCCEEDED(hr)) hr = camera_control_->Set(kCameraControlFocus, position, kCameraControlAuto);
+    } else if (op == kFocusLock) {
+      // Automatic focus off at the position it reached: the lens stays.
+      if (SUCCEEDED(hr)) {
+        hr = camera_control_->Set(kCameraControlFocus, position, kCameraControlManual);
+      }
+    } else if (op != kFocusGet) {
+      return E_INVALIDARG;
+    }
+    if (FAILED(hr)) return hr;
+    if (op != kFocusGet) hr = camera_control_->Get(kCameraControlFocus, &position, &current);
+    if (SUCCEEDED(hr)) {
+      *value = position;
+      *flags = current;
+    }
+    return hr;
   }
 
   // The test camera's media source (TestSource).
@@ -805,6 +897,12 @@ class MfCapture : public Capture {
 
   IMFMediaSource* source_ = nullptr;
   IMFSourceReader* reader_ = nullptr;
+  AmCameraControl* camera_control_ = nullptr;  // the device's (not the test camera's)
+  bool initial_focus_saved_ = false;
+  bool focus_changed_ = false;
+  LONG initial_focus_ = 0;
+  LONG initial_focus_flags_ = 0;
+  std::mutex focus_mutex_;
   bool paced_ = false;  // the test camera's source makes frames at once: 30 a second here
   ULONGLONG next_ = 0;
   TraceStats read_trace_{"MF read", {"pace", "ReadSample", "contiguous buffer", "copy frame"}};

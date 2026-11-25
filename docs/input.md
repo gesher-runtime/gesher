@@ -215,7 +215,10 @@ and InputMethodManager real enough for apps. ADR 0039 has the decisions.
   processes), the stacks and wait chains of the process's threads that are
   in the IME or TSF and of the threads of any other process a chain ends in
   (dbghelp's StackWalk64); again a minute later while it lasts, and how
-  long it was once the thread answers. ime.cc reports window-thread
+  long it was once the thread answers. Waits are measured in awake time
+  (unbiased interrupt time, the clock of Android's `uptimeMillis` and of its
+  watchdog), so time the PC spends asleep or hibernating is not reported as a
+  wait (`thread_watch_clock_test`). ime.cc reports window-thread
   messages that take over 500 ms.
 - **Server 2022's Microsoft IME hangs** (found with that watch, ci runs
   40140095142 to 40199105986): after a Japanese composition, every switch

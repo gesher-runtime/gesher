@@ -8,6 +8,10 @@
 #include "pipe_io.h"
 
 #include <gesher/file_description.h>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
@@ -15,6 +19,7 @@
 #include <bcrypt.h>
 
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cstring>
 #include <new>
@@ -853,3 +858,9 @@ struct StartupImport {
 StartupImport startup_import;
 }  // namespace
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the descriptor table is consistent in the child.
+GESHER_FORK_LOCK_PTR(gesher::kForkOrderDescriptors, std::mutex,
+                     gesher::table != nullptr ? &gesher::table->mutex : nullptr);
+#endif

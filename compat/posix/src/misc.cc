@@ -13,6 +13,7 @@
 #include <syslog.h>
 #include <termios.h>
 #include <unistd.h>
+#include <gesher/ptrace_state.h>
 #include <gesher/stdio.h>
 
 #include <limits>
@@ -138,9 +139,20 @@ int prctl(int option, ...) {
       break;
     }
     case PR_GET_DUMPABLE:
-      result = 1;
+      result = gesher::ptrace::GetDumpable();
       break;
     case PR_SET_DUMPABLE:
+    case PR_SET_PTRACER: {
+      // Both take an unsigned long, which callers here pass as 32 bits;
+      // PR_SET_PTRACER_ANY is then all ones and sign-extends to the kernel's.
+      const int value = va_arg(args, int);
+      const uint64_t wide = static_cast<uint64_t>(static_cast<int64_t>(value));
+      const int error = option == PR_SET_DUMPABLE
+                            ? gesher::ptrace::SetDumpable(static_cast<uint32_t>(value))
+                            : gesher::ptrace::SetPtracer(wide);
+      result = error == 0 ? 0 : (errno = -error, -1);
+      break;
+    }
     case PR_SET_NO_NEW_PRIVS:
       result = 0;
       break;

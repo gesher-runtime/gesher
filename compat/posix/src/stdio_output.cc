@@ -16,6 +16,10 @@
 #include "record_lock_descriptors.h"
 #include "../../bionic/stdio_windows_lock.h"
 #include <gesher/file_description.h>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 #include <windows.h>
 #include <fcntl.h>
@@ -60,6 +64,7 @@ struct State {
   int fd = -1;
   bool live = true;
   std::atomic<bool> line_output{false};
+  BionicState bionic;
   mbstate_t input_conversion{};
   mbstate_t output_conversion{};
 };
@@ -125,6 +130,7 @@ int ConfigureDefaults(State& state, FILE* stream, int fd, int flags, bool standa
   state.fd = fd;
   state.live = true;
   state.line_output.store(false, std::memory_order_relaxed);
+  state.bionic = {};
   state.input_conversion = {};
   state.output_conversion = {};
   const int saved = errno;
@@ -275,6 +281,7 @@ int FlushLocal(FILE* stream) {
   return state->buffer.FlushOutput(Writer(state->fd));
 }
 size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
+  if (size == 0 || count == 0) return 0;
   if (formatting_stream && formatting_stream->stream == stream) {
     return formatting_stream->buffer.Write(bytes, size, count, Writer(formatting_stream->fd));
   }
@@ -283,6 +290,7 @@ size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bo
   return state->buffer.Write(bytes, size, count, Writer(state->fd));
 }
 size_t ReadLocal(void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
+  if (size == 0 || count == 0) return 0;
   AccessStream state(stream, unlocked);
   if (!state) return 0;
   state->line_output.store(false, std::memory_order_release);
@@ -352,11 +360,11 @@ int FlagLocal(FILE* stream, bool error, bool unlocked) {
   // A stream with no shared I/O state has no recorded EOF or error. Queries
   // must not create metadata or invent an error when allocation is exhausted.
   AccessStream state(stream, unlocked, false);
-  return state ? (error ? state->buffer.Error() : state->buffer.Eof()) : 0;
+  return state ? (error ? state->buffer.Error() || state->bionic.conversion_error : state->buffer.Eof()) : 0;
 }
 void ClearLocal(FILE* stream, bool unlocked) {
   AccessStream state(stream, unlocked, false);
-  if (state) state->buffer.Clear();
+  if (state) { state->buffer.Clear(); state->bionic.conversion_error = false; }
 }
 void ErrorLocal(FILE* stream, int error) {
   AccessStream state(stream, false);
@@ -370,15 +378,24 @@ int BufferLocal(FILE* stream, char* buffer, int mode, size_t size) {
   auto buffering = mode == _IONBF ? StreamBuffer::Mode::kNone :
       mode == _IOLBF ? StreamBuffer::Mode::kLine : StreamBuffer::Mode::kFull;
   int result = state->buffer.Configure(buffering, buffer, size, Writer(state->fd));
-  state->input_conversion = {};
-  state->output_conversion = {};
+  if (result == 0) {
+    state->input_conversion = {};
+    state->output_conversion = {};
+    state->bionic.input_state = {};
+    state->bionic.pushback = 0xffffffffu;
+  }
   return result;
 }
 int64_t SeekLocal(FILE* stream, int64_t offset, int whence) {
   AccessStream state(stream, false);
   if (!state) return -1;
   int result = state->buffer.Seek(offset, whence, Writer(state->fd), Seeker(state->fd));
-  if (result == 0) { state->input_conversion = {}; state->output_conversion = {}; }
+  if (result == 0) {
+    state->input_conversion = {};
+    state->output_conversion = {};
+    state->bionic.input_state = {};
+    state->bionic.pushback = 0xffffffffu;
+  }
   return result;
 }
 int64_t TellLocal(FILE* stream) {
@@ -474,6 +491,10 @@ int ScanWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
   state->buffer.Orient(1);
   return __real___mingw_vfwscanf(stream, format, arguments);
 }
+BionicState* BionicMetadataLocal(const std::shared_ptr<void>& token) {
+  auto* state = static_cast<State*>(token.get());
+  return state ? &state->bionic : nullptr;
+}
 struct Api {
   std::shared_ptr<void> (*acquire)(FILE*);
   void (*release)(const std::shared_ptr<void>&);
@@ -503,6 +524,7 @@ struct Api {
   int (*print_wide)(FILE*, const wchar_t*, va_list);
   int (*scan)(FILE*, const char*, va_list);
   int (*scan_wide)(FILE*, const wchar_t*, va_list);
+  BionicState* (*bionic_metadata)(const std::shared_ptr<void>&);
 };
 const Api* Owner() {
   using Factory = const Api* (*)();
@@ -519,7 +541,7 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
       OpenDescriptorLocal, RegisterLocal, ForgetLocal, FlushLocal, WriteLocal, ReadLocal,
       LineLocal, UngetLocal, FflushLocal, FlagLocal, ClearLocal, ErrorLocal, BufferLocal,
       SeekLocal, TellLocal, OrientLocal, PutWideLocal, GetWideLocal, UngetWideLocal,
-      PrintLocal, PrintWideLocal, ScanLocal, ScanWideLocal};
+      PrintLocal, PrintWideLocal, ScanLocal, ScanWideLocal, BionicMetadataLocal};
   return &api;
 }
 namespace {
@@ -538,6 +560,7 @@ StreamGuard::StreamGuard(FILE* stream)
     : token_(Owner()->acquire(stream)), cleanup_([](void* raw) { static_cast<StreamGuard*>(raw)->Release(); }, this) {}
 StreamGuard::~StreamGuard() = default;
 void StreamGuard::Release() { Owner()->release(token_); token_.reset(); }
+BionicState* StreamGuard::Metadata() const { return Owner()->bionic_metadata(token_); }
 void Lock(FILE* stream) { Owner()->lock(stream); }
 void Unlock(FILE* stream) { Owner()->unlock(stream); }
 int TryLock(FILE* stream) { return Owner()->try_lock(stream); }
@@ -760,3 +783,44 @@ extern "C" {
 int (*__imp_fseeko64)(FILE*, long long, int) = gesher_fseeko64;
 long long (*__imp_ftello64)(FILE*) = gesher_ftello64;
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the stream registry. A stream's own lock is not
+// waited for (another thread may hold it across a blocking read, and Linux's
+// fork waits for no stream): in the child every stream's lock is made anew,
+// free, unless the forking thread itself held it (flockfile around fork),
+// which keeps it at that depth. A stream another thread was writing at that
+// moment may hold part of that write in the child's copy of its buffer.
+namespace {
+DWORD g_stdio_fork_thread = 0;
+bool StdioTryLock(void*) {
+  using namespace gesher::stdio;
+  if (registry == nullptr) return true;
+  if (!registry->mutex.try_lock()) return false;
+  g_stdio_fork_thread = GetCurrentThreadId();
+  return true;
+}
+void StdioUnlock(void*) {
+  using namespace gesher::stdio;
+  if (registry != nullptr) registry->mutex.unlock();
+}
+void StdioChild(void*) {
+  using namespace gesher::stdio;
+  if (registry == nullptr) return;
+  for (auto& entry : registry->streams) {
+    auto* section = reinterpret_cast<CRITICAL_SECTION*>(&entry.second->mutex);
+    const bool ours = reinterpret_cast<uintptr_t>(section->OwningThread) == g_stdio_fork_thread;
+    const LONG depth = ours ? section->RecursionCount : 0;
+    InitializeCriticalSection(section);
+    for (LONG i = 0; i < depth; ++i) EnterCriticalSection(section);
+  }
+  new (&registry->mutex) std::mutex();
+}
+const gesher::ForkLockOps kStdioForkOps = {&StdioTryLock, &StdioUnlock, &StdioChild};
+// Registered with a non-null object: the registry may be made later.
+int g_stdio_fork_anchor = 0;
+const gesher::ForkLockRegistration g_fork_stdio(gesher::kForkOrderSubsystem, "stdio streams",
+                                                []() -> void* { return &g_stdio_fork_anchor; },
+                                                &kStdioForkOps);
+}  // namespace
+#endif

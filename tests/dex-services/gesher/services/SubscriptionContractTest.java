@@ -6,8 +6,10 @@ import android.telephony.SubscriptionManager;
 import com.android.internal.telephony.ISub;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Proxy;
 
-/** Checks the production absent-subscription service without requiring Android JNI. */
+/** Checks the production subscription service without a modem, without requiring Android JNI. */
 public final class SubscriptionContractTest {
     private static int checks;
 
@@ -52,11 +54,31 @@ public final class SubscriptionContractTest {
         return checks;
     }
 
-    public static void main(String[] args) throws Exception {
-        Class<?> type = Class.forName("com.gesher.server.DeviceServices$SubscriptionService");
-        Constructor<?> constructor = type.getDeclaredConstructor();
+    /** The production subscription service over a machine without a cellular modem. */
+    static ISub noModemService() throws Exception {
+        Class<?> source = Class.forName("com.gesher.server.WindowsCellular$Source");
+        Class<?> snapshot = Class.forName("com.gesher.server.WindowsCellular$Snapshot");
+        Class<?> sink = Class.forName("com.gesher.server.TelephonyService$PropertySink");
+        Class<?> callers = Class.forName("com.gesher.server.TelephonyService$Callers");
+        Class<?> cellular = Class.forName("com.gesher.server.TelephonyService$Cellular");
+        Class<?> endpoints = Class.forName("com.gesher.server.TelephonyService$Endpoints");
+        // Without a boot modem no snapshot is read and no property is written; the
+        // methods verified here authenticate no caller.
+        Object none = Proxy.newProxyInstance(SubscriptionContractTest.class.getClassLoader(),
+                new Class<?>[] {source, sink, callers}, (proxy, method, args) -> {
+                    throw new AssertionError("unexpected " + method.getName());
+                });
+        Constructor<?> model = cellular.getDeclaredConstructor(source, snapshot, sink);
+        model.setAccessible(true);
+        Constructor<?> constructor = endpoints.getDeclaredConstructor(cellular, callers);
         constructor.setAccessible(true);
-        ISub service = (ISub) constructor.newInstance();
-        System.out.println("SubscriptionContractTest all passed: " + verifyService(service));
+        Object created = constructor.newInstance(model.newInstance(none, null, none), none);
+        Field field = endpoints.getDeclaredField("subscriptions");
+        field.setAccessible(true);
+        return (ISub) field.get(created);
+    }
+
+    public static void main(String[] args) throws Exception {
+        System.out.println("SubscriptionContractTest all passed: " + verifyService(noModemService()));
     }
 }
