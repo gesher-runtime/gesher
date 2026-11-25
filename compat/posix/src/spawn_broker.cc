@@ -469,6 +469,7 @@ BOOL CALLBACK StartOnce(PINIT_ONCE, void*, void**) {
   for (int i = 0; error == ERROR_SUCCESS && i < kInstances; ++i) {
     if (!StartHelperThread(InstanceThread, reinterpret_cast<void*>(static_cast<intptr_t>(i)), 64 * 1024)) {
       error = GetLastError();
+      if (error == ERROR_SUCCESS) error = ERROR_TIMEOUT;  // never a silent gap
     }
   }
   if (error != ERROR_SUCCESS) Stopped(error);

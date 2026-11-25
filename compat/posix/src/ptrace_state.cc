@@ -578,13 +578,13 @@ void CreateLocked(DWORD pid) {
   if (g_owner && g_next_thread != nullptr) {
     if (g_probe_mutex == nullptr) g_probe_mutex = CreateMutexW(nullptr, FALSE, nullptr);
     // A small stack: the guard only makes system calls. Its id is published
-    // before the state is, so that a tracer never finds a state without it.
+    // before the state is, so that a tracer never finds a state without it;
+    // it is published once the guard runs its own code (in a forked child,
+    // within the helper start bound: a guard that does not start leaves 0,
+    // and GuardRunning says so).
     DWORD guard_tid = 0;
-    HANDLE guard = CreateThread(nullptr, 64 * 1024, GuardMain, state,
-                                STACK_SIZE_PARAM_IS_A_RESERVATION, &guard_tid);
-    if (guard != nullptr) {
+    if (gesher::StartHelperThread(GuardMain, state, 64 * 1024, &guard_tid)) {
       InterlockedExchange(&state->guard_tid, static_cast<LONG>(guard_tid));
-      CloseHandle(guard);
     }
   }
   if (state->version != kStateVersion) InterlockedExchange(&state->version, kStateVersion);
@@ -617,6 +617,14 @@ const bool g_started = [] {
 }();
 
 }  // namespace
+
+bool GuardRunning() {
+  SharedState* state = Self();
+  if (state == nullptr) return false;
+  // Only the executable's copy of gesher-base starts one (with ntdll's
+  // NtGetNextThread, which every supported Windows has).
+  return !g_owner || g_next_thread == nullptr || state->guard_tid != 0;
+}
 
 SharedState* Self() {
   const DWORD pid = GetCurrentProcessId();

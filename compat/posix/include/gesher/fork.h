@@ -167,9 +167,11 @@ void ThreadLeaving();
 // one in the middle of its work (inside the heap, say): it is in the fork set.
 std::mutex& ForkHelperLock();
 // Starts a helper thread and returns once it runs its own code (its loader
-// initialisation, which allocates, is over). false if it could not start, or
-// did not get there within 5 s (logged; it then never runs `routine`).
-bool StartHelperThread(LPTHREAD_START_ROUTINE routine, void* argument, SIZE_T stack);
+// initialisation, which allocates, is over), with its id in `thread_id` when
+// given. false if it could not start or, in a forked child, did not get
+// there within 5 s (logged, ERROR_TIMEOUT; it then never runs `routine`).
+bool StartHelperThread(LPTHREAD_START_ROUTINE routine, void* argument, SIZE_T stack,
+                       DWORD* thread_id = nullptr);
 
 // For code that runs as a thread leaves: takes `lock`, or returns false
 // without it while a fork holds the whole set (the caller then defers what it

@@ -303,27 +303,49 @@ resume it, and nothing has asked for it.
     in the child its only thread is outside those functions, so each of
     these locks must be free; one still held (or recording waiters) is
     stale and is made free, first thing in the child, before any other
-    thread exists. The locks are found in ntdll's code: in
-    `RtlCloneUserProcess` and the functions it calls directly, each `lea
-    rcx,[rip+X]` followed at once by a call or jump to the exported
-    `RtlAcquireSRWLockExclusive`/`Shared`, with X inside ntdll's image on an
-    8-byte boundary. Whether that is enough is checked once per process
-    (and again in each forked child before its first fork) with a
-    throwaway clone, before the first real one: that child resets the locks,
-    adds and removes a function table and makes a clone of its own, all
-    bounded. If it cannot, fork fails with `EAGAIN` on that system (said
-    once on standard error), rather than make children that hang. The
-    probe confirmed it on 20348 (without the reset the child's
+    thread exists. Which locks are made free is found in ntdll's code, on
+    x86-64 only: in `RtlCloneUserProcess` (its `.pdata` extent) and in each
+    function it calls with a `call rel32` whose target starts a `.pdata`
+    function or lies in none (a leaf), within that callee's first 0x40
+    bytes, each `lea rcx,[rip+X]` followed, after at most three
+    instructions that leave rcx alone (stack adjustments, pops, `xor
+    edx,edx`, `xor r8d,r8d`, `mov edx,imm32`), by a call or jump to the
+    exported `RtlAcquireSRWLockExclusive`/`Shared`, with X inside ntdll's
+    image on an 8-byte boundary. On build 26100 that finds the TLS,
+    protected-policies, `.mrdata` (through `LdrForkMrdata`), the two
+    feature-configuration (`RtlpFcProcessManager`), critical-section-list
+    and fork locks; it does not find locks taken through a register computed
+    otherwise (the 16 `LdrpDelayedTlsReclaimTable` locks, `mov rcx,rbx` in
+    a loop) or deeper in the call tree. The scan is the repair; the proof is
+    a check that does what a forked child does: a throwaway clone makes the
+    locks free, adds and removes a function table and makes a clone of its
+    own, which takes every lock `RtlCloneUserProcess` takes (those the scan
+    does not find included), so a lock left held anywhere there makes it
+    hang. The throwaway clone ends as soon as its own clone returns, and
+    that one ends at once, so two copies exist together only while the
+    second is made; each commits as much memory as the forking process, so
+    the check needs room for two copies besides it. It runs once per ntdll
+    build on a machine (a working result is kept in
+    `%LOCALAPPDATA%\Gesher\clone-check`, named by ntdll's link time and
+    size), and a forked child has its parent's result. A copy that cannot be
+    made for want of memory proves nothing: that fork fails with `ENOMEM`
+    and the next one checks again. Only a step that returned an error, or
+    one that did not end within 15 s (a lock never given back), turns fork
+    off in the process: `EAGAIN`, said once on standard error. The probe
+    confirmed it on 20348 (without the reset the child's
     `RtlAddFunctionTable` and nested clone hang every time; with it, both
     work) and that build 26100 leaves the locks free;
   - the child's start: the child opens its signal mailbox and starts its
     watcher thread and its ptrace guard before `fork` returns in it, and
-    tells the parent so; the parent, after it releases the fork set, waits
-    for that (up to 15 s; each helper thread's start is bounded at 5 s and
-    logged if it does not come, and such a thread never runs its work). A
-    child that cannot start them, or that ends first, has run no guest code
-    yet: it is ended and `fork` fails with `EAGAIN`, rather than return a
-    child that loses signals or cannot be traced;
+    tells the parent so once the watcher thread and the guard both run
+    their own code (the guard's thread id is published then); the parent,
+    after it releases the fork set, waits for that (up to 15 s; in a forked
+    child each helper thread's start is bounded at 5 s and logged if it
+    does not come, and such a thread never runs its work; elsewhere it is
+    waited for as before, and the spawn broker reports a helper that did not
+    start as stopped). A child that cannot start them, or that ends first,
+    has run no guest code yet: it is ended and `fork` fails with `EAGAIN`,
+    rather than return a child that loses signals or cannot be traced;
   - ntdll's address-wait table: `WaitOnAddress` keeps its waiters in the
     PEB (`PEB.WaitOnAddressHashTable`, 128 buckets, each a list of wait
     blocks on the waiting threads' stacks), and every wait that goes through

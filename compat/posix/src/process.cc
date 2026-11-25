@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -538,26 +539,37 @@ void EmptyWaitTable() {
 //
 // RtlCloneUserProcess takes some of ntdll's SRW locks itself around the clone
 // (the protected-policies lock, the .mrdata lock that LdrForkMrdata takes,
-// the TLS and fork locks...) and gives them back in both processes. On some
-// Windows builds it does not give every one back in the child: on Windows
-// Server 2022 (build 20348) the child keeps RtlpProtectedPoliciesSRWLock and
-// LdrpMrdataLock held, so the child's first RtlAddFunctionTable (the
-// translator's unwind data for new code) or a fork of its own waits for ever.
-// When the clone returns in the child its only thread is outside those
-// functions, so each of these locks must be free then: one that is still
-// held, or records waiters, is stale (its holder was the parent's) and is made
-// free again, first thing in the child (no other thread exists yet).
+// the feature-configuration, TLS and fork locks...) and gives them back in
+// both processes. On some Windows builds it does not give every one back in
+// the child: on Windows Server 2022 (build 20348) the child keeps
+// RtlpProtectedPoliciesSRWLock and LdrpMrdataLock held, so the child's first
+// RtlAddFunctionTable (the translator's unwind data for new code) or a fork
+// of its own waits for ever. When the clone returns in the child its only
+// thread is outside those functions, so each of these locks must be free
+// then: one that is still held, or records waiters, is stale (its holder was
+// the parent's) and is made free again, first thing in the child (no other
+// thread exists yet).
 //
-// The locks are found in ntdll's code: in RtlCloneUserProcess and in the
-// functions it calls directly, every `lea rcx,[rip+X]` followed at once by a
-// call or jump to the exported RtlAcquireSRWLockExclusive/Shared, X inside
-// ntdll's image on an 8-byte boundary. Whether the child can then make a
-// clone and add function tables is checked once per process, before its
-// first fork, with a throwaway clone (CloneWorks): when it cannot, fork fails
-// with EAGAIN rather than make children that hang (ADR 0092).
+// The locks made free are those found in ntdll's code (x86-64 only): in
+// RtlCloneUserProcess (its .pdata extent) and in each function it calls with
+// a `call rel32` whose target is the start of a .pdata function or lies in
+// no .pdata function at all (a leaf), within that callee's first 0x40 bytes:
+// every `lea rcx,[rip+X]` followed, after at most three instructions that do
+// not write rcx (stack adjustments, pops, `xor edx,edx`/`xor r8d,r8d`,
+// `mov edx,imm32`), by a call or jump to the exported
+// RtlAcquireSRWLockExclusive/Shared, X inside ntdll's image on an 8-byte
+// boundary. Locks taken through a register computed otherwise (the 16
+// LdrpDelayedTlsReclaimTable locks, `mov rcx,rbx` in a loop) or deeper in the
+// call tree are not found. The scan is the repair, not the proof: whether a
+// clone works is checked by doing what a forked child does (CloneWorks): a
+// throwaway clone makes them free, adds a function table and makes a clone
+// of its own, which takes every lock RtlCloneUserProcess takes, the ones the
+// scan does not find included. If one stayed held, that clone hangs and fork
+// is turned off.
 constexpr int kMaxCloneLocks = 16;
 volatile LONG_PTR* g_clone_locks[kMaxCloneLocks];
 int g_clone_lock_count = 0;
+bool g_clone_locks_found = false;
 
 struct NtdllCode {
   const BYTE* low;
@@ -582,28 +594,59 @@ int32_t Rel32(const BYTE* at) {
   return value;
 }
 
+#if defined(__x86_64__) || defined(_M_X64)
+// The length of an instruction that may stand between the lea and the call
+// (it does not write rcx), or 0.
+int NeutralLength(const BYTE* at) {
+  if (at[0] == 0x48 && at[1] == 0x83 && (at[2] == 0xC4 || at[2] == 0xEC)) return 4;  // add/sub rsp, imm8
+  if (at[0] == 0x48 && at[1] == 0x81 && (at[2] == 0xC4 || at[2] == 0xEC)) return 7;  // add/sub rsp, imm32
+  if (at[0] == 0x33 && at[1] == 0xD2) return 2;                                      // xor edx,edx
+  if (at[0] == 0x45 && at[1] == 0x33 && at[2] == 0xC0) return 3;                     // xor r8d,r8d
+  if (at[0] == 0xBA) return 5;                                                       // mov edx,imm32
+  if (at[0] == 0x5B || at[0] == 0x5D || at[0] == 0x5E || at[0] == 0x5F) return 1;    // pop rbx/rbp/rsi/rdi
+  if (at[0] == 0x41 && at[1] >= 0x5C && at[1] <= 0x5F) return 2;                     // pop r12-r15
+  return 0;
+}
+
+// Whether `target` may be a function another calls: the start of a .pdata
+// function, or in none (a leaf function has no entry).
+bool CallTarget(const BYTE* target) {
+  DWORD64 base = 0;
+  PRUNTIME_FUNCTION entry = RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(target), &base, nullptr);
+  return entry == nullptr || base + entry->BeginAddress == reinterpret_cast<DWORD64>(target);
+}
+
 void ScanCloneLocks(const NtdllCode& code, const BYTE* f, int length, bool callees) {
-  if (f < code.low || f + length + 12 > code.high) return;
+  if (f < code.low || f + length + 40 > code.high) return;
   for (int i = 0; i < length; ++i) {
     if (callees && f[i] == 0xE8) {
       const BYTE* callee = f + i + 5 + Rel32(f + i + 1);
       if (callee >= code.low && callee < code.high && callee != code.acquire_exclusive &&
-          callee != code.acquire_shared) {
+          callee != code.acquire_shared && CallTarget(callee)) {
         ScanCloneLocks(code, callee, 0x40, false);
       }
     }
-    if (f[i] != 0x48 || f[i + 1] != 0x8D || f[i + 2] != 0x0D || (f[i + 7] != 0xE8 && f[i + 7] != 0xE9)) continue;
-    const BYTE* target = f + i + 12 + Rel32(f + i + 8);
-    if (target == code.acquire_exclusive || target == code.acquire_shared) AddCloneLock(code, f + i + 7 + Rel32(f + i + 3));
+    if (f[i] != 0x48 || f[i + 1] != 0x8D || f[i + 2] != 0x0D) continue;
+    const BYTE* lock = f + i + 7 + Rel32(f + i + 3);
+    const BYTE* at = f + i + 7;
+    for (int between = 0; between <= 3; ++between) {
+      if (at[0] == 0xE8 || at[0] == 0xE9) {
+        const BYTE* target = at + 5 + Rel32(at + 1);
+        if (target == code.acquire_exclusive || target == code.acquire_shared) AddCloneLock(code, lock);
+        break;
+      }
+      const int n = NeutralLength(at);
+      if (n == 0) break;
+      at += n;
+    }
   }
 }
+#endif
 
 void FindCloneLocks() {
-#if !defined(__x86_64__) && !defined(_M_X64)
-  // The scan reads x86-64 instructions; on another host it finds nothing,
-  // and the capability check decides alone.
-  return;
-#endif
+  if (g_clone_locks_found) return;  // a forked child keeps its parent's (the same ntdll)
+  g_clone_locks_found = true;
+#if defined(__x86_64__) || defined(_M_X64)
   HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
   MODULEINFO module{};
   if (ntdll == nullptr || !K32GetModuleInformation(GetCurrentProcess(), ntdll, &module, sizeof(module))) return;
@@ -613,7 +656,19 @@ void FindCloneLocks() {
                  static_cast<const BYTE*>(Ntdll("RtlAcquireSRWLockShared"))};
   const auto* clone = static_cast<const BYTE*>(Ntdll("RtlCloneUserProcess"));
   if (clone == nullptr || code.acquire_exclusive == nullptr || code.acquire_shared == nullptr) return;
-  ScanCloneLocks(code, clone, 0x300, true);
+  // The function's own extent (its primary .pdata entry), at most 0x600 bytes.
+  int length = 0x300;
+  DWORD64 base = 0;
+  if (PRUNTIME_FUNCTION entry = RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(clone), &base, nullptr)) {
+    if (base + entry->BeginAddress == reinterpret_cast<DWORD64>(clone) && entry->EndAddress > entry->BeginAddress) {
+      length = static_cast<int>(std::min<DWORD>(entry->EndAddress - entry->BeginAddress, 0x600));
+    }
+  }
+  ScanCloneLocks(code, clone, length, true);
+#else
+  // The scan reads x86-64 instructions; on another host it finds nothing,
+  // and the capability check decides alone.
+#endif
 }
 
 // In the child, first thing: no thread holds or waits for these.
@@ -632,75 +687,146 @@ void ResetStaleCloneLocks() {
   }
 }
 
-// The throwaway clone's checks: the child adds and removes a function table
-// (the .mrdata lock) and makes a clone of its own (every clone lock), which
-// ends at once. Its exit code says how far it got.
+// --- whether a clone works here (CloneWorks) ----------------------------------------
+//
+// A throwaway clone does what a forked child does with ntdll: it makes the
+// stale clone locks free, adds and removes a function table, and makes a
+// clone of its own. It ends as soon as that clone returns (it does not wait
+// for it), and that clone ends at once, so the two copies exist together
+// only while the second is being made. Each copy commits as much memory as
+// this process, so the check needs room for two copies besides this one; it
+// runs once per ntdll build on a machine: a working result is kept in
+// %LOCALAPPDATA%\Gesher\clone-check (named by ntdll's link time and size),
+// and a forked child has its parent's result. A copy that cannot be made for
+// want of memory proves nothing: fork fails with ENOMEM that time and the
+// check runs again at the next fork. Only a check that definitely failed (a
+// step that returned an error, or one that did not end in 15 s: a lock never
+// given back) turns fork off in this process, with EAGAIN.
 RUNTIME_FUNCTION g_probe_table[1];
 BYTE g_probe_code[64];
+volatile LONG g_probe_step = 0;  // how far the throwaway clone got (read from it)
+
+constexpr DWORD kProbeAddFailed = 2;
+constexpr DWORD kProbeCloneFailed = 3;
+constexpr DWORD kProbeCloneNoMemory = 5;
+
+bool NoMemory(LONG status) {
+  return status == static_cast<LONG>(0xC0000017) /* STATUS_NO_MEMORY */ ||
+         status == static_cast<LONG>(0xC000012D) /* STATUS_COMMITMENT_LIMIT */ ||
+         status == static_cast<LONG>(0xC0000044) /* STATUS_QUOTA_EXCEEDED */ ||
+         status == static_cast<LONG>(0xC000009A) /* STATUS_INSUFFICIENT_RESOURCES */;
+}
 
 [[noreturn]] void CloneProbeChild(CloneFn clone) {
   EmptyWaitTable();
   ResetStaleCloneLocks();
+  g_probe_step = 1;
   g_probe_table[0].BeginAddress = 0;
 #if defined(__x86_64__) || defined(_M_X64)
   g_probe_table[0].EndAddress = 16;  // an ARM64 entry has no end: the unwind data gives the length
 #endif
   g_probe_table[0].UnwindData = 32;
   if (!RtlAddFunctionTable(g_probe_table, 1, reinterpret_cast<DWORD64>(g_probe_code))) {
-    TerminateProcess(GetCurrentProcess(), 2);
+    TerminateProcess(GetCurrentProcess(), kProbeAddFailed);
   }
   RtlDeleteFunctionTable(g_probe_table);
+  g_probe_step = 2;
   RtlProcessInformation info{};
   info.length = sizeof(info);
   const LONG status = clone(0, nullptr, nullptr, nullptr, &info);
   if (status == kStatusProcessCloned) TerminateProcess(GetCurrentProcess(), 0);
-  if (status < 0) TerminateProcess(GetCurrentProcess(), 3);
-  const DWORD waited = WaitForSingleObject(info.process, 5000);
-  TerminateProcess(GetCurrentProcess(), waited == WAIT_OBJECT_0 ? 0 : 4);
+  if (status < 0) TerminateProcess(GetCurrentProcess(), NoMemory(status) ? kProbeCloneNoMemory : kProbeCloneFailed);
+  TerminateProcess(GetCurrentProcess(), 0);  // the clone ends on its own, at once
   for (;;) {}
 }
 
+// The file that says a clone works with this ntdll build.
+std::wstring CloneCheckFile() {
+  wchar_t root[MAX_PATH];
+  const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", root, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) return L"";
+  const auto* ntdll = reinterpret_cast<const BYTE*>(GetModuleHandleW(L"ntdll.dll"));
+  if (ntdll == nullptr) return L"";
+  const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(ntdll);
+  const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(ntdll + dos->e_lfanew);
+  wchar_t name[64];
+  swprintf(name, 64, L"ntdll-%08lx-%08lx.ok", static_cast<unsigned long>(nt->FileHeader.TimeDateStamp),
+           static_cast<unsigned long>(nt->OptionalHeader.SizeOfImage));
+  return std::wstring(root, n) + L"\\Gesher\\clone-check\\" + name;
+}
+
+void RememberCloneWorks() {
+  const std::wstring file = CloneCheckFile();
+  if (file.empty()) return;
+  const size_t dir_end = file.rfind(L'\\');
+  CreateDirectoryW(file.substr(0, file.rfind(L'\\', dir_end - 1)).c_str(), nullptr);  // ...\Gesher
+  CreateDirectoryW(file.substr(0, dir_end).c_str(), nullptr);
+  HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+}
+
+void SayForkOff(const char* why) {
+  char text[256];
+  const int n = snprintf(text, sizeof(text),
+                         "gesher: fork is turned off in this process: a cloned process %s; fork fails with EAGAIN\n",
+                         why);
+  DWORD written = 0;
+  if (n > 0) WriteFile(GetStdHandle(STD_ERROR_HANDLE), text, static_cast<DWORD>(n), &written, nullptr);
+}
+
 // Whether a child of this process can work (above). Called with the fork set
-// held, once per process (a forked child checks again: it is another clone).
-int g_clone_works = -1;  // -1 not known yet
-DWORD g_clone_works_pid = 0;
+// held. A forked child has its parent's result (the same ntdll).
+int g_clone_works = -1;  // -1 not known yet, 0 no, 1 yes
 
 bool CloneWorks(CloneFn clone) {
-  if (g_clone_works >= 0 && g_clone_works_pid == GetCurrentProcessId()) return g_clone_works != 0;
-  g_clone_lock_count = 0;
   FindCloneLocks();
+  if (g_clone_works >= 0) return g_clone_works != 0 || (errno = EAGAIN, false);
+  const std::wstring file = CloneCheckFile();
+  if (!file.empty() && GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    g_clone_works = 1;
+    return true;
+  }
+  g_probe_step = 0;
   RtlProcessInformation info{};
   info.length = sizeof(info);
   const LONG status = clone(0, nullptr, nullptr, nullptr, &info);
   if (status == kStatusProcessCloned) CloneProbeChild(clone);
-  DWORD code = 1;
-  if (status >= 0) {
-    CloseHandle(info.thread);
-    if (WaitForSingleObject(info.process, 15000) == WAIT_OBJECT_0) {
-      GetExitCodeProcess(info.process, &code);
-    } else {
-      TerminateProcess(info.process, 1);
-      WaitForSingleObject(info.process, 5000);
-    }
-    CloseHandle(info.process);
-  } else {
+  if (status < 0) {
     // Not a property of the system: a clone may fail for want of memory.
-    return errno = (status == static_cast<LONG>(0xC0000017) || status == static_cast<LONG>(0xC000012D)) ? ENOMEM
-                                                                                                       : EAGAIN,
-           false;
+    return errno = NoMemory(status) ? ENOMEM : EAGAIN, false;
   }
-  g_clone_works = code == 0 ? 1 : 0;
-  g_clone_works_pid = GetCurrentProcessId();
-  if (g_clone_works == 0) {
-    static const char kMessage[] =
-        "gesher: fork is not available on this Windows build: a cloned process cannot add function tables or "
-        "clone again (check failed at step %lu); fork fails with EAGAIN\n";
-    char text[sizeof(kMessage) + 16];
-    const int n = snprintf(text, sizeof(text), kMessage, static_cast<unsigned long>(code));
-    DWORD written = 0;
-    if (n > 0) WriteFile(GetStdHandle(STD_ERROR_HANDLE), text, static_cast<DWORD>(n), &written, nullptr);
+  CloseHandle(info.thread);
+  DWORD code = STILL_ACTIVE;
+  LONG step = 0;
+  if (WaitForSingleObject(info.process, 15000) == WAIT_OBJECT_0) {
+    GetExitCodeProcess(info.process, &code);
+  } else {
+    SIZE_T got = 0;
+    ReadProcessMemory(info.process, const_cast<LONG*>(&g_probe_step), &step, sizeof(step), &got);
+    TerminateProcess(info.process, 1);
+    WaitForSingleObject(info.process, 5000);
   }
-  return g_clone_works != 0 || (errno = EAGAIN, false);
+  CloseHandle(info.process);
+  if (code == 0) {
+    g_clone_works = 1;
+    RememberCloneWorks();
+    return true;
+  }
+  if (code == kProbeCloneNoMemory) return errno = ENOMEM, false;  // try again at the next fork
+  if (code == kProbeAddFailed) {
+    SayForkOff("cannot add function tables");
+  } else if (code == kProbeCloneFailed) {
+    SayForkOff("cannot clone again");
+  } else if (code == STILL_ACTIVE && step == 1) {
+    SayForkOff("hangs adding function tables (an ntdll lock the clone left held)");
+  } else if (code == STILL_ACTIVE && step == 2) {
+    SayForkOff("hangs cloning again (an ntdll lock the clone left held)");
+  } else {
+    // It never got to the checks (a loaded machine, say): nothing proven.
+    return errno = EAGAIN, false;
+  }
+  g_clone_works = 0;
+  return errno = EAGAIN, false;
 }
 
 // Object types a clone must not share with this process: the thread pool's
@@ -941,11 +1067,9 @@ int CloneProcess(HANDLE* process, DWORD* pid) {
   RestoreHandles(changed);
   ReleaseSRWLockExclusive(&g_spawn_lock);
   if (status < 0) {
-    // STATUS_NO_MEMORY, STATUS_COMMITMENT_LIMIT, quota: EAGAIN/ENOMEM as fork(2).
-    return errno = (status == static_cast<LONG>(0xC0000017) || status == static_cast<LONG>(0xC000012D))
-                       ? ENOMEM
-                       : EAGAIN,
-           -1;
+    // Memory (no memory, the commit limit, a job's memory quota): ENOMEM as
+    // fork(2); anything else EAGAIN.
+    return errno = NoMemory(status) ? ENOMEM : EAGAIN, -1;
   }
   CloseHandle(info.thread);
   *process = info.process;
@@ -971,8 +1095,9 @@ bool ReinitializeAfterFork() {
   // with the dumpable flag the parent had at the clone and no tracer or
   // ptracer exception, and its own guard, so that a tracer can stop it from
   // the moment fork returns in it. This is the executable's copy of
-  // gesher-base, the one that owns the guard.
-  return gesher::ptrace::Self() != nullptr;
+  // gesher-base, the one that owns the guard; the child is ready only once
+  // the guard really runs.
+  return gesher::ptrace::GuardRunning();
 }
 
 }  // namespace gesher

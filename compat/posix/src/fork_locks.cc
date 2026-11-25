@@ -175,8 +175,9 @@ std::mutex& ForkHelperLock() {
 }
 
 namespace {
-// How long a helper thread may take to reach its own code (its loader
-// initialisation: DLL thread attach) before it is given up.
+// How long a helper thread of a forked child may take to reach its own code
+// (its loader initialisation: DLL thread attach) before it is given up. In
+// a process that is not a clone, the start is waited for as before.
 constexpr DWORD kHelperStartMs = 5000;
 
 // Shared by the starting thread and the helper. `state`: 0 not decided, 1 the
@@ -205,30 +206,36 @@ DWORD WINAPI RunHelper(void* raw) {
 }
 }  // namespace
 
-bool StartHelperThread(LPTHREAD_START_ROUTINE routine, void* argument, SIZE_T stack) {
+bool StartHelperThread(LPTHREAD_START_ROUTINE routine, void* argument, SIZE_T stack, DWORD* thread_id) {
   auto* start = new (std::nothrow) HelperStart{routine, argument, CreateEventW(nullptr, TRUE, FALSE, nullptr), 0, 2};
   if (start == nullptr) return false;
   if (start->started == nullptr) {
     delete start;
     return false;
   }
-  HANDLE thread = CreateThread(nullptr, stack, RunHelper, start, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+  DWORD id = 0;
+  HANDLE thread = CreateThread(nullptr, stack, RunHelper, start, STACK_SIZE_PARAM_IS_A_RESERVATION, &id);
   if (thread == nullptr) {
     CloseHandle(start->started);
     delete start;
     return false;
   }
   CloseHandle(thread);
-  // Bounded: a thread whose start hangs (a DLL's thread attach in a clone)
-  // must not hang its starter. Given up, it never runs the routine.
-  const bool started = WaitForSingleObject(start->started, kHelperStartMs) == WAIT_OBJECT_0 ||
+  // Bounded in a forked child: a thread whose start hangs there (a DLL's
+  // thread attach in a clone) must not hang its starter, and the fork fails
+  // instead. Given up, it never runs the routine.
+  const DWORD bound = InForkedChild() ? kHelperStartMs : INFINITE;
+  const bool started = WaitForSingleObject(start->started, bound) == WAIT_OBJECT_0 ||
                        InterlockedCompareExchange(&start->state, 2, 0) != 0;
   Unref(start);
   if (!started) {
     logging::Record(0 /*LOG_ID_MAIN*/, 6 /*ANDROID_LOG_ERROR*/, "gesher-fork",
-                    "a helper thread did not start within 5 s; given up");
+                    "a forked child's helper thread did not start within 5 s; given up");
+    SetLastError(ERROR_TIMEOUT);
+    return false;
   }
-  return started;
+  if (thread_id != nullptr) *thread_id = id;
+  return true;
 }
 
 // Whether this thread has passed the gate (ThreadLeaving runs once a thread).
