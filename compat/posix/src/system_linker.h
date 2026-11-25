@@ -19,12 +19,23 @@ std::string Image();
 
 // The Windows path of the file on disk holding Image(), under
 // $ANDROID_DATA/system/gesher-linker/<hash of the bytes>/linker64, written
-// once and read-only; empty when it cannot be written or holds other bytes.
-// Final (GetFinalPathNameByHandleW) form, without a \\?\ prefix.
+// once (image directories unused for a week and dead processes' temporary
+// files are pruned); empty when it cannot be written. Final
+// (GetFinalPathNameByHandleW) form, without a \\?\ prefix.
 const std::wstring& File();
 
+// Whether the Linux path `path` names kPath: absolute, with empty and "."
+// components dropped and ".." resolved, no trailing slash.
+bool IsName(const char* path);
+
+// For calls that would change the file or its name (open for writing or
+// truncation, unlink, rename, link, symlink, chmod, chown, utimes, xattrs):
+// -1 with errno EROFS when `path` IsName, as /system is a read-only file
+// system on Android; 0 otherwise.
+int RefuseChange(const char* path);
+
 // Whether `windows` (a Windows path, with or without \\?\) is File(), so that
-// /proc/self/maps and /proc/self/fd name it as kPath.
+// /proc/self/maps, /proc/self/fd and realpath name it as kPath.
 bool IsFile(const std::wstring& windows);
 
 // Maps File() read-only for the rest of the process's life, once, as the

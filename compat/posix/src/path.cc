@@ -264,7 +264,13 @@ int OpenPath(const char* path, int flags, mode_t mode) {
   std::wstring windows;
   PathKind kind = MapPath(path, &windows);
   switch (kind) {
-    case PathKind::kFile: return OpenFile(windows, flags, mode);
+    case PathKind::kFile:
+      // /system is read-only on Android (system_linker.h).
+      if (((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC) != 0) &&
+          system_linker::RefuseChange(path) != 0) {
+        return -1;
+      }
+      return OpenFile(windows, flags, mode);
     case PathKind::kNull:
     case PathKind::kZero:
     case PathKind::kRandom: return OpenDevice(kind, flags);
@@ -386,7 +392,7 @@ PathKind MapPath(const char* path, std::wstring* windows) {
     PathKind kind = VirtualKind(path, windows);
     if (kind != PathKind::kFile) return kind;
     // Gesher's ELF loader as Android's dynamic linker (system_linker.h).
-    if (std::strcmp(path, system_linker::kPath) == 0) {
+    if (system_linker::IsName(path)) {
       *windows = system_linker::File();
       if (windows->empty()) return PathKind::kMissing;
       Lengthen(windows);
@@ -695,6 +701,7 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
   if (resolved.empty()) return errno = ENOENT, -1;
+  if (gesher::system_linker::RefuseChange(resolved.c_str()) != 0) return -1;
   std::wstring windows;
   switch (gesher::MapPath(resolved.c_str(), &windows)) {
     case PathKind::kFile: {
@@ -758,6 +765,7 @@ int mkdir(const char* path) {
 }
 
 int unlink(const char* path) {
+  if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EACCES)) return -1;  // EACCES: /dev and /proc names
   return gesher::PosixDelete(windows, false);

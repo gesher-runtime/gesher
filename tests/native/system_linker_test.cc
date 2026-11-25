@@ -17,11 +17,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <windows.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
+
+#include <gesher/elf_loader.h>
 
 #include "exec_spawn.h"
 
@@ -53,6 +57,8 @@ static std::string ReadPath(const char* path) {
   return s;
 }
 
+static uint32_t ImageHash();
+
 static unsigned U16(const std::string& s, size_t at) {
   return static_cast<unsigned char>(s[at]) | static_cast<unsigned char>(s[at + 1]) << 8;
 }
@@ -82,11 +88,197 @@ static void TestHeader() {
   errno = 0;
   CHECK(access("/system/bin/linker", F_OK) != 0 && errno == ENOENT);
   CHECK(open("/system/bin/linker", O_RDONLY) < 0);
-  // Read-only through the name.
-  CHECK(open("/system/bin/linker64", O_WRONLY) < 0);
-  CHECK(open("/system/bin/linker64", O_RDWR | O_TRUNC) < 0);
-  CHECK(ReadPath("/system/bin/linker64") == image);
-  printf("PASS  no /system/bin/linker; linker64 cannot be written\n");
+  printf("PASS  no /system/bin/linker\n");
+
+  // Other spellings of the name are the same file; a trailing slash is not.
+  CHECK(ReadPath("/system//bin/./linker64") == image);
+  CHECK(ReadPath("/system/bin/../bin/linker64") == image);
+  CHECK(ReadPath("/../system/bin/linker64") == image);
+  CHECK(open("/system/bin/linker64/", O_RDONLY) < 0);
+  printf("PASS  /system//bin/./linker64 and /system/bin/../bin/linker64 name it\n");
+}
+
+// /system is a read-only file system on Android: every change through the
+// name is EROFS, and the file stays as it was.
+#define CHECK_EROFS(call)        \
+  do {                           \
+    errno = 0;                   \
+    CHECK((call) == -1);         \
+    CHECK(errno == EROFS);       \
+  } while (0)
+
+static void TestReadOnly(const std::wstring& data) {
+  printf("changes through /system/bin/linker64\n");
+  const char* name = "/system/bin/linker64";
+  const std::string before = ReadPath(name);
+  struct stat st_before {};
+  CHECK(stat(name, &st_before) == 0);
+  CHECK_EROFS(open(name, O_WRONLY));
+  CHECK_EROFS(open(name, O_RDWR));
+  CHECK_EROFS(open(name, O_RDONLY | O_TRUNC));
+  CHECK_EROFS(open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644));
+  CHECK_EROFS(open("/system//bin/../bin/linker64", O_WRONLY | O_APPEND));
+  CHECK_EROFS(openat(AT_FDCWD, name, O_RDWR));
+  CHECK_EROFS(creat(name, 0644));
+  CHECK_EROFS(unlink(name));
+  CHECK_EROFS(unlinkat(AT_FDCWD, name, 0));
+  CHECK_EROFS(remove(name));
+  const std::string other = ex::Narrow(data + L"\\other");
+  {
+    const int fd = open(other.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    CHECK(fd >= 0);
+    if (fd >= 0) close(fd);
+  }
+  CHECK_EROFS(rename(name, (other + "-moved").c_str()));
+  CHECK_EROFS(rename(other.c_str(), name));
+  CHECK_EROFS(renameat(AT_FDCWD, other.c_str(), AT_FDCWD, name));
+  CHECK_EROFS(link(name, (other + "-link").c_str()));
+  CHECK_EROFS(link(other.c_str(), name));
+  CHECK_EROFS(symlink(other.c_str(), name));
+  CHECK_EROFS(chmod(name, 0777));
+  CHECK_EROFS(fchmodat(AT_FDCWD, name, 0600, 0));
+  CHECK_EROFS(chown(name, 0, 0));
+  CHECK_EROFS(utimes(name, nullptr));
+  CHECK_EROFS(utimensat(AT_FDCWD, name, nullptr, 0));
+  // Reads still work, and the file is unchanged.
+  CHECK(access(name, R_OK) == 0);
+  CHECK(ReadPath(name) == before);
+  struct stat st_after {};
+  CHECK(stat(name, &st_after) == 0 && st_after.st_ino == st_before.st_ino &&
+        st_after.st_size == st_before.st_size && st_after.st_mtime == st_before.st_mtime);
+  // The file holding it is an ordinary one (not read-only), so cleanups of
+  // Gesher's data directory can remove it.
+  WIN32_FIND_DATAW found;
+  HANDLE find = FindFirstFileW((data + L"\\system\\gesher-linker\\*").c_str(), &found);
+  std::wstring file;
+  if (find != INVALID_HANDLE_VALUE) {
+    do {
+      if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 && found.cFileName[0] != L'.') {
+        const std::wstring candidate = data + L"\\system\\gesher-linker\\" + found.cFileName + L"\\linker64";
+        if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) file = candidate;
+      }
+    } while (FindNextFileW(find, &found));
+    FindClose(find);
+  }
+  const DWORD attributes = GetFileAttributesW(file.c_str());
+  CHECK(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) == 0);
+  printf("PASS  open for writing, unlink, rename, link, symlink, chmod, chown, utimes: EROFS\n");
+}
+
+static void TestRealpath() {
+  printf("realpath\n");
+  char resolved[4096];
+  CHECK(realpath("/system/bin/linker64", resolved) != nullptr &&
+        strcmp(resolved, "/system/bin/linker64") == 0);
+  CHECK(realpath("/system//bin/../bin/./linker64", resolved) != nullptr &&
+        strcmp(resolved, "/system/bin/linker64") == 0);
+  const int fd = open("/system/bin/linker64", O_RDONLY);
+  CHECK(fd >= 0);
+  if (fd >= 0) {
+    const std::string link = "/proc/self/fd/" + std::to_string(fd);
+    CHECK(realpath(link.c_str(), resolved) != nullptr && strcmp(resolved, "/system/bin/linker64") == 0);
+    close(fd);
+  }
+  printf("PASS  realpath names it /system/bin/linker64\n");
+}
+
+static void TestDlopen() {
+  printf("loading it as a library\n");
+  std::string error;
+  gesher::elf::Library* lib = gesher::elf::Load("/system/bin/linker64", &error);
+  CHECK(lib == nullptr);
+  CHECK(error.find("Gesher's ELF loader") != std::string::npos);
+  // Nothing was mapped for it: maps still names it once.
+  const std::string maps = ReadPath("/proc/self/maps");
+  size_t count = 0;
+  for (size_t at = maps.find(" /system/bin/linker64\n"); at != std::string::npos;
+       at = maps.find(" /system/bin/linker64\n", at + 1)) {
+    ++count;
+  }
+  CHECK(count == 1);
+  printf("PASS  the ELF loader refuses to load it as a library\n");
+}
+
+static uint32_t ImageHash() {
+  const std::string image = ReadPath("/system/bin/linker64");
+  uint32_t fnv = 2166136261u;
+  for (unsigned char c : image) fnv = (fnv ^ c) * 16777619u;
+  return fnv;
+}
+
+// Leftovers placed before the first use of the name, checked after it.
+static void PreparePrune(const std::wstring& data) {
+  const std::wstring root = data + L"\\system\\gesher-linker";
+  CreateDirectoryW((data + L"\\system").c_str(), nullptr);
+  CreateDirectoryW(root.c_str(), nullptr);
+  auto make = [](const std::wstring& path) {
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+  };
+  for (const wchar_t* name : {L"deadbeef", L"cafef00d"}) {
+    CreateDirectoryW((root + L"\\" + name).c_str(), nullptr);
+    make(root + L"\\" + name + L"\\linker64");
+  }
+  // deadbeef: unused for eight days.
+  HANDLE dir = CreateFileW((root + L"\\deadbeef").c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ |
+                           FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  FILETIME now;
+  GetSystemTimeAsFileTime(&now);
+  ULARGE_INTEGER t;
+  t.LowPart = now.dwLowDateTime;
+  t.HighPart = now.dwHighDateTime;
+  t.QuadPart -= 8ull * 24 * 3600 * 10000000ull;
+  FILETIME old = {t.LowPart, t.HighPart};
+  SetFileTime(dir, nullptr, nullptr, &old);
+  CloseHandle(dir);
+}
+
+static void TestPrune(const std::wstring& data) {
+  printf("leftovers of earlier images\n");
+  const std::wstring root = data + L"\\system\\gesher-linker";
+  CHECK(GetFileAttributesW((root + L"\\deadbeef").c_str()) == INVALID_FILE_ATTRIBUTES);
+  CHECK(GetFileAttributesW((root + L"\\cafef00d\\linker64").c_str()) != INVALID_FILE_ATTRIBUTES);
+  printf("PASS  an image directory unused for a week is removed, a recent one kept\n");
+}
+
+static void TestTemporaryPrune(const std::wstring& data) {
+  // A dead process's temporary file in the current image's directory goes
+  // the next time a process starts using the name; this process's stays.
+  wchar_t hash[16];
+  swprintf(hash, 16, L"%08x", ImageHash());
+  const std::wstring dir = data + L"\\system\\gesher-linker\\" + hash;
+  const std::wstring dead = dir + L"\\linker64.0.tmp";
+  const std::wstring mine = dir + L"\\linker64." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+  for (const std::wstring& path : {dead, mine}) {
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    CHECK(h != INVALID_HANDLE_VALUE);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+  }
+  // Another process (this test again, with --use) uses the name.
+  wchar_t self[MAX_PATH];
+  GetModuleFileNameW(nullptr, self, MAX_PATH);
+  std::wstring command;
+  ex::AppendQuoted(&command, self);
+  command += L" --use ";
+  ex::AppendQuoted(&command, data);
+  STARTUPINFOW si = {};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi = {};
+  const BOOL started = CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                                      nullptr, nullptr, &si, &pi);
+  CHECK(started);
+  if (!started) return;
+  WaitForSingleObject(pi.hProcess, 30000);
+  DWORD status = 1;
+  GetExitCodeProcess(pi.hProcess, &status);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  CHECK(status == 0);
+  CHECK(GetFileAttributesW(dead.c_str()) == INVALID_FILE_ATTRIBUTES);
+  CHECK(GetFileAttributesW(mine.c_str()) != INVALID_FILE_ATTRIBUTES);
+  DeleteFileW(mine.c_str());
+  printf("PASS  a dead process's temporary file is removed, a running one's kept\n");
 }
 
 static void TestMaps() {
@@ -146,18 +338,12 @@ static void TestMaps() {
   printf("PASS  /proc/self/fd names it /system/bin/linker64\n");
 }
 
+// The file holding the current image.
 static std::wstring FindFile(const std::wstring& data) {
-  WIN32_FIND_DATAW found;
-  HANDLE h = FindFirstFileW((data + L"\\system\\gesher-linker\\*").c_str(), &found);
-  if (h == INVALID_HANDLE_VALUE) return L"";
-  std::wstring file;
-  do {
-    if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 && found.cFileName[0] != L'.') {
-      file = data + L"\\system\\gesher-linker\\" + found.cFileName + L"\\linker64";
-    }
-  } while (FindNextFileW(h, &found));
-  FindClose(h);
-  return file;
+  wchar_t hash[16];
+  swprintf(hash, 16, L"%08x", ImageHash());
+  const std::wstring file = data + L"\system\gesher-linker\\" + hash + L"\linker64";
+  return GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES ? file : L"";
 }
 
 static void TestExec(const std::wstring& data) {
@@ -191,7 +377,8 @@ static void TestExec(const std::wstring& data) {
   CHECK(ex::PrepareLaunch({"/system/bin/linker64", ex::Narrow(data + L"\\missing")}, "", &via) == ex::kENOENT);
   printf("PASS  linker64 PROGRAM ARGS launches PROGRAM; nothing else runs\n");
 
-  // The file itself as a program: the ELF loader finds no entry point and
+  // The file itself as a program: the ELF loader refuses it (it has no entry
+  // point either)
   // stops, before any code of it could run.
   const std::wstring file = FindFile(data);
   CHECK(!file.empty());
@@ -237,20 +424,35 @@ static void TestExec(const std::wstring& data) {
 }
 
 int main(int argc, char** argv) {
+  if (argc == 3 && strcmp(argv[1], "--use") == 0) {
+    // A second process using the name (TestTemporaryPrune).
+    SetEnvironmentVariableW(L"ANDROID_DATA", ex::Widen(argv[2]).c_str());
+    struct stat st {};
+    return stat("/system/bin/linker64", &st) == 0 ? 0 : 1;
+  }
   if (argc != 2) {
-    fprintf(stderr, "usage: system_linker_test <empty directory for $ANDROID_DATA>\n");
+    fprintf(stderr, "usage: system_linker_test <empty directory for $ANDROID_DATA>
+");
     return 2;
   }
   const std::wstring data = ex::Widen(argv[1]);
   CreateDirectoryW(data.c_str(), nullptr);
   SetEnvironmentVariableW(L"ANDROID_DATA", data.c_str());
+  PreparePrune(data);
   TestHeader();
+  TestPrune(data);
+  TestReadOnly(data);
   TestMaps();
+  TestRealpath();
+  TestDlopen();
   TestExec(data);
+  TestTemporaryPrune(data);
   if (g_failed != 0) {
-    printf("system_linker_test: %d of %d checks failed\n", g_failed, g_checks);
+    printf("system_linker_test: %d of %d checks failed
+", g_failed, g_checks);
     return 1;
   }
-  printf("system_linker_test: all %d checks passed\n", g_checks);
+  printf("system_linker_test: all %d checks passed
+", g_checks);
   return 0;
 }

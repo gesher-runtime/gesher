@@ -127,6 +127,7 @@ static int SystemFontPath(const char*, std::wstring*) { return 0; }
 namespace system_linker {
 inline constexpr char kPath[] = "/system/bin/linker64";
 static const std::wstring& File() { static const std::wstring none; return none; }
+static bool IsName(const char*) { return false; }
 }
 namespace procfs { static unsigned Type(const std::wstring&) { return 0; } }
 '''

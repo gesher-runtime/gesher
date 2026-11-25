@@ -29,6 +29,7 @@
 #include "event_internal.h"
 #include "record_lock_descriptors.h"
 #include "pipe_io.h"
+#include "system_linker.h"
 
 namespace {
 
@@ -282,6 +283,7 @@ long fpathconf(int fd, int name) {
 }
 
 int chown(const char* path, uid_t owner, gid_t group) {
+  if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   struct stat st;
   if (stat(path, &st) != 0) return -1;
   return CheckOwner(owner, group);
@@ -866,7 +868,9 @@ char* realpath(const char* path, char* resolved_path) {
     errno = ENOENT;
     return nullptr;
   }
-  if (kind == gesher::PathKind::kFile) {
+  if (kind == gesher::PathKind::kFile && gesher::system_linker::IsFile(wpath)) {
+    out = gesher::system_linker::kPath;  // Gesher's ELF loader, by its name
+  } else if (kind == gesher::PathKind::kFile) {
     HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (h == INVALID_HANDLE_VALUE) {

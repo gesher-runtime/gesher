@@ -299,7 +299,7 @@ target_link_libraries(elf_deferred_code_test PRIVATE gesher_elf)
 # /proc/self/maps line and exec of linker64, through gesher-base and exec_spawn.
 add_executable(system_linker_test tests/native/system_linker_test.cc)
 target_compile_options(system_linker_test PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(system_linker_test PRIVATE gesher_exec_spawn)
+target_link_libraries(system_linker_test PRIVATE gesher_exec_spawn gesher_elf)
 add_dependencies(system_linker_test gesher-exec)
 
 # Live CRT environment storage after host and guest mutations (exec4).

@@ -12,14 +12,19 @@
 
 #include "system_linker.h"
 
+#include <errno.h>
 #include <windows.h>
 
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
+#include <cstdlib>
 #include <mutex>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "internal.h"
 
@@ -189,16 +194,20 @@ bool ReadAll(const std::wstring& path, std::string* out) {
   return ok;
 }
 
-void DeleteTemporary(const std::wstring& path) {
-  SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
-  DeleteFileW(path.c_str());
-}
-
-// Makes `path` a read-only file holding exactly `image`. An existing file
-// with these bytes is used as it is (other processes may have it mapped).
+// Makes `path` a file holding exactly `image`. An existing file with these
+// bytes is used as it is (other processes may have it mapped). It is not
+// marked read-only: the name refuses changes (EROFS, IsName), and a read-only
+// file would stop ordinary cleanups of Gesher's data directory.
 bool Place(const std::wstring& path, const std::string& image) {
   std::string existing;
-  if (ReadAll(path, &existing) && existing == image) return true;
+  if (ReadAll(path, &existing) && existing == image) {
+    // Written read-only by the first version of this code.
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) != 0) {
+      SetFileAttributesW(path.c_str(), attributes & ~FILE_ATTRIBUTE_READONLY);
+    }
+    return true;
+  }
   const std::wstring temp = path + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
   HANDLE h = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -208,20 +217,97 @@ bool Place(const std::wstring& path, const std::string& image) {
                   written == image.size();
   CloseHandle(h);
   if (!ok) {
-    DeleteTemporary(temp);
+    DeleteFileW(temp.c_str());
     return false;
   }
-  SetFileAttributesW(temp.c_str(), FILE_ATTRIBUTE_READONLY);
   if (MoveFileExW(temp.c_str(), path.c_str(), 0)) return true;
   // Another process placed it first, or the file there holds other bytes.
   if (ReadAll(path, &existing) && existing == image) {
-    DeleteTemporary(temp);
+    DeleteFileW(temp.c_str());
     return true;
   }
   SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
   if (MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) return true;
-  DeleteTemporary(temp);
+  DeleteFileW(temp.c_str());
   return false;
+}
+
+bool IsHexName(const wchar_t* name) {
+  size_t n = 0;
+  for (; name[n] != L'\0'; ++n) {
+    if (!iswxdigit(name[n])) return false;
+  }
+  return n == 8;
+}
+
+// The directory is in use: its last-write time becomes now, so that another
+// process's Prune does not take it for an abandoned one.
+void MarkUsed(const std::wstring& dir) {
+  HANDLE h = CreateFileW(dir.c_str(), FILE_WRITE_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return;
+  FILETIME now;
+  GetSystemTimeAsFileTime(&now);
+  SetFileTime(h, nullptr, nullptr, &now);
+  CloseHandle(h);
+}
+
+bool ProcessRuns(DWORD pid) {
+  HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+  if (process == nullptr) return GetLastError() == ERROR_ACCESS_DENIED;  // it exists
+  const bool running = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+  CloseHandle(process);
+  return running;
+}
+
+// Removes what earlier images and dead processes left under `root`: other
+// image directories unused for a week (a process still running from one keeps
+// its mapping; only a name it opened again later would be gone) and temporary
+// files of processes that no longer run.
+void Prune(const std::wstring& root, const std::wstring& keep) {
+  constexpr unsigned long long kWeek = 7ull * 24 * 3600 * 10000000ull;  // 100 ns units
+  FILETIME now_time;
+  GetSystemTimeAsFileTime(&now_time);
+  const unsigned long long now =
+      (static_cast<unsigned long long>(now_time.dwHighDateTime) << 32) | now_time.dwLowDateTime;
+  WIN32_FIND_DATAW found;
+  HANDLE find = FindFirstFileW((root + L"\\*").c_str(), &found);
+  if (find == INVALID_HANDLE_VALUE) return;
+  do {
+    if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 || !IsHexName(found.cFileName)) {
+      continue;
+    }
+    const std::wstring sub = root + L"\\" + found.cFileName;
+    if (_wcsicmp(found.cFileName, keep.c_str()) == 0) {
+      WIN32_FIND_DATAW temp;
+      HANDLE t = FindFirstFileW((sub + L"\\linker64.*.tmp").c_str(), &temp);
+      if (t == INVALID_HANDLE_VALUE) continue;
+      do {
+        const DWORD pid = static_cast<DWORD>(std::wcstoul(temp.cFileName + 9, nullptr, 10));
+        if (!ProcessRuns(pid)) DeleteFileW((sub + L"\\" + temp.cFileName).c_str());
+      } while (FindNextFileW(t, &temp));
+      FindClose(t);
+      continue;
+    }
+    const unsigned long long written =
+        (static_cast<unsigned long long>(found.ftLastWriteTime.dwHighDateTime) << 32) |
+        found.ftLastWriteTime.dwLowDateTime;
+    if (now < written || now - written < kWeek) continue;
+    WIN32_FIND_DATAW entry;
+    HANDLE e = FindFirstFileW((sub + L"\\*").c_str(), &entry);
+    if (e != INVALID_HANDLE_VALUE) {
+      do {
+        if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
+        const std::wstring file = sub + L"\\" + entry.cFileName;
+        SetFileAttributesW(file.c_str(), FILE_ATTRIBUTE_NORMAL);
+        DeleteFileW(file.c_str());
+      } while (FindNextFileW(e, &entry));
+      FindClose(e);
+    }
+    RemoveDirectoryW(sub.c_str());
+  } while (FindNextFileW(find, &found));
+  FindClose(find);
 }
 
 std::wstring FinalPath(const std::wstring& path) {
@@ -260,14 +346,52 @@ const std::wstring& File() {
       for (unsigned char c : image) fnv = (fnv ^ c) * 16777619u;
       wchar_t name[16];
       std::swprintf(name, 16, L"%08x", fnv);
-      const std::wstring dir = data + L"\\system\\gesher-linker\\" + name;
+      const std::wstring root = data + L"\\system\\gesher-linker";
+      const std::wstring dir = root + L"\\" + name;
       MakeDirectories(dir);
+      MarkUsed(dir);
       const std::wstring path = dir + L"\\linker64";
       if (Place(path, image)) g_file = FinalPath(path);
+      Prune(root, name);
     }
     g_file_ready.store(true, std::memory_order_release);
   });
   return g_file;
+}
+
+bool IsName(const char* path) {
+  if (path == nullptr || path[0] != '/' || path[1] == '/') return false;
+  const size_t length = std::strlen(path);
+  if (path[length - 1] == '/') return false;  // a directory: ENOTDIR on Linux
+  // The components after dropping empty and "." ones and resolving "..", as
+  // the kernel walks them (no symbolic link is on the way).
+  static constexpr std::string_view kParts[] = {"system", "bin", "linker64"};
+  std::string_view parts[3];
+  size_t count = 0;
+  std::string_view rest(path);
+  while (!rest.empty()) {
+    const size_t slash = rest.find('/');
+    const std::string_view part = rest.substr(0, slash);
+    rest = slash == std::string_view::npos ? std::string_view() : rest.substr(slash + 1);
+    if (part.empty() || part == ".") continue;
+    if (part == "..") {
+      if (count > 0) --count;
+      continue;
+    }
+    if (count == 3) return false;
+    parts[count++] = part;
+  }
+  if (count != 3) return false;
+  for (size_t i = 0; i < 3; ++i) {
+    if (parts[i] != kParts[i]) return false;
+  }
+  return true;
+}
+
+int RefuseChange(const char* path) {
+  if (!IsName(path)) return 0;
+  errno = EROFS;
+  return -1;
 }
 
 bool IsFile(const std::wstring& windows) {

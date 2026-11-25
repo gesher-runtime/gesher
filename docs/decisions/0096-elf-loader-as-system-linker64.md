@@ -55,7 +55,7 @@ file name.
 adaptation decided by the maintainer and listed in CONTRIBUTING.md's
 examples. It is generic: every process, no package or packer is singled out.
 
-- **The file.** `/system/bin/linker64` is a read-only file holding a small
+- **The file.** `/system/bin/linker64` is a file holding a small
   ELF image (`system_linker::Image()`): ELF64, little-endian, `ET_DYN`,
   `EM_X86_64`, the machine Gesher's linker loads natively. It names itself as
   Gesher's: an `NT` note with owner `Gesher` ("Gesher ELF loader: the dynamic
@@ -65,29 +65,57 @@ examples. It is generic: every process, no package or packer is singled out.
   `$ANDROID_DATA/system/gesher-linker/<hash of the bytes>/linker64` (else
   `%LOCALAPPDATA%\Gesher\data`), written on first use, as the stand-in
   `libart.so` is (0086): a process that has one mapped keeps it, and a file
-  holding other bytes is replaced. Writing through the name fails
-  (`EACCES`).
+  holding other bytes is replaced. Image directories unused for a week and
+  temporary files of processes that no longer run are pruned. The name is
+  matched after dropping empty and `.` components and resolving `..`
+  (`/system//bin/../bin/linker64` is the same file); a trailing slash is not
+  the file.
+- **Read-only through the name.** `/system` is a read-only file system on
+  Android, so every call that would change the file or its name through
+  `/system/bin/linker64` fails with `EROFS` (`system_linker::RefuseChange`):
+  `open`/`openat`/`creat` for writing, appending or truncation, `unlink`,
+  `unlinkat`, `remove`, `rename`/`renameat` from or to it, `link` from or to
+  it, `symlink` onto it, `chmod`/`fchmodat`, `chown` and
+  `utimes`/`utimensat`. Reads are unaffected. The file on disk has no
+  read-only attribute, so ordinary cleanups of Gesher's data directory (the
+  uninstaller, `remove_all`) remove it.
 - **No `/system/bin/linker`.** Gesher has no 32-bit support; a 64-bit-only
   device has no 32-bit linker either.
 - **In `/proc/self/maps`.** `Maps()` first maps the file read-only, once, for
   the rest of the process's life (`EnsureMapped`), and `MappedFile` names
   that view `/system/bin/linker64` (offset 0, the file's inode).
-  `/proc/self/fd/<n>` names an open descriptor of it the same way.
+  `/proc/self/fd/<n>` names an open descriptor of it the same way, and
+  `realpath` (and so `File.getCanonicalPath()`) of the name or of such a
+  descriptor gives `/system/bin/linker64`.
   The mapping is made when maps is first read rather than at process start
   because that file is the only place it can be observed (it is not a loaded
-  library: `dl_iterate_phdr` and `dlopen` do not see it), and every reader of
+  library, so `dl_iterate_phdr` does not list it), and every reader of
   `/proc/self/maps` or `/proc/<own pid>/maps`, Java or native, raw `openat`
   included, gets there through `Maps()`. A process that never reads maps
   pays nothing; one that does pays one comparison of a file of under 1 KiB and
   one `MapViewOfFile`, once.
+- **Loading it.** `dlopen("/system/bin/linker64")` (any spelling, any path to
+  the file) fails: the ELF loader recognises the image by its `Gesher` note
+  and reports "... is Gesher's ELF loader (/system/bin/linker64): the
+  process's own dynamic linker, not a library to load". Android's `dlopen` of
+  its linker returns the linker's own handle, whose symbols are the
+  `__loader_*` functions; Gesher has no such object to hand out (those
+  functions are the bionic shim's), and an empty library that `dlsym` finds
+  nothing in would only hide that. Nothing is mapped for the attempt.
 - **Executing it.** Android runs `linker64 PROGRAM [ARGS...]` as PROGRAM.
   `exec_spawn`'s `PrepareProgram` does that for the path
   `/system/bin/linker64`: PROGRAM (a path, as the linker takes it) must be an
   ELF executable or one of gesher-exec's tools, and gets the same launch as
-  when executed directly. No program, an option (`--list`) or a program that
-  is not ELF is `ENOEXEC` (Android's linker execs, prints an error and exits).
+  when executed directly. Differences from Android, where the exec itself
+  always succeeds: with no program or `--help` Android's linker prints its
+  usage and exits 0, with `--list` it lists the libraries, and with a missing
+  or non-ELF program it prints an error and exits 1; here all of these fail
+  the exec with `ENOEXEC` (`ENOENT` for a missing program). An arm64 PROGRAM
+  is accepted and runs through the translator, as it does executed directly
+  (0047); an x86-64 device's linker64 would refuse it.
   The file itself run by gesher-exec (`--elf` on its Windows path) stops with
-  `CANNOT LINK EXECUTABLE ... has no entry point`: nothing in it is run.
+  `CANNOT LINK EXECUTABLE ...` (the loader refuses the image, which has no
+  entry point either): nothing in it is run.
 
 ## Consequences
 
@@ -106,21 +134,27 @@ examples. It is generic: every process, no package or packer is singled out.
 - `/proc/self/maps` shows the view as `r--s` (gesher-base reports a view that
   is not copy-on-write as shared); a device shows the linker's segments as
   `r--p`, `r-xp` and `rw-p`. The line is one read-only page range.
-- Only the exact name `/system/bin/linker64` is mapped (as `/system/fonts` is):
+- Only the name `/system/bin/linker64` is mapped (as `/system/fonts` is):
   `/apex/com.android.runtime/bin/linker64` and `/system/bin` as a directory
-  do not exist.
-- The file is protected by its read-only attribute, not by the name: an app
-  running with the user's token can delete or change it as it can any of the
-  user's files (0090). The next process that uses the name writes it again,
-  and maps only bytes equal to the image.
+  do not exist. The `exec` special case matches the exact string only.
+- The name refuses changes; the file on disk does not: an app running with
+  the user's token can change it through its Windows path as it can any of
+  the user's files (0090). The next process that uses the name writes it
+  again, and maps only bytes equal to the image.
+- `/proc/self/maps` names the view `/system/bin/linker64` only when the data
+  directory is on a volume with a drive letter (`MappedFile` translates
+  device paths through drive letters).
 - With the AppContainer sandbox (0090, off by default) the container needs
   read access to the file and write access only if it is missing; that is not
   arranged yet, so a contained process may see no linker64 (as before this
   change).
 - **Tests:** `tests/native/system_linker_test.cc` (tracks/21-posix.ps1) reads
   the header through `open`, checks `stat`, `access`, the missing
-  `/system/bin/linker`, refused writes, the maps line (name, offset, inode,
-  the mapped bytes, mapped once), `/proc/self/fd`, the launch `linker64
-  PROGRAM ARGS` prepares (equal to PROGRAM's own), the `ENOEXEC` cases, and
-  that gesher-exec refuses to run the file. The procfs and SQLite path
+  `/system/bin/linker`, other spellings of the name, `EROFS` from each
+  changing call above with the file unchanged and not read-only, the maps
+  line (name, offset, inode, the mapped bytes, mapped once), `/proc/self/fd`,
+  `realpath`, the loader refusing the image, the launch `linker64 PROGRAM
+  ARGS` prepares (equal to PROGRAM's own), the `ENOEXEC` cases, that
+  gesher-exec refuses to run the file, and pruning (an old image directory, a
+  dead process's temporary file, kept ones). The procfs and SQLite path
   fixtures stub the new functions.
