@@ -98,6 +98,11 @@ examples. It is generic: every process, no package or packer is singled out.
   Other apps keep the ABIs they saw (`SUPPORTED_ABIS` is unchanged); code that
   switches on the linker's machine now finds the one it would on an x86-64
   device (0095's packer reads `/system/bin/ls`, not the linker).
+- Soundcore 5.0.39 on a local build: the shell extracts the x86-64
+  `files/libexec.so` and `libexecmain.so` (`ELF 64-bit LSB shared object,
+  x86-64`), the stand-in `libart.so` is loaded for `files/libexec.so` (0086),
+  and the app shows `WelcomeActivity` (first frames drawn, focused), fetches
+  its server configuration and keeps running.
 - `/proc/self/maps` shows the view as `r--s` (gesher-base reports a view that
   is not copy-on-write as shared); a device shows the linker's segments as
   `r--p`, `r-xp` and `rw-p`. The line is one read-only page range.
