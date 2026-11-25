@@ -1,0 +1,305 @@
+// gesher-base: Gesher's x86-64 ELF loader as /system/bin/linker64
+// (system_linker.h, docs/decisions/0096-elf-loader-as-system-linker64.md).
+//
+// On a 64-bit Android device /system/bin/linker64 is the dynamic linker, an
+// ELF file whose header names the device's machine, and every process maps it
+// (/proc/self/maps names it). Gesher's dynamic linker is its ELF loader
+// (compat/elf/elf_loader.cc), part of dalvikvm.exe and gesher-exec.exe; it
+// loads x86-64 ELF natively. This file gives it that name: path.cc maps
+// /system/bin/linker64 to a file holding Image(), procfs.cc maps that file
+// before it lists /proc/self/maps and names it /system/bin/linker64 there.
+// There is no /system/bin/linker: Gesher runs no 32-bit code.
+
+#include "system_linker.h"
+
+#include <windows.h>
+
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <cwchar>
+#include <mutex>
+#include <string>
+
+#include "internal.h"
+
+namespace gesher::system_linker {
+namespace {
+
+constexpr char kNoteName[] = "Gesher";
+constexpr char kNoteText[] =
+    "Gesher ELF loader: the dynamic linker of this process, part of Gesher's runtime. "
+    "It loads x86-64 ELF natively. Not a program: exec of /system/bin/linker64 runs the "
+    "program named after it.";
+constexpr char kComment[] = "Gesher ELF loader";
+constexpr uint32_t kNoteType = 1;
+
+void Put16(std::string* out, size_t offset, uint16_t v) {
+  for (int i = 0; i < 2; ++i) (*out)[offset + i] = static_cast<char>(v >> (8 * i));
+}
+void Put32(std::string* out, size_t offset, uint32_t v) {
+  for (int i = 0; i < 4; ++i) (*out)[offset + i] = static_cast<char>(v >> (8 * i));
+}
+void Put64(std::string* out, size_t offset, uint64_t v) {
+  for (int i = 0; i < 8; ++i) (*out)[offset + i] = static_cast<char>(v >> (8 * i));
+}
+size_t Align(std::string* out, size_t align) {
+  while (out->size() % align != 0) out->push_back('\0');
+  return out->size();
+}
+
+std::string BuildImage() {
+  constexpr size_t kEhdr = 64, kPhdr = 56, kShdr = 64;
+  constexpr int kPhnum = 3, kShnum = 4;
+  std::string out(kEhdr + kPhnum * kPhdr, '\0');
+
+  // .note.gesher: namesz, descsz, type, name and text, each padded to 4.
+  const size_t note = Align(&out, 4);
+  out.append(12, '\0');
+  Put32(&out, note, sizeof(kNoteName));
+  Put32(&out, note + 4, sizeof(kNoteText));
+  Put32(&out, note + 8, kNoteType);
+  out.append(kNoteName, sizeof(kNoteName));
+  Align(&out, 4);
+  out.append(kNoteText, sizeof(kNoteText));
+  Align(&out, 4);
+  const size_t note_size = out.size() - note;
+
+  const size_t comment = out.size();
+  out.append(kComment, sizeof(kComment));
+
+  constexpr char kShstr[] = "\0.note.gesher\0.comment\0.shstrtab";
+  const size_t shstrtab = out.size();
+  out.append(kShstr, sizeof(kShstr));
+  const size_t shoff = Align(&out, 8);
+  out.append(kShnum * kShdr, '\0');
+  const size_t size = out.size();
+
+  // ELF header: ELF64, little-endian, ET_DYN, EM_X86_64, no entry point.
+  std::memcpy(out.data(), "\x7f" "ELF", 4);
+  out[4] = 2;  // ELFCLASS64
+  out[5] = 1;  // ELFDATA2LSB
+  out[6] = 1;  // EV_CURRENT
+  Put16(&out, 16, 3);   // ET_DYN
+  Put16(&out, 18, 62);  // EM_X86_64
+  Put32(&out, 20, 1);   // EV_CURRENT
+  Put64(&out, 24, 0);   // e_entry
+  Put64(&out, 32, kEhdr);
+  Put64(&out, 40, shoff);
+  Put16(&out, 52, kEhdr);
+  Put16(&out, 54, kPhdr);
+  Put16(&out, 56, kPhnum);
+  Put16(&out, 58, kShdr);
+  Put16(&out, 60, kShnum);
+  Put16(&out, 62, 3);  // .shstrtab
+
+  auto phdr = [&](int i, uint32_t type, uint32_t flags, uint64_t offset, uint64_t filesz,
+                  uint64_t align) {
+    const size_t p = kEhdr + i * kPhdr;
+    Put32(&out, p, type);
+    Put32(&out, p + 4, flags);
+    Put64(&out, p + 8, offset);
+    Put64(&out, p + 16, offset);  // p_vaddr: loaded at its file offset
+    Put64(&out, p + 24, offset);
+    Put64(&out, p + 32, filesz);
+    Put64(&out, p + 40, filesz);
+    Put64(&out, p + 48, align);
+  };
+  phdr(0, 1, 4, 0, size, 4096);              // PT_LOAD, R: the whole file, no code
+  phdr(1, 4, 4, note, note_size, 4);         // PT_NOTE
+  phdr(2, 0x6474e551, 6, 0, 0, 16);          // PT_GNU_STACK, RW
+
+  auto shdr = [&](int i, uint32_t name, uint32_t type, uint64_t flags, uint64_t offset,
+                  uint64_t sh_size, uint64_t align, uint64_t entsize) {
+    const size_t s = shoff + i * kShdr;
+    Put32(&out, s, name);
+    Put32(&out, s + 4, type);
+    Put64(&out, s + 8, flags);
+    Put64(&out, s + 16, (flags & 2) != 0 ? offset : 0);
+    Put64(&out, s + 24, offset);
+    Put64(&out, s + 32, sh_size);
+    Put64(&out, s + 48, align);
+    Put64(&out, s + 56, entsize);
+  };
+  shdr(1, 1, 7, 2, note, note_size, 4, 0);                    // .note.gesher: SHT_NOTE, ALLOC
+  shdr(2, 14, 1, 0x30, comment, sizeof(kComment), 1, 1);      // .comment: MERGE|STRINGS
+  shdr(3, 23, 3, 0, shstrtab, sizeof(kShstr), 1, 0);          // .shstrtab
+  return out;
+}
+
+std::wstring StripPrefix(const std::wstring& path) {
+  if (path.rfind(L"\\\\?\\UNC\\", 0) == 0) return L"\\\\" + path.substr(8);
+  if (path.rfind(L"\\\\?\\", 0) == 0) return path.substr(4);
+  return path;
+}
+
+std::wstring Environment(const wchar_t* name) {
+  DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
+  if (size == 0) return std::wstring();
+  std::wstring value(size, L'\0');
+  DWORD n = GetEnvironmentVariableW(name, value.data(), size);
+  if (n == 0 || n >= size) return std::wstring();
+  value.resize(n);
+  return value;
+}
+
+// $ANDROID_DATA (a Windows or a Linux path), else %LOCALAPPDATA%\Gesher\data
+// as the launcher's default.
+std::wstring DataDirectory() {
+  std::wstring data = Environment(L"ANDROID_DATA");
+  if (!data.empty()) {
+    std::wstring mapped;
+    const std::string narrow = Narrow(data.c_str());
+    if (MapPath(narrow.c_str(), &mapped) != PathKind::kFile) return std::wstring();
+    data = StripPrefix(mapped);
+  } else {
+    data = Environment(L"LOCALAPPDATA");
+    if (data.empty()) return std::wstring();
+    data += L"\\Gesher\\data";
+  }
+  for (wchar_t& c : data) {
+    if (c == L'/') c = L'\\';
+  }
+  return data;
+}
+
+void MakeDirectories(const std::wstring& dir) {
+  for (size_t i = 1; i <= dir.size(); ++i) {
+    if (i == dir.size() || dir[i] == L'\\') {
+      const std::wstring part = dir.substr(0, i);
+      if (!part.empty() && part.back() != L':' && part != L"\\") CreateDirectoryW(part.c_str(), nullptr);
+    }
+  }
+}
+
+bool ReadAll(const std::wstring& path, std::string* out) {
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  LARGE_INTEGER size{};
+  bool ok = GetFileSizeEx(h, &size) && size.QuadPart >= 0 && size.QuadPart <= 65536;
+  if (ok) {
+    out->assign(static_cast<size_t>(size.QuadPart), '\0');
+    DWORD got = 0;
+    ok = out->empty() || (ReadFile(h, out->data(), static_cast<DWORD>(out->size()), &got, nullptr) &&
+                          got == out->size());
+  }
+  CloseHandle(h);
+  return ok;
+}
+
+void DeleteTemporary(const std::wstring& path) {
+  SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+  DeleteFileW(path.c_str());
+}
+
+// Makes `path` a read-only file holding exactly `image`. An existing file
+// with these bytes is used as it is (other processes may have it mapped).
+bool Place(const std::wstring& path, const std::string& image) {
+  std::string existing;
+  if (ReadAll(path, &existing) && existing == image) return true;
+  const std::wstring temp = path + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
+  HANDLE h = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  DWORD written = 0;
+  const bool ok = WriteFile(h, image.data(), static_cast<DWORD>(image.size()), &written, nullptr) &&
+                  written == image.size();
+  CloseHandle(h);
+  if (!ok) {
+    DeleteTemporary(temp);
+    return false;
+  }
+  SetFileAttributesW(temp.c_str(), FILE_ATTRIBUTE_READONLY);
+  if (MoveFileExW(temp.c_str(), path.c_str(), 0)) return true;
+  // Another process placed it first, or the file there holds other bytes.
+  if (ReadAll(path, &existing) && existing == image) {
+    DeleteTemporary(temp);
+    return true;
+  }
+  SetFileAttributesW(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+  if (MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) return true;
+  DeleteTemporary(temp);
+  return false;
+}
+
+std::wstring FinalPath(const std::wstring& path) {
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return std::wstring();
+  std::wstring final(32768, L'\0');
+  DWORD n = GetFinalPathNameByHandleW(h, final.data(), static_cast<DWORD>(final.size()),
+                                      FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  CloseHandle(h);
+  if (n == 0 || n >= final.size()) return std::wstring();
+  final.resize(n);
+  return StripPrefix(final);
+}
+
+std::once_flag g_file_once;
+std::atomic<bool> g_file_ready{false};
+std::wstring g_file;
+
+}  // namespace
+
+std::string Image() {
+  static const std::string image = BuildImage();
+  return image;
+}
+
+const std::wstring& File() {
+  std::call_once(g_file_once, [] {
+    const std::wstring data = DataDirectory();
+    if (!data.empty()) {
+      const std::string image = Image();
+      // A directory per image: a process that has an older one mapped keeps
+      // it, and a file is never rewritten while mapped.
+      uint32_t fnv = 2166136261u;
+      for (unsigned char c : image) fnv = (fnv ^ c) * 16777619u;
+      wchar_t name[16];
+      std::swprintf(name, 16, L"%08x", fnv);
+      const std::wstring dir = data + L"\\system\\gesher-linker\\" + name;
+      MakeDirectories(dir);
+      const std::wstring path = dir + L"\\linker64";
+      if (Place(path, image)) g_file = FinalPath(path);
+    }
+    g_file_ready.store(true, std::memory_order_release);
+  });
+  return g_file;
+}
+
+bool IsFile(const std::wstring& windows) {
+  // Only a process that used the name (MapPath, EnsureMapped) can have the
+  // file open or mapped; others never create it here.
+  if (!g_file_ready.load(std::memory_order_acquire) || g_file.empty()) return false;
+  return _wcsicmp(StripPrefix(windows).c_str(), g_file.c_str()) == 0;
+}
+
+void EnsureMapped() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    const std::wstring& file = File();
+    if (file.empty()) return;
+    HANDLE h = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    HANDLE section = CreateFileMappingW(h, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    CloseHandle(h);
+    if (section == nullptr) return;
+    void* view = MapViewOfFile(section, FILE_MAP_READ, 0, 0, 0);
+    CloseHandle(section);
+    if (view == nullptr) return;
+    // What is mapped is what the name promises; the view stays for the
+    // process's lifetime, as the linker's mapping does on a device.
+    const std::string image = Image();
+    MEMORY_BASIC_INFORMATION info{};
+    if (VirtualQuery(view, &info, sizeof(info)) != sizeof(info) || info.RegionSize < image.size() ||
+        std::memcmp(view, image.data(), image.size()) != 0) {
+      UnmapViewOfFile(view);
+    }
+  });
+}
+
+}  // namespace gesher::system_linker

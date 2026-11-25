@@ -34,6 +34,7 @@
 #include "binder_internal.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
+#include "system_linker.h"
 #include "revocable_internal.h"
 
 namespace gesher {
@@ -384,6 +385,13 @@ PathKind MapPath(const char* path, std::wstring* windows) {
     }
     PathKind kind = VirtualKind(path, windows);
     if (kind != PathKind::kFile) return kind;
+    // Gesher's ELF loader as Android's dynamic linker (system_linker.h).
+    if (std::strcmp(path, system_linker::kPath) == 0) {
+      *windows = system_linker::File();
+      if (windows->empty()) return PathKind::kMissing;
+      Lengthen(windows);
+      return PathKind::kFile;
+    }
     int font = SystemFontPath(path, windows);
     if (font != 0) return font > 0 ? PathKind::kFile : PathKind::kMissing;
     if (DrivePath(path, windows)) {
