@@ -111,6 +111,22 @@ function CheckMuxer([string] $Abi, [string] $Mode, [string] $Caller, $Result, [s
   }
 }
 
+$annexB = Join-Path $Dir 'media_annexb_contracts.exe'
+if (-not (Test-Path $annexB)) {
+  Write-Host 'FAIL  media4 Annex B: actual bounded-helper executable is missing'
+  $script:failed++
+} else {
+  $annexResult = InvokeMuxer $annexB @() @{} 180
+  Write-Host $annexResult.Text
+  if ($annexResult.Code -eq 0 -and $annexResult.Text -match 'Annex B contracts: [0-9]+ checks, [0-9]+ calls, PASS' -and
+      -not $annexResult.Text.Contains('FAIL')) {
+    Write-Host 'PASS  media4 Annex B: actual helper, exact units, every byte value, concurrency and native protected-page bounds'
+  } else {
+    Write-Host "FAIL  media4 Annex B: actual-helper exit $($annexResult.Code)"
+    $script:failed++
+  }
+}
+
 if (-not (Test-Path "$mxDir/mediamuxer-tests.dex") -or -not (Test-Path "$Dir/media_muxer_verify.exe")) {
   Write-Host 'FAIL  media4 muxer: native/dex/oracle artifacts are missing'
   $script:failed++
