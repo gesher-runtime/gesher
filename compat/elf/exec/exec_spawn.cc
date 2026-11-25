@@ -397,6 +397,21 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
     AppendArgs(&launch->command_line, argv, 1);
     return Finish(launch);
   }
+  if (prog == "/system/bin/linker64") {
+    // Android's dynamic linker run as a program, `linker64 PROGRAM [ARGS...]`:
+    // PROGRAM (a path, not looked up in PATH) runs with ARGS. The name is
+    // Gesher's ELF loader (compat/posix/src/system_linker.h), which does that
+    // for an ELF program. No program, linker64's own options or a program
+    // that is not ELF fail the exec instead (Android's linker prints an error).
+    if (depth > 0 || argv.size() < 2 || argv[1].empty() || argv[1][0] == '-') return kENOEXEC;
+    const std::vector<std::string> program(argv.begin() + 1, argv.end());
+    Launch inner;
+    int r = PrepareProgram(program[0], program, dir, depth + 1, false, &inner, path_override);
+    if (r != 0) return r;
+    if (inner.kind != "elf" && inner.kind != "tool") return kENOEXEC;
+    *launch = inner;
+    return 0;
+  }
   std::string tool = ToolName(prog);
   if (!tool.empty() && (search || prog.find('/') != std::string::npos)) {
     // Android's /system/bin programs that gesher-exec provides (docs/exec.md).
