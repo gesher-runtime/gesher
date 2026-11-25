@@ -257,8 +257,8 @@ closed three of this layer's leftovers:
   `realpath`, `statfs`) fails with `EPERM`, as Linux refuses it to a process
   without `CAP_CHECKPOINT_RESTORE`.
 - `getdents64` keeps a stream on the open file description. On disk it is a
-  directory handle of its own (the fd's directory opened by its file ID, not
-  inheritable) that it enumerates with `GetFileInformationByHandleEx`, with a
+  directory handle of its own (the fd's directory opened by its 128-bit file
+  ID, not inheritable) that it enumerates with `GetFileInformationByHandleEx`, with a
   4 KB first batch, then 64 KB, freed once the listing ends. For `/proc` it
   is the directory's entries. A call that continues where the last one
   stopped reads on; one at a position the stream did not stop at (`lseek`, a
@@ -270,12 +270,17 @@ closed three of this layer's leftovers:
   entries out between them; calls on other fds do not wait. A call resolves
   its fd once, so a `close` and `open` of that number by another thread does
   not turn it to another file. Nothing of a stream is in the fork set, so a
-  fork never waits for a `getdents64`; a forked child closes the stream
-  handles it inherited and gets new streams, which open the directory again
-  at the shared position. A directory removed while the fd is open lists as
-  empty. The fd's file position is the index of the next entry (`d_off` is
-  that ordinal); `d_ino` is the file ID `stat` reports as `st_ino` (a `/proc`
-  entry's position).
+  fork never waits for a `getdents64`. Each stream handle lives in a slot
+  registered (under a leaf lock held only to add or remove a slot) before
+  the handle is opened, and is stored in it as soon as it is open; a forked
+  child closes the slots' handles it inherited and gets new streams, which
+  open the directory again at the shared position. Only a fork in the few
+  instructions between an open's return and that store, or between a
+  slot's removal and its close, leaves the child one stream handle. A
+  directory removed while the fd is open lists as empty. The fd's file
+  position is the index of the next entry (`d_off` is that ordinal); `d_ino`
+  is the inode `stat` reports as `st_ino`: the file ID on disk, procfs's
+  inode of the name for `/proc`.
 - Positions are ordinals, not cookies: after an `lseek` to a `d_off`, or in a
   forked child, the stream counts entries from the start again, so an entry
   removed before that point meanwhile shifts the rest and one live entry may

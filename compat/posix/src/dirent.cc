@@ -173,38 +173,47 @@ unsigned char EntryType(DWORD attributes, DWORD reparse_tag) {
 //
 // Fork: nothing of a stream is in the fork set, so a fork never waits for a
 // getdents64 (a slow volume, a long skip, a /proc snapshot that takes the
-// mman or fd-table locks). The directory handles are listed in a registry
-// under g_attach_lock, a leaf held for a few instructions; a forked child
-// closes the ones it inherited and starts a new generation: a stream of an
-// older one is replaced on its next use, and never touched or freed (its
-// state and lock may be a parent's thread's, mid-call).
+// mman or fd-table locks). Every source's directory handle lives in a slot
+// that is registered under g_attach_lock (a leaf, held only to add or remove
+// a slot) before the handle is opened, and the handle is stored into it as
+// soon as it is open: a fork sees each directory handle of a stream in its
+// slot, apart from the few instructions between an open's return and that
+// store. A forked child closes the slots' handles it inherited and starts a
+// new generation: a stream of an older one is replaced on its next use, and
+// never touched or freed (its state and lock may be a parent's thread's,
+// mid-call; its slot stays valid memory, which the child reads).
 
-// Taken only to attach a stream or (un)register a handle, never while
-// waiting on anything else: a leaf in the fork set.
+// Taken only to attach a stream or add or remove a slot, never while waiting
+// on anything else: a leaf in the fork set.
 std::mutex g_attach_lock;
-std::vector<HANDLE>* g_stream_handles = nullptr;  // under g_attach_lock
+std::vector<std::atomic<HANDLE>*>* g_handle_slots = nullptr;  // under g_attach_lock
 std::atomic<unsigned> g_generation{0};
 
-void RegisterHandle(HANDLE h) {
+void RegisterSlot(std::atomic<HANDLE>* slot) {
   std::lock_guard<std::mutex> guard(g_attach_lock);
-  if (g_stream_handles == nullptr) g_stream_handles = new std::vector<HANDLE>();
-  g_stream_handles->push_back(h);
+  if (g_handle_slots == nullptr) g_handle_slots = new std::vector<std::atomic<HANDLE>*>();
+  g_handle_slots->push_back(slot);
 }
 
-// Closed under the lock, so that a fork sees it either registered and open,
-// or neither.
-void CloseRegisteredHandle(HANDLE h) {
-  std::lock_guard<std::mutex> guard(g_attach_lock);
-  if (g_stream_handles != nullptr) {
-    for (size_t i = 0; i < g_stream_handles->size(); ++i) {
-      if ((*g_stream_handles)[i] == h) {
-        (*g_stream_handles)[i] = g_stream_handles->back();
-        g_stream_handles->pop_back();
-        break;
+// Takes the slot and its handle out of the registry, then closes the handle
+// with no lock held (closing can do I/O). A fork in the few instructions
+// between the two leaves the child that one inherited handle.
+void CloseSlot(std::atomic<HANDLE>* slot) {
+  HANDLE h;
+  {
+    std::lock_guard<std::mutex> guard(g_attach_lock);
+    if (g_handle_slots != nullptr) {
+      for (size_t i = 0; i < g_handle_slots->size(); ++i) {
+        if ((*g_handle_slots)[i] == slot) {
+          (*g_handle_slots)[i] = g_handle_slots->back();
+          g_handle_slots->pop_back();
+          break;
+        }
       }
     }
+    h = slot->exchange(nullptr);
   }
-  CloseHandle(h);
+  if (h != nullptr) CloseHandle(h);
 }
 
 constexpr size_t kFirstBatch = 4 * 1024;  // a small directory's whole listing
@@ -213,7 +222,8 @@ constexpr size_t kBatch = 64 * 1024;
 struct Source {
   std::string path;
   long long position = 0;  // entries read so far
-  HANDLE handle = nullptr;  // on disk, registered
+  std::atomic<HANDLE> handle{nullptr};  // on disk: the registered slot
+  bool registered = false;
   bool restart = true;
   bool ended = false;
   std::vector<unsigned char> batch;  // FILE_ID_BOTH_DIR_INFO records
@@ -222,12 +232,12 @@ struct Source {
   DIR* dir = nullptr;  // /proc
 
   ~Source() {
-    if (handle != nullptr) CloseRegisteredHandle(handle);
+    if (registered) CloseSlot(&handle);
     if (dir != nullptr) closedir(dir);
   }
 
-  // The next entry (its d_ino: the file ID on disk, 0 when there is none),
-  // or false at the end (errno 0) or on an error (errno set).
+  // The next entry (its d_ino: the inode stat reports for it, 0 when there
+  // is none), or false at the end (errno 0) or on an error (errno set).
   bool Read(std::string* name, unsigned char* type, unsigned long long* ino) {
     if (dir != nullptr) {
       errno = 0;
@@ -235,14 +245,23 @@ struct Source {
       if (e == nullptr) return false;
       *name = e->d_name;
       *type = e->d_type;
-      *ino = 0;
+      // procfs's inode of the entry's name, as stat and lstat report it.
+      std::string entry = path;
+      if (*name == "..") {
+        const size_t slash = entry.rfind('/');
+        entry = slash == 0 || slash == std::string::npos ? std::string("/") : entry.substr(0, slash);
+      } else if (*name != ".") {
+        entry += "/" + *name;
+      }
+      *ino = gesher::procfs::Inode(entry);
       ++position;
       return true;
     }
     if (!batch_valid) {
-      if (ended || handle == nullptr) return errno = 0, false;
+      const HANDLE h = handle.load(std::memory_order_relaxed);
+      if (ended || h == nullptr) return errno = 0, false;
       batch.resize(restart ? kFirstBatch : kBatch);
-      if (!GetFileInformationByHandleEx(handle,
+      if (!GetFileInformationByHandleEx(h,
                                         restart ? FileIdBothDirectoryRestartInfo
                                                 : FileIdBothDirectoryInfo,
                                         batch.data(), static_cast<DWORD>(batch.size()))) {
@@ -277,46 +296,67 @@ struct Source {
   }
 };
 
-// The fd's directory again, for a new source: by its file ID (the very
-// directory, whatever its name is now), else by its name, checked to be the
-// same directory. Not inheritable. nullptr with *gone when it has been
-// removed (an empty listing, as Linux's for a removed directory).
-HANDLE OpenDirectory(HANDLE fd_handle, bool* gone) {
+// The file identity (volume serial, 128-bit file ID) of a handle: FileIdInfo,
+// or on a file system without it (FAT) the 32-bit serial and 64-bit index
+// widened to that form, as system_linker.cc keeps identities.
+bool IdentityOf(HANDLE h, FILE_ID_INFO* id) {
+  if (GetFileInformationByHandleEx(h, FileIdInfo, id, sizeof(*id))) return true;
+  BY_HANDLE_FILE_INFORMATION info;
+  if (!GetFileInformationByHandle(h, &info)) return false;
+  *id = {};
+  id->VolumeSerialNumber = info.dwVolumeSerialNumber;
+  const unsigned long long index = (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) |
+                                   info.nFileIndexLow;
+  memcpy(id->FileId.Identifier, &index, sizeof(index));
+  return true;
+}
+
+// Opens the fd's directory again into `slot` (registered beforehand): by its
+// file ID (the very directory, whatever its name is now), else by its name,
+// checked to be the same directory (a few tries, should it be renamed and
+// replaced meanwhile; then ENOENT). Not inheritable. Each handle goes into
+// the slot as soon as it is open. False with *gone when the directory has
+// been removed (an empty listing, as Linux's for a removed directory).
+bool OpenDirectory(HANDLE fd_handle, std::atomic<HANDLE>* slot, bool* gone) {
   *gone = false;
   constexpr DWORD kAccess = FILE_LIST_DIRECTORY | SYNCHRONIZE;
   constexpr DWORD kShare = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-  BY_HANDLE_FILE_INFORMATION fd_info;
-  if (!GetFileInformationByHandle(fd_handle, &fd_info)) return gesher::FailWithLastError(), nullptr;
+  FILE_ID_INFO fd_id;
+  if (!IdentityOf(fd_handle, &fd_id)) return gesher::FailWithLastError(), false;
   FILE_STANDARD_INFO standard;
   if (GetFileInformationByHandleEx(fd_handle, FileStandardInfo, &standard, sizeof(standard)) &&
       standard.DeletePending) {
     *gone = true;
-    return nullptr;
+    return false;
   }
   FILE_ID_DESCRIPTOR id = {};
   id.dwSize = sizeof(id);
-  id.Type = FileIdType;
-  id.FileId.QuadPart = static_cast<LONGLONG>((static_cast<unsigned long long>(fd_info.nFileIndexHigh) << 32) |
-                                             fd_info.nFileIndexLow);
+  id.Type = ExtendedFileIdType;
+  id.ExtendedFileId = fd_id.FileId;
   HANDLE h = OpenFileById(fd_handle, &id, kAccess, kShare, nullptr, FILE_FLAG_BACKUP_SEMANTICS);
-  if (h != INVALID_HANDLE_VALUE) return h;
-  std::wstring windows(32768, L'\0');
-  const DWORD n = GetFinalPathNameByHandleW(fd_handle, windows.data(), 32768,
-                                            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  if (n == 0 || n >= 32768) return gesher::FailWithLastError(), nullptr;
-  windows.resize(n);
-  h = CreateFileW(windows.c_str(), kAccess, kShare, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS,
-                  nullptr);
-  if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError(), nullptr;
-  BY_HANDLE_FILE_INFORMATION info;
-  if (!GetFileInformationByHandle(h, &info) ||
-      info.dwVolumeSerialNumber != fd_info.dwVolumeSerialNumber ||
-      info.nFileIndexHigh != fd_info.nFileIndexHigh || info.nFileIndexLow != fd_info.nFileIndexLow) {
-    // Renamed and replaced between the two calls: not the fd's directory.
-    CloseHandle(h);
-    return errno = ESTALE, nullptr;
+  if (h != INVALID_HANDLE_VALUE) {
+    slot->store(h);
+    return true;
   }
-  return h;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    std::wstring windows(32768, L'\0');
+    const DWORD n = GetFinalPathNameByHandleW(fd_handle, windows.data(), 32768,
+                                              FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n == 0 || n >= 32768) return gesher::FailWithLastError(), false;
+    windows.resize(n);
+    h = CreateFileW(windows.c_str(), kAccess, kShare, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS,
+                    nullptr);
+    if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError(), false;
+    slot->store(h);
+    FILE_ID_INFO opened;
+    if (IdentityOf(h, &opened) && opened.VolumeSerialNumber == fd_id.VolumeSerialNumber &&
+        memcmp(opened.FileId.Identifier, fd_id.FileId.Identifier, sizeof(opened.FileId.Identifier)) == 0) {
+      return true;
+    }
+    // Renamed and replaced between the two calls: not the fd's directory.
+    CloseHandle(slot->exchange(nullptr));
+  }
+  return errno = ENOENT, false;
 }
 
 // A new source for the fd's directory, at `position` (fewer when the listing
@@ -330,12 +370,10 @@ std::unique_ptr<Source> MakeSource(HANDLE fd_handle, bool on_disk, const std::st
     if (source->dir == nullptr) return nullptr;
   } else {
     bool gone;
-    HANDLE h = OpenDirectory(fd_handle, &gone);
-    if (h == nullptr && !gone) return nullptr;
-    if (h != nullptr) {
-      RegisterHandle(h);
-      source->handle = h;
-    } else {
+    RegisterSlot(&source->handle);
+    source->registered = true;
+    if (!OpenDirectory(fd_handle, &source->handle, &gone)) {
+      if (!gone) return nullptr;
       source->ended = true;  // removed: nothing to list
     }
   }
@@ -389,11 +427,12 @@ std::shared_ptr<DirectoryStream> StreamOf(const std::shared_ptr<gesher::OpenFile
 // handles it inherited are closed (the parent's streams' are no use to it,
 // and a program it starts must not get them), and a new generation begins.
 void AttachForkChild(void* lock) {
-  if (g_stream_handles != nullptr) {
-    for (HANDLE h : *g_stream_handles) {
-      if (gesher::InheritedAtFork(h)) CloseHandle(h);
+  if (g_handle_slots != nullptr) {
+    for (std::atomic<HANDLE>* slot : *g_handle_slots) {
+      const HANDLE h = slot->load();
+      if (h != nullptr && gesher::InheritedAtFork(h)) CloseHandle(h);
     }
-    g_stream_handles->clear();
+    g_handle_slots->clear();
   }
   g_generation.fetch_add(1);
   new (lock) std::mutex();
@@ -449,6 +488,16 @@ bool FifoFilePath(int fd, std::wstring* windows_path, bool* is_fifo) {
   buffer.resize(n);
   *windows_path = std::move(buffer);
   return true;
+}
+
+// For the contract test, with the fork set held (so g_attach_lock too): the
+// directory handles the stream slots hold, as a forked child would see them.
+void StreamHandlesWhileForkSetHeld(std::vector<HANDLE>* handles) {
+  handles->clear();
+  if (g_handle_slots == nullptr) return;
+  for (std::atomic<HANDLE>* slot : *g_handle_slots) {
+    if (HANDLE h = slot->load()) handles->push_back(h);
+  }
 }
 
 int ProcfsFollow(const char* path, std::string* linux_path, int* fd, std::string* target) {

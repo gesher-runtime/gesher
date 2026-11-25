@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -33,6 +34,47 @@
 #include <gesher/fork.h>
 #include <gesher/procfs_fd.h>
 #include <gesher/process_name.h>
+
+namespace gesher {
+// dirent.cc, for this test: the stream slots' handles, with the fork set held.
+void StreamHandlesWhileForkSetHeld(std::vector<HANDLE>* handles);
+}  // namespace gesher
+
+// This process's handles with exactly `access` granted
+// (SystemExtendedHandleInformation).
+static std::vector<HANDLE> HandlesWithAccess(ULONG access) {
+  using Query = LONG(NTAPI*)(ULONG, void*, ULONG, ULONG*);
+  static const auto query = reinterpret_cast<Query>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation")));
+  struct Entry {
+    void* object;
+    ULONG_PTR pid;
+    ULONG_PTR value;
+    ULONG granted;
+    USHORT creator;
+    USHORT type;
+    ULONG attributes;
+    ULONG reserved;
+  };
+  std::vector<HANDLE> found;
+  std::vector<unsigned char> buffer(1 << 22);
+  ULONG needed = 0;
+  LONG status;
+  while ((status = query(64, buffer.data(), static_cast<ULONG>(buffer.size()), &needed)) ==
+         static_cast<LONG>(0xC0000004)) {
+    buffer.resize(buffer.size() * 2);
+  }
+  if (status < 0) return found;
+  ULONG_PTR count;
+  memcpy(&count, buffer.data(), sizeof(count));
+  const auto* entries = reinterpret_cast<const Entry*>(buffer.data() + 2 * sizeof(ULONG_PTR));
+  for (ULONG_PTR i = 0; i < count; ++i) {
+    if (entries[i].pid == GetCurrentProcessId() && entries[i].granted == access) {
+      found.push_back(reinterpret_cast<HANDLE>(entries[i].value));
+    }
+  }
+  return found;
+}
 
 static int g_failed = 0;
 static int g_checks = 0;
@@ -562,6 +604,32 @@ static void TestProcfsDescriptors() {
   std::vector<std::string> names = Dents(dir, 64);  // a record or two per call
   CHECK(Has(names, ".") && Has(names, "..") && Has(names, "maps") && Has(names, "status") &&
         Has(names, "map_files") && Has(names, "fd"));
+  {
+    // d_ino is the inode stat and lstat report for each name.
+    CHECK(lseek(dir, 0, SEEK_SET) == 0);
+    char all[4096];
+    const ssize_t got = getdents64(dir, all, sizeof(all));
+    int checked = 0, matched = 0;
+    for (ssize_t at = 0; at < got;) {
+      unsigned short reclen;
+      unsigned long long ino;
+      memcpy(&reclen, all + at + 16, 2);
+      memcpy(&ino, all + at, 8);
+      const std::string name = all + at + 19;
+      if (name != "..") {
+        struct stat st = {};
+        ++checked;
+        const int r = name == "." ? stat("/proc/self", &st) : lstat(("/proc/self/" + name).c_str(), &st);
+        if (r == 0 &&
+            static_cast<unsigned long long>(st.st_ino) == ino) {
+          ++matched;
+        }
+      }
+      at += reclen;
+    }
+    CHECK_MSG(checked > 5 && matched == checked, "a /proc entry's d_ino is its st_ino");
+    lseek(dir, 0, SEEK_SET);
+  }
   CHECK_MSG(lseek(dir, 0, SEEK_SET) == 0 && Dents(dir, 4096) == names,
             "lseek to 0 rewinds; the buffer size does not change the listing");
   char tiny[16];
@@ -915,6 +983,57 @@ static void TestForkWhileProcReaders() {
   CHECK_MSG(worst < 1000.0, "and promptly");
 }
 
+// Every directory handle of a getdents64 stream is in its registered slot
+// whenever a fork holds its lock set (a forked child closes those it
+// inherited): threads reopening streams all the while (lseek to 0 and read)
+// never have one open outside a slot.
+static void TestForkSeesStreamHandles() {
+  printf("Testing that a fork sees every stream handle...\n");
+  wchar_t temp[MAX_PATH];
+  GetTempPathW(MAX_PATH, temp);
+  char narrow[MAX_PATH * 3];
+  WideCharToMultiByte(CP_UTF8, 0, temp, -1, narrow, sizeof(narrow), nullptr, nullptr);
+  // Handles with that access before any stream: not the streams' (the
+  // process's own, such as a directory the loader keeps open).
+  constexpr ULONG kStreamAccess = FILE_LIST_DIRECTORY | SYNCHRONIZE;
+  const std::vector<HANDLE> before = HandlesWithAccess(kStreamAccess);
+  std::atomic<bool> stop{false};
+  std::vector<std::thread> readers;
+  for (int i = 0; i < 8; ++i) {
+    readers.emplace_back([&stop, &narrow]() {
+      const int fd = open(narrow, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      char part[256];
+      while (fd >= 0 && !stop.load()) {
+        lseek(fd, 0, SEEK_SET);
+        getdents64(fd, part, sizeof(part));
+      }
+      if (fd >= 0) close(fd);
+    });
+  }
+  Sleep(50);
+  int outside = 0, seen = 0;
+  for (int round = 0; round < 100; ++round) {
+    if (gesher::AcquireForkLocks(nullptr, nullptr, 5000) != 0) continue;
+    std::vector<HANDLE> registered;
+    gesher::StreamHandlesWhileForkSetHeld(&registered);
+    const std::vector<HANDLE> open = HandlesWithAccess(kStreamAccess);
+    gesher::ReleaseForkLocks(false);
+    seen += static_cast<int>(registered.size());
+    for (HANDLE h : open) {
+      if (std::find(registered.begin(), registered.end(), h) == registered.end() &&
+          std::find(before.begin(), before.end(), h) == before.end()) {
+        ++outside;
+      }
+    }
+  }
+  stop = true;
+  for (std::thread& t : readers) t.join();
+  printf("  100 fork-set rounds: %d stream handles in slots, %d directory handles outside\n", seen,
+         outside);
+  CHECK_MSG(seen > 0, "the readers' streams were open during the rounds");
+  CHECK_MSG(outside <= 1, "a fork finds every stream handle in its slot");
+}
+
 // getdents64 on a directory on disk.
 static void TestDiskGetdents() {
   printf("Testing getdents64 on a directory on disk...\n");
@@ -1107,6 +1226,7 @@ int main(int argc, char** argv) {
   TestProcfsTimes();
   TestDiskGetdents();
   TestForkWhileProcReaders();
+  TestForkSeesStreamHandles();
 
   if (g_failed == 0) {
     printf("procfs & sysfs contracts: all passed (%d checks)\n", g_checks);
