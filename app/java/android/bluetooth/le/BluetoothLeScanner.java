@@ -160,6 +160,9 @@ public final class BluetoothLeScanner {
         Log.i(TAG, "LE scan started");
         long[] meta = new long[6];
         long housekeepingAt = 0;
+        int received = 0;
+        int delivered = 0;
+        Set<String> unique = new HashSet<>();
         try {
             for (;;) {
                 synchronized (sLock) {
@@ -172,8 +175,12 @@ public final class BluetoothLeScanner {
                 meta[5] = 0;
                 byte[] data = WindowsBluetooth.nativeScanNext(scan, 200, meta);
                 if (data != null) {
+                    received++;
                     ScanResult report = result(data, meta);
-                    if (report != null) deliver(report);
+                    if (report != null) {
+                        unique.add(report.getDevice().getAddress());
+                        delivered += deliver(report);
+                    }
                 } else if (meta[5] != 0) {
                     Log.w(TAG, "Windows ended the LE scan: " + WindowsBluetooth.hresult((int) meta[5]));
                     failAll(ScanCallback.SCAN_FAILED_INTERNAL_ERROR);
@@ -187,7 +194,8 @@ public final class BluetoothLeScanner {
             }
         } finally {
             WindowsBluetooth.nativeScanStop(scan);
-            Log.i(TAG, "LE scan stopped");
+            Log.i(TAG, "LE scan stopped (received " + received + " ads from "
+                    + unique.size() + " devices, delivered " + delivered + ")");
         }
     }
 
@@ -228,13 +236,15 @@ public final class BluetoothLeScanner {
                 ScanResult.PERIODIC_INTERVAL_NOT_PRESENT, record, SystemClock.elapsedRealtimeNanos());
     }
 
-    private static void deliver(ScanResult result) {
+    private static int deliver(ScanResult result) {
         String address = result.getDevice().getAddress();
         List<Runnable> calls = new ArrayList<>();
+        int delivered = 0;
         synchronized (sLock) {
-            if (sThread != Thread.currentThread()) return;
+            if (sThread != Thread.currentThread()) return 0;
             for (Client c : sActiveClients) {
                 if (!c.mayReceive || !c.matches(result)) continue;
+                delivered++;
                 ScanResult forClient = withContext(result, c.context);
                 int type = c.callbackType();
                 if ((type & (ScanSettings.CALLBACK_TYPE_FIRST_MATCH
@@ -262,6 +272,7 @@ public final class BluetoothLeScanner {
         }
         Handler h = handler();
         for (Runnable r : calls) h.post(r);
+        return delivered;
     }
 
     private static ScanResult withContext(ScanResult r, Context context) {
