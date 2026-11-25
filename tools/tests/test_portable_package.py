@@ -43,6 +43,11 @@ class PortablePackageTests(unittest.TestCase):
             path.write_bytes(('fixture bytes for ' + name).encode())
         # This is deliberately outside the installer's production manifest.
         (self.build / 'unshipped-test-fixture.jar').write_bytes(b'never ship this')
+        # Debug/retrace and compile-only outputs must not leak into a release.
+        for name in ('gesher-app-mapping.txt', 'gesher-camera-mapping.txt',
+                     'gesher-tts-mapping.txt', 'gesher-stt-mapping.txt',
+                     'gesher-app-classes.jar'):
+            (self.build / name).write_bytes(b'build-only artifact')
 
     def package(self, *extra, success=True, version=VERSION):
         result = subprocess.run(
@@ -77,6 +82,10 @@ class PortablePackageTests(unittest.TestCase):
                          'App/framework/x86_64/boot.art', 'App/gesher-tts.apk', 'App/gesher-stt.apk'):
                 self.assertIn(prefix + name, names)
             self.assertNotIn(prefix + 'App/unshipped-test-fixture.jar', names)
+            for name in ('gesher-app-mapping.txt', 'gesher-camera-mapping.txt',
+                         'gesher-tts-mapping.txt', 'gesher-stt-mapping.txt',
+                         'gesher-app-classes.jar'):
+                self.assertNotIn(prefix + 'App/' + name, names)
             self.assertEqual(z.read(prefix + 'Gesher.exe'), (self.build / 'gesher-launch.exe').read_bytes())
             self.assertEqual(z.read(prefix + 'App/gesher-launch.exe'), (self.build / 'gesher-launch.exe').read_bytes())
             self.assertIn(b'Version=0.9.1', z.read(prefix + 'App/gesher-version.ini'))

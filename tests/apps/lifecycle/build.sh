@@ -10,7 +10,8 @@
 #
 # aapt2 compiles the resources and links them with the manifest against
 # framework-res.apk, which also writes R.java; javac compiles the app against
-# framework.jar's classes (and libcore's java.base, as app/build.sh does); d8 dexes it;
+# framework.jar's classes (and libcore's java.base, as app/build.sh does); R8 shrinks
+# apps with proguard-rules.pro (GESHER_R8=0 opts out), otherwise D8 dexes them;
 # the dex is added to the APK and the APK is zip-aligned. SIGN_TEST_APK=1 also signs
 # the fixture with a disposable real certificate for verified-identity contracts.
 # Other callers retain the existing unsigned fixture output.
@@ -110,7 +111,8 @@ javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-optio
   -cp "$classpath" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
 (cd "$work" && find classes -name '*.class' > dex.txt)
 if [[ ${GESHER_R8:-1} == 1 && -f "$app/proguard-rules.pro" ]]; then
-  (cd "$work/classes" && jar --create --file "$(native "$work/r8-input.jar")" --no-manifest $(find . -name '*.class'))
+  jar --create --file "$(native "$work/r8-input.jar")" --no-manifest \
+    -C "$(native "$work/classes")" .
   r8_libs=(--lib "$(native "$framework")")
   if [[ -n $app_classes ]]; then r8_libs+=(--lib "$(native "$app_classes")"); fi
   if [[ -n $core ]]; then
@@ -125,9 +127,11 @@ if [[ ${GESHER_R8:-1} == 1 && -f "$app/proguard-rules.pro" ]]; then
     "${r8_libs[@]}" \
     --pg-conf "$(native "$work/aapt-rules.pro")" \
     --pg-conf "$(native "$app/proguard-rules.pro")" \
+    --pg-map-output "$(native "$out/$name-mapping.txt")" \
     --output "$(native "$work/dex")" \
     "$(native "$work/r8-input.jar")"
 else
+  rm -f "$out/$name-mapping.txt"
   (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
     --output dex @dex.txt)
 fi

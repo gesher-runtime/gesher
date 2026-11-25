@@ -62,6 +62,9 @@ if(GESHER_STRIP)
   target_link_options(gesher_arm64 PRIVATE -s)
 endif()
 if(GESHER_HARDEN)
+  # Clang matches prefix-map paths literally; normalize the repository root
+  # before passing it rather than leaving /compat/arm64/dll/../../.. in it.
+  get_filename_component(_gesher_source_root "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
   target_compile_options(gesher_arm64 PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
     $<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>
@@ -69,8 +72,8 @@ if(GESHER_HARDEN)
     -ffunction-sections
     -fdata-sections
     -fno-ident
-    -fmerge-all-constants
-    "-ffile-prefix-map=${CMAKE_CURRENT_LIST_DIR}/../../..=."
+    # Preserve distinct constant objects and per-call local object identity.
+    "-ffile-prefix-map=${_gesher_source_root}=."
     $<$<CONFIG:Release>:-g0>)
   target_link_options(gesher_arm64 PRIVATE
     -Wl,--exclude-all-symbols

@@ -31,8 +31,9 @@ add_compile_options(-mno-ms-bitfields -fno-exceptions
   $<$<COMPILE_LANGUAGE:CXX>:-fsized-deallocation>)
 # Everything links statically: one self-contained .exe per tool. Executables
 # are stripped by default; objects keep their debug info unless Release/hardened.
-# Local builds that need symbols (addr2line on crash reports) turn GESHER_STRIP
-# and GESHER_HARDEN off.
+# Local builds that need line information (addr2line on crash reports) use
+# -DCMAKE_BUILD_TYPE=RelWithDebInfo -DGESHER_STRIP=OFF. Hardening can remain on:
+# it removes debug information only in Release configurations.
 option(GESHER_STRIP "Strip executables" ON)
 option(GESHER_HARDEN "Harden binaries against reverse engineering" ON)
 add_link_options(-static)
@@ -47,7 +48,7 @@ if(GESHER_HARDEN)
     -ffunction-sections
     -fdata-sections
     -fno-ident
-    -fmerge-all-constants
+    # Preserve distinct constant objects and per-call local object identity.
     "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
     $<$<CONFIG:Release>:-g0>)
   add_link_options(
