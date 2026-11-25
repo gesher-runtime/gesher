@@ -316,12 +316,115 @@ public final class SettingsProviderContractTest {
         provider.call("DELETE_system", "observe", null);
         check(seen.equals(Arrays.asList(item("observe"), item("observe"), item("observe"))), "Changed-row notifications only");
     }
+    /** location_mode / location_providers_allowed follow the location service's live state. */
+    private static void location(ContentProvider provider) throws Exception {
+        Class<?> type = provider.getClass();
+        Class<?> stateType = Class.forName("com.gesher.server.SettingsProvider$LocationState");
+        java.lang.reflect.Method set = type.getDeclaredMethod("setLocationState", stateType);
+        java.lang.reflect.Method changed = type.getDeclaredMethod("locationStateChanged");
+        set.setAccessible(true); changed.setAccessible(true);
+        Uri secure = Uri.parse("content://settings/secure");
+        String mode = Settings.Secure.LOCATION_MODE, allowed = Settings.Secure.LOCATION_PROVIDERS_ALLOWED;
+        java.util.function.Function<String, String> get = name ->
+                provider.call("GET_secure", name, null).getString("value");
+        // Without a location service the stored rows answer, as before.
+        set.invoke(null, (Object) null);
+        check("0".equals(get.apply(mode)), "Stored location_mode without a location service");
+        check("".equals(get.apply(allowed)), "Stored location_providers_allowed default");
+        boolean[] enabled = {true}; String[] providers = {"network,gps"}; boolean[] fail = {false};
+        Object state = java.lang.reflect.Proxy.newProxyInstance(stateType.getClassLoader(),
+                new Class<?>[]{stateType}, (proxy, method, arguments) -> {
+                    if (fail[0]) throw new IllegalStateException("location service unavailable");
+                    switch (method.getName()) {
+                        case "locationEnabled": return enabled[0];
+                        case "providersAllowed": return providers[0];
+                        default: throw new AssertionError(method);
+                    }
+                });
+        try {
+            set.invoke(null, state);
+            check("3".equals(get.apply(mode)), "location_mode on: LOCATION_MODE_ON");
+            check(Settings.Secure.LOCATION_MODE_ON == 3, "LOCATION_MODE_ON value");
+            check("network,gps".equals(get.apply(allowed)), "Live location_providers_allowed");
+            try (Cursor c = provider.query(Uri.withAppendedPath(secure, mode), new String[]{"name", "value"}, null, null, null)) {
+                check(c.getCount() == 1 && c.moveToFirst() && "3".equals(c.getString(1)), "Item query: live location_mode");
+            }
+            try (Cursor c = provider.query(secure, new String[]{"value"}, "name=?", new String[]{allowed}, null)) {
+                check(c.moveToFirst() && "network,gps".equals(c.getString(0)), "Selection query: live providers");
+            }
+            boolean listedMode = false, listedAllowed = false;
+            try (Cursor c = provider.query(secure, new String[]{"name", "value"}, null, null, null)) {
+                while (c.moveToNext()) {
+                    if (mode.equals(c.getString(0))) listedMode = "3".equals(c.getString(1));
+                    if (allowed.equals(c.getString(0))) listedAllowed = "network,gps".equals(c.getString(1));
+                }
+            }
+            check(listedMode && listedAllowed, "Table query: live location rows");
+            ArrayList<String> list = provider.call("LIST_secure", null, null).getStringArrayList("result_settings_list");
+            check(list.contains(mode + "=3") && list.contains(allowed + "=network,gps"), "LIST: live location rows " + list);
+            // Windows turns location off: the next read says so.
+            enabled[0] = false; providers[0] = "";
+            check("0".equals(get.apply(mode)), "location_mode off: LOCATION_MODE_OFF");
+            check("".equals(get.apply(allowed)), "No providers allowed when off");
+            // Windows' location setting owns them: writes neither take effect nor are stored.
+            enabled[0] = true; providers[0] = "network";
+            provider.call("PUT_secure", mode, value("0"));
+            check("3".equals(get.apply(mode)), "Ignored location_mode PUT");
+            check(provider.call("DELETE_secure", mode, null).getInt("result_rows_deleted") == 0, "Ignored location_mode DELETE");
+            check(provider.insert(secure, values(allowed, "gps")) == null, "Ignored location_providers_allowed insert");
+            check(provider.update(Uri.withAppendedPath(secure, mode), values(mode, "1"), null, null) == 0, "Ignored location_mode update");
+            check(provider.delete(Uri.withAppendedPath(secure, allowed), null, null) == 0, "Ignored providers delete");
+            check("network".equals(get.apply(allowed)), "Live providers after ignored writes");
+            // Other secure rows are untouched by the live rows.
+            provider.call("PUT_secure", "contract_secure", value("kept"));
+            check("kept".equals(get.apply("contract_secure")), "Other secure rows still stored");
+            // A failing location service: the stored rows answer instead of an error.
+            fail[0] = true;
+            check("0".equals(get.apply(mode)), "Stored location_mode when the service fails");
+            fail[0] = false;
+            // State changes notify observers of both rows, outside the provider monitor.
+            ArrayList<Uri> seen = new ArrayList<>();
+            class TestContext extends ContextWrapper {
+                ContentResolver resolver;
+                TestContext() { super(null); }
+                @Override public String getPackageName() { return "android"; }
+                @Override public String getOpPackageName() { return "android"; }
+                @Override public int getUserId() { return 0; }
+                @Override public ApplicationInfo getApplicationInfo() { return new ApplicationInfo(); }
+                @Override public Object getSystemService(String name) { return null; }
+                @Override public ContentResolver getContentResolver() { return resolver; }
+            }
+            TestContext context = new TestContext();
+            context.resolver = new ContentResolver(context) {
+                @Override protected IContentProvider acquireProvider(Context c, String name) { throw new AssertionError(); }
+                @Override protected IContentProvider acquireUnstableProvider(Context c, String name) { throw new AssertionError(); }
+                @Override public boolean releaseProvider(IContentProvider p) { return true; }
+                @Override public boolean releaseUnstableProvider(IContentProvider p) { return true; }
+                @Override public void unstableProviderDied(IContentProvider p) { }
+                @Override public void notifyChange(Uri uri, ContentObserver observer) {
+                    check(!Thread.holdsLock(provider), "Location observer called under provider monitor");
+                    seen.add(uri);
+                }
+            };
+            Field info = type.getDeclaredField("mInfo"); info.setAccessible(true);
+            provider.attachInfo(context, (ProviderInfo) info.get(provider));
+            seen.clear();
+            changed.invoke(null);
+            check(seen.equals(Arrays.asList(Uri.withAppendedPath(secure, mode), Uri.withAppendedPath(secure, allowed))),
+                    "Location change notifies both rows " + seen);
+        } finally {
+            set.invoke(null, (Object) null);
+        }
+        // Without the location service again, writes reach the stored row as before.
+        provider.call("PUT_secure", mode, value("1"));
+        check("1".equals(get.apply(mode)), "Stored location_mode writable without a location service");
+    }
     public static void contracts(String group) throws Exception {
         Field clock = Class.forName("com.gesher.app.locale.SystemLocale").getDeclaredField("sIs24Hour");
         clock.setAccessible(true); clock.set(null, Boolean.TRUE); // Declared host locale boundary.
         File directory = Files.createTempDirectory("gesher-settings-contract-").toFile();
         try {
-            for (String name : new String[]{"query", "crud", "call", "persistence", "transient", "limits", "observers"}) {
+            for (String name : new String[]{"query", "crud", "call", "persistence", "transient", "limits", "observers", "location"}) {
                 if (!group.equals("all") && !group.equals(name)) continue;
                 File file = new File(directory, name + ".bin"); ContentProvider p = provider(file);
                 switch (name) {
@@ -329,6 +432,7 @@ public final class SettingsProviderContractTest {
                     case "call": call(p); break; case "persistence": persistence(file); break;
                     case "transient": transientCheckerRows(file); break;
                     case "limits": limits(p); break; case "observers": observers(p); break;
+                    case "location": location(p); break;
                     default: throw new AssertionError(name);
                 }
             }

@@ -107,10 +107,38 @@ public final class LocationManagerService extends ILocationManager.Default {
     private long mPollInterval;
     /** The enabled state each provider last reported to the registrations. */
     private final Map<String, Boolean> mReportedEnabled = new HashMap<>();
+    /** isLocationEnabled's last reported answer (MODE_CHANGED, location_mode); null: none yet. */
+    private Boolean mReportedLocationEnabled;
 
     public LocationManagerService(PackageManagerService pm, ActivityManagerService am) {
         mPm = pm;
         mAm = am;
+        // Settings.Secure location_mode / location_providers_allowed answer this service's
+        // state, as Android's location service keeps them (react-native-wifi-reborn reads
+        // location_mode before every Wi-Fi scan).
+        SettingsProvider.setLocationState(new SettingsProvider.LocationState() {
+            @Override
+            public boolean locationEnabled() {
+                boolean enabled = isLocationEnabled();
+                Boolean reported;
+                synchronized (mLock) {
+                    reported = mReportedLocationEnabled;
+                }
+                // A change a reader saw first: observers and receivers learn of it too.
+                if (reported != null && reported != enabled) {
+                    try {
+                        mExecutor.execute(LocationManagerService.this::checkEnabledChanges);
+                    } catch (java.util.concurrent.RejectedExecutionException shutDown) {
+                    }
+                }
+                return enabled;
+            }
+
+            @Override
+            public String providersAllowed() {
+                return LocationManagerService.this.providersAllowed();
+            }
+        });
         // Windows' answer may take a moment: asked now, off the binder threads.
         mExecutor.execute(() -> {
             WindowsLocation.refreshAccess();
@@ -994,8 +1022,50 @@ public final class LocationManagerService extends ILocationManager.Default {
         }
     }
 
-    /** Tells registrations about providers turned on or off since the last check. */
+    /** Enabled providers as Android's location_providers_allowed lists them: no passive or fused. */
+    private String providersAllowed() {
+        StringBuilder allowed = new StringBuilder();
+        for (String p : getAllProviders()) {
+            if (LocationManager.PASSIVE_PROVIDER.equals(p)
+                    || LocationManager.FUSED_PROVIDER.equals(p) || !isEnabled(p)) continue;
+            if (allowed.length() > 0) allowed.append(',');
+            allowed.append(p);
+        }
+        return allowed.toString();
+    }
+
+    /**
+     * Tells registrations about providers turned on or off since the last check, and
+     * everyone else about location turned on or off: MODE_CHANGED and the Settings.Secure
+     * location rows' observers, as Android does.
+     */
     private void checkEnabledChanges() {
+        boolean settingsChanged = checkProviderChanges();
+        boolean location = isLocationEnabled();
+        Boolean before;
+        synchronized (mLock) {
+            before = mReportedLocationEnabled;
+            mReportedLocationEnabled = location;
+        }
+        // A first observation initializes the state; it is not a change.
+        if (before != null && before != location) {
+            log("location " + (location ? "enabled" : "disabled"));
+            settingsChanged = true;
+            Intent changed = new Intent(LocationManager.MODE_CHANGED_ACTION);
+            changed.putExtra(LocationManager.EXTRA_LOCATION_ENABLED, location);
+            changed.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
+            try {
+                mAm.sendBroadcastFor("android", changed, null);
+            } catch (RuntimeException e) {
+                log("MODE_CHANGED broadcast failed: " + e);
+            }
+        }
+        if (settingsChanged) SettingsProvider.locationStateChanged();
+    }
+
+    /** The provider part of checkEnabledChanges; true when a provider changed state. */
+    private boolean checkProviderChanges() {
+        boolean changedAny = false;
         List<String> providers = getAllProviders();
         for (String p : providers) {
             boolean enabled = isEnabled(p);
@@ -1017,6 +1087,7 @@ public final class LocationManagerService extends ILocationManager.Default {
             // A first observation initializes provider state; it is not a
             // provider transition to broadcast to unrelated receivers.
             if (before == null) continue;
+            changedAny = true;
             Intent changed = new Intent(LocationManager.PROVIDERS_CHANGED_ACTION);
             changed.putExtra(LocationManager.EXTRA_PROVIDER_NAME, p);
             changed.putExtra(LocationManager.EXTRA_PROVIDER_ENABLED, enabled);
@@ -1027,6 +1098,7 @@ public final class LocationManagerService extends ILocationManager.Default {
                 log("PROVIDERS_CHANGED broadcast failed: " + e);
             }
         }
+        return changedAny;
     }
 
     // --- test providers ------------------------------------------------------------------
