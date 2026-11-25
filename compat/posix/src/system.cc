@@ -38,6 +38,7 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "native_fence_internal.h"
 #include "pipe_io.h"
 #include "revocable_internal.h"
 #include "linux_socket.h"
@@ -330,8 +331,9 @@ int sched_setparam(pid_t, const struct sched_param*) { return 0; }
 // --- ioctl, wait --------------------------------------------------------------
 
 // FIONREAD and FIONBIO, the ioctls Android's Java libraries use on files,
-// pipes and sockets; the only device ioctls are /dev/binder's (binder.cc),
-// others fail with ENOTTY.
+// pipes and sockets; the only device ioctls are /dev/binder's (binder.cc) and
+// a native fence's SYNC_IOC_FILE_INFO (native_fence.cc), others fail with
+// ENOTTY.
 int ioctl(int fd, unsigned long request, ...) {
   va_list args;
   va_start(args, request);
@@ -339,6 +341,8 @@ int ioctl(int fd, unsigned long request, ...) {
   va_end(args);
   int binder_result;
   if (gesher::BinderIoctl(fd, request, argp, &binder_result)) return binder_result;
+  int fence_result;
+  if (gesher::SyncFileIoctl(fd, request, argp, &fence_result)) return fence_result;
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
     if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;

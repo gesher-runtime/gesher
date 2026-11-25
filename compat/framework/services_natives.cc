@@ -32,6 +32,7 @@
 
 #include "core_jni_helpers.h"
 #include "services_zygote.h"
+#include "services_dexopt_watch.h"
 
 // Its layout checks use offsetof on a class with atomics, which Soong's flags
 // let pass (-Wno-invalid-offsetof).
@@ -163,6 +164,57 @@ static jint Zygote_spawn(JNIEnv* env, jclass, jstring commandLine, jobjectArray 
                                  breakaway == JNI_TRUE);
 }
 
+static jint Zygote_spawnInAppContainer(JNIEnv* env, jclass, jstring commandLine,
+                                       jobjectArray set, jobjectArray unset, jstring logPath,
+                                       jstring name, jstring displayName,
+                                       jobjectArray capabilities) {
+    gesher::zygote::AppContainerSpec spec;
+    spec.name = ZygoteString(env, name);
+    spec.display_name = ZygoteString(env, displayName);
+    spec.capabilities = ZygoteStrings(env, capabilities);
+    return gesher::zygote::SpawnInAppContainer(ZygoteString(env, commandLine),
+                                               ZygoteStrings(env, set), ZygoteStrings(env, unset),
+                                               ZygoteString(env, logPath), spec);
+}
+
+static jint Zygote_ensureAppContainer(JNIEnv* env, jclass, jstring name, jstring displayName) {
+    return static_cast<jint>(gesher::zygote::EnsureAppContainer(ZygoteString(env, name),
+                                                                ZygoteString(env, displayName)));
+}
+
+static jint Zygote_grantToAppContainer(JNIEnv* env, jclass, jstring path, jstring name,
+                                       jint access, jboolean inherit) {
+    return static_cast<jint>(gesher::zygote::GrantToAppContainer(
+        ZygoteString(env, path), ZygoteString(env, name), static_cast<uint32_t>(access),
+        inherit == JNI_TRUE));
+}
+
+static jint Zygote_grantToCapability(JNIEnv* env, jclass, jstring path, jstring capability,
+                                     jint access, jboolean inherit) {
+    return static_cast<jint>(gesher::zygote::GrantToCapability(
+        ZygoteString(env, path), ZygoteString(env, capability), static_cast<uint32_t>(access),
+        inherit == JNI_TRUE));
+}
+
+static jint Zygote_deleteAppContainer(JNIEnv* env, jclass, jstring name) {
+    return static_cast<jint>(gesher::zygote::DeleteAppContainer(ZygoteString(env, name)));
+}
+
+static jint Zygote_spawnCompiler(JNIEnv* env, jclass, jstring commandLine, jobjectArray set,
+                                 jobjectArray unset, jstring logPath, jint memory, jint cpu) {
+    return gesher::zygote::Spawn(ZygoteString(env, commandLine), ZygoteStrings(env, set),
+                                 ZygoteStrings(env, unset), ZygoteString(env, logPath),
+                                 false, static_cast<uint32_t>(memory), static_cast<uint32_t>(cpu));
+}
+static jint Zygote_waitChild(JNIEnv*, jclass, jint pid, jlong identity, jint timeout,
+                             jlong cancel, jboolean memory) {
+    return gesher::zygote::WaitChild(pid, identity, timeout, static_cast<intptr_t>(cancel),
+                                     memory == JNI_TRUE);
+}
+static jlong Zygote_availableMemory(JNIEnv*, jclass) {
+    return static_cast<jlong>(gesher::zygote::AvailableMemory());
+}
+
 static jint Zygote_restartWithUid(JNIEnv* env, jclass, jint uid) {
     uint32_t code = 0;
     uint32_t failure = gesher::zygote::RestartWithUid(uid, &code);
@@ -236,6 +288,21 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeSpawn",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)I",
      GESHER_JNI(Zygote_spawn)},
+    {"nativeSpawnInAppContainer",
+     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;"
+     "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_spawnInAppContainer)},
+    {"nativeEnsureAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_ensureAppContainer)},
+    {"nativeGrantToAppContainer", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
+     GESHER_JNI(Zygote_grantToAppContainer)},
+    {"nativeGrantToCapability", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
+     GESHER_JNI(Zygote_grantToCapability)},
+    {"nativeDeleteAppContainer", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_deleteAppContainer)},
+    {"nativeSpawnCompiler", "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;II)I",
+     GESHER_JNI(Zygote_spawnCompiler)},
+    {"nativeWaitChild", "(IJIJZ)I", GESHER_JNI(Zygote_waitChild)},
+    {"nativeAvailableMemory", "()J", GESHER_JNI(Zygote_availableMemory)},
     {"nativeRestartWithUid", "(I)I", GESHER_JNI(Zygote_restartWithUid)},
     {"nativeStartTime", "(I)J", GESHER_JNI(Zygote_startTime)},
     {"nativeChildStartTime", "(I)J", GESHER_JNI(Zygote_childStartTime)},
@@ -253,9 +320,55 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeExePath", "()Ljava/lang/String;", GESHER_JNI(Zygote_exePath)},
 };
 
+static void ProfileWatchError(JNIEnv* env, uint32_t error) {
+    char message[128];
+    std::snprintf(message, sizeof(message), "Profile directory notifications failed: Win32 error %u", error);
+    jniThrowException(env, "java/io/IOException", message);
+}
+static jlong ProfileWatch_open(JNIEnv* env, jclass, jstring path) {
+    uint32_t error = 0;
+    uint64_t token = gesher::dexopt::OpenProfileWatch(ZygoteString(env, path), &error);
+    if (token == 0) ProfileWatchError(env, error);
+    return static_cast<jlong>(token);
+}
+static jobjectArray ProfileWatch_next(JNIEnv* env, jclass, jlong token) {
+    std::vector<std::u16string> names;
+    uint32_t error = 0;
+    if (!gesher::dexopt::ReadProfileWatch(static_cast<uint64_t>(token), &names, &error)) {
+        ProfileWatchError(env, error);
+        return nullptr;
+    }
+    jclass string_class = env->FindClass("java/lang/String");
+    if (string_class == nullptr) return nullptr;
+    jobjectArray result = env->NewObjectArray(static_cast<jsize>(names.size()), string_class, nullptr);
+    env->DeleteLocalRef(string_class);
+    if (result == nullptr) return nullptr;
+    for (size_t i = 0; i < names.size(); ++i) {
+        jstring name = ZygoteJavaString(env, names[i]);
+        if (name == nullptr) return nullptr;
+        env->SetObjectArrayElement(result, static_cast<jsize>(i), name);
+        env->DeleteLocalRef(name);
+        if (env->ExceptionCheck()) return nullptr;
+    }
+    return result;
+}
+static void ProfileWatch_wake(JNIEnv*, jclass, jlong token) {
+    gesher::dexopt::WakeProfileWatch(static_cast<uint64_t>(token));
+}
+static void ProfileWatch_close(JNIEnv*, jclass, jlong token) {
+    gesher::dexopt::CloseProfileWatch(static_cast<uint64_t>(token));
+}
+static const JNINativeMethod gProfileWatchMethods[] = {
+    {"open", "(Ljava/lang/String;)J", GESHER_JNI(ProfileWatch_open)},
+    {"next", "(J)[Ljava/lang/String;", GESHER_JNI(ProfileWatch_next)},
+    {"wake", "(J)V", GESHER_JNI(ProfileWatch_wake)},
+    {"close", "(J)V", GESHER_JNI(ProfileWatch_close)},
+};
+
 int register_gesher_Zygote(JNIEnv* env) {
-    return RegisterGesherNatives(env, "com/gesher/server/Zygote", gZygoteMethods,
-                                NELEM(gZygoteMethods));
+    RegisterGesherNatives(env, "com/gesher/server/Zygote", gZygoteMethods, NELEM(gZygoteMethods));
+    return RegisterGesherNatives(env, "com/gesher/server/DexoptProfileNotifications",
+                                gProfileWatchMethods, NELEM(gProfileWatchMethods));
 }
 
 }  // namespace android

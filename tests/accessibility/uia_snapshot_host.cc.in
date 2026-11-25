@@ -65,6 +65,7 @@ enum class Failure { None, NoUia, Cache, CacheNull, Property, Walker, WalkerNull
 Failure failure = Failure::None;
 std::atomic<int> references{0};
 std::atomic<int> wrong_thread_release{0};
+std::atomic<int> root_queries{0};  // COM traversals the UIA thread actually began
 std::thread::id uia_thread;
 std::atomic<bool> live_window{true};
 const HWND window1 = reinterpret_cast<HWND>(uintptr_t(1));
@@ -157,6 +158,7 @@ struct IUIAutomation : Ref {
     return failure == Failure::Walker ? E_FAIL : S_OK;
   }
   HRESULT ElementFromHandleBuildCache(HWND, IUIAutomationCacheRequest*, IUIAutomationElement** out) {
+    ++root_queries;
     *out = failure == Failure::RootNull ? nullptr : new IUIAutomationElement(&tree_root);
     return failure == Failure::Root ? E_FAIL : S_OK;
   }
@@ -253,13 +255,21 @@ int main() {
     std::unique_lock<std::mutex> lock(busy_mutex);
     require(busy_cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }), "UIA queue is occupied");
   }
+  // Read on the test thread while the UIA thread is parked in the predecessor.
+  int traversals = root_queries.load();
+  Node* target = g_elements.at(displayed).nodes.at(0)->node;
+  int focused = target->focus;
   require(request(window1, 1500, 5) == nullptr, "queued snapshot times out without an answer");
+  // As nativeAct queues it: the provider already told Android it accepted the action.
+  require(!RunOnUiaThread([=] { Act(displayed, 0, 2, L""); }, 5), "queued action times out without an answer");
   {
     std::lock_guard<std::mutex> lock(busy_mutex);
     released = true; busy_cv.notify_all();
   }
   require(busy.get(), "blocking predecessor completes");
   drain();
+  require(root_queries.load() == traversals, "snapshot abandoned before it began never traverses COM");
+  require(target->focus == focused + 1, "an accepted action that waited past its timeout is still performed");
   require(g_generation == displayed, "abandoned queued capture never publishes");
   require(references.load() == initial_refs, "abandoned queued capture releases its private references");
   require(action(displayed), "abandoned queued capture preserves displayed action");

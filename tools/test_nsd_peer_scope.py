@@ -6,6 +6,7 @@ These are host checks of the actual helper and peer entry points, not execution
 of the Windows provider. The live peer independently requires provider readback.
 """
 import argparse
+import errno
 import importlib
 from pathlib import Path
 import socket
@@ -78,6 +79,10 @@ class SocketBoundary:
             raise AssertionError('receive restriction must be verified after bind')
         self.call('read-enabled' if option == 28 else 'read-list', level, option, length)
         return self.enabled if option == 28 else self.interfaces
+
+    def sendto(self, data, destination):
+        self.call('send', bytes(data), destination)
+        return len(data)
 
 
 class ReceiveScopeTest(unittest.TestCase):
@@ -208,6 +213,190 @@ class PeerOwnershipTest(unittest.TestCase):
                     self.assertTrue(ready)
                     self.assertFalse(any(event[1] in ('enable', 'add', 'read-enabled', 'read-list')
                                          for event in events))
+
+
+class PeerCommandTest(unittest.TestCase):
+    def test_missing_and_real_replaced_command(self):
+        with tempfile.TemporaryDirectory(prefix='nsd-command-') as temporary:
+            path = Path(temporary) / 'command'
+            reader = windows_peer.CommandReader(path)
+            self.assertEqual(reader.read(), '')
+            replacement = path.with_name('command-new')
+            replacement.write_text('1 announce', encoding='utf-8')
+            replacement.replace(path)
+            self.assertEqual(reader.read(), '1 announce')
+            replacement.write_text('2 quit', encoding='utf-8')
+            replacement.replace(path)
+            self.assertEqual(reader.read(), '2 quit')
+
+    def test_access_error_deadline_is_absolute_and_not_reset_by_missing_or_empty(self):
+        reader = windows_peer.CommandReader(Path('command'))
+        denied = PermissionError(errno.EACCES, 'controlled replacement sharing denial')
+        now = [5.0]
+        with mock.patch.object(windows_peer.time, 'monotonic', side_effect=lambda: now[0]), \
+                mock.patch.object(Path, 'read_text', side_effect=[denied, FileNotFoundError(), '', denied]) as read:
+            self.assertEqual(reader.read(), '')
+            for at in (5.2, 5.5, 5.9):
+                now[0] = at
+                self.assertEqual(reader.read(), '')
+            now[0] = 6.0
+            with self.assertRaises(PermissionError) as caught:
+                reader.read()
+            self.assertIs(caught.exception, denied)
+            self.assertEqual(read.call_count, 4, 'expired deadline admits no extra read')
+
+    def test_successful_retry_starts_no_deadline_for_the_next_command(self):
+        reader = windows_peer.CommandReader(Path('command'))
+        denied = PermissionError(errno.EACCES, 'controlled sharing denial')
+        now = [5.0]
+        with mock.patch.object(windows_peer.time, 'monotonic', side_effect=lambda: now[0]), \
+                mock.patch.object(Path, 'read_text', side_effect=[denied, '1 announce', denied, '2 quit']):
+            self.assertEqual(reader.read(), '')
+            now[0] = 5.5
+            self.assertEqual(reader.read(), '1 announce')
+            now[0] = 20.0
+            self.assertEqual(reader.read(), '')
+            now[0] = 20.5
+            self.assertEqual(reader.read(), '2 quit')
+
+    def test_unrelated_io_and_decode_errors_are_not_retried(self):
+        for error in (OSError(errno.EIO, 'read failed'), IsADirectoryError(),
+                      UnicodeDecodeError('utf-8', b'\xff', 0, 1, 'invalid command')):
+            with self.subTest(error=type(error).__name__):
+                reader = windows_peer.CommandReader(Path('command'))
+                with mock.patch.object(Path, 'read_text', side_effect=error) as read:
+                    with self.assertRaises(type(error)) as caught:
+                        reader.read()
+                    self.assertIs(caught.exception, error)
+                    self.assertEqual(read.call_count, 1)
+
+    def run_commands(self, *, persistent=False, malformed=None, global_deadline=False):
+        created, events, observations = [], [], []
+        now, loops, denied = [0.0], [0], [0]
+        access_error = PermissionError(errno.EACCES, 'controlled command replacement denial')
+        original_read = Path.read_text
+        with tempfile.TemporaryDirectory(prefix='nsd-command-loop-') as temporary:
+            control = Path(temporary)
+            command = control / 'command'
+            command.write_text(malformed or '1 announce', encoding='utf-8')
+            args = argparse.Namespace(control=control, type='_gs0123456789ab._tcp',
+                    instance='Owned fixture', index=42, family=4, address='192.0.2.1')
+
+            def create(family, kind):
+                self.assertEqual(family, socket.AF_INET)
+                value = SocketBoundary(kind, index=42, events=events)
+                created.append(value)
+                return value
+
+            def read(path, *args, **kwargs):
+                if path == command and (persistent or denied[0]):
+                    denied[0] = 0
+                    raise access_error
+                return original_read(path, *args, **kwargs)
+
+            def select_ready(readers, writers, errors, timeout):
+                self.assertEqual((readers, writers, errors, timeout), ([created[1]], [], [], 0.05))
+                ack = original_read(control / 'ack') if (control / 'ack').exists() else ''
+                observations.append(ack)
+                loops[0] += 1
+                if persistent:
+                    now[0] += 150.0 if global_deadline else 0.4
+                elif loops[0] == 1:
+                    command.write_text('2 silent', encoding='utf-8')
+                    denied[0] = 1
+                    now[0] = 0.7
+                elif loops[0] == 2:
+                    # The denied control read must leave announcement mode live.
+                    now[0] = 0.8
+                elif loops[0] == 3:
+                    command.write_text('3 quit', encoding='utf-8')
+                else:
+                    self.fail('peer did not honor the real quit command')
+                return [], [], []
+
+            error = None
+            with mock.patch.object(windows_peer.socket, 'socket', side_effect=create), \
+                    mock.patch.object(peer_scope.sys, 'platform', 'win32'), \
+                    mock.patch.object(windows_peer.time, 'monotonic', side_effect=lambda: now[0]), \
+                    mock.patch.object(windows_peer.select, 'select', side_effect=select_ready), \
+                    mock.patch.object(Path, 'read_text', new=read):
+                try:
+                    windows_peer.serve(args)
+                except (OSError, ValueError) as caught:
+                    error = caught
+            ack = original_read(control / 'ack') if (control / 'ack').exists() else ''
+            ready = (control / 'ready').exists()
+        self.assertEqual(len(created), 2)
+        self.assertTrue(all(value.closed for value in created), 'both owned sockets retire on every exit')
+        self.assertTrue(ready)
+        return error, ack, observations, events, access_error
+
+    def test_run_peer_keeps_network_loop_and_ack_order_until_real_quit(self):
+        error, ack, observations, events, _ = self.run_commands()
+        self.assertIsNone(error)
+        self.assertEqual(ack, '3')
+        self.assertEqual(observations, ['1', '1', '2'], 'denied read must not acknowledge silent')
+        sent = [entry for entry in events if entry[1] == 'send']
+        self.assertEqual(len(sent), 2, 'existing announcement mode continues during the denied read')
+        self.assertEqual(sent[0], sent[1], 'retry sends only the previously requested packet')
+
+    def test_run_peer_persistent_denial_fails_without_ack_and_closes_sockets(self):
+        error, ack, observations, events, denied = self.run_commands(persistent=True)
+        self.assertIs(error, denied)
+        self.assertEqual(ack, '')
+        self.assertEqual(observations, ['', '', ''])
+        self.assertFalse(any(entry[1] == 'send' for entry in events))
+
+    def test_control_retry_does_not_extend_the_existing_global_deadline(self):
+        error, ack, observations, _, _ = self.run_commands(persistent=True, global_deadline=True)
+        self.assertIsNone(error)  # Preserve the peer's existing 150-second exit.
+        self.assertEqual(ack, '')
+        self.assertEqual(observations, [''])
+
+    def test_malformed_commands_still_fail_immediately_without_ack(self):
+        for command in ('missing-separator', '1 unsupported'):
+            with self.subTest(command=command):
+                error, ack, observations, events, _ = self.run_commands(malformed=command)
+                self.assertIsInstance(error, ValueError)
+                self.assertEqual(ack, '')
+                self.assertEqual(observations, [])
+                self.assertFalse(any(entry[1] == 'send' for entry in events))
+
+    @unittest.skipUnless(sys.platform == 'win32', 'requires actual Windows file sharing')
+    def test_real_windows_sharing_denial_then_read_and_persistent_error(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        create = kernel32.CreateFileW
+        create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                           wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        create.restype = wintypes.HANDLE
+        close = kernel32.CloseHandle
+        close.argtypes = [wintypes.HANDLE]
+        close.restype = wintypes.BOOL
+        with tempfile.TemporaryDirectory(prefix='nsd-sharing-') as temporary:
+            path = Path(temporary) / 'command'
+            path.write_text('1 quit', encoding='utf-8')
+            reader = windows_peer.CommandReader(path)
+            handle = create(str(path), 0x80000000, 0, None, 3, 0x80, None)
+            self.assertIsNotNone(handle)
+            self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+            try:
+                # This is the failed call in the CI trace, with a real kernel
+                # share denial rather than an injected Python exception.
+                with self.assertRaises(PermissionError):
+                    path.read_text(encoding='utf-8')
+                with mock.patch.object(windows_peer.time, 'monotonic', return_value=10.0):
+                    self.assertEqual(reader.read(), '')
+                    expired = windows_peer.CommandReader(path)
+                    self.assertEqual(expired.read(), '')
+                with mock.patch.object(windows_peer.time, 'monotonic', return_value=11.0):
+                    with self.assertRaises(PermissionError):
+                        expired.read()
+            finally:
+                self.assertTrue(close(handle))
+            with mock.patch.object(windows_peer.time, 'monotonic', return_value=10.5):
+                self.assertEqual(reader.read(), '1 quit', 'actual released file is read before acknowledging')
 
 
 class PermissionFixtureTest(unittest.TestCase):

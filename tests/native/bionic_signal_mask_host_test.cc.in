@@ -51,6 +51,11 @@ bool IsGuestCode(const void* address) {
   return reinterpret_cast<uintptr_t>(address) == kTranslatedHandler;
 }
 }  // namespace gesher::arm64
+// The receiving thread is the one whose state is t_state; whether it has
+// translated guest code under way (an ARM64 frame to report) is a boundary.
+thread_local ThreadState* t_state = &state;
+static bool guest_context_available = false;
+bool GuestContextAvailable() { return guest_context_available; }
 
 @ACTION_HELPERS@
 
@@ -125,6 +130,7 @@ static void Reset(uint64_t mask) {
   g_process_pending = false;
   for (auto& action : S().actions) action = {0, 0, kNativeHandler, 0, 0};
   self_available = true;
+  guest_context_available = false;
   deliveries = change_before_delivery = change_after_dispatch = 0;
   dispatched.clear();
 }
@@ -415,6 +421,50 @@ static void DeliveryFailures() {
   }
 }
 
+// A translated (ARM64) SA_SIGINFO handler needs the receiving thread's guest
+// registers: a sender queues it for any thread, the receiver runs it only with
+// guest code under way, and an unrunnable record does not block later ones.
+static void TranslatedReceiver() {
+  phase = "translated SA_SIGINFO receiver claim";
+  variation = 0;
+  Reset(timer_bit);
+  const BionicSigaction translated{static_cast<int32_t>(kSaSiginfo), 0, kTranslatedHandler, 0, 0};
+  {
+    ThreadState other;
+    check("a sender queues a translated SA_SIGINFO action for another thread",
+          ActionSupported(&other, 64, translated));
+  }
+  check("a receiver with no guest code under way cannot run it",
+        !ActionSupported(&state, 64, translated));
+  guest_context_available = true;
+  check("a receiver with guest code under way runs it", ActionSupported(&state, 64, translated));
+
+  variation = 1;
+  Reset(timer_bit | high_bit);
+  guest_context_available = true;
+  Queue(false, 64, 801);
+  S().actions[64] = translated;
+  uint64_t input = high_bit;
+  check("unblocking delivers it to a receiver with guest code under way",
+        PthreadSigmask(kSigUnblock, &input, nullptr) == 0 && dispatched.size() == 1 &&
+        IsRecord(dispatched[0].info, 64, 801) && queued_records == 0 && !state.any_pending);
+
+  variation = 2;
+  Reset(timer_bit);
+  Queue(false, 10, 802);
+  Queue(true, 12, 803);
+  Queue(false, 64, 804);
+  S().actions[10] = translated;
+  const int rc = DeliverAll(&state);
+  check("an action the receiver cannot run reports ENOSYS and stays pending",
+        rc == kENOSYS && state.pending.Mask() == Bit(10) && state.any_pending &&
+        S().process_pending.Mask() == 0 && queued_records == 1);
+  check("it does not hold back the higher-numbered signals behind it",
+        dispatched.size() == 2 && dispatched[0].sig == 12 && IsRecord(dispatched[0].info, 12, 803) &&
+        dispatched[1].sig == 64 && IsRecord(dispatched[1].info, 64, 804));
+  CheckRetained(false, 10, 802);
+}
+
 // Android 16 sigsuspend64 filters its mask with filter_reserved_signals(set,
 // SIG_SETMASK): signal 32 is blocked and runtime signals 33..41 are not while
 // the call waits; the previous mask comes back unchanged afterwards.
@@ -593,6 +643,7 @@ int main() {
   UnsupportedPreflight();
   SupportedActions();
   DeliveryFailures();
+  TranslatedReceiver();
   SuspendMasks();
   WaitSets();
   Reset(timer_bit);

@@ -240,7 +240,7 @@ CheckTimed 'services: gesher-app parses lifecycle.apk with PackageParser2 (singl
   "-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
   '-Xint', '-Xusejit:false', 'com.gesher.app.Main', (NoDrive "$Dir/lifecycle.apk")) @(
   'gesher-app: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.bluetooth, gesher.wifi, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, restrictions, rollback, search, sensitive_content_protection_service, shortcut, speech_recognition, statusbar, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, usb, user, vibrator_manager, window',
+    'gesher-app: stand-in services in this process: account, activity, activity_task, alarm, appops, appwidget, audio, auth, batteryproperties, batterystats, blob_store, clipboard, connectivity, content, country_detector, credential, crossprofileapps, device_identifiers, device_policy, deviceidle, display, domain_verification, dropbox, gesher.alert_window, gesher.bluetooth, gesher.camera_source, gesher.wifi, grammatical_inflection, input, input_method, iphonesubinfo, isub, jobscheduler, locale, location, media_router, media_session, mount, notification, package, permission_checker, permissionmgr, phone, power, print, restrictions, rollback, search, sensitive_content_protection_service, shortcut, speech_recognition, statusbar, storagestats, telephony.registry, textservices, thermalservice, trust, uimode, uri_grants, usagestats, usb, user, vibrator_manager, webviewupdate, window',
   'gesher-app: com.gesher.lifecycle.LifecycleActivity onResume',
   'gesher-app: done') 300
 
@@ -582,7 +582,7 @@ Start-Sleep -Milliseconds 500
 $serverOut = (Get-Content "$logs/system_server.out" -Raw -ErrorAction SilentlyContinue) + ''
 $missing = @(
   'system_server: com.gesher.lifecycle parsed by PackageParser2: 1 activities',
-  'system_server: registered uri_grants, package, activity, activity_task, window, display, user, restrictions, blob_store, rollback, input, audio, media_session, media_router, content, input_method, textservices, notification, uimode, mount',
+  'system_server: registered uri_grants, package, activity, activity_task, gesher.alert_window, window, display, user, restrictions, blob_store, rollback, input, audio, media_session, media_router, content, input_method, textservices, notification, uimode, mount',
   'system_server: finishing com.gesher.lifecycle/com.gesher.lifecycle.LifecycleActivity (app-request)'
 ) | Where-Object { -not $serverOut.Contains($_) }
 if (-not $missing) {
@@ -704,6 +704,20 @@ if ($codeA -eq 0 -and $codeB -eq 0 -and $started -eq 1 -and $connected -eq 1 -an
   $failed++
 }
 
+# Bundled packages depend on this PC's real capabilities (for example, installed
+# speech engines). Record their inventory before adding our fixtures, then require
+# exactly two additional packages throughout the install/uninstall checks.
+$initialList = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
+$initialListCode = $LASTEXITCODE
+$initialPackageCount = ([regex]::Matches($initialList, '(?m)^package:')).Count
+if ($initialListCode -ne 0 -or -not $initialList.Contains("gesher-app: $initialPackageCount installed packages") -or
+    $initialList -match '(?m)^package:com\.gesher\.(lifecycle|peer|components) ') {
+  Write-Host "FAIL  services: initial package inventory is consistent and contains no install fixtures (exit $initialListCode)"
+  Write-Host $initialList
+  $failed++
+}
+$expectedInstalledPackageCount = $initialPackageCount + 2
+
 # Installed packages: install (copied into data/app/<package>-1/base.apk,
 # listed in packages.list), the same APK again (unchanged), list
 # (IPackageManager.getInstalledPackages and getPackageInfo across processes).
@@ -722,8 +736,7 @@ $ok = CheckOrdered 'services: gesher-app install and list: base.apk in data/app/
   '/app/com.gesher.lifecycle-1',
   'gesher-app: installed com.gesher.peer (version 1) in ',
   'gesher-app: com.gesher.lifecycle is installed and unchanged',
-  # 2 installed + the synthetic com.google.android.gms and com.android.vending (GmsPackageSupport).
-  'gesher-app: 4 installed packages',
+  "gesher-app: $expectedInstalledPackageCount installed packages",
   'package:com.gesher.lifecycle version 1.0 (1) ',
   '/app/com.gesher.lifecycle-1/base.apk, 1 activities, 0 services, 0 providers',
   'package:com.gesher.peer version 1.0 (1) ',
@@ -918,7 +931,8 @@ $code = $LASTEXITCODE
 $out += RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
 $code = [Math]::Max($code, $LASTEXITCODE)
 $ok = CheckOrdered 'services: gesher-app uninstall: the package''s code, data and entry removed' $out @(
-  'gesher-app: uninstalled com.gesher.peer', 'gesher-app: 4 installed packages',
+  # The components fixture installed above replaces the removed peer fixture.
+  'gesher-app: uninstalled com.gesher.peer', "gesher-app: $expectedInstalledPackageCount installed packages",
   'package:com.gesher.lifecycle ', 'package:com.gesher.components ') $code
 if ($ok -and ($out.Contains('package:com.gesher.peer') -or (Test-Path (Join-Path $root 'data/app/com.gesher.peer-1')) -or
     (Get-Content (Join-Path $root 'data/system/packages.list') -Raw) -match 'com\.gesher\.peer')) {
@@ -1023,7 +1037,7 @@ try {
     @{ Class = 'ApplicationRestrictionsTest'; Count = 16; Name = 'unmanaged restrictions queries and explicit unsupported approval' },
     @{ Class = 'BlobStoreContractTest'; Count = 87; Name = 'blob sessions, digest publication, quota admission, leases, and restart' },
     @{ Class = 'NsdContractTest'; Count = 65; Name = 'DNS-SD request overloads, callback executors and discovery lifecycle' },
-    @{ Class = 'WifiUnsupportedTest'; Count = 42; Name = 'observed Wi-Fi state and unsupported controller mutations'; SystemContext = $true },
+    @{ Class = 'WifiUnsupportedTest'; Count = 51; Name = 'observed Wi-Fi state and unsupported controller mutations'; SystemContext = $true },
     @{ Class = 'WifiScannerUnsupportedTest'; Count = 8; Name = 'optional Wi-Fi scanner type resolves without hardware service'; SystemContext = $true },
     @{ Class = 'RoleManagerUnsupportedTest'; Count = 168; Name = 'RoleManager absence, permission, callback and mutation contracts' }
   )
@@ -1051,6 +1065,12 @@ try {
     '-Xint', '-Xusejit:false', 'gesher.services.WindowsWifiTest')
   CheckTimed 'services: native WLAN data and nonblocking live reads' "$Dir/dalvikvm.exe" `
     $wifiArgs @('WindowsWifiTest all passed: live nonblocking Windows API boundary') 30
+  # The host-install fixture also exercises package-private production methods;
+  # native Binder/Parcel run on ART, with only package publication recorded by the fixture.
+  $hostInstallArgs = @("-Xbootclasspath:$wifiBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', 'com.gesher.server.HostInstallIntentTest')
+  CheckTimed 'services: explicit host install intent, legacy compatibility and malformed Parcel refusal' "$Dir/dalvikvm.exe" `
+    $hostInstallArgs @('HostInstallIntentTest', 'checks passed') 30
 } finally {
   $env:ANDROID_DATA = $savedContractsData
   $env:GESHER_BINDER = $savedContractsBinder

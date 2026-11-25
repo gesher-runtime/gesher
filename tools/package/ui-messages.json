@@ -84,6 +84,30 @@
       "en": "Don't allow",
       "he": "לא לאפשר"
     },
+    "background_permission_title": {
+      "en": "Gesher background permission request",
+      "he": "גשר — בקשת הרשאה ברקע"
+    },
+    "background_permission_heading": {
+      "en": "Allow access all the time?",
+      "he": "לאפשר גישה כל הזמן?"
+    },
+    "background_permission_requested": {
+      "en": "This app is also asking to use this permission in the background, when you are not using it:",
+      "he": "היישום מבקש להשתמש בהרשאה זו גם ברקע, כשאינך משתמש בו:"
+    },
+    "background_permission_always": {
+      "en": "Allow all the time",
+      "he": "לאפשר כל הזמן"
+    },
+    "background_permission_foreground": {
+      "en": "Allow only while using the app",
+      "he": "לאפשר רק בזמן השימוש ביישום"
+    },
+    "background_permission_deny": {
+      "en": "Don't allow, not even while using the app",
+      "he": "לא לאפשר, גם לא בזמן השימוש ביישום"
+    },
     "exact_alarm_title": {
       "en": "Alarms and reminders",
       "he": "התראות ותזכורות"
@@ -148,6 +172,22 @@
       "en": "Cancel",
       "he": "ביטול"
     },
+    "camera_source_title": {
+      "en": "Camera or image from the PC?",
+      "he": "מצלמה או תמונה מהמחשב?"
+    },
+    "camera_source_camera": {
+      "en": "Use the PC camera",
+      "he": "שימוש במצלמת המחשב"
+    },
+    "camera_source_image": {
+      "en": "Choose an image from the PC",
+      "he": "בחירת תמונה מהמחשב"
+    },
+    "camera_pick_title": {
+      "en": "Choose an image for the camera",
+      "he": "בחירת תמונה עבור המצלמה"
+    },
     "no_device": {
       "en": "no Gesher device is running",
       "he": "סביבת גשר אינה פועלת"
@@ -209,8 +249,16 @@
       "he": "חלקי היישום ⁨{0}⁩ אינם חתומים כולם באותו מפתח."
     },
     "install_missing_split": {
-      "en": "The application ⁨{0}⁩ is a base split APK and requires companion split APKs (such as ABI or density splits) to be installed.\n\nInstall the full bundle (.xapk or .apks), or place its split APKs (split_*.apk / config.*.apk) in the same folder.",
-      "he": "היישום ⁨{0}⁩ הוא קובץ בסיס חלקי (Split APK) שדורש גם את חלקי ההתקנה הנלווים (כגון ספריות מעבד או משאבי מסך).\n\nיש להתקין את החבילה המלאה (.xapk או .apks), או להציב את קובצי החלקים הנלווים (split_*.apk / config.*.apk) באותה תיקייה."
+      "en": "The application ⁨{0}⁩ is a base split APK and requires companion split APKs (such as ABI or density splits) to be installed.\n\nInstall the full bundle (.xapk, .apks, .apkm or .apk+), or place its split APKs (split_*.apk / config.*.apk) in the same folder.",
+      "he": "היישום ⁨{0}⁩ הוא קובץ בסיס חלקי (Split APK) שדורש גם את חלקי ההתקנה הנלווים (כגון ספריות מעבד או משאבי מסך).\n\nיש להתקין את החבילה המלאה (.xapk, .apks, .apkm או .apk+), או להציב את קובצי החלקים הנלווים (split_*.apk / config.*.apk) באותה תיקייה."
+    },
+    "install_no_matching_abis": {
+      "en": "The application {0} has native code only for {1}; Gesher runs x86_64 and arm64-v8a.\n\nUse the app's arm64-v8a, x86_64 or universal APK.",
+      "he": "היישום ‪{0}‬ כולל קוד מקומי (Native) עבור ‪{1}‬ בלבד; גשר תומך ב־‪x86_64‬ וב־‪arm64-v8a‬.\n\nיש להשתמש בקובץ התקנה (APK) עבור ‪arm64-v8a‬, ‪x86_64‬ או בגרסה אוניברסלית."
+    },
+    "install_no_matching_abis_details": {
+      "en": "The application cannot be installed because its native code is not compatible with Gesher.\n\nDetails: ‪{0}‬",
+      "he": "אי אפשר להתקין את היישום משום שהקוד המקומי (Native) שלו אינו תואם לגשר.\n\nפרטים: ‪{0}‬"
     },
     "uninstalled": {
       "en": "uninstalled {0}",
@@ -297,8 +345,8 @@
       "he": "כל היישומים"
     },
     "proxy_invalid": {
-      "en": "{0}: not host:port, direct or windows",
-      "he": "{0}: יש להזין host:port, direct או windows"
+      "en": "{0}: not host:port, socks5://host:port, direct or windows",
+      "he": "{0}: יש להזין host:port, socks5://host:port, direct או windows"
     },
     "proxy_saved": {
       "en": "proxy of {0}: {1} (app processes started from now on)",
@@ -408,6 +456,42 @@
       "en": "Setup could not download these components and will continue without them:\n\n%1\nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).",
       "he": "לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:\n\n%1\nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר)."
     },
+    "setup_install_type_title": {
+      "en": "Installation Type",
+      "he": "סוג התקנה"
+    },
+    "setup_install_type_desc": {
+      "en": "Choose how you want to install Gesher.",
+      "he": "בחר כיצד ברצונך להתקין את גשר."
+    },
+    "setup_install_standard": {
+      "en": "Standard installation (recommended for this computer)",
+      "he": "התקנה רגילה (מומלץ למחשב זה)"
+    },
+    "setup_install_standard_desc": {
+      "en": "Installs into your user profile, registers .apk associations, and adds Start menu shortcuts.",
+      "he": "מתקין לפרופיל המשתמש, משייך קובצי .apk ומוסיף קיצורי דרך לתפריט התחל."
+    },
+    "setup_install_portable": {
+      "en": "Portable installation (for USB flash drives or standalone folder)",
+      "he": "התקנה ניידת (לדיסק-און-קי או תיקייה עצמאית)"
+    },
+    "setup_install_portable_desc": {
+      "en": "Extracts Gesher as a self-contained portable application. Does not modify the Windows registry or Start menu.",
+      "he": "מחלץ את גשר כיישום נייד ועצמאי. אינו משנה את רישום המערכת (Registry) ולא מוסיף קיצורים לתפריט התחל."
+    },
+    "setup_portable_existing_install": {
+      "en": "This folder contains a standard Gesher installation. Choose another folder for the portable installation.",
+      "he": "בתיקייה זו קיימת התקנה רגילה של גשר. יש לבחור תיקייה אחרת להתקנה הניידת."
+    },
+    "setup_standard_existing_portable": {
+      "en": "This folder contains a portable Gesher installation. Choose portable installation to update it, or choose another folder.",
+      "he": "בתיקייה זו קיימת התקנה ניידת של גשר. לעדכונה יש לבחור בהתקנה ניידת, או לבחור תיקייה אחרת."
+    },
+    "setup_portable_write_failed": {
+      "en": "The portable data folder or launcher could not be written. Check that the destination is writable.",
+      "he": "לא ניתן לכתוב את תיקיית הנתונים או את קובץ ההפעלה הנייד. יש לוודא שניתן לכתוב לתיקיית היעד."
+    },
     "cp_title": {
       "en": "Gesher Control Center",
       "he": "לוח הבקרה של גשר"
@@ -508,6 +592,10 @@
       "en": "Launch",
       "he": "הפעל"
     },
+    "cp_btn_app_info": {
+      "en": "Details",
+      "he": "פרטים"
+    },
     "cp_separate_windows": {
       "en": "Separate windows",
       "he": "חלונות נפרדים"
@@ -515,6 +603,70 @@
     "cp_separate_windows_tip": {
       "en": "Each task of the app opens in a window of its own, instead of one window for the app. Applies from the app's next start.",
       "he": "כל משימה של האפליקציה נפתחת בחלון משלה, במקום חלון אחד לאפליקציה. חל מההפעלה הבאה של האפליקציה."
+    },
+    "cp_proxy_desc": {
+      "en": "Gesher's own HTTP or SOCKS5 proxy for every app, instead of Windows' proxy settings. Each app can have its own with its Proxy button. It applies to app processes started from now on: close a running app completely and start it again, or stop and start the device (reopening a window can keep the app's process and its previous proxy). It covers clients that support the selected proxy type and use the system proxy; WebView pages keep Windows' settings.",
+      "he": "פרוקסי HTTP או SOCKS5 של גשר לכל היישומים, במקום הגדרות הפרוקסי של Windows. לכל יישום אפשר לקבוע פרוקסי משלו בכפתור 'פרוקסי' שלו. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש, או לכבות ולהפעיל את המערכת (פתיחה מחדש של חלון יכולה להשאיר את תהליך היישום עם הפרוקסי הקודם). חל על לקוחות שתומכים בסוג הפרוקסי הנבחר ומשתמשים בפרוקסי המערכת; דפי WebView ממשיכים לפי הגדרות Windows."
+    },
+    "cp_proxy_mode_inherit": {
+      "en": "Same as every app",
+      "he": "כמו כל היישומים"
+    },
+    "cp_proxy_mode_windows": {
+      "en": "Windows' settings",
+      "he": "הגדרות Windows"
+    },
+    "cp_proxy_mode_direct": {
+      "en": "No proxy (direct)",
+      "he": "ללא פרוקסי (ישיר)"
+    },
+    "cp_proxy_mode_server": {
+      "en": "Proxy server",
+      "he": "שרת פרוקסי"
+    },
+    "cp_proxy_address_hint": {
+      "en": "HTTP: host:port (127.0.0.1:8080). SOCKS5: socks5://host:port (socks5://127.0.0.1:1080).",
+      "he": "HTTP: כתובת:פורט (127.0.0.1:8080). SOCKS5: למשל socks5://127.0.0.1:1080."
+    },
+    "cp_proxy_save": {
+      "en": "Save",
+      "he": "שמירה"
+    },
+    "cp_proxy_saved": {
+      "en": "Proxy saved. It applies to app processes started from now on: close a running app completely and start it again.",
+      "he": "הפרוקסי נשמר. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש."
+    },
+    "cp_proxy_invalid": {
+      "en": "⁨{0}⁩ is not a proxy server address. Enter host:port for HTTP or socks5://host:port for SOCKS5.",
+      "he": "⁨{0}⁩ אינה כתובת של שרת פרוקסי. יש להזין host:port עבור HTTP או socks5://host:port עבור SOCKS5."
+    },
+    "cp_proxy_save_failed": {
+      "en": "Failed to save the proxy: {0}",
+      "he": "שמירת הפרוקסי נכשלה: {0}"
+    },
+    "cp_btn_proxy": {
+      "en": "Proxy",
+      "he": "פרוקסי"
+    },
+    "cp_btn_proxy_tip": {
+      "en": "This app's own proxy",
+      "he": "פרוקסי משלו ליישום הזה"
+    },
+    "cp_btn_proxy_all": {
+      "en": "Proxy for every app",
+      "he": "פרוקסי לכל היישומים"
+    },
+    "cp_proxy_app_title": {
+      "en": "Proxy for ⁨{0}⁩",
+      "he": "פרוקסי עבור ⁨{0}⁩"
+    },
+    "cp_proxy_app_desc": {
+      "en": "This app's own proxy, instead of the setting of every app. It applies when a new process of the app starts: close the app completely and start it again (reopening its window can keep its process and its previous proxy). WebView pages keep Windows' settings.",
+      "he": "פרוקסי משלו ליישום הזה, במקום ההגדרה של כל היישומים. חל כשמתחיל תהליך חדש של היישום: יש לסגור את היישום לגמרי ולהפעיל אותו מחדש (פתיחה מחדש של החלון יכולה להשאיר את התהליך עם הפרוקסי הקודם). דפי WebView ממשיכים לפי הגדרות Windows."
+    },
+    "cp_proxy_app_value": {
+      "en": "Proxy: {0}",
+      "he": "פרוקסי: {0}"
     },
     "windows_separate_saved": {
       "en": "{0}: each task in a window of its own, from the app's next start",
@@ -557,12 +709,60 @@
       "he": "עודכן לאחרונה: {0}"
     },
     "cp_app_info_detail": {
-      "en": "An app asked to open this application's settings. Here you can launch or uninstall it.",
-      "he": "יישום ביקש לפתוח את ההגדרות של היישום הזה. כאן אפשר להפעיל אותו או להסיר אותו."
+      "en": "An app asked to open this application's settings. Here you can allow or deny its special access. You can launch or uninstall it from the app list in the Gesher Control Center.",
+      "he": "יישום ביקש לפתוח את ההגדרות של היישום הזה. כאן אפשר לאשר או לשלול את הגישה המיוחדת שלו. אפשר להפעיל או להסיר אותו מרשימת היישומים בלוח הבקרה של גשר."
     },
     "cp_app_info_close": {
       "en": "Close",
       "he": "סגירה"
+    },
+    "cp_app_info_detail_list": {
+      "en": "Here you can allow or deny this application's special access. You can launch or uninstall it from the app list in the Gesher Control Center.",
+      "he": "כאן אפשר לאשר או לשלול את הגישה המיוחדת של היישום הזה. אפשר להפעיל או להסיר אותו מרשימת היישומים בלוח הבקרה של גשר."
+    },
+    "cp_access_title": {
+      "en": "Special app access (on Android, you allow these in Settings):",
+      "he": "הרשאות גישה מיוחדות (באנדרואיד מאשרים אותן בהגדרות):"
+    },
+    "cp_access_loading": {
+      "en": "Reading the special access from the Gesher device...",
+      "he": "קורא את הגישה המיוחדת מסביבת גשר..."
+    },
+    "cp_access_fixed": {
+      "en": "{0} (always allowed: this app is itself an installer)",
+      "he": "{0} (תמיד מאושר: היישום הזה הוא בעצמו מתקין יישומים)"
+    },
+    "cp_access_all_files": {
+      "en": "All files access",
+      "he": "גישה לכל הקבצים"
+    },
+    "cp_access_overlay": {
+      "en": "Display over other apps",
+      "he": "הצגה מעל יישומים אחרים"
+    },
+    "cp_access_install": {
+      "en": "Install unknown apps",
+      "he": "התקנת יישומים לא מוכרים"
+    },
+    "cp_access_write_settings": {
+      "en": "Modify system settings",
+      "he": "שינוי הגדרות המערכת"
+    },
+    "cp_access_usage": {
+      "en": "Usage access",
+      "he": "גישה לנתוני שימוש"
+    },
+    "cp_access_media": {
+      "en": "Media management",
+      "he": "ניהול מדיה"
+    },
+    "cp_access_unavailable": {
+      "en": "Gesher could not read this application's special access. If the Gesher device is stopped, start it and open the details again.",
+      "he": "גשר לא הצליח לקרוא את הגישה המיוחדת של היישום הזה. אם סביבת גשר כבויה, יש להפעיל אותה ולפתוח שוב את הפרטים."
+    },
+    "cp_access_failed": {
+      "en": "Could not change \"{0}\".",
+      "he": "לא ניתן היה לשנות את \"{0}\"."
     },
     "cp_uninstall_failed": {
       "en": "Failed to uninstall {0}.",
@@ -587,6 +787,14 @@
     "cp_status_ready": {
       "en": "Ready",
       "he": "מוכן"
+    },
+    "cp_btn_open_logs": {
+      "en": "Open logs location",
+      "he": "פתח את מיקום הלוגים"
+    },
+    "cp_open_logs_failed": {
+      "en": "Could not open the logs folder: ⁨{0}⁩",
+      "he": "לא ניתן לפתוח את תיקיית הלוגים: ⁨{0}⁩"
     },
     "cp_status_working": {
       "en": "Working, please wait…",
@@ -867,6 +1075,26 @@
     "cp_update_reopen_failed": {
       "en": "The update is installed. Close and reopen the control center from the Start menu.",
       "he": "העדכון מותקן. סגור את לוח הבקרה ופתח אותו מחדש מתפריט התחל."
+    },
+    "cp_camera_title": {
+      "en": "Camera",
+      "he": "מצלמה"
+    },
+    "cp_camera_image_picker": {
+      "en": "Allow choosing an image from the PC instead of taking a photo",
+      "he": "אפשר בחירת תמונה מהמחשב במקום צילום במצלמה"
+    },
+    "cp_camera_image_picker_hint": {
+      "en": "Off by default. When on, an app that takes a photo or opens the camera can use an image you choose from the PC instead; when the PC has a camera, you are asked which to use. Applies the next time an app opens the camera. Whether the device reports a camera, and the camera app on a PC without one, follow after Gesher restarts.",
+      "he": "כבוי כברירת מחדל. כשהאפשרות פועלת, יישום שמצלם או פותח את המצלמה יכול להשתמש במקום זאת בתמונה שתבחר מהמחשב; כשיש למחשב מצלמה, תישאל במה להשתמש. חל בפעם הבאה שיישום פותח את המצלמה. דיווח המכשיר על קיום מצלמה, ויישום המצלמה במחשב ללא מצלמה, מתעדכנים לאחר הפעלה מחדש של גשר."
+    },
+    "cp_camera_image_picker_saved": {
+      "en": "Camera setting saved.",
+      "he": "הגדרת המצלמה נשמרה."
+    },
+    "cp_camera_image_picker_failed": {
+      "en": "Could not save the camera setting: {0}",
+      "he": "שמירת הגדרת המצלמה נכשלה: {0}"
     }
   }
 }

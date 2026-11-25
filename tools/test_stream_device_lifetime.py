@@ -41,7 +41,7 @@ def main() -> int:
         "@PARSE_MODE@": section(host, "bool ParseMode(", "// Random characters"),
         "@FCLOSE@": section(host, "int gesher_fclose_state(", "// The stream is reopened"),
         "@FREOPEN@": section(host, "FILE* gesher_freopen_state(", "char* mkdtemp("),
-        "@STREAM_STATE@": section(shim, "constexpr uint32_t kWeof", "class StreamLock"),
+        "@STREAM_STATE@": section(shim, "int Orient(FILE* stream,", "using StreamLock"),
         "@READ_STREAM@": section(shim, "size_t ReadStream(", "// fopen through"),
         "@GETC_UNLOCKED@": section(shim, "int BIONIC_SYSV GetcUnlocked(", "int BIONIC_SYSV PutcUnlocked("),
         "@FREAD_UNLOCKED@": section(shim, "size_t BIONIC_SYSV FreadUnlocked(", "size_t BIONIC_SYSV FwriteUnlocked("),

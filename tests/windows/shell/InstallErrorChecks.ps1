@@ -1,6 +1,6 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # The Control Center's install failures carry their reason: Install-PanelApk (the
-# production function, taken from gesher-control-panel.ps1) hands gesher-app.ps1 a
+# production function, taken from gesher-panel-actions.ps1) hands gesher-app.ps1 a
 # file in GESHER_LAUNCH_ERROR_FILE, which PowerShell passes to Launcher through
 # Unicode arguments. com.gesher.app.Launcher writes why an
 # install failed (a different signing key, ...), and shows it after "failed".
@@ -22,7 +22,8 @@ function Assert-Install([bool] $condition, [string] $message) {
 # The texts the launcher and gesher-launch show, in both languages.
 $catalog = Get-Content -LiteralPath $UiMessagesPath -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($key in 'launch_failed', 'install_update_incompatible', 'install_bad_signature',
-                 'install_bad_split_signature', 'install_missing_split', 'cp_install_failed') {
+                 'install_bad_split_signature', 'install_missing_split', 'install_no_matching_abis',
+                 'install_no_matching_abis_details', 'cp_install_failed') {
     $entry = $catalog.messages.PSObject.Properties[$key]
     Assert-Install ($null -ne $entry) "ui-messages.json has '$key'"
     foreach ($lang in 'en', 'he') {
@@ -33,11 +34,16 @@ foreach ($key in 'launch_failed', 'install_update_incompatible', 'install_bad_si
 foreach ($lang in 'en', 'he') {
     # The advice names a command that exists (gesher.ps1 runs a dex, not uninstall).
     Assert-Install ($catalog.messages.install_update_incompatible.$lang.Contains('gesher-app uninstall {0}')) "install_update_incompatible ($lang) names gesher-app uninstall"
+    Assert-Install ($catalog.messages.install_no_matching_abis.$lang.Contains('{1}')) "install_no_matching_abis ($lang) shows unsupported ABI"
+    Assert-Install ($catalog.messages.install_no_matching_abis.$lang.Contains('arm64-v8a')) "install_no_matching_abis ($lang) mentions arm64-v8a"
+    Assert-Install ($catalog.messages.install_no_matching_abis.$lang.Contains('x86_64')) "install_no_matching_abis ($lang) mentions x86_64"
 }
+Assert-Install ($catalog.messages.install_no_matching_abis.he.Contains([char]0x202A)) 'install_no_matching_abis (he) protects embedded tokens with LRE'
+Assert-Install ($catalog.messages.install_no_matching_abis.he.Contains([char]0x202C)) 'install_no_matching_abis (he) closes embedded tokens with PDF'
 Assert-Install ($catalog.messages.install_update_incompatible.he.Contains($catalog.messages.cp_title.he)) 'The Hebrew advice names the Control Center as its title does'
 
 # Install-PanelApk itself, as the panel defines it.
-$ast = [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $PanelPath), [ref]$null, [ref]$null)
+$ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path $PanelPath) 'gesher-panel-actions.ps1'), [ref]$null, [ref]$null)
 $function = $ast.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Install-PanelApk' }, $true)
 Assert-Install ($null -ne $function) 'The control panel defines Install-PanelApk'
 . ([scriptblock]::Create($function.Extent.Text))
