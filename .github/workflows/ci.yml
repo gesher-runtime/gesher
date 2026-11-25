@@ -304,7 +304,6 @@ jobs:
         run: |
           & .\cost-events-server-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows Server cost capability or lifecycle checks failed' }
-
       - name: MediaStore provider over real SQLite and NTFS paths, file-move rollback and crash recovery
         if: ${{ !cancelled() }}
         shell: bash
