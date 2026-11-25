@@ -5,9 +5,11 @@
 package com.gesher.app.window;
 
 import android.app.ActivityThread;
+import android.app.AppOpsManager;
 import android.app.WindowConfiguration;
 import android.content.ClipData;
 import android.content.ClipDescription;
+import android.content.Context;
 import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.graphics.Region;
@@ -18,6 +20,7 @@ import android.os.Looper;
 import android.os.MessageQueue;
 import android.os.RemoteCallback;
 import android.os.RemoteException;
+import android.os.ServiceManager;
 import android.os.SystemClock;
 import android.util.ArrayMap;
 import android.view.IWindow;
@@ -47,7 +50,10 @@ import com.gesher.app.DeviceProfile;
 import com.gesher.app.input.VirtualKeyboard;
 import com.gesher.app.input.WindowInput;
 import com.gesher.app.input.WindowsInputMethod;
+import com.gesher.server.AlertWindowPolicy;
 import com.gesher.server.WindowManagerService;
+import com.android.internal.app.IAppOpsCallback;
+import com.android.internal.app.IAppOpsService;
 
 import java.io.FileDescriptor;
 import java.lang.ref.WeakReference;
@@ -176,6 +182,14 @@ public final class WindowSession extends IWindowSession.Stub {
     private final java.util.Map<IBinder, Boolean> mActivityVisibility = new java.util.WeakHashMap<>();
     private final WindowLayout mLayout = new WindowLayout();
     private final ArrayMap<IBinder, AppWindow> mWindows = new ArrayMap<>();
+    private final Object mAlertWatchLock = new Object();
+    /** One AppOps watcher per process that ever adds a managed alert window. */
+    private IAppOpsService mAlertOps;
+    private final IAppOpsCallback mAlertWatcher = new IAppOpsCallback.Stub() {
+        @Override public void opChanged(int op, int uid, String name, String device) {
+            if (op == AlertWindowOperation.OP) refreshAlertWindows();
+        }
+    };
     private volatile CloseHandler mCloseHandler = WindowSession::finishActivity;
     private volatile LifecycleHandler mLifecycleHandler = serverLifecycle();
     /** Windows added so far (AppWindow.seq). Guarded by mWindows. */
@@ -263,6 +277,11 @@ public final class WindowSession extends IWindowSession.Stub {
         FileDescriptor eventFd;
         boolean drawn;
         boolean shown;
+        boolean viewVisible;
+        /** Removed from the session, including when an alert ancestor was removed. */
+        volatile boolean removed;
+        Handler alertHandler;
+        AlertWindowOperation alertOperation;
 
         // Popups (ADR 0040).
         /** The window this one belongs to (shown as its popup), or null: a top-level window. */
@@ -826,7 +845,7 @@ public final class WindowSession extends IWindowSession.Stub {
         }
         // Focusable windows start focused (a window shown off the desktop is never
         // activated); a toast, a tooltip or a PopupWindow that is not focusable never is.
-        o.initialFocus = w.focusable() && !emptyTransparentActivity(w);
+        o.initialFocus = w.focusable() && alertVisible(w) && !emptyTransparentActivity(w);
         if (o.initialFocus) w.sessionFocus = Boolean.TRUE;
         final IBinder key = w.client.asBinder();
         o.listener = (type, a, b) -> onWindowEvent(key, type, a, b);
@@ -878,6 +897,7 @@ public final class WindowSession extends IWindowSession.Stub {
                 break;
             case WindowInput.EVENT_FOCUS:
                 w.handler.post(() -> {
+                    if (a != 0 && (!present(key, w) || !alertVisible(w))) return;
                     if (w.focused != (a != 0)) {
                         w.focused = a != 0;
                         w.identity.focus(w.focused, w.handler);
@@ -1295,7 +1315,7 @@ public final class WindowSession extends IWindowSession.Stub {
         synchronized (mWindows) {
             w = mWindows.get(key);
         }
-        if (w == null) return;
+        if (w == null || !alertVisible(w)) return;
         String text;
         if (Character.isHighSurrogate(c)) {
             w.highSurrogate = c;
@@ -1892,8 +1912,9 @@ public final class WindowSession extends IWindowSession.Stub {
     }
 
     /**
-     * A popup's Win32 window: owned by its parent's (Windows keeps it above it, hides and
-     * minimizes it with it; no taskbar button), translucent when its format has alpha (a
+     * A popup's Win32 window: owned by its parent's (Windows keeps it above it and
+     * minimizes it with it; hiding the owner does not hide its popups), with no taskbar
+     * button, translucent when its format has alpha (a
      * layered window: a dialog's rounded corners and shadow show what is behind; with
      * SkiaGL its frames are read back into it), never activated when it is not focusable, clicked
      * through when it is not touchable.
@@ -1953,6 +1974,7 @@ public final class WindowSession extends IWindowSession.Stub {
     /** Shows a window once drawn (finishDrawing, or relayout making it visible again). */
     private void showWindow(AppWindow w) {
         NativeWindow nw = w.nativeWindow;
+        if (nw == null || !alertVisible(w)) return;
         if (emptyTransparentActivity(w)) {
             // Routing Activities often show a Dialog from onCreate without adding
             // Activity content. Their transparent DecorView can measure only a
@@ -2230,7 +2252,7 @@ public final class WindowSession extends IWindowSession.Stub {
             synchronized (mWindows) {
                 for (int i = 0; i < mWindows.size(); i++) {
                     AppWindow v = mWindows.valueAt(i);
-                    if (v.nativeWindow != null && v.shown && root(v) == root) group.add(v);
+                    if (v.nativeWindow != null && v.shown && root(v) == root && alertVisible(v)) group.add(v);
                 }
             }
             group.sort(WindowSession::compareStack);
@@ -2306,14 +2328,14 @@ public final class WindowSession extends IWindowSession.Stub {
      * as clicking an app window behind its dialog does on Windows.
      */
     private void onActivated(AppWindow w) {
-        if (!shownOnDesktop(w)) return;
+        if (!present(w.client.asBinder(), w) || !alertVisible(w) || !shownOnDesktop(w)) return;
         AppWindow root = root(w);
         AppWindow keys = null;
         synchronized (mWindows) {
             List<AppWindow> group = new ArrayList<>();
             for (int i = 0; i < mWindows.size(); i++) {
                 AppWindow v = mWindows.valueAt(i);
-                if (v.nativeWindow != null && v.shown && root(v) == root) group.add(v);
+                if (v.nativeWindow != null && v.shown && root(v) == root && alertVisible(v)) group.add(v);
             }
             group.sort(WindowSession::compareStack);
             for (AppWindow v : group) {
@@ -2321,7 +2343,9 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             if (!w.popup) mActiveRoot = w;
         }
-        if (keys != null && keys != w && keys.nativeWindow != null) keys.nativeWindow.activate();
+        if (keys != null && keys != w && keys.nativeWindow != null && alertVisible(keys)) {
+            keys.nativeWindow.activate();
+        }
         // The user activated a task's window: the task comes to the front (resumed), as a
         // click on a freeform task does on Android's desktop.
         if (root.taskId >= 0 && !root.minimized
@@ -2526,6 +2550,109 @@ public final class WindowSession extends IWindowSession.Stub {
 
     // ---- IWindowSession ----
 
+    private IAppOpsService watchAlertMode() {
+        synchronized (mAlertWatchLock) {
+            if (mAlertOps != null && mAlertOps.asBinder().isBinderAlive()) return mAlertOps;
+            IBinder binder = ServiceManager.checkService(Context.APP_OPS_SERVICE);
+            if (binder == null) return null;
+            IAppOpsService ops = IAppOpsService.Stub.asInterface(binder);
+            IBinder.DeathRecipient death = this::refreshAlertWindows;
+            try {
+                binder.linkToDeath(death, 0);
+                ops.startWatchingModeWithFlags(AlertWindowOperation.OP, null,
+                        AppOpsManager.WATCH_FOREGROUND_CHANGES, mAlertWatcher);
+                mAlertOps = ops;
+                return ops;
+            } catch (RemoteException | SecurityException unavailable) {
+                binder.unlinkToDeath(death, 0);
+                return null;
+            }
+        }
+    }
+
+    /** A sub-window cannot present or route input through a revoked alert parent. */
+    private static boolean alertVisible(AppWindow window) {
+        for (AppWindow w = window; w != null; w = w.parent) {
+            if (w.removed) return false;
+            if (w.alertOperation != null && !w.alertOperation.visible()) return false;
+        }
+        return true;
+    }
+
+    private static boolean belongsToAlert(AppWindow window, AppWindow owner) {
+        for (AppWindow w = window; w != null; w = w.parent) {
+            if (w == owner) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasAlertOwner(AppWindow window) {
+        for (AppWindow w = window; w != null; w = w.parent) {
+            if (w.alertOperation != null) return true;
+        }
+        return false;
+    }
+
+    private void refreshAlertWindows() {
+        List<AppWindow> owners = new ArrayList<>();
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow w = mWindows.valueAt(i);
+                if (w.alertOperation != null) owners.add(w);
+            }
+        }
+        for (AppWindow owner : owners) {
+            owner.alertHandler.post(() -> refreshAlertGroup(owner));
+        }
+    }
+
+    private void refreshAlertGroup(AppWindow owner) {
+        if (window(owner.client) != owner) return;
+        boolean wasVisible = owner.alertOperation.visible();
+        owner.alertOperation.refresh();
+        if (wasVisible == owner.alertOperation.visible()) return;
+        List<AppWindow> windows = new ArrayList<>();
+        synchronized (mWindows) {
+            for (int i = 0; i < mWindows.size(); i++) {
+                AppWindow w = mWindows.valueAt(i);
+                if (belongsToAlert(w, owner)) windows.add(w);
+            }
+        }
+        for (AppWindow w : windows) {
+            Handler handler = w.handler;
+            if (handler == null || handler.getLooper() == Looper.myLooper()) updateAlertVisibility(w);
+            else handler.post(() -> updateAlertVisibility(w));
+        }
+    }
+
+    private void updateAlertVisibility(AppWindow w) {
+        if (window(w.client) != w || w.nativeWindow == null) return;
+        if (!alertVisible(w)) {
+            if (w.shown) hideWindow(w);
+            w.highSurrogate = 0;
+            if (w.focused) {
+                w.focused = false;
+                w.identity.focus(false, w.handler);
+            }
+            if (Boolean.TRUE.equals(w.sessionFocus)) {
+                w.sessionFocus = false;
+                w.identity.focus(false, w.handler);
+                if (w.input != null) w.input.inject(WindowInput.EVENT_FOCUS, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0);
+            }
+        } else if (w.viewVisible && w.drawn && !w.shown && !w.coverHidden && !root(w).minimized) {
+            showWindow(w);
+        }
+    }
+
+    private static void checkAlertRelayout(AppWindow w, WindowManager.LayoutParams next) {
+        if ((AlertWindowPolicy.applies(w.attrs) || AlertWindowPolicy.applies(next))
+                && (w.attrs.type != next.type
+                        || AlertWindowPolicy.rounded(w.attrs) != AlertWindowPolicy.rounded(next))) {
+            throw new IllegalArgumentException("Cannot change a window's alert classification after adding it");
+        }
+    }
+
     @Override
     public int addToDisplay(IWindow window, WindowManager.LayoutParams attrs, int viewVisibility,
             int layerStackId, int requestedVisibleTypes, InputChannel outInputChannel,
@@ -2538,12 +2665,24 @@ public final class WindowSession extends IWindowSession.Stub {
     public int addToDisplayAsUser(IWindow window, WindowManager.LayoutParams attrs,
             int viewVisibility, int layerStackId, int userId, int requestedVisibleTypes,
             InputChannel outInputChannel, WindowRelayoutResult result) {
+        AppWindow w = new AppWindow(window);
+        if (AlertWindowPolicy.applies(attrs)) {
+            AlertWindowPolicy.Owner owner = AlertWindowPolicy.checkAdd(attrs);
+            if (owner == null) return WindowManagerGlobal.ADD_PERMISSION_DENIED;
+            if (owner.packageName() != null && WindowManager.LayoutParams.isSystemAlertWindowType(attrs.type)) {
+                IAppOpsService ops = watchAlertMode();
+                Looper looper = Looper.myLooper();
+                if (ops == null || looper == null) return WindowManagerGlobal.ADD_PERMISSION_DENIED;
+                w.alertOperation = new AlertWindowOperation(ops, owner);
+                w.alertHandler = Handler.createAsync(looper);
+            }
+        }
         // After a LaunchActivityItem: the Activity's calls go through the hook again.
         ActivityClientHook.ensure();
         watchResumedActivities();
-        AppWindow w = new AppWindow(window);
         w.attrs.copyFrom(attrs);
         w.requestedVisibleTypes = requestedVisibleTypes;
+        w.viewVisible = viewVisibility == View.VISIBLE;
         // The Activity's task, and whether the window floats over the Activity below it
         // (a dialog or translucent theme): before mWindows is locked (binder calls).
         boolean overActivity = false;
@@ -2559,6 +2698,9 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             w.seq = mNextSeq++;
             w.parent = findParent(w, overActivity);
+            if (isSubWindow(attrs.type) && w.parent == null) {
+                return WindowManagerGlobal.ADD_BAD_SUBWINDOW_TOKEN;
+            }
             w.popup = w.parent != null || attrs.type >= WindowManager.LayoutParams.FIRST_SUB_WINDOW;
             if (activityConfig != null) {
                 Rect b = activityConfig.windowConfiguration.getBounds();
@@ -2580,6 +2722,7 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             mWindows.put(window.asBinder(), w);
         }
+        if (w.alertOperation != null) w.alertOperation.refresh();
         // The window's input channel pair (input reaches it once the input track's
         // WindowInput is attached: attachInput).
         if (outInputChannel != null) {
@@ -2610,22 +2753,59 @@ public final class WindowSession extends IWindowSession.Stub {
 
     @Override
     public void remove(IBinder clientToken) {
-        AppWindow w;
+        List<AppWindow> removed = new ArrayList<>();
         synchronized (mWindows) {
-            w = mWindows.remove(clientToken);
-        }
-        if (w != null) {
-            w.identity.retire(w.handler);
-            boolean wasShown = w.shown;
-            if (!w.popup && w.nativeWindow != null && w.shown) rememberTaskScreen(w);
-            closeNativeWindow(w);
-            log("window \"" + w.title() + "\" removed");
-            if (w.popup && wasShown) updateGroup(root(w));
-            AppWindow below = w.parent;
-            if (below != null && below.appHidden && below.nativeWindow != null
-                    && !hasActivityPopup(below) && !root(below).minimized) {
-                hideWindow(below);  // its Activity stayed stopped
+            AppWindow owner = mWindows.remove(clientToken);
+            if (owner == null) return;
+            removed.add(owner);
+            if (hasAlertOwner(owner)) {
+                // Children cannot outlive the alert admission that made them visible.
+                // Remove them atomically so late events and new child adds cannot use it.
+                for (int i = mWindows.size() - 1; i >= 0; i--) {
+                    AppWindow child = mWindows.valueAt(i);
+                    if (belongsToAlert(child, owner)) {
+                        removed.add(child);
+                        mWindows.removeAt(i);
+                    }
+                }
             }
+            for (AppWindow w : removed) w.removed = true;
+        }
+        // Native owned popups stay visible when their owner is merely hidden. Retained
+        // Surface references can defer HWND destruction, so hide every retired window now.
+        // Newer descendants release before their parents when they share a Looper.
+        removed.sort((first, second) -> Long.compare(second.seq, first.seq));
+        for (AppWindow w : removed) {
+            if (w.alertOperation != null) w.alertOperation.close();
+            w.identity.retire(w.handler);
+            NativeWindow nativeWindow = w.nativeWindow;
+            if (nativeWindow != null) {
+                nativeWindow.hide();
+                nativeWindow.setInputRoute(null, null, null);
+            }
+            NativeWindow dimLayer = w.dimLayer;
+            if (dimLayer != null) dimLayer.hide();
+            Runnable release = () -> finishRemove(w);
+            Handler handler = w.handler;
+            if (handler == null || handler.getLooper() == Looper.myLooper() || !handler.post(release)) {
+                release.run();
+            }
+        }
+    }
+
+    /** Release the removed window's resources on its Looper when it is still running. */
+    private void finishRemove(AppWindow w) {
+        boolean wasShown = w.shown;
+        if (!w.popup && w.nativeWindow != null && w.shown) rememberTaskScreen(w);
+        closeNativeWindow(w);
+        w.focused = false;
+        w.highSurrogate = 0;
+        log("window \"" + w.title() + "\" removed");
+        if (w.popup && wasShown && !root(w).removed) updateGroup(root(w));
+        AppWindow below = w.parent;
+        if (below != null && !below.removed && below.appHidden && below.nativeWindow != null
+                && !hasActivityPopup(below) && !root(below).minimized) {
+            hideWindow(below);  // its Activity stayed stopped
         }
     }
 
@@ -2637,11 +2817,13 @@ public final class WindowSession extends IWindowSession.Stub {
         if (w == null) return 0;
         int oldFlags = w.attrs.flags;
         if (attrs != null) {
+            checkAlertRelayout(w, attrs);
             w.attrs.copyFrom(attrs);
             if (w.nativeWindow != null) w.nativeWindow.setTitle(title(w));
         }
         w.requestedWidth = requestedWidth;
         w.requestedHeight = requestedHeight;
+        w.viewVisible = viewVisibility == View.VISIBLE;
         // The task turned for an orientation (or back): the window takes its new shape.
         syncTaskShape(w);
         ActivityClientHook.ensure();
@@ -2724,6 +2906,7 @@ public final class WindowSession extends IWindowSession.Stub {
         if (w == null) return;
         int oldFlags = w.attrs.flags;
         if (attrs != null) {
+            checkAlertRelayout(w, attrs);
             w.attrs.copyFrom(attrs);
             if (w.nativeWindow != null) w.nativeWindow.setTitle(title(w));
         }
@@ -2731,6 +2914,7 @@ public final class WindowSession extends IWindowSession.Stub {
         // changed): the Win32 window follows.
         w.requestedWidth = requestedWidth;
         w.requestedHeight = requestedHeight;
+        w.viewVisible = viewVisibility == View.VISIBLE;
         if (w.nativeWindow == null || viewVisibility != View.VISIBLE) return;
         WindowRelayoutResult result = new WindowRelayoutResult(new ClientWindowFrames(),
                 new android.util.MergedConfiguration(), new InsetsState(),
@@ -2859,7 +3043,7 @@ public final class WindowSession extends IWindowSession.Stub {
             }
             if (target == null) target = activeRoot();
         }
-        if (target == null) return;
+        if (target == null || !alertVisible(target)) return;
 
         ClipData data = null;
         ClipDescription desc = null;
@@ -2887,6 +3071,10 @@ public final class WindowSession extends IWindowSession.Stub {
         final AppWindow w = target;
         final android.view.DragEvent dragEvent = event;
         Runnable dispatch = () -> {
+            if (!present(w.client.asBinder(), w) || !alertVisible(w)) {
+                dragEvent.recycle();
+                return;
+            }
             ViewRootImpl root = viewRoot(w);
             if (root != null) {
                 try {
