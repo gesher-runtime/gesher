@@ -27,9 +27,27 @@ jobs:
           sparse-checkout: |
             .github/cla
             .github/scripts
+      - name: Resolve this repository's name
+        id: repo
+        shell: bash
+        run: echo "name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+      - name: Create repository bot token
+        id: gesher-bot
+        if: vars.GESHER_BOT_APP_ID != ''
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.GESHER_BOT_APP_ID }}
+          private-key: ${{ secrets.GESHER_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo.outputs.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-statuses: write
       - name: Check or record CLA signature
         uses: actions/github-script@v7
         with:
+          github-token: ${{ steps.gesher-bot.outputs.token || github.token }}
           script: |
             const cla = require('./.github/scripts/cla.js');
             await cla.run({ github, context, core });
