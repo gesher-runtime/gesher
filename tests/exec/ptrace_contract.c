@@ -1407,6 +1407,8 @@ int main(int argc, char** argv) {
   parent_shared_write();
   parent_pending_read(65535, 100);
   parent_pending_read(65536, 100);
+  parent_pending_read(65535, 4097);
+  parent_pending_read(61441, 70000);
   parent_stream(0, 60);
   parent_stream(1, 60);
   parent_attach_at_spawn();

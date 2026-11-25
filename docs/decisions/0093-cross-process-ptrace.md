@@ -203,30 +203,35 @@ other operation on that description waits for it, also while the thread is
 stopped. So a blocking write is written only in ways that complete at once,
 with the description's gate keeping every other Gesher user out:
 - when the free buffer space the pipe reports (`WriteQuotaAvailable`) holds
-  the write (beyond `PIPE_BUF`, a piece of it), that is written: it is
-  buffered at once, whole;
+  all of the write, it is written: it is buffered at once, whole;
 - otherwise the reported room says little: a read pending on the other end
   reserves its own size from it (a pending read of R bytes leaves
   65536 - R, none from 65536 on), although a write into that read completes
   at once. The endpoint is switched to `PIPE_NOWAIT`, which Windows allows
   only while the pipe holds no data (it refuses with `ERROR_PIPE_BUSY`
-  otherwise). When the switch succeeds the pipe is empty: the write (beyond
-  `PIPE_BUF`, a piece of it, halved until it fits) goes in at once, all or
-  nothing, into the pending read and the buffer, and the endpoint is
-  switched back. A write into a pending read is therefore neither delayed
-  nor split, as on Linux;
+  otherwise). When the switch succeeds the pipe is empty: the write goes in
+  at once, all or nothing, into the pending read and the buffer, which
+  together take about R + 65536 bytes (beyond `PIPE_BUF`, a piece of that
+  size first, halved until it fits), and the endpoint is switched back. A
+  write into a pending read is therefore neither delayed nor split, as on
+  Linux, whatever its size;
 - when the switch is refused, data waits for a reader that is not reading,
-  and the write waits for room. Beyond `PIPE_BUF`, one byte waits in a
-  blocking write, which completes when the reader frees room and which a
-  stop or a signal cancels without ambiguity (it was read or it was not). A
-  write of at most `PIPE_BUF` bytes is never split: it waits with nothing
-  pending (short sleeps, then 1 ms ones, where a stop can take it) and tries
-  again.
+  and the reported room is real. Beyond `PIPE_BUF`, a piece that fits it is
+  written; with no room at all one byte waits in a blocking write, which
+  completes when the reader frees room and which a stop or a signal cancels
+  without ambiguity (it was read or it was not). A write of at most
+  `PIPE_BUF` bytes is never split: it waits with nothing pending in the
+  kernel, where a stop can take it, and tries again: a few yields, then
+  high-resolution waitable-timer waits of 50 us that grow to 1 ms while the
+  wait goes on (`Sleep(1)` lasts a whole timer tick, about 16 ms, and would
+  bound such a writer to a few hundred kilobytes a second).
 
 A stopped writer therefore makes no progress beyond what it had written into
 the pipe, and a signal or a thread's cancellation of a blocking write returns
-the bytes it wrote (a short count) or `EINTR`, as on Linux. Throughput is
-unchanged (the same pipe throughput checks before and after this change).
+the bytes it wrote (a short count) or `EINTR`, as on Linux. Against a reader
+that keeps up, writes go through at full speed; a `PIPE_BUF` writer that
+waits for a slow reader to free room resumes within the timer waits above,
+not at once as a Linux writer woken by the reader does.
 
 While stopped it rescans every 20 ms. A thread the system started meanwhile
 (a thread pool worker) is suspended and checked as in 2; if it is not at a
