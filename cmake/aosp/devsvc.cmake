@@ -9,6 +9,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_win32.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/url_handlers_win.cc
+  ${CMAKE_SOURCE_DIR}/compat/devsvc/home_region_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/clipboard_access.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_toast.c
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_activator.c)

@@ -396,6 +396,20 @@ public final class WindowsHost {
     }
 
     /**
+     * The user's "Country or region" as an ISO 3166-1 alpha-2 code (GetUserDefaultGeoName,
+     * else GetUserGeoID and GetGeoInfoW GEO_ISO2), or null when Windows has none (an M.49
+     * area, a failure) or this runtime has no natives.
+     */
+    public static String homeRegion() {
+        if (!available()) return null;
+        try {
+            return nativeHomeRegion();
+        } catch (UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
+    /**
      * Whether Windows has a handler registered for the URI scheme (the current user's
      * default, AssocQueryStringW with ASSOCF_IS_PROTOCOL). False without the natives.
      */
@@ -517,6 +531,7 @@ public final class WindowsHost {
     private static native int nativeUnregisterAppId(String appId);
     private static native String nativeFullPath(String path);
     private static native boolean nativeOpenUrl(String url);
+    private static native String nativeHomeRegion();
     private static native boolean nativeHasUrlHandler(String scheme);
     private static native boolean nativeConfirmDial(String packageName, String number,
             int ownerPid, java.util.function.BooleanSupplier active);

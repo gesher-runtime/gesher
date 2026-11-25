@@ -15,6 +15,7 @@
 
 #include "core_jni_helpers.h"
 #include "devsvc_win32.h"
+#include "home_region_win.h"
 #include "url_handlers_win.h"
 #include "../windows/clipboard_publication.h"
 #include <new>
@@ -349,6 +350,12 @@ jboolean WindowsHost_openUrl(JNIEnv* env, jclass, jstring url) {
   return dev::OpenUrl(Str(env, url)) ? JNI_TRUE : JNI_FALSE;
 }
 
+jstring WindowsHost_homeRegion(JNIEnv* env, jclass) {
+  char16_t region[3] = {};
+  if (!::dev::HomeRegion(region, nullptr)) return nullptr;
+  return JStr(env, std::u16string(region, 2));
+}
+
 jboolean WindowsHost_hasUrlHandler(JNIEnv* env, jclass, jstring scheme) {
   static_assert(sizeof(wchar_t) == sizeof(char16_t), "UTF-16 wchar_t");
   std::u16string s = Str(env, scheme);
@@ -530,6 +537,7 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeUnregisterAppId", "(" DEVSVC_STRING ")I", GESHER_JNI(WindowsHost_unregisterAppId)},
     {"nativeFullPath", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_fullPath)},
     {"nativeOpenUrl", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_openUrl)},
+    {"nativeHomeRegion", "()" DEVSVC_STRING, GESHER_JNI(WindowsHost_homeRegion)},
     {"nativeHasUrlHandler", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_hasUrlHandler)},
     {"nativeConfirmDial", "(" DEVSVC_STRING DEVSVC_STRING
         "ILjava/util/function/BooleanSupplier;)Z", GESHER_JNI(WindowsHost_confirmDial)},
