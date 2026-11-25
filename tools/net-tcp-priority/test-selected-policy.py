@@ -610,6 +610,8 @@ GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::ws::LocalAddressCac
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
+# ADR 0097 replaces system.cc's ENOSYS mkfifo stub with a relocation comment.
+# The reviewed receipt adds exactly that hunk; every byte check below remains.
 REVIEWED_PATCH_SHA256='ee4583db58b83515430b5a4333cb95d3ef037ddc5731f5ad0f7958ba858a8e55'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()

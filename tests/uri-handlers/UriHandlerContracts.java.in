@@ -1,0 +1,329 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package com.gesher.server;
+
+import android.content.ComponentName;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
+import android.net.Uri;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Predicate;
+
+/**
+ * Host contracts of the unchanged production WindowsUriHandlers, on AOSP's own Intent,
+ * IntentFilter and Uri (android-all 16). The only test double is the Windows answer
+ * (a set of schemes with a registered handler), defined here and nowhere in app/java.
+ */
+public final class UriHandlerContracts {
+    private static int sChecks;
+
+    private static void check(boolean condition, String what) {
+        if (!condition) throw new AssertionError(what);
+        sChecks++;
+    }
+
+    private static void equal(Object expected, Object actual, String what) {
+        if (expected == null ? actual != null : !expected.equals(actual)) {
+            throw new AssertionError(what + ": expected <" + expected + "> but was <" + actual + ">");
+        }
+        sChecks++;
+    }
+
+    /** The Windows answer of a test: these schemes have a handler; records each question. */
+    private static final class TestWindows implements Predicate<String> {
+        final Set<String> registered;
+        final List<String> asked = new ArrayList<>();
+        TestWindows(String... schemes) { registered = new HashSet<>(Arrays.asList(schemes)); }
+        @Override public boolean test(String scheme) {
+            asked.add(scheme);
+            return registered.contains(scheme);
+        }
+    }
+
+    private static Intent intent(String action, String uri) {
+        return new Intent(action, Uri.parse(uri));
+    }
+
+    private static List<ResolveInfo> query(WindowsUriHandlers handlers, Intent intent) {
+        return handlers.queryIntentActivities(intent, null, PackageManager.MATCH_DEFAULT_ONLY);
+    }
+
+    private static String resolved(WindowsUriHandlers handlers, Intent intent) {
+        List<ResolveInfo> all = query(handlers, intent);
+        check(all.size() <= 1, "at most one handler activity per request");
+        return all.isEmpty() ? null : all.get(0).activityInfo.name;
+    }
+
+    static final String MAIL = WindowsUriHandlers.PACKAGE + ".WindowsMailActivity";
+    static final String DIALER = WindowsUriHandlers.PACKAGE + ".WindowsDialerActivity";
+    static final String MESSAGING = WindowsUriHandlers.PACKAGE + ".WindowsMessagingActivity";
+    static final String MAPS = WindowsUriHandlers.PACKAGE + ".WindowsMapsActivity";
+
+    static void withoutWindows() {
+        // A runtime without Windows natives: a device without any of these apps.
+        WindowsUriHandlers none = new WindowsUriHandlers(null);
+        check(!none.exists(), "no natives: no package");
+        equal(null, none.packageInfo(PackageManager.GET_ACTIVITIES), "no natives: getPackageInfo");
+        equal(null, none.applicationInfo(0), "no natives: getApplicationInfo");
+        equal(null, none.activityInfo(MAIL, 0), "no natives: getActivityInfo");
+        equal(null, resolved(none, intent(Intent.ACTION_SENDTO, "mailto:a@example.com")), "no natives: mailto");
+        equal(null, resolved(none, intent(Intent.ACTION_DIAL, "tel:+15551234")), "no natives: tel");
+
+        // Windows answers, but has no handler registered for any of the schemes.
+        TestWindows nothing = new TestWindows();
+        WindowsUriHandlers empty = new WindowsUriHandlers(nothing);
+        check(!empty.exists(), "no handler: no package");
+        equal(null, empty.packageInfo(0), "no handler: getPackageInfo");
+        equal(null, resolved(empty, intent(Intent.ACTION_SENDTO, "mailto:a@example.com")), "no handler: SENDTO mailto");
+        equal(null, resolved(empty, intent(Intent.ACTION_VIEW, "mailto:a@example.com")), "no handler: VIEW mailto");
+        equal(null, resolved(empty, intent(Intent.ACTION_DIAL, "tel:+15551234")), "no handler: DIAL tel");
+        equal(null, resolved(empty, intent(Intent.ACTION_SENDTO, "smsto:+15551234")), "no handler: SENDTO smsto");
+        equal(null, resolved(empty, intent(Intent.ACTION_VIEW, "geo:32.08,34.78")), "no handler: VIEW geo");
+        check(empty.filters().isEmpty(), "no handler: no filters for package visibility");
+
+        // A failing Windows query is not a registered handler.
+        WindowsUriHandlers failing = new WindowsUriHandlers(scheme -> {
+            throw new IllegalStateException("AssocQueryStringW failed");
+        });
+        check(!failing.exists(), "failed query: no package");
+        equal(null, resolved(failing, intent(Intent.ACTION_SENDTO, "mailto:a@example.com")), "failed query: no handler");
+    }
+
+    static void onlyRegisteredSchemes() {
+        TestWindows windows = new TestWindows("mailto");
+        WindowsUriHandlers handlers = new WindowsUriHandlers(windows);
+        equal(MAIL, resolved(handlers, intent(Intent.ACTION_SENDTO, "mailto:a@example.com")), "SENDTO mailto");
+        equal(MAIL, resolved(handlers, intent(Intent.ACTION_VIEW, "mailto:a@example.com")), "VIEW mailto");
+        // IntentFilter matches schemes case-sensitively (Intent.normalizeScheme is the app's).
+        equal(null, resolved(handlers, intent(Intent.ACTION_VIEW, "MAILTO:a@example.com")), "VIEW MAILTO");
+        equal(null, resolved(handlers, intent(Intent.ACTION_DIAL, "tel:+15551234")), "tel without a Windows tel handler");
+        equal(null, resolved(handlers, intent(Intent.ACTION_VIEW, "geo:0,0?q=Haifa")), "geo without a Windows geo handler");
+
+        windows.asked.clear();
+        resolved(handlers, intent(Intent.ACTION_SENDTO, "smsto:+15551234"));
+        equal(Arrays.asList("sms"), windows.asked, "smsto asks Windows about sms only");
+        windows.asked.clear();
+        resolved(handlers, intent(Intent.ACTION_VIEW, "https://example.com/"));
+        check(windows.asked.isEmpty(), "an http request asks Windows nothing here");
+
+        PackageInfo pi = handlers.packageInfo(PackageManager.GET_ACTIVITIES);
+        check(pi != null && pi.activities.length == 1 && MAIL.equals(pi.activities[0].name),
+                "getPackageInfo lists only the activities Windows has a handler for");
+        check(handlers.activityInfo(DIALER, 0) == null, "getActivityInfo of an absent handler");
+        ActivityInfo mail = handlers.activityInfo(MAIL, 0);
+        check(mail != null && mail.exported && mail.enabled
+                && WindowsUriHandlers.PACKAGE.equals(mail.packageName), "getActivityInfo of the mail handler");
+        equal(1, handlers.filters().size(), "one filter for package visibility");
+
+        // Registration can change while the device runs: each question reaches Windows.
+        windows.registered.add("tel");
+        equal(DIALER, resolved(handlers, intent(Intent.ACTION_DIAL, "tel:+15551234")), "tel after registration");
+        windows.registered.clear();
+        check(!handlers.exists(), "after unregistration");
+        equal(null, resolved(handlers, intent(Intent.ACTION_SENDTO, "mailto:a@example.com")), "mailto after unregistration");
+    }
+
+    static void filtersOfAospApps() {
+        WindowsUriHandlers all = new WindowsUriHandlers(new TestWindows("mailto", "tel", "sms", "geo"));
+        // Dialer: VIEW and DIAL of tel. Never CALL: it places the call without confirmation.
+        equal(DIALER, resolved(all, intent(Intent.ACTION_DIAL, "tel:+15551234")), "DIAL tel");
+        equal(DIALER, resolved(all, intent(Intent.ACTION_VIEW, "tel:+15551234")), "VIEW tel");
+        equal(null, resolved(all, intent(Intent.ACTION_CALL, "tel:+15551234")), "CALL tel has no Windows handler");
+        equal(null, resolved(all, new Intent(Intent.ACTION_DIAL)), "DIAL without a number");
+        equal(null, resolved(all, intent(Intent.ACTION_SENDTO, "tel:+15551234")), "SENDTO tel");
+        // Messaging: VIEW and SENDTO of sms and smsto. Not mms.
+        equal(MESSAGING, resolved(all, intent(Intent.ACTION_SENDTO, "smsto:+15551234")), "SENDTO smsto");
+        equal(MESSAGING, resolved(all, intent(Intent.ACTION_VIEW, "sms:+15551234")), "VIEW sms");
+        equal(null, resolved(all, intent(Intent.ACTION_SENDTO, "mmsto:+15551234")), "SENDTO mmsto");
+        // Maps: VIEW of geo.
+        equal(MAPS, resolved(all, intent(Intent.ACTION_VIEW, "geo:32.08,34.78?q=Tel%20Aviv")), "VIEW geo");
+        equal(null, resolved(all, intent(Intent.ACTION_SENDTO, "geo:32.08,34.78")), "SENDTO geo");
+        // ACTION_SEND of message/rfc822 (attachments): no MAPI path, no resolver.
+        Intent send = new Intent(Intent.ACTION_SEND).setType("message/rfc822");
+        send.putExtra(Intent.EXTRA_EMAIL, new String[] { "a@example.com" });
+        equal(null, resolved(all, send), "SEND message/rfc822");
+        // http(s) stays the browser's (BrowserPackageSupport).
+        equal(null, resolved(all, intent(Intent.ACTION_VIEW, "https://example.com/")), "VIEW https");
+
+        // Categories: a request's categories must all be in the filter.
+        Intent browsable = intent(Intent.ACTION_VIEW, "mailto:a@example.com").addCategory(Intent.CATEGORY_BROWSABLE);
+        equal(MAIL, resolved(all, browsable), "BROWSABLE mailto");
+        Intent appEmail = intent(Intent.ACTION_SENDTO, "mailto:a@example.com").addCategory(Intent.CATEGORY_APP_EMAIL);
+        equal(null, resolved(all, appEmail), "an unknown category does not match");
+
+        // Package and component restrictions.
+        Intent other = intent(Intent.ACTION_SENDTO, "mailto:a@example.com").setPackage("com.example.mail");
+        equal(null, resolved(all, other), "another package named");
+        Intent named = intent(Intent.ACTION_SENDTO, "mailto:a@example.com").setPackage(WindowsUriHandlers.PACKAGE);
+        equal(MAIL, resolved(all, named), "this package named");
+        Intent explicit = intent(Intent.ACTION_SENDTO, "mailto:a@example.com")
+                .setComponent(new ComponentName(WindowsUriHandlers.PACKAGE, MAIL));
+        equal(MAIL, resolved(all, explicit), "explicit component while registered");
+        WindowsUriHandlers mailOnly = new WindowsUriHandlers(new TestWindows("mailto"));
+        Intent explicitDialer = intent(Intent.ACTION_DIAL, "tel:+15551234")
+                .setComponent(new ComponentName(WindowsUriHandlers.PACKAGE, DIALER));
+        equal(null, resolved(mailOnly, explicitDialer), "explicit component without its Windows handler");
+
+        ResolveInfo withFilter = all.queryIntentActivities(intent(Intent.ACTION_SENDTO, "mailto:a@example.com"), null,
+                PackageManager.GET_RESOLVED_FILTER).get(0);
+        check(withFilter.filter != null && withFilter.filter.hasAction(Intent.ACTION_SENDTO)
+                && withFilter.filter.hasDataScheme("mailto"), "GET_RESOLVED_FILTER");
+        check(withFilter.isDefault && withFilter.match > 0, "isDefault and match");
+        check(WindowsUriHandlers.handlesScheme("SMSTO") && !WindowsUriHandlers.handlesScheme("https")
+                && !WindowsUriHandlers.handlesScheme(null), "handlesScheme");
+    }
+
+    /**
+     * An explicit component is one handler: the request must be one that handler hands to
+     * Windows (its action and data scheme) while Windows has it. Otherwise nothing resolves,
+     * and startActivity is ActivityNotFoundException, never another handler's launch.
+     */
+    static void explicitComponentIsOneHandler() {
+        ComponentName mail = new ComponentName(WindowsUriHandlers.PACKAGE, MAIL);
+        ComponentName maps = new ComponentName(WindowsUriHandlers.PACKAGE, MAPS);
+        WindowsUriHandlers mailOnly = new WindowsUriHandlers(new TestWindows("mailto"));
+
+        // The reviewer's case: only mail registered, the mail component with a maps URI.
+        Intent geoToMail = intent(Intent.ACTION_VIEW, "geo:32.08,34.78?q=Tel%20Aviv").setComponent(mail);
+        equal(null, resolved(mailOnly, geoToMail), "mail component with a geo URI");
+        Intent telToMail = intent(Intent.ACTION_VIEW, "tel:+15551234").setComponent(mail);
+        equal(null, resolved(mailOnly, telToMail), "mail component with a tel URI");
+        // The handler's scheme with an action it does not take.
+        Intent dialMail = intent(Intent.ACTION_DIAL, "mailto:a@example.com").setComponent(mail);
+        equal(null, resolved(mailOnly, dialMail), "mail component with ACTION_DIAL");
+        Intent sendMail = new Intent(Intent.ACTION_SEND).setData(Uri.parse("mailto:a@example.com")).setComponent(mail);
+        equal(null, resolved(mailOnly, sendMail), "mail component with ACTION_SEND");
+        // Nothing to hand to Windows: no data.
+        Intent bare = new Intent(Intent.ACTION_VIEW).setComponent(mail);
+        equal(null, resolved(mailOnly, bare), "mail component without data");
+        Intent empty = new Intent().setComponent(mail);
+        equal(null, resolved(mailOnly, empty), "mail component without action or data");
+
+        // Matching action and scheme: resolves, with or without CATEGORY_DEFAULT.
+        equal(MAIL, resolved(mailOnly, intent(Intent.ACTION_SENDTO, "mailto:a@example.com").setComponent(mail)),
+                "mail component with SENDTO mailto");
+        equal(MAIL, resolved(mailOnly, intent(Intent.ACTION_VIEW, "mailto:a@example.com").setComponent(mail)),
+                "mail component with VIEW mailto");
+        // The maps component with its own URI, but Windows has no geo handler.
+        equal(null, resolved(mailOnly, intent(Intent.ACTION_VIEW, "geo:0,0?q=Haifa").setComponent(maps)),
+                "maps component without a Windows geo handler");
+        WindowsUriHandlers mapsToo = new WindowsUriHandlers(new TestWindows("mailto", "geo"));
+        equal(MAPS, resolved(mapsToo, intent(Intent.ACTION_VIEW, "geo:0,0?q=Haifa").setComponent(maps)),
+                "maps component with VIEW geo");
+        equal(null, resolved(mapsToo, intent(Intent.ACTION_VIEW, "mailto:a@example.com").setComponent(maps)),
+                "maps component with a mailto URI, both registered");
+    }
+
+    static void selectorsKeepTheSelectedHandler() {
+        WindowsUriHandlers mailOnly = new WindowsUriHandlers(new TestWindows("mailto"));
+        WindowsUriHandlers all = new WindowsUriHandlers(new TestWindows("mailto", "tel", "sms", "geo"));
+        Intent crossScheme = intent(Intent.ACTION_VIEW, "geo:32,34");
+        crossScheme.setSelector(intent(Intent.ACTION_SENDTO, "mailto:selector@example.com"));
+        check(!mailOnly.canDelegate(crossScheme, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a mail selector cannot launch an unregistered geo handler");
+        check(!all.canDelegate(crossScheme, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a mail selector cannot switch to a different registered handler");
+
+        Intent unsupportedAction = intent(Intent.ACTION_CALL, "tel:+1555");
+        unsupportedAction.setSelector(intent(Intent.ACTION_DIAL, "tel:+1666"));
+        check(!all.canDelegate(unsupportedAction, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a supported selector cannot authorize an unsupported outer action");
+        Intent missingPayload = new Intent(Intent.ACTION_SENDTO);
+        missingPayload.setSelector(intent(Intent.ACTION_SENDTO, "mailto:selector@example.com"));
+        check(!all.canDelegate(missingPayload, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a selector does not manufacture a missing outer payload");
+
+        Intent matching = intent(Intent.ACTION_SENDTO, "mailto:actual@example.com");
+        matching.putExtra(Intent.EXTRA_SUBJECT, "Outer subject");
+        matching.setSelector(intent(Intent.ACTION_VIEW, "mailto:selector@example.com"));
+        check(mailOnly.canDelegate(matching, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a selector may choose the same handler with different resolution data");
+        equal("mailto:actual@example.com?subject=Outer%20subject", WindowsUriHandlers.windowsUri(matching),
+                "the outer recipient and extras, not the selector's, reach Windows");
+        check(matching.getComponent() == null && matching.getSelector() != null,
+                "delegation leaves the caller's intent and selector unchanged");
+
+        Intent alias = intent(Intent.ACTION_SENDTO, "smsto:+1555");
+        alias.setSelector(intent(Intent.ACTION_VIEW, "sms:+1666"));
+        check(all.canDelegate(alias, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "sms and smsto may select the same Windows messaging handler");
+        equal("sms:+1555", WindowsUriHandlers.windowsUri(alias), "SMS keeps its outer recipient");
+
+        Intent typedPayload = intent(Intent.ACTION_SENDTO, "mailto:actual@example.com");
+        typedPayload.setDataAndType(Uri.parse("mailto:actual@example.com"), "application/pdf");
+        typedPayload.setSelector(intent(Intent.ACTION_VIEW, "mailto:selector@example.com"));
+        check(!mailOnly.canDelegate(typedPayload, null, PackageManager.MATCH_DEFAULT_ONLY),
+                "a selector's absent MIME type does not hide an unsupported outer MIME type");
+        check(mailOnly.canDelegate(intent(Intent.ACTION_VIEW, "mailto:direct@example.com"),
+                null, PackageManager.MATCH_DEFAULT_ONLY), "ordinary requests still delegate");
+    }
+
+    static void windowsUris() {
+        Intent compose = intent(Intent.ACTION_SENDTO, "mailto:a@example.com");
+        compose.putExtra(Intent.EXTRA_EMAIL, new String[] { "b@example.com", "c@example.com" });
+        compose.putExtra(Intent.EXTRA_CC, new String[] { "d@example.com" });
+        compose.putExtra(Intent.EXTRA_BCC, new String[] { "e@example.com" });
+        compose.putExtra(Intent.EXTRA_SUBJECT, "Hello & welcome");
+        compose.putExtra(Intent.EXTRA_TEXT, "line one\nשלום");
+        equal("mailto:a@example.com,b@example.com,c@example.com?cc=d@example.com&bcc=e@example.com"
+                + "&subject=Hello%20%26%20welcome&body=line%20one%0D%0A%D7%A9%D7%9C%D7%95%D7%9D",
+                WindowsUriHandlers.windowsUri(compose), "SENDTO mailto with Intent's mail extras");
+
+        Intent own = intent(Intent.ACTION_SENDTO,
+                "mailto:?to=a%40example.com&subject=From%20URI&body=Kept&cc=x@example.com&x-thread=7");
+        own.putExtra(Intent.EXTRA_SUBJECT, "From extra");
+        own.putExtra(Intent.EXTRA_TEXT, "Ignored");
+        own.putExtra(Intent.EXTRA_CC, new String[] { "y@example.com" });
+        equal("mailto:a@example.com?cc=x@example.com,y@example.com&subject=From%20URI&body=Kept&x-thread=7",
+                WindowsUriHandlers.windowsUri(own), "the URI's own fields win; extras add recipients");
+
+        Intent single = intent(Intent.ACTION_SENDTO, "mailto:");
+        single.putExtra(Intent.EXTRA_EMAIL, "only@example.com");
+        equal("mailto:only@example.com", WindowsUriHandlers.windowsUri(single), "EXTRA_EMAIL as one String");
+
+        Intent sms = intent(Intent.ACTION_SENDTO, "smsto:+972501234567");
+        sms.putExtra("sms_body", "שלום & hi");
+        equal("sms:+972501234567?body=%D7%A9%D7%9C%D7%95%D7%9D%20%26%20hi", WindowsUriHandlers.windowsUri(sms),
+                "smsto with sms_body");
+        equal("sms:+1555,+1666?body=from%20uri",
+                WindowsUriHandlers.windowsUri(intent(Intent.ACTION_VIEW, "sms:+1555;+1666?body=from%20uri")),
+                "sms recipients (; or ,) and the URI's body");
+        Intent shared = intent(Intent.ACTION_SENDTO, "smsto:+1555");
+        shared.setDataAndType(Uri.parse("smsto:+1555"), "text/plain");
+        shared.putExtra(Intent.EXTRA_TEXT, "shared");
+        equal("sms:+1555?body=shared", WindowsUriHandlers.windowsUri(shared), "EXTRA_TEXT of text/plain");
+        Intent notText = intent(Intent.ACTION_SENDTO, "smsto:+1555");
+        notText.putExtra(Intent.EXTRA_TEXT, "not used");
+        equal("sms:+1555", WindowsUriHandlers.windowsUri(notText), "EXTRA_TEXT without text/plain is not a body");
+
+        equal("tel:+1-800-555-0100", WindowsUriHandlers.windowsUri(intent(Intent.ACTION_DIAL, "tel:+1-800-555-0100")),
+                "tel unchanged");
+        equal("tel:%2A31%23", WindowsUriHandlers.windowsUri(intent(Intent.ACTION_DIAL, "tel:%2A31%23")),
+                "tel keeps its encoding");
+        equal("geo:32.08,34.78?q=Tel%20Aviv",
+                WindowsUriHandlers.windowsUri(intent(Intent.ACTION_VIEW, "geo:32.08,34.78?q=Tel%20Aviv")), "geo unchanged");
+        equal(null, WindowsUriHandlers.windowsUri(intent(Intent.ACTION_DIAL, "tel:")), "tel without a number");
+        equal(null, WindowsUriHandlers.windowsUri(new Intent(Intent.ACTION_DIAL)), "no data");
+        equal(null, WindowsUriHandlers.windowsUri(intent(Intent.ACTION_VIEW, "https://example.com/")), "not a handler scheme");
+    }
+
+    public static void main(String[] args) {
+        withoutWindows();
+        onlyRegisteredSchemes();
+        filtersOfAospApps();
+        explicitComponentIsOneHandler();
+        selectorsKeepTheSelectedHandler();
+        windowsUris();
+        System.out.println("uri-handler contracts: " + sChecks + " checks passed");
+    }
+}
