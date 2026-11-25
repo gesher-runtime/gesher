@@ -83,7 +83,11 @@ SOURCES = {
             public static void restoreCallingIdentity(long value){cleared=value==1;}
         }''',
     "android/os/SystemClock.java": '''package android.os;
-        public class SystemClock { public static long elapsedRealtime(){return System.nanoTime()/1_000_000;} }''',
+        public class SystemClock {
+            public static java.util.function.LongSupplier uptime=()->System.nanoTime()/1_000_000;
+            public static long uptimeMillis(){return uptime.getAsLong();}
+            public static long elapsedRealtime(){return System.nanoTime()/1_000_000;}
+        }''',
     "android/os/UserHandle.java": '''package android.os;
         public class UserHandle { public static final int USER_NULL=-10000; }''',
     "com/gesher/server/ObserverBoundaries.java": '''package com.gesher.server;

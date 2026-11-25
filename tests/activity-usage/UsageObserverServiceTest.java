@@ -10,6 +10,7 @@ import android.app.usage.UsageStatsManager;
 import android.content.Intent;
 import android.os.Binder;
 import android.os.RemoteException;
+import android.os.SystemClock;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +26,48 @@ import static com.gesher.server.UsageLimitObserversTest.throwsType;
 
 /** Compiles the complete service/history/observer sources over explicit Android I/O boundaries. */
 public final class UsageObserverServiceTest {
+    private static void suspendedVisibleUsageUsesElapsedTime(Path directory, PackageManagerService packages,
+            CallerIdentity callers) throws Exception {
+        AtomicLong awake = new AtomicLong(1000), elapsed = new AtomicLong(1000);
+        var previousUptime = SystemClock.uptime;
+        SystemClock.uptime = awake::get;
+        UsageLimitObserversTest.ManualScheduler timer = new UsageLimitObserversTest.ManualScheduler(awake);
+        DesktopUsageStatsService service = new DesktopUsageStatsService(packages, callers,
+                directory.resolve("suspend-history.bin"), elapsed::get, elapsed::get, timer);
+        List<Intent> delivered = new ArrayList<>();
+        PendingIntent callback = new PendingIntent((code, intent, type, whitelist, receiver, permission, options) ->
+                delivered.add(intent));
+        Binder activity = new Binder();
+        try {
+            service.registerAppUsageObserver(1, new String[]{"sleep-app"}, 60000, callback, "owner");
+            service.transition(activity, "sleep-app", "Activity", ActivityUsageHistory.State.RESUMED);
+            awake.set(31000);
+            elapsed.set(31000);
+            service.transition(activity, "sleep-app", "Activity", ActivityUsageHistory.State.PAUSED);
+            // Android 16 uses elapsedRealtime for the open usage interval.
+            // The timer does not wake the suspended host. STOPPED supplies the
+            // next accounting opportunity after resume, while uptime is unchanged.
+            elapsed.addAndGet(86_400_000);
+            service.transition(activity, "sleep-app", "Activity", ActivityUsageHistory.State.STOPPED);
+            timer.drain();
+            check(delivered.size() == 1 && delivered.getFirst().getLongExtra(
+                            UsageStatsManager.EXTRA_TIME_USED, -1) == 86_430_000,
+                    "Visible usage did not include suspended elapsed time");
+            check(timer.pending() == 0, "One-shot observer retained a timer after delivery");
+            service.transition(activity, "sleep-app", "Activity", ActivityUsageHistory.State.RESUMED);
+            elapsed.addAndGet(30000);
+            timer.advance(61000);
+            check(delivered.size() == 1 && timer.pending() == 0,
+                    "Expired observer fired again after resumed activity");
+            service.transition(activity, "sleep-app", "Activity", ActivityUsageHistory.State.TERMINATED);
+        } finally {
+            SystemClock.uptime = previousUptime;
+            var field = DesktopUsageStatsService.class.getDeclaredField("mHistory");
+            field.setAccessible(true);
+            ((ActivityUsageHistory) field.get(service)).close();
+        }
+    }
+
     private static void lockOrder(DesktopUsageStatsService service, CallerIdentity callers,
             PendingIntent callback) throws Exception {
         Binder token = new Binder();
@@ -98,6 +141,7 @@ public final class UsageObserverServiceTest {
         packages.installed.put("owner", owner);
         CallerIdentity callers = new CallerIdentity(packages, owner);
         AtomicLong clock = new AtomicLong(1000);
+        SystemClock.uptime = clock::get;
         UsageLimitObserversTest.ManualScheduler timer = new UsageLimitObserversTest.ManualScheduler(clock);
         DesktopUsageStatsService service = new DesktopUsageStatsService(packages, callers,
                 directory.resolve("history.bin"), clock::get, clock::get, timer);
@@ -190,6 +234,7 @@ public final class UsageObserverServiceTest {
             check(delivered.size() == 4 && delivered.getLast().getIntExtra(
                     UsageStatsManager.EXTRA_OBSERVER_ID, -1) == 95, "Dead callback blocked another observer");
             check(!Binder.cleared, "Failed send did not restore identity");
+            suspendedVisibleUsageUsesElapsedTime(directory, packages, callers);
 
             throwsType(SecurityException.class, () -> service.registerUsageSessionObserver(
                     1, new String[]{"child"}, 60000, 1, callback, callback, "owner"));
@@ -212,7 +257,7 @@ public final class UsageObserverServiceTest {
                     1, new String[]{"app"}, 60000, callback, "owner"));
             unmanaged.unregisterAppUsageObserver(1, "owner");
             throwsType(UnsupportedOperationException.class, () -> unmanaged.reportUsageStart(activity, "feature", "owner"));
-            System.out.println("UsageObserverServiceTest passed: identity, permission, lifecycle, callbacks, retirement");
+            System.out.println("UsageObserverServiceTest passed: identity, permission, lifecycle, callbacks, retirement, suspend");
         } finally {
             var field = DesktopUsageStatsService.class.getDeclaredField("mHistory");
             field.setAccessible(true);

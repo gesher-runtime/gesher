@@ -66,6 +66,8 @@ final class DesktopUsageStatsService extends IUsageStatsManager.Default {
         mHistory = new ActivityUsageHistory(file, wall, elapsed,
                 failure -> SystemServer.log("usage history I/O failed: "
                         + failure.getClass().getSimpleName()));
+        // Android 16 AppTimeLimitController accounts with elapsedRealtime,
+        // including suspend while a usage interval has not been stopped.
         mObservers = new UsageLimitObservers(elapsed, scheduler,
                 failure -> SystemServer.log("usage observer callback failed: "
                         + failure.getClass().getSimpleName()));

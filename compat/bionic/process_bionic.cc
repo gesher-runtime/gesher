@@ -225,15 +225,66 @@ int BIONIC_SYSV Execvpe(const char* file, char* const argv[], char* const envp[]
   return DoExec(file, argv, envp, true);
 }
 
+// The list forms take argv as variadic pointers up to a null one; execle's
+// envp follows that null (bionic's execl.cpp). The System V trampoline and the
+// ARM64 bridge both supply the argument list after path and argv[0] (NextGp
+// reads either va_list); the vector forms share path resolution, environment
+// and errors.
+std::vector<char*> ListArgv(const char* first, SysvVaList* args) {
+  std::vector<char*> argv{const_cast<char*>(first)};
+  if (first != nullptr) {
+    while (auto* argument = reinterpret_cast<char*>(NextGp(args))) {
+      argv.push_back(argument);
+    }
+    argv.push_back(nullptr);
+  }
+  return argv;
+}
+
+extern "C" int BIONIC_SYSV gesher_bionic_vexecl(const char* path, const char* first,
+                                               SysvVaList* args) {
+  std::vector<char*> argv = ListArgv(first, args);
+  return Execv(path, argv.data());
+}
+extern "C" int BIONIC_SYSV gesher_bionic_vexeclp(const char* file, const char* first,
+                                                SysvVaList* args) {
+  std::vector<char*> argv = ListArgv(first, args);
+  return Execvp(file, argv.data());
+}
+extern "C" int BIONIC_SYSV gesher_bionic_vexecle(const char* path, const char* first,
+                                                SysvVaList* args) {
+  std::vector<char*> argv = ListArgv(first, args);
+  auto envp = reinterpret_cast<char* const*>(NextGp(args));
+  // A null envp is an empty environment for execve, not the caller's.
+  static char* const kEmpty[] = {nullptr};
+  return Execve(path, argv.data(), envp != nullptr ? envp : kEmpty);
+}
+
+// Two fixed arguments (path or file, argv[0]), the va_list in %rdx.
+extern "C" void gesher_bionic_execl();
+extern "C" void gesher_bionic_execlp();
+extern "C" void gesher_bionic_execle();
+asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execl", "gesher_bionic_vexecl", "16", "%rdx"));
+asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execlp", "gesher_bionic_vexeclp", "16", "%rdx"));
+asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execle", "gesher_bionic_vexecle", "16", "%rdx"));
+
 // --- waitpid / wait / wait4 ----------------------------------------------------
 
 constexpr int kWNOHANG = 1;
 
+bool IsChild(int pid) {
+  std::lock_guard<std::mutex> lock(g_children_mutex);
+  return g_children.count(pid) != 0;
+}
+
 int CollectOne(int pid, int* status, int options) {
   for (;;) {
+    // A tracer's tracees report their stops and exits too (ADR 0093).
+    bool traced = false;
+    if (int got = PtraceWaitPoll(pid, options, status, &traced, &IsChild); got != 0) return got;
     {
       std::lock_guard<std::mutex> lock(g_children_mutex);
-      if (g_children.empty()) return errno = 10 /*ECHILD*/, -1;
+      if (g_children.empty() && !traced) return errno = 10 /*ECHILD*/, -1;
       // A specific pid, or any (-1/0).
       bool found = false;
       for (auto& kv : g_children) {
@@ -250,7 +301,7 @@ int CollectOne(int pid, int* status, int options) {
         if (pid > 0) break;
       }
       // None exited: wait below with the lock released.
-      if (!found) return errno = 10 /*ECHILD*/, -1;  // no such child
+      if (!found && !traced) return errno = 10 /*ECHILD*/, -1;  // no such child
     }
     if ((options & kWNOHANG) != 0) return 0;
     // Block until a child exits (the watcher sets `exited`), then re-scan.
@@ -619,6 +670,13 @@ void RegisterProcess(SymbolTable& t) {
   E("execv", Execv);
   E("execvp", Execvp);
   E("execvpe", Execvpe);
+  E("execl", gesher_bionic_execl);
+  E("execlp", gesher_bionic_execlp);
+  E("execle", gesher_bionic_execle);
+  // The va_list forms, for the arm64 translator (guest_libc.cc).
+  E("__gesher_vexecl", gesher_bionic_vexecl);
+  E("__gesher_vexeclp", gesher_bionic_vexeclp);
+  E("__gesher_vexecle", gesher_bionic_vexecle);
   E("waitpid", Waitpid);
   E("wait", Wait);
   E("wait4", Wait4);

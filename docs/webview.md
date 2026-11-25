@@ -37,7 +37,20 @@ this result does not establish arbitrary accessibility or screen-reader UX.
   would look for a WebView package, so `new WebView(context)`,
   `CookieManager.getInstance()`, `WebStorage.getInstance()`,
   `WebSettings.getDefaultUserAgent()` and `WebView.setWebContentsDebuggingEnabled`
-  work with no WebView APK and no `webviewupdate` service.
+  work with no WebView APK.
+- **The provider package.** The system server's `webviewupdate` service
+  (`com.gesher.server.WebViewUpdateService`) names the built-in provider, and
+  the device declares `android.software.webview` while the WebView2 Runtime is
+  installed (docs/system-features.md). So
+  `WebView.getCurrentWebViewPackage()` (which asks that service while no
+  provider APK is loaded in the process) returns a `PackageInfo` for
+  `com.gesher.webview` whose `versionName` is the installed WebView2 Runtime's
+  Chromium version (`158.0.4370.33`; `versionCode` build * 100000 + patch *
+  100, as Chrome numbers them). Apps that check the WebView's major version
+  before loading one (Capacitor's `Bridge.isMinimumWebViewInstalled`) work.
+  Without a runtime it is null, as on a device with no WebView package. The
+  provider is not an installed APK: `PackageManager` does not list
+  `com.gesher.webview`.
 - **One WebView = one WebView2 controller** (`GesherWebViewProvider`, which is
   the WebViewProvider, its ViewDelegate and ScrollDelegate). It is created
   with the WebView, parked in a hidden window of the WebView thread until the

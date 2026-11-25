@@ -147,3 +147,81 @@ blocking file-lock commands that the repository deliberately keeps unavailable.
 Round 2 is separately implemented and validated. Follow the linked PR checks for
 current integration status; this report records local evidence, not a promise
 that queued or running CI has passed.
+
+## Source PR reintegration and independent review, 24 November 2026
+
+The continuation through `b7b128d287519c2db8064a7cf5abd550b744f41a` was
+independently inspected and brought back into source PR #381. Main
+`e074b67b2f83ce9128c11713171329e9fbbf6739` was then merged, preserving the
+original work and the existing continuation commits.
+
+The merge preserves main's newly added `gesher_mmap_fixed_replaces` query for
+the ELF loader. Its change to `mman.cc` required rebasing the exact memfd
+qualification transition onto that main commit. The transition still reverses
+only the three memfd lease files, checks both endpoint hashes, reproduces the
+current bytes in the forward direction, and rejects all existing negative
+controls. `ofd-stream-source.json` remains byte-identical to current main;
+the shared-stdio qualification and all original protected source checks remain
+in place. This is source qualification, not a grant of native-runtime approval.
+
+Independent review also found a missing control wake in `CaptureEngine::Submit`:
+preparing or starting a second recorder notified `cv_` while the worker could
+be blocked in the source's data wait. A quiet endpoint therefore delayed the
+control command until a packet or the 50 ms safety timeout. `Submit` now uses
+the existing `Wake` path, interrupting either wait and retaining its sticky
+restart predicate for the race before a wait begins. Lock ordering remains
+engine mutex before wake mutex; the worker releases the wake mutex before
+reacquiring the engine mutex.
+
+The new `event-command` case uses the existing explicitly isolated source
+boundary whose wait ends only on a signal or interrupt. Both prepare and start
+must complete with no injected sample signal. Compiling the complete worker
+from pre-fix `f83057ec0bc1eb75126dc5c99ff28c26fb1342f5` with this case fails the
+prepare assertion; the corrected worker passes all eight assertions. The
+Linux run substitutes only host clock/environment calls and the fixture's
+existing WASAPI/priority boundaries; it is not a Windows audio-device run.
+
+Validation on the integrated source:
+
+- The complete capture worker and existing adapter fixtures pass all 20
+  production-role cases, including start/stop/release races, reentrant start,
+  stale-peer publication, source loss, permissions, event-only waits and the
+  new control-command wake case, using the Linux boundaries described above.
+- Both x86_64 and AArch64 Windows capture production/isolated fixtures and the
+  WASAPI boundary fixture cross-compile with the pinned `llvm-mingw-20261006`
+  toolchain and warnings treated as errors. The complete production
+  `memfd_seals.cc` and `mman.cc` also cross-compile for both architectures.
+- ASan/UBSan memfd fixtures pass, including the real Linux mapping-lease
+  reference and all 19 race assertions. Mapping replacement passes 274
+  assertions, MediaPlayer priming passes 209 with unchanged captured-tone
+  tolerances, and capture selection passes 2,061 with no allocations in
+  10,000 presence scans of 64 streams. LeakSanitizer remains unavailable
+  under the host tracer; only its detection is disabled locally.
+- All six Bluetooth socket cases, bounded/coalesced SDP, Bluetooth watch,
+  handwriting callbacks and the 12 capture-role unit tests pass.
+- Selected-source and vector policies pass, including 33 transition mutation
+  cases, seven repinned memfd controls and 23 shared-stdio negative controls.
+
+CI now executes the existing `event-signal`/`event-wake` cases and the new
+`event-command` case in the Windows media track, instead of merely compiling
+them. It also runs the new SDP and handwriting host suites. No assertions,
+timeouts, required gates or hardware/ART claims are relaxed. Real Windows
+execution, physical endpoint/radio behavior and exact-head CI remain the
+integration gates; host fixtures and cross-compilation cannot establish them.
+
+An independent second reviewer then reproduced an arithmetic error in the new
+video deadline wait: a timestamp of `INT64_MAX / 10` microseconds at speed 0.1
+overflowed the floating-to-`int64_t` conversion before the wait was bounded.
+The calculation now uses double precision and clamps the delay to the existing
+500-to-50,000 microsecond interval before integer conversion. The production
+Playback regression presents the first frame, verifies the distant frame stays
+pending with a 50 ms recheck, and interrupts the wait on shutdown. The complete
+214-check player suite and unchanged captured-tone gates pass with ASan, UBSan
+and explicit `float-cast-overflow` instrumentation; the same fixture at
+`89119647964a31b78013c6071531b4e2b65fe573` fails at the original conversion.
+
+Main subsequently advanced to `5b2af6e4e5de5525791c304de21c2c6a77aebcd2`
+and was merged without conflicts. Its thread-watch, IME and updated OFD
+qualification are preserved unchanged. That advance did not change any of the
+three memfd qualification sources, so their exact transition remains anchored
+to `e074b67b`; no new qualification exception or digest update was needed.

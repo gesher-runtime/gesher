@@ -1,0 +1,541 @@
+{
+  "schema": 1,
+  "checked_at_utc": "2026-11-25 08:45:57 UTC",
+  "repository": "gesher-runtime/gesher",
+  "diagnostic": {
+    "head": "908d99eb480b6d40480235e13c678fb791e7e636",
+    "tree": "cf7cad35dc850e9130d269710355b07999f64cc9",
+    "parents": [
+      "81d5fc3ff0651b23b9aa8a2fa043b9992cf5b7c0"
+    ],
+    "run_id": 45498551083,
+    "run_url": "https://github.com/gesher-runtime/gesher/actions/runs/45498551083",
+    "attempt": 1,
+    "event": "push",
+    "conclusion": "success",
+    "build_job_id": 138815400328,
+    "artifact": {
+      "id": 14970632267,
+      "name": "webview",
+      "size_bytes": 2571476,
+      "sha256": "deac166af322f374041c059c5b537c30a4ad087239ff9a0d7f4b4f1fd1771dbf"
+    },
+    "jobs": [
+      {
+        "os": "windows-2025",
+        "job_id": 138818825742,
+        "runtime": "157.0.4341.46",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45498551083/job/138818825742",
+        "conclusion": "success",
+        "sdk": "1.0.4258.31",
+        "qualification_loader": "static (WebView2LoaderStatic.lib)",
+        "quota": {
+          "result": "qualified",
+          "initialized_partitions": 1,
+          "persisted_before_revisit": 2,
+          "live": 5,
+          "deleted": 2,
+          "preserved": 3,
+          "payload_bytes": 262144,
+          "phases": [
+            "PASS  quota-registry: write A-first-party origin=https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: write C-under-A origin=https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: persisted-before-revisit complete keys=2 removed=0",
+            "PASS  quota-registry: persisted discovery after browser exit without revisiting fixture origins",
+            "PASS  quota-registry: write B-first-party origin=https://quota-b-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: write C-under-B origin=https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: write A-under-B origin=https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: live-update complete keys=5 removed=0",
+            "PASS  quota-registry: post-delete complete keys=3 removed=2",
+            "PASS  quota-registry: absent A-first-party origin=https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=0 closed=true secure=true",
+            "PASS  quota-registry: absent C-under-A origin=https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=0 closed=true secure=true",
+            "PASS  quota-registry: read B-first-party origin=https://quota-b-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: read C-under-B origin=https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: read A-under-B origin=https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: QUALIFIED persisted=2 live=5 deleted=2 preserved=3 payload_bytes=262144; production API still gated"
+          ],
+          "inventory_snapshots": [
+            {
+              "entries": [
+                {
+                  "bucketId": "1",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid/",
+                  "usage": "15332"
+                },
+                {
+                  "bucketId": "2",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid/^0https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid",
+                  "usage": "15244"
+                }
+              ],
+              "globalUsage": "30576"
+            },
+            {
+              "entries": [
+                {
+                  "bucketId": "1",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid/",
+                  "usage": "15332"
+                },
+                {
+                  "bucketId": "2",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid/^0https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid",
+                  "usage": "15244"
+                },
+                {
+                  "bucketId": "3",
+                  "name": "_default",
+                  "storageKey": "https://quota-b-2168bd4a214547e8acd3c6b708ee4659.invalid/",
+                  "usage": "15332"
+                },
+                {
+                  "bucketId": "4",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid/^0https://quota-b-2168bd4a214547e8acd3c6b708ee4659.invalid",
+                  "usage": "15244"
+                },
+                {
+                  "bucketId": "5",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid/^0https://quota-b-2168bd4a214547e8acd3c6b708ee4659.invalid",
+                  "usage": "15244"
+                }
+              ],
+              "globalUsage": "76396"
+            },
+            {
+              "entries": [
+                {
+                  "bucketId": "1",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid/",
+                  "usage": "0"
+                },
+                {
+                  "bucketId": "2",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid/^0https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid",
+                  "usage": "0"
+                },
+                {
+                  "bucketId": "3",
+                  "name": "_default",
+                  "storageKey": "https://quota-b-2168bd4a214547e8acd3c6b708ee4659.invalid/",
+                  "usage": "15332"
+                },
+                {
+                  "bucketId": "4",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-2168bd4a214547e8acd3c6b708ee4659.invalid/^0https://quota-b-2168bd4a214547e8acd3c6b708ee4659.invalid",
+                  "usage": "15244"
+                },
+                {
+                  "bucketId": "5",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-2168bd4a214547e8acd3c6b708ee4659.invalid/^0https://quota-b-2168bd4a214547e8acd3c6b708ee4659.invalid",
+                  "usage": "15244"
+                }
+              ],
+              "globalUsage": "45820"
+            }
+          ],
+          "process_exit_lines": [
+            "2026-11-24T22:19:52.5171397Z INFO  quota-registry: browser process exited pid=1352",
+            "2026-11-24T22:19:52.5350102Z INFO  quota-registry: browser process exited pid=7776"
+          ],
+          "profile_lines": [
+            "2026-11-24T22:19:52.5126227Z INFO  quota-registry: profile-path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-quota-registry-2168bd4a214547e8acd3c6b708ee4659\\EBWebView\\Default",
+            "2026-11-24T22:19:52.5183856Z INFO  quota-registry: profile-path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-quota-registry-2168bd4a214547e8acd3c6b708ee4659\\EBWebView\\Default"
+          ]
+        },
+        "worker": {
+          "result": "valid diagnostic; required network rejection not established",
+          "cases": [
+            {
+              "event": "case",
+              "name": "pass",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "origin",
+              "bytes": 11,
+              "text": "origin:pass",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "fulfill",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "intercepted",
+              "bytes": 8,
+              "text": "supplied",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "http403",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 403,
+              "originHeader": "intercepted",
+              "bytes": 6,
+              "text": "denied",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "first-read",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "intercepted",
+              "bytes": 0,
+              "text": "",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "first-abort",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "intercepted",
+              "bytes": 0,
+              "text": "",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "mid-body",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "intercepted",
+              "bytes": 65536,
+              "text": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "error": "",
+              "timedOut": false
+            }
+          ],
+          "counter_lines": [
+            "INFO  worker-response: case=pass intercepted=1 origin-network=1",
+            "INFO  worker-response: case=fulfill intercepted=1 origin-network=0",
+            "INFO  worker-response: case=http403 intercepted=1 origin-network=0",
+            "INFO  worker-response: case=first-read intercepted=1 origin-network=0",
+            "INFO  worker-response: case=first-read read-hr=0x8003001e reads=1 faults=1 supplied-prefix=0 live-streams=0 pre-response-rejection=no",
+            "INFO  worker-response: case=first-abort intercepted=1 origin-network=0",
+            "INFO  worker-response: case=first-abort read-hr=0x80004004 reads=1 faults=1 supplied-prefix=0 live-streams=0 pre-response-rejection=no",
+            "INFO  worker-response: case=mid-body intercepted=1 origin-network=0",
+            "INFO  worker-response: case=mid-body read-hr=0x8003001e reads=3 faults=1 supplied-prefix=65536 live-streams=0 pre-response-rejection=no"
+          ]
+        }
+      },
+      {
+        "os": "windows-2022",
+        "job_id": 138818825817,
+        "runtime": "131.0.2903.86",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45498551083/job/138818825817",
+        "conclusion": "success",
+        "sdk": "1.0.4258.31",
+        "qualification_loader": "static (WebView2LoaderStatic.lib)",
+        "quota": {
+          "result": "qualified",
+          "initialized_partitions": 1,
+          "persisted_before_revisit": 2,
+          "live": 5,
+          "deleted": 2,
+          "preserved": 3,
+          "payload_bytes": 262144,
+          "phases": [
+            "PASS  quota-registry: write A-first-party origin=https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: write C-under-A origin=https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: persisted-before-revisit complete keys=2 removed=0",
+            "PASS  quota-registry: persisted discovery after browser exit without revisiting fixture origins",
+            "PASS  quota-registry: write B-first-party origin=https://quota-b-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: write C-under-B origin=https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: write A-under-B origin=https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: live-update complete keys=5 removed=0",
+            "PASS  quota-registry: post-delete complete keys=3 removed=2",
+            "PASS  quota-registry: absent A-first-party origin=https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=0 closed=true secure=true",
+            "PASS  quota-registry: absent C-under-A origin=https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=0 closed=true secure=true",
+            "PASS  quota-registry: read B-first-party origin=https://quota-b-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: read C-under-B origin=https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: read A-under-B origin=https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid bytes=262144 closed=true secure=true",
+            "PASS  quota-registry: QUALIFIED persisted=2 live=5 deleted=2 preserved=3 payload_bytes=262144; production API still gated"
+          ],
+          "inventory_snapshots": [
+            {
+              "entries": [
+                {
+                  "bucketId": "1",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid/",
+                  "usage": "15330"
+                },
+                {
+                  "bucketId": "2",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid/^0https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid",
+                  "usage": "15242"
+                }
+              ],
+              "globalUsage": "30572"
+            },
+            {
+              "entries": [
+                {
+                  "bucketId": "1",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid/",
+                  "usage": "15330"
+                },
+                {
+                  "bucketId": "2",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid/^0https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid",
+                  "usage": "15242"
+                },
+                {
+                  "bucketId": "3",
+                  "name": "_default",
+                  "storageKey": "https://quota-b-de812dd7b1154f8babc9db241d2b9a06.invalid/",
+                  "usage": "15332"
+                },
+                {
+                  "bucketId": "4",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid/^0https://quota-b-de812dd7b1154f8babc9db241d2b9a06.invalid",
+                  "usage": "15244"
+                },
+                {
+                  "bucketId": "5",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid/^0https://quota-b-de812dd7b1154f8babc9db241d2b9a06.invalid",
+                  "usage": "15244"
+                }
+              ],
+              "globalUsage": "76392"
+            },
+            {
+              "entries": [
+                {
+                  "bucketId": "1",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid/",
+                  "usage": "0"
+                },
+                {
+                  "bucketId": "2",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid/^0https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid",
+                  "usage": "0"
+                },
+                {
+                  "bucketId": "3",
+                  "name": "_default",
+                  "storageKey": "https://quota-b-de812dd7b1154f8babc9db241d2b9a06.invalid/",
+                  "usage": "15332"
+                },
+                {
+                  "bucketId": "4",
+                  "name": "_default",
+                  "storageKey": "https://quota-c-de812dd7b1154f8babc9db241d2b9a06.invalid/^0https://quota-b-de812dd7b1154f8babc9db241d2b9a06.invalid",
+                  "usage": "15244"
+                },
+                {
+                  "bucketId": "5",
+                  "name": "_default",
+                  "storageKey": "https://quota-a-de812dd7b1154f8babc9db241d2b9a06.invalid/^0https://quota-b-de812dd7b1154f8babc9db241d2b9a06.invalid",
+                  "usage": "15244"
+                }
+              ],
+              "globalUsage": "45820"
+            }
+          ],
+          "process_exit_lines": [
+            "2026-11-24T22:22:22.7212922Z INFO  quota-registry: browser process exited pid=2936",
+            "2026-11-24T22:22:22.7376806Z INFO  quota-registry: browser process exited pid=3336"
+          ],
+          "profile_lines": [
+            "2026-11-24T22:22:22.7167382Z INFO  quota-registry: profile-path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-quota-registry-de812dd7b1154f8babc9db241d2b9a06\\EBWebView\\Default",
+            "2026-11-24T22:22:22.7225709Z INFO  quota-registry: profile-path=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-quota-registry-de812dd7b1154f8babc9db241d2b9a06\\EBWebView\\Default"
+          ]
+        },
+        "worker": {
+          "result": "valid diagnostic; required network rejection not established",
+          "cases": [
+            {
+              "event": "case",
+              "name": "pass",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "origin",
+              "bytes": 11,
+              "text": "origin:pass",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "fulfill",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "intercepted",
+              "bytes": 8,
+              "text": "supplied",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "http403",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 403,
+              "originHeader": "intercepted",
+              "bytes": 6,
+              "text": "denied",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "first-read",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "intercepted",
+              "bytes": 0,
+              "text": "",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "first-abort",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "intercepted",
+              "bytes": 0,
+              "text": "",
+              "error": "",
+              "timedOut": false
+            },
+            {
+              "event": "case",
+              "name": "mid-body",
+              "fetch": "resolved",
+              "body": "complete",
+              "status": 200,
+              "originHeader": "intercepted",
+              "bytes": 65536,
+              "text": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "error": "",
+              "timedOut": false
+            }
+          ],
+          "counter_lines": [
+            "INFO  worker-response: case=pass intercepted=1 origin-network=1",
+            "INFO  worker-response: case=fulfill intercepted=1 origin-network=0",
+            "INFO  worker-response: case=http403 intercepted=1 origin-network=0",
+            "INFO  worker-response: case=first-read intercepted=1 origin-network=0",
+            "INFO  worker-response: case=first-read read-hr=0x8003001e reads=1 faults=1 supplied-prefix=0 live-streams=0 pre-response-rejection=no",
+            "INFO  worker-response: case=first-abort intercepted=1 origin-network=0",
+            "INFO  worker-response: case=first-abort read-hr=0x80004004 reads=1 faults=1 supplied-prefix=0 live-streams=0 pre-response-rejection=no",
+            "INFO  worker-response: case=mid-body intercepted=1 origin-network=0",
+            "INFO  worker-response: case=mid-body read-hr=0x8003001e reads=3 faults=1 supplied-prefix=65536 live-streams=0 pre-response-rejection=no"
+          ]
+        }
+      }
+    ]
+  },
+  "prior_ci": {
+    "r1": {
+      "head": "895170db79c4d2d36baac84a20ea2aa2cca2a848",
+      "run_id": 45496569034,
+      "attempt": 1,
+      "conclusion": "success",
+      "jobs": 81,
+      "success": 75,
+      "conditional_skips": 6,
+      "tested_source": "a6204272bda7269c7a9f636a54e9f208d1126a30",
+      "source_identity_job": 138808554909
+    },
+    "r2": {
+      "head": "4fe77c03b331b9890401a5834c0dee7f7a0c9314",
+      "run_id": 45490428616,
+      "attempt": 1,
+      "conclusion": "failure",
+      "jobs": 67,
+      "success": 53,
+      "failure": 5,
+      "skipped": 9,
+      "tested_source": "7485682204724b73d8c3fb4b9d423d64c1346daf",
+      "root_failure_jobs": [
+        138788917473,
+        138788917523
+      ],
+      "downstream_failures": [
+        {
+          "job": 138829675877,
+          "reason": "SHARD_RESULT=skipped"
+        },
+        {
+          "job": 138829675947,
+          "reason": "SHARD_RESULT=skipped"
+        },
+        {
+          "job": 138849548656,
+          "reason": "Required jobs did not succeed after source-policy failures and skipped dependent jobs"
+        }
+      ]
+    }
+  },
+  "source_prs": [
+    {
+      "number": 381,
+      "head": "0a4bd5896b7f2dcbf6c535d9de5faa11b4bad17d",
+      "state": "closed",
+      "merged": true,
+      "merged_at": "2026-11-24T23:33:23Z",
+      "merge_commit": "dcc29a49143c4bd33e0e60a81b25e0e1f2cfc12a"
+    },
+    {
+      "number": 399,
+      "head": "20e4d091d239181e0bb0b3669c3c3fbddc44a78c",
+      "state": "closed",
+      "merged": true,
+      "merged_at": "2026-11-25T00:21:36Z",
+      "merge_commit": "669d40a1218bdf3a38a2eb1ccc96ff3297f4c0d0"
+    },
+    {
+      "number": 388,
+      "head": "895170db79c4d2d36baac84a20ea2aa2cca2a848",
+      "state": "closed",
+      "merged": false,
+      "merged_at": null,
+      "merge_commit": "a6204272bda7269c7a9f636a54e9f208d1126a30"
+    }
+  ],
+  "limitations": [
+    "Quota qualification is an isolated private-profile experiment, not a production getOrigins implementation or per-storage-key quota proof.",
+    "Worker fault tests use fully available backing bodies and do not establish progressive streaming or worker cache modes.",
+    "Successful worker diagnostic exit records the observed failure semantics; it does not mean the required Android network-error behavior passed.",
+    "Only the static loader ran the new qualification modes; both native loader targets were compiled, and old default/COM gates still ran."
+  ]
+}
+

@@ -10,7 +10,39 @@ The current [issue56](https://github.com/gesher-runtime/gesher/issues/56) labels
 shorthand for worker/storage work must not be read as completion of the entire
 renderer roadmap. Render-process control/client APIs remain a separate gap.
 
-## Open pull requests checked before implementation
+## Update — 25 November 2026
+
+The actual Windows experiment has completed: the full persisted/live/selective-
+deletion/payload storage sequence passed on WebView2 131 and 157 at diagnostic
+head `908d99eb480b6d40480235e13c678fb791e7e636`. The
+[runtime report](webview-runtime-results-2026-11-25.md) and its linked JSON retain
+the exact source, build artifact, job links and observations. The worker stream
+faults remained successful HTTP responses with empty or truncated bodies; their
+valid diagnostic result is not a qualified network-error implementation.
+
+PR381 and PR399 have since merged into main. The final PR399 head removed its
+earlier worker changes and reused the graphics/usage implementation, adding an
+independent suspend regression. PR388 is externally closed. The continuation
+incorporates main `a0291539acd9fef036a305c23a0cd33dd297048a`, keeps its landed
+production and complete source-qualification policy, and imports the corrected
+quota probe without the temporary diagnostic workflow trigger.
+
+The [new open-PR inventory](webview-open-prs-2026-11-25.json) records all 86 open
+pull refs. Each actual fetched head was compared against its listed base, with
+no fetch/diff failures. PR493 moved between listing and fetch; both identities
+are recorded and the fetched head was inspected. Only PR414 intersects the
+nine remaining production paths: its independent `Host::Configure` change
+handles Windows profile paths. No current open PR supplies the missing complete
+WebView storage/worker backend. The older table below is a dated record, not an
+assessment of PR399's final merged code.
+
+Full `getOrigins`, arbitrary full-key effective quotas, partition-aware
+production deletion and complete worker semantics still require production
+implementation and acceptance. The successful registry experiment removes an
+uncertainty about actual discovery/deletion; it does not enable unsupported
+public features.
+
+## Historical open-PR audit — 24 November 2026
 
 The public open-PR collection returned 100 entries and an empty second page on
 2026-11-24. All 100 pull refs were fetched; their actual heads matched the listed

@@ -225,6 +225,12 @@ jobs:
           "$cc" -shared -fPIC -O2 -Wall -Wextra -Werror \
             -Wl,-soname,libfilesystem_contract.so \
             -o dist-arm64/filesystem_contract_arm64.so tests/native/filesystem_contract_guest.c
+          # bionic's libstdc++.so from a translated guest (the NDK's "system"
+          # C++ runtime): dlopen/dlsym, new/delete and the static-local guards.
+          "$PWD/$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++" \
+            -shared -fPIC -O2 -std=c++17 -fno-exceptions -fno-rtti -fno-stack-protector \
+            -Wall -Wextra -Werror -nostdlib++ -Wl,-soname,liblibstdcxx_test.so \
+            -o dist-arm64/libstdcxx_test_arm64.so tests/native/libstdcxx_test.cc -lstdc++ -ldl
           # The guest-ABI checks: ELF TLS (TLSDESC), setjmp, struct stat and
           # epoll_event, syscall numbers, auxv, atomics, va_list, host pointers;
           # and the perf kernel (docs/arm64.md).
@@ -243,6 +249,10 @@ jobs:
           "$cc" -shared -fPIC -O2 -fstack-protector-strong \
             -Wl,-soname,libjni_test.so \
             -o dist-arm64/jni_test_arm64.so tests/native/arm64_jni_test.c
+          # android_dlopen_ext (tests/native/dlext_test.c) from a guest: the
+          # libraries it loads into reservations, in a directory of their own
+          # (native-libs.yml builds the same names for x86_64).
+          bash tests/native/build-dlext.sh "$cc" dist-arm64/dlext-arm64
           # An arm64-v8a ELF executable (the exec track's test program, ADR 0035)
           # and its DT_NEEDED library, for gesher-exec through the translator:
           # in a directory of their own (the x86_64 ones have the same names).

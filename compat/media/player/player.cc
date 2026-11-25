@@ -476,9 +476,12 @@ class Playback : public std::enable_shared_from_this<Playback> {
         // The media clock runs at the playback speed, so the frame is due in
         // ahead / speed; the wait ends early for a seek, pause, speed change or
         // new Surface, and the bound re-reads a clock that may have stalled.
-        const int64_t due_us = static_cast<int64_t>(ahead / std::max(speed_, 0.1f));
-        cv_.wait_for(lock, std::chrono::microseconds(std::clamp<int64_t>(
-                               due_us - 1000, 500, kVideoClockRecheckUs)));
+        // A valid but distant timestamp at a slow speed can exceed int64_t's
+        // range. Bound the floating delay before converting it for the wait.
+        const double due_us = static_cast<double>(ahead) / std::max(speed_, 0.1f);
+        const int64_t wait_us = static_cast<int64_t>(std::clamp<double>(
+            due_us - 1000, 500, kVideoClockRecheckUs));
+        cv_.wait_for(lock, std::chrono::microseconds(wait_us));
       }
       if (interrupted) continue;
       if (show) Render(f);

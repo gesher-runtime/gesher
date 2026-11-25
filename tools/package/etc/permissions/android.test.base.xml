@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The android.test.base shared library (frameworks/base/test-base: JUnit 3's
+     junit.framework and android.test's base classes), declared as Android's
+     platform.xml declares it. Apps targeting API 29 or lower get it without naming
+     it (AndroidTestBaseUpdater). gesher-app.ps1 installs this file as
+     $ANDROID_ROOT/etc/permissions and the jar as $ANDROID_ROOT/framework. -->
+<permissions>
+    <library name="android.test.base"
+            file="/system/framework/android.test.base.jar" />
+</permissions>
