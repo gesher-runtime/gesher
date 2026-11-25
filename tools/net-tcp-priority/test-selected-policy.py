@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '67752ba31ac2b54e2f7a3eeee972c34bab57725d7f5b6ebe8b503dd27d9fc660'
+OFD_QUALIFICATION_SHA256 = '64ec040e6f1b7e038175916e1efffdf96113f020ef90e2f357e5ad3e088720a5'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -380,7 +380,7 @@ def preceding_logging_property_source():
 # This source qualification grants no supplier, controller or runtime approval.
 MEMFD_LEASE_QUALIFICATION='tools/net-tcp-priority/qualified/memfd-lease-source.json'
 MEMFD_LEASE_PATCH='tools/net-tcp-priority/qualified/memfd-lease-source.patch'
-MEMFD_LEASE_QUALIFICATION_SHA256 = 'bc7b4a3e231c1586e22e514bf10e73a853c6065c7997b5c98fffbfeee5c3cb37'
+MEMFD_LEASE_QUALIFICATION_SHA256 = 'ec1546197f01dcce5d8276621331d7ff75595aac0b938c8abcb2865813a1c9c2'
 MEMFD_LEASE_BASELINE='e074b67b2f83ce9128c11713171329e9fbbf6739'
 MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
 def preceding_memfd_lease_sources():
