@@ -15,8 +15,45 @@ package com.gesher.server;
 final class WindowsHelloKey implements HelloKeyBackend {
     private final Object mLock = new Object();
     private int mNextId;
+    private final java.util.function.IntToLongFunction mOwner;
+    private final java.util.function.BiFunction<String, Integer, Request> mCreate;
+    private final OwnerWatcher mOwnerWatcher;
+    private final WatchStarter mWatchStarter;
 
     private WindowsHelloKey() {
+        this(WindowsHello::nativeOwnerWindow,
+                (name, pid) -> new Request(nativeStartCreate(pid, name)),
+                (owner, pid, cancel, done) ->
+                        WindowsHello.watchOwner(owner, pid, cancel::run, done));
+    }
+
+    /** Native ownership boundary, injectable without a Windows prompt in host tests. */
+    WindowsHelloKey(java.util.function.IntToLongFunction owner,
+            java.util.function.BiFunction<String, Integer, Request> create,
+            OwnerWatcher ownerWatcher) {
+        this(owner, create, ownerWatcher, (work, name) -> {
+            Thread watch = new Thread(work, name);
+            watch.setDaemon(true);
+            watch.start();
+        });
+    }
+
+    WindowsHelloKey(java.util.function.IntToLongFunction owner,
+            java.util.function.BiFunction<String, Integer, Request> create,
+            OwnerWatcher ownerWatcher, WatchStarter watchStarter) {
+        mOwner = owner;
+        mCreate = create;
+        mOwnerWatcher = ownerWatcher;
+        mWatchStarter = watchStarter;
+    }
+
+    interface OwnerWatcher {
+        void watch(long owner, int pid, Runnable cancel,
+                java.util.concurrent.atomic.AtomicBoolean done);
+    }
+
+    interface WatchStarter {
+        void start(Runnable work, String name);
     }
 
     /** The backend, or null when the natives are not in this runtime (host tests, old builds). */
@@ -36,7 +73,9 @@ final class WindowsHelloKey implements HelloKeyBackend {
 
     @Override
     public Result create(String name, int pid) {
-        return new Request(nativeStartCreate(pid, name)).await();
+        long owner = mOwner.applyAsLong(pid);
+        Request request = owner == 0 ? startOwned(0, () -> 0) : mCreate.apply(name, pid);
+        return awaitOwned(request, owner, pid, nextId());
     }
 
     @Override
@@ -50,7 +89,7 @@ final class WindowsHelloKey implements HelloKeyBackend {
     @Override
     public Operation sign(String name, int pid, byte[] data, Completion completion) {
         int id = nextId();
-        long owner = WindowsHello.nativeOwnerWindow(pid);
+        long owner = mOwner.applyAsLong(pid);
         Request request = startOwned(owner, () -> nativeStartSign(pid, name, data));
         // On its own thread also when nothing started: never before sign returns.
         Thread t = new Thread(() -> completion.onResult(awaitOwned(request, owner, pid, id)),
@@ -75,20 +114,45 @@ final class WindowsHelloKey implements HelloKeyBackend {
     }
 
     /** Key-backed authentication has the same foreground lifetime as the plain verifier. */
-    private static Result awaitOwned(Request request, long owner, int pid, int id) {
+    private Result awaitOwned(Request request, long owner, int pid, int id) {
         java.util.concurrent.atomic.AtomicBoolean done =
                 new java.util.concurrent.atomic.AtomicBoolean();
-        if (owner != 0) {
-            Thread watch = new Thread(
-                    () -> WindowsHello.watchOwner(owner, pid, request::cancel, done),
-                    "keystore-hello-owner-" + id);
-            watch.setDaemon(true);
-            watch.start();
-        }
         try {
+            if (owner != 0) {
+                try {
+                    mWatchStarter.start(() -> {
+                        try {
+                            mOwnerWatcher.watch(owner, pid, request::cancel, done);
+                        } catch (RuntimeException | Error failure) {
+                            cancelAfterWatchFailure(request, failure);
+                            // An uncaught watcher exception would terminate Android's
+                            // system server. Reject its request and report the failed watch.
+                            System.err.println("gesher hello key: owner watch failed: " + failure);
+                        }
+                    }, "keystore-hello-owner-" + id);
+                } catch (RuntimeException | Error failure) {
+                    // Native creation already owns a request. Even failure to allocate or
+                    // start its watcher must deliver one rejected native disposition.
+                    cancelAfterWatchFailure(request, failure);
+                    try {
+                        request.await();
+                    } catch (RuntimeException | Error cleanupFailure) {
+                        if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
+                    }
+                    throw failure;
+                }
+            }
             return request.await();
         } finally {
             done.set(true);
+        }
+    }
+
+    private static void cancelAfterWatchFailure(Request request, Throwable failure) {
+        try {
+            request.cancel();
+        } catch (RuntimeException | Error cancelFailure) {
+            if (cancelFailure != failure) failure.addSuppressed(cancelFailure);
         }
     }
 
@@ -106,40 +170,51 @@ final class WindowsHelloKey implements HelloKeyBackend {
     static final class Request implements Operation {
         private final java.util.function.Supplier<Result> mAwait;
         private final Runnable mCancel;
-        private final Runnable mRelease;
+        private final java.util.function.Consumer<Boolean> mRelease;
         private boolean mReleased;
         private boolean mCanceled;
 
         Request(long handle) {
             this(() -> awaitNative(handle),
                     () -> { if (handle != 0) nativeCancel(handle); },
-                    () -> { if (handle != 0) nativeRelease(handle); });
+                    accepted -> { if (handle != 0) nativeRelease(handle, accepted); });
         }
 
         /** Native request boundary, injectable without a Windows prompt in host tests. */
         Request(java.util.function.Supplier<Result> await, Runnable cancel, Runnable release) {
+            this(await, cancel, accepted -> release.run());
+        }
+
+        Request(java.util.function.Supplier<Result> await, Runnable cancel,
+                java.util.function.Consumer<Boolean> release) {
             mAwait = await;
             mCancel = cancel;
             mRelease = release;
         }
 
         Result await() {
-            Result result;
             try {
-                result = mAwait.get();
+                Result result = mAwait.get();
+                synchronized (this) {
+                    if (mCanceled) {
+                        if (result.data != null) java.util.Arrays.fill(result.data, (byte) 0);
+                        result = new Result(USER_CANCELED, null);
+                    }
+                    // Delivery and cancellation have one disposition. Native creation
+                    // retains cleanup ownership until this decision, including a failed
+                    // JNI byte-array handoff or a late successful canceled create.
+                    mReleased = true;
+                    mRelease.accept(result.status == SUCCESS);
+                }
+                return result;
             } finally {
                 synchronized (this) {
-                    mReleased = true;
-                    mRelease.run();
+                    if (!mReleased) {
+                        mReleased = true;
+                        mRelease.accept(false);
+                    }
                 }
             }
-            synchronized (this) {
-                if (mCanceled) {
-                    if (result.data != null) java.util.Arrays.fill(result.data, (byte) 0);
-                    return new Result(USER_CANCELED, null);
-                }
-            }
-            return result;
         }
 
         @Override
@@ -174,5 +249,5 @@ final class WindowsHelloKey implements HelloKeyBackend {
 
     private static native void nativeCancel(long handle);
 
-    private static native void nativeRelease(long handle);
+    private static native void nativeRelease(long handle, boolean accepted);
 }

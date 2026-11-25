@@ -247,6 +247,16 @@ jobs:
         run: |
           & .\hello-key-windows.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows Hello key contracts failed' }
+      - name: Build Windows Hello create cancellation and cleanup contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_key_create_windows_test.cc compat\devices\hello_key_win.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:hello-key-create.exe ole32.lib user32.lib
+      - name: Windows Hello create ownership and late completion cleanup
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\hello-key-create.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Hello create cleanup contracts failed' }
       - name: Build actual Windows Hello prompt-owner contracts (ADR 0094)
         if: ${{ !cancelled() }}
         shell: cmd

@@ -1147,8 +1147,190 @@ public final class AuthServiceContracts {
                 "a failed native key wait still releases its request");
     }
 
+    static void keyCreateOwnership() throws Exception {
+        final int PID = 42;
+        AtomicInteger starts = new AtomicInteger(), watches = new AtomicInteger();
+        WindowsHelloKey noOwner = new WindowsHelloKey(pid -> 0, (name, pid) -> {
+            starts.incrementAndGet();
+            return new WindowsHelloKey.Request(
+                    () -> new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, new byte[] {1}),
+                    () -> { }, accepted -> { });
+        }, (owner, pid, cancel, done) -> watches.incrementAndGet());
+        check(noOwner.create("missing-owner", PID).status == HelloKeyBackend.NOT_FOREGROUND
+                        && starts.get() == 0 && watches.get() == 0,
+                "key enrollment without an owner never starts a native create or watcher");
+
+        for (boolean canceled : new boolean[] {false, true}) {
+            java.util.concurrent.CountDownLatch waiting = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch watched = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicBoolean watchedIdentity =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+            AtomicInteger cancelCalls = new AtomicInteger(), releaseCalls = new AtomicInteger();
+            List<Boolean> accepted = Collections.synchronizedList(new ArrayList<>());
+            byte[] publicKey = {7, 8, 9};
+            WindowsHelloKey hello = new WindowsHelloKey(pid -> 73, (name, pid) -> {
+                starts.incrementAndGet();
+                return new WindowsHelloKey.Request(() -> {
+                    waiting.countDown();
+                    try {
+                        watched.await(2, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        throw new AssertionError(e);
+                    }
+                    return new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, publicKey);
+                }, cancelCalls::incrementAndGet, keep -> {
+                    accepted.add(keep);
+                    releaseCalls.incrementAndGet();
+                });
+            }, (owner, pid, cancel, done) -> {
+                watchedIdentity.set(owner == 73 && pid == PID);
+                watches.incrementAndGet();
+                try {
+                    if (waiting.await(2, java.util.concurrent.TimeUnit.SECONDS) && canceled) {
+                        cancel.run();
+                        cancel.run();
+                    }
+                    watched.countDown();
+                    long deadline = System.nanoTime() + 2_000_000_000L;
+                    while (!done.get() && System.nanoTime() < deadline) Thread.yield();
+                    if (done.get()) stopped.countDown();
+                } catch (InterruptedException e) {
+                    throw new AssertionError(e);
+                }
+            });
+            HelloKeyBackend.Result result = hello.create("owned-create", PID);
+            boolean watchStopped = stopped.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            check(watchedIdentity.get() && watchStopped,
+                    "key enrollment watches its captured owner during await and stops after completion");
+            check(releaseCalls.get() == 1 && accepted.equals(List.of(!canceled)),
+                    "native create receives exactly one final accepted/canceled handoff disposition");
+            check(canceled
+                            ? result.status == HelloKeyBackend.USER_CANCELED && result.data == null
+                                    && cancelCalls.get() == 1 && Arrays.equals(publicKey, new byte[3])
+                            : result.status == HelloKeyBackend.SUCCESS && result.data == publicKey
+                                    && cancelCalls.get() == 0,
+                    "owner loss rejects a racing successful create; a live owner keeps its public key");
+        }
+
+        List<Boolean> disposition = new ArrayList<>();
+        WindowsHelloKey.Request canceledBeforeAwait = new WindowsHelloKey.Request(
+                () -> new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, new byte[] {5}),
+                () -> { }, disposition::add);
+        canceledBeforeAwait.cancel();
+        check(canceledBeforeAwait.await().status == HelloKeyBackend.USER_CANCELED
+                        && disposition.equals(List.of(false)),
+                "a create canceled before awaiting never accepts the native key");
+        disposition.clear();
+        WindowsHelloKey.Request handoffFailed = new WindowsHelloKey.Request(() -> {
+            throw new OutOfMemoryError("scripted JNI public-key allocation failure");
+        }, () -> { }, disposition::add);
+        try {
+            handoffFailed.await();
+        } catch (OutOfMemoryError expected) {
+            check(disposition.equals(List.of(false)),
+                    "failed JNI result handoff rejects native creation for cleanup");
+        }
+    }
+
+    static void keyWatchFailures() {
+        for (Throwable original : new Throwable[] {
+                new IllegalStateException("scripted watcher startup failure"),
+                new OutOfMemoryError("scripted watcher allocation failure")}) {
+            AtomicInteger waits = new AtomicInteger(), cancels = new AtomicInteger();
+            List<Boolean> released = new ArrayList<>();
+            java.util.concurrent.atomic.AtomicReference<Runnable> unstarted =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicBoolean observedDone =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+            byte[] publicKey = {1, 2, 3};
+            WindowsHelloKey hello = new WindowsHelloKey(pid -> 73, (name, pid) ->
+                    new WindowsHelloKey.Request(() -> {
+                        waits.incrementAndGet();
+                        return new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, publicKey);
+                    }, cancels::incrementAndGet, released::add),
+                    (owner, pid, cancel, done) -> observedDone.set(done.get()),
+                    (work, name) -> {
+                        unstarted.set(work);
+                        if (original instanceof Error) throw (Error) original;
+                        throw (RuntimeException) original;
+                    });
+            Throwable caught = null;
+            try {
+                hello.create("unwatched", 42);
+            } catch (RuntimeException | Error failure) {
+                caught = failure;
+            }
+            check(caught == original,
+                    "watch allocation/start failure preserves its original exception");
+            check(waits.get() == 1 && cancels.get() == 1 && released.equals(List.of(false))
+                            && Arrays.equals(publicKey, new byte[3]),
+                    "failed watch startup cancels, awaits and rejects native creation exactly once");
+            unstarted.get().run();
+            check(observedDone.get(),
+                    "failed watch startup marks its lifetime done even for a delayed watcher");
+        }
+
+        for (Throwable watchFailure : new Throwable[] {
+                new IllegalStateException("scripted watch body failure"),
+                new AssertionError("scripted watch body error")}) {
+            AtomicInteger waits = new AtomicInteger(), cancels = new AtomicInteger();
+            List<Boolean> released = new ArrayList<>();
+            java.util.concurrent.atomic.AtomicReference<java.util.concurrent.atomic.AtomicBoolean>
+                    watchedDone = new java.util.concurrent.atomic.AtomicReference<>();
+            WindowsHelloKey hello = new WindowsHelloKey(pid -> 73, (name, pid) ->
+                    new WindowsHelloKey.Request(() -> {
+                        waits.incrementAndGet();
+                        return new HelloKeyBackend.Result(HelloKeyBackend.SUCCESS, new byte[] {4});
+                    }, cancels::incrementAndGet, released::add),
+                    (owner, pid, cancel, done) -> {
+                        watchedDone.set(done);
+                        if (watchFailure instanceof Error) throw (Error) watchFailure;
+                        throw (RuntimeException) watchFailure;
+                    }, (work, name) -> work.run());
+            HelloKeyBackend.Result result = null;
+            Throwable escaped = null;
+            try {
+                result = hello.create("failed-watch", 42);
+            } catch (RuntimeException | Error failure) {
+                escaped = failure;
+            }
+            check(escaped == null && result != null
+                            && result.status == HelloKeyBackend.USER_CANCELED && result.data == null,
+                    "watcher body failure rejects its request without escaping on the server thread");
+            check(waits.get() == 1 && cancels.get() == 1 && released.equals(List.of(false))
+                            && watchedDone.get().get(),
+                    "a failed watcher still awaits and rejects once, then ends its lifetime");
+        }
+
+        IllegalStateException original = new IllegalStateException("watch did not start");
+        IllegalArgumentException cancelFailure = new IllegalArgumentException("cancel boundary failed");
+        OutOfMemoryError awaitFailure = new OutOfMemoryError("native handoff failed");
+        AtomicInteger waits = new AtomicInteger();
+        List<Boolean> released = new ArrayList<>();
+        WindowsHelloKey hello = new WindowsHelloKey(pid -> 73, (name, pid) ->
+                new WindowsHelloKey.Request(() -> {
+                    waits.incrementAndGet();
+                    throw awaitFailure;
+                }, () -> { throw cancelFailure; }, released::add),
+                (owner, pid, cancel, done) -> { }, (work, name) -> { throw original; });
+        Throwable caught = null;
+        try {
+            hello.create("cleanup-failure", 42);
+        } catch (RuntimeException | Error failure) {
+            caught = failure;
+        }
+        check(caught == original && Arrays.equals(original.getSuppressed(),
+                        new Throwable[] {cancelFailure, awaitFailure}),
+                "watch startup failure stays primary when cancellation and awaiting also fail");
+        check(waits.get() == 1 && released.equals(List.of(false)),
+                "cleanup exceptions cannot skip the rejected native disposition or await twice");
+    }
+
     public static void main(String[] args) throws Exception {
         keyRequestCancellation();
+        keyCreateOwnership();
+        keyWatchFailures();
         unavailable();
         available();
         keystore();

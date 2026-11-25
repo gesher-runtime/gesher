@@ -1,7 +1,7 @@
 # 0095: AndroidKeyStore user authentication enforced through a Windows Hello key
 
 Status: proposed. Phase 3 of [0094](0094-biometric-and-device-credential-via-windows-hello.md).
-Nothing here has run on Windows yet; see "Not verified".
+The interactive Hello and ART/provider path remains unverified; see "Not verified".
 
 ## Context
 
@@ -305,18 +305,46 @@ binding is a success.
 
 A cancel (`cancelAuthentication`, or the client's death) asks Windows to close the prompt.
 Key-backed authentication also uses the plain verifier's owner-window watch, so losing
-the foreground or destroying the owner's window cancels signature prompts, including the
-signature required to finish enrollment. Key creation keeps its synchronous lifetime;
-if the following enrollment signature fails, enrollment deletes the unbound key.
+the foreground or destroying the owner's window cancels both the initial key creation
+and signature prompts, including the signature required to finish enrollment. A missing
+owner prevents creation from starting. If the following enrollment signature fails,
+enrollment deletes the unbound key.
 Cancellation ends the authorization even if Windows subsequently returns a successful
 signature: the request drops those bytes and the authorization session does not unlock
 timed keys or release an operation's key. An AuthService callback filter alone would be
 too late, because those authorizations are committed before its callback runs.
-As for ADR 0094's verifier, the wait for Windows is then bounded: when Windows has not
-ended the request 5 s after the cancel (its `IAsyncInfo::Cancel` failed, or it ignores
-the request), the request is abandoned and reported as UserCanceled. An abandoned
-request's result is never read, so a signature the user's later answer to the leftover
-prompt produces opens nothing and authorizes no operation.
+
+Creation reserves one native enrollment slot before calling Windows. Its native owner
+keeps the operation and the exact newly requested name until accepted public-key delivery
+or completed cleanup. Cancellation and delivery choose one disposition under the Java
+request lock; failed JNI byte-array delivery rejects the creation too. The native create
+wait returns UserCanceled with no bytes after a five-second cancellation grace period,
+while the retained owner continues observing Windows. A blocked Windows `Cancel` call
+runs outside locks required by that caller and cannot stop its return or disposition.
+Only an observed creation Success permits cleanup of that exact key; AlreadyExists and
+unknown results never authorize deletion. A late Success after cancellation, or a Success
+whose public-key extraction or delivery failed, is deleted before another create is
+admitted. Cleanup retains an already started `DeleteAsync` until terminal completion;
+it does not launch additional deletions behind an unobserved action. A failed terminal
+deletion is retried while the same enrollment slot remains occupied.
+
+A failed COM status/interface observation returns failure to the caller and retains the
+operation while observation is retried. Once its result was obtained, that same result
+is retained for status retries. `GetResults` itself is a
+[one-shot handoff](https://devblogs.microsoft.com/oldnewthing/20240110-00/?p=109256): if its
+first call fails before creation status can be known, the operation and name remain in
+one unavailable slot until process exit, with an explicit diagnostic and no worker left
+running. There is no second result read, blind deletion or new enrollment behind that
+unknown outcome. A permanently unobservable or unfinished Windows operation can therefore
+make enrollment unavailable; it cannot accumulate requests or cleanup workers. These
+rules do not claim that an unobservable key was deleted or that cleanup survives a
+system-server crash or process exit.
+
+Signatures retain the existing grace policy: after cancellation, a request whose Windows
+operation has not ended after five seconds returns UserCanceled and its abandoned result
+is never read. A signature from a later answer opens nothing and authorizes no operation.
+The grace checks and scripted cancellation tests are not proof that a real Windows prompt
+was dismissed, or that every external COM call completes within the grace period.
 
 For keys with a timeout an ordinary confirmation (no operation) has to release them too.
 `AuthService` is not changed for that: `KeyBoundHello` wraps the `WindowsHelloBackend`

@@ -124,8 +124,8 @@ void WindowsHelloKey_cancel(JNIEnv*, jclass, jlong handle) {
   if (handle != 0) hello_key::Cancel(FromHandle(handle));
 }
 
-void WindowsHelloKey_release(JNIEnv*, jclass, jlong handle) {
-  if (handle != 0) hello_key::Release(FromHandle(handle));
+void WindowsHelloKey_release(JNIEnv*, jclass, jlong handle, jboolean accepted) {
+  if (handle != 0) hello_key::Release(FromHandle(handle), accepted == JNI_TRUE);
 }
 
 const JNINativeMethod gMethods[] = {
@@ -136,7 +136,7 @@ const JNINativeMethod gMethods[] = {
     {"nativeStartSign", "(ILjava/lang/String;[B)J", GESHER_JNI(WindowsHelloKey_startSign)},
     {"nativeAwait", "(J[[B)I", GESHER_JNI(WindowsHelloKey_await)},
     {"nativeCancel", "(J)V", GESHER_JNI(WindowsHelloKey_cancel)},
-    {"nativeRelease", "(J)V", GESHER_JNI(WindowsHelloKey_release)},
+    {"nativeRelease", "(JZ)V", GESHER_JNI(WindowsHelloKey_release)},
 };
 
 }  // namespace
