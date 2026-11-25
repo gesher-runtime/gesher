@@ -201,6 +201,8 @@ public final class Services {
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
+        // The camera image-picker setting's question and file picker (docs/devices.md).
+        services.put(CameraSourceService.NAME, new CameraSourceService(am));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 clipboard).asBinder());
         // content://media: MediaStore over the shared volume (docs/media-provider.md).
@@ -304,24 +306,24 @@ public final class Services {
         services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
                 android.app.admin.IDevicePolicyManager.class,
                 new DeviceServices.DevicePolicyService()).asBinder());
+        // Telephony over the host's cellular modem, if Windows reported one at boot
+        // (docs/telephony.md); without one, AOSP's no-phone answers.
+        TelephonyService.Endpoints telephony = TelephonyService.create(pm, am,
+                () -> location.isLocationEnabledForUser(0));
         services.put(Context.TELEPHONY_SERVICE, StandIn.of(
-                com.android.internal.telephony.ITelephony.class,
-                new DeviceServices.TelephonyService()).asBinder());
+                com.android.internal.telephony.ITelephony.class, telephony.phone).asBinder());
         services.put("iphonesubinfo", StandIn.of(
-                com.android.internal.telephony.IPhoneSubInfo.class,
-                new DeviceServices.PhoneSubInfoService()).asBinder());
+                com.android.internal.telephony.IPhoneSubInfo.class, telephony.phoneSubInfo).asBinder());
         services.put("device_identifiers", StandIn.of(
                 android.os.IDeviceIdentifiersPolicyService.class,
                 new DeviceServices.DeviceIdentifiersPolicyService()).asBinder());
         services.put("isub", StandIn.of(
-                com.android.internal.telephony.ISub.class,
-                new DeviceServices.SubscriptionService()).asBinder());
+                com.android.internal.telephony.ISub.class, telephony.subscriptions).asBinder());
         // The binder service's name, which TelephonyRegistryManager looks up, not
         // Context.TELEPHONY_REGISTRY_SERVICE ("telephony_registry", the manager's): under
         // that name registerTelephonyCallback / listen threw NullPointerException (Waze).
         services.put("telephony.registry", StandIn.of(
-                com.android.internal.telephony.ITelephonyRegistry.class,
-                new DeviceServices.TelephonyRegistryService()).asBinder());
+                com.android.internal.telephony.ITelephonyRegistry.class, telephony.registry).asBinder());
         StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
                 android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
         services.put(Context.TRUST_SERVICE, trust.asBinder());

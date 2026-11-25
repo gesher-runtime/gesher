@@ -1,0 +1,94 @@
+Forget the global last context in eglDestroyContext
+
+Gesher issue #485 (Moovit: MapLibre GL maps in several GLSurfaceViews, each
+with its own GL thread, on the one default display): "host fault reading 0x8"
+at libGLESv2.dll+0x1ebea2, rx::Framebuffer11::markAttachmentsDirty with
+this == NULL, called from rx::StateManager11::updateState during a draw.
+
+Gesher builds ANGLE with angle_force_context_check_every_call
+(compat/angle/args.gn). Each GL entry point then calls
+DirtyContextIfNeeded(context) (src/libGLESv2/global_state.h), which marks all
+state of the calling context dirty only when it differs from the global last
+context. The Direct3D 11 back end has one StateManager11 per display, shared by
+all contexts; StateManager11::onMakeCurrent resets its caches of the draw
+framebuffer, executable and vertex array (mFramebuffer11, mExecutableD3D,
+mVertexArray11) to null, and only the context being made current is dirtied.
+
+egl::Display::destroyContext (src/libANGLE/Display.cpp) makes the doomed
+context current with Display::makeCurrent and then restores the thread's
+previous context, bypassing SetContextCurrent, so the global last context is
+not updated. The ScopedSyncCurrentContextFromThread in the DestroyContext stub
+then calls SetContextCurrent with the thread's context; when that is null,
+DirtyContextIfNeeded does nothing. Sequence:
+
+  thread B: eglMakeCurrent(EGL_NO_CONTEXT) releasing context X
+  thread A: a GL call (last context = A; glClear applies only the clear
+            state, the draw framebuffer binding among it)
+  thread B: eglDestroyContext(X) (the StateManager11 caches become null)
+  thread A: draw: A is the last context, so it is not dirtied again; the
+            executable and vertex array, still pending from the dirtying at
+            the clear, are re-applied, the draw framebuffer is not, and
+            updateState dereferences the null mFramebuffer11.
+
+GLSurfaceView's GL thread ends exactly like thread B (eglMakeCurrent with
+EGL_NO_CONTEXT, eglDestroySurface, eglDestroyContext). When the destroying
+thread has another context current, restoring it dirties that context and
+records it as the last context, so the other contexts are dirtied again and
+nothing breaks. eglMakeCurrent and eglReleaseThread run onMakeCurrent only for
+the context that they make current, which SetContextCurrent records;
+eglTerminate releases contexts without making them current.
+
+The fix: the DestroyContext stub sets the global last context to null before
+egl::Display::destroyContext. Every context, including one that made the
+previous GL call on another thread, then has all of its state dirtied before
+its next GL call; the context current on the destroying thread, if any, is
+dirtied by the scoped sync and recorded as the last context. The global EGL
+mutex, which eglDestroyContext's entry point holds, guards every access to the
+last context. This also drops the last-context pointer to a context that may
+be freed here.
+
+Written against ANGLE ab6a82e0ed14, the commit Gesher builds. On ANGLE main
+(November 2026) DirtyContextIfNeeded is unchanged but the DestroyContext stub
+was refactored, so the hunk needs rebasing when ANGLE_COMMIT moves; not yet
+reported upstream. The patch is under ANGLE's BSD license. Applied by compat/angle/build-angle.ps1; regression tests:
+tests/native/egl_context_destroy_test.cc (track 40-native-libs) and
+tests/native2/egl_context_destroy_jni.cpp (track 44-native2).
+
+diff --git a/src/libGLESv2/egl_stubs.cpp b/src/libGLESv2/egl_stubs.cpp
+--- a/src/libGLESv2/egl_stubs.cpp
++++ b/src/libGLESv2/egl_stubs.cpp
+@@ -43,6 +43,26 @@
+     }
+     *numConfigs = resultSize;
+ }
++
++// Gesher (compat/angle/patches): with ANGLE_FORCE_CONTEXT_CHECK_EVERY_CALL a GL call dirties all
++// state of its context only when that context is not the global last context. eglDestroyContext
++// makes the doomed context current inside egl::Display::destroyContext and then restores the
++// thread's previous context (or none), without SetContextCurrent. Making the doomed context
++// current runs the backend's onMakeCurrent, which resets per-display state that all contexts share
++// (the D3D11 StateManager11 caches of the draw framebuffer, executable and vertex array). If the
++// destroying thread has no current context, nothing updates the last context, so the context that
++// made the previous GL call, possibly on another thread, would draw with the reset caches.
++// Forget the last context so that every context has all of its state dirtied before its next
++// call (this also drops the pointer to a context that may be freed here). eglMakeCurrent and
++// eglReleaseThread need no such step: they run onMakeCurrent only for the context that they make
++// current, which SetContextCurrent then records. Called with the global EGL mutex held, which
++// guards every access to the last context.
++void InvalidateGlobalLastContext()
++{
++#if defined(ANGLE_FORCE_CONTEXT_CHECK_EVERY_CALL)
++    SetGlobalLastContext(nullptr);
++#endif
++}
+ }  // anonymous namespace
+ 
+ EGLBoolean BindAPI(Thread *thread, EGLenum api)
+@@ -313,6 +333,7 @@
+ 
+     ScopedSyncCurrentContextFromThread scopedSyncCurrent(thread);
+ 
++    InvalidateGlobalLastContext();
+     ANGLE_EGL_TRY_RETURN(thread, display->destroyContext(thread, context), "eglDestroyContext",
+                          GetContextIfValid(display, contextID), EGL_FALSE);
+     thread->setSuccess();

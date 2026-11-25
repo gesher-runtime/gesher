@@ -1654,6 +1654,7 @@ SymbolTable& Table() {
     RegisterSignal(*table);
     RegisterTime(*table);
     RegisterSyscall(*table);
+    RegisterPtrace(*table);
     RegisterProcess(*table);  // last: it wraps entries already there
     return table;
   }();

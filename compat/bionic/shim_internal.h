@@ -146,8 +146,16 @@ void RegisterCxx(SymbolTable& table);      // cxx_bionic.cc
 // x86-64 Linux numeric timerfd syscalls share the libc exports' implementation.
 bool DispatchTimerfdSyscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                            int64_t* result);
-// ptrace (a process nobody traces) and the POSIX regex functions.
+// The raw system call table and the POSIX regex functions.
 void RegisterSyscall(SymbolTable& table);  // syscall_bionic.cc
+// ptrace between Gesher processes (ADR 0093).
+void RegisterPtrace(SymbolTable& table);  // ptrace_bionic.cc
+// wait4's hook for this process's tracees (ptrace_bionic.cc): a stop or exit
+// of a tracee `pid` selects (any for -1/0) as a Linux status word, returning
+// its pid; 0 if none is ready. `*matched` says whether `pid` selects any
+// tracee. An exit of a tracee that is also this process's child is left to the
+// child's own wait (`is_child`).
+int PtraceWaitPoll(int pid, int options, int* status, bool* matched, bool (*is_child)(int));
 // A raw x86-64 Linux system call, as the kernel takes it: the shim function
 // that does the same, and the kernel's result or -errno. The ELF loader's
 // handler for `syscall` instructions in loaded code (ADR 0084), and
