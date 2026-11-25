@@ -17,6 +17,8 @@ extern "C" {
 #define PR_CAPBSET_DROP   24
 #define PR_SET_NO_NEW_PRIVS 38
 #define PR_SET_VMA        0x53564d41
+#define PR_SET_PTRACER    0x59616d61  /* Yama */
+#define PR_SET_PTRACER_ANY ((unsigned long)-1)
 #define PR_SET_VMA_ANON_NAME 0
 
 int prctl(int option, ...);

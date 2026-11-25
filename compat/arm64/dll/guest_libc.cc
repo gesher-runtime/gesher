@@ -421,6 +421,7 @@ const SyscallMap kSyscalls[] = {
     {82, "fsync", 'i'},       {83, "fdatasync", 'i'},    {94, "_exit", 'i'},
     {85, "timerfd_create", 'i'}, {86, "timerfd_settime", 'i'}, {87, "timerfd_gettime", 'i'},
     {101, "nanosleep", 'i'},  {113, "clock_gettime", 'i'}, {114, "clock_getres", 'i'},
+    {117, "__gesher_ptrace_syscall", 'l'}, {260, "wait4", 'i'},
     {124, "sched_yield", 'i'}, {123, "sched_getaffinity", 'i'}, {129, "kill", 'i'},
     {130, "tkill", 'i'},      {131, "tgkill", 'i'},     {132, "sigaltstack", 'i'},
     {160, "uname", 'i'},
@@ -890,6 +891,13 @@ bool InitGuestLibc() {
   if (g_mmap) {
     Override("mmap", reinterpret_cast<void*>(&GuestMmap));
     Override("mmap64", reinterpret_cast<void*>(&GuestMmap));
+  }
+
+  if (void* writes = Host("__gesher_ptrace_code_writes")) {
+    SetExternalCodeWrites(reinterpret_cast<const void*(GESHER_SYSV*)()>(writes)());
+    if (void* set_hook = Host("__gesher_ptrace_set_halt_hook")) {
+      reinterpret_cast<void(GESHER_SYSV*)(void(GESHER_SYSV*)())>(set_hook)(&HaltForExternalWrites);
+    }
   }
 
   g_host_syscall = Host("syscall");

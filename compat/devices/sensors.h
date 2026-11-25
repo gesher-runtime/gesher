@@ -41,7 +41,18 @@ class Source {
   virtual bool Read(Reading* reading) = 0;
 };
 
+// Where a listed sensor comes from. Only kWindows and kTest describe a sensor
+// for the system features (PackageManagerService.addSensorFeatures, through
+// WindowsSensors): kStationaryDefault is Gesher's gravity-only desktop default,
+// not hardware, so it never declares android.hardware.sensor.* (docs/devices.md).
+enum class Origin : int {
+  kWindows,            // Windows.Devices.Sensors' default sensor of its kind
+  kTest,               // GESHER_SENSOR_TEST's sensors, the explicit test switch
+  kStationaryDefault,  // the stationary accelerometer (GESHER_SENSOR_FALLBACK)
+};
+
 struct Sensor {
+  Origin origin = Origin::kWindows;
   int handle = 0;
   int type = 0;
   std::string name;

@@ -104,6 +104,21 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   the stand-in, `patches/art/0802` and `0803`). `GESHER_ART_SHIM=0` turns it
   off.
 
+- **The ELF loader as `/system/bin/linker64`**
+  ([0096](decisions/0096-elf-loader-as-system-linker64.md)). The loader is
+  the process's dynamic linker, so it has Android's name for one:
+  `/system/bin/linker64` is a file (read-only through that name: `EROFS`)
+  whose ELF header says ELF64,
+  little-endian, `EM_X86_64` (the machine the loader runs natively) and names
+  itself as Gesher's ELF loader (a `Gesher` note, `.comment`), and
+  `/proc/self/maps` lists a mapping of it in every process, as a 64-bit
+  device does (`compat/posix/src/system_linker.cc`). There is no
+  `/system/bin/linker`: Gesher runs no 32-bit code. Code that reads the
+  linker's `e_machine` or looks for `/bin/linker64` in its maps to choose its
+  libraries (Ijiami's Java shell does both) then picks x86-64.
+  `linker64 PROGRAM ARGS` runs PROGRAM; the file itself has no code, and the
+  loader refuses to `dlopen` it.
+
 - **360 Jiagu shells pick their library by the device's ABI**
   ([0095](decisions/0095-jiagu-shell-abi-selection.md)). The stub copies
   `libjgcge_x86.so`/`libjgcge_x64.so` from the APK's assets when
@@ -376,7 +391,12 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     is not provided.
     `EGL_DEFAULT_DISPLAY` is ANGLE's Direct3D 11 display on the hardware
     adapter, else WARP (`GESHER_EGL_DEVICE=warp` forces WARP; the choice is
-    printed as `gesher EGL: default display: ...`). `eglCreateWindowSurface`
+    printed as `gesher EGL: default display: ...`, with the adapter and the
+    OpenGL ES version the device declares for it). ES 3.0 only on a GPU:
+    without one, WARP is capped at feature level 10_0, ES 2.0 only (no ES 3
+    config, ES 3 contexts refused with `EGL_BAD_MATCH`). Processes after the
+    system server's probe give exactly the boot's `ro.opengles.version`, and no
+    context above it (docs/system-features.md). `eglCreateWindowSurface`
     (and the platform forms) takes the `ANativeWindow*` and creates ANGLE's
     window surface on its HWND (`gesher_window_hwnd`), holding a reference
     to the window until `eglDestroySurface`. Android-only config attributes
