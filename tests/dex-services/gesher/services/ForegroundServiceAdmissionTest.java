@@ -4,6 +4,7 @@ package gesher.services;
 import android.Manifest;
 import android.app.IActivityManager;
 import android.app.IApplicationThread;
+import android.app.IServiceConnection;
 import android.app.InvalidForegroundServiceTypeException;
 import android.app.MissingForegroundServiceTypeException;
 import android.app.Notification;
@@ -11,6 +12,7 @@ import android.app.NotificationChannel;
 import android.app.RemoteServiceException.ForegroundServiceDidNotStartInTimeException;
 import android.app.Service;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.PermissionInfo;
@@ -450,6 +452,21 @@ public final class ForegroundServiceAdmissionTest {
                         && SERVICE.getClassName().equals(ForegroundServiceDidNotStartInTimeException
                                 .getServiceClassNameFromExtras(timedOut.thread.crashExtras)),
                 "The typed app-thread error must name the original service");
+
+        Harness bound = new Harness(33, 0, BASE);
+        bound.start(true);
+        Object beforeBoundTimeout = bound.promotionDeadline();
+        IServiceConnection connection = new IServiceConnection.Stub() {
+            @Override public void connected(ComponentName name, IBinder service, boolean dead) { }
+        };
+        bound.asApp(() -> check(bound.am.bindService(bound.thread, null,
+                new Intent().setComponent(SERVICE), null, connection, Context.BIND_AUTO_CREATE,
+                OWNER, 0) == 1, "Auto-create connection must keep the service instance"));
+        bound.expire(beforeBoundTimeout);
+        check(!((Boolean) get(bound.thread.service, "startRequested")) && bound.thread.crashes == 0,
+                "A timed-out started lifetime must end while its binding keeps the instance");
+        bound.asApp(() -> check(bound.am.unbindService(connection), "Auto-create client can unbind"));
+        check(bound.thread.crashes == 1, "Tearing down the bound instance reports the missed promotion");
 
         Harness stopped = new Harness(33, 0, BASE);
         stopped.start(true);
