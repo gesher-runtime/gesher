@@ -1130,18 +1130,23 @@ final class ActiveServices {
     }
 
     private void foregroundStartTimedOut(ServiceRecord r, ForegroundStartDeadline deadline) {
+        boolean reportFailure;
         synchronized (this) {
             if (r.foregroundStartDeadline != deadline || r.app != deadline.app
                     || mServices.get(r.name) != r || !serviceCurrent(r)
                     || deadline.app.dead || deadline.app.exiting) return;
-            completeForegroundStartLocked(r);
+            cancelForegroundStartDeadlineLocked(r);
             r.foregroundStartExpired = true;
             r.startRequested = false;
             r.lastStartIntent = null;
             r.pendingStarts.clear();
             clearStartGrants(r, Integer.MAX_VALUE);
+            // An auto-create binding can keep the instance alive. Teardown will
+            // report the failure when its last owner releases it.
+            reportFailure = !r.hasAutoCreateConnections();
+            if (reportFailure) r.foregroundStartRequired = false;
         }
-        reportForegroundStartFailure(r, deadline.app);
+        if (reportFailure) reportForegroundStartFailure(r, deadline.app);
         maybeBringDown(r);
     }
 
