@@ -334,15 +334,33 @@ describes the combination.
 ### 7. Migration
 
 The old file format (`GKS1`) does not record whether a key required user authentication,
-so the keys that did cannot be identified. Decision: `GKS1` keys are read as they are
-and keep working (no user data is lost); each is marked *legacy*, which is written out
-with the new format (`GKS2`) and means "authorizations unknown, not enforced". New keys,
-including a regenerated key under the same alias, are enforced. Rejected: invalidating
-every old key (destroys app data for keys that never required authentication); sealing
-every old key (would demand authentication for keys that never asked for it, and prompt
-at upgrade). This leaves legacy keys that asked for authentication unenforced, as they
-were; that is an open question for maintainers below. A `GKS2` file is not readable by
-an older Gesher.
+so the keys that did cannot be identified. **Maintainer decision for #475: invalidate
+these keys and let applications recreate them with known authorizations.** The
+maintainer explicitly accepted that this can make existing encrypted data unrecoverable,
+including data protected by old keys that had never requested authentication.
+
+Every store read rejects secret and private keys from `GKS1`, and `GKS2` keys carrying
+the legacy flag written by the earlier migration. No raw key object is constructed for
+them. Their aliases are absent from the KeyStore entry, key, certificate-chain and
+enumeration APIs; applications can generate or import replacement keys under the same
+aliases. The normal `KeyGenParameterSpec` / `KeyProtection` authentication rules apply to
+those replacements. Migration does not enroll or prompt on the user's behalf.
+
+Trusted certificate entries contain no secret key or user-authentication requirement and
+are preserved. Modern `GKS2` non-authenticated keys and sealed auth-bound keys retain their
+material and metadata. After a complete read, the sanitized map is written as `GKS2`
+using atomic replacement, removing the rejected key material. If that replacement is
+unavailable, the original file is retained and the error is logged; rejected aliases
+remain unavailable in memory. Migration never rewrites an incomplete parse over unseen entries.
+Restoring either an old `GKS1` file or a previously migrated `GKS2` backup cannot restore
+access: the same rejection applies again on read. This does not claim to erase external
+backups or raw key bytes that an earlier Gesher version already exported.
+
+The host contracts exercise the actual provider's load, lookup, persistence, replacement
+and restore paths, including write failure, truncated input, trusted certificates and
+mixed modern/legacy stores. They verify that an auth-bound replacement remains opaque
+and requires authorization. These tests are not Windows Hello or ART execution evidence.
+A `GKS2` file is not readable by an older Gesher.
 
 ### 8. Combined with phase 2b (`feat/hello-combined`)
 
@@ -369,13 +387,11 @@ decides both:
 
 ## Open questions for maintainers
 
-1. Legacy keys (item 7): is "keep, marked legacy" accepted, or should an upgrade
-   invalidate them so apps re-create them enforced?
-2. Enrollment prompts at key generation (item 2): Android never prompts there. Is that
+1. Enrollment prompts at key generation (item 2): Android never prompts there. Is that
    an acceptable desktop difference, or should enrollment be a separate, explicit step?
-3. `KeyBoundHello` changes which Windows prompt an ordinary confirmation shows while
+2. `KeyBoundHello` changes which Windows prompt an ordinary confirmation shows while
    keys with a timeout exist (no app message). Acceptable?
-4. Upstream ADR 0090 (AppContainer isolation): all Hello calls are in the system server,
+3. Upstream ADR 0090 (AppContainer isolation): all Hello calls are in the system server,
    so app containers are not involved; confirm the system server stays outside one.
 
 ## Not verified
