@@ -7,7 +7,10 @@ Ijiami's packed shell libraries to unpack and run.
 Code: `compat/bionic/art_shim.cc`, `compat/bionic/jni_bridge.cc`,
 `patches/art/0800-packer-load-class-hook.patch`,
 `patches/art/0801-packer-jni-caller-abi.patch`, `compat/posix/src/procfs.cc`,
-`compat/framework/android_runtime.cc`, `compat/arm64/dll/patch-dynarmic-fpsr.py`.
+`compat/framework/android_runtime.cc`, `compat/arm64/dll/patch-dynarmic-fpsr.py`;
+for the arm64 stand-ins (see the last section)
+`patches/art/0802-packer-runtime-verifier.patch` and
+`patches/art/0803-packer-open-common-hook.patch`.
 
 ## Context
 
@@ -58,9 +61,13 @@ no symbol.
 **A stand-in `libart.so` for such an app, and ART calling it.**
 
 - `compat/bionic/art_shim.cc` writes a small ELF64 x86-64 object to
-  `$ANDROID_DATA/system/gesher-art/<hash of its bytes>/libart.so` (once; a
-  process that has an older one mapped keeps it) and loads it with the ELF
-  loader. It exports only the `LoadClass` symbol, a System V function that
+  `$ANDROID_DATA/system/gesher-art/x86_64-<64-bit hash of its bytes>/libart.so`
+  (once; a process that has an older one mapped keeps it) and loads it with
+  the ELF loader. After loading, it removes the directories of other images
+  of its kind (and the 32-bit names used before) that have been untouched
+  for a day (looked at again just before each is removed: another process
+  marks a directory used before loading from it); a file another process
+  still has mapped is not deleted, and its directory stays. It exports only the `LoadClass` symbol, a System V function that
   does nothing: a normal prologue, two 8-byte NOPs and the epilogue. An inline
   hook can displace the first 14 bytes (or 5) on whole, position-independent
   instructions.
@@ -198,3 +205,103 @@ APK the check passes.
 - **Not covered:** the `LoadMethod` fallbacks (no such function exists in
   Android 16's ART), and any packer that resolves ART symbols through
   `dl_iterate_phdr` or `dlopen("libart.so")` instead of `/proc/self/maps`.
+
+## Addendum (2026-11-23): an arm64 stand-in for NetEase Yidun
+
+Dreame (`com.dreame.smartlife`, issue #301) is packed by NetEase Yidun
+(网易易盾). Its shell, `libnesec.so`, exists only for arm64-v8a and runs
+translated (ADR 0047). It resolves ART's symbols the way Ijiami's shell does:
+from the objects `/proc/self/maps` names. But it looks each symbol up in the
+library that defines it on a device:
+
+- in `libart.so`: `ClassLinker::LoadClass`, which it hooks inline;
+  `Runtime::DisableVerifier`, which it calls on `Runtime::instance_` before
+  it opens its decrypted dex files from memory (ART then opens them without
+  verifying them, as `OatFileManager::OpenDexFilesFromOat` does when
+  verification is disabled); `Runtime::IsVerificationEnabled` and
+  `IsVerificationSoftFail`; and `OatHeader::kOatVersion`;
+- in `libdexfile.so`: `DexFileLoader::OpenCommon` (Android 16's form, with a
+  `DexFileContainer`), which it hooks inline to learn where ART placed each
+  dex file it opens. Its `LoadClass` hook finds a dex file's method-body
+  store by that address. A stand-in `libart.so` that exported `OpenCommon`
+  was not looked at.
+
+**Decision.** For an arm64 ELF shell named `libnesec.so`, the bridge writes
+and loads two arm64 stand-ins in one directory named after their contents
+(`arm64-<64-bit hash>`, pruned as the x86-64 one's are),
+`libart.so` and `libdexfile.so`, as a device's ART module has them in its
+`lib64` (`compat/bionic/art_shim.cc`, `LoadArtShimArm64`;
+`compat/bionic/jni_bridge.cc`, `LoadArtShimArm64For`). The x86-64 stand-in is
+unchanged; each shell gets the stand-in of its own machine only
+(`ArtHookingPackerMachine`), so an arm64 shell with Ijiami's generic names and
+an x86-64 `libnesec.so` get nothing.
+
+- **`libart.so`** exports `LoadClass` (a frame record around NOPs: whatever a
+  hook displaces is position-independent); the three Runtime functions, each
+  six displaceable NOPs and then a tail call through its own GOT slot
+  (`LDR X16`, `BR X16`; `R_AARCH64_GLOB_DAT`); `kOatVersion`, which holds
+  ART's own version; and `Runtime::instance_`, which holds the Runtime
+  pointer. ART calls `LoadClass` through a host entry into the translator
+  (`gesher::arm64::HostEntry`), as `patches/art/0800` calls the x86-64 one.
+- **The Runtime functions act on the real Runtime.** Their GOT slots are
+  bound to host functions that call `patches/art/0802`'s
+  `gesher_art_runtime_disable_verifier` and
+  `gesher_art_runtime_verification` (the stand-ins' `__gesher_art_*`
+  imports). The loader binds those imports while it loads the stand-ins, on
+  its own thread only (`ResolveArtShimImport`, asked first by the bionic
+  resolver); they are in no symbol table, so an app's `dlsym` or another
+  object's imports never reach them. These act only on this process's
+  `Runtime::Current()`; for any other pointer they log it and do nothing
+  (or report false). The verifier is disabled only because the app asked
+  ART to do so, through ART's own function.
+- **`libdexfile.so`** exports `OpenCommon` (six displaceable NOPs, then a
+  call through its GOT slot to ART's real `OpenCommon`, with AAPCS64's
+  result storage in X8 passed first) and an entry. `patches/art/0803` makes
+  ART's `DexFileLoader::OpenCommon` call that entry, through a host entry,
+  when the hook pointer is set. The entry makes the device's AAPCS64 call to
+  the stand-in's `OpenCommon`, so the shell's inline hook runs as on a
+  device. Whatever it does, the dex file is opened by ART's own `OpenCommon`
+  (`gesher_art_dex_file_loader_open_common`; a thread-local guard keeps that
+  call from going round again), with the arguments the hook passed.
+- **Why two objects.** The shell finds `OpenCommon` only in the maps line
+  whose path ends in `/libdexfile.so`. Each stand-in therefore exports exactly
+  what its library exports on a device, and nothing else.
+
+**What else Dreame needed** on the way to its first screen (separate commits,
+each a general Linux or Android contract, not specific to this app):
+`execl`/`execlp`/`execle`; the translator honouring the guest's `IC IVAU`,
+`IC IALLU` and an executable-range `mprotect` (the shell's inline hooks
+rewrite code that already ran); `fsync` on a read-only descriptor (through a
+writable handle or descriptor of the same file when Windows allows one;
+without any write access, a read-only file or an ACL that denies writing,
+only the cached data is written back, without committing metadata or
+flushing the device's cache: [posix.md](../posix.md#known-gaps)); `IP_PKTINFO`
+on IPv4 UDP; a content provider authority given to the first provider in a
+package that declares it (AOSP's `ComponentResolver`); and bionic's
+`libstdc++.so` exports, which the shell `dlopen`s.
+
+**Consequences.**
+
+- With the stand-ins Dreame's shell restores its method bodies and the app
+  reaches its welcome (login) screen on a local build. Its later screens and
+  its anti-tamper checks were not explored.
+- Cost: two files of a few KiB once for such an app, and an atomic load per
+  `OpenCommon` for every app (null unless the stand-in was loaded).
+- **Tests:** `tests/native/art_shim_test.cc` checks the two arm64 images
+  without a translator: ELF header and machine, segments, sonames, the
+  exports through `DT_GNU_HASH` and `DT_HASH` (and that neither object
+  exports the other's), the `R_AARCH64_GLOB_DAT` GOT relocations and the code
+  that reads those slots, and the entry's call. It also checks which machine
+  each shell's stand-in is for, and the pruning of stale stand-in directories.
+  `tests/native/art_shim_arm64_test.cc` (tracks/47-arm64.ps1) runs them
+  under the translator as `LoadArtShimArm64` loads them, their imports bound
+  to host fakes that record their System V arguments: the `OpenCommon` entry
+  called as ART calls it, `OpenCommon` called by guest code as a device calls
+  it (X8, stack arguments), the three Runtime functions and `LoadClass`, each
+  with a distinct value in every argument, which the fake must receive in its
+  place; `Runtime::instance_` and `kOatVersion`; a load that fails after
+  `libdexfile.so` loaded, and its retry (each object loaded once); and that
+  the imports are visible to nothing else afterwards. The ART patches are
+  exercised only by an app with this shell; no such app is in the repository.
+- **Not covered:** an x86-64 or 32-bit NetEase shell, and any ART symbol the
+  shell looks up on a path Dreame's startup did not take.

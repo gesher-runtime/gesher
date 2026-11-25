@@ -56,9 +56,10 @@ TEB. This brings the three faster execution modes to Windows. The design is
   when ART's `dlopen` (`System.load`) of a path gives the Android linker's
   error (`library "..." not found`, `is too small to be an ELF executable`,
   `has bad ELF magic`) rather than Windows', the Windows error behind it.
-- `GESHER_ART_SHIM=0` — no stand-in `libart.so` for an app whose packer hooks
-  ART by symbol (ADR 0086; `gesher art: ...` in the app's log says when one
-  is loaded).
+- `GESHER_ART_SHIM=0` — no stand-in `libart.so` (or, for an arm64 shell,
+  `libart.so` and `libdexfile.so`) for an app whose packer hooks ART by
+  symbol (ADR 0086; `gesher art: ...` in the app's log says when one is
+  loaded).
 - `GESHER_MMAP_NO_PLACEHOLDERS=1` — plain allocations and views, oat code
   copied, no dual-mapped JIT cache (the configuration before ADR 0036).
 - `GESHER_LOG_EXECUTION=1` also logs, for an app, the oat file its dex file
