@@ -16,8 +16,10 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "speech_recognition_win.h"
@@ -27,6 +29,35 @@ namespace sr = gesher::devices::speech_recognition;
 namespace {
 
 int g_failures = 0;
+
+// A startup or teardown deadlock must fail this process, never leave a detached
+// worker or disguise a session that has not started as a successful test.
+class Deadline {
+ public:
+  Deadline(const char* phase, DWORD timeout_ms)
+      : done_(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
+    if (done_ == nullptr) {
+      std::fprintf(stderr, "FAIL could not create the test deadline event\n");
+      std::exit(1);
+    }
+    watcher_ = std::thread([this, phase, timeout_ms] {
+      if (WaitForSingleObject(done_, timeout_ms) != WAIT_OBJECT_0) {
+        std::fprintf(stderr, "FAIL %s did not complete within %lu ms\n", phase, timeout_ms);
+        std::fflush(stderr);
+        std::_Exit(1);
+      }
+    });
+  }
+  ~Deadline() {
+    SetEvent(done_);
+    watcher_.join();
+    CloseHandle(done_);
+  }
+
+ private:
+  HANDLE done_;
+  std::thread watcher_;
+};
 
 void Check(bool ok, const char* what) {
   std::printf("%s %s\n", ok ? "PASS" : "FAIL", what);
@@ -62,6 +93,9 @@ std::vector<sr::Event> RecognizeSilence(sr::Session* session, int rate, int ms) 
 }  // namespace
 
 int main() {
+  // Preserve the last completed contract when a watchdog reports a deadlock.
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+  std::setvbuf(stderr, nullptr, _IONBF, 0);
   // The pure language matching, as the Android engine relies on it.
   std::vector<sr::Recognizer> fixture(2);
   fixture[0].token_id = L"A";
@@ -111,10 +145,13 @@ int main() {
     options.sample_rate = 16000;
     options.hypotheses = true;
     options.max_alternates = 3;
-    hr = sr::StartSession(options, &session, &recognizer_failed);
+    {
+      Deadline deadline("starting dictation before caller PCM", 30000);
+      hr = sr::StartSession(options, &session, &recognizer_failed);
+    }
     std::printf("StartSession(%s): HRESULT 0x%08lX%s\n", Narrow(options.language).c_str(),
                 static_cast<unsigned long>(hr), recognizer_failed ? " (recognizer failed)" : "");
-    Check(SUCCEEDED(hr) && session != nullptr, "dictation starts over handed-over PCM");
+    Check(SUCCEEDED(hr) && session != nullptr, "dictation starts before the caller provides PCM");
     if (session != nullptr) {
       std::vector<sr::Event> events = RecognizeSilence(session.get(), 16000, 2000);
       bool ended = !events.empty() && events.back().kind == sr::EventKind::kStreamEnd;
@@ -124,11 +161,19 @@ int main() {
       Check(!recognized, "silence is not recognized as speech");
       Check(!session->Write(std::vector<int16_t>(160).data(), 160),
             "no audio is taken after the end");
-      session.reset();
+      {
+        Deadline deadline("releasing the ended stream", 5000);
+        session.reset();
+      }
 
-      hr = sr::StartSession(options, &session, &recognizer_failed);
-      Check(SUCCEEDED(hr), "a second session starts");
+      {
+        Deadline deadline("starting the empty session to cancel", 30000);
+        hr = sr::StartSession(options, &session, &recognizer_failed);
+      }
+      Check(SUCCEEDED(hr) && session != nullptr,
+            "a second session starts without PCM before immediate cancellation");
       if (session != nullptr) {
+        Deadline deadline("canceling and joining a session with no PCM", 5000);
         ULONGLONG before = GetTickCount64();
         session->Cancel();
         Check(session->NextEvent(1000).kind == sr::EventKind::kNone,
