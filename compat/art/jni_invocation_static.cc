@@ -8,9 +8,13 @@
 
 #include <stdlib.h>
 
+#include <cstdio>
+#include <cstdlib>
+
 #include <string>
 
 #include <android-base/file.h>
+#include <gesher/gles_version_property.h>
 #include <android-base/properties.h>
 #include <android-base/strings.h>
 
@@ -27,6 +31,8 @@ JniInvocationImpl the_instance;
 // loads build.prop from Java, after the runtime is up; dalvikvm calls
 // JniInvocationInit just before JNI_CreateJavaVM, so it is loaded here too,
 // from $ANDROID_ROOT/build.prop, with the same syntax (BuildProps.java).
+// ro.opengles.version only as a version Gesher serves (0x30000, 0x20000): the
+// rule all build.prop loaders share (gesher/gles_version_property.h).
 void LoadBuildProp() {
   const char* root = getenv("ANDROID_ROOT");
   if (root == nullptr) return;
@@ -40,7 +46,13 @@ void LoadBuildProp() {
     std::string key = android::base::Trim(line.substr(0, eq));
     // init's "?=" (set if unset) is taken as a plain assignment, as in BuildProps.
     if (!key.empty() && key.back() == '?') key = android::base::Trim(key.substr(0, key.size() - 1));
-    android::base::SetProperty(key, android::base::Trim(line.substr(eq + 1)));
+    std::string value = android::base::Trim(line.substr(eq + 1));
+    if (!gesher::properties::ServedBuildProperty(key, value)) {
+      std::fprintf(stderr, "build.prop: %s=%s is not an OpenGL ES version Gesher serves (0x30000, 0x20000);"
+                   " left unset, the probe declares it\n", key.c_str(), value.c_str());
+      continue;
+    }
+    android::base::SetProperty(key, value);
   }
 }
 }  // namespace
