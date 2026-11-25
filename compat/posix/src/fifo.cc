@@ -22,6 +22,11 @@
 #include "record_lock_descriptors.h"
 #include "socket_user_copy.h"
 
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+
 #include <bcrypt.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -801,6 +806,14 @@ InheritedFifoBinding inherited_fifo_binding;
 }  // namespace
 
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the process's table of FIFO rings. An open holds it
+// while it maps a ring (and waits for the ring's lock); a child cloned then
+// would find it held by a thread it does not have, and its next FIFO open
+// would wait for ever.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::CacheMutex());
+#endif
 
 // mkfifo(3) and mknod(S_IFIFO): an empty file with WSL's FIFO tag. A volume
 // without reparse points (FAT) cannot hold one; Linux's vfat fails with EPERM.
