@@ -199,6 +199,42 @@ final class SettingsProvider extends ContentProvider {
         }
     }
 
+    /** Server-local view of a global setting; null when absent (or without the provider). */
+    static String globalString(String name) {
+        SettingsProvider provider = sInstance;
+        if (provider == null) return null;
+        synchronized (provider) { return provider.mTables.get(GLOBAL).get(name); }
+    }
+
+    /**
+     * Sets a Settings.Global value from the system server, durably and with observer
+     * notification, as the phone process's Settings.Global.putInt does (the mobile data
+     * switches, docs/telephony.md). Returns false without the provider.
+     */
+    static boolean putGlobal(String name, String value) {
+        SettingsProvider p = sInstance;
+        if (p == null) return false;
+        p.put(GLOBAL, name, value, false);
+        return true;
+    }
+
+    /**
+     * Adds a Settings.Secure default from the system server: the value when the setting
+     * has none, as a default row (a value written to it later replaces it, and is kept).
+     * Speech recognition: {@code voice_recognition_service} once Gesher's recognition
+     * service is installed (SttEngineApp, docs/speech-recognition.md).
+     */
+    static void addSecureDefault(String name, String value) {
+        SettingsProvider p = sInstance;
+        if (p == null) return;
+        boolean added;
+        synchronized (p) {
+            added = !p.mTables.get(SECURE).containsKey(name);
+            if (added) p.mStore.addDefault(SECURE, name, value);
+        }
+        if (added) p.notifySetting(SECURE, name);
+    }
+
     /**
      * Sets a Settings.System value from the system server (locale track: TIME_12_24 when
      * Windows' time format changes; ADR 0049).
@@ -262,12 +298,18 @@ final class SettingsProvider extends ContentProvider {
         global.put(Settings.Global.WIFI_ON, "0");
         global.put(Settings.Global.BLUETOOTH_ON, "0");
         global.put(Settings.Global.DATA_ROAMING, "0");
-        global.put(Settings.Global.DEVICE_NAME, "Gesher");
+        String deviceName = defaultDeviceName();
+        global.put(Settings.Global.DEVICE_NAME, deviceName);
 
         mStore = new SettingsStore(file, mTables);
+        followComputerName(deviceName);
         String recognizer = SpeechRecognitionManagerService.configuredDefault(pm,
                 System.getenv("GESHER_SPEECH_RECOGNIZER"));
         if (recognizer != null) mStore.addDefault(SECURE, Settings.Secure.VOICE_RECOGNITION_SERVICE, recognizer);
+        // AOSP's DatabaseHelper.loadGlobalSettings: mobile data on (ro.com.android.mobiledata
+        // unset). Added to existing stores too, so Settings.Global readers agree with
+        // TelephonyManager (docs/telephony.md, "Mobile data switches").
+        mStore.addDefault(GLOBAL, Settings.Global.MOBILE_DATA, "1");
         // Single-process mode executes app code in the server's own PID and cannot
         // authenticate a privileged writer. Never expose its process to host selection state.
         mTextStore = mPm != null && mPm.hasTransientPackageState() ? null
@@ -290,6 +332,55 @@ final class SettingsProvider extends ContentProvider {
         mInfo.flags = ProviderInfo.FLAG_SINGLE_USER;
         // Publish only after all tables are available to server-local readers.
         sInstance = this;
+    }
+
+    /**
+     * Settings.Global.DEVICE_NAME's default (docs/device-identity.md): Windows' computer
+     * name, the PC's own device name; Build.MODEL, Android's own default, only when Windows
+     * gives none.
+     */
+    static String defaultDeviceName() {
+        String name = WindowsHost.computerName();
+        if (name != null && !name.isEmpty()) return name;
+        try {
+            return android.os.Build.MODEL;
+        } catch (RuntimeException | LinkageError noProperties) {  // a host JVM without them
+            return LEGACY_DEVICE_NAME;
+        }
+    }
+
+    /** The fixed DEVICE_NAME every profile stored before it followed the computer name. */
+    static final String LEGACY_DEVICE_NAME = "Gesher";
+    /** The DEVICE_NAME Gesher last derived; a different stored name is the user's own. */
+    static final String DERIVED_DEVICE_NAME = "persist.gesher.device_name";
+
+    /**
+     * Keeps a derived DEVICE_NAME following the computer name (renaming the PC renames the
+     * device), while a name the user set, or deleted, stays. Stored rows include defaults,
+     * so the name Gesher derived is recorded to tell them apart.
+     */
+    private void followComputerName(String name) {
+        String derived = null;
+        try {
+            derived = android.os.SystemProperties.get(DERIVED_DEVICE_NAME, "");
+        } catch (RuntimeException | LinkageError noProperties) {  // a host JVM without them
+        }
+        try {
+            String stored = mTables.get(GLOBAL).get(Settings.Global.DEVICE_NAME);
+            // The fixed legacy name is migrated only in a profile where Gesher never
+            // recorded a derived name; afterwards "Gesher" is a name the user chose.
+            boolean recorded = derived != null && !derived.isEmpty();
+            boolean legacy = LEGACY_DEVICE_NAME.equals(stored) && !recorded;
+            if (stored != null && !name.equals(stored) && (legacy || (recorded && stored.equals(derived)))) {
+                mStore.put(GLOBAL, Settings.Global.DEVICE_NAME, name, false);
+                stored = name;
+            }
+            if (derived != null && name.equals(stored) && !name.equals(derived)) {
+                android.os.SystemProperties.set(DERIVED_DEVICE_NAME, name);
+            }
+        } catch (RuntimeException | LinkageError e) {
+            SystemServer.log("settings: device name not updated: " + e);
+        }
     }
 
     /** What getContentProvider answers for {@code settings}. */
@@ -331,17 +422,26 @@ final class SettingsProvider extends ContentProvider {
             // does not become a privileged writer when its attachment is absent.
             throw new SecurityException("Unrecognized settings writer identity");
         }
+        int uid = Binder.getCallingUid();
         ApkPackage owner = mPm.get(actual);
-        if (owner == null || mPm.isRemovalPending(actual) || owner.uid() != Binder.getCallingUid()) {
+        if (owner == null || mPm.isRemovalPending(actual) || owner.uid() != uid) {
             throw new SecurityException("Unrecognized application Binder identity");
+        }
+        // Package UIDs survive replacement and reinstallation. Decide only for the
+        // installation this live process runs, so a process left from an earlier
+        // installation never writes with its replacement's AppOp or permission.
+        if (mCallers.packageCodeForPid(pid, uid) != owner) {
+            throw new SecurityException("Settings writer belongs to a retired installation");
         }
         // AOSP's system-table special access is an AppOp for ordinary apps.
         // Secure/global still require the actual privileged permission; its holders
         // may also write system settings independently of the special-access AppOp.
         if (mPm.permissions().checkPermission(actual, android.Manifest.permission.WRITE_SECURE_SETTINGS)
-                == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requireCurrentWriter(pid, uid, owner);
+            return;
+        }
         if (SYSTEM.equals(table)) {
-            int uid = Binder.getCallingUid();
             String attribution = getCallingAttributionTag();
             int mode;
             long identity = Binder.clearCallingIdentity();
@@ -351,9 +451,23 @@ final class SettingsProvider extends ContentProvider {
             } finally { Binder.restoreCallingIdentity(identity); }
             if (mode == AppOpsManager.MODE_ALLOWED || mode == AppOpsManager.MODE_DEFAULT
                     && mPm.permissions().checkPermission(actual, android.Manifest.permission.WRITE_SETTINGS)
-                        == android.content.pm.PackageManager.PERMISSION_GRANTED) return;
+                        == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requireCurrentWriter(pid, uid, owner);
+                return;
+            }
         }
         throw new SecurityException("Settings write permission denied");
+    }
+
+    /**
+     * A grant can only follow the installation it was made to: if the writer's installation
+     * is still current after the decision was read, the decision was not its replacement's.
+     */
+    private void requireCurrentWriter(int pid, int uid, ApkPackage owner) {
+        if (mCallers.packageCodeForPid(pid, uid) != owner || mPm.get(owner.packageName) != owner
+                || mPm.isRemovalPending(owner.packageName)) {
+            throw new SecurityException("Settings writer was replaced while its access was checked");
+        }
     }
 
     @Override

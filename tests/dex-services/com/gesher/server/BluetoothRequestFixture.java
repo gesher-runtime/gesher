@@ -415,12 +415,12 @@ public final class BluetoothRequestFixture {
             Object status = start.invoke(atm, null, intent, null, "android", null, null, -1, null);
             check(Integer.valueOf(ActivityManager.START_SUCCESS).equals(status), "actual activity route rejected " + action);
             check(h.queue.work.size() == 1, "actual route did not enqueue helper");
-            check(((java.util.Set<?>) get(atm, "mNativeConsentActivities")).size() == 1,
+            check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).size() == 1,
                     "native request did not reserve its idle lifetime");
             check((long) invoke(atm, "idleSince", new Class<?>[]{}) == 0,
                     "runtime went idle while native request was pending");
             h.queue.next();
-            check(((java.util.Set<?>) get(atm, "mNativeConsentActivities")).isEmpty(),
+            check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).isEmpty(),
                     "native request completion leaked idle reservation");
         }
         h.radio.on = true;
@@ -498,17 +498,17 @@ public final class BluetoothRequestFixture {
         check(Integer.valueOf(ActivityManager.START_SUCCESS).equals(
                 start.invoke(atm, null, dial, null, "android", null, null, -1, null)), "actual DIAL route rejected");
         check(confirms[0] == 0 && opens[0] == 0 && h.queue.work.size() == 1, "DIAL performs host work before returning");
-        check(((java.util.Set<?>) get(atm, "mNativeConsentActivities")).size() == 1, "DIAL lost its native UI lifetime");
+        check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).size() == 1, "DIAL lost its native UI lifetime");
         h.queue.next();
         check(confirms[0] == 1 && opens[0] == 1, "approved DIAL did not open exactly once");
-        check(((java.util.Set<?>) get(atm, "mNativeConsentActivities")).isEmpty(), "DIAL leaked its native UI lifetime");
+        check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).isEmpty(), "DIAL leaked its native UI lifetime");
         consent[0] = false;
         start.invoke(atm, null, dial, null, "android", null, null, -1, null); h.queue.next();
         check(confirms[0] == 2 && opens[0] == 1, "canceled DIAL reached Windows shell");
         start.invoke(atm, null, dial, null, "android", null, null, -1, null);
         registered.set(false); h.queue.next();
         check(confirms[0] == 2 && opens[0] == 1, "removed tel handler still showed or opened DIAL");
-        check(((java.util.Set<?>) get(atm, "mNativeConsentActivities")).isEmpty(), "removed handler leaked review lifetime");
+        check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).isEmpty(), "removed handler leaked review lifetime");
         registered.set(true);
         Field opener = field(ActivityTaskManagerService.class, "sOpenExternalUrl");
         Object saved = opener.get(null); int[] views = {0};
@@ -590,7 +590,7 @@ public final class BluetoothRequestFixture {
         }
         void released(Object source) throws Exception {
             check((int) get(source, "nativeUiCount") == 0, "native UI cover count leaked");
-            check(((java.util.Set<?>) get(atm, "mNativeConsentActivities")).isEmpty(), "native UI idle reservation leaked");
+            check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).isEmpty(), "native UI idle reservation leaked");
         }
     }
     private static void resultRoutes() throws Exception {

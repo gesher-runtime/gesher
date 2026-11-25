@@ -81,6 +81,7 @@ try {
     $ready = [pscustomobject]@{
         ProcessId = $identity.ProcessId; StartTime = $identity.StartTime
         ConsoleWindow = [PanelChildProbe.Native]::GetConsoleWindow().ToInt64()
+        ScriptPath = $PSCommandPath
         Arguments = @($args)
     }
     $temporary = Join-Path $PSScriptRoot 'ready.tmp'
@@ -140,15 +141,25 @@ function Assert-LauncherReplaceable([string] $Path) {
     }
 }
 
-function Invoke-PanelLauncherCase([string] $Command, [string] $Directory, [bool] $Detached, [switch] $Redirect) {
+function Invoke-PanelLauncherCase([string] $Command, [string] $Directory, [bool] $Detached,
+        [switch] $Redirect, [switch] $DirectPanel, [switch] $AppLayout, [switch] $NoArguments) {
     $null = [IO.Directory]::CreateDirectory($Directory)
     $executable = Join-Path $Directory 'gesher-launch.exe'
     Copy-Item -LiteralPath $LauncherPath -Destination $executable
-    [IO.File]::WriteAllText((Join-Path $Directory 'gesher-app.ps1'), $standIn)
+    $scriptDirectory = if ($AppLayout) { Join-Path $Directory 'App' } else { $Directory }
+    [void][IO.Directory]::CreateDirectory($scriptDirectory)
+    [IO.File]::WriteAllText((Join-Path $scriptDirectory 'gesher-app.ps1'), $standIn)
+    if ($DirectPanel) {
+        [IO.File]::WriteAllText((Join-Path $scriptDirectory 'gesher-control-panel.ps1'), $standIn)
+    }
+    $isPanel = $NoArguments -or $Command -in 'control-panel', 'settings', 'dashboard', 'gui'
+    $usesDirectPanel = $DirectPanel -and $isPanel
+    $expectedScript = Join-Path $scriptDirectory $(if ($usesDirectPanel) { 'gesher-control-panel.ps1' } else { 'gesher-app.ps1' })
+    $expectedArguments = if ($usesDirectPanel) { '' } elseif ($NoArguments) { 'control-panel' } else { $Command + '|argument with spaces' }
     $parent = $null
     $child = $null
     try {
-        $arguments = $Command + ' "argument with spaces"'
+        $arguments = if ($NoArguments) { '' } else { $Command + ' "argument with spaces"' }
         if ($Redirect) {
             $info = New-Object Diagnostics.ProcessStartInfo
             $info.FileName = $executable
@@ -164,10 +175,11 @@ function Invoke-PanelLauncherCase([string] $Command, [string] $Directory, [bool]
         } else {
             $parent = [Gesher.PanelLauncherProbe.NativeProcess]::Start($executable, $arguments, $Directory)
         }
-        $record = Wait-PanelProbe $Directory
+        $record = Wait-PanelProbe $scriptDirectory
         $child = Get-PanelProbeProcess $record
         Assert-PanelLauncher ($record.ConsoleWindow -eq 0) "$Command flashed a PowerShell console window."
-        Assert-PanelLauncher (($record.Arguments -join '|') -ceq ($Command + '|argument with spaces')) "$Command changed its arguments."
+        Assert-PanelLauncher ($record.ScriptPath -ceq $expectedScript) "$Command selected the wrong entry script."
+        Assert-PanelLauncher (($record.Arguments -join '|') -ceq $expectedArguments) "$Command changed its arguments."
         Assert-PanelLauncher (-not $child.HasExited) "$Command did not keep the control panel running."
         if ($Detached) {
             Assert-PanelLauncher ($parent.Wait(5000)) "$Command kept the native launcher alive while the panel was open."
@@ -178,7 +190,7 @@ function Invoke-PanelLauncherCase([string] $Command, [string] $Directory, [bool]
             $ended = if ($Redirect) { $parent.WaitForExit(250) } else { $parent.Wait(250) }
             Assert-PanelLauncher (-not $ended) "$Command stopped waiting for the script's exit code."
         }
-        [IO.File]::WriteAllText((Join-Path $Directory 'release'), 'go')
+        [IO.File]::WriteAllText((Join-Path $scriptDirectory 'release'), 'go')
         Assert-PanelLauncher ($child.WaitForExit(15000)) "$Command left the child running after its gate opened."
         Assert-PanelLauncher ($child.ExitCode -eq 23) "$Command child did not complete with its deliberate exit code."
         if (-not $Detached) {
@@ -193,9 +205,9 @@ function Invoke-PanelLauncherCase([string] $Command, [string] $Directory, [bool]
     } finally {
         # Also find a child that failed before publishing ready.json, so a failed
         # assertion cannot leave a gated PowerShell process on the runner.
-        [IO.File]::WriteAllText((Join-Path $Directory 'release'), 'cleanup')
-        if (-not $child -and [IO.File]::Exists((Join-Path $Directory 'child.json'))) {
-            try { $child = Get-PanelProbeProcess ([IO.File]::ReadAllText((Join-Path $Directory 'child.json')) | ConvertFrom-Json) } catch { }
+        [IO.File]::WriteAllText((Join-Path $scriptDirectory 'release'), 'cleanup')
+        if (-not $child -and [IO.File]::Exists((Join-Path $scriptDirectory 'child.json'))) {
+            try { $child = Get-PanelProbeProcess ([IO.File]::ReadAllText((Join-Path $scriptDirectory 'child.json')) | ConvertFrom-Json) } catch { }
         }
         if ($child) {
             if (-not $child.WaitForExit(10000)) { $child.Kill(); $null = $child.WaitForExit(10000) }
@@ -218,11 +230,17 @@ try {
     foreach ($command in 'control-panel', 'settings', 'dashboard', 'gui', 'SeTtInGs') {
         $caseIndex++
         Invoke-PanelLauncherCase -Command $command -Directory (Join-Path $work ('detached {0} {1}' -f $caseIndex, $command)) -Detached $true
+        Invoke-PanelLauncherCase -Command $command -Directory (Join-Path $work ('direct {0} {1}' -f $caseIndex, $command)) -Detached $true -DirectPanel
     }
     Invoke-PanelLauncherCase -Command 'control-panel' -Directory (Join-Path $work 'redirected') -Detached $false -Redirect
+    Invoke-PanelLauncherCase -Command 'control-panel' -Directory (Join-Path $work 'direct redirected') -Detached $false -Redirect -DirectPanel
+    Invoke-PanelLauncherCase -Directory (Join-Path $work 'default fallback') -Detached $true -NoArguments
+    Invoke-PanelLauncherCase -Directory (Join-Path $work 'default direct') -Detached $true -NoArguments -DirectPanel
+    Invoke-PanelLauncherCase -Directory (Join-Path $work 'default App layout') -Detached $true -NoArguments -DirectPanel -AppLayout
+    Invoke-PanelLauncherCase -Command 'settings' -Directory (Join-Path $work 'alias App layout') -Detached $true -DirectPanel -AppLayout
     # A command that does not open the dashboard retains its old wait behavior,
     # even without handles. App/splash behavior has its separate existing probes.
-    Invoke-PanelLauncherCase -Command 'status' -Directory (Join-Path $work 'ordinary') -Detached $false
+    Invoke-PanelLauncherCase -Command 'status' -Directory (Join-Path $work 'ordinary') -Detached $false -DirectPanel
     'PASS  shell: control-panel handoff frees the native launcher, keeps its child alive and preserves redirected waits ({0} checks)' -f $script:LauncherChecks
 } finally {
     if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }

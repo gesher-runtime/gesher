@@ -58,3 +58,12 @@ Check 'services: concurrent Control Center requests stay whole on the runtime fi
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.ControlCenterRequestsTest
 } @('ControlCenterRequestsTest all passed:')
+
+# country_detector (CountryDetectorService over WindowsCountry): this machine's Windows
+# "Country or region", or the default Locale's country without one, as
+# COUNTRY_SOURCE_LOCALE, through StandIn's generated ICountryDetector stub.
+Check 'services: CountryDetector reports Windows'' Country or region as the locale source' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.CountryDetectorTest
+} @('CountryDetectorTest: detectCountry is ',
+  'CountryDetectorTest all passed')

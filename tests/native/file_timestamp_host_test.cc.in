@@ -215,6 +215,11 @@ static PathKind MapPath(const char* path, std::wstring* result) {
   if (std::strcmp(path, "/mnt/c/תיקיה/file") == 0) { *result = L"mapped-file"; return PathKind::kFile; }
   result->assign(path, path + std::strlen(path)); return PathKind::kFile;
 }
+// Gesher's ELF loader as /system/bin/linker64 is not part of this fixture.
+namespace system_linker {
+static int RefuseChange(const char*) { return 0; }
+static int RefuseChangeHandle(HANDLE) { return 0; }
+}  // namespace system_linker
 }  // namespace gesher
 using gesher::PathKind;
 int futimens(int fd, const struct timespec times[2]);
