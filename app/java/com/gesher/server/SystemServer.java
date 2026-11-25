@@ -473,6 +473,8 @@ public final class SystemServer {
         }
 
         void start() throws Exception {
+            // Settings requests of an earlier device wait for nobody now (SettingsResults).
+            ControlCenter.clearResults(Device.dataDir());
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
             trackLauncherRecords(mServices.pm);
@@ -538,6 +540,43 @@ public final class SystemServer {
         @Override
         public boolean uninstall(String packageName) throws Exception {
             return mInstaller.uninstall(packageName);
+        }
+
+        @Override
+        public String[] specialAccess(String packageName) {
+            return SpecialAccess.rows(SpecialAccess.query(mServices.pm, packageName));
+        }
+
+        @Override
+        public String setSpecialAccess(String packageName, String opName, boolean allowed) {
+            return setSpecialAccess(packageName, opName, allowed, 0, 0, new String[0]);
+        }
+
+        @Override
+        public String setSpecialAccess(String packageName, String opName, boolean allowed,
+                int panelPid, long panelStartedAt, String[] tokens) {
+            SpecialAccess.Entry entry = SpecialAccess.set(mServices.pm, packageName, opName, allowed);
+            mServices.atm.specialAccessToggled(packageName, opName, entry.allowed(), panelPid,
+                    panelStartedAt, tokens);
+            String row = entry.row();
+            log("special access: " + packageName + " " + row.replace('	', ' ')
+                    + " (the user's choice in the Control Center)");
+            return row;
+        }
+
+        @Override
+        public int settingsScreensShown(int pid, long startedAt, String[] tokens) {
+            return mServices.atm.settingsScreensShown(pid, startedAt, tokens);
+        }
+
+        @Override
+        public int settingsScreensClosed(String[] tokens) {
+            return mServices.atm.settingsScreensClosed(tokens);
+        }
+
+        @Override
+        public int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
+            return mServices.atm.settingsScreensClosed(pid, startedAt, tokens);
         }
 
         @Override
