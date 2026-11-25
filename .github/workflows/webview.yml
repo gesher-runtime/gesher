@@ -17,6 +17,7 @@ on:
     paths:
       - 'compat/webview/**'
       - 'probes/webview/**'
+      - 'tests/native/worker_response_gate_test.ps1'
       - 'cmake/webview2_sdk.cmake'
       - '.github/workflows/webview.yml'
   workflow_dispatch:
