@@ -194,6 +194,8 @@ class Jit {
   uint64_t GetSP() const { return sp; }
   uint64_t GetRegister(size_t index) const { return registers.at(index); }
   void SetRegister(size_t index, uint64_t value) { registers.at(index) = value; }
+  // A raw clone with a child stack sets it (ADR 0092); not reached here.
+  void SetSP(uint64_t value) { sp = value; }
 };
 }  // namespace A64
 }  // namespace Dynarmic

@@ -42,6 +42,7 @@
 #include "shim_internal.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/fork.h>
 #include <gesher/ptrace_state.h>
 
 #include <windows.h>
@@ -102,9 +103,10 @@ void Release(Tracee& t) {
 }
 
 // The map, emptied in a process cloned from the tracer: Linux's forked child
-// traces nothing. Its handles were not inherited (none is inheritable), but
-// the views of the tracees' sections were copied with the address space.
-// Called with g_mutex held.
+// traces nothing. A fork empties it in the child at once (PtraceForkChild);
+// in a clone made otherwise (none is) its views are unmapped here, and its
+// handles, whose inheritance is not known, left alone. Called with g_mutex
+// held.
 std::map<int, Tracee>& Tracees() {
   const DWORD self = GetCurrentProcessId();
   if (g_tracees_pid != self) {
@@ -535,6 +537,19 @@ void BIONIC_SYSV PtraceSetHaltHook(pt::HaltHook hook) { pt::SetHaltHook(hook); }
 
 }  // namespace
 
+void PtraceForkChild() {
+  // The fork's clone inherited every handle at the same value
+  // (gesher::CloneProcess) and copied the views: the child's copies of the
+  // parent's tracees are released, and nothing in their states (the
+  // parent's tracing) is touched. g_mutex is the fork's (the fork set).
+  for (auto& entry : g_tracees) {
+    pt::CloseRemote(&entry.second.remote);
+    if (entry.second.process != nullptr) CloseHandle(entry.second.process);
+  }
+  g_tracees.clear();
+  g_tracees_pid = GetCurrentProcessId();
+}
+
 int PtraceWaitPoll(int pid, int options, int* status, bool* matched, bool (*is_child)(int)) {
   *matched = false;
   if ((options & kWclone) != 0 && (options & kWall) == 0) return 0;  // tracees are not clones
@@ -581,3 +596,7 @@ void RegisterPtrace(SymbolTable& t) {
 }
 
 }  // namespace gesher::bionic
+
+// fork (gesher/fork.h, ADR 0092): the tracee table in a forked child (which
+// empties it: a forked child traces nothing, Tracees()).
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::g_mutex);

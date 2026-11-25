@@ -535,6 +535,11 @@ public final class ActivityManagerService extends IActivityManager.Default {
 
     UriGrants uriGrants() { return mProviders.uriGrants(); }
     ContentProviders providers() { return mProviders; }
+
+    /** A system-server receiver of implicit broadcasts with {@code action} from any sender. */
+    void addSystemReceiver(String action, java.util.function.Consumer<Intent> receiver) {
+        mBroadcasts.addSystemReceiver(action, receiver);
+    }
     DocumentsStorageProvider documents() { return mProviders.documents(); }
 
     @Override

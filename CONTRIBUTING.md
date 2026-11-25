@@ -97,12 +97,16 @@ it is removed or redesigned.
   code generated with AI. Generated explanations and passing tests are not
   substitutes for reviewing its behavior.
 
-Submit contributions under the applicable project license. Gesher uses
-[Apache License 2.0](LICENSE); see also the
-[licensing decision](docs/decisions/0001-license.md). Identify third-party code,
-its source and license, retain required notices, and ensure you have the right
-to contribute it, including any necessary employer permission. Follow the
-licensing decision's restrictions on copying code from other projects.
+Gesher is now licensed under a proprietary All Rights Reserved license
+([LICENSE](LICENSE)); public redistribution with or without modifications is
+prohibited without prior written permission. Every contributor must sign the
+[Contributor License Agreement](.github/cla/CLA.md) once by posting the
+required signature comment on their pull request (`I have read the CLA Document
+and I hereby sign the CLA`) before the PR can be merged. Identify third-party
+code, its source and license, retain required notices, and ensure you have the
+right to contribute it, including any necessary employer permission. Follow the
+[licensing decision](docs/decisions/0001-license.md)'s restrictions on copying
+code from other projects.
 
 ## Required review: scope before correctness
 

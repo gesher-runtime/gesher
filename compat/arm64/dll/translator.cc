@@ -38,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <shared_mutex>
 #include <unordered_map>
 #include <vector>
@@ -45,6 +46,7 @@
 #include "dynarmic/interface/A64/a64.h"
 #include "dynarmic/interface/A64/config.h"
 #include "dynarmic/interface/exclusive_monitor.h"
+#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 
 namespace A64 = Dynarmic::A64;
 
@@ -64,6 +66,7 @@ extern "C" void gesher_guest_entry_shim();  // host_entry stubs jump here
 namespace gesher_arm64 {
 
 const gesher_arm64_host* g_host = nullptr;
+unsigned (GESHER_SYSV* g_signal_exit_code)(int) = nullptr;
 
 namespace {
 
@@ -144,6 +147,12 @@ class JitCode {
 
   // The owning thread, before Run: Run applies the ranges posted so far.
   void Dispatched() { posted_.store(0, std::memory_order_relaxed); }
+
+  // A guest fork (ADR 0092) holds every Jit's page record while it clones, so
+  // the child's copy is consistent; the child makes the lock anew.
+  bool TryLockForFork() { return mutex_.try_lock(); }
+  void UnlockForFork() { mutex_.unlock(); }
+  void RenewForChild() { new (&mutex_) std::mutex(); }
 
   // Any thread. Line-precise while few ranges wait for the Jit's next
   // dispatch; then page-granular, so a paused Jit's pending set (dynarmic
@@ -1010,6 +1019,15 @@ class Env final : public A64::UserCallbacks {
     for (size_t id : ids_) Monitor().ClearProcessor(id);
   }
 
+  // In a forked child (ForkChild): the same Env goes on with the child's
+  // thread, which has another id; the profiler's handle was the parent's.
+  void AfterFork() {
+    tid_ = GetCurrentThreadId();
+    if (thread_ != nullptr) CloseHandle(thread_);
+    thread_ = nullptr;
+  }
+  const uint8_t* tls_block() const { return tls_block_; }
+
   // Whether another thread may reuse this Env: not if its thread left in the
   // middle of guest code (a Jit still marked running).
   bool Reusable() const { return depth_ == 0; }
@@ -1485,8 +1503,11 @@ class Env final : public A64::UserCallbacks {
         for (int i = 0; i < 6; ++i) args[i] = jit->GetRegister(i);
         counters_.syscalls.Bump();
         last_syscall_.store(jit->GetRegister(8), std::memory_order_relaxed);
-        int64_t result = GuestRawSyscall(jit->GetRegister(8), args);
+        const uint64_t nr = jit->GetRegister(8);
+        int64_t result = GuestRawSyscall(nr, args);
         jit->SetRegister(0, static_cast<uint64_t>(result));
+        // A fork-like clone's child starts on the stack it was given, if any.
+        if (nr == 220 && result == 0 && args[1] != 0) jit->SetSP(args[1]);
       } else if (pending.fn != nullptr) {
         CallHost(jit, pending.fn, pending.va_index, pending.pointer_variadic_fixed);
       } else if (Dynarmic::Has(halt, Dynarmic::HaltReason::CacheInvalidation) &&
@@ -1685,6 +1706,7 @@ class Env final : public A64::UserCallbacks {
   std::atomic<void*> sampled_host_fn_{nullptr};  // the host function called from guest code
   std::atomic<uint64_t> last_syscall_{~uint64_t{0}};
   HANDLE thread_ = nullptr;  // only while profiling
+  Env* retired_next_ = nullptr;  // in g_retired_envs (ReleaseRetiredEnvs)
   DWORD tid_ = 0;
 };
 
@@ -1707,24 +1729,66 @@ size_t EnvPoolLimit() {
   return limit;
 }
 
+// Set while a guest fork holds every translator lock (TryForkPrepare until
+// ForkParent/ForkChild), and so is cloning or about to.
+std::atomic<bool> g_fork_holds_all{false};
+
+// With g_env_pool_mutex held: detaches `env`, then pools it parked or frees
+// it. While the pool lock is held no fork can hold every translator lock, so
+// the locks Detach takes come free.
+void ReleaseEnvLocked(Env* env) {
+  env->Detach();
+  if (env->Reusable() && g_env_pool.size() < EnvPoolLimit()) {
+    env->Park();
+    g_env_pool.push_back(env);
+    return;
+  }
+  delete env;
+}
+
+void ReleaseEnv(Env* env) {
+  std::lock_guard<std::mutex> lock(g_env_pool_mutex);
+  ReleaseEnvLocked(env);
+}
+
+// A leaving thread's thread_local destructor runs under ntdll's loader lock,
+// which a guest fork's clone waits for while it holds the translator's locks
+// (ADR 0092). So it releases its Env at once unless a fork holds them all;
+// then it only retires the Env here, without a lock, and the next thread that
+// takes an Env (or the next fork) releases it.
+std::atomic<Env*> g_retired_envs{nullptr};
+
+void ReleaseRetiredEnvs() {
+  Env* env = g_retired_envs.exchange(nullptr, std::memory_order_acq_rel);
+  while (env != nullptr) {
+    Env* next = env->retired_next_;
+    ReleaseEnv(env);
+    env = next;
+  }
+}
+
 struct EnvRelease {
   void operator()(Env* env) const {
-    env->Detach();
-    if (env->Reusable()) {
-      std::lock_guard<std::mutex> lock(g_env_pool_mutex);
-      if (g_env_pool.size() < EnvPoolLimit()) {
-        env->Park();
-        g_env_pool.push_back(env);
+    if (t_env_raw == env) t_env_raw = nullptr;
+    while (!g_env_pool_mutex.try_lock()) {
+      if (g_fork_holds_all.load(std::memory_order_acquire)) {
+        env->retired_next_ = g_retired_envs.load(std::memory_order_relaxed);
+        while (!g_retired_envs.compare_exchange_weak(env->retired_next_, env, std::memory_order_release,
+                                                     std::memory_order_relaxed)) {
+        }
         return;
       }
+      SwitchToThread();
     }
-    delete env;
+    ReleaseEnvLocked(env);
+    g_env_pool_mutex.unlock();
   }
 };
 thread_local std::unique_ptr<Env, EnvRelease> t_env;
 
 Env* ThreadEnv() {
   if (!t_env) {
+    ReleaseRetiredEnvs();
     Env* env = nullptr;
     {
       std::lock_guard<std::mutex> lock(g_env_pool_mutex);
@@ -2534,6 +2598,135 @@ void GESHER_SYSV HaltForExternalWrites() {
   }
 }
 
+// --- fork (ADR 0092) ------------------------------------------------------------
+// The bionic shim clones the process for a guest fork with gesher-base's
+// fork set held (gesher/fork.h) and these hooks: every translator lock is
+// held across the clone (only tried: when one is busy the shim releases
+// everything and starts again), and the exclusive monitor's spin lock last.
+// No thread is then inside them, so the child's copies of the tables they
+// guard are consistent.
+namespace {
+DWORD g_fork_thread = 0;  // the forking thread's id in the parent
+
+bool TryLockMonitor() {
+  return __atomic_exchange_n(Dynarmic::GetExclusiveMonitorLockPointer(&Monitor()), 1, __ATOMIC_ACQUIRE) == 0;
+}
+void UnlockMonitor() {
+  __atomic_store_n(Dynarmic::GetExclusiveMonitorLockPointer(&Monitor()), 0, __ATOMIC_RELEASE);
+}
+
+template <typename Lock>
+void Renew(Lock& lock) {
+  new (&lock) Lock();
+}
+
+// Taken in this order; each only tried (the shim's fork set retries the
+// whole round when one is busy, gesher/fork.h).
+int g_fork_held = 0;  // how many of them the current round holds
+template <typename Lock>
+bool TryHold(Lock& lock) {
+  if (!lock.try_lock()) return false;
+  ++g_fork_held;
+  return true;
+}
+// The live Jits' page records the current round holds (g_live_jits_mutex is
+// held while they are, so the list does not change).
+size_t g_fork_jits_held = 0;
+bool TryHoldJits() {
+  g_fork_jits_held = 0;
+  for (JitCode* code : g_live_jits) {
+    if (!code->TryLockForFork()) return false;
+    ++g_fork_jits_held;
+  }
+  ++g_fork_held;
+  return true;
+}
+void ReleaseHeld() {
+  // Reverse order of TryForkPrepare.
+  int n = g_fork_held;
+  if (n > 13) UnlockMonitor();
+  for (size_t i = g_fork_jits_held; i-- > 0;) g_live_jits[i]->UnlockForFork();
+  g_fork_jits_held = 0;
+  if (n > 11) g_live_jits_mutex.unlock();
+  if (n > 10) g_clean_exec_mutex.unlock();
+  if (n > 9) g_ids_mutex.unlock();
+  if (n > 8) g_tls_mutex.unlock();
+  if (n > 7) g_host_pages_mutex.unlock();
+  if (n > 6) g_regions_mutex.unlock();
+  if (n > 5) g_code_mutex.unlock();
+  if (n > 4) g_tramp_mutex.unlock();
+  if (n > 3) g_va_mutex.unlock();
+  if (n > 2) g_entry_mutex.unlock();
+  if (n > 1) g_envs_mutex.unlock();
+  if (n > 0) g_env_pool_mutex.unlock();
+  g_fork_held = 0;
+}
+}  // namespace
+
+// Before a fork takes its locks: release what threads that left retired.
+void ReleaseRetiredForFork() { ReleaseRetiredEnvs(); }
+
+int GESHER_SYSV TryForkPrepare() {
+  g_fork_thread = GetCurrentThreadId();
+  g_fork_held = 0;
+  const bool held = TryHold(g_env_pool_mutex) && TryHold(g_envs_mutex) && TryHold(g_entry_mutex) &&
+                    TryHold(g_va_mutex) && TryHold(g_tramp_mutex) && TryHold(g_code_mutex) &&
+                    TryHold(g_regions_mutex) && TryHold(g_host_pages_mutex) &&
+                    TryHold(g_tls_mutex) && TryHold(g_ids_mutex) &&
+                    // The guest pages' protection record and the live Jits
+                    // with their page records (instruction-cache maintenance).
+                    TryHold(g_clean_exec_mutex) && TryHold(g_live_jits_mutex) && TryHoldJits() &&
+                    (TryLockMonitor() ? (++g_fork_held, true) : false);
+  if (!held) ReleaseHeld();
+  else g_fork_holds_all.store(true, std::memory_order_release);
+  return held ? 1 : 0;
+}
+
+void GESHER_SYSV ForkParent() {
+  g_fork_holds_all.store(false, std::memory_order_release);
+  ReleaseHeld();
+}
+
+// The child has the forking thread only. Its Env (guest stack, TLS block,
+// Jits and their code) goes on as it was; the other threads' guest TLS
+// blocks and profiler entries are not the child's, and their exclusive
+// reservations are gone (a store-exclusive of the child's that spans the
+// fork fails and is retried, as after any clearing of the monitor). The
+// locks are made anew: releasing one a parent's thread waits for would wake
+// a thread the child does not have.
+void GESHER_SYSV ForkChild() {
+  Env* self = t_env_raw;
+  const DWORD tid = GetCurrentThreadId();
+  if (self != nullptr) self->AfterFork();
+  std::erase_if(g_tls_blocks, [self](const TlsBlock& block) {
+    return self == nullptr || block.base != self->tls_block();
+  });
+  for (TlsBlock& block : g_tls_blocks) block.owner_thread = tid;
+  for (TlsImage& image : g_tls_images) {
+    if (image.owner_thread == g_fork_thread) image.owner_thread = tid;
+  }
+  g_envs.clear();
+  UnlockMonitor();
+  Monitor().Clear();
+  // Every live Jit's page record stays (the other threads' Jits are never
+  // run again here, but an invalidation still reaches them harmlessly).
+  for (JitCode* code : g_live_jits) code->RenewForChild();
+  g_fork_jits_held = 0;
+  Renew(g_live_jits_mutex);
+  Renew(g_clean_exec_mutex);
+  Renew(g_ids_mutex);
+  Renew(g_tls_mutex);
+  Renew(g_host_pages_mutex);
+  Renew(g_regions_mutex);
+  Renew(g_code_mutex);
+  Renew(g_tramp_mutex);
+  Renew(g_va_mutex);
+  Renew(g_entry_mutex);
+  Renew(g_envs_mutex);
+  Renew(g_env_pool_mutex);
+  g_fork_holds_all.store(false, std::memory_order_relaxed);
+}
+
 bool InGuestCode(uintptr_t addr) {
   static thread_local CodeRegion last{0, 0};
   static thread_local uint64_t seen = 0;
@@ -2799,7 +2992,10 @@ void PrintGuestState() {
   PrintGuestState();
   std::fflush(stderr);
   std::fflush(stdout);
-  TerminateProcess(GetCurrentProcess(), 128 + signo);
+  // A forked child's exit code for a death by a signal is the shim's
+  // (gesher/fork.h); 128 + the signal elsewhere.
+  TerminateProcess(GetCurrentProcess(),
+                   g_signal_exit_code != nullptr ? g_signal_exit_code(signo) : 128 + static_cast<UINT>(signo));
   for (;;) Sleep(INFINITE);
 }
 
