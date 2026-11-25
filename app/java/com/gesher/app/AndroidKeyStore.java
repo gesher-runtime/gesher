@@ -75,7 +75,8 @@ import javax.security.auth.x500.X500Principal;
  * be done, making the key fails as on a device without a secure lock screen or without
  * an enrolled biometric. The other authorizations in the spec (purposes, validity dates,
  * StrongBox, attestation) are not enforced. Keys from before ADR 0095 did not record
- * whether they required user authentication; they stay as they were, marked as such.
+ * whether they required user authentication; those keys are invalidated on read so an
+ * application can recreate them with known authorizations (ADR 0095, migration).
  * Before the app's Application exists, keys are kept in memory and written to the file
  * once it does.
  */
@@ -138,7 +139,7 @@ public final class AndroidKeyStore extends Provider {
         final byte[] sealed;
         final int authTimeout;       // seconds; 0: every use is authorized
         final int authType;          // KeyProperties.AUTH_*
-        /** Read from a GKS1 file: whether it required user authentication is not known. */
+        /** Retained for old trusted certificates; legacy secret/private keys are never loaded. */
         final boolean legacy;
 
         Entry(int kind, Key key, Certificate[] chain, Date created) {
@@ -212,6 +213,16 @@ public final class AndroidKeyStore extends Provider {
         private static long sStamp;
         private static long sLength;
 
+        private static final class Loaded {
+            final Map<String, Entry> entries;
+            final boolean invalidated;
+
+            Loaded(Map<String, Entry> entries, boolean invalidated) {
+                this.entries = entries;
+                this.invalidated = invalidated;
+            }
+        }
+
         private static File file() {
             try {
                 android.app.Application app = android.app.ActivityThread.currentApplication();
@@ -229,16 +240,19 @@ public final class AndroidKeyStore extends Provider {
             if (sFile == null) {
                 // The app's data directory is known now: the file's keys, then the ones made
                 // before (they win).
-                Map<String, Entry> merged = read(f);
+                Loaded loaded = read(f);
+                Map<String, Entry> merged = loaded.entries;
                 boolean pending = !sEntries.isEmpty();
                 merged.putAll(sEntries);
                 sEntries = merged;
                 sFile = f;
-                if (pending) write();
-                else stamp();
-            } else if (sFile.lastModified() != sStamp || sFile.length() != sLength) {
-                sEntries = read(sFile);
                 stamp();
+                if (pending || loaded.invalidated) write(loaded.invalidated);
+            } else if (sFile.lastModified() != sStamp || sFile.length() != sLength) {
+                Loaded loaded = read(sFile);
+                sEntries = loaded.entries;
+                stamp();
+                if (loaded.invalidated) write(true);
             }
         }
 
@@ -269,9 +283,9 @@ public final class AndroidKeyStore extends Provider {
             if (sEntries.remove(alias) != null) write();
         }
 
-        private static Map<String, Entry> read(File f) {
+        private static Loaded read(File f) {
             Map<String, Entry> out = new LinkedHashMap<>();
-            if (!f.exists()) return out;
+            if (!f.exists()) return new Loaded(out, false);
             try (DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(
                     new FileInputStream(f)))) {
                 int magic = in.readInt();
@@ -280,6 +294,7 @@ public final class AndroidKeyStore extends Provider {
                 }
                 int n = in.readInt();
                 CertificateFactory x509 = null;
+                boolean invalidated = false;
                 for (int i = 0; i < n; i++) {
                     String alias = in.readUTF();
                     int kind = in.readByte();
@@ -295,6 +310,15 @@ public final class AndroidKeyStore extends Provider {
                         if (x509 == null) x509 = CertificateFactory.getInstance("X.509");
                         chain[c] = x509.generateCertificate(new ByteArrayInputStream(bytes(in)));
                     }
+                    // GKS1 and an earlier GKS2 migration did not retain the requested
+                    // authorizations. Never turn either into a raw, usable key. This
+                    // applies on every read, including a restored old store. Certificates
+                    // alone have no secret material or user-authentication requirement.
+                    if (kind != TRUSTED && (flags & FLAG_LEGACY) != 0) {
+                        java.util.Arrays.fill(encoded, (byte) 0);
+                        invalidated = true;
+                        continue;
+                    }
                     Key key = null;
                     if (sealed) {
                         // The blob is the key; only the system server opens it.
@@ -308,13 +332,19 @@ public final class AndroidKeyStore extends Provider {
                             sealed ? encoded : null, authTimeout, authType,
                             (flags & FLAG_LEGACY) != 0));
                 }
+                return new Loaded(out, invalidated);
             } catch (IOException | java.security.GeneralSecurityException e) {
                 log("cannot read " + f + ", its keys are not used: " + e);
             }
-            return out;
+            // An incomplete parse must not rewrite a partial map over unseen entries.
+            return new Loaded(out, false);
         }
 
         private static void write() {
+            write(false);
+        }
+
+        private static void write(boolean preserveExistingOnFailure) {
             if (sFile == null) return;
             File tmp = new File(sFile.getPath() + ".tmp");
             try {
@@ -341,9 +371,21 @@ public final class AndroidKeyStore extends Provider {
                     }
                 }
                 try {
-                    java.nio.file.Files.move(tmp.toPath(), sFile.toPath(),
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    if (preserveExistingOnFailure) {
+                        java.nio.file.Files.move(tmp.toPath(), sFile.toPath(),
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                                java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                    } else {
+                        java.nio.file.Files.move(tmp.toPath(), sFile.toPath(),
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    }
                 } catch (IOException | RuntimeException e) {
+                    // Migration must not delete a mixed store's valid modern entries if
+                    // replacement is unavailable. Legacy aliases stay absent in memory;
+                    // another read will reject them again even if this write cannot persist.
+                    if (preserveExistingOnFailure) {
+                        throw new IOException("cannot safely replace legacy key store", e);
+                    }
                     if (!sFile.delete() && sFile.exists()) throw e;
                     if (!tmp.renameTo(sFile)) throw new IOException("cannot rename " + tmp);
                 }
