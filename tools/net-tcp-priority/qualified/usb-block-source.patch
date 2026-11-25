@@ -985,12 +985,12 @@ index a8fb022e2..153ab18cf 100644
 +    return true;
 +  }
 diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
-index cd046541a..5874aedae 100644
+index 4b6904574..72bfff962 100644
 --- a/compat/posix/src/fsops.cc
 +++ b/compat/posix/src/fsops.cc
 @@ -27,0 +28 @@
 +#include "usb_block_internal.h"
-@@ -300,0 +302,4 @@ int Access(const char* path, int mode, bool follow) {
+@@ -305,0 +307,4 @@ int Access(const char* path, int mode, bool follow) {
 +      if (type == S_IFBLK) {
 +        return (mode & X_OK) != 0 || ((mode & W_OK) != 0 && !gesher::usb_block::Writable())
 +            ? (errno = EACCES, -1) : 0;

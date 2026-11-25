@@ -24,7 +24,7 @@
         "port_exfat.py": "7bd3d3b7a44ca2ed951316dfa131432b9a5395a4ec074647590e530c52815f99",
         "test_exfat_port.py": "76b181b47e487fe1a70d52716e958aa4c91099ee216b09b34391bfbe1bc847c6"
       },
-      "license_sha256": "c95bae1d1ce0235ecccd3560b772ec1efb97f348a79f0fbe0a634f0c2ccefe2c"
+      "license_sha256": "4aa8fd53ab1c7459f2bffe75a615fa295809b354c4ea813e09a36f5f8d10dd08"
     }
   ],
   "packages": [
