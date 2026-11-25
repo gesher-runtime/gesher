@@ -19,6 +19,8 @@ class LoopbackServer {
   bool Healthy() const;
   std::wstring Origin() const;
   unsigned Count(const std::string& path) const;
+  unsigned TotalCount() const;
+  unsigned Connections() const;
 
  private:
   struct Impl;

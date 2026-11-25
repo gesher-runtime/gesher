@@ -18,24 +18,33 @@ namespace {
 // body-read errors have different catch blocks. A 403 is a resolved response.
 constexpr char kWorkerScript[] = R"JS(
 'use strict';
+const workerIdentity = crypto.randomUUID();
 self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
 self.addEventListener('message', event => {
   event.waitUntil((async () => {
     const name = event.data;
-    const out = {event:'case', name, fetch:'pending', body:'none', status:0,
-                 originHeader:'', bytes:0, text:'', error:'', timedOut:false};
     const abort = new AbortController();
+    const request = new Request(new URL('/network/' + name, self.location.href),
+                                {cache:'no-store', signal:abort.signal});
+    const out = {event:'case', name, fetch:'pending', body:'none', status:0,
+                 originHeader:'', bytes:0, text:'', error:'', errorName:'', timedOut:false,
+                 aborted:false, requestUrl:request.url, finalRequestUrl:'', responseUrl:'',
+                 workerIdentity, workerScript:self.location.href,
+                 timingCount:0, timingName:'', timingType:''};
+    performance.clearResourceTimings();
     const timer = setTimeout(() => { out.timedOut = true; abort.abort(); }, 10000);
     try {
       let response;
       try {
-        response = await fetch('/network/' + name, {cache:'no-store', signal:abort.signal});
+        response = await fetch(request);
       } catch (error) {
         out.fetch = 'rejected'; out.error = String(error).slice(0, 512);
+        out.errorName = String(error.name).slice(0, 64);
       }
       if (response) {
         out.fetch = 'resolved'; out.status = response.status;
+        out.responseUrl = response.url;
         out.originHeader = response.headers.get('X-Probe-Origin') || '';
         try {
           const reader = response.body.getReader();
@@ -50,10 +59,22 @@ self.addEventListener('message', event => {
           out.body = 'complete';
         } catch (error) {
           out.body = 'rejected'; out.error = String(error).slice(0, 512);
+          out.errorName = String(error.name).slice(0, 64);
         }
       }
     } finally {
       clearTimeout(timer);
+      out.aborted = abort.signal.aborted;
+      out.finalRequestUrl = request.url;
+      // Let the resource-timing entry be delivered after fetch/body settlement.
+      // Report absence or rewritten names instead of substituting the input URL.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const timings = performance.getEntriesByType('resource');
+      out.timingCount = timings.length;
+      if (timings.length === 1) {
+        out.timingName = timings[0].name;
+        out.timingType = timings[0].initiatorType;
+      }
       event.ports[0].postMessage(out);
     }
   })());
@@ -90,7 +111,8 @@ constexpr char kPage[] = R"HTML(<!doctype html><meta charset="utf-8"><title>work
       worker.addEventListener('statechange', changed); changed();
     });
     post({event:'worker-ready', script:worker.scriptURL, state:worker.state, scope:registration.scope});
-    for (const name of ['pass', 'fulfill', 'http403', 'first-read', 'first-abort', 'mid-body']) {
+    for (const name of ['pass', 'fulfill', 'http403', 'first-read', 'first-abort', 'mid-body',
+                       'uri-deferred', 'invoke-abort', 'followup']) {
       const result = await new Promise((resolve, reject) => {
         const channel = new MessageChannel();
         const timer = setTimeout(() => { channel.port1.close(); reject(new Error('worker message timeout: ' + name)); }, 12000);
@@ -131,6 +153,7 @@ struct LoopbackServer::Impl {
   SOCKET listener = INVALID_SOCKET;
   HANDLE thread = nullptr;
   std::atomic<bool> stop{false}, healthy{true};
+  std::atomic<unsigned> connections{0};
   uint64_t deadline = 0;
   unsigned port = 0;
   mutable std::mutex mutex;
@@ -171,6 +194,7 @@ struct LoopbackServer::Impl {
       if (FD_ISSET(listener, &reads)) {
         SOCKET accepted = accept(listener, nullptr, nullptr);
         if (accepted != INVALID_SOCKET) {
+          ++connections;  // Count TCP acceptance even if no HTTP request follows.
           u_long nonblocking = 1;
           if (clients.size() == 16 || ioctlsocket(accepted, FIONBIO, &nonblocking) == SOCKET_ERROR) {
             closesocket(accepted); healthy = false;
@@ -247,5 +271,12 @@ unsigned LoopbackServer::Count(const std::string& path) const {
   std::lock_guard<std::mutex> lock(impl_->mutex);
   auto found = impl_->counts.find(path); return found == impl_->counts.end() ? 0 : found->second;
 }
+unsigned LoopbackServer::TotalCount() const {
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  unsigned total = 0;
+  for (const auto& [path, count] : impl_->counts) total += count;
+  return total;
+}
+unsigned LoopbackServer::Connections() const { return impl_->connections; }
 
 }  // namespace worker_response_probe

@@ -46,6 +46,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify exact worker response scripts
+        run: node tests/native/worker_response_script_test.js
+
       # The same toolchain cache as .github/actions/setup-build.
       - name: Cache toolchain
         id: toolchain
