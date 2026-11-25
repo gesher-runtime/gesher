@@ -186,6 +186,21 @@ public final class AccountSecurityTest {
         require(received.size() == 2 && received.get(0).containsKey(AccountManager.KEY_INTENT)
                 && received.get(1).getBoolean(AccountManager.KEY_BOOLEAN_RESULT), "Interactive continuation or final replay guard failed");
         System.out.println("AccountSecurityTest: login Activity continuation delivered once and final response replay ignored");
+        ComponentName loginActivity = new ComponentName("test.owner", "test.owner.Login");
+        Method recordIntent = method(service, "recordAuthenticatorIntent", int.class, ComponentName.class);
+        Method consumeIntent = method(service, "consumeAuthenticatorIntent", int.class, ComponentName.class);
+        require(!(Boolean) consumeIntent.invoke(manager, 11001, loginActivity),
+                "Unissued authenticator Intent launch grant succeeded");
+        recordIntent.invoke(manager, 11001, loginActivity);
+        require(!(Boolean) consumeIntent.invoke(manager, 11002, loginActivity),
+                "Authenticator Intent launch grant worked for wrong caller UID");
+        require(!(Boolean) consumeIntent.invoke(manager, 11001, new ComponentName("test.owner", "test.owner.Other")),
+                "Authenticator Intent launch grant worked for wrong component");
+        require((Boolean) consumeIntent.invoke(manager, 11001, loginActivity),
+                "Issued authenticator Intent launch grant was rejected");
+        require(!(Boolean) consumeIntent.invoke(manager, 11001, loginActivity),
+                "Authenticator Intent launch grant was reusable");
+        System.out.println("AccountSecurityTest: KEY_INTENT launch grants are single-use and scoped to caller UID and component");
         Class<?> sessions = Class.forName("com.gesher.server.AccountSessions");
         long[] now = {1000};
         Object handles = construct(sessions, new Class<?>[] {java.util.function.LongSupplier.class},

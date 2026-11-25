@@ -160,6 +160,43 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
     // Guarded by this.
     private final Map<Account, Entry> mAccounts = new LinkedHashMap<>();
+
+    // Short-lived, single-use grants allowing a caller that received KEY_INTENT from an
+    // authenticator to launch that authenticator's non-exported Activity (as AOSP does).
+    private static final int MAX_AUTHENTICATOR_INTENT_GRANTS = 64;
+    private static final long AUTHENTICATOR_INTENT_TTL_MS = 60_000L;
+    private record AuthenticatorIntentGrant(int callerUid, ComponentName component) { }
+    private final Map<AuthenticatorIntentGrant, Long> mAuthenticatorIntents = new LinkedHashMap<>();
+
+    private void pruneExpiredAuthenticatorIntentsLocked(long now) {
+        mAuthenticatorIntents.entrySet().removeIf(e -> now - e.getValue() > AUTHENTICATOR_INTENT_TTL_MS);
+    }
+
+    private void recordAuthenticatorIntent(int callerUid, ComponentName component) {
+        if (component == null) return;
+        long now = SystemClock.elapsedRealtime();
+        synchronized (mAuthenticatorIntents) {
+            pruneExpiredAuthenticatorIntentsLocked(now);
+            AuthenticatorIntentGrant key = new AuthenticatorIntentGrant(callerUid, component);
+            mAuthenticatorIntents.remove(key);
+            while (mAuthenticatorIntents.size() >= MAX_AUTHENTICATOR_INTENT_GRANTS) {
+                java.util.Iterator<AuthenticatorIntentGrant> it = mAuthenticatorIntents.keySet().iterator();
+                if (!it.hasNext()) break;
+                it.next();
+                it.remove();
+            }
+            mAuthenticatorIntents.put(key, now);
+        }
+    }
+
+    boolean consumeAuthenticatorIntent(int callerUid, ComponentName component) {
+        if (component == null) return false;
+        long now = SystemClock.elapsedRealtime();
+        synchronized (mAuthenticatorIntents) {
+            pruneExpiredAuthenticatorIntentsLocked(now);
+            return mAuthenticatorIntents.remove(new AuthenticatorIntentGrant(callerUid, component)) != null;
+        }
+    }
     // Protected-store write-ahead records. Only the package registry can decide
     // if removing the owner committed or rolled back.
     private final Set<String> mPendingOwnerRemovals = new HashSet<>();
@@ -1875,6 +1912,12 @@ public final class AccountManagerService extends IAccountManager.Default {
                     }
                     if (checked == null) error(response, AccountManager.ERROR_CODE_INVALID_RESPONSE, "Invalid authenticator response");
                     else if (response != null) {
+                        if (client != null && checked.containsKey(AccountManager.KEY_INTENT)) {
+                            Intent keyIntent = checked.getParcelable(AccountManager.KEY_INTENT, Intent.class);
+                            if (keyIntent != null && keyIntent.getComponent() != null) {
+                                recordAuthenticatorIntent(client.uid, keyIntent.getComponent());
+                            }
+                        }
                         try { response.onResult(checked); }
                         catch (RemoteException e) { close(); }
                     }
