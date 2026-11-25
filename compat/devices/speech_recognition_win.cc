@@ -449,8 +449,10 @@ class SapiSession final : public Session {
       *recognizer_failed = true;
       return Log("ISpRecoGrammar::LoadDictation", hr);
     }
+    // A new recognizer is already SPRST_ACTIVE. Activating dictation starts its
+    // input; setting the recognizer active again can wait for a synchronization
+    // while SAPI is blocked reading PCM the caller cannot write until Start returns.
     hr = (*grammar)->SetDictationState(SPRS_ACTIVE);
-    if (SUCCEEDED(hr)) hr = (*recognizer)->SetRecoState(SPRST_ACTIVE);
     if (FAILED(hr)) return Log("activating dictation", hr);
     return S_OK;
   }
@@ -600,7 +602,7 @@ HRESULT StartSession(const SessionOptions& options, std::unique_ptr<Session>* ou
   int index = FindRecognizer(recognizers, options.language);
   if (index < 0) return kSpErrNotFound;
   SessionOptions bounded = options;
-  bounded.max_alternates = std::min(options.max_alternates, kMaxAlternates);
+  bounded.max_alternates = (std::min)(options.max_alternates, kMaxAlternates);
   auto session = std::make_unique<SapiSession>(bounded, recognizers[index].token_id);
   hr = session->Start(recognizer_failed);
   if (FAILED(hr)) return hr;
