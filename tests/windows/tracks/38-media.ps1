@@ -139,7 +139,8 @@ if (Test-Path "$Dir/mediaapp.apk") {
       'MediaTest audiotrack 4 bytebuffer 16-bit stereo 22050 volume 0.5: wrote 35280, position 8820/8820, periodic notifications 4, underruns ok',
       'MediaTest audiotrack 5 legacy static loop: stream 3, wrote 12800, setLoopPoints 0',
       'MediaTest audiotrack 6 playback rate: set 0, rate 48000, wrote 14400, position 14400/14400',
-      'MediaTest audiotrack 7 builder defaults: rate 48000, buffer at least the minimum true, wrote 14400 in time true, position 14400/14400',
+      'MediaTest audiotrack 7 builder defaults: rate 48000, buffer at least the minimum true, wrote 14400 in time true, position 14400/14400, silent transfer',
+      'MediaTest audiotrack 7 default-rate waveform: rate 48000, prefilled 14400/14400, position 14400/14400',
       'MediaTest done', 'gesher-app: done')
   Check 'media: AudioManager in mediaapp.apk: stream volumes (aliases, set, adjust, mute), the ringer mode, getDevices, audio focus (a transient loss, the gain back, a loss), isMusicActive' {
     $global:LASTEXITCODE = $mediaExit
