@@ -64,7 +64,8 @@ static void Sleep(DWORD milliseconds) {
 // No high-resolution waitable timer here: production falls back to Sleep(1).
 using LONGLONG = long long;
 struct LARGE_INTEGER { LONGLONG QuadPart; };
-constexpr DWORD CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 2, TIMER_ALL_ACCESS = 0x1f0003;
+constexpr DWORD CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 2, TIMER_ALL_ACCESS = 0x1f0003,
+    INFINITE = 0xffffffff;
 static HANDLE CreateWaitableTimerExW(void*, const wchar_t*, DWORD, DWORD) { return nullptr; }
 static BOOL SetWaitableTimer(HANDLE, const LARGE_INTEGER*, LONG, void*, void*, BOOL) { return FALSE; }
 static DWORD MapError(int error, bool writing) {

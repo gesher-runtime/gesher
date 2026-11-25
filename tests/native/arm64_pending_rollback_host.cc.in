@@ -145,14 +145,6 @@ class Jit {
     PerformRequestedCacheInvalidation(reason);
     return reason;
   }
-  // Dynarmic drops the translations of [start, start + length).
-  void InvalidateCacheRange(uint64_t start, size_t length) {
-    REQUIRE(!running);
-    for (auto entry = code.begin(); entry != code.end();) {
-      if (entry->first >= start && entry->first - start < length) entry = code.erase(entry);
-      else ++entry;
-    }
-  }
   void ClearCache() {
     REQUIRE(!running);
     std::lock_guard<std::mutex> lock(invalidation_mutex);
