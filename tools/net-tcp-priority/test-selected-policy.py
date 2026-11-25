@@ -460,6 +460,71 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
         if (!result) waiting_files = true;
 '''),
 )
+# Storage policy adds file-path checks and launch initialization to files also
+# covered by the OFD receipt. Reverse this separately pinned transition to the
+# exact main checkpoint before running EVERY original receipt and TCP check.
+# The helper pins bind the new references to their reviewed source bytes only:
+# neither this transition nor a passing source check qualifies native execution.
+STORAGE_POLICY_QUALIFICATION='tools/net-tcp-priority/qualified/storage-policy-source.json'
+STORAGE_POLICY_PATCH='tools/net-tcp-priority/qualified/storage-policy-source.patch'
+STORAGE_POLICY_QUALIFICATION_SHA256='80311c4e30c7e551ab08d09028fb57e641bb1e05ac44b70c5803ad7adde10a43'
+STORAGE_POLICY_BASELINE='43e210f4eb7505b8e118044e28d4870433bbb23f'
+STORAGE_POLICY_PATHS=[
+ 'compat/art/dalvikvm_main.cc',
+ 'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/gesher_exec.cc',
+ 'compat/posix/posix.cmake',
+ 'compat/posix/src/fsops.cc',
+ 'compat/posix/src/socket.cc',
+ 'compat/posix/src/system.cc',
+ 'compat/posix/src/unistd.cc',
+ 'tests/art-temp/entry_test.cc',
+ 'tests/native/ofd_transfer_host_test.cc.in',
+ 'tools/test_temp_directory.py',
+]
+STORAGE_POLICY_HELPERS=[
+ 'compat/posix/include/gesher/storage_policy.h',
+ 'compat/posix/src/storage_policy.cc',
+ 'compat/posix/src/storage_policy.h',
+]
+def preceding_storage_policy_sources():
+ raw=(ROOT/STORAGE_POLICY_QUALIFICATION).read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==STORAGE_POLICY_QUALIFICATION_SHA256,'storage policy source qualification changed'
+ qualification=json.loads(raw)
+ assert set(qualification)=={'baseline','baseline_policy_sha256','paths','previous_sha256',
+                             'source_sha256','helper_sha256','patch_sha256','native_runtime_approval'},'storage policy transition schema changed'
+ assert qualification['baseline']==STORAGE_POLICY_BASELINE and qualification['native_runtime_approval'] is False
+ assert qualification['paths']==STORAGE_POLICY_PATHS
+ assert sorted(qualification['previous_sha256'])==sorted(qualification['source_sha256'])==STORAGE_POLICY_PATHS
+ assert sorted(qualification['helper_sha256'])==STORAGE_POLICY_HELPERS
+ baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':tools/net-tcp-priority/test-selected-policy.py'])
+ assert hashlib.sha256(baseline_policy).hexdigest()==qualification['baseline_policy_sha256'],'storage policy baseline policy changed'
+ for path in STORAGE_POLICY_HELPERS:
+  assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==qualification['helper_sha256'][path],path
+ patch=(ROOT/STORAGE_POLICY_PATCH).read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'storage policy transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STORAGE_POLICY_PATHS
+ current={path:(ROOT/path).read_bytes() for path in STORAGE_POLICY_PATHS}
+ baseline={path:subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':'+path]) for path in STORAGE_POLICY_PATHS}
+ for path in STORAGE_POLICY_PATHS:
+  assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
+  assert hashlib.sha256(baseline[path]).hexdigest()==qualification['previous_sha256'][path],path
+  assert current[path]!=baseline[path],('empty storage policy transition',path)
+ with tempfile.TemporaryDirectory(prefix='gesher-storage-policy-qualification-') as temporary:
+  work=Path(temporary)
+  for path in STORAGE_POLICY_PATHS:
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(current[path])
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in STORAGE_POLICY_PATHS:
+   assert (work/path).read_bytes()==baseline[path],('storage policy reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in STORAGE_POLICY_PATHS:
+   assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
+ return baseline
+
 def preceding_ofd_sources():
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'ofd-stream-source.json').read_bytes()
@@ -473,8 +538,10 @@ def preceding_ofd_sources():
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  memfd_lease=preceding_memfd_lease_sources()
  shared_stdio=preceding_shared_stdio_sources(qualification)
+ storage_policy=preceding_storage_policy_sources()
  assert memfd_lease.keys().isdisjoint(shared_stdio),'source qualifications overlap'
- preceding={**memfd_lease,**shared_stdio}
+ assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()),'source qualifications overlap'
+ preceding={**memfd_lease,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
   actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
@@ -484,7 +551,7 @@ def preceding_ofd_sources():
   work=Path(temporary)
   for path in paths:
    (work/path).parent.mkdir(parents=True,exist_ok=True)
-   (work/path).write_bytes((ROOT/path).read_bytes())
+   (work/path).write_bytes(preceding.get(path,(ROOT/path).read_bytes()))
   subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
   subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
   previous={path:(work/path).read_bytes() for path in paths}
@@ -682,7 +749,58 @@ def check():
  assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
  for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
- print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition exact_gles_property_transition exact_memfd_lease_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
+ print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition exact_gles_property_transition exact_memfd_lease_transition exact_storage_policy_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
+
+def storage_policy_negative_controls():
+ # Isolated read substitution only: no source files are changed or executed.
+ # Refreshing this transition's after hash cannot admit an extra byte outside
+ # its exact patch, because the reverse endpoint is still the historical main.
+ from unittest.mock import patch
+ original=Path.read_bytes
+ qualification=json.loads(original(ROOT/STORAGE_POLICY_QUALIFICATION))
+ checked=repinned=0
+ for name in STORAGE_POLICY_PATHS+STORAGE_POLICY_HELPERS+[STORAGE_POLICY_PATCH]:
+  target=ROOT/name
+  source=original(target)
+  data=source.replace(b'@@',b'@x',1) if name==STORAGE_POLICY_PATCH else source+b'\n'
+  assert data!=source,name
+  for repin in (False,True) if name in STORAGE_POLICY_PATHS or name==STORAGE_POLICY_PATCH else (False,):
+   pins={}
+   receipt=None
+   if repin:
+    updated=json.loads(json.dumps(qualification))
+    if name==STORAGE_POLICY_PATCH:updated['patch_sha256']=hashlib.sha256(data).hexdigest()
+    else:updated['source_sha256'][name]=hashlib.sha256(data).hexdigest()
+    receipt=(json.dumps(updated,indent=2)+'\n').encode()
+    pins['STORAGE_POLICY_QUALIFICATION_SHA256']=hashlib.sha256(receipt).hexdigest()
+    repinned+=1
+   def reads(path):
+    if path==target:return data
+    if receipt is not None and path==ROOT/STORAGE_POLICY_QUALIFICATION:return receipt
+    return original(path)
+   rejected=None
+   with patch.object(Path,'read_bytes',reads),patch.dict(globals(),pins):
+    try:preceding_storage_policy_sources()
+    except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+   assert rejected is not None,'unqualified storage source accepted: '+name+' repin='+str(repin)
+   if repin:
+    message=str(rejected)
+    assert 'qualification changed' not in message and 'transition patch changed' not in message and message!=name,(name,message)
+   checked+=1
+ for field in ('baseline_policy_sha256','previous_sha256'):
+  updated=json.loads(json.dumps(qualification))
+  if field=='previous_sha256':updated[field][STORAGE_POLICY_PATHS[0]]='0'*64
+  else:updated[field]='0'*64
+  receipt=(json.dumps(updated,indent=2)+'\n').encode()
+  def reads(path):return receipt if path==ROOT/STORAGE_POLICY_QUALIFICATION else original(path)
+  rejected=None
+  with patch.object(Path,'read_bytes',reads),patch.dict(globals(),{'STORAGE_POLICY_QUALIFICATION_SHA256':hashlib.sha256(receipt).hexdigest()}):
+   try:preceding_storage_policy_sources()
+   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+  assert rejected is not None,'storage historical endpoint changed: '+field
+  checked+=1
+ print('TCP_STORAGE_POLICY_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(checked)+' repinned_transition_controls='+str(repinned)+' native_processes_started=0')
+
 def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
@@ -773,6 +891,7 @@ if __name__=='__main__':
  import sys
  check()
  if '--selftest' in sys.argv:
+  storage_policy_negative_controls()
   transition_negative_controls()
   import runpy
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')
