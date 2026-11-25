@@ -25,7 +25,7 @@ def main() -> None:
     parser.add_argument("--case", choices=("all", "history", "validation", "tasks", "recents",
                                           "attach", "visibility", "permissions", "pending",
                                           "back", "appwindow", "windowclose", "windowmode",
-                                          "ordinary", "review"), default="all")
+                                          "ordinary", "review", "componentreview"), default="all")
     args = parser.parse_args()
     compiler = shutil.which("cc")
     if not compiler:
@@ -41,7 +41,8 @@ def main() -> None:
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
                         str(ROOT / "tests/activity-finish/framework_host.c"), "-o", str(library)], check=True)
         sources = []
-        for name in ("ActivityTaskManagerService", "ActivityManagerService", "PendingIntents", "ActivityClientController"):
+        for name in ("ActivityTaskManagerService", "ActivityManagerService", "PendingIntents", "ActivityClientController",
+                     "ActiveServices", "ContentProviders", "BroadcastController"):
             relative = "app/java/com/gesher/server/" + name + ".java"
             source = ROOT / relative
             if args.source_ref:

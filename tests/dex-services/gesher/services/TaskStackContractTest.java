@@ -151,6 +151,14 @@ public final class TaskStackContractTest {
         provider.setAuthority(pkg + ".grants"); provider.setEnabled(true);
         provider.setExported(false); provider.setGrantUriPermissions(true);
         provider.setReadPermission(pkg + ".READ_PRIVATE"); parsed.addProvider(provider);
+        if (camera) {
+            var service = new com.android.internal.pm.pkg.component.ParsedServiceImpl();
+            service.setPackageName(pkg); service.setName(pkg + ".ReviewService");
+            service.setEnabled(true); service.setExported(true); parsed.addService(service);
+            var receiver = new ParsedActivityImpl();
+            receiver.setPackageName(pkg); receiver.setName(pkg + ".ReviewReceiver");
+            receiver.setEnabled(true); receiver.setExported(true); parsed.addReceiver(receiver);
+        }
         parsed.hideAsFinal();
         ApkPackage apk = (ApkPackage) UNSAFE.allocateInstance(ApkPackage.class);
         set(apk, "packageName", pkg);
@@ -232,6 +240,7 @@ public final class TaskStackContractTest {
             } finally { Binder.restoreCallingIdentity(original); }
             set(process, "packageName", PKG);
             set(process, "processName", PKG);
+            set(process, "packageCode", owner);
             // This fixture supplies an already admitted process. Keep its captured
             // choice consistent with the server's actual package setting.
             try { set(process, "separateWindows", com.gesher.app.window.AppWindows.separate(PKG)); }
@@ -1440,6 +1449,9 @@ public final class TaskStackContractTest {
     /** Real policy/controller and ATM; only the human dialog and OS process boundary are queued. */
     private static final class ReviewFixture {
         static final String CAMERA = "android.permission.CAMERA";
+        // Each fixture is a distinct installed UID; ART persists earlier reviews.
+        static final java.util.concurrent.atomic.AtomicInteger NEXT_UID =
+                new java.util.concurrent.atomic.AtomicInteger(UID + 30);
         final Harness h;
         final ApkPackage target;
         final PermissionPolicy policy;
@@ -1467,9 +1479,14 @@ public final class TaskStackContractTest {
                         .put(CAMERA, camera);
                 set(catalog, "mLoaded", true);
             }
-            target = legacyCode("fixture.taskstack.review." + name, UID + 30);
+            int targetUid = NEXT_UID.getAndIncrement();
+            check(targetUid >= android.os.Process.FIRST_APPLICATION_UID
+                    && targetUid <= android.os.Process.LAST_APPLICATION_UID,
+                    "Review fixture exhausted application UIDs");
+            target = legacyCode("fixture.taskstack.review." + name, targetUid);
             publishFixtureCode(h, target.packageName, target);
             initialize();
+            check(pending(), "Fresh legacy fixture inherited a completed permission review");
             Class<?> decisionType = type("PermissionRequests$Decision");
             Object decision = java.lang.reflect.Proxy.newProxyInstance(decisionType.getClassLoader(),
                     new Class<?>[]{decisionType}, (proxy, method, args) -> {
@@ -1520,6 +1537,206 @@ public final class TaskStackContractTest {
             }
             return count;
         }
+    }
+
+    /** Metadata and cancellation-only assertions; no component/application entry is invoked. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void legacyReviewComponentGuards() throws Exception {
+        ReviewFixture review = new ReviewFixture("componentguards");
+        Harness h = review.h;
+        PackageManagerService pm = (PackageManagerService)h.packages;
+        Class<?> workType = type("ActivityTaskManagerService$PendingWork");
+        Class<?> kindType = type("ApkPackage$ComponentKind");
+        java.util.concurrent.atomic.AtomicInteger executed = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger canceled = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Consumer<Object> work = ignored -> executed.incrementAndGet();
+        List<Object> admissions = new ArrayList<>();
+        String[] components = {"ReviewService", "ReviewReceiver", "GrantProvider"};
+        String[] kinds = {"SERVICE", "RECEIVER", "PROVIDER"};
+        Method current = workType.getDeclaredMethod("current", PackageManagerService.class);
+        current.setAccessible(true);
+        for (int i = 0; i < components.length; i++) {
+            Object pending = make(workType, new Class<?>[]{ApkPackage.class, String.class, kindType,
+                    String.class, java.util.function.Consumer.class, Runnable.class},
+                    review.target, review.target.packageName + "." + components[i],
+                    Enum.valueOf((Class)kindType, kinds[i]), review.target.packageName,
+                    work, (Runnable)canceled::incrementAndGet);
+            admissions.add(pending);
+            check(!(Boolean)current.invoke(pending, pm), "Pending review admitted " + kinds[i] + " work");
+        }
+        List<Object> queued = (List<Object>)get(h.tasks, "mPendingWork");
+        queued.addAll(admissions);
+        Method cancel = h.tasks.getClass().getDeclaredMethod("cancelInvalidProcessWork", ApkPackage.class, String.class);
+        cancel.setAccessible(true);
+        cancel.invoke(h.tasks, review.target, review.target.packageName);
+        cancel.invoke(h.tasks, review.target, review.target.packageName);
+        check(queued.isEmpty() && canceled.get() == 3 && executed.get() == 0,
+                "Review refusal stranded or duplicated a queued cancellation callback");
+
+        Object services = get(h.am, "mServices"), providers = get(h.am, "mProviders"),
+                broadcasts = get(h.am, "mBroadcasts");
+        android.content.pm.ServiceInfo serviceInfo = new android.content.pm.ServiceInfo();
+        serviceInfo.packageName = review.target.packageName;
+        serviceInfo.name = review.target.packageName + ".ReviewService";
+        Class<?> serviceType = type("ActiveServices$ServiceRecord");
+        Object service = make(serviceType, new Class<?>[]{android.content.pm.ServiceInfo.class, ApkPackage.class},
+                serviceInfo, review.target);
+        Method serviceReviewed = services.getClass().getDeclaredMethod("serviceReviewed", serviceType);
+        serviceReviewed.setAccessible(true);
+        check(!(Boolean)serviceReviewed.invoke(services, service), "Cached service escaped the review guard");
+        Class<?> bindingType = type("ActiveServices$IntentBindRecord"),
+                connectionType = type("ActiveServices$ConnectionRecord");
+        Intent bindingIntent = new Intent().setComponent(new ComponentName(serviceInfo.packageName, serviceInfo.name));
+        Object binding = make(bindingType, new Class<?>[]{serviceType, Intent.class}, service, bindingIntent);
+        java.util.concurrent.atomic.AtomicInteger bindingCanceled = new java.util.concurrent.atomic.AtomicInteger();
+        android.app.IServiceConnection connection = new android.app.IServiceConnection.Default() {
+            final IBinder binder = new Binder();
+            @Override public IBinder asBinder() { return binder; }
+            @Override public void connected(ComponentName name, IBinder published, android.app.IBinderSession session, boolean dead) {
+                check(dead && published == null, "Canceled review returned a service capability");
+                bindingCanceled.incrementAndGet();
+            }
+        };
+        Object connectionRecord = make(connectionType, new Class<?>[]{bindingType, android.app.IServiceConnection.class,
+                long.class, IApplicationThread.class, java.util.function.BooleanSupplier.class,
+                type("ActivityTaskManagerService$ProcessRecord")}, binding, connection, (long)Context.BIND_AUTO_CREATE,
+                null, (java.util.function.BooleanSupplier)() -> true, null);
+        set(connectionRecord, "reviewPending", true);
+        ((List<Object>)get(binding, "connections")).add(connectionRecord);
+        ((java.util.Map<Object, Object>)get(service, "bindings")).put(new Intent.FilterComparison(bindingIntent), binding);
+        ((java.util.Map<Object, Object>)get(services, "mServices")).put(bindingIntent.getComponent(), service);
+        ((java.util.Map<Object, Object>)get(services, "mConnections")).put(connection.asBinder(),
+                new ArrayList<>(List.of(connectionRecord)));
+        Method cancelBinding = services.getClass().getDeclaredMethod("cancelBinding", connectionType);
+        cancelBinding.setAccessible(true);
+        cancelBinding.invoke(services, connectionRecord);
+        cancelBinding.invoke(services, connectionRecord);
+        check(bindingCanceled.get() == 1 && ((Collection<?>)get(binding, "connections")).isEmpty()
+                && ((java.util.Map<?, ?>)get(services, "mConnections")).isEmpty(),
+                "Canceled service review stranded a connection or completed it twice");
+
+        android.content.pm.ProviderInfo providerInfo = new android.content.pm.ProviderInfo();
+        providerInfo.packageName = review.target.packageName;
+        providerInfo.name = review.target.packageName + ".GrantProvider";
+        Class<?> installType = type("ContentProviders$ProviderInstall");
+        Object install = make(installType, new Class<?>[]{ApkPackage.class, android.content.pm.ProviderInfo.class},
+                review.target, providerInfo);
+        Method installCurrent = providers.getClass().getDeclaredMethod("current", installType);
+        installCurrent.setAccessible(true);
+        check(!(Boolean)installCurrent.invoke(providers, install), "Provider installation/publication escaped review");
+
+        Class<?> senderType = type("BroadcastController$Sender");
+        Object sender = make(senderType, new Class<?>[]{String.class, int.class, boolean.class,
+                java.util.function.BooleanSupplier.class}, "android", android.os.Process.SYSTEM_UID,
+                true, (java.util.function.BooleanSupplier)() -> true);
+        Class<?> receiverType = type("BroadcastController$ReceiverList"),
+                filterType = type("BroadcastController$ReceiverFilter");
+        Object receiver = make(receiverType, new Class<?>[]{android.content.IIntentReceiver.class,
+                type("ActivityTaskManagerService$ProcessRecord"), String.class, ApkPackage.class},
+                null, null, review.target.packageName, review.target);
+        Object filter = make(filterType, new Class<?>[]{android.content.IntentFilter.class, String.class, int.class},
+                new android.content.IntentFilter("fixture.review"), null, Context.RECEIVER_EXPORTED);
+        Method registeredAllowed = broadcasts.getClass().getDeclaredMethod("registeredAllowed", senderType, receiverType, filterType);
+        registeredAllowed.setAccessible(true);
+        check(!(Boolean)registeredAllowed.invoke(broadcasts, sender, receiver, filter),
+                "Registered receiver escaped the review guard for a trusted system sender");
+
+        java.util.concurrent.atomic.AtomicInteger approved = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger declined = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicBoolean lifetime = new java.util.concurrent.atomic.AtomicBoolean(true);
+        Method request = h.tasks.getClass().getDeclaredMethod("requestComponentPermissionReview", ApkPackage.class,
+                boolean.class, java.util.function.BooleanSupplier.class, Runnable.class, Runnable.class);
+        request.setAccessible(true);
+        request.invoke(h.tasks, review.target, false, (java.util.function.BooleanSupplier)lifetime::get,
+                (Runnable)approved::incrementAndGet, (Runnable)declined::incrementAndGet);
+        check(declined.get() == 1 && approved.get() == 0 && review.queue.isEmpty() && review.prompts == 0,
+                "Background component refusal waited for review or displayed a prompt");
+        request.invoke(h.tasks, review.target, true, (java.util.function.BooleanSupplier)lifetime::get,
+                (Runnable)approved::incrementAndGet, (Runnable)() -> {
+                    declined.incrementAndGet();
+                    throw new IllegalStateException("fixture cancellation callback");
+                });
+        check(approved.get() == 0 && declined.get() == 1 && review.queue.size() == 1,
+                "Foreground review did not defer its continuation");
+        lifetime.set(false);
+        review.choose();
+        check(!review.pending() && approved.get() == 0 && declined.get() == 2,
+                "Retired authority was resumed after a confirmed review");
+        check(((Collection<?>)get(h.tasks, "mNativeUiActivities")).isEmpty(),
+                "Canceled component review retained its native UI reservation");
+        for (int i = 0; i < admissions.size(); i++) {
+            check((Boolean)current.invoke(admissions.get(i), pm), "Completed review still blocked " + kinds[i]);
+        }
+        check((Boolean)serviceReviewed.invoke(services, service), "Completed review still blocked cached service admission");
+        check((Boolean)installCurrent.invoke(providers, install), "Completed review still blocked provider admission");
+        check((Boolean)registeredAllowed.invoke(broadcasts, sender, receiver, filter),
+                "Completed review still blocked registered receiver admission");
+        lifetime.set(true);
+        request.invoke(h.tasks, review.target, true, (java.util.function.BooleanSupplier)lifetime::get,
+                (Runnable)approved::incrementAndGet, (Runnable)declined::incrementAndGet);
+        review.choose();
+        check(approved.get() == 1 && declined.get() == 2 && review.queue.isEmpty() && review.prompts == 1,
+                "An already completed review did not release its current continuation exactly once");
+        Object rejectedProcess = null;
+        for (Object process : (List<Object>)get(h.tasks, "mProcesses")) {
+            if (get(process, "packageCode") == review.target) rejectedProcess = process;
+        }
+        check(rejectedProcess != null, "Missing process identity for queue ownership assertions");
+        Method cancelProcess = h.tasks.getClass().getDeclaredMethod("cancelProcessWork", ApkPackage.class,
+                String.class, type("ActivityTaskManagerService$ProcessRecord"));
+        cancelProcess.setAccessible(true);
+        set(admissions.get(0), "awaitingProcess", rejectedProcess);
+        queued.addAll(admissions);
+        cancelProcess.invoke(h.tasks, review.target, review.target.packageName, rejectedProcess);
+        check(canceled.get() == 4 && queued.size() == 2 && queued.contains(admissions.get(1))
+                && queued.contains(admissions.get(2)),
+                "Rejecting an unbound process canceled newer unassigned work or retained its own work");
+        com.gesher.server.ProcessExitStatus exits = (com.gesher.server.ProcessExitStatus)get(h.tasks, "mExitStatus");
+        exits.started(review.target.packageName, 71);
+        Object oldGeneration = exits.capture(review.target.packageName, 71);
+        exits.started(review.target.packageName, 72);
+        Object newGeneration = exits.capture(review.target.packageName, 72);
+        set(rejectedProcess, "exitGeneration", oldGeneration);
+        set(admissions.get(0), "awaitingProcess", null);
+        set(admissions.get(0), "launchGeneration", oldGeneration);
+        set(admissions.get(2), "launchGeneration", newGeneration);
+        queued.add(admissions.get(0));
+        cancelProcess.invoke(h.tasks, review.target, review.target.packageName, rejectedProcess);
+        check(canceled.get() == 5 && queued.size() == 2 && queued.contains(admissions.get(1))
+                && queued.contains(admissions.get(2)), "Process rejection crossed its captured generation");
+        queued.add(admissions.get(0));
+        set(admissions.get(0), "awaitingProcess", rejectedProcess);
+        Method release = h.tasks.getClass().getDeclaredMethod("releaseProcessWorkLocked",
+                type("ActivityTaskManagerService$ProcessRecord"));
+        release.setAccessible(true);
+        synchronized (h.tasks) { release.invoke(h.tasks, rejectedProcess); }
+        check(get(admissions.get(0), "awaitingProcess") == null
+                && get(admissions.get(0), "launchGeneration") == null
+                && get(admissions.get(2), "launchGeneration") == newGeneration,
+                "Normal retirement did not release only its own work for recovery");
+        set(admissions.get(0), "launchGeneration", oldGeneration);
+        Class<?> pendingProcessType = type("ActivityTaskManagerService$PendingProcess");
+        Object pendingProcess = make(pendingProcessType, new Class<?>[]{String.class, String.class, String.class},
+                review.target.packageName, review.target.packageName, "guard-unit");
+        set(pendingProcess, "exitGeneration", oldGeneration);
+        ((java.util.Map<Long, Object>)get(h.tasks, "mStarting")).put(71L, pendingProcess);
+        Method failed = h.tasks.getClass().getDeclaredMethod("startFailed", long.class, pendingProcessType);
+        failed.setAccessible(true);
+        failed.invoke(h.tasks, 71L, pendingProcess);
+        failed.invoke(h.tasks, 71L, pendingProcess);
+        check(canceled.get() == 6 && queued.size() == 2 && queued.contains(admissions.get(1))
+                && queued.contains(admissions.get(2)), "Failed process start stranded work or canceled a later generation");
+        queued.clear();
+        publishFixtureCode(h, review.target.packageName,
+                ReviewFixture.legacyCode(review.target.packageName, review.target.uid()));
+        for (Object pending : admissions) check(!(Boolean)current.invoke(pending, pm),
+                "Review approval survived replacement of its target generation");
+        check(!(Boolean)serviceReviewed.invoke(services, service)
+                && !(Boolean)installCurrent.invoke(providers, install)
+                && !(Boolean)registeredAllowed.invoke(broadcasts, sender, receiver, filter),
+                "Cached component authority survived replacement of its package");
+        check(executed.get() == 0 && review.targetThread.transactions.isEmpty(),
+                "Guard assertions entered application code");
     }
 
     /** A timed call also makes the old blocking production implementation a decisive control. */
@@ -2604,6 +2821,9 @@ public final class TaskStackContractTest {
             legacyReviewSlowLaunch(); legacyReviewCancellation(); legacyReviewGenerations();
             legacyReviewBatch(); legacyReviewForwardedResult(); legacyReviewRevokedPermission();
             legacyReviewAcceptedCallerExit(); legacyReviewStandalone(); legacyReviewHostReceipt();
+        }
+        if (selected.equals("all") || selected.equals("review") || selected.equals("componentreview")) {
+            legacyReviewComponentGuards();
         }
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
         if (selected.equals("all") || selected.equals("back")) backOnTaskRoot();

@@ -256,6 +256,8 @@ final class BroadcastController {
         deliverToSystemReceivers(snapshot);
         String[] required = copy(requiredPermissions), excluded = copy(excludePermissions),
                 excludedPackages = copy(excludePackages);
+        boolean reviewDeferred = deferExplicitReceiverReview(snapshot, resolvedType, origin,
+                required, excluded, excludedPackages);
         Bundle extras = resultExtras(resultExtras);
         if (resultData != null && resultData.length() > 65536) throw new IllegalArgumentException("Broadcast result data too large");
         List<OrderedTarget> targets = new ArrayList<>();
@@ -276,15 +278,16 @@ final class BroadcastController {
                 if (best != null) targets.add(new OrderedTarget(rl, best));
             }
         }
-        if (snapshot.getComponent() != null || snapshot.getPackage() != null
+        if (!reviewDeferred && (snapshot.getComponent() != null || snapshot.getPackage() != null
                 || "com.google.android.c2dm.intent.RECEIVE".equals(snapshot.getAction())
-                || "com.google.android.c2dm.intent.REGISTRATION".equals(snapshot.getAction())) {
+                || "com.google.android.c2dm.intent.REGISTRATION".equals(snapshot.getAction()))) {
             synchronized (mPm) {
             for (ResolveInfo ri : mPm.receivers(snapshot, resolvedType,
                     PackageManager.GET_META_DATA | PackageManager.GET_SHARED_LIBRARY_FILES)) {
                 ActivityInfo info = ri.activityInfo;
                 ApkPackage owner = mPm.get(info.packageName);
-                if (owner != null && componentAllowed(origin, info.packageName, info.exported, info.permission)
+                if (owner != null && !mPm.permissions().isReviewRequired(owner)
+                        && componentAllowed(origin, info.packageName, info.exported, info.permission)
                         && receiverPermissions(info.packageName, required, excluded, excludedPackages)) {
                     targets.add(new OrderedTarget(info, owner, ri.priority));
                 }
@@ -387,6 +390,7 @@ final class BroadcastController {
     private boolean targetCurrent(OrderedBroadcast chain, OrderedTarget target) {
         if (!chain.sender.lifetime.getAsBoolean() || target.owner == null
                 || mPm.get(target.packageName()) != target.owner || mPm.isRemovalPending(target.packageName())
+                || mPm.permissions().isReviewRequired(target.owner)
                 || !receiverPermissions(target.packageName(), chain.required,
                         chain.excluded, chain.excludedPackages)) return false;
         if (target.registered != null) {
@@ -721,6 +725,8 @@ final class BroadcastController {
         }
         // A query for sticky broadcasts (devsvc: the system's, StickyBroadcasts).
         flags = receiverExportFlags(receiver, filter, flags, sender.uid);
+        ApkPackage receiverCode = mPm.get(sender.packageName);
+        if (receiverCode != null && mPm.permissions().isReviewRequired(receiverCode)) return null;
         if (receiver == null) return StickyBroadcasts.match(filter);
         if (app == null) {
             SystemServer.log("registerReceiver from pid " + callingPid
@@ -731,6 +737,7 @@ final class BroadcastController {
             // Filtering and catalog loading may race process death or package replacement.
             // Check under the same lock as processDied's removal, before publishing state.
             if (!sender.acceptance.getAsBoolean() || app.exiting
+                    || mPm.permissions().isReviewRequired(receiverCode)
                     || mAtm.callerProcess(callingPid) != app) return null;
             ReceiverList rl = mRegistered.get(receiver.asBinder());
             if (rl == null) {
@@ -749,6 +756,7 @@ final class BroadcastController {
         SystemServer.log("registerReceiver from " + callerPackage + ": " + actions);
         // A sticky broadcast the filter matches is returned and delivered (devsvc).
         Intent sticky = StickyBroadcasts.match(filter);
+        if (mPm.permissions().isReviewRequired(receiverCode)) return null;
         if (sticky != null) {
             try {
                 app.thread.scheduleRegisteredReceiver(receiver, sticky,
@@ -844,6 +852,8 @@ final class BroadcastController {
         intent = new Intent(intent);
         validateBroadcastSender(sender, intent);
         deliverToSystemReceivers(intent);
+        boolean reviewDeferred = deferExplicitReceiverReview(intent, resolvedType, sender,
+                requiredPermissions, excludePermissions, excludePackages);
         String callingPackage = sender.packageName;
         // Registered receivers: implicit broadcasts only.
         List<ReceiverList> registered = new ArrayList<>();
@@ -872,15 +882,16 @@ final class BroadcastController {
         }
         // Manifest receivers: explicit, or implicit to a package, or C2DM/FCM push actions.
         List<ManifestDelivery> manifest = new ArrayList<>();
-        if (intent.getComponent() != null || intent.getPackage() != null
+        if (!reviewDeferred && (intent.getComponent() != null || intent.getPackage() != null
                 || "com.google.android.c2dm.intent.RECEIVE".equals(intent.getAction())
-                || "com.google.android.c2dm.intent.REGISTRATION".equals(intent.getAction())) {
+                || "com.google.android.c2dm.intent.REGISTRATION".equals(intent.getAction()))) {
             synchronized (mPm) {
             for (ResolveInfo ri : mPm.receivers(intent, resolvedType,
                     PackageManager.GET_META_DATA | PackageManager.GET_SHARED_LIBRARY_FILES)) {
                 ActivityInfo info = ri.activityInfo;
                 ApkPackage owner = mPm.get(info.packageName);
-                if (owner != null && componentAllowed(sender, info.packageName, info.exported, info.permission)
+                if (owner != null && !mPm.permissions().isReviewRequired(owner)
+                        && componentAllowed(sender, info.packageName, info.exported, info.permission)
                         && receiverPermissions(info.packageName, requiredPermissions,
                                 excludePermissions, excludePackages)) {
                     manifest.add(new ManifestDelivery(info, intent, owner, sender));
@@ -917,7 +928,8 @@ final class BroadcastController {
         }
         for (ReceiverList rl : registered) {
             if (!sender.lifetime.getAsBoolean()) break;
-            if (mPm.get(rl.packageName) != rl.owner || mPm.isRemovalPending(rl.packageName)) continue;
+            if (mPm.get(rl.packageName) != rl.owner || mPm.isRemovalPending(rl.packageName)
+                    || mPm.permissions().isReviewRequired(rl.owner)) continue;
             try {
                 rl.app.thread.scheduleRegisteredReceiver(rl.receiver, intent,
                         android.app.Activity.RESULT_OK, null /* data */, null /* extras */,
@@ -968,6 +980,38 @@ final class BroadcastController {
             } finally { Binder.restoreCallingIdentity(identity); }
         }
         return ActivityManager.BROADCAST_SUCCESS;
+    }
+
+    /** AOSP skips pending-review delivery and reissues only an explicit foreground send. */
+    private boolean deferExplicitReceiverReview(Intent intent, String resolvedType, Sender sender,
+            String[] requiredPermissions, String[] excludePermissions, String[] excludePackages) {
+        if (intent.getComponent() == null || !sender.acceptance.getAsBoolean()) return false;
+        final ActivityInfo info;
+        final ApkPackage owner;
+        synchronized (mPm) {
+            info = mPm.getReceiverInfo(intent.getComponent(), PackageManager.GET_META_DATA, 0);
+            owner = info == null ? null : mPm.get(info.packageName);
+        }
+        if (owner == null || !mPm.permissions().isReviewRequired(owner)
+                || !componentAllowed(sender, info.packageName, info.exported, info.permission)
+                || !receiverPermissions(info.packageName, requiredPermissions, excludePermissions, excludePackages)) return false;
+        Intent snapshot = new Intent(intent);
+        String[] required = copy(requiredPermissions), excluded = copy(excludePermissions),
+                excludedPackages = copy(excludePackages);
+        // The accepted request retains package authority, never a review worker's UID.
+        Sender accepted = new Sender(sender.packageName, sender.uid, sender.system, sender.lifetime);
+        mAtm.requestComponentPermissionReview(owner,
+                mAtm.componentReviewForeground(sender.uid, sender.system),
+                () -> sender.lifetime.getAsBoolean() && mPm.get(info.packageName) == owner
+                        && !mPm.isRemovalPending(info.packageName)
+                        && owner.componentEnabled(info.name, ApkPackage.ComponentKind.RECEIVER)
+                        && componentAllowed(sender, info.packageName, info.exported, info.permission)
+                        && receiverPermissions(info.packageName, required, excluded, excludedPackages),
+                () -> broadcastIntent(snapshot, resolvedType, accepted, required, excluded, excludedPackages),
+                () -> {});
+        // The original ordered/result callback completes without a human wait. The
+        // post-review delivery is a new send, like AOSP's immutable PendingIntent.
+        return true;
     }
 
     private Sender sender(String claimed, int pid) {
@@ -1026,7 +1070,8 @@ final class BroadcastController {
     private boolean registeredAllowed(Sender sender, ReceiverList receiver, ReceiverFilter filter) {
         if (!sender.lifetime.getAsBoolean() || receiver.owner == null
                 || mPm.get(receiver.packageName) != receiver.owner
-                || mPm.isRemovalPending(receiver.packageName)) return false;
+                || mPm.isRemovalPending(receiver.packageName)
+                || mPm.permissions().isReviewRequired(receiver.owner)) return false;
         if (sender.system) return true;
         if (!filter.exported && sender.uid != receiver.owner.uid()) return false;
         return filter.permission == null || mPm.checkUidPermission(filter.permission, sender.uid)
@@ -1220,6 +1265,7 @@ final class BroadcastController {
         return delivery.sender.lifetime.getAsBoolean()
                 && delivery.owner == mPm.get(delivery.info.packageName)
                 && !mPm.isRemovalPending(delivery.info.packageName)
+                && !mPm.permissions().isReviewRequired(delivery.owner)
                 && delivery.owner.componentEnabled(delivery.info.name, ApkPackage.ComponentKind.RECEIVER);
     }
 
