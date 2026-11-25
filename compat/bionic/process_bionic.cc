@@ -952,6 +952,7 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
   if (run_atfork) RunAtforkPrepare();
   // Forked children create processes through this one (gesher/fork.h).
   gesher::StartSpawnBroker();
+  gesher::PrepareFork();
   std::unique_lock<std::mutex> serial(g_fork_mutex);
   PthreadForkPrepare();
   g_fork_hooks = hooks;

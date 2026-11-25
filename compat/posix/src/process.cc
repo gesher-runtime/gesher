@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <windows.h>
 #include <psapi.h>
+#include <shlobj.h>
 #include <winternl.h>
 
 #include <algorithm>
@@ -709,13 +710,18 @@ volatile LONG g_probe_step = 0;  // how far the throwaway clone got (read from i
 constexpr DWORD kProbeAddFailed = 2;
 constexpr DWORD kProbeCloneFailed = 3;
 constexpr DWORD kProbeCloneNoMemory = 5;
+constexpr DWORD kProbeCloneQuota = 6;
+constexpr DWORD kProbeEnded = 0x0F5E0DEAu;  // the parent ended a probe that did not end
 
+// Memory a clone could not have: ENOMEM, as fork(2).
 bool NoMemory(LONG status) {
   return status == static_cast<LONG>(0xC0000017) /* STATUS_NO_MEMORY */ ||
          status == static_cast<LONG>(0xC000012D) /* STATUS_COMMITMENT_LIMIT */ ||
-         status == static_cast<LONG>(0xC0000044) /* STATUS_QUOTA_EXCEEDED */ ||
          status == static_cast<LONG>(0xC000009A) /* STATUS_INSUFFICIENT_RESOURCES */;
 }
+// A quota (a job's active-process limit gives STATUS_QUOTA_EXCEEDED): EAGAIN,
+// as Linux's RLIMIT_NPROC or pids cgroup.
+bool OverQuota(LONG status) { return status == static_cast<LONG>(0xC0000044); }
 
 [[noreturn]] void CloneProbeChild(CloneFn clone) {
   EmptyWaitTable();
@@ -735,28 +741,64 @@ bool NoMemory(LONG status) {
   info.length = sizeof(info);
   const LONG status = clone(0, nullptr, nullptr, nullptr, &info);
   if (status == kStatusProcessCloned) TerminateProcess(GetCurrentProcess(), 0);
-  if (status < 0) TerminateProcess(GetCurrentProcess(), NoMemory(status) ? kProbeCloneNoMemory : kProbeCloneFailed);
+  if (status < 0) {
+    TerminateProcess(GetCurrentProcess(), NoMemory(status)    ? kProbeCloneNoMemory
+                                          : OverQuota(status) ? kProbeCloneQuota
+                                                              : kProbeCloneFailed);
+  }
   TerminateProcess(GetCurrentProcess(), 0);  // the clone ends on its own, at once
   for (;;) {}
 }
 
-// The file that says a clone works with this ntdll build.
-std::wstring CloneCheckFile() {
-  wchar_t root[MAX_PATH];
-  const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", root, MAX_PATH);
-  if (n == 0 || n >= MAX_PATH) return L"";
+// The file that says a clone works: named by ntdll's build (link time and
+// size), this gesher-base's build (its image's link time) and the
+// architecture. The folder is the user's local application data, read once
+// before the first fork, outside the fork set (PrepareFork), from the
+// user's profile rather than the environment the app can change.
+std::wstring g_clone_check_file;
+bool g_clone_check_prepared = false;
+
+DWORD ImageStamp(const void* base) {
+  const auto* image = static_cast<const BYTE*>(base);
+  const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+  return reinterpret_cast<const IMAGE_NT_HEADERS*>(image + dos->e_lfanew)->FileHeader.TimeDateStamp;
+}
+
+void PrepareCloneCheckFile() {
+  if (g_clone_check_prepared) return;
+  g_clone_check_prepared = true;
+  PWSTR local = nullptr;
+  if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DONT_VERIFY, nullptr, &local)) || local == nullptr) {
+    if (local != nullptr) CoTaskMemFree(local);
+    return;
+  }
+  const std::wstring root = local;
+  CoTaskMemFree(local);
   const auto* ntdll = reinterpret_cast<const BYTE*>(GetModuleHandleW(L"ntdll.dll"));
-  if (ntdll == nullptr) return L"";
+  HMODULE self = nullptr;
+  if (ntdll == nullptr || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                                  GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                              reinterpret_cast<LPCWSTR>(&g_clone_check_file), &self)) {
+    return;
+  }
   const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(ntdll);
   const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(ntdll + dos->e_lfanew);
-  wchar_t name[64];
-  swprintf(name, 64, L"ntdll-%08lx-%08lx.ok", static_cast<unsigned long>(nt->FileHeader.TimeDateStamp),
-           static_cast<unsigned long>(nt->OptionalHeader.SizeOfImage));
-  return std::wstring(root, n) + L"\\Gesher\\clone-check\\" + name;
+#if defined(__x86_64__) || defined(_M_X64)
+  const wchar_t* arch = L"x64";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+  const wchar_t* arch = L"arm64";
+#else
+  const wchar_t* arch = L"other";
+#endif
+  wchar_t name[96];
+  swprintf(name, 96, L"ntdll-%08lx-%08lx-gesher-%08lx-%ls.ok", static_cast<unsigned long>(nt->FileHeader.TimeDateStamp),
+           static_cast<unsigned long>(nt->OptionalHeader.SizeOfImage), static_cast<unsigned long>(ImageStamp(self)),
+           arch);
+  g_clone_check_file = root + L"\\Gesher\\clone-check\\" + name;
 }
 
 void RememberCloneWorks() {
-  const std::wstring file = CloneCheckFile();
+  const std::wstring& file = g_clone_check_file;
   if (file.empty()) return;
   const size_t dir_end = file.rfind(L'\\');
   CreateDirectoryW(file.substr(0, file.rfind(L'\\', dir_end - 1)).c_str(), nullptr);  // ...\Gesher
@@ -777,49 +819,65 @@ void SayForkOff(const char* why) {
 // Whether a child of this process can work (above). Called with the fork set
 // held. A forked child has its parent's result (the same ntdll).
 int g_clone_works = -1;  // -1 not known yet, 0 no, 1 yes
+// When the check last could not make its second copy for want of room (a
+// process or memory limit): forks go on without it for a while.
+ULONGLONG g_clone_check_deferred_at = 0;
+bool g_clone_check_deferred = false;
+constexpr ULONGLONG kCloneCheckRetryMs = 30000;
 
 bool CloneWorks(CloneFn clone) {
   FindCloneLocks();
   if (g_clone_works >= 0) return g_clone_works != 0 || (errno = EAGAIN, false);
-  const std::wstring file = CloneCheckFile();
-  if (!file.empty() && GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES) {
+  if (!g_clone_check_file.empty() && GetFileAttributesW(g_clone_check_file.c_str()) != INVALID_FILE_ATTRIBUTES) {
     g_clone_works = 1;
     return true;
   }
+  if (g_clone_check_deferred && GetTickCount64() - g_clone_check_deferred_at < kCloneCheckRetryMs) return true;
   g_probe_step = 0;
   RtlProcessInformation info{};
   info.length = sizeof(info);
   const LONG status = clone(0, nullptr, nullptr, nullptr, &info);
   if (status == kStatusProcessCloned) CloneProbeChild(clone);
   if (status < 0) {
-    // Not a property of the system: a clone may fail for want of memory.
+    // Not a property of the system: the fork's own clone would fail the same
+    // way (one copy, as this one). Nothing is kept.
     return errno = NoMemory(status) ? ENOMEM : EAGAIN, false;
   }
   CloseHandle(info.thread);
   DWORD code = STILL_ACTIVE;
   LONG step = 0;
-  if (WaitForSingleObject(info.process, 15000) == WAIT_OBJECT_0) {
-    GetExitCodeProcess(info.process, &code);
-  } else {
+  if (WaitForSingleObject(info.process, 15000) != WAIT_OBJECT_0) {
     SIZE_T got = 0;
     ReadProcessMemory(info.process, const_cast<LONG*>(&g_probe_step), &step, sizeof(step), &got);
-    TerminateProcess(info.process, 1);
+    TerminateProcess(info.process, kProbeEnded);
     WaitForSingleObject(info.process, 5000);
   }
+  // Its own code if it ended by itself, even right at the bound.
+  GetExitCodeProcess(info.process, &code);
   CloseHandle(info.process);
   if (code == 0) {
     g_clone_works = 1;
+    g_clone_check_deferred = false;
     RememberCloneWorks();
     return true;
   }
-  if (code == kProbeCloneNoMemory) return errno = ENOMEM, false;  // try again at the next fork
+  if (code == kProbeCloneNoMemory || code == kProbeCloneQuota) {
+    // The first copy worked (a function table added); a second copy did not
+    // fit within this process's limits (memory, a job's process count). The
+    // fork itself needs one copy, not two: it goes on, unchecked at the
+    // second level (Server 2022's stale locks are repaired either way), and
+    // the check runs again after a while. Nothing is kept.
+    g_clone_check_deferred = true;
+    g_clone_check_deferred_at = GetTickCount64();
+    return true;
+  }
   if (code == kProbeAddFailed) {
     SayForkOff("cannot add function tables");
   } else if (code == kProbeCloneFailed) {
     SayForkOff("cannot clone again");
-  } else if (code == STILL_ACTIVE && step == 1) {
+  } else if (code == kProbeEnded && step == 1) {
     SayForkOff("hangs adding function tables (an ntdll lock the clone left held)");
-  } else if (code == STILL_ACTIVE && step == 2) {
+  } else if (code == kProbeEnded && step == 2) {
     SayForkOff("hangs cloning again (an ntdll lock the clone left held)");
   } else {
     // It never got to the checks (a loaded machine, say): nothing proven.
@@ -986,6 +1044,8 @@ void ReleaseSpawnLock() { ReleaseSRWLockShared(&g_spawn_lock); }
 
 bool InForkedChild() { return g_forked_child.load(std::memory_order_acquire); }
 
+void PrepareFork() { PrepareCloneCheckFile(); }
+
 bool InheritedAtFork(HANDLE handle) {
   return handle != nullptr && InForkedChild() &&
          std::binary_search(g_fork_inherited.begin(), g_fork_inherited.end(), handle);
@@ -1067,8 +1127,8 @@ int CloneProcess(HANDLE* process, DWORD* pid) {
   RestoreHandles(changed);
   ReleaseSRWLockExclusive(&g_spawn_lock);
   if (status < 0) {
-    // Memory (no memory, the commit limit, a job's memory quota): ENOMEM as
-    // fork(2); anything else EAGAIN.
+    // Memory: ENOMEM as fork(2); a quota (a job's process limit) and anything
+    // else EAGAIN.
     return errno = NoMemory(status) ? ENOMEM : EAGAIN, -1;
   }
   CloseHandle(info.thread);

@@ -78,6 +78,10 @@ void ForgetChildMailbox(DWORD pid);
 // lets another thread unmap and seal (ADR 0092).
 bool ForkHasMemfdWriteLeases();
 
+// Before a fork takes the fork set: what CloneProcess needs from outside it
+// (the user's profile folder, read once).
+void PrepareFork();
+
 // True in a process CloneProcess made. The ntdll thread pool of the parent
 // does not exist there: code that would use it takes another path or fails.
 bool InForkedChild();

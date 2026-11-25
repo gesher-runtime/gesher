@@ -324,14 +324,28 @@ resume it, and nothing has asked for it.
     hang. The throwaway clone ends as soon as its own clone returns, and
     that one ends at once, so two copies exist together only while the
     second is made; each commits as much memory as the forking process, so
-    the check needs room for two copies besides it. It runs once per ntdll
-    build on a machine (a working result is kept in
-    `%LOCALAPPDATA%\Gesher\clone-check`, named by ntdll's link time and
-    size), and a forked child has its parent's result. A copy that cannot be
-    made for want of memory proves nothing: that fork fails with `ENOMEM`
-    and the next one checks again. Only a step that returned an error, or
-    one that did not end within 15 s (a lock never given back), turns fork
-    off in the process: `EAGAIN`, said once on standard error. The probe
+    the check needs room for two copies besides it, and two more processes.
+    It runs once per build of ntdll and of Gesher on a machine: a working
+    result is kept in the user's local application data (the profile's
+    folder, read once before the first fork, outside the fork set, so the
+    app's environment cannot move it), in `Gesher\clone-check`, named by
+    ntdll's link time and size, the link time of the image that carries
+    gesher-base, and the architecture; a forked child has its parent's
+    result. When the first copy cannot be made (memory, a job's process
+    limit) the fork's own copy could not be either: that fork fails, with
+    `ENOMEM` for memory and `EAGAIN` for a process limit (as Linux's
+    `RLIMIT_NPROC`), and nothing is kept. When only the second copy cannot
+    be made (it needs room for one more process than the fork does), the
+    first level is proven (a function table added in a clone) and the fork
+    goes on without the second level, which is checked again after 30 s;
+    nothing is kept either, so a limit never turns fork off. Server 2022's
+    stale locks are repaired in every child whether or not the check ran;
+    only an unknown build whose clone leaves a lock the scan does not find
+    could then make a child whose own fork hangs, and only while such a
+    limit stops the check. Only a step that returned an error, or one that
+    did not end within 15 s (a lock never given back; a probe that ended by
+    itself right at the bound counts with its own result), turns fork off
+    in the process: `EAGAIN`, said once on standard error. The probe
     confirmed it on 20348 (without the reset the child's
     `RtlAddFunctionTable` and nested clone hang every time; with it, both
     work) and that build 26100 leaves the locks free;
@@ -341,9 +355,16 @@ resume it, and nothing has asked for it.
     their own code (the guard's thread id is published then); the parent,
     after it releases the fork set, waits for that (up to 15 s; in a forked
     child each helper thread's start is bounded at 5 s and logged if it
-    does not come, and such a thread never runs its work; elsewhere it is
-    waited for as before, and the spawn broker reports a helper that did not
-    start as stopped). A child that cannot start them, or that ends first,
+    does not come, and such a thread never runs its work; in a process that
+    is not a forked child it is waited for without a bound, as the mailbox
+    thread and the broker's always were, and the spawn broker reports a
+    helper that did not start as stopped). The guard now starts through the
+    same function everywhere, so a process that is not a forked child waits
+    without a bound for its guard to run its own code: in the executable's
+    static initialisation, run by the C runtime's entry point after the
+    loader has finished, never under the loader lock. Only the executable's
+    copy of gesher-base starts a guard; a DLL that links gesher-base (a test
+    module) does not, so no thread is started or waited for in a `DllMain`. A child that cannot start them, or that ends first,
     has run no guest code yet: it is ended and `fork` fails with `EAGAIN`,
     rather than return a child that loses signals or cannot be traced;
   - ntdll's address-wait table: `WaitOnAddress` keeps its waiters in the
