@@ -10,7 +10,6 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
-#include <gesher/file_description.h>
 #include <gesher/clocks.h>
 #include <gesher/procfs_fd.h>
 #include <gesher/ptrace_state.h>
@@ -842,10 +841,13 @@ int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
   }
   auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, -1;
-  // A pipe or a socket is on Linux's pipefs or sockfs; a FIFO is on the
-  // volume that holds its file (below).
-  const bool pipe = GetFileType(h) == FILE_TYPE_PIPE &&
-                    ::gesher::GetDescriptorKind(fd) != ::gesher::DescriptorKind::kFifo;
+  // A FIFO is on the file system that holds its file, as on Linux (its
+  // descriptor's handle is a placeholder pipe): that file's volume.
+  std::wstring fifo_file;
+  bool fifo;
+  if (!::gesher::FifoFilePath(fd, &fifo_file, &fifo)) return -1;
+  // A pipe or a socket is on Linux's pipefs or sockfs.
+  const bool pipe = !fifo && GetFileType(h) == FILE_TYPE_PIPE;
   if (pipe || gesher_is_socket(fd)) {
     std::memset(out, 0, sizeof(*out));
     out->f_type = pipe ? kPipefsMagic : kSockfsMagic;
@@ -856,9 +858,10 @@ int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
     return 0;
   }
   std::wstring w(32768, L'\0');
-  DWORD len =
-      GetFinalPathNameByHandleW(h, w.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  DWORD len = fifo ? static_cast<DWORD>(fifo_file.size())
+                   : GetFinalPathNameByHandleW(h, w.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (len == 0 || len >= 32768) return errno = kEBADF, -1;
+  if (fifo) w = fifo_file;
   w.resize(len);
   wchar_t root[MAX_PATH + 1];
   if (!GetVolumePathNameW(w.c_str(), root, MAX_PATH + 1)) return errno = kEBADF, -1;

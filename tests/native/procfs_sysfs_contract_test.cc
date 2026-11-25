@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <windows.h>
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <set>
@@ -489,6 +490,7 @@ static std::vector<std::string> Dents(int fd, size_t size) {
   for (int calls = 0; calls < 100000; ++calls) {
     ssize_t n = getdents64(fd, buffer.data(), buffer.size());
     if (n <= 0) {
+      if (n != 0) fprintf(stderr, "getdents64 -> %zd errno %d after %zu names\n", n, errno, names.size());
       CHECK_MSG(n == 0, "getdents64 ends with 0");
       break;
     }
@@ -950,6 +952,62 @@ static void TestDiskGetdents() {
                 std::set<std::string>(shared.begin(), shared.end()).size() == shared.size(),
             "two threads on one fd read each entry once between them");
   close(dir);
+
+  // Streams hold handles only while their descriptions live: 300 fds each
+  // part way through the listing, then closed, leave no handle behind.
+  DWORD handles_before = 0, handles_open = 0, handles_after = 0;
+  GetProcessHandleCount(GetCurrentProcess(), &handles_before);
+  std::vector<int> many;
+  for (int i = 0; i < 300; ++i) {
+    const int d = open(narrow, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    char part[512];
+    if (d >= 0 && getdents64(d, part, sizeof(part)) > 0) many.push_back(d);
+  }
+  GetProcessHandleCount(GetCurrentProcess(), &handles_open);
+  for (int d : many) close(d);
+  GetProcessHandleCount(GetCurrentProcess(), &handles_after);
+  printf("  handles: %lu before, %lu with 300 streams, %lu after closing them\n", handles_before,
+         handles_open, handles_after);
+  CHECK(many.size() == 300);
+  CHECK_MSG(handles_after <= handles_before + 4, "a closed description's stream closes its handle");
+
+  // The fd is resolved once per call: while one thread reads a directory fd
+  // with getdents64, another puts a file in its place (dup2) and back. The
+  // directory's position must never land in the file's description.
+  {
+    const std::string data = TempName("getdents-race");
+    const int file = open(data.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    const int target = open(narrow, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    const int directory = open(narrow, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    CHECK(file >= 0 && target >= 0 && directory >= 0);
+    std::atomic<bool> stop{false};
+    std::thread reader([&]() {
+      char part[256];
+      while (!stop.load()) {
+        if (getdents64(target, part, sizeof(part)) == 0) lseek(target, 0, SEEK_SET);
+      }
+    });
+    int moved = 0;
+    for (int i = 0; i < 20000; ++i) {
+      if (dup2(file, target) < 0) break;
+      if (lseek(file, 0, SEEK_CUR) != 0) {
+        ++moved;
+        lseek(file, 0, SEEK_SET);
+      }
+      if (dup2(directory, target) < 0) break;
+      if (lseek(file, 0, SEEK_CUR) != 0) {
+        ++moved;
+        lseek(file, 0, SEEK_SET);
+      }
+    }
+    stop = true;
+    reader.join();
+    CHECK_MSG(moved == 0, "getdents64 never moves the position of a file that replaced its fd");
+    close(file);
+    close(target);
+    close(directory);
+    unlink(data.c_str());
+  }
   for (int i = 0; i < kFiles; ++i) {
     DeleteFileW((root + L"\\file-with-a-longer-name-" + std::to_wstring(i)).c_str());
   }

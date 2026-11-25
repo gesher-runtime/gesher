@@ -11,9 +11,11 @@
 
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
 #include <vector>
 
+#include "fifo_internal.h"
 #include "internal.h"
 #include "storage_policy.h"
 #include "ofd_internal.h"
@@ -106,16 +108,16 @@ DIR* Open(const char* name, int fd) {
   return dir;
 }
 
-// The directory open as fd, as a Linux path: a /proc directory's own path
-// (procfs.cc keeps it on the fd's file), or the directory on disk.
-bool DirectoryOfFd(int fd, std::string* path) {
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
+// The directory `h` (an fd's handle) is open on, as a Linux path: a /proc
+// directory's own path (procfs.cc keeps it on the fd's file), or the
+// directory on disk; *on_disk tells which.
+bool DirectoryOfHandle(HANDLE h, std::string* path, bool* on_disk) {
   BY_HANDLE_FILE_INFORMATION info;
   if (!GetFileInformationByHandle(h, &info)) return errno = ENOTDIR, false;
   unsigned type;
   if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 &&
       gesher::procfs::DescribeTemporaryFile(h, &type, path)) {
+    *on_disk = false;
     return type == S_IFDIR || (errno = ENOTDIR, false);
   }
   if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) return errno = ENOTDIR, false;
@@ -123,72 +125,243 @@ bool DirectoryOfFd(int fd, std::string* path) {
   DWORD n = GetFinalPathNameByHandleW(h, buffer, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0 || n >= 32768) return gesher::FailWithLastError(), false;
   *path = gesher::LinuxPath(buffer);
+  *on_disk = true;
   return true;
 }
 
+bool DirectoryOfFd(int fd, std::string* path) {
+  HANDLE h = gesher::HandleFromFd(fd);
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
+  bool on_disk;
+  return DirectoryOfHandle(h, path, &on_disk);
+}
+
+// A directory entry's d_type, from its attributes and reparse tag.
+unsigned char EntryType(DWORD attributes, DWORD reparse_tag) {
+  if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+      (reparse_tag == IO_REPARSE_TAG_SYMLINK || reparse_tag == IO_REPARSE_TAG_MOUNT_POINT)) {
+    return DT_LNK;  // as lstat reports them (stat.cc)
+  }
+  if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && reparse_tag == 0x80000024) {
+    return DT_FIFO;  // IO_REPARSE_TAG_LX_FIFO (fifo.cc)
+  }
+  return (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? DT_DIR : DT_REG;
+}
+
 // getdents64's place in a directory, kept on the open file description as
-// Linux keeps a directory's position there: an open enumeration (a find
-// handle, or a /proc directory's entries) that each call continuing where the
-// last one stopped reads on from. A call at a position the stream did not
-// stop at (lseek, or a process sharing the description after fork) opens the
-// directory again and skips to it. The stream goes with the description when
-// its last fd closes.
+// Linux keeps a directory's position there. On disk it is a directory handle
+// of the stream's own (reopened from the fd's) that it enumerates with
+// GetFileInformationByHandleEx; a /proc directory's is its entries (a DIR
+// without handles). Each call that continues where the last one stopped
+// reads on. A call at a position the stream did not stop at (lseek, or a
+// process sharing the description after fork) enumerates again from the
+// start and skips to it: positions are ordinals. The stream goes with the
+// description when its last fd closes.
 struct DirectoryStream {
   // The description's f_pos_lock: calls on one description take turns, so
   // threads reading one fd share its entries out; calls on other fds do not
-  // wait. Never held across fork by the child (see StreamOf).
+  // wait. A fork tries it with the attach lock (AttachTryLock), so no
+  // stream is cloned in the middle of a call.
   std::mutex lock;
-  DWORD process = GetCurrentProcessId();
-  DIR* dir = nullptr;
   std::string path;
   long long next = -1;  // the position the last call left the fd at
-  // An entry read from `dir` that the last call's buffer could not hold.
+  // On disk: the handle, a batch of FILE_ID_BOTH_DIR_INFO records and the
+  // offset of the next one in it (`batch_offset` past `batch_size`: none).
+  HANDLE handle = nullptr;
+  std::vector<unsigned char> batch;
+  size_t batch_offset = 0;
+  bool batch_valid = false;
+  bool restart = true;
+  bool ended = false;
+  // A /proc directory's entries.
+  DIR* dir = nullptr;
+  // An entry read that the last call's buffer could not hold.
   bool pending = false;
   std::string pending_name;
   unsigned char pending_type = 0;
-  unsigned long long pending_ino = 0;
+
+  DirectoryStream();
+  ~DirectoryStream();
+  DirectoryStream(const DirectoryStream&) = delete;
+  DirectoryStream& operator=(const DirectoryStream&) = delete;
 
   void Close() {
-    if (dir == nullptr) return;
-    if (process != GetCurrentProcessId()) {
-      // A forked child's copy: the find handle is the parent's, not this
-      // process's, and must not be closed here (the value may name another
-      // handle of the child's).
-      dir->find = INVALID_HANDLE_VALUE;
-      dir->fd = -1;
-    }
-    closedir(dir);
+    if (handle != nullptr) CloseHandle(handle);
+    handle = nullptr;
+    batch_valid = false;
+    restart = true;
+    ended = false;
+    if (dir != nullptr) closedir(dir);
     dir = nullptr;
+    pending = false;
+    next = -1;
   }
-  ~DirectoryStream() { Close(); }
+
+  bool OpenAt(HANDLE fd_handle, bool on_disk, const std::string& directory) {
+    Close();
+    path = directory;
+    if (!on_disk) {
+      dir = Open(directory.c_str(), -1);
+      return dir != nullptr;
+    }
+    // The directory the fd is open on, by its name now (the fd's handle
+    // need not allow listing). Not inheritable: a spawned program does not
+    // get it.
+    std::wstring windows(32768, L'\0');
+    const DWORD n = GetFinalPathNameByHandleW(fd_handle, windows.data(), 32768,
+                                              FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n == 0 || n >= 32768) return gesher::FailWithLastError(), false;
+    windows.resize(n);
+    handle = CreateFileW(windows.c_str(), FILE_LIST_DIRECTORY | SYNCHRONIZE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+      handle = nullptr;
+      return gesher::FailWithLastError(), false;
+    }
+    batch.resize(64 * 1024);
+    return true;
+  }
+
+  // The next entry, or false at the end (errno 0) or on an error (errno set).
+  bool Read(std::string* name, unsigned char* type) {
+    if (dir != nullptr) {
+      errno = 0;
+      struct dirent* e = readdir(dir);
+      if (e == nullptr) return false;
+      *name = e->d_name;
+      *type = e->d_type;
+      return true;
+    }
+    for (;;) {
+      if (!batch_valid) {
+        if (ended || handle == nullptr) return errno = 0, false;
+        if (!GetFileInformationByHandleEx(handle,
+                                          restart ? FileIdBothDirectoryRestartInfo
+                                                  : FileIdBothDirectoryInfo,
+                                          batch.data(), static_cast<DWORD>(batch.size()))) {
+          if (GetLastError() == ERROR_NO_MORE_FILES || GetLastError() == ERROR_FILE_NOT_FOUND) {
+            ended = true;
+            return errno = 0, false;
+          }
+          gesher::FailWithLastError();
+          return false;
+        }
+        restart = false;
+        batch_valid = true;
+        batch_offset = 0;
+      }
+      const auto* info = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(batch.data() + batch_offset);
+      if (info->NextEntryOffset == 0) {
+        batch_valid = false;
+      } else {
+        batch_offset += info->NextEntryOffset;
+      }
+      const std::wstring wide(info->FileName, info->FileNameLength / sizeof(wchar_t));
+      // A name with a character Windows reserves is stored encoded.
+      *name = gesher::Narrow(gesher::reserved_names::Decoded(wide.c_str()).c_str());
+      // EaSize holds the reparse tag of a reparse point.
+      *type = EntryType(info->FileAttributes, info->EaSize);
+      return true;
+    }
+  }
 };
 
-// Taken only to find or attach a description's stream, never while waiting
-// on anything else: a leaf in the fork set.
+// Every stream of this process, for a forked child to find (ForkChild), and
+// the lock that attaches streams to descriptions. The lock is taken only to
+// attach, register or unregister a stream, never while waiting on anything
+// else: a leaf in the fork set.
 std::mutex g_attach_lock;
+std::vector<DirectoryStream*>* g_streams = nullptr;  // under g_attach_lock
 
-// The stream of fd's open file description, made on first use. A forked
-// child does not use the parent's (its lock may have been held at fork, and
-// its find handle is the parent's): it gets one of its own, which opens the
-// directory again at the shared position.
-std::shared_ptr<DirectoryStream> StreamOf(int fd) {
-  std::shared_ptr<gesher::OpenFileDescription> description;
-  if (!gesher::LookupOfd(fd, &description) || !description) {
-    if (gesher::DescriptorSnapshotPtr snapshot = gesher::CaptureDescriptor(fd)) {
-      description = snapshot->description;
+DirectoryStream::DirectoryStream() {
+  std::lock_guard<std::mutex> guard(g_attach_lock);
+  if (g_streams == nullptr) g_streams = new std::vector<DirectoryStream*>();
+  g_streams->push_back(this);
+}
+
+DirectoryStream::~DirectoryStream() {
+  {
+    std::lock_guard<std::mutex> guard(g_attach_lock);
+    if (g_streams != nullptr) {
+      for (size_t i = 0; i < g_streams->size(); ++i) {
+        if ((*g_streams)[i] == this) {
+          (*g_streams)[i] = g_streams->back();
+          g_streams->pop_back();
+          break;
+        }
+      }
     }
   }
-  if (!description) return std::make_shared<DirectoryStream>();  // this call's only
-  std::shared_ptr<DirectoryStream> stale;  // released after the lock
-  std::lock_guard<std::mutex> guard(g_attach_lock);
-  auto stream = std::static_pointer_cast<DirectoryStream>(description->directory_stream);
-  if (!stream || stream->process != GetCurrentProcessId()) {
-    stale = std::move(stream);
-    stream = std::make_shared<DirectoryStream>();
-    description->directory_stream = stream;
-  }
-  return stream;
+  Close();
 }
+
+// The stream of `description`, made on first use; without a description,
+// one for this call only.
+std::shared_ptr<DirectoryStream> StreamOf(const std::shared_ptr<gesher::OpenFileDescription>& description) {
+  if (!description) return std::make_shared<DirectoryStream>();
+  {
+    std::lock_guard<std::mutex> guard(g_attach_lock);
+    if (description->directory_stream) {
+      return std::static_pointer_cast<DirectoryStream>(description->directory_stream);
+    }
+  }
+  auto made = std::make_shared<DirectoryStream>();  // registers itself: not under the lock
+  std::lock_guard<std::mutex> guard(g_attach_lock);
+  if (!description->directory_stream) description->directory_stream = made;
+  return std::static_pointer_cast<DirectoryStream>(description->directory_stream);
+}
+
+#ifdef GESHER_FORK_LOCK
+// The fork set's view of the streams: the attach lock and every stream's
+// lock, all or none. A call holds a stream's lock for one buffer's worth of
+// entries, so a fork that finds one busy retries its round shortly; it is
+// never waited for while holding another lock of the set.
+bool AttachTryLock(void* lock) {
+  auto* attach = static_cast<std::mutex*>(lock);
+  if (!attach->try_lock()) return false;
+  if (g_streams != nullptr) {
+    for (size_t i = 0; i < g_streams->size(); ++i) {
+      if (!(*g_streams)[i]->lock.try_lock()) {
+        while (i-- > 0) (*g_streams)[i]->lock.unlock();
+        attach->unlock();
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+void AttachUnlock(void* lock) {
+  if (g_streams != nullptr) {
+    for (DirectoryStream* stream : *g_streams) stream->lock.unlock();
+  }
+  static_cast<std::mutex*>(lock)->unlock();
+}
+
+// In a forked child, which holds all of them and runs alone: the locks are
+// made anew, and a directory handle the child inherited is closed, so that
+// neither the child nor a program it starts keeps the parent's directory
+// open through a stream. The child's next call on the stream opens the
+// directory again at the shared position.
+void ForkChild(void* lock) {
+  if (g_streams != nullptr) {
+    for (DirectoryStream* stream : *g_streams) {
+      new (&stream->lock) std::mutex();
+      if (stream->handle != nullptr && gesher::InheritedAtFork(stream->handle)) {
+        CloseHandle(stream->handle);
+      }
+      stream->handle = nullptr;
+      stream->batch_valid = false;
+      stream->restart = true;
+      stream->ended = false;
+      stream->pending = false;
+      stream->next = -1;
+    }
+  }
+  new (lock) std::mutex();
+}
+#endif
 
 }  // namespace
 
@@ -202,6 +375,22 @@ bool ProcfsDescriptor(int fd, std::string* linux_path, bool* directory) {
     return false;
   }
   *directory = type == S_IFDIR;
+  return true;
+}
+
+bool FifoFilePath(int fd, std::wstring* windows_path, bool* is_fifo) {
+  *is_fifo = false;
+  if (GetDescriptorKind(fd) != DescriptorKind::kFifo) return true;
+  DescriptorSnapshotPtr snapshot = CaptureDescriptor(fd);
+  if (!snapshot || snapshot->kind != DescriptorKind::kFifo) return true;
+  *is_fifo = true;
+  HANDLE file = OpenFifoFile(snapshot, FILE_READ_ATTRIBUTES);
+  if (file == INVALID_HANDLE_VALUE || file == nullptr) return false;
+  wchar_t buffer[32768];
+  const DWORD n = GetFinalPathNameByHandleW(file, buffer, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  CloseHandle(file);
+  if (n == 0 || n >= 32768) return FailWithLastError(), false;
+  windows_path->assign(buffer, n);
   return true;
 }
 
@@ -239,26 +428,30 @@ DIR* fdopendir(int fd) {
 }
 
 ssize_t getdents64(int fd, void* buffer, size_t size) {
+  // The fd is resolved once: another thread's close and open on its number
+  // cannot turn this call to another file (Linux pins it with fdget_pos).
+  gesher::DescriptorSnapshotPtr snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return errno == 0 ? (errno = EBADF, -1) : -1;
+  const HANDLE h = snapshot->handle;
+  if (GetFileType(h) != FILE_TYPE_DISK) return errno = ENOTDIR, -1;
   std::string path;
-  if (!DirectoryOfFd(fd, &path)) return -1;
+  bool on_disk;
+  if (!DirectoryOfHandle(h, &path, &on_disk)) return -1;
   if (buffer == nullptr) return errno = EFAULT, -1;
-  std::shared_ptr<DirectoryStream> stream = StreamOf(fd);
+  std::shared_ptr<DirectoryStream> stream = StreamOf(snapshot->description);
   std::lock_guard<std::mutex> guard(stream->lock);
-  // The position is the fd's (its open file description's, shared by dup
-  // and fork), as Linux keeps a directory's.
-  HANDLE h = gesher::HandleFromFd(fd);
+  // The position is the description's (shared by dup and fork), as Linux
+  // keeps a directory's.
   LARGE_INTEGER zero = {}, position = {};
   if (!SetFilePointerEx(h, zero, &position, FILE_CURRENT)) return gesher::FailWithLastError();
   long long index = position.QuadPart < 0 ? 0 : position.QuadPart;
-  if (stream->dir == nullptr || index != stream->next || stream->path != path) {
-    stream->Close();
-    stream->pending = false;
-    stream->next = -1;
-    stream->dir = Open(path.c_str(), -1);
-    if (stream->dir == nullptr) return -1;
-    stream->path = path;
+  if ((stream->handle == nullptr && stream->dir == nullptr) || index != stream->next ||
+      stream->path != path) {
+    if (!stream->OpenAt(h, on_disk, path)) return -1;
     long long skipped = 0;
-    while (skipped < index && readdir(stream->dir) != nullptr) ++skipped;
+    std::string name;
+    unsigned char type;
+    while (skipped < index && stream->Read(&name, &type)) ++skipped;
     index = skipped;  // past the end: stays at the end
   }
   auto* out = static_cast<unsigned char*>(buffer);
@@ -269,31 +462,33 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
   for (;;) {
     if (!stream->pending) {
       const int saved = errno;
-      errno = 0;
-      struct dirent* e = readdir(stream->dir);
-      if (e == nullptr) {
-        if (errno != 0 && used == 0) return -1;
+      if (!stream->Read(&stream->pending_name, &stream->pending_type)) {
+        if (errno != 0 && used == 0) {
+          stream->next = -1;  // the next call starts over
+          return -1;
+        }
         errno = saved;
         break;
       }
       errno = saved;
       stream->pending = true;
-      stream->pending_name = e->d_name;
-      stream->pending_type = e->d_type;
-      stream->pending_ino = e->d_ino;
     }
     const size_t name_length = stream->pending_name.size();
     const size_t record = (kNameOffset + name_length + 1 + 7) & ~size_t{7};
     if (used + record > size) {
       // Kept: the next call starts with it.
-      if (used == 0) return errno = EINVAL, -1;  // the buffer cannot hold one entry
+      if (used == 0) {
+        stream->next = index;
+        return errno = EINVAL, -1;  // the buffer cannot hold one entry
+      }
       break;
     }
     stream->pending = false;
     ++index;
     unsigned char* r = out + used;
     memset(r, 0, record);
-    const unsigned long long ino = stream->pending_ino;
+    // d_ino is the entry's position, as readdir's (some code skips 0).
+    const unsigned long long ino = static_cast<unsigned long long>(index);
     const long long next = index;
     const unsigned short reclen = static_cast<unsigned short>(record);
     memcpy(r, &ino, 8);
@@ -302,6 +497,16 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
     r[18] = stream->pending_type;
     memcpy(r + kNameOffset, stream->pending_name.data(), name_length);
     used += record;
+  }
+  // The stream's lock keeps this process's calls apart, but not an lseek,
+  // nor a process sharing the description after fork: one that moved the
+  // position meanwhile wins (as its lseek, ordered after this call, would on
+  // Linux), and this stream starts over at its position next time.
+  LARGE_INTEGER now = {};
+  if (!SetFilePointerEx(h, zero, &now, FILE_CURRENT)) return gesher::FailWithLastError();
+  if (now.QuadPart != position.QuadPart) {
+    stream->next = -1;
+    return static_cast<ssize_t>(used);
   }
   position.QuadPart = index;
   if (!SetFilePointerEx(h, position, nullptr, FILE_BEGIN)) {
@@ -329,17 +534,7 @@ struct dirent* readdir(DIR* dir) {
     }
   }
   dir->have_data = false;
-  DWORD attrs = dir->data.dwFileAttributes;
-  unsigned char type;
-  if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
-      (dir->data.dwReserved0 == IO_REPARSE_TAG_SYMLINK ||
-       dir->data.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT)) {
-    type = DT_LNK;  // as lstat reports them (stat.cc)
-  } else if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && dir->data.dwReserved0 == 0x80000024) {
-    type = DT_FIFO;  // IO_REPARSE_TAG_LX_FIFO (fifo.cc)
-  } else {
-    type = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0 ? DT_DIR : DT_REG;
-  }
+  const unsigned char type = EntryType(dir->data.dwFileAttributes, dir->data.dwReserved0);
   ++dir->position;
   // A name with a character Windows reserves is stored encoded.
   Fill(e, gesher::Narrow(gesher::reserved_names::Decoded(dir->data.cFileName).c_str()), type,
@@ -397,10 +592,13 @@ int dirfd(DIR* dir) {
 }  // extern "C"
 
 #ifdef GESHER_FORK_LOCK
-// fork (gesher/fork.h): a leaf, held only to attach a stream. The streams'
-// own locks stay out of the fork set: a child never takes the parent's
-// (StreamOf gives it new streams), so one held at fork cannot block it, and a
-// getdents64 running under the loader lock (a constructor) does not hold up
-// fork by its whole scan.
-GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, g_attach_lock);
+// fork (gesher/fork.h): a leaf. The attach lock is held only to attach or
+// register a stream, a stream's lock for one call's buffer: the fork set
+// takes them together (AttachTryLock), and the child makes them anew and
+// drops the inherited handles (ForkChild).
+namespace {
+const gesher::ForkLockOps kAttachOps = {&AttachTryLock, &AttachUnlock, &ForkChild};
+const gesher::ForkLockRegistration g_attach_registration(
+    gesher::kForkOrderLeaf, "g_attach_lock", []() -> void* { return &g_attach_lock; }, &kAttachOps);
+}  // namespace
 #endif

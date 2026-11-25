@@ -101,7 +101,14 @@ int FromHandle(HANDLE h, struct stat* buf, gesher::OpenFileDescription* descript
   // regular files show the execute bits too, as an NTFS volume mounted on
   // Linux does (ADR 0057).
   bool read_only = (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
-  if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+  if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && gesher::IsSymlinkHandle(h)) {
+    // A handle on a symbolic link (or junction) itself, lstat's or an fd
+    // opened O_PATH | O_NOFOLLOW: Linux reports the link, its size the
+    // length of its target.
+    std::string target;
+    buf->st_mode = S_IFLNK | 0777;
+    buf->st_size = gesher::ReadSymlinkHandle(h, &target) ? static_cast<long long>(target.size()) : 0;
+  } else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
     buf->st_mode = S_IFDIR | 0755;
   } else if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && gesher::IsFifoHandle(h)) {
     // A FIFO (fifo.cc): no data of its own, and nothing to execute.
