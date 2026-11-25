@@ -205,6 +205,15 @@ public final class Services {
         services.put(CameraSourceService.NAME, new CameraSourceService(am));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 clipboard).asBinder());
+        // content://media: MediaStore over the shared volume (docs/media-provider.md).
+        try {
+            MediaStoreProvider.create(am, pm, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/media")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to index.
+            SystemServer.log("media: provider unavailable: " + e);
+        }
         // print (docs/print.md): FEATURE_PRINTING means the runtime has the Windows
         // print bridge, even with no default printer. Without the native bridge,
         // PrintManager never asks for the service.
@@ -326,6 +335,14 @@ public final class Services {
         // that name registerTelephonyCallback / listen threw NullPointerException (Waze).
         services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class, telephony.registry).asBinder());
+        // credential: CredentialManager for passkeys (docs/passkeys.md, ADR 0093). The system
+        // server is the one credential provider, over Windows' WebAuthn API (WindowsWebAuthn,
+        // null without its natives). Without that API, and for other credential types, the
+        // answers are AOSP's for a device without a provider.
+        services.put(Context.CREDENTIAL_SERVICE, StandIn.of(
+                android.credentials.ICredentialManager.class,
+                new CredentialManagerService(new CredentialManagerHost(am, pm),
+                        WindowsWebAuthn.create(), new AssetLinks.Https())).asBinder());
         StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
                 android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
         services.put(Context.TRUST_SERVICE, trust.asBinder());

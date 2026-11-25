@@ -36,18 +36,9 @@ function buildRequestComment(login, repoFullName) {
   const claUrl = `https://github.com/${repoFullName}/blob/main/.github/cla/CLA.md`;
   return [
     BOT_MARKER,
-    `שלום @${login}, תודה על התרומה!`,
+    `Hi @${login}, thank you for your contribution!`,
     '',
-    `לפני שנוכל למזג את ה-PR, כל תורם נדרש לחתום פעם אחת על הסכם התורמים ([CLA](${claUrl})).`,
-    '',
-    'כדי לחתום, אנא פרסם תגובה ב-PR זה עם הנוסח המדויק הבא:',
-    '',
-    '```text',
-    CLA_PHRASE,
-    '```',
-    '',
-    '---',
-    `Hi @${login}, thank you for your contribution! Before we can merge this PR, every contributor must sign the [Contributor License Agreement (CLA)](${claUrl}) once.`,
+    `Before we can merge this PR, every contributor must sign the [Contributor License Agreement (CLA)](${claUrl}) once.`,
     '',
     'To sign, please post a comment on this PR with the exact text:',
     '',
@@ -179,7 +170,7 @@ async function run({ github, context, core }) {
         repo,
         issueNumber: issue.number,
       });
-      const signedNotice = `${BOT_MARKER}\nתודה @${commenter}, החתימה על ה-CLA נשמרה! / Thank you @${commenter}, your CLA signature has been recorded.`;
+      const signedNotice = `${BOT_MARKER}\nThank you @${commenter}, your CLA signature has been recorded.`;
       if (existing) {
         await github.rest.issues.updateComment({
           owner,
