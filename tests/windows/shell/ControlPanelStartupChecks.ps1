@@ -72,7 +72,10 @@ function Get-InstalledApps {
     $script:Reads++
     return [IO.File]::ReadAllText($script:PackagesPath)
 }
-function Update-AppsView($installed) {
+function Update-AppsView($installed, [hashtable] $ReadStamps = $null) {
+    # The declared renderer boundary observes its paths before consuming them,
+    # as the production parser/renderer do for shortcut and icon metadata.
+    foreach ($path in $script:ExtraPaths) { $null = Get-FileStamp $path $ReadStamps }
     $script:Shown = $installed
     $script:ViewState.AppFiles = $script:ExtraPaths
     if ($script:MutateDuringRender) {
@@ -95,11 +98,15 @@ $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 $script:MetadataMonitor = $null
 $script:LiveRefreshDebounceMs = 400; $script:LiveRefreshMaximumDelayMs = 2000; $script:LiveRefreshRecoveryMs = 5000
 try {
-    foreach ($scenario in 'quiet', 'change-during-read', 'new-watch-after-read') {
+    foreach ($scenario in 'quiet', 'quiet-delayed-first-heartbeat', 'change-during-read', 'new-watch-after-read') {
         [IO.File]::WriteAllText($script:PackagesPath, 'first!')
         $script:Reads = 0; $script:Shown = $null; $script:IsBusy = $false
         $script:MutateDuringRender = ($scenario -eq 'change-during-read')
         $script:ExtraPaths = @()
+        if ($scenario -eq 'quiet-delayed-first-heartbeat') {
+            $script:ExtraPaths = @((Join-Path $root 'data/data/fixture.app/gesher-shell/shortcut.properties'),
+                (Join-Path $root 'data/data/fixture.app/gesher-shell/icon.ico'))
+        }
         if ($scenario -eq 'new-watch-after-read') {
             $external = Join-Path $fixture 'external/icon.ico'
             [void][IO.Directory]::CreateDirectory((Split-Path -Parent $external))
@@ -115,7 +122,7 @@ try {
         $script:MetadataMonitor.add_Changed($changed)
         Refresh-Dashboard
         Assert-Startup ($script:Reads -eq 1) "$scenario repeated the initial read"
-        if ($scenario -ne 'quiet') {
+        if ($scenario -notlike 'quiet*') {
             Assert-Startup ($null -ne $script:LiveState.PendingSince) "$scenario acknowledged a notification not covered by the rendered snapshot"
         }
         if ($scenario -eq 'change-during-read') {
@@ -126,7 +133,10 @@ try {
         $window.IsVisible = $true
         Invoke-PanelMetadataVisibilityChanged
         Invoke-PanelMetadataActivated
-        if ($scenario -eq 'quiet') {
+        if ($scenario -like 'quiet*') {
+            # A slow first WPF show may outlast the recovery deadline. No file
+            # changed: discovering the path set must not look like a mutation.
+            if ($scenario -eq 'quiet-delayed-first-heartbeat') { $script:LiveState.RecoveryAt = [DateTime]::MinValue }
             Invoke-LiveRefreshTick
             Assert-Startup ($script:Reads -eq 1 -and -not $script:LiveState.PendingSince) 'Quiet first show performed a redundant refresh'
         } else {

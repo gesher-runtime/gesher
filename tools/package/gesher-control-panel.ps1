@@ -378,12 +378,15 @@ function Get-DeviceStatus {
 # Cheap change detection: length and write time of the files the dashboard derives its state from.
 # Notifications normally trigger refresh. These UI-thread stamps recover missed events only
 # while the panel is visible; native/.NET callbacks never execute PowerShell off the dispatcher.
-function Get-FileStamp([string] $path) {
+function Get-FileStamp([string] $path, [hashtable] $ReadStamps = $null) {
+    if ($null -ne $ReadStamps -and $ReadStamps.ContainsKey($path)) { return $ReadStamps[$path] }
+    $stamp = '-'
     try {
         $info = [System.IO.FileInfo]::new($path)
-        if ($info.Exists) { return "$($info.Length):$($info.LastWriteTimeUtc.Ticks)" }
+        if ($info.Exists) { $stamp = "$($info.Length):$($info.LastWriteTimeUtc.Ticks)" }
     } catch { }
-    return '-'
+    if ($null -ne $ReadStamps) { $ReadStamps[$path] = $stamp }
+    return $stamp
 }
 
 function Get-StateStamp {
@@ -399,8 +402,14 @@ function Get-StateStamp {
 }
 
 # Shortcut labels and icons are written after packages.list, so they are tracked separately.
-function Get-AppFilesStamp {
-    return (@($script:ViewState.AppFiles | ForEach-Object { Get-FileStamp $_ }) -join '|')
+function Get-AppFilesStamp([hashtable] $ReadStamps = $null) {
+    return (@($script:ViewState.AppFiles | ForEach-Object {
+        if ($null -eq $ReadStamps) { Get-FileStamp $_ }
+        else {
+            if (-not $ReadStamps.ContainsKey($_)) { throw "Application metadata was not captured before reading: $_" }
+            $ReadStamps[$_]
+        }
+    }) -join '|')
 }
 
 function Test-PanelMetadataVisible {
@@ -495,7 +504,7 @@ function Get-MicrogStatus {
 }
 
 # Helper to read installed applications
-function Get-InstalledApps {
+function Get-InstalledApps([hashtable] $ReadStamps = $null) {
     $apps = [System.Collections.Generic.List[PSObject]]::new()
     $packagesFile = Join-Path $root 'data/system/packages.list'
     if (-not (Test-Path -LiteralPath $packagesFile)) { return $apps }
@@ -514,6 +523,13 @@ function Get-InstalledApps {
         # trigger observation/recovery without another shortcut rewrite.
         $iconCandidates = [System.Collections.Generic.List[string]]::new()
         $propFile = Join-Path $root "data/data/$pkg/gesher-shell/shortcut.properties"
+        $candidate = Join-Path $root "data/data/$pkg/gesher-shell/icon.ico"
+        $launchMarker = Join-Path $root "data/data/$pkg/gesher-shell/no-launcher-activity"
+        if ($null -ne $ReadStamps) {
+            $null = Get-FileStamp $propFile $ReadStamps
+            $null = Get-FileStamp $candidate $ReadStamps
+            $null = Get-FileStamp $launchMarker $ReadStamps
+        }
         if (Test-Path -LiteralPath $propFile) {
             foreach ($propLine in Get-Content -LiteralPath $propFile) {
                 if ($propLine -match '^\s*label\s*=\s*(.*)$') {
@@ -524,19 +540,19 @@ function Get-InstalledApps {
                     $iconCandidate = $Matches[1].Trim() -replace '\\\\', '\' -replace '\\:', ':'
                     if (-not [string]::IsNullOrWhiteSpace($iconCandidate)) {
                         $iconCandidates.Add($iconCandidate)
+                        if ($null -ne $ReadStamps) { $null = Get-FileStamp $iconCandidate $ReadStamps }
                         if (Test-Path -LiteralPath $iconCandidate) { $iconPath = $iconCandidate }
                     }
                 }
             }
         }
         if (-not $iconPath) {
-            $candidate = Join-Path $root "data/data/$pkg/gesher-shell/icon.ico"
             if (Test-Path -LiteralPath $candidate) { $iconPath = $candidate }
         }
 
         # As a launcher's app list, "Launch" only for a package with a MAIN/LAUNCHER activity:
         # AppShell records one without (com.gesher.camera's capture activity, for example).
-        $launchable = -not (Test-Path -LiteralPath (Join-Path $root "data/data/$pkg/gesher-shell/no-launcher-activity"))
+        $launchable = -not (Test-Path -LiteralPath $launchMarker)
 
         $apps.Add([PSCustomObject]@{
             Package = $pkg
@@ -714,12 +730,12 @@ function Get-PanelAppIcon([string] $path, [string] $stamp, [hashtable] $icons) {
 }
 
 # Rebuild the list only when its contents change, keeping unchanged icons decoded.
-function Update-AppsView($installed) {
+function Update-AppsView($installed, [hashtable] $ReadStamps = $null) {
     $appFiles = [System.Collections.Generic.List[string]]::new()
     $watched = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $iconStamps = @{}
+    $iconStamps[$icoFile] = Get-FileStamp $icoFile $ReadStamps
     $defaultIco = if (Test-Path -LiteralPath $icoFile) { $icoFile } else { $null }
-    $iconStamps[$icoFile] = Get-FileStamp $icoFile
     $appFiles.Add($icoFile)
     [void]$watched.Add($icoFile)
     $signature = @(foreach ($app in $installed) {
@@ -730,7 +746,7 @@ function Update-AppsView($installed) {
             if ($path -and $watched.Add([string]$path)) { $appFiles.Add([string]$path) }
         }
         if ($app.IconPath -and -not $iconStamps.ContainsKey($app.IconPath)) {
-            $iconStamps[$app.IconPath] = Get-FileStamp $app.IconPath
+            $iconStamps[$app.IconPath] = Get-FileStamp $app.IconPath $ReadStamps
         }
         "$($app.Package)`t$($app.Label)`t$($app.IconPath)`t$(if ($app.IconPath) { $iconStamps[$app.IconPath] })`t$($app.Launchable)"
     }) -join "`n"
@@ -783,18 +799,22 @@ function Refresh-Dashboard {
         }
     }
     $generation = if ($script:MetadataMonitor) { $script:MetadataMonitor.Generation } else { 0 }
-    # Stamps precede reads so notifications or visible recovery notice a change during the read.
+    # State and per-path app stamps precede their reads so visible recovery also
+    # notices changes during a read when no notification arrives. App paths are
+    # discovered by this refresh, so serialize the captured stamps only after
+    # discovery instead of comparing the previous view's path set with the new one.
     $stateStamp = Get-StateStamp
-    $appsStamp = Get-AppFilesStamp
+    $appReadStamps = @{}
     # A transient read/render failure must leave a retry pending even when the files have
     # stopped changing. Commit the observed stamps only after the whole refresh succeeds.
     if (-not $script:LiveState.PendingSince) { Request-PanelMetadataRefresh }
     Update-DeviceView (Get-DeviceStatus)
     Update-MicrogView (Get-MicrogStatus)
     if (Get-Command Update-CameraView -ErrorAction SilentlyContinue) { Update-CameraView }
-    $installed = Get-InstalledApps
+    $installed = Get-InstalledApps $appReadStamps
     Update-StoreView $installed
-    Update-AppsView $installed
+    Update-AppsView $installed $appReadStamps
+    $appsStamp = Get-AppFilesStamp $appReadStamps
     Update-PanelMetadataWatch
     if ($null -eq $script:LiveState.Stamp -and -not (Test-PanelMetadataVisible)) {
         $script:LiveState.InitialShowPending = $true
