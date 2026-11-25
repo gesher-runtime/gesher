@@ -57,8 +57,9 @@ import java.util.function.Predicate;
  *     {@code scheduleUnbindService} → onUnbind; then the service is destroyed if nothing
  *     else keeps it.
  * <li>{@code startForeground}: {@code setServiceForeground} posts the notification to the
- *     stand-in notification manager ({@link NotificationManagerService}); nothing enforces
- *     the foreground service rules (types, the 10 s to call startForeground).
+ *     notification manager ({@link NotificationManagerService}) after checking the declared
+ *     types and foreground-service manifest permissions. Background-start exemptions,
+ *     type-specific runtime prerequisites and promotion deadlines remain incomplete.
  * </ul>
  *
  * <p>Unexpected process death restarts sticky/redelivery services and live auto-create
@@ -618,6 +619,96 @@ final class ActiveServices {
         Dexopt.activityChanged();
     }
 
+    /** Android 16's default manifest permission policy, before any promotion is published. */
+    private int admitForegroundType(ServiceRecord service, ApkPackage owner, int requestedType) {
+        if (owner == null || owner != service.owner) {
+            throw new SecurityException("Foreground service package is no longer installed");
+        }
+        int targetSdk = owner.parsed.getTargetSdkVersion();
+        if (targetSdk >= android.os.Build.VERSION_CODES.P) {
+            requireForegroundPermission(owner, android.Manifest.permission.FOREGROUND_SERVICE);
+        }
+        int manifestType = service.info.getForegroundServiceType();
+        int type = requestedType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
+                ? manifestType : requestedType;
+        if ((type & ~manifestType) != 0) {
+            throw new IllegalArgumentException("Foreground service type is not declared in the manifest");
+        }
+        // AOSP ignores SHORT_SERVICE when another type is selected. Keep the reported
+        // service type consistent, without claiming to implement its separate timeout.
+        if ((type & ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE) != 0
+                && type != ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE) {
+            type &= ~ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE;
+        }
+        // These AOSP compatibility changes are queried by UID, unlike the base P
+        // permission above. PlatformCompat requires the change to be enabled for
+        // every installed package sharing that UID; one older sibling keeps the
+        // legacy behavior. Read the current immutable package snapshot, not a cache
+        // that could retain an older target after update/removal of that sibling.
+        for (ApkPackage member : mPm.packages()) {
+            if (member.uid() == owner.uid()
+                    && member.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                return type;
+            }
+        }
+        if (type == ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE) {
+            if (requestedType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST) {
+                throw new android.app.MissingForegroundServiceTypeException(
+                        "Foreground service has no type declared in the manifest");
+            }
+            throw new android.app.InvalidForegroundServiceTypeException(
+                    "Foreground service type NONE is not allowed for target SDK " + targetSdk);
+        }
+        for (int remaining = type; remaining != 0;) {
+            int selected = Integer.highestOneBit(remaining);
+            remaining &= ~selected;
+            String permission = foregroundTypePermission(selected);
+            if (permission != null) {
+                requireForegroundPermission(owner, permission);
+            } else if (selected != ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE
+                    && (type & ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) == 0) {
+                // AOSP treats an unknown future type as NONE, unless SPECIAL_USE is
+                // also declared and selected. Its ordinary permission is checked above.
+                throw new android.app.InvalidForegroundServiceTypeException(
+                        "Unknown foreground service type 0x" + Integer.toHexString(selected));
+            }
+        }
+        return type;
+    }
+
+    private void requireForegroundPermission(ApkPackage owner, String permission) {
+        // The service's authenticated UID owns the permission, even when a system
+        // caller requests promotion. Do not authorize using the server's Binder UID.
+        if (mPm.permissions().checkUidPermission(owner.uid(), permission, 0)
+                != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Foreground service in " + owner.packageName
+                    + " requires " + permission);
+        }
+    }
+
+    private static String foregroundTypePermission(int type) {
+        // This is only the manifest ('all of') permission layer of AOSP's policy.
+        // Runtime grants, AppOps, roles and device/USB prerequisites are separate.
+        // FILE_MANAGEMENT is not registered in android-16.0.0_r4's default policy,
+        // so it uses the unknown-type fallback. SHORT_SERVICE has no extra permission.
+        return switch (type) {
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC -> android.Manifest.permission.FOREGROUND_SERVICE_DATA_SYNC;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK -> android.Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL -> android.Manifest.permission.FOREGROUND_SERVICE_PHONE_CALL;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> android.Manifest.permission.FOREGROUND_SERVICE_LOCATION;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> android.Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION -> android.Manifest.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA -> android.Manifest.permission.FOREGROUND_SERVICE_CAMERA;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE -> android.Manifest.permission.FOREGROUND_SERVICE_MICROPHONE;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH -> android.Manifest.permission.FOREGROUND_SERVICE_HEALTH;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING -> android.Manifest.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED -> android.Manifest.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING -> android.Manifest.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE -> android.Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE;
+            default -> null;
+        };
+    }
+
     private void setServiceForegroundLocked(ComponentName className, IBinder token, int id,
             Notification notification, int flags, int foregroundServiceType,
             java.util.Map<Integer, AppOpsService.UidState> visible) {
@@ -632,12 +723,7 @@ final class ActiveServices {
             requireServiceOwner(r);
             if (id != 0 && notification == null) throw new IllegalArgumentException("Missing foreground notification");
             previous = r.foregroundId;
-            int selectedType = id == 0 ? 0
-                    : foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
-                            ? r.info.getForegroundServiceType() : foregroundServiceType;
-            if ((selectedType & ~r.info.getForegroundServiceType()) != 0) {
-                throw new IllegalArgumentException("Foreground service type is not declared in the manifest");
-            }
+            int selectedType = id == 0 ? 0 : admitForegroundType(r, captured, foregroundServiceType);
             int eligible = 0;
             AppOpsService.UidState state = captured == null ? null : visible.get(captured.uid());
             boolean whileInUse = captured != null && (captured.parsed.getTargetSdkVersion() < 30
@@ -673,12 +759,8 @@ final class ActiveServices {
             mAtm.noteShortcutForeground(foregroundVisit, ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE);
         } else mAtm.noteShortcutForeground(null, 0);
         if (id != 0) {
-            // FOREGROUND_SERVICE_TYPE_MANIFEST (startForeground(id, notification)): the
-            // manifest's types.
-            int type = foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
-                    ? r.info.getForegroundServiceType() : foregroundServiceType;
             SystemServer.log("setServiceForeground " + r + ": foreground, notification " + id
-                    + " (service type 0x" + Integer.toHexString(type) + ")");
+                    + " (service type 0x" + Integer.toHexString(r.foregroundType) + ")");
             mNotifications.postFor(captured, r.info.packageName, null, id, notification);
         } else {
             SystemServer.log("setServiceForeground " + r + ": background"
