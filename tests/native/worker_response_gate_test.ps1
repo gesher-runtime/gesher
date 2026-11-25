@@ -102,10 +102,21 @@ function OrderingFixture {
 }
 $script:checks = 0
 function Check([string]$Name, [string]$Output, [int]$ExitCode, [int]$Failures) {
-  $script:failed = 0; $script:probeOutput = $Output; $script:probeExit = $ExitCode
-  & { . $gate } *> $null
-  if ($script:failed -ne $Failures) { throw "$Name failures=$script:failed expected=$Failures" }
-  $script:checks++
+  # RunTimed models a native process by setting global LASTEXITCODE. Keep that
+  # injected status inside this fixture, including when an assertion throws.
+  # Actions appends an exit using LASTEXITCODE after invoking this script.
+  $priorExitVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+  $hadPriorExit = $null -ne $priorExitVariable
+  $priorExitValue = if ($hadPriorExit) { $priorExitVariable.Value } else { $null }
+  try {
+    $script:failed = 0; $script:probeOutput = $Output; $script:probeExit = $ExitCode
+    & { . $gate } *> $null
+    if ($script:failed -ne $Failures) { throw "$Name failures=$script:failed expected=$Failures" }
+    $script:checks++
+  } finally {
+    if ($hadPriorExit) { $global:LASTEXITCODE = $priorExitValue }
+    else { Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue }
+  }
 }
 try {
   $scope = ScopeFixture

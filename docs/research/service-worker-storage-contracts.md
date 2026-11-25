@@ -118,6 +118,63 @@ it. The prepared synthetic-response bridge rejects bodies larger than 64 MiB
 instead of truncating them; unrestricted streaming needs a separate design and
 runtime validation before worker support can be claimed.
 
+#### Response streaming and cancellation boundary
+
+The reviewed SDK `1.0.4258.31` documents an additional precondition in
+`ICoreWebView2WebResourceResponse::get_Content`: all response bytes must already
+be available when the request deferral completes. The same rule appears in
+[Microsoft's response-content reference](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2webresourceresponse?view=webview2-1.0.4258.31#get_content).
+A ring buffer that receives future bytes after `Complete` does not satisfy that
+documented contract. Making the COM stream agile or reading on a background
+thread does not remove the precondition.
+
+The current inert transport also has explicit implementation limits:
+
+- [Java dispatch](../../app/java/com/gesher/app/webview/GesherServiceWorkers.java)
+  drains the application's stream on a shared two-thread request pool, rejects
+  more than 64 MiB and submits one final `byte[]` after EOF.
+- [JNI](../../compat/webview/webview_jni.cc) copies that final array into a native
+  vector. There is no begin/chunk/credit/EOF/error/cancel protocol.
+- [Native request ownership](../../compat/webview/webview_host.cc) ends when the
+  first response consumes its pending request ID and completes the deferral.
+  Timeout and cancellation remove native pending requests without notifying
+  the Java producer; there is no continuing body-producer registry or lease.
+- [OwnedStream](../../compat/webview/owned_stream.h) exposes immutable, fully
+  materialized bytes with accurate size and independent clone cursors. Its
+  thread-safe ownership does not establish future-byte production or backpressure.
+
+A complete owned file spool could bound memory and remove the finite 64 MiB
+limit, but it would still wait for EOF. It would not establish progressive
+delivery, nor make a slow or nonterminating application stream complete. The
+actual first-read/mid-body fault results above also show that merely returning
+an `IStream::Read` error did not produce the required worker failure on the two
+tested runtimes. The pre-response URI-denial experiment supplies no evidence
+about a failure after response delivery has begun.
+
+The Java try-with-resources ordering has a separate cancellation limit. If a
+read throws, `close()` executes before the outer catch submits failure; a blocked
+close can therefore delay failure indefinitely. After a successful read, the
+native response is submitted before close, but a blocked close still occupies
+one of the two request threads. A future transport could wake native consumers,
+reject late chunks and schedule one close outside native locks and the STA.
+It cannot assume that arbitrary application `read()` or `close()` methods will
+terminate; attempted native cancellation and observed Java close completion
+must be recorded separately.
+
+Before a supported progressive route could be exposed, real ART/Java/JNI/native/
+WebView2 acceptance would need the following independent observations:
+
+| Case | Required observation |
+| --- | --- |
+| Progress before EOF | The producer waits for a real consumer acknowledgement of a prefix before emitting the tail; the worker must consume that prefix before EOF. |
+| Large and unknown-length bodies | Exact bytes beyond 64 MiB, preserved metadata and measured Java/native buffer high-water marks independent of total length. |
+| Read failure | Actual initial-fetch/body-read errors before the first byte and after a consumed prefix, compared with Android; no successful truncated body. |
+| Blocked application close | Native cancellation and unrelated requests complete while close is blocked; release the fixture latch and verify exactly-once eventual close. |
+| Concurrency and late activity | Same-URL bodies remain independent; cancellation, duplicate EOF, late chunks and stale request generations cannot revive another body. |
+| Owner and browser shutdown | Actual consumer abort, blocked-read wakeup and ownership cleanup without joining arbitrary application code from the STA. |
+
+No such new transport or engine capability is claimed by the current source.
+
 #### Independent check of a CDP alternative
 
 An independent review inspected both the pinned SDK 1.0.4258.31 and stable

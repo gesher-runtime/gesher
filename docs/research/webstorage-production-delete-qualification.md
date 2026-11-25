@@ -69,6 +69,15 @@ observe that exact nonzero exit and an actual probe frame before trusting the
 diagnostic. The real storage operation still runs in its own process with the
 original checks. No production behavior or acceptance rule has been relaxed.
 
+The first diagnostic build at `4178e10814949f5f9a13fd709c91473ffb9de835`
+passed in [run 45600590577](https://github.com/gesher-runtime/gesher/actions/runs/45600590577).
+Both Windows jobs then stopped in the preceding PowerShell worker log-fixture
+step: its 44 scenarios completed, but the simulated exit status from the final
+negative case escaped into the outer command invocation. Consequently neither
+the native fault control nor the actual storage/worker qualification step ran.
+The fixture runner must restore its caller's native exit-status state while
+preserving assertion failures; this failed run supplies no new native evidence.
+
 ## State and operations
 
 The fixture first writes and closes all five baseline databases: A first-party,
