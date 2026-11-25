@@ -83,20 +83,28 @@ examples. It is generic: every process, no package or packer is singled out.
   could not be written. Reads are unaffected.
 - **Read-only by any other way to it.** Linux lets a symbolic link point
   into `/system` and refuses writes through it; so does Gesher. By file
-  identity (volume serial number and file index, `IsFileInfo`):
+  identity (`FileIdInfo`: 64-bit volume serial number and 128-bit file ID,
+  unique on ReFS and Dev Drives as on NTFS; serial number and file index on a
+  file system without it):
   - `OpenFile` refuses a writing open of the file under any name with
     `EROFS`. A process that uses the name holds the file open without sharing
     write access for its lifetime, and a mapped file cannot be truncated, so
-    such opens fail before the file changes; the identity check also turns
-    those failures into `EROFS`.
+    such opens fail before the file changes; the identity check turns those
+    failures into `EROFS` at the first sharing violation, without the retries
+    that wait out a brief open of another file.
+  - `chmod` and `utimes`/`utimensat` through a symbolic or hard link to the
+    file are `EROFS` (`AT_SYMLINK_NOFOLLOW` on a symbolic link changes the
+    link, which is not the file).
   - `fchmod`, `futimens` (and `utimensat(fd, "", AT_EMPTY_PATH)`),
     `fsetxattr` and `fremovexattr` on an fd of the file are `EROFS`, as are
     the path xattr calls through a link.
-  - `readlink` of a link made to `/system/bin/linker64` gives
-    `/system/bin/linker64` (the link stores the file's Windows path), and
-    `realpath` of the link gives the name as well.
-  A process that never used the name and finds no file has nothing to
-  protect, and does not look again. The file on disk has no read-only
+  - `readlink` of a link whose own target is the file (made to
+    `/system/bin/linker64`; it stores the file's Windows path) gives
+    `/system/bin/linker64`; a link to such a link reads as that link.
+    `realpath` of any of them gives the name.
+  A process that never used the name looks for the file once, without
+  writing it, and again when a write is refused for sharing (another process
+  made the file since and holds it). The file on disk has no read-only
   attribute, so ordinary cleanups of Gesher's data directory (the uninstaller,
   `remove_all`) remove it.
 - **No `/system/bin/linker`.** Gesher has no 32-bit support; a 64-bit-only
@@ -177,7 +185,9 @@ examples. It is generic: every process, no package or packer is singled out.
   changing call above with the file unchanged and not read-only, the maps
   line (name, offset, inode, the mapped bytes, mapped once), `/proc/self/fd`,
   `realpath`, a symbolic link to the name (writes `EROFS`, `readlink` and
-  `realpath` name it), xattr and fd-based changes (`EROFS`), names Linux
+  `realpath` name it), `chmod` and `utimes` through symbolic and hard links,
+  `readlink` of a chain of links, a process that looked before the file
+  existed (`EROFS` once another process holds it), xattr and fd-based changes (`EROFS`), names Linux
   would not resolve, a process without the file (`EROFS` to create), the
   loader refusing the image, the launch `linker64 PROGRAM
   ARGS` prepares (equal to PROGRAM's own), the `ENOEXEC` cases, that
