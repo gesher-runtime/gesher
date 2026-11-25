@@ -578,6 +578,7 @@ struct NtdllCode {
   const BYTE* acquire_shared;
 };
 
+#if defined(__x86_64__) || defined(_M_X64)
 void AddCloneLock(const NtdllCode& code, const BYTE* lock) {
   if (lock < code.low || lock + sizeof(LONG_PTR) > code.high || (reinterpret_cast<uintptr_t>(lock) & 7) != 0) return;
   for (int i = 0; i < g_clone_lock_count; ++i) {
@@ -594,7 +595,6 @@ int32_t Rel32(const BYTE* at) {
   return value;
 }
 
-#if defined(__x86_64__) || defined(_M_X64)
 // The length of an instruction that may stand between the lea and the call
 // (it does not write rcx), or 0.
 int NeutralLength(const BYTE* at) {
