@@ -9,9 +9,12 @@ function New-PanelView([ValidateSet('dashboard', 'confirm', 'message')] [string]
     finally { $reader.Close() }
     # Object resources reach template instances too, without parsing translated
     # braces, ampersands, tabs or Hebrew as XML or markup extensions.
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($match in [regex]::Matches($source, '\{DynamicResource Text_([A-Za-z0-9_]+)\}')) {
         $key = $match.Groups[1].Value
-        $view.Resources["Text_$key"] = [string](Get-GesherText $key)
+        if ($seen.Add($key)) {
+            $view.Resources["Text_$key"] = [string](Get-GesherText $key)
+        }
     }
     foreach ($key in $Resources.Keys) { $view.Resources[$key] = $Resources[$key] }
     return $view
