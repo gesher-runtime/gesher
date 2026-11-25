@@ -534,14 +534,13 @@ public final class KeystoreAuthorization implements KeystoreOperations {
         binding.id = random(16);
         binding.salt = random(32);
         binding.name = NAME_PREFIX + hex(binding.id);
-        HelloKeyBackend.Result created = mBackend.create(binding.name, pid);
-        if (created.status != HelloKeyBackend.SUCCESS) return enrollFailure(created.status);
-        binding.helloPublic = created.data;
-        boolean kept = false;
-        try {
+        try (HelloKeyBackend.Creation creation = mBackend.create(binding.name, pid)) {
+            HelloKeyBackend.Result created = creation.result;
+            if (created.status != HelloKeyBackend.SUCCESS) return enrollFailure(created.status);
+            binding.helloPublic = created.data;
             CountDownLatch done = new CountDownLatch(1);
             HelloKeyBackend.Result[] signed = new HelloKeyBackend.Result[1];
-            mBackend.sign(binding.name, pid, message(binding), result -> {
+            HelloKeyBackend.Operation signing = mBackend.sign(binding.name, pid, message(binding), result -> {
                 signed[0] = result;
                 done.countDown();
             });
@@ -549,6 +548,7 @@ public final class KeystoreAuthorization implements KeystoreOperations {
                 done.await();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                signing.cancel();
                 return FAILED;
             }
             if (signed[0].status != HelloKeyBackend.SUCCESS) return enrollFailure(signed[0].status);
@@ -570,6 +570,10 @@ public final class KeystoreAuthorization implements KeystoreOperations {
             binding.sealedPrivate = gcm.doFinal(pair.getPrivate().getEncoded());
             synchronized (mLock) {
                 store(binding);
+                // The native creation keeps its bounded cleanup owner until the
+                // first signature and binding-file write both succeeded. Every earlier
+                // return or exception rejects it through Creation.close().
+                creation.commit();
                 mLoaded = true;
                 mBinding = binding;
                 // The user has just confirmed with Windows Hello: a real confirmation.
@@ -577,13 +581,10 @@ public final class KeystoreAuthorization implements KeystoreOperations {
                 mUnlockedAt = mClock.getAsLong();
                 mLiveAt = mUnlockedAt;
             }
-            kept = true;
             return OK;
         } catch (GeneralSecurityException | IOException e) {
             log("enrolling the keystore binding failed: " + e);
             return FAILED;
-        } finally {
-            if (!kept) mBackend.delete(binding.name);
         }
     }
 
