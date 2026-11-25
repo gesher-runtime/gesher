@@ -1,0 +1,93 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+package com.gesher.server;
+
+import android.os.RemoteException;
+import android.view.inputmethod.CursorAnchorInfo;
+import com.android.internal.inputmethod.IBooleanListener;
+import com.android.internal.inputmethod.IConnectionlessHandwritingCallback;
+import com.android.internal.inputmethod.IInputMethodClient;
+
+/** The production callback-taking handwriting methods of InputMethodManagerService, on a JVM. */
+public final class HandwritingCallbackHost {
+    static final int CONNECTIONLESS_HANDWRITING_ERROR_UNSUPPORTED = 1;
+
+    /** The IInputMethodManager methods the production section overrides. */
+    private interface Contract {
+        void startConnectionlessStylusHandwriting(IInputMethodClient client, int userId,
+                CursorAnchorInfo cursorAnchorInfo, String delegatePackageName,
+                String delegatorPackageName, IConnectionlessHandwritingCallback callback);
+
+        void acceptStylusHandwritingDelegationAsync(IInputMethodClient client, int userId,
+                String delegatePackageName, String delegatorPackageName, int flags,
+                IBooleanListener callback);
+    }
+
+    private static final class Service implements Contract {
+        // PRODUCTION_HANDWRITING_METHODS
+    }
+
+    private static final class Connectionless implements IConnectionlessHandwritingCallback {
+        int errors, results, error = -1;
+        RemoteException failure;
+        public void onResult(CharSequence text) { results++; }
+        public void onError(int code) throws RemoteException {
+            errors++;
+            error = code;
+            if (failure != null) throw failure;
+        }
+    }
+
+    private static final class Results implements IBooleanListener {
+        int results;
+        boolean last = true;
+        RemoteException failure;
+        public void onResult(boolean value) throws RemoteException {
+            results++;
+            last = value;
+            if (failure != null) throw failure;
+        }
+    }
+
+    private static void check(boolean value, String message) {
+        if (!value) throw new AssertionError(message);
+    }
+
+    public static void main(String[] args) throws Exception {
+        Service service = new Service();
+        for (boolean delegated : new boolean[] {false, true}) {
+            String delegate = delegated ? "fixture.delegate" : null;
+            String delegator = delegated ? "fixture.delegator" : null;
+
+            Connectionless first = new Connectionless();
+            service.startConnectionlessStylusHandwriting(null, 0, null, delegate, delegator, first);
+            check(first.errors == 1 && first.error == CONNECTIONLESS_HANDWRITING_ERROR_UNSUPPORTED
+                    && first.results == 0, "unsupported error exactly once, no fabricated text");
+
+            // A callback's RemoteException keeps propagating as a runtime failure (AOSP contract).
+            Connectionless failed = new Connectionless();
+            failed.failure = new RemoteException("fixture callback is gone");
+            try {
+                service.startConnectionlessStylusHandwriting(null, 0, null, delegate, delegator, failed);
+                throw new AssertionError("callback RemoteException must propagate");
+            } catch (RuntimeException expected) {
+                check(expected.getCause() == failed.failure, "original RemoteException is the cause");
+            }
+            check(failed.errors == 1, "failed callback was told once, not retried");
+
+            // A missing callback has nobody to notify and must not be a NullPointerException.
+            service.startConnectionlessStylusHandwriting(null, 0, null, delegate, delegator, null);
+
+            Results accepted = new Results();
+            service.acceptStylusHandwritingDelegationAsync(null, 0, "d", "r", 0, accepted);
+            check(accepted.results == 1 && !accepted.last, "async delegation completes once with false");
+
+            Results gone = new Results();
+            gone.failure = new RemoteException("fixture listener is gone");
+            service.acceptStylusHandwritingDelegationAsync(null, 0, "d", "r", 0, gone);
+            check(gone.results == 1 && !gone.last, "dead listener told once and swallowed");
+
+            service.acceptStylusHandwritingDelegationAsync(null, 0, "d", "r", 0, null);
+        }
+        System.out.println("HandwritingCallbackHost passed: null callbacks, dead callbacks");
+    }
+}

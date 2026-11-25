@@ -7,6 +7,7 @@
 
 #define EGL_NO_PLATFORM_SPECIFIC_TYPES 1
 #include "egl_child_surface.h"
+#include "display_refresh.h"
 #include "egl_readback_layout.h"
 #include "gpu_keepalive.h"
 
@@ -157,6 +158,7 @@ struct Child {
   std::thread* thread = nullptr;
   int helper_width = 0, helper_height = 0;
   std::chrono::steady_clock::time_point last_post{};
+  DisplayRefresh refresh;
   EGLContext last_context = EGL_NO_CONTEXT;
   bool interval_zero = false;  // ANGLE's swap interval set to 0 for it
   bool reverse_rows = false;
@@ -449,10 +451,11 @@ bool ChildSurfaceBeforeSwap(EGLDisplay display, EGLSurface surface) {
     }
   }
   post_site.Add(gesher::perf::Now() - post_start);
-  // Paced as a 60 Hz display would (the hidden swap chain is not).
-  static gesher::perf::Site pace_site("EGL child surface: 60 Hz pacing wait (count: ms late)");
+  // The hidden swap chain has no useful vsync. Pace to the queried host mode,
+  // with a 60 Hz fallback when Windows cannot report a display frequency.
+  static gesher::perf::Site pace_site("EGL child surface: display pacing wait (count: ms late)");
   auto now = std::chrono::steady_clock::now();
-  auto next = c->last_post + std::chrono::microseconds(16667);
+  auto next = c->last_post + c->refresh.Period(c->helper, now);
   const int64_t pace_start = gesher::perf::Now();
   if (now < next) WaitUntil(next);
   c->last_post = std::chrono::steady_clock::now();
