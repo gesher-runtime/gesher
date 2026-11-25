@@ -80,7 +80,11 @@ public final class CameraService extends ICameraService.Default {
     private CameraService() {
     }
 
-    /** The devices, found on first use (not when the process starts). */
+    /**
+     * The devices, found on first use (not when the process starts), and last the selected-
+     * image camera while the Control Center's image-picker setting is on
+     * ({@link CameraImageSource}; the setting is followed as it changes).
+     */
     List<WindowsCamera.Device> devices() {
         List<WindowsCamera.Device> devices = mDevices;
         if (devices == null) {
@@ -92,7 +96,7 @@ public final class CameraService extends ICameraService.Default {
                 devices = mDevices;
             }
         }
-        return devices;
+        return CameraImageSource.withPicker(devices, CameraImageSource.enabled());
     }
 
     static void log(String message) {

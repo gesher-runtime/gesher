@@ -28,6 +28,8 @@
 #include <string>
 #include <utility>
 
+#include <gesher/device_identity.h>
+
 namespace gesher {
 namespace devsvc {
 namespace {
@@ -829,6 +831,11 @@ std::u16string TimeZoneKeyName() {
   DYNAMIC_TIME_ZONE_INFORMATION tz = {};
   if (GetDynamicTimeZoneInformation(&tz) == TIME_ZONE_ID_INVALID) return std::u16string();
   return U16(tz.TimeZoneKeyName);
+}
+
+std::u16string ComputerName() {
+  std::string name = gesher::device_identity::ComputerName();
+  return FromUtf8(name.data(), name.size());
 }
 
 std::u16string IanaZone(const std::u16string& windows_id) {

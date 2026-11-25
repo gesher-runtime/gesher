@@ -170,6 +170,8 @@ public final class SystemServer {
     }
 
     public static void main(String[] args) {
+        // stdout/stderr are system_server.log: no credentials (docs/logging.md).
+        com.gesher.app.LogRedaction.installStandardStreams();
         try {
             run(args);
         } catch (Throwable t) {
@@ -396,9 +398,12 @@ public final class SystemServer {
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
             // One window for the app's tasks, or one each (ADR 0088).
             env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
+            // ProcessList's runtime flags for the app (ptrace: ADR 0093).
+            int runtimeFlags = com.gesher.app.ProcessSpecialization.runtimeFlagsFor(
+                    pkg.applicationInfo(0));
             String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk)));
+                    String.valueOf(targetSdk), "--runtime-flags", String.valueOf(runtimeFlags)));
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
                 return AppSandbox.spawn(command, env, logFile, pkg, packageName,

@@ -297,6 +297,13 @@ target_include_directories(elf_deferred_code_test PRIVATE compat/elf)
 target_compile_options(elf_deferred_code_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(elf_deferred_code_test PRIVATE gesher_elf)
 
+# Gesher's ELF loader as /system/bin/linker64 (ADR 0096): the file, its
+# /proc/self/maps line and exec of linker64, through gesher-base and exec_spawn.
+add_executable(system_linker_test tests/native/system_linker_test.cc)
+target_compile_options(system_linker_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(system_linker_test PRIVATE gesher_exec_spawn gesher_elf)
+add_dependencies(system_linker_test gesher-exec)
+
 # Live CRT environment storage after host and guest mutations (exec4).
 add_executable(exec4_environment_test tests/exec/environment-host-test.cc)
 target_compile_options(exec4_environment_test PRIVATE -Wall -Wextra -Werror)
