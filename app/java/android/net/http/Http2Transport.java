@@ -8,8 +8,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.*;
 import java.util.*;
-import java.util.zip.GZIPInputStream;
-import java.util.zip.InflaterInputStream;
 
 /** A narrow adapter to AOSP OkHttp's HTTP/2 framing already in core-libart.jar.
  * Like Network's HttpURLConnectionFactory adapter, reflection keeps this out of
@@ -20,6 +18,7 @@ final class Http2Transport implements Closeable {
     private static final String IO=HTTP+"okio.";
     private final Http2SessionPool pool;
     private final boolean privatePool;
+    private final boolean brotliEnabled;
     private Http2SessionPool.Session lease;
     private Http2SessionPool.Route route;
     private int operations;
@@ -27,6 +26,7 @@ final class Http2Transport implements Closeable {
     private volatile boolean closed;
     private volatile InputStream decodedBody;
     private String responseEncoding="";
+    private volatile long receivedBytes;
     private final Class<?> bufferClass=Class.forName(IO+"Buffer");
     private final Class<?> sourceClass=Class.forName(IO+"Source");
     private final Class<?> sinkClass=Class.forName(IO+"Sink");
@@ -45,10 +45,13 @@ final class Http2Transport implements Closeable {
     private final Method sinkFlush=sinkClass.getMethod("flush");
     private final Method sinkClose=sinkClass.getMethod("close");
 
-    Http2Transport() throws ReflectiveOperationException { this(new Http2SessionPool(), true); }
-    Http2Transport(Http2SessionPool pool) throws ReflectiveOperationException { this(pool, false); }
-    private Http2Transport(Http2SessionPool pool, boolean privatePool) throws ReflectiveOperationException {
-        this.pool=pool; this.privatePool=privatePool;
+    Http2Transport() throws ReflectiveOperationException { this(new Http2SessionPool(), true, false); }
+    Http2Transport(Http2SessionPool pool) throws ReflectiveOperationException { this(pool, false, false); }
+    Http2Transport(Http2SessionPool pool, boolean brotliEnabled) throws ReflectiveOperationException {
+        this(pool, false, brotliEnabled);
+    }
+    private Http2Transport(Http2SessionPool pool, boolean privatePool, boolean brotliEnabled) throws ReflectiveOperationException {
+        this.pool=pool; this.privatePool=privatePool; this.brotliEnabled=brotliEnabled;
     }
     private synchronized void enter() throws IOException {
         if (closed) throw new IOException("Stream closed");
@@ -193,11 +196,9 @@ final class Http2Transport implements Closeable {
         } finally { leave(); }
     }
     void setResponseEncoding(String encoding) throws IOException {
-        if (!encoding.isEmpty() && !encoding.equalsIgnoreCase("identity")
-                && !encoding.equalsIgnoreCase("gzip") && !encoding.equalsIgnoreCase("deflate"))
-            throw new IOException("Unsupported HTTP content encoding");
         responseEncoding=encoding;
     }
+    long receivedBytes() { return receivedBytes; }
     private void initDecodedBody() throws IOException {
         InputStream raw=new InputStream() {
             private final byte[] one=new byte[1];
@@ -213,11 +214,9 @@ final class Http2Transport implements Closeable {
                 catch (Exception e) { throw new IOException("HTTP/2 body read failed",e); }
             }
         };
-        // GZIPInputStream reads its header in the constructor. Do that only in
-        // the body pump, after the response-header callback has been dispatched:
-        // a duplex peer may wait for a write from that callback before its body.
-        InputStream decoded=responseEncoding.equalsIgnoreCase("gzip") ? new GZIPInputStream(raw)
-                : new InflaterInputStream(raw);
+        // Decoder initialization and all input reads happen only in the body
+        // pump, after the application's response-header callback was dispatched.
+        InputStream decoded=ContentDecoding.wrap(raw,responseEncoding,brotliEnabled);
         synchronized (this) {
             if (closed) { decoded.close(); throw new IOException("Stream closed"); }
             decodedBody=decoded;
@@ -236,6 +235,7 @@ final class Http2Transport implements Closeable {
                 if (part<=0) throw new EOFException("HTTP/2 buffer ended before source bytes");
                 copied+=part;
             }
+            receivedBytes+=copied;
             return copied;
         } catch (Exception | Error failure) {
             // A failing Source can have appended bytes before throwing. Only
@@ -249,8 +249,7 @@ final class Http2Transport implements Closeable {
         if (count==0) return 0;
         enter();
         try {
-        if (decodedBody==null && (responseEncoding.equalsIgnoreCase("gzip")
-                || responseEncoding.equalsIgnoreCase("deflate"))) initDecodedBody();
+        if (decodedBody==null && !responseEncoding.isEmpty()) initDecodedBody();
         if (decodedBody==null) return readRaw(bytes,offset,count);
         return decodedBody.read(bytes,offset,count);
         } finally { leave(); }

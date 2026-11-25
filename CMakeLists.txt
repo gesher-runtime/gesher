@@ -58,6 +58,7 @@ include(cmake/aosp/boringssl.cmake)
 include(cmake/aosp/libcore_native.cmake)
 # Conscrypt's libjavacrypto and compat/net: TLS, Windows' trusted roots (docs/network.md).
 include(cmake/aosp/conscrypt.cmake)
+include(cmake/aosp/brotli.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)

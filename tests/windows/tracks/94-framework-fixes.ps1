@@ -23,13 +23,13 @@ Check 'network: Android HttpEngine requests over real ART and HTTP sockets' {
   $httpEngineOut
 } @('HttpEngineDeviceSmoke passed:')
 
-foreach ($httpCacheTest in @('HttpEngineCacheTest', 'HttpEngineConnectionLifetimeTest', 'HttpEngineReadBufferTest')) {
+foreach ($httpCacheTest in @('HttpEngineCacheTest', 'HttpEngineConnectionLifetimeTest', 'HttpEngineReadBufferTest', 'android.net.http.HttpEngineBrotliTest')) {
   $httpCacheOut = FixesRun ($dvmFixes + $httpCacheTest) 90
   $httpCacheCode = $LASTEXITCODE
   Check "network: $httpCacheTest real-provider contracts on ART" {
     if ($httpCacheCode -ne 0) { throw "HTTP engine contract failed: $httpCacheOut" }
     $httpCacheOut
-  } @("${httpCacheTest} passed:")
+  } @("$($httpCacheTest.Split('.')[-1]) passed:")
 }
 
 foreach ($httpPolicyMode in @('ordinary', 'global-enabled', 'global-disabled')) {
@@ -48,7 +48,7 @@ Check 'network: HTTP/2 full duplex, direct buffers, flush and gRPC trailers' {
   $http2Out
 } @('Http2DeviceSmoke passed:')
 
-$http2ContractModes = @('gzip-headers', 'early-read', 'readonly-write', 'large', 'cancel', 'disabled', 'sessions')
+$http2ContractModes = @('gzip-headers', 'brotli', 'brotli-headers', 'brotli-cancel', 'early-read', 'readonly-write', 'large', 'cancel', 'disabled', 'sessions')
 foreach ($http2ContractMode in $http2ContractModes) {
   $http2ContractOut = FixesRun ($dvmFixes + 'Http2DeviceSmoke' + $http2ContractMode) 45
   $http2ContractCode = $LASTEXITCODE
