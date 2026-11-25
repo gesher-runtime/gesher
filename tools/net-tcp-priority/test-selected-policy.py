@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '64ec040e6f1b7e038175916e1efffdf96113f020ef90e2f357e5ad3e088720a5'
+OFD_QUALIFICATION_SHA256 = 'caeea5f5dd515a2522011a0a1f0dc5271dadfa8929e87ac1393f668bf096e49b'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -467,7 +467,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # neither this transition nor a passing source check qualifies native execution.
 STORAGE_POLICY_QUALIFICATION='tools/net-tcp-priority/qualified/storage-policy-source.json'
 STORAGE_POLICY_PATCH='tools/net-tcp-priority/qualified/storage-policy-source.patch'
-STORAGE_POLICY_QUALIFICATION_SHA256='80311c4e30c7e551ab08d09028fb57e641bb1e05ac44b70c5803ad7adde10a43'
+STORAGE_POLICY_QUALIFICATION_SHA256='1274a14dce7607f2ea1a6eea833f4036a48a8fe306b58e799cb04080e613cc41'
 STORAGE_POLICY_BASELINE='43e210f4eb7505b8e118044e28d4870433bbb23f'
 STORAGE_POLICY_PATHS=[
  'compat/art/dalvikvm_main.cc',
