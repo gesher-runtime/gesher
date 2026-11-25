@@ -80,6 +80,43 @@ jobs:
           python3 tools/ci/test_release_workflows.py
           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
           python3 -m unittest discover -s tools/ci -p test_prune_caches.py
+  # The hosted Server images can expose NLM without its cost backend. Their
+  # contracts below prove that absence independently and check failed-start
+  # cleanup. This client job unconditionally requires the real subscription.
+  network-cost-client:
+    name: Windows client network cost
+    needs: [source-identity]
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+      - name: Verify the compiler targets native ARM64
+        shell: pwsh
+        run: |
+          if ($env:VSCMD_ARG_TGT_ARCH -ne 'arm64') { throw 'Windows client contracts require the ARM64 compiler target' }
+      - name: Build production network cost policy contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
+      - name: Unknown cost never grants unmetered capability
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-policy-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Production cost classification failed' }
+      - name: Build unchanged strict connection cost subscription test
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc /Fe:cost-events-test.exe ole32.lib uuid.lib
+      - name: Require real Windows client subscription and unsubscription
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-events-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Required Windows client cost subscription failed' }
   # Short Windows host contracts share one runner per OS: separate jobs each
   # paid for a runner, checkout and queue slot to run a minute of checks.
   # Every check step runs even after an earlier one fails, so one failure
@@ -261,6 +298,26 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
+      - name: Build production network cost policy contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
+      - name: Unknown cost never grants unmetered capability
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-policy-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Production cost classification failed' }
+      - name: Build SDK-verified Server cost capability and lifecycle contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_server_test.cc /Fe:cost-events-server-test.exe ole32.lib uuid.lib
+      - name: Verify actual Server cost support and failed-start handle reclamation
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-events-server-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Server cost capability or lifecycle checks failed' }
       - name: MediaStore provider over real SQLite and NTFS paths, file-move rollback and crash recovery
         if: ${{ !cancelled() }}
         shell: bash
@@ -674,6 +731,8 @@ jobs:
           python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
+          python3 tools/test_webview_document_script.py --sanitize
+          python3 tools/test_webview_popup_script.py --sanitize
           python3 tools/test_uia_snapshot_contracts.py --sanitize
           python3 tools/test_running_tasks_contracts.py
 
@@ -2857,7 +2916,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job
