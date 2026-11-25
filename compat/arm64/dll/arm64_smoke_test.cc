@@ -134,15 +134,16 @@ int main(int argc, char** argv) {
           "missing ARM64 DNS bridge must fail with ENOSYS");
   }
 
-  // The guest's process state cannot be cloned by the host's vfork-style shim.
-  // Call the actual guest bindings: both must return pid_t(-1), set EAGAIN and
-  // leave the caller running. This host supplies no fallback fork function.
-  for (const char* name : {"fork", "vfork"}) {
+  // Guest fork clones the process through the bionic shim's __gesher_fork
+  // (ADR 0092; tests/native/arm64_fork_exec.c runs real children). This host
+  // has no shim: the actual guest bindings must return pid_t(-1) with ENOSYS
+  // and leave the caller running, never fabricate a child.
+  for (const char* name : {"fork", "vfork", "_Fork"}) {
     void* fn = api->guest_symbol(name);
     g_test_errno = 0;
     uint64_t result = fn ? api->call(fn, nullptr, 0) : 0;
-    Check(name, fn && static_cast<int32_t>(result) == -1 && g_test_errno == 11,
-          "guest process cloning must fail with EAGAIN");
+    Check(name, fn && static_cast<int32_t>(result) == -1 && g_test_errno == 38,
+          "guest fork without the shim's clone must fail with ENOSYS");
   }
 
   // `arm64_smoke_test crash-segv|crash-ill|crash-jump`: a faulting guest, which

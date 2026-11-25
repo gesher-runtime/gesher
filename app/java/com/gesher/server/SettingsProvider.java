@@ -183,6 +183,17 @@ final class SettingsProvider extends ContentProvider {
         synchronized (provider) { return provider.mTables.get(SECURE).get(name); }
     }
 
+    /**
+     * Sets (or, for null, removes) a Settings.Secure value from the system server: values
+     * that mirror a Windows setting (CaptioningBridge). Observers are notified.
+     */
+    static void putSecure(String name, String value) {
+        SettingsProvider p = sInstance;
+        if (p == null) return;
+        if (value == null) p.remove(SECURE, name);
+        else p.put(SECURE, name, value, false);
+    }
+
     /** Server-local numeric global setting, with the same malformed-value fallback as Settings. */
     static long globalLong(String name, long defaultValue) {
         SettingsProvider provider = sInstance;
@@ -221,6 +232,8 @@ final class SettingsProvider extends ContentProvider {
     /**
      * Adds a Settings.Secure default from the system server: the value when the setting
      * has none, as a default row (a value written to it later replaces it, and is kept).
+     * Text-to-speech: {@code tts_default_synth} once Gesher's engine is installed
+     * (TtsEngineApp, docs/tts.md).
      * Speech recognition: {@code voice_recognition_service} once Gesher's recognition
      * service is installed (SttEngineApp, docs/speech-recognition.md).
      */
