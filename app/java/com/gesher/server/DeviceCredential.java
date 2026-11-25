@@ -99,7 +99,8 @@ final class DeviceCredential {
             // FEATURE_SECURE_LOCK_SCREEN for the whole run: ask again before giving up.
             for (int retry = 0; isTransient(answer) && retry < START_RETRIES; retry++) {
                 sleepMs.accept(START_RETRY_MS);
-                answer = backend.availability();
+                // The ordinary five-second cache outlasts every startup retry.
+                answer = backend.refreshAvailability();
             }
             mStartState = answer;
             remember(answer);
