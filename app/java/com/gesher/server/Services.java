@@ -233,6 +233,10 @@ public final class Services {
         LocationManagerService location = new LocationManagerService(pm, am);
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 location).asBinder());
+        // CountryDetector: Windows' "Country or region" as the locale source
+        // (CountryDetectorService); no network, SIM or location-based country.
+        services.put(Context.COUNTRY_DETECTOR, StandIn.of(android.location.ICountryDetector.class,
+                new CountryDetectorService(WindowsCountry.create())).asBinder());
         services.put(com.gesher.net.IWindowsWifi.NAME,
                 new WifiService(am, atm, pm, () -> location.isLocationEnabledForUser(0)));
         // Bluetooth (docs/bluetooth.md): Windows' radio, its broadcasts and discovery. The
