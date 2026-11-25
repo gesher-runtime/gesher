@@ -184,8 +184,8 @@ Not reported:
 | `android.hardware.location`, `.location.network` | always | LocationManagerService, Windows location with IP fallback |
 | `android.hardware.location.gps` | Windows has a GNSS receiver (`WindowsLocation.hasGnssReceiver`) | the gps provider gets its fixes |
 | `android.hardware.bluetooth`, `.bluetooth_le` | Windows radio / LE support | docs/bluetooth.md |
-| `android.hardware.camera.any` | a Windows camera | CameraService (docs/devices.md) |
-| `android.hardware.camera` | a camera explicitly configured as rear-mounted (`GESHER_CAMERA_REAR_ID`) | as above; Camera2 and the legacy API report it `LENS_FACING_BACK` |
+| `android.hardware.camera.any` | a Windows camera, or the selected-image camera while the Control Center's "Allow choosing an image from the PC instead of taking a photo" setting is on at the device's start (CONTRIBUTING.md, PR #487) | CameraService (docs/devices.md) |
+| `android.hardware.camera` | a camera explicitly configured as rear-mounted (`GESHER_CAMERA_REAR_ID`), or the selected-image camera ("Gesher Image Picker", a rear camera without autofocus) while that setting is on | as above; Camera2 and the legacy API report it `LENS_FACING_BACK` |
 | `android.hardware.camera.front` | a camera not configured as rear: a PC's camera faces the user (maintainer-approved desktop default, CONTRIBUTING.md) | as above; Camera2 and the legacy API report it `LENS_FACING_FRONT` (`CAMERA_FACING_FRONT`) |
 | `android.hardware.camera.autofocus` | the rear (`android.hardware.camera`) camera's driver really focuses automatically (`WindowsCamera.Device.autofocus`); a front camera's autofocus does not add it | as above |
 | `android.hardware.ram.normal` / `.ram.low` | whichever `ActivityManager.isLowRamDevice()` says (`ro.config.low_ram` is unset: normal) | as AOSP's SystemConfig |

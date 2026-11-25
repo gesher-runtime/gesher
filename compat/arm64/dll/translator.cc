@@ -2157,19 +2157,105 @@ void StartProfiler() {
   });
 }
 
+// The memory at an address no module or guest library claims: its region
+// (VirtualQuery) and, where the translator can tell, what owns it. Only
+// lock-free checks besides InGuestCode (which the vectored handler already
+// uses): a fault while this thread holds another translator lock must not
+// deadlock the note.
+void PrintRegion(const char* label, uint64_t addr) {
+  MEMORY_BASIC_INFORMATION mbi;
+  if (VirtualQuery(reinterpret_cast<const void*>(addr), &mbi, sizeof(mbi)) == 0) {
+    std::fprintf(stderr, "%sVirtualQuery failed (%lu)\n", label, GetLastError());
+    return;
+  }
+  const char* type = mbi.Type == MEM_IMAGE    ? "image"
+                     : mbi.Type == MEM_MAPPED ? "mapped"
+                     : mbi.Type == MEM_PRIVATE ? "private"
+                                               : "none";
+  const char* state = mbi.State == MEM_COMMIT    ? "commit"
+                      : mbi.State == MEM_RESERVE ? "reserve"
+                                                 : "free";
+  std::fprintf(stderr,
+               "%sregion 0x%llx+0x%llx, allocation 0x%llx, %s %s, protect 0x%lx (allocated 0x%lx)\n",
+               label, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(mbi.BaseAddress)),
+               static_cast<unsigned long long>(mbi.RegionSize),
+               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(mbi.AllocationBase)),
+               state, type, mbi.Protect, mbi.AllocationProtect);
+  if (mbi.State != MEM_COMMIT) return;
+  const char* owner = nullptr;
+  if (InGuestCode(addr)) {
+    owner = "guest code or a guest trampoline page (the host never runs these)";
+  } else if (mbi.Type == MEM_PRIVATE && mbi.AllocationProtect == PAGE_EXECUTE_READWRITE &&
+             (mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)) != 0 &&
+             (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0) {
+    // A host_entry stub (MakeHostEntry): 24-byte slots from the start of a
+    // 64 KiB PAGE_EXECUTE_READWRITE allocation, each "mov r10, fn; mov rax,
+    // gesher_guest_entry_shim; jmp rax".
+    auto alloc = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
+    auto region = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+    uintptr_t start = alloc + (addr - alloc) / kEntryStub * kEntryStub;
+    uint64_t shim = 0;
+    // Read the slot only inside the committed region that holds `addr`.
+    if (start + kEntryStub <= alloc + 0x10000 && start >= region &&
+        start + kEntryStub <= region + mbi.RegionSize) {
+      const auto* slot = reinterpret_cast<const uint8_t*>(start);
+      if (slot[0] == 0x49 && slot[1] == 0xBA && slot[10] == 0x48 && slot[11] == 0xB8) {
+        std::memcpy(&shim, slot + 12, 8);
+      }
+    }
+    owner = shim == reinterpret_cast<uint64_t>(&gesher_guest_entry_shim)
+                ? "a translator host_entry stub (a host call of a guest function)"
+                : "anonymous executable memory: JIT code (the translator's code cache or ART's "
+                  "JIT) or a stub";
+  }
+  if (owner != nullptr) std::fprintf(stderr, "%s%s\n", label, owner);
+}
+
+// Set while this thread writes a note: describe() or the CRT may fault in
+// turn, and a nested fault must not write a note of its own (it would end
+// without the host pc lines and use up the notes).
+thread_local bool t_noting_host_fault = false;
+
 // A fault in host code during a guest -> host call: ART's fatal-signal report
 // that may follow has no registers or backtrace on Windows, so say where the
-// guest was. A note only (ART may still handle the fault); the first few.
+// guest was. A note only (ART may still handle the fault). The first 8 in the
+// process: the limit is per process, not per thread, because a fault storm
+// (a fault ART handles and the code retries) can come from any number of
+// threads, and an app with dozens of threads would otherwise flood stderr;
+// nested faults no longer count, so the first real faults are the ones noted.
 void NoteHostCallFault(const EXCEPTION_RECORD* r, const CONTEXT* c) {
   static std::atomic<int> notes{0};
-  Env* env = t_env_raw;
-  if (env == nullptr || env->host_fn() == nullptr || notes.fetch_add(1) >= 8) return;
   const char* op = r->ExceptionInformation[0] == 0   ? "reading"
                    : r->ExceptionInformation[0] == 1 ? "writing"
                                                      : "executing";
-  std::fprintf(stderr, "gesher arm64: tid %lu: host fault %s 0x%llx in a call from guest code\n",
-               GetCurrentThreadId(), op,
-               static_cast<unsigned long long>(r->ExceptionInformation[1]));
+  if (t_noting_host_fault) {
+    std::fprintf(stderr,
+                 "gesher arm64: tid %lu: (a further host fault %s 0x%llx at host pc 0x%llx while "
+                 "describing the fault above)\n",
+                 GetCurrentThreadId(), op, static_cast<unsigned long long>(r->ExceptionInformation[1]),
+                 static_cast<unsigned long long>(c->Rip));
+    return;
+  }
+  Env* env = t_env_raw;
+  if (env == nullptr || env->host_fn() == nullptr || notes.fetch_add(1) >= 8) return;
+  struct Noting {
+    Noting() { t_noting_host_fault = true; }
+    ~Noting() { t_noting_host_fault = false; }
+  } noting;
+  std::fprintf(stderr,
+               "gesher arm64: tid %lu: host fault %s 0x%llx in a call from guest code, host pc "
+               "0x%llx\n",
+               GetCurrentThreadId(), op, static_cast<unsigned long long>(r->ExceptionInformation[1]),
+               static_cast<unsigned long long>(c->Rip));
+  // What needs no lookup first, so the note says where the fault was even
+  // when a lookup below faults or blocks.
+  HMODULE module = nullptr;
+  if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<LPCSTR>(c->Rip), &module)) {
+    PrintRegion("    host pc        ", c->Rip);
+  }
+  std::fflush(stderr);
   PrintWhere("    host pc        ", c->Rip);
   PrintWhere("    host function  ", reinterpret_cast<uint64_t>(env->host_fn()));
   PrintWhere("    called from    ", env->host_caller());

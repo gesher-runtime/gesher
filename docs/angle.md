@@ -41,6 +41,28 @@ and ES 3.1 contexts are refused. Google Play hides apps whose
   and a context switch between calls resyncs the calling context's state, so
   contexts current on different threads keep their own state, ADR 0089
   section 6), then `ninja libEGL libGLESv2`.
+- **Patches** (`compat/angle/patches/*.patch`): Gesher's fixes to ANGLE's own
+  source, applied in name order by `build-angle.ps1` after `gclient sync`
+  with `git apply --check` first; a patch that does not apply to
+  `ANGLE_COMMIT` fails the build. Each patch's header says why, the sequence
+  it fixes and its upstream status; the patches are under ANGLE's BSD license
+  and listed in `NOTICES.txt`. Moving `ANGLE_COMMIT` means rebasing them.
+  - `0001-forget-last-context-on-destroy.patch` (issue #485):
+    `eglDestroyContext` makes the doomed context current inside
+    `egl::Display::destroyContext` and switches back without
+    `SetContextCurrent`, which resets the display's shared `StateManager11`
+    caches (draw framebuffer, executable, vertex array) without recording a
+    context switch. With `angle_force_context_check_every_call`, the context
+    that made the previous GL call on another thread was then not dirtied
+    and its next draw dereferenced a null `Framebuffer11`
+    (`libGLESv2.dll+0x1ebea2` at this commit: Moovit's MapLibre maps, one GL
+    thread per `GLSurfaceView`). The `DestroyContext` stub now sets the
+    global last context to null, so every context is fully dirtied before
+    its next call. Tests: `tests/native/egl_context_destroy_test.cc` (track
+    40-native-libs, default adapter and WARP) and, through the guest thunks
+    and the arm64 translator, `tests/native2/egl_context_destroy_jni.cpp`
+    (track 44-native2), both from
+    `tests/native/egl_context_destroy_scenarios.h`.
 - **Host synchronization bridge** (`compat/angle/gesher_d3d11_context.cpp`):
   the build adds two private DLL exports for Gesher's EGL fence adapter.
   Synchronization submission executes under ANGLE's global GL mutex, with no

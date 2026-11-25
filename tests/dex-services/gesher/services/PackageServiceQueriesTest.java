@@ -316,13 +316,18 @@ public final class PackageServiceQueriesTest {
         }
         // Cameras: FEATURE_CAMERA for one configured as rear, FEATURE_CAMERA_FRONT for the
         // others (a PC's camera faces the user, CONTRIBUTING.md); none without natives.
+        // While the Control Center's image setting is on, the selected-image camera
+        // (CameraImageSource, a rear camera without autofocus) counts too.
         List<com.gesher.server.WindowsCamera.Device> cameras;
+        boolean picker;
         try {
             cameras = com.gesher.server.WindowsCamera.devices();
+            picker = com.gesher.server.CameraImageFallback.enabled();
         } catch (LinkageError e) {
             cameras = Collections.emptyList();
+            picker = false;
         }
-        boolean rearCamera = false;
+        boolean rearCamera = picker;
         boolean frontCamera = false;
         boolean rearAutofocus = false;
         for (com.gesher.server.WindowsCamera.Device camera : cameras) {
@@ -334,7 +339,8 @@ public final class PackageServiceQueriesTest {
             }
         }
         // FEATURE_CAMERA_AUTOFOCUS: only a rear camera's real autofocus (CameraAutofocusContractTest).
-        require(service.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY, 0) == !cameras.isEmpty()
+        require(service.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY, 0)
+                                == (picker || !cameras.isEmpty())
                         && service.hasSystemFeature(PackageManager.FEATURE_CAMERA, 0) == rearCamera
                         && service.hasSystemFeature(PackageManager.FEATURE_CAMERA_FRONT, 0)
                                 == frontCamera
