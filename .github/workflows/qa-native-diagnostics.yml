@@ -1,4 +1,4 @@
-name: Independent Windows QA
+name: Independent Windows network QA
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  native-diagnostics:
+  network-contracts:
     strategy:
       fail-fast: false
       matrix:
@@ -17,119 +17,73 @@ jobs:
           - os: windows-2022
             msvc_arch: x64
             target_arch: x64
+            contract: server
           - os: windows-2025
             msvc_arch: x64
             target_arch: x64
+            contract: server
           - os: windows-11-arm
             msvc_arch: amd64_arm64
             target_arch: arm64
+            contract: client
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Check out the reviewed caption fix
+      - name: Check out the exact reviewed network checkpoint
         uses: actions/checkout@v4
         with:
-          ref: 86d9ff39c6483ade80c880d6e0457b3737800d21
-          path: captions
-          persist-credentials: false
-      - name: Check out the caption regression baseline
-        uses: actions/checkout@v4
-        with:
-          ref: d1861c8322a690fc4aaae06bd0fc38bf613128d5
-          path: captions-baseline
-          persist-credentials: false
-      - name: Check out the reviewed network fixes
-        uses: actions/checkout@v4
-        with:
-          ref: 03177d669f07aeebc67f6d4a718d9c42778e2326
+          ref: 300a60a87e612ebe365bb275c833ad5b31e28eef
           path: network
           persist-credentials: false
-      - name: Verify the exact source revisions
+      - name: Verify the source revision
         shell: pwsh
         run: |
-          $captionRevision = git -C captions rev-parse HEAD
-          $captionBaseline = git -C captions-baseline rev-parse HEAD
           $networkRevision = git -C network rev-parse HEAD
-          Write-Host "Captions source: $captionRevision"
-          Write-Host "Captions regression baseline: $captionBaseline"
           Write-Host "Network source: $networkRevision"
-          if ($captionRevision -ne '86d9ff39c6483ade80c880d6e0457b3737800d21') { throw 'Unexpected caption source' }
-          if ($captionBaseline -ne 'd1861c8322a690fc4aaae06bd0fc38bf613128d5') { throw 'Unexpected caption regression baseline' }
-          if ($networkRevision -ne '03177d669f07aeebc67f6d4a718d9c42778e2326') { throw 'Unexpected network source' }
+          if ($networkRevision -ne '300a60a87e612ebe365bb275c833ad5b31e28eef') { throw 'Unexpected network source' }
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.msvc_arch }}
-      - name: Verify the compiler target architecture
+      - name: Verify the native compiler target
         shell: pwsh
         run: |
           Write-Host "Compiler target: $env:VSCMD_ARG_TGT_ARCH; runner: $env:RUNNER_ARCH"
           if ($env:VSCMD_ARG_TGT_ARCH -ne '${{ matrix.target_arch }}') { throw 'Unexpected compiler target' }
-      - name: Compile the caption regression against the old reader
-        id: caption_baseline_build
-        shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icaptions-baseline\compat\devices captions-baseline\compat\devices\caption_win.cc captions\tests\captioning\caption_read_test.cc /Fe:caption-baseline-test.exe ole32.lib uuid.lib
-      - name: Confirm the old reader fails the default-style regression
-        if: ${{ !cancelled() && steps.caption_baseline_build.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          $result = & .\caption-baseline-test.exe
-          $code = $LASTEXITCODE
-          $result | Write-Host
-          if ($code -ne 1 -or ($result -join "`n") -notmatch 'FAIL default colors and opacities: Read returns S_OK') {
-            throw 'The baseline did not fail for the expected caption regression'
-          }
-          # GitHub's pwsh epilogue otherwise propagates the expected native exit 1.
-          exit 0
-      - name: Compile the caption regression against the fixed reader
-        id: caption_regression_build
-        if: ${{ !cancelled() }}
-        working-directory: captions
-        shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc tests\captioning\caption_read_test.cc /Fe:caption-read-test.exe ole32.lib uuid.lib
-      - name: Enforce default and explicit style contracts in the fixed reader
-        if: ${{ !cancelled() && steps.caption_regression_build.outcome == 'success' }}
-        working-directory: captions
-        shell: pwsh
-        run: |
-          & .\caption-read-test.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Caption read regression contracts failed' }
-      - name: Compile the caption reader and SDK diagnostics
-        id: caption_build
-        if: ${{ !cancelled() }}
-        working-directory: captions
-        shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc compat\devices\winrt.cc tests\captioning\caption_windows_test.cc /Fe:caption-test.exe ole32.lib uuid.lib
-      - name: Read every Windows SDK caption getter and enforce the bridge contracts
-        if: ${{ !cancelled() && steps.caption_build.outcome == 'success' }}
-        working-directory: captions
-        shell: pwsh
-        run: |
-          & .\caption-test.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Caption contracts failed; inspect SDK getter results above' }
-      - name: Compile the independent Windows SDK subscription diagnostic
-        id: cost_diagnostic_build
-        if: ${{ !cancelled() }}
+      - name: Compile the production cost classification contracts
+        id: policy_build
         working-directory: network
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_diagnostic.cc /Fe:cost-events-diagnostic.exe ole32.lib uuid.lib
-      - name: Compare the production and SDK event sinks without changing network settings
-        if: ${{ !cancelled() && steps.cost_diagnostic_build.outcome == 'success' }}
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
+      - name: Verify unknown, unrestricted, and metered cost transitions
+        if: ${{ !cancelled() && steps.policy_build.outcome == 'success' }}
         working-directory: network
         shell: pwsh
         run: |
-          & .\cost-events-diagnostic.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Network SDK diagnostic could not complete' }
-      - name: Compile the network cost subscription with production Windows defines
-        id: cost_build
-        if: ${{ !cancelled() }}
+          & .\cost-policy-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Production network cost classification failed' }
+      - name: Compile the unchanged strict client subscription contract
+        id: client_build
+        if: ${{ !cancelled() && matrix.contract == 'client' }}
         working-directory: network
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc /Fe:cost-events-test.exe ole32.lib uuid.lib
-      - name: Subscribe and unsubscribe through the actual Network List Manager
-        if: ${{ !cancelled() && steps.cost_build.outcome == 'success' }}
+      - name: Require real client subscription and unsubscription
+        if: ${{ !cancelled() && matrix.contract == 'client' && steps.client_build.outcome == 'success' }}
         working-directory: network
         shell: pwsh
         run: |
           & .\cost-events-test.exe
-          if ($LASTEXITCODE -ne 0) { throw 'Network cost event contracts failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Windows client network cost subscription failed' }
+      - name: Compile the independent Server capability and lifecycle contract
+        id: server_build
+        if: ${{ !cancelled() && matrix.contract == 'server' }}
+        working-directory: network
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_server_test.cc /Fe:cost-events-server-test.exe ole32.lib uuid.lib
+      - name: Verify actual Server support and reclaim failed-start resources
+        if: ${{ !cancelled() && matrix.contract == 'server' && steps.server_build.outcome == 'success' }}
+        working-directory: network
+        shell: pwsh
+        run: |
+          & .\cost-events-server-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Server network cost capability or lifecycle failed' }
