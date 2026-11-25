@@ -446,6 +446,8 @@ jobs:
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
           python3 tools/test_memmem_performance.py --sanitize
+          python3 tools/test_memrchr_contracts.py --sanitize --negative-controls
+          python3 tools/test_memrchr_report.py
           python3 tools/test_bionic_system_contracts.py --sanitize
           python3 tools/test_environment_contracts.py --sanitize
           python3 tools/test_environment_lookup_contracts.py
@@ -454,6 +456,8 @@ jobs:
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
           python3 tools/test_bionic_directory_contracts.py --sanitize
+          python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts
+          python3 tools/test_scandir_report.py
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize

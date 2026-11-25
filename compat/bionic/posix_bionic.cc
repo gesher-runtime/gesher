@@ -228,6 +228,56 @@ using SysvDirCompare = int(BIONIC_SYSV*)(const BionicDirent**, const BionicDiren
 int BIONIC_SYSV Alphasort(const BionicDirent** a, const BionicDirent** b) {
   return std::strcmp((*a)->d_name, (*b)->d_name);
 }
+bool MergeDirectoryEntries(BionicDirent** entries, size_t count, SysvDirCompare compare) {
+  // Optional pointer scratch never changes the C API's allocation-failure
+  // contract. Keep the comparator's errno even when this allocation fails.
+  const int saved_errno = errno;
+  auto** scratch = static_cast<BionicDirent**>(std::malloc(count * sizeof(*entries)));
+  errno = saved_errno;
+  if (scratch == nullptr) return false;
+  BionicDirent** from = entries;
+  BionicDirent** to = scratch;
+  // count is bounded by INT_MAX in ScanDirectory; all width/index arithmetic
+  // and the pointer allocation therefore fit the shim's LP64 size_t.
+  for (size_t width = 1; width < count; width *= 2) {
+    for (size_t begin = 0; begin < count; begin += width * 2) {
+      const size_t middle = count - begin < width ? count : begin + width;
+      const size_t end = count - middle < width ? count : middle + width;
+      size_t left = begin, right = middle;
+      for (size_t out = begin; out < end; ++out) {
+        if (left == middle) to[out] = from[right++];
+        else if (right == end) to[out] = from[left++];
+        else {
+          const BionicDirent* x = from[left];
+          const BionicDirent* y = from[right];
+          to[out] = compare(&x, &y) <= 0 ? from[left++] : from[right++];
+        }
+      }
+    }
+    std::swap(from, to);
+  }
+  if (from != entries) std::memcpy(entries, from, count * sizeof(*entries));
+  std::free(scratch);
+  return true;
+}
+void SortLongDirectory(BionicDirent** entries, size_t count, SysvDirCompare compare) {
+  // Already/nearly sorted directories retain insertion sort and allocate no
+  // scratch. Bound its work before a stable merge on a disordered directory.
+  size_t remaining_swaps = count * 8;
+  for (size_t i = 1; i < count; ++i) {
+    for (size_t j = i; j > 0; --j) {
+      const BionicDirent* x = entries[j - 1];
+      const BionicDirent* y = entries[j];
+      if (compare(&x, &y) <= 0) break;
+      std::swap(entries[j - 1], entries[j]);
+      if (--remaining_swaps == 0) {
+        if (MergeDirectoryEntries(entries, count, compare)) return;
+        // One failed optional allocation resumes the original stable sort.
+        remaining_swaps = SIZE_MAX;
+      }
+    }
+  }
+}
 int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
                   SysvDirCompare compare) {
   if (d == nullptr) return -1;
@@ -277,7 +327,9 @@ int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
     errno = error;
     return -1;  // Leave the caller's output untouched and free the prefix.
   }
-  if (compare != nullptr) {
+  if (compare != nullptr && count >= 128) {
+    SortLongDirectory(entries, count, compare);
+  } else if (compare != nullptr) {
     // Insertion sort through the System V comparator (lists are short).
     for (size_t i = 1; i < count; ++i) {
       for (size_t j = i; j > 0; --j) {
@@ -701,8 +753,42 @@ char* BIONIC_SYSV StpncpyChk(char* d, const char* s, size_t n, size_t dn) {
   if (n > dn) FortifyFailure("stpncpy");
   return Stpncpy(d, s, n);
 }
+// Keep the word loop's register saves out of tiny and near-end searches.
+// Both functions use the guest calling convention, so this can be a tail call.
+__attribute__((noinline))
+void* BIONIC_SYSV MemrchrWords(const uint8_t* p, uint8_t byte, size_t n) {
+  // Read only complete words inside the caller's range. memcpy permits
+  // unaligned input without changing the byte buffer's effective type.
+  constexpr uint64_t ones = UINT64_C(0x0101010101010101);
+  constexpr uint64_t highs = UINT64_C(0x8080808080808080);
+  const uint64_t repeated = ones * byte;
+  while (n >= sizeof(uint64_t)) {
+    n -= sizeof(uint64_t);
+    uint64_t word;
+    std::memcpy(&word, p + n, sizeof(word));
+    const uint64_t different = word ^ repeated;
+    if (((different - ones) & ~different & highs) != 0) {
+      // The zero-byte test is a block predicate, not a position mask:
+      // subtraction can also mark a neighboring 0x01 byte after a zero.
+      for (size_t i = sizeof(word); i != 0; --i) {
+        if (p[n + i - 1] == byte) return const_cast<uint8_t*>(p + n + i - 1);
+      }
+    }
+  }
+  while (n-- > 0) {
+    if (p[n] == byte) return const_cast<uint8_t*>(p + n);
+  }
+  return nullptr;
+}
 void* BIONIC_SYSV Memrchr(const void* s, int c, size_t n) {
   auto p = static_cast<const uint8_t*>(s);
+  if (n >= 2 * sizeof(uint64_t)) {
+    const uint8_t byte = static_cast<uint8_t>(c);
+    for (size_t i = 0; i < sizeof(uint64_t); ++i) {
+      if (p[--n] == byte) return const_cast<uint8_t*>(p + n);
+    }
+    return MemrchrWords(p, byte, n);
+  }
   while (n-- > 0) {
     if (p[n] == static_cast<uint8_t>(c)) return const_cast<uint8_t*>(p + n);
   }
