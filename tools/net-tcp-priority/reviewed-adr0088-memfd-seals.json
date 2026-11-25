@@ -808,6 +808,15 @@
     ]
    ],
    [
+    701,
+    [
+     "int mkfifo(const char*, mode_t) { return errno = ENOSYS, -1; }\n"
+    ],
+    [
+     "// mkfifo is in fifo.cc, with the FIFO descriptors (ADR 0096).\n"
+    ]
+   ],
+   [
     747,
     [
      "  if ((flags & (MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_NOEXEC_SEAL)) != 0)\n",

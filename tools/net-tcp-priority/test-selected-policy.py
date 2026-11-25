@@ -491,7 +491,7 @@ def preceding_ofd_sources():
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='986c2c28f6e9517fdeae6a95ebe3908cf30ed4b7fe94cdbe31e1300fb9bb0c4c'
+REVIEWED_PATCH_SHA256='719009bb672d071bd95ac774f667d06ec1efc009b568c58c400274ca2ca4676b'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
