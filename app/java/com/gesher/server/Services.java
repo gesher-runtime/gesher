@@ -118,6 +118,8 @@ public final class Services {
                 StandIn.of(IActivityManager.class, am).asBinder());
         services.put(Context.ACTIVITY_TASK_SERVICE,
                 StandIn.of(IActivityTaskManager.class, atm).asBinder());
+        AlertWindowPolicy alerts = new AlertWindowPolicy(pm, atm);
+        services.put(AlertWindowPolicy.NAME, alerts);
         WindowManagerService wm = new WindowManagerService();
         services.put(Context.WINDOW_SERVICE,
                 StandIn.of(IWindowManager.class, wm).asBinder());
@@ -193,6 +195,9 @@ public final class Services {
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
+        // webviewupdate: the built-in WebView provider's package (WebView2, docs/webview.md).
+        services.put(WebViewUpdateService.NAME, StandIn.of(android.webkit.IWebViewUpdateService.class,
+                new WebViewUpdateService(pm)).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
@@ -221,6 +226,10 @@ public final class Services {
         LocationManagerService location = new LocationManagerService(pm, am);
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 location).asBinder());
+        // CountryDetector: Windows' "Country or region" as the locale source
+        // (CountryDetectorService); no network, SIM or location-based country.
+        services.put(Context.COUNTRY_DETECTOR, StandIn.of(android.location.ICountryDetector.class,
+                new CountryDetectorService(WindowsCountry.create())).asBinder());
         services.put(com.gesher.net.IWindowsWifi.NAME,
                 new WifiService(am, atm, pm, () -> location.isLocationEnabledForUser(0)));
         // Bluetooth (docs/bluetooth.md): Windows' radio, its broadcasts and discovery. The
@@ -282,7 +291,7 @@ public final class Services {
         // StorageStatsManager: app and volume sizes for file managers and cleaners.
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,
-                new StorageStatsService(pm)).asBinder());
+                new StorageStatsService(pm, atm::authenticatedPackageCodeForPid)).asBinder());
         services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
                 android.app.admin.IDevicePolicyManager.class,
                 new DeviceServices.DevicePolicyService()).asBinder());
@@ -304,9 +313,17 @@ public final class Services {
         services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class,
                 new DeviceServices.TelephonyRegistryService()).asBinder());
-        services.put(Context.TRUST_SERVICE, StandIn.of(
-                android.app.trust.ITrustManager.class,
-                new DeviceServices.TrustService()).asBinder());
+        StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
+                android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
+        services.put(Context.TRUST_SERVICE, trust.asBinder());
+        // auth: BiometricManager and BiometricPrompt (ADR 0091). AOSP registers it on every
+        // device; no biometric sensor, the device credential as trust reports it. A
+        // credential is confirmed by Windows Hello (WindowsHello, null without its natives);
+        // while trust reports no secure device, no prompt reaches it.
+        services.put(Context.AUTH_SERVICE, StandIn.of(
+                android.hardware.biometrics.IAuthService.class,
+                new AuthService(new AuthServiceHost(am, atm, pm, trust.asInterface()),
+                        WindowsHello.create())).asBinder());
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
                 new DeviceServices.ShortcutService(pm, am.callers())).asBinder());

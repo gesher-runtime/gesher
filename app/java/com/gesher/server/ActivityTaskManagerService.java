@@ -125,7 +125,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return info;
     }
 
-    /** How long startActivityAndWait waits for the activity to be idle. */
+    /**
+     * How long startActivityAndWait waits for the activity to draw its first frame or be
+     * idle. Longer than Android's idle timeout (ActivityTaskSupervisor.IDLE_TIMEOUT, 10 s
+     * after the activity resumed): it also covers starting the process, and an app's first
+     * start on Windows (dexopt, an interpreted APK) can take minutes.
+     */
     private static final long WAIT_TIMEOUT_MS = 300_000;
 
     private static final AtomicLongFieldUpdater<ProcessRecord> LAST_ACTIVE =
@@ -143,6 +148,195 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** A fixed ms-settings: page for an Android Settings screen (SettingsIntents). */
     static volatile java.util.function.Predicate<String> sOpenSettingsPage = WindowsHost::openUrl;
+
+    /** Per-app Settings screens' results, answered as the Control Center's details close. */
+    private volatile SettingsResults mSettingsResults;
+    private final Object mSettingsResultsLock = new Object();
+
+    SettingsResults settingsResults() {
+        SettingsResults results = mSettingsResults;
+        if (results != null) return results;
+        synchronized (mSettingsResultsLock) {
+            if (mSettingsResults == null) {
+                mSettingsResults = new SettingsResults((pending, code) -> {
+                    // A fast host close must wait for launch admission to finish
+                    // and the covered Activity's pause transaction to be scheduled.
+                    synchronized (mLaunchLock) {
+                        ControlCenter.forgetResult(pending.token);
+                        if (pending.continuation != null) pending.continuation.accept(pending.hostClosed);
+                        if (pending.requestCode >= 0) {
+                            deliverResult((ActivityRecord) pending.source, pending.resultWho,
+                                    pending.requestCode, code, null, (ProcessRecord) pending.process);
+                        }
+                    }
+                });
+            }
+            return mSettingsResults;
+        }
+    }
+
+    /**
+     * While a host Settings dialog is in front of the caller's task, pause its
+     * activity through the same lifecycle path as the native document picker.
+     */
+    private Runnable coverWithSettings(ActivityRecord source, ProcessRecord sourceProcess, Intent intent) {
+        ActivityRecord covered;
+        ProcessRecord process;
+        boolean pauseNow;
+        synchronized (this) {
+            if (source.app != sourceProcess || source.finishing || !activityEnabled(source)
+                    || !mActivities.contains(source) || mHiddenTasks.contains(source.taskId)) return null;
+            covered = topOf(source.taskId);
+            process = covered == null ? null : covered.app;
+            if (process == null || process.exiting || process.dead || process.pidSuperseded) return null;
+            pauseNow = covered.state == State.RESUMED || covered.state == State.RESUMING
+                    || covered.state == State.LAUNCHING;
+            if (!pauseNow && !covered.resumeAfterNativeUi) return null;
+            covered.nativeUiCount++;
+            covered.resumeAfterNativeUi = true;
+            updateIdle();
+        }
+        Runnable release = () -> finishSettingsCover(covered);
+        try {
+            if (pauseNow) pause(covered, false,
+                    (intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
+            updateTopResumed();
+            return release;
+        } catch (RuntimeException | Error failure) {
+            release.run();
+            throw failure;
+        }
+    }
+
+    private void finishSettingsCover(ActivityRecord covered) {
+        synchronized (mLaunchLock) {
+            boolean resumeCovered = false, restartTask = false;
+            AppTaskRecord task = null;
+            synchronized (this) {
+                if (--covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
+                        && covered.state != State.PAUSING) {
+                    covered.resumeAfterNativeUi = false;
+                    if (!covered.finishing && covered.state != State.DESTROYED
+                            && mActivities.contains(covered) && activityEnabled(covered)
+                            && topOf(covered.taskId) == covered && !mHiddenTasks.contains(covered.taskId)) {
+                        ProcessRecord current = covered.app;
+                        resumeCovered = current != null && processByPid(current.pid) == current
+                                && !current.exiting && !current.dead && !current.pidSuperseded;
+                        // The cover belongs to the retained ActivityRecord. If it is still in
+                        // front, removing the cover can also restart it after process death.
+                        task = mAppTasks.get(covered.taskId);
+                        restartTask = current == null && task != null && !mTaskOrder.isEmpty()
+                                && mTaskOrder.get(mTaskOrder.size() - 1) == covered.taskId;
+                    }
+                }
+                updateIdle();
+                notifyAll();
+            }
+            if (restartTask) moveTaskToFront(covered.taskId, task);
+            else if (resumeCovered) { realStartActivity(covered); resume(covered); }
+            updateTopResumed();
+        }
+    }
+
+    /** The Activity that launched the confirmation remains covered until the user decides. */
+    final class InstallConfirmationVisit {
+        private final ActivityRecord source;
+        private final ProcessRecord process;
+        private final String resultWho;
+        private final int requestCode;
+        private boolean resultDelivered;
+        private Runnable releaseCover;
+        private boolean completed;
+
+        InstallConfirmationVisit(IBinder sourceToken, ProcessRecord expectedProcess,
+                String resultWho, int requestCode) {
+            synchronized (ActivityTaskManagerService.this) {
+                ActivityRecord record = sourceToken == null ? null : forToken(sourceToken);
+                ProcessRecord app = record == null ? null : record.app;
+                boolean attached = app != null && app == expectedProcess
+                        && processByPid(app.pid) == app && !app.exiting && !app.dead
+                        && mActivities.contains(record) && !record.finishing
+                        && record.state != State.DESTROYED;
+                this.source = attached ? record : null;
+                this.process = attached ? app : null;
+            }
+            this.resultWho = resultWho;
+            this.requestCode = requestCode;
+        }
+
+        void detachResult() {
+            deliver(false);
+        }
+
+        private void deliver(boolean confirmed) {
+            if (resultDelivered || source == null || requestCode < 0) return;
+            resultDelivered = true;
+            deliverResult(source, resultWho, requestCode,
+                    confirmed ? android.app.Activity.RESULT_OK : android.app.Activity.RESULT_CANCELED,
+                    null, process);
+        }
+
+        void cover(Intent intent) {
+            if (source != null) releaseCover = coverWithSettings(source, process, intent);
+        }
+
+        void finish(boolean confirmed) {
+            synchronized (mLaunchLock) {
+                if (completed) return;
+                completed = true;
+                try {
+                    deliver(confirmed);
+                } finally {
+                    if (releaseCover != null) releaseCover.run();
+                }
+            }
+        }
+    }
+
+    /** Opens the unknown-source choice for an already committed installer continuation. */
+    boolean openInstallSourceSettings(String packageName, Intent launchIntent,
+            InstallConfirmationVisit visit, java.util.function.Consumer<Boolean> complete) {
+        // Host completion cannot pass admission and pause under mLaunchLock.
+        SettingsResults results = settingsResults();
+        SettingsResults.Pending pending = new SettingsResults.Pending(null, null,
+                null, -1, SettingsResults.UNKNOWN_SOURCES, packageName);
+        pending.continuation = complete;
+        String token = results.register(pending);
+        if (token == null) return false;
+        if (!ControlCenter.open(packageName, token, results::cancel)) {
+            results.discard(token);
+            return false;
+        }
+        visit.cover(launchIntent);
+        return true;
+    }
+
+    /** A dialog is now visible in this exact Control Center host process. */
+    public int settingsScreensShown(int pid, long startedAt, String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.shown(new SettingsResults.Panel(pid, startedAt), tokens);
+    }
+
+    /** The Control Center closed the app details it showed for these requests. */
+    public int settingsScreensClosed(String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.closed(null, tokens);
+    }
+
+    public int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        return results == null ? 0 : results.closed(new SettingsResults.Panel(pid, startedAt), tokens);
+    }
+
+    /** The user turned a special access switch in the Control Center (SpecialAccess). */
+    public void specialAccessToggled(String packageName, String opName, boolean allowed,
+            int panelPid, long panelStartedAt, String[] tokens) {
+        SettingsResults results = mSettingsResults;
+        if (results != null && tokens.length > 0) {
+            results.toggled(new SettingsResults.Panel(panelPid, panelStartedAt), tokens,
+                    packageName, opName, allowed);
+        }
+    }
 
     /** STARTED: made visible again without being resumed (StartActivityItem). */
     enum State { INITIALIZING, LAUNCHING, RESUMING, RESUMED, PAUSING, PAUSED, STARTED, STOPPING,
@@ -251,6 +445,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 new WindowContainerToken(new IWindowContainerToken.Stub() {});
         State state = State.INITIALIZING;
         boolean idle;
+        /**
+         * The first frame of one of its windows was drawn in its process (ActivityRecord
+         * .onWindowsDrawn; ActivityClientController#windowsDrawn). Unlike idle it stays
+         * through a resume or relaunch (a preserved window is not drawn "first" again);
+         * a new process must draw anew.
+         */
+        boolean drawn;
         boolean finishing;
         boolean preserveProcessOnFinish;
         int exactAlarmSettings;
@@ -362,6 +563,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
     private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
+    private final ThreadLocal<ProcessRecord> mVerifiedIntentSenderSource = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedPublication = new ThreadLocal<>();
     private Runnable mBeforeActivityPublication; // Server-local retirement race fixture.
@@ -761,7 +963,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             noteShortcutForeground(record.app, ActivityManager.PROCESS_STATE_TOP);
         }
         if (mUsageStats != null) {
-            mUsageStats.transition(record.token, record.info.packageName, record.info.name, state);
+            ActivityRecord root = rootOf(record.taskId);
+            mUsageStats.transition(record.token, record.info.packageName, record.info.name,
+                    root == null ? record.info.packageName : root.info.packageName, state);
         }
     }
 
@@ -1403,12 +1607,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             Intent intent = intents[intents.length - 1];
             intent.setFlags((intent.getFlags() & ~mask) | (flagsValues & mask));
             Bundle launchOptions = activityOptions(mergedOptions, shareIdentity);
-            if (intents.length > 1) {
-                return withVerifiedCreator(creator, creatorLive, callerLive,
-                        () -> startActivities(null, creator, null, intents, types, resultTo, launchOptions, 0));
+            ProcessRecord previous = mVerifiedIntentSenderSource.get();
+            mVerifiedIntentSenderSource.set(source == null ? null : process);
+            try {
+                if (intents.length > 1) {
+                    return withVerifiedCreator(creator, creatorLive, callerLive,
+                            () -> startActivities(null, creator, null, intents, types, resultTo, launchOptions, 0));
+                }
+                return startActivityForVerifiedCreator(creator, intent, types[0],
+                        creatorLive, resultTo, resultWho, requestCode, launchOptions, callerLive);
+            } finally {
+                if (previous == null) mVerifiedIntentSenderSource.remove();
+                else mVerifiedIntentSenderSource.set(previous);
             }
-            return startActivityForVerifiedCreator(creator, intent, types[0],
-                    creatorLive, resultTo, resultWho, requestCode, launchOptions, callerLive);
         });
     }
 
@@ -1657,12 +1868,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         long deadline = SystemClock.uptimeMillis() + WAIT_TIMEOUT_MS;
         synchronized (this) {
             // ActivityTaskSupervisor.waitActivityVisibleOrLaunched: until the launch is
-            // complete (here: the activity is idle), or it went away. A trampoline (a
-            // launcher activity that starts the app's real one and stays below it,
-            // stopped, never idle) completes the launch with that activity: one started
-            // after it in its task that is idle (Android's launch transition ends when
-            // the task's windows are drawn).
-            while (!r.idle && r.state != State.DESTROYED && idleAbove(r) == null) {
+            // complete, or it went away (cleanupActivity). Android completes it when the
+            // activity's windows are drawn (ActivityRecord.onWindowsDrawn ->
+            // reportActivityLaunched), not when its main thread is idle: an app that keeps
+            // its looper busy (a map that posts frame after frame) is never idle, yet has
+            // launched. Here: its first frame was drawn in its process, or else it is idle
+            // (no window drawn: a headless process). A trampoline (a launcher activity that
+            // starts the app's real one and stays below it, stopped, never drawn or idle)
+            // completes the launch with that activity: one started after it in its task
+            // that has launched (Android's launch transition ends when the task's windows
+            // are drawn).
+            while (!launched(r) && r.state != State.DESTROYED && launchedAbove(r) == null) {
                 long left = deadline - SystemClock.uptimeMillis();
                 if (left <= 0) {
                     result.timeout = true;
@@ -1675,9 +1891,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     break;
                 }
             }
-            // A rejected native start or unexpected pre-idle process death is
-            // different from an activity deliberately finishing in onCreate.
-            if (r.launchFailed && !r.idle && idleAbove(r) == null) {
+            // A rejected native start or unexpected process death before the activity
+            // drew or was idle is different from an activity deliberately finishing in
+            // onCreate.
+            if (r.launchFailed && !launched(r) && launchedAbove(r) == null) {
                 result.result = ActivityManager.START_CANCELED;
             }
         }
@@ -1685,11 +1902,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return result;
     }
 
-    /** An activity started after {@code r} in its task that is idle, or null. Guarded by this. */
-    private ActivityRecord idleAbove(ActivityRecord r) {
+    /** Its launch is complete: a window drawn, or idle. Guarded by this. */
+    private static boolean launched(ActivityRecord r) {
+        return r.drawn || r.idle;
+    }
+
+    /**
+     * An activity started after {@code r} in its task that has launched ({@link #launched}),
+     * or null. Guarded by this.
+     */
+    private ActivityRecord launchedAbove(ActivityRecord r) {
         for (int i = mActivities.size() - 1; i >= 0; i--) {
             ActivityRecord a = mActivities.get(i);
-            if (a != r && a.taskId == r.taskId && a.idle && a.state != State.DESTROYED
+            if (a != r && a.taskId == r.taskId && launched(a) && a.state != State.DESTROYED
                     && a.startOrder > r.startOrder) {
                 return a;
             }
@@ -2737,6 +2962,19 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (!matchingThread) throw new SecurityException("Unrecognized activity caller thread");
             }
         }
+        if (PackageInstallerService.isConfirmationIntent(intent)) {
+            boolean systemCreator = internalCreator && "android".equals(originalName)
+                    && originalCallerCode == null;
+            if (internalCreator && (delegated == null || !delegated.getAsBoolean()
+                    || originalCallerCode == null && !systemCreator)) {
+                return ActivityManager.START_CANCELED;
+            }
+            ProcessRecord source = internalCreator ? mVerifiedIntentSenderSource.get() : originalProcess;
+            boolean newTask = (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0;
+            var visit = new InstallConfirmationVisit(resultToToken, source, resultWho, requestCode);
+            return mPm.packageInstallerService().openConfirmation(intent, visit, newTask,
+                    internalCreator ? originalCallerCode : null, systemCreator);
+        }
         if (intent != null && PackageManager.ACTION_REQUEST_PERMISSIONS.equals(intent.getAction())) {
             return requestPermissions(caller, callingPackage, intent, resultToToken,
                     resultWho, requestCode);
@@ -2837,19 +3075,43 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     settings = SettingsIntents.resolve(intent, pkg -> mPm.get(pkg) != null);
                 }
                 if (settings != null) {
-                    boolean opened = settings.controlCenter
-                            ? ControlCenter.open(settings.packageName)
-                            : sOpenSettingsPage.test(settings.windowsUri);
-                    SystemServer.log("startActivity: " + action + ": " + settings
-                            + (opened ? " opened" : " unavailable"));
-                    if (!opened) return ActivityManager.START_INTENT_NOT_RESOLVED;
-                    // Settings answers a startActivityForResult when the user leaves it;
-                    // Windows' page reports nothing, so the request is not left waiting.
+                    // Settings answers a startActivityForResult when the user leaves it.
                     // Only to an activity of the calling process: another app's token
                     // must not receive a result it did not ask for.
                     ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
-                    if (source != null && requestCode >= 0 && source.app != null
-                            && source.app.pid == originalPid) {
+                    ProcessRecord sourceProcess = source != null ? source.app : null;
+                    boolean ownActivity = sourceProcess != null && sourceProcess == originalProcess
+                            && sourceProcess.pid == originalPid;
+                    boolean wantsResult = ownActivity && requestCode >= 0;
+                    // Wait for the details to close, even when the app only requested a
+                    // lifecycle transition. Windows' external Settings pages and the
+                    // Control Center's main view do not report completion.
+                    SettingsResults.Pending pending = ownActivity && settings.controlCenter
+                            && settings.packageName != null
+                            ? new SettingsResults.Pending(source, sourceProcess, resultWho,
+                                    requestCode, action, settings.packageName)
+                            : null;
+                    String token = pending == null ? null : settingsResults().register(pending);
+                    if (pending != null && token == null) return ActivityManager.START_CANCELED;
+                    // The opener can cancel admission before the host shows the visit.
+                    // Normal queue publication never replaces another package's request.
+                    java.util.function.Consumer<String> replaced = old -> {
+                        SettingsResults results = mSettingsResults;
+                        if (results != null) results.cancel(old);
+                    };
+                    boolean opened = settings.controlCenter
+                            ? ControlCenter.open(settings.packageName, token, replaced)
+                            : sOpenSettingsPage.test(settings.windowsUri);
+                    SystemServer.log("startActivity: " + action + ": " + settings
+                            + (opened ? " opened" : " unavailable")
+                            + (token != null ? " (waiting for details to close)" : ""));
+                    if (!opened) {
+                        if (token != null) settingsResults().discard(token);
+                        return ActivityManager.START_INTENT_NOT_RESOLVED;
+                    }
+                    if (pending != null) {
+                        pending.releaseCover = coverWithSettings(source, sourceProcess, intent);
+                    } else if (wantsResult) {
                         deliverResult(source, resultWho, requestCode,
                                 android.app.Activity.RESULT_CANCELED, null);
                     }
@@ -4618,6 +4880,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     affectedTasks.add(r.taskId);
                     continue;
                 }
+                // A launch that lost its process before drawing or becoming idle must
+                // report failure, even with no saved state and removal below. A drawn
+                // activity has already launched even if its looper never becomes idle.
+                if (!launched(r) && !r.finishing && r.state != State.DESTROYED) r.launchFailed = true;
                 recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
@@ -4631,12 +4897,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         mTaskRotation.delete(r.taskId);
                     }
                 } else {
-                    if (!r.idle) r.launchFailed = true;
                     r.app = null;
                     r.launchGeneration = null;
                     r.launchScheduled = false;
                     r.state = State.STOPPED;
                     r.idle = false;
+                    r.drawn = false;
                     r.stopWhenIdle = false;
                     r.waitingFor = null;
                     r.activityWindowGrant = null;
@@ -6100,6 +6366,31 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         SystemServer.log("activityIdle: " + r.name());
         for (ActivityRecord a : toStop) stop(a);
+    }
+
+    /**
+     * ActivityRecord.onWindowsDrawn: the first frame of the activity's window was drawn in
+     * its process (ActivityClientController#windowsDrawn). A launch waiting for the activity
+     * is complete ({@link #waitForStarted}); unlike idle, it stops no activity behind it.
+     * {@code callingPid}: the reporting process, which must still be the record's live
+     * process now (the server's own pid reports for in-process records).
+     *
+     * <p>The report is one way and can be overtaken by the process's death: a process that
+     * draws and dies before the server reads the report fails the launch it was waiting
+     * for (START_CANCELED). That is accepted: the app is gone moments after its first
+     * frame, and a report from a dead process cannot be told apart from a stale one.
+     */
+    void activityWindowsDrawn(ActivityRecord r, int callingPid) {
+        synchronized (this) {
+            if (r.drawn || r.state == State.DESTROYED || !mActivities.contains(r)) return;
+            if (callingPid != android.os.Process.myPid()) {
+                ProcessRecord caller = processByPid(callingPid);
+                if (caller == null || r.app != caller) return;
+            }
+            r.drawn = true;
+            notifyAll();
+        }
+        SystemServer.log("activityWindowsDrawn: " + r.name());
     }
 
     /**

@@ -13,7 +13,9 @@ try {
 
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
+. (Join-Path $here 'gesher-panel-view.ps1')
+. (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Set-GesherProfileEnvironment $here
 $script:UpdateDirectory = Join-Path $root 'updates'
 
 # One Control Center. A second start (the Start menu again, or an app's "App info", which
@@ -23,7 +25,14 @@ $script:UpdateDirectory = Join-Path $root 'updates'
 # a panel closes its handles as its window closes, so a start right after that opens a
 # new one. "Reopen" after an update starts the new version while the old one is still
 # open: GESHER_PANEL_REOPEN lets that start through.
+# Legacy single-file requests are imported for an older running server.
 $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
+$script:PanelRequestsDir = Join-Path $root 'data/system/control-panel-requests'
+# Requests waiting for their result: one file per token, holding the package (ControlCenter.java).
+$script:PanelResultsDir = Join-Path $root 'data/system/control-panel-results'
+# The package whose details are shown for a request: a new request never replaces its tokens.
+$script:PanelShowingFile = Join-Path $root 'data/system/control-panel-showing'
+$script:PanelLogFile = Join-Path $root 'logs/control-panel.log'
 $script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
 # Apps whose tasks are windows of their own (ADR 0088; AppWindows.java): separate.<package>=true.
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
@@ -31,8 +40,9 @@ $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
 $script:PanelInstanceCreated = $false
-$script:PanelInstance = [System.Threading.Mutex]::new($false, 'Local\Gesher.ControlPanel', [ref] $script:PanelInstanceCreated)
-$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, 'Local\Gesher.ControlPanel.Show')
+$panelName = Get-GesherControlPanelName $root
+$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
+$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
 if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
     $null = $script:PanelShowEvent.Set()
     exit 0
@@ -530,260 +540,7 @@ function Get-InstalledApps {
 }
 
 # Build WPF Window in XAML
-[xml]$xaml = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="$(Get-GesherText 'cp_title')"
-        Width="920" Height="820" MinWidth="800" MinHeight="600"
-        WindowStartupLocation="CenterScreen"
-        FlowDirection="$flowDirection"
-        FontFamily="Segoe UI, Tahoma, Arial"
-        Background="#F5F6F8"
-        AllowDrop="True">
-    <Window.Resources>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="14,8"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#D0D5DD"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="Foreground" Value="#344054"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F2F4F7"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#1570EF"/>
-            <Setter Property="BorderBrush" Value="#1570EF"/>
-            <Setter Property="Foreground" Value="#FFFFFF"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#175CD3"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#FFF1F3"/>
-            <Setter Property="BorderBrush" Value="#FDA29B"/>
-            <Setter Property="Foreground" Value="#B42318"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#FEE4E2"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-    </Window.Resources>
-    <ScrollViewer Name="PanelScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-    <!-- Bound the first measure too, before SizeChanged adjusts the viewport. -->
-    <Grid Name="PanelLayout" Margin="24" MinHeight="640" Height="640">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <!-- Header -->
-        <Border Grid.Row="0" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="20,16" Margin="0,0,0,16">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
-                    <TextBlock Text="$(Get-GesherText 'cp_title')" FontSize="20" FontWeight="Bold" Foreground="#101828"/>
-                    <TextBlock Text="$(Get-GesherText 'cp_subtitle')" FontSize="13" Foreground="#667085" Margin="0,4,0,0"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Name="DeviceIndicator" Width="12" Height="12" CornerRadius="6" Background="#98A2B3" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                    <TextBlock Name="DeviceStatusText" Text="$(Get-GesherText 'cp_device_stopped')" FontSize="13" FontWeight="SemiBold" Foreground="#344054" VerticalAlignment="Center" Margin="0,0,16,0"/>
-                    <Button Name="BtnToggleDevice" Content="$(Get-GesherText 'cp_btn_start')"/>
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <!-- Services Cards (Google Play & Aurora Store) -->
-        <Grid Name="ServicesCards" Grid.Row="1" Margin="0,0,0,16">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="16"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- Card 1: Google Play (microG) -->
-            <Border Grid.Column="0" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18">
-                <StackPanel>
-                    <Grid Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="$(Get-GesherText 'cp_microg_title')" FontSize="15" FontWeight="Bold" Foreground="#101828"/>
-                        <Border Grid.Column="1" Name="MicrogBadge" CornerRadius="12" Padding="8,2" Background="#F2F4F7">
-                            <TextBlock Name="MicrogBadgeText" Text="$(Get-GesherText 'cp_microg_disabled')" FontSize="11" FontWeight="SemiBold" Foreground="#475467"/>
-                        </Border>
-                    </Grid>
-                    <TextBlock Text="$(Get-GesherText 'cp_microg_desc')" TextWrapping="Wrap" FontSize="12" Foreground="#667085" Margin="0,0,0,16"/>
-                    <WrapPanel Orientation="Horizontal">
-                        <Button Name="BtnEnableMicrog" Style="{StaticResource PrimaryButton}" Content="$(Get-GesherText 'cp_btn_enable_microg')" Margin="0,0,8,8"/>
-                        <Button Name="BtnGoogleLogin" Content="$(Get-GesherText 'cp_btn_google_login')" Margin="0,0,8,8"/>
-                        <Button Name="BtnMicrogSettings" Content="$(Get-GesherText 'cp_btn_microg_settings')" Margin="0,0,8,8"/>
-                        <Button Name="BtnDisableMicrog" Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_disable_microg')" Margin="0,0,8,8"/>
-                    </WrapPanel>
-                </StackPanel>
-            </Border>
-
-            <!-- Card 2: App Store (Aurora Store) -->
-            <Border Grid.Column="2" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18">
-                <StackPanel>
-                    <Grid Margin="0,0,0,10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="$(Get-GesherText 'cp_store_title')" FontSize="15" FontWeight="Bold" Foreground="#101828"/>
-                        <Border Grid.Column="1" Name="StoreBadge" CornerRadius="12" Padding="8,2" Background="#F2F4F7">
-                            <TextBlock Name="StoreBadgeText" Text="$(Get-GesherText 'cp_store_not_installed')" FontSize="11" FontWeight="SemiBold" Foreground="#475467"/>
-                        </Border>
-                    </Grid>
-                    <TextBlock Text="$(Get-GesherText 'cp_store_desc')" TextWrapping="Wrap" FontSize="12" Foreground="#667085" Margin="0,0,0,16"/>
-                    <WrapPanel Orientation="Horizontal">
-                        <Button Name="BtnInstallStore" Style="{StaticResource PrimaryButton}" Content="$(Get-GesherText 'cp_btn_install_store')" Margin="0,0,8,8"/>
-                        <Button Name="BtnOpenStore" Content="$(Get-GesherText 'cp_btn_open_store')" Margin="0,0,8,8"/>
-                    </WrapPanel>
-                </StackPanel>
-            </Border>
-        </Grid>
-
-        <!-- Runtime updates: network work never runs on the WPF dispatcher. -->
-        <Border Grid.Row="2" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Margin="0,0,14,0">
-                    <TextBlock Text="$(Get-GesherText 'cp_update_title')" FontSize="15" FontWeight="Bold" Foreground="#101828"/>
-                    <TextBlock Name="UpdateVersionText" FontSize="12" Foreground="#667085" Margin="0,4,0,0"/>
-                    <TextBlock Name="UpdateStatusText" TextWrapping="Wrap" FontSize="12" Foreground="#475467" Margin="0,5,0,0"/>
-                    <CheckBox Name="AutomaticUpdateChecks" Content="$(Get-GesherText 'cp_update_automatic')" ToolTip="$(Get-GesherText 'cp_update_automatic_hint')" FontSize="12" Foreground="#475467" Margin="0,9,0,0"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                    <WrapPanel HorizontalAlignment="Right" MaxWidth="330">
-                        <Button Name="BtnCheckUpdate" Content="$(Get-GesherText 'cp_update_check')" Margin="0,0,8,6"/>
-                        <Button Name="BtnInstallUpdate" Content="$(Get-GesherText 'cp_update_download_install')" Style="{StaticResource PrimaryButton}" Margin="0,0,0,6" Visibility="Collapsed"/>
-                        <Button Name="BtnCancelUpdate" Content="$(Get-GesherText 'cp_update_cancel')" Margin="0,0,0,6" Visibility="Collapsed"/>
-                        <Button Name="BtnReopenPanel" Content="$(Get-GesherText 'cp_update_reopen')" Style="{StaticResource PrimaryButton}" Margin="0,0,0,6" Visibility="Collapsed"/>
-                    </WrapPanel>
-                    <Button Name="BtnUpdateNotes" Content="$(Get-GesherText 'cp_update_notes')" HorizontalAlignment="Right" Padding="8,3" FontSize="12" BorderThickness="0" Foreground="#175CD3" Visibility="Collapsed"/>
-                    <ProgressBar Name="UpdateProgress" Height="4" IsIndeterminate="True" Margin="0,8,0,0" Visibility="Collapsed"/>
-                </StackPanel>
-            </Grid>
-        </Border>
-
-        <!-- Installed Applications Section -->
-        <Border Name="ApplicationsSection" Grid.Row="3" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="20">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <Grid Grid.Row="0" Margin="0,0,0,16">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0">
-                        <TextBlock Text="$(Get-GesherText 'cp_apps_title')" FontSize="16" FontWeight="Bold" Foreground="#101828"/>
-                        <TextBlock Text="$(Get-GesherText 'cp_drag_drop_hint')" FontSize="12" Foreground="#667085" Margin="0,2,0,0"/>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Name="BtnProxyAll" Content="$(Get-GesherText 'cp_btn_proxy_all')" ToolTip="$(Get-GesherText 'cp_proxy_desc')" Margin="0,0,8,0"/>
-                        <Button Name="BtnInstallApk" Style="{StaticResource PrimaryButton}" Content="$(Get-GesherText 'cp_btn_install_apk')"/>
-                    </StackPanel>
-                </Grid>
-
-                    <ItemsControl Name="AppsList" Grid.Row="1"
-                                  ScrollViewer.CanContentScroll="True"
-                                  VirtualizingPanel.IsVirtualizing="True"
-                                  VirtualizingPanel.VirtualizationMode="Recycling"
-                                  VirtualizingPanel.ScrollUnit="Pixel">
-                        <ItemsControl.Template>
-                            <ControlTemplate TargetType="ItemsControl">
-                                <ScrollViewer Name="AppsViewport" CanContentScroll="True"
-                                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                    <ItemsPresenter Name="ItemsPresenter"/>
-                                </ScrollViewer>
-                            </ControlTemplate>
-                        </ItemsControl.Template>
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border BorderBrush="#F2F4F7" BorderThickness="0,0,0,1" Padding="12,10" Background="Transparent">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="48"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Image Grid.Column="0" Source="{Binding IconImage}" Width="36" Height="36" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0,12,0">
-                                            <TextBlock Text="{Binding Label}" FontSize="14" FontWeight="SemiBold" Foreground="#101828"/>
-                                            <TextBlock Text="{Binding Package}" FontSize="12" Foreground="#667085" Margin="0,2,0,0"/>
-                                            <TextBlock Text="{Binding ProxyText}" Visibility="{Binding ProxyVisibility}" FontSize="12" Foreground="#175CD3" Margin="0,2,0,0"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                            <CheckBox Content="$(Get-GesherText 'cp_separate_windows')" ToolTip="$(Get-GesherText 'cp_separate_windows_tip')" IsChecked="{Binding SeparateWindows, Mode=OneWay}" Tag="{Binding Package}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                            <Button Content="$(Get-GesherText 'cp_btn_proxy')" ToolTip="$(Get-GesherText 'cp_btn_proxy_tip')" Tag="{Binding Package}" Margin="0,0,8,0"/>
-                                            <Button Content="$(Get-GesherText 'cp_btn_launch')" Tag="{Binding Package}" Visibility="{Binding LaunchVisibility}" Margin="0,0,8,0"/>
-                                            <Button Style="{StaticResource DangerButton}" Content="$(Get-GesherText 'cp_btn_uninstall')" Tag="{Binding Package}"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-            </Grid>
-        </Border>
-
-        <!-- Status & Progress Footer -->
-        <Border Grid.Row="4" Margin="0,12,0,0">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Name="StatusMessage" Grid.Column="0" Text="$(Get-GesherText 'cp_status_ready')" FontSize="12" Foreground="#475467" VerticalAlignment="Center"/>
-                <ProgressBar Name="ActivityBar" Grid.Column="1" Width="140" Height="6" IsIndeterminate="False" Visibility="Hidden" VerticalAlignment="Center"/>
-            </Grid>
-        </Border>
-    </Grid>
-    </ScrollViewer>
-</Window>
-"@
-
-$reader = [System.Xml.XmlNodeReader]::new($xaml)
-$window = [System.Windows.Markup.XamlReader]::Load($reader)
+$window = New-PanelView 'dashboard' @{ PanelFlowDirection = [System.Windows.FlowDirection]$flowDirection }
 $window.MaxHeight = [System.Windows.SystemParameters]::WorkArea.Height
 $window.MinHeight = [Math]::Min($window.MinHeight, $window.MaxHeight)
 $window.Height = [Math]::Min($window.Height, $window.MaxHeight)
@@ -1071,6 +828,7 @@ function Invoke-LiveRefreshTick {
 function Invoke-PanelHeartbeat {
     if ($script:ActionState.Closed) { return }
     try { Complete-PanelAction } catch { }
+    try { Clear-PanelSpecialAccessWorkers } catch { }
     try { Invoke-PanelRequest } catch { }
     try { Invoke-PanelUpdateTick } catch {
         Set-PanelUpdateStatus 'cp_update_check_failed' @() $_.Exception.Message
@@ -1095,6 +853,57 @@ function Read-PanelRequest {
     return $text.Trim()
 }
 
+# The package and result token are one immutable record (ControlCenter.publishRequest).
+# A legacy single-line record has no embedded token; its old result files are taken
+# only after its details become the owned visit.
+function ConvertFrom-QueuedPanelRequest([string] $text) {
+    if ($null -eq $text -or $text.Length -gt 1024) { return $null }
+    $lines = @($text -split "`r?`n")
+    while ($lines.Count -gt 1 -and $lines[-1] -eq '') { $lines = @($lines[0..($lines.Count - 2)]) }
+    if ($lines.Count -gt 2) { return $null }
+    $package = ConvertFrom-PanelRequest $lines[0]
+    $token = if ($lines.Count -eq 2) { $lines[1] } else { '' }
+    if ($token -and ($token -cnotmatch '^[0-9a-f]{32}$' -or -not $package)) { return $null }
+    return [PSCustomObject]@{
+        Package = $(if ($package) { $package.Package } else { $null })
+        Tokens = [string[]]$(if ($token) { @($token) } else { @() })
+    }
+}
+
+# Imports the old server's one-file protocol without a peek/take split. The renamed
+# file is now immutable and belongs to the queue even when a different app is shown.
+function Import-LegacyPanelRequest {
+    if (-not (Test-Path -LiteralPath $script:PanelRequestFile)) { return }
+    if (-not (Test-Path -LiteralPath $script:PanelRequestsDir)) {
+        [void](New-Item -ItemType Directory -Path $script:PanelRequestsDir -Force)
+    }
+    if (@(Get-ChildItem -LiteralPath $script:PanelRequestsDir -Filter '*.request' -File).Count -ge 32) { return }
+    $name = '{0:D19}-legacy-{1}.request' -f [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(), [guid]::NewGuid().ToString('N')
+    $owned = Join-Path $script:PanelRequestsDir $name
+    try { Move-Item -LiteralPath $script:PanelRequestFile -Destination $owned -ErrorAction Stop } catch { }
+}
+
+# Claims one complete request; filtering reads an immutable filename, so another
+# publisher cannot replace the inspected package with a different package's token.
+# Reopen can briefly create two consumers: only the successful rename owns a visit.
+function Receive-PanelRequest([string] $Package = '') {
+    Import-LegacyPanelRequest
+    if (-not (Test-Path -LiteralPath $script:PanelRequestsDir)) { return $null }
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:PanelRequestsDir -Filter '*.request' -File | Sort-Object Name)) {
+        try { $request = ConvertFrom-QueuedPanelRequest ([IO.File]::ReadAllText($file.FullName)) } catch { continue }
+        if ($Package -and (-not $request -or $request.Package -cne $Package)) { continue }
+        $taken = "$($file.FullName).$([guid]::NewGuid().ToString('N')).taken"
+        try { Move-Item -LiteralPath $file.FullName -Destination $taken -ErrorAction Stop } catch { continue }
+        # The selected record is immutable. The successful rename owns the parsed
+        # value too; a second read adds I/O and can lose the visit on a transient error.
+        Remove-Item -LiteralPath $taken -Force -ErrorAction SilentlyContinue
+        # Malformed legacy records still raise the main panel, as the old protocol did.
+        if (-not $request) { $request = [PSCustomObject]@{ Package = $null; Tokens = [string[]]@() } }
+        return $request
+    }
+    return $null
+}
+
 # packages.list's install and update times (milliseconds since 1970, UTC), as local dates.
 function Get-AppInstallTimes([string] $pkg) {
     $packagesFile = Join-Path $root 'data/system/packages.list'
@@ -1114,7 +923,262 @@ function Get-AppInstallTimes([string] $pkg) {
     return $null
 }
 
-function Show-AppInfoDialog([string] $pkg) {
+# Android Settings' special app access switches the App info shows (SpecialAccess.java):
+# the app-op's public name and its label. The device lists only those the app requests.
+$script:SpecialAccessLabels = [ordered]@{
+    'android:system_alert_window' = 'cp_access_overlay'
+    'android:request_install_packages' = 'cp_access_install'
+    'android:write_settings' = 'cp_access_write_settings'
+    'android:get_usage_stats' = 'cp_access_usage'
+}
+$script:SpecialAccessTimeoutMs = 120000
+# Background queries whose dialog closed before they answered; the live timer disposes them.
+$script:OrphanSpecialAccessWorkers = [Collections.Generic.List[object]]::new()
+
+# The device's answer (gesher-app special-access): "special-access<TAB>op<TAB>allowed|denied"
+# lines, with "<TAB>fixed" when the switch cannot change it, among the launcher's other
+# output. Unknown switches are left out.
+function ConvertFrom-SpecialAccessOutput([string[]] $lines) {
+    $switches = [Collections.Generic.List[object]]::new()
+    foreach ($line in $lines) {
+        if ($line -cmatch '^special-access\t(android:[a-z_]+)\t(allowed|denied)(\tfixed)?\s*$' -and
+                @($script:SpecialAccessLabels.Keys) -ccontains $Matches[1]) {
+            $switches.Add([PSCustomObject]@{ Op = $Matches[1]; Allowed = ($Matches[2] -eq 'allowed'); Fixed = [bool]$Matches[3] })
+        }
+    }
+    return $switches.ToArray()
+}
+
+# Runs gesher-app special-access in its own process (the script ends with exit), hidden;
+# the device authenticates it as the host shell. Returns its exit code and output lines.
+# Runs in a background runspace for the dialog (Start-PanelSpecialAccess): never on the UI thread.
+function Invoke-PanelSpecialAccess([string[]] $arguments,
+        [ValidateSet('special-access', 'settings-shown', 'settings-closed')] [string] $command = 'special-access') {
+    $appScript = Join-Path $here 'gesher-app.ps1'
+    $system = [Environment]::GetFolderPath('System')
+    $info = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'))
+    # Every argument was checked against a fixed pattern: no quoting is needed.
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $appScript + '" ' + $command + ' ' + ($arguments -join ' ')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($script:SpecialAccessTimeoutMs)) {
+            # The launcher's dalvikvm is a child of this PowerShell: end the whole tree.
+            try {
+                $kill = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'taskkill.exe'), "/PID $($process.Id) /T /F")
+                $kill.UseShellExecute = $false; $kill.CreateNoWindow = $true
+                $killer = [System.Diagnostics.Process]::Start($kill)
+                $null = $killer.WaitForExit(10000); $killer.Dispose()
+            } catch { }
+            try { if (-not $process.HasExited) { $process.Kill() } } catch { }
+            return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
+        }
+        $process.WaitForExit()
+        $null = $errors.Result
+        return [PSCustomObject]@{ ExitCode = $process.ExitCode; Lines = @($output.Result -split "`r?`n") }
+    } finally { $process.Dispose() }
+}
+
+# Starts Invoke-PanelSpecialAccess in a background runspace; poll it with
+# Test-PanelSpecialAccessDone and take its answer with Receive-PanelSpecialAccess.
+function Start-PanelSpecialAccess([string[]] $arguments, [string] $command = 'special-access') {
+    $powerShell = [PowerShell]::Create()
+    try {
+        $body = "param(`$here, `$timeout, `$arguments, `$command)`n`$script:SpecialAccessTimeoutMs = `$timeout`n" +
+            "function Invoke-PanelSpecialAccess {`n$((Get-Command Invoke-PanelSpecialAccess).Definition)`n}`n" +
+            "Invoke-PanelSpecialAccess `$arguments `$command"
+        $null = $powerShell.AddScript($body).AddArgument($here).AddArgument($script:SpecialAccessTimeoutMs).AddArgument([string[]]$arguments).AddArgument($command)
+        return [PSCustomObject]@{ PowerShell = $powerShell; Handle = $powerShell.BeginInvoke() }
+    } catch {
+        $powerShell.Dispose()
+        throw
+    }
+}
+
+function Test-PanelSpecialAccessDone($worker) {
+    return [bool]$worker.Handle.IsCompleted
+}
+
+# A diagnostic line in logs\control-panel.log; never fails the caller.
+function Write-PanelLog([string] $message) {
+    try {
+        $directory = Split-Path -Parent $script:PanelLogFile
+        if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
+        [IO.File]::AppendAllText($script:PanelLogFile,
+            "$([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss')) $message`r`n", [Text.UTF8Encoding]::new($false))
+    } catch { }
+}
+
+function Receive-PanelSpecialAccess($worker) {
+    try {
+        $results = @($worker.PowerShell.EndInvoke($worker.Handle))
+        foreach ($failure in @($worker.PowerShell.Streams.Error)) { Write-PanelLog "special access: $failure" }
+        $last = if ($results.Count) { $results[-1] } else { $null }
+        if ($last -and $last.PSObject.Properties['ExitCode']) { return $last }
+        Write-PanelLog 'special access: the background query returned no result'
+    } catch { Write-PanelLog "special access: $($_.Exception.Message)" }
+    finally { try { $worker.PowerShell.Dispose() } catch { } }
+    return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
+}
+
+# Disposes background queries of closed dialogs once they have finished.
+function Clear-PanelSpecialAccessWorkers {
+    foreach ($worker in @($script:OrphanSpecialAccessWorkers)) {
+        if (Test-PanelSpecialAccessDone $worker) {
+            $null = Receive-PanelSpecialAccess $worker
+            [void]$script:OrphanSpecialAccessWorkers.Remove($worker)
+        }
+    }
+    if ($script:PanelVisitReports -and $script:PanelVisitReports.Count) { Update-PanelVisitReports }
+}
+
+function Test-PanelPackageName([string] $pkg) {
+    return $pkg -cmatch '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$' -and $pkg.Length -le 255
+}
+
+function Test-PanelSpecialAccessOp([string] $op) {
+    # The ordered table's lookup ignores case; the device's op names do not.
+    return @($script:SpecialAccessLabels.Keys) -ccontains $op
+}
+
+# A query's answer: the switches (one array, possibly empty: an app requesting none), or
+# $null when the device could not answer.
+function Read-AppSpecialAccessResult($result) {
+    if ($null -eq $result -or $result.ExitCode -ne 0) { return $null }
+    return ,@(ConvertFrom-SpecialAccessOutput $result.Lines)
+}
+
+# A change's answer: the switch's state afterwards, or $null on failure.
+function Read-SetSpecialAccessResult($result, [string] $op) {
+    if ($null -eq $result -or $result.ExitCode -ne 0) { return $null }
+    $answer = @(ConvertFrom-SpecialAccessOutput $result.Lines) | Where-Object { $_.Op -ceq $op } | Select-Object -First 1
+    if (-not $answer) { return $null }
+    return [bool]$answer.Allowed
+}
+
+# Synchronous forms (diagnostics and tests; the dialog uses the background worker).
+function Get-AppSpecialAccess([string] $pkg) {
+    if (-not (Test-PanelPackageName $pkg)) { return $null }
+    return Read-AppSpecialAccessResult (Invoke-PanelSpecialAccess @($pkg))
+}
+
+function Set-AppSpecialAccess([string] $pkg, [string] $op, [bool] $allow) {
+    if (-not (Test-PanelPackageName $pkg) -or -not (Test-PanelSpecialAccessOp $op)) { return $null }
+    return Read-SetSpecialAccessResult (Invoke-PanelSpecialAccess @($pkg, $op, $(if ($allow) { 'allow' } else { 'deny' }))) $op
+}
+
+# A visit belongs to one exact Control Center process, even if Windows reuses its PID.
+function Get-PanelVisitIdentity {
+    $process = [Diagnostics.Process]::GetCurrentProcess()
+    try { return "$($process.Id)", "$($process.StartTime.ToFileTimeUtc())" }
+    finally { $process.Dispose() }
+}
+
+function Send-PanelSettingsShown([string[]] $tokens) {
+    if (-not $tokens.Count) { return }
+    $script:PanelVisitReports.Enqueue(@{
+        Command = 'settings-shown'; Arguments = @(Get-PanelVisitIdentity) + $tokens
+        Mutations = @(); Worker = $null; RetryAfter = [DateTime]::MinValue
+    })
+}
+
+function Send-PanelSettingsClosed([string[]] $tokens, [object[]] $mutations = @()) {
+    if (-not $tokens.Count) { return }
+    $script:PanelVisitReports.Enqueue(@{
+        Command = 'settings-closed'; Arguments = @(Get-PanelVisitIdentity) + $tokens
+        Mutations = $mutations; Worker = $null; RetryAfter = [DateTime]::MinValue
+    })
+}
+
+# Keep reports ordered and retry transport failures while the host is alive. A
+# visit's close is sent only after every settings write from that dialog returned.
+function Update-PanelVisitReports {
+    $report = $script:PanelVisitReports.Peek()
+    if ($report.Worker) {
+        if (-not (Test-PanelSpecialAccessDone $report.Worker)) { return }
+        $result = Receive-PanelSpecialAccess $report.Worker
+        $report.Worker = $null
+        # An absent device has no waiting request. An older server has no shown API.
+        if ($result.ExitCode -in 0, 3, 4) {
+            $null = $script:PanelVisitReports.Dequeue()
+            return
+        }
+        Write-PanelLog "$($report.Command): delivery failed ($($result.ExitCode))"
+        $report.RetryAfter = [DateTime]::UtcNow.AddSeconds(1)
+    }
+    if ($report.RetryAfter -gt [DateTime]::UtcNow) { return }
+    foreach ($mutation in $report.Mutations) {
+        if (-not (Test-PanelSpecialAccessDone $mutation)) { return }
+    }
+    $report.Worker = Start-PanelSpecialAccess $report.Arguments $report.Command
+}
+
+# The panel window is already closed; give a committed choice its terminal report
+# before the host process exits. A failed device cannot leave this process waiting.
+function Complete-PanelVisitReportsOnExit([int] $timeoutMs = (2 * $script:SpecialAccessTimeoutMs + 1000)) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ($script:PanelVisitReports.Count -gt 0 -and $watch.ElapsedMilliseconds -lt $timeoutMs) {
+        try { Update-PanelVisitReports } catch { Write-PanelLog "closing Settings visit: $($_.Exception.Message)" }
+        if ($script:PanelVisitReports.Count) { Start-Sleep -Milliseconds 50 }
+    }
+}
+
+# A request from the system server: one package name. $null for anything else.
+function ConvertFrom-PanelRequest([string] $text) {
+    if ($null -eq $text) { return $null }
+    if ($text -cmatch '^([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)$' -and $Matches[1].Length -le 255) {
+        return [PSCustomObject]@{ Package = $Matches[1] }
+    }
+    return $null
+}
+
+# Takes the result tokens of the requests waiting for this package's details: each a file
+# named by its token, holding the package. Taken files are removed (reported on close).
+function Receive-PanelResultTokens([string] $pkg) {
+    $tokens = [Collections.Generic.List[string]]::new()
+    if (-not $pkg -or -not (Test-Path -LiteralPath $script:PanelResultsDir)) { return $tokens.ToArray() }
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:PanelResultsDir -File -ErrorAction SilentlyContinue)) {
+        if ($file.Name -cnotmatch '^[0-9a-f]{32}$') { continue }
+        try { $owner = [IO.File]::ReadAllText($file.FullName).Trim() } catch { continue }
+        if ($owner -cne $pkg) { continue }
+        # The device may be reading the file: retry briefly. A token is reported even if its
+        # file stays; the device answers each token once and removes its file then.
+        foreach ($attempt in 1..5) {
+            try { [IO.File]::Delete($file.FullName); break } catch { Start-Sleep -Milliseconds 20 }
+        }
+        $tokens.Add($file.Name)
+    }
+    return $tokens.ToArray()
+}
+
+# Records the package whose details are shown for a request ($null: none), for
+# ControlCenter.publishRequest. Written before the request is taken.
+function Set-PanelShowing([string] $pkg) {
+    try {
+        if ($pkg) { [IO.File]::WriteAllText($script:PanelShowingFile, $pkg) }
+        elseif (Test-Path -LiteralPath $script:PanelShowingFile) { [IO.File]::Delete($script:PanelShowingFile) }
+    } catch { Write-PanelLog "showing marker: $($_.Exception.Message)" }
+}
+
+# Adds result tokens to the details shown, once each.
+function Add-PanelShowingTokens([string[]] $tokens) {
+    $added = [Collections.Generic.List[string]]::new()
+    foreach ($token in $tokens) {
+        if ($token -and -not $script:ShowingTokens.Contains($token)) {
+            $script:ShowingTokens.Add($token)
+            $added.Add($token)
+        }
+    }
+    if ($script:SettingsVisitVisible) { Send-PanelSettingsShown $added.ToArray() }
+}
+
+# FromList: the user opened it from the app list, rather than an app from Settings' screens.
+function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
     $item = $appsList.ItemsSource | Where-Object { $_.Package -eq $pkg } | Select-Object -First 1
     if (-not $item) {
         Refresh-Dashboard
@@ -1129,40 +1193,76 @@ function Show-AppInfoDialog([string] $pkg) {
         if ($times[1] -and $times[1] -ne $times[0]) { $lines += Get-GesherText 'cp_app_info_updated' @($times[1]) }
     }
     $message = if ($lines.Count -gt 0) { $lines -join "`n" } else { $label }
+    # The dialog opens at once; the device's switches load in the background. From the
+    # app list, a stopped device is not started for them (the dialog says so).
     $uninstall = Show-ModernConfirmDialog `
         -Title $label `
         -SubTitle $pkg `
         -Message $message `
-        -Detail (Get-GesherText 'cp_app_info_detail') `
+        -Detail (Get-GesherText $(if ($FromList) { 'cp_app_info_detail_list' } else { 'cp_app_info_detail' })) `
         -ConfirmText (Get-GesherText 'cp_btn_uninstall') `
         -CancelText (Get-GesherText 'cp_app_info_close') `
         -IconImage $item.IconImage `
-        -CancelIsDefault
+        -CancelIsDefault `
+        -SpecialAccessPackage $pkg
     if ($uninstall) { & $script:OnAppUninstall $pkg }
 }
 
 # Shows a pending request: brings the panel to the front and, for a package, its details.
+# The details shown and the result tokens of the requests they answer: a request for the
+# app already shown joins it instead of opening the details again after they close.
 $script:ShowingAppInfo = $false
+$script:ShowingPackage = $null
+$script:ShowingTokens = [Collections.Generic.List[string]]::new()
+$script:SettingsVisitVisible = $false
+$script:SettingsVisitMutations = @()
+$script:PanelVisitReports = [Collections.Generic.Queue[hashtable]]::new()
 function Invoke-PanelRequest {
     # Another start signalled: come to the front even while busy or showing a dialog.
     $raise = $false
     if ($script:PanelShowEvent) { try { $raise = $script:PanelShowEvent.WaitOne(0) } catch { } }
-    # The dialog runs a nested message loop in which this timer keeps ticking; an action
-    # in progress keeps the request until it ends.
+    # The dialog runs a nested message loop in which this timer keeps ticking.
     $request = $null
-    if (-not $script:IsBusy -and -not $script:ShowingAppInfo) { $request = Read-PanelRequest }
+    if ($script:ShowingAppInfo -and $script:ShowingPackage -and -not $script:IsBusy) {
+        # Only immutable records for this dialog join it; other packages stay queued.
+        # Bound dispatcher work even if tokenless callers keep refilling the queue.
+        for ($claimed = 0; $claimed -lt 32; $claimed++) {
+            $joined = Receive-PanelRequest $script:ShowingPackage
+            if (-not $joined) { break }
+            Add-PanelShowingTokens $joined.Tokens
+            $raise = $true
+        }
+        Add-PanelShowingTokens (Receive-PanelResultTokens $script:ShowingPackage)
+    } elseif (-not $script:IsBusy -and -not $script:ShowingAppInfo) {
+        $request = Receive-PanelRequest
+    }
     if ($null -ne $request) { $raise = $true }
     if (-not $raise) { return }
     if ($window.WindowState -eq [System.Windows.WindowState]::Minimized) {
         $window.WindowState = [System.Windows.WindowState]::Normal
     }
-    # Topmost on and off: Windows lets a background process raise its own window that way.
     $window.Topmost = $true
     $window.Topmost = $false
     $null = $window.Activate()
-    if ($request -match '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$') {
+    if ($request -and $request.Package) {
         $script:ShowingAppInfo = $true
-        try { Show-AppInfoDialog $request } finally { $script:ShowingAppInfo = $false }
+        $script:ShowingPackage = $request.Package
+        $script:ShowingTokens.Clear()
+        # Only legacy publishers use this marker; queue ownership never depends on it.
+        Set-PanelShowing $request.Package
+        Add-PanelShowingTokens $request.Tokens
+        Add-PanelShowingTokens (Receive-PanelResultTokens $request.Package)
+        try { Show-AppInfoDialog $request.Package }
+        finally {
+            $tokens = $script:ShowingTokens.ToArray()
+            $script:ShowingTokens.Clear()
+            $script:ShowingPackage = $null
+            $script:ShowingAppInfo = $false
+            $script:SettingsVisitVisible = $false
+            Set-PanelShowing $null
+            if ($tokens.Count) { Send-PanelSettingsClosed $tokens $script:SettingsVisitMutations }
+            $script:SettingsVisitMutations = @()
+        }
     }
 }
 
@@ -1420,115 +1520,17 @@ function Show-ModernConfirmDialog {
         [string] $SubTitle = $null,
         # Enter closes instead of confirming: for a dialog another app raised (App info),
         # where the user may be typing elsewhere when it takes the focus.
-        [switch] $CancelIsDefault
+        [switch] $CancelIsDefault,
+        # App info: the package whose special access switches load in the background.
+        [string] $SpecialAccessPackage = $null
     )
 
     $badgeBg = if ($IsDanger) { '#FEE4E2' } elseif ($IsWarning) { '#FEF0C7' } else { '#F2F4F7' }
     $badgeFg = if ($IsDanger) { '#D92D20' } elseif ($IsWarning) { '#DC6803' } else { '#344054' }
     $btnStyle = if ($IsDanger) { 'DangerActionButton' } else { 'PrimaryButton' }
 
-    [xml]$dialogXaml = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="460" SizeToContent="Height"
-        WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False"
-        FlowDirection="$flowDirection"
-        FontFamily="Segoe UI, Tahoma, Arial"
-        Background="#FFFFFF">
-    <Window.Resources>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#D0D5DD"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="Foreground" Value="#344054"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F2F4F7"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#1570EF"/>
-            <Setter Property="BorderBrush" Value="#1570EF"/>
-            <Setter Property="Foreground" Value="#FFFFFF"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#175CD3"/>
-                    <Setter Property="BorderBrush" Value="#175CD3"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-        <Style x:Key="DangerActionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="#D92D20"/>
-            <Setter Property="BorderBrush" Value="#D92D20"/>
-            <Setter Property="Foreground" Value="#FFFFFF"/>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#B42318"/>
-                    <Setter Property="BorderBrush" Value="#B42318"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-    </Window.Resources>
-    <Border Padding="22">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="20"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0" Margin="0,0,0,14">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="14"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Border Name="IconContainer" Grid.Column="0" Width="44" Height="44" CornerRadius="10" Background="$badgeBg" VerticalAlignment="Top">
-                    <Image Name="AppIconImage" Width="32" Height="32" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
-                </Border>
-                <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                    <TextBlock Name="DialogTitle" FontSize="16" FontWeight="Bold" Foreground="#101828"/>
-                    <TextBlock Name="DialogSubTitle" FontSize="12" Foreground="#667085" Margin="0,2,0,0" Visibility="Collapsed"/>
-                </StackPanel>
-            </Grid>
-
-            <StackPanel Grid.Row="1">
-                <TextBlock Name="DialogMessage" FontSize="13" FontWeight="SemiBold" Foreground="#344054" TextWrapping="Wrap" Margin="0,0,0,6"/>
-                <TextBlock Name="DialogDetail" FontSize="12" Foreground="#667085" TextWrapping="Wrap" Visibility="Collapsed"/>
-            </StackPanel>
-
-            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Name="BtnCancel" IsCancel="True" MinWidth="85"/>
-                <Border Width="10"/>
-                <Button Name="BtnConfirm" Style="{StaticResource $btnStyle}" IsDefault="True" MinWidth="85"/>
-            </StackPanel>
-        </Grid>
-    </Border>
-</Window>
-"@
-    $reader = [System.Xml.XmlNodeReader]::new($dialogXaml)
-    $dialog = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dialog = New-PanelView 'confirm' @{ PanelFlowDirection = [System.Windows.FlowDirection]$flowDirection; PanelBadgeBackground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($badgeBg) }
+    $dialog.Resources['PanelConfirmStyle'] = $dialog.Resources[$btnStyle]
     # Set literal strings after XAML loading: XML attributes normalize newlines
     # and tabs, and XAML can interpret a leading brace as a markup extension.
     $dialog.Title = $Title
@@ -1546,6 +1548,126 @@ function Show-ModernConfirmDialog {
     }
     $dialog.Owner = $window
     if ($window.Icon) { $dialog.Icon = $window.Icon }
+
+    if ($SpecialAccessPackage) {
+        # The switches load and change in background runspaces; a timer of the dialog takes
+        # their answers on the UI thread. A switch is disabled while its change is pending.
+        $accessState = @{ Query = $null; Pending = @{}; Closed = $false }
+        $switchPanel = $dialog.FindName('SwitchPanel')
+        $switchStatus = $dialog.FindName('SwitchStatus')
+        $switchError = $dialog.FindName('SwitchError')
+        $switchList = $dialog.FindName('SwitchList')
+        $switchPanel.Visibility = 'Visible'
+        $dialog.FindName('SwitchTitle').Text = Get-GesherText 'cp_access_title'
+        $switchStatus.Text = Get-GesherText 'cp_access_loading'
+        $switchStatus.Visibility = 'Visible'
+        $accessTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $accessTimer.Interval = [TimeSpan]::FromMilliseconds(100)
+        $accessTimer.Add_Tick({
+            if ($accessState.Closed) { return }
+            try {
+            if ($accessState.Query -and (Test-PanelSpecialAccessDone $accessState.Query)) {
+                $switches = Read-AppSpecialAccessResult (Receive-PanelSpecialAccess $accessState.Query)
+                $accessState.Query = $null
+                $switchStatus.Visibility = 'Collapsed'
+                if ($null -eq $switches) {
+                    $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                    $switchError.Visibility = 'Visible'
+                } elseif (@($switches).Count -eq 0) {
+                    $switchPanel.Visibility = 'Collapsed'
+                } else {
+                    foreach ($item in @($switches)) {
+                        $box = [System.Windows.Controls.CheckBox]::new()
+                        $labelText = Get-GesherText $script:SpecialAccessLabels[[string]$item.Op]
+                        $box.Tag = [string]$item.Op
+                        $box.IsChecked = [bool]$item.Allowed
+                        $box.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
+                        $box.FontSize = 13
+                        if ($item.Fixed) {
+                            # The device would answer allowed whatever the switch says.
+                            $box.Content = Get-GesherText 'cp_access_fixed' @($labelText)
+                            $box.IsEnabled = $false
+                        } else {
+                            $box.Content = $labelText
+                            $box.Add_Click({
+                                param($sender, $e)
+                                $op = [string]$sender.Tag
+                                $wanted = [bool]$sender.IsChecked
+                                $switchError.Visibility = 'Collapsed'
+                                if ($accessState.Pending.ContainsKey($op)) { $sender.IsChecked = -not $wanted; return }
+                                $sender.IsEnabled = $false
+                                try {
+                                    $arguments = @($SpecialAccessPackage, $op, $(if ($wanted) { 'allow' } else { 'deny' }))
+                                    if ($op -ceq 'android:request_install_packages' -and $script:SettingsVisitVisible -and $script:ShowingTokens.Count) {
+                                        $arguments += @(Get-PanelVisitIdentity)
+                                        $arguments += @($script:ShowingTokens | Select-Object -Last 32)
+                                    }
+                                    $worker = Start-PanelSpecialAccess $arguments
+                                    $accessState.Pending[$op] = @{ Worker = $worker; Box = $sender; Wanted = $wanted }
+                                } catch {
+                                    $sender.IsEnabled = $true
+                                    $sender.IsChecked = -not $wanted
+                                    $switchError.Text = Get-GesherText 'cp_access_failed' @([string]$sender.Content)
+                                    $switchError.Visibility = 'Visible'
+                                }
+                            })
+                        }
+                        [void]$switchList.Children.Add($box)
+                    }
+                }
+            }
+            foreach ($op in @($accessState.Pending.Keys)) {
+                $change = $accessState.Pending[$op]
+                if (-not (Test-PanelSpecialAccessDone $change.Worker)) { continue }
+                $accessState.Pending.Remove($op)
+                $state = Read-SetSpecialAccessResult (Receive-PanelSpecialAccess $change.Worker) $op
+                $change.Box.IsEnabled = $true
+                if ($null -eq $state) {
+                    $change.Box.IsChecked = -not $change.Wanted
+                    $switchError.Text = Get-GesherText 'cp_access_failed' @([string]$change.Box.Content)
+                    $switchError.Visibility = 'Visible'
+                } else {
+                    # What the device answers, not what was asked.
+                    $change.Box.IsChecked = [bool]$state
+                }
+            }
+            } catch {
+                # A failure here must not leave the dialog loading forever or end the panel.
+                Write-PanelLog "special access dialog: $($_.Exception.Message)"
+                $switchStatus.Visibility = 'Collapsed'
+                $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                $switchError.Visibility = 'Visible'
+            }
+        })
+        $dialog.Add_Closed({
+            $accessTimer.Stop()
+            $accessState.Closed = $true
+            # Answers still running are disposed by the live timer once they finish.
+            if ($accessState.Query) { $script:OrphanSpecialAccessWorkers.Add($accessState.Query); $accessState.Query = $null }
+            $mutations = @($accessState.Pending.Values | ForEach-Object { $_.Worker })
+            if ($script:SettingsVisitVisible) { $script:SettingsVisitMutations = $mutations }
+            foreach ($mutation in $mutations) { $script:OrphanSpecialAccessWorkers.Add($mutation) }
+            $accessState.Pending.Clear()
+        })
+        # Nothing runs before the dialog is shown: an error before ShowDialog leaves no
+        # timer or background query behind.
+        $dialog.Add_Loaded({
+            if ($accessState.Closed) { return }
+            if ($script:ShowingPackage -ceq $SpecialAccessPackage) {
+                $script:SettingsVisitVisible = $true
+                Send-PanelSettingsShown $script:ShowingTokens.ToArray()
+            }
+            try { $accessState.Query = Start-PanelSpecialAccess @($SpecialAccessPackage) }
+            catch {
+                Write-PanelLog "special access: $($_.Exception.Message)"
+                $switchStatus.Visibility = 'Collapsed'
+                $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                $switchError.Visibility = 'Visible'
+                return
+            }
+            $accessTimer.Start()
+        })
+    }
 
     $btnConfirm = $dialog.FindName('BtnConfirm')
     $iconContainer = $dialog.FindName('IconContainer')
@@ -1603,75 +1725,7 @@ function Show-ModernMessageDialog {
     $badgeBg = if ($IsError) { '#FEE4E2' } else { '#E0F2FE' }
     $badgeFg = if ($IsError) { '#D92D20' } else { '#0284C7' }
 
-    [xml]$dialogXaml = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="440" SizeToContent="Height"
-        WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False"
-        FlowDirection="$flowDirection"
-        FontFamily="Segoe UI, Tahoma, Arial"
-        Background="#FFFFFF">
-    <Window.Resources>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="16,8"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#D0D5DD"/>
-            <Setter Property="Background" Value="#FFFFFF"/>
-            <Setter Property="Foreground" Value="#344054"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#F2F4F7"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-    </Window.Resources>
-    <Border Padding="22">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="20"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <Grid Grid.Row="0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="14"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Border Grid.Column="0" Width="40" Height="40" CornerRadius="20" Background="$badgeBg" VerticalAlignment="Top">
-                    <TextBlock Text="$(if ($IsError) { '!' } else { 'i' })" FontWeight="Bold" FontSize="18" Foreground="$badgeFg" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <ScrollViewer Name="DialogMessageScroll" Grid.Column="2" MaxHeight="400" VerticalScrollBarVisibility="Auto">
-                    <TextBlock Name="DialogMessage" FontSize="13" Foreground="#344054" TextWrapping="Wrap" VerticalAlignment="Center"/>
-                </ScrollViewer>
-            </Grid>
-            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Name="BtnOk" IsDefault="True" IsCancel="True" MinWidth="85"/>
-            </StackPanel>
-        </Grid>
-    </Border>
-</Window>
-"@
-    $reader = [System.Xml.XmlNodeReader]::new($dialogXaml)
-    $dialog = [System.Windows.Markup.XamlReader]::Load($reader)
+    $dialog = New-PanelView 'message' @{ PanelFlowDirection = [System.Windows.FlowDirection]$flowDirection; PanelBadgeBackground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($badgeBg); PanelBadgeForeground = [System.Windows.Media.BrushConverter]::new().ConvertFromString($badgeFg); PanelMessageSymbol = $(if ($IsError) { '!' } else { 'i' }) }
     $dialog.Title = $Title
     $dialog.FindName('DialogMessage').Text = $Message
     $dialog.FindName('BtnOk').Content = Get-GesherText 'cp_dialog_ok'
@@ -1851,275 +1905,7 @@ $btnDisableMicrog.Add_Click({
     [void](Start-PanelAction 'Microg' @{ Enable = $false })
 })
 
-# Installs an APK through gesher-app.ps1; on failure throws the panel's message with the
-# reason com.gesher.app.Launcher wrote to GESHER_LAUNCH_ERROR_FILE (for example a
-# different signing key than the installed app's), not only "failed".
-function Install-PanelApk([string] $file, [string] $displayName) {
-    $errorFile = $null
-    try { $errorFile = [System.IO.Path]::GetTempFileName() } catch { }
-    $previous = $env:GESHER_LAUNCH_ERROR_FILE
-    if ($errorFile) { $env:GESHER_LAUNCH_ERROR_FILE = $errorFile }
-    else { Remove-Item Env:GESHER_LAUNCH_ERROR_FILE -ErrorAction SilentlyContinue }
-    $reason = ''
-    try {
-        & (Join-Path $here 'gesher-app.ps1') install "$file"
-        $code = $LASTEXITCODE
-    } finally {
-        if ($null -eq $previous) { Remove-Item Env:GESHER_LAUNCH_ERROR_FILE -ErrorAction SilentlyContinue }
-        else { $env:GESHER_LAUNCH_ERROR_FILE = $previous }
-        # Also when gesher-app.ps1 throws: the temporary file never stays behind.
-        if ($errorFile) {
-            try { $reason = [System.IO.File]::ReadAllText($errorFile, [System.Text.Encoding]::UTF8).Trim() } catch { }
-            Remove-Item -LiteralPath $errorFile -Force -ErrorAction SilentlyContinue
-        }
-    }
-    if ($code -ne 0) {
-        $message = Get-GesherText 'cp_install_failed' @($displayName)
-        if ($reason) { $message += "`n`n" + $reason }
-        throw $message
-    }
-}
-
-# One background owner runs profile mutations. Arguments are data and no WPF
-# objects enter its runspace. Existing helper scripts retain their own process
-# lifetimes; the panel never aborts a possibly committing install on close.
-function New-PanelActionWorker([string] $operation, $request) {
-    $powerShell = [PowerShell]::Create()
-    try {
-        $work = {
-            param($here, $operation, $request, $installDefinition, $language)
-            $ErrorActionPreference = 'Stop'
-            $ProgressPreference = 'SilentlyContinue'
-            # This process already has the panel's chosen display language.
-            # Reuse it without compiling a native language reader, and without
-            # changing GESHER_LOCALES (which also configures Android apps).
-            $env:GESHER_PANEL_UI_LANGUAGE = $language
-            # Includes nested microG staging helpers. Bound transport waits;
-            # committing an installation is deliberately never force-stopped.
-            $PSDefaultParameterValues = @{ 'Invoke-WebRequest:TimeoutSec' = 120 }
-            . (Join-Path $here 'gesher-ui.ps1')
-            $script:GesherUiLanguage = $language
-            # Trusted source from this panel, shared with the synchronous helper
-            # contracts. No path, label or package is interpolated into source.
-            . ([scriptblock]::Create("function Install-PanelApk {`n$installDefinition`n}"))
-            function Invoke-PanelApp([string[]] $arguments) {
-                $global:LASTEXITCODE = 0
-                & (Join-Path $here 'gesher-app.ps1') @arguments 6>$null | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw (Get-GesherText 'cp_action_failed' @($LASTEXITCODE)) }
-            }
-            $failures = [Collections.Generic.List[string]]::new()
-            try {
-                switch ($operation) {
-                    'Device' { Invoke-PanelApp @([string]$request.Command) }
-                    'Microg' {
-                        Invoke-PanelApp @('shutdown')
-                        $global:LASTEXITCODE = 0
-                        if ($request.Enable) {
-                            & (Join-Path $here 'gesher-app-microg.ps1') -AutoDownload 6>$null | Out-Null
-                        } else {
-                            & (Join-Path $here 'gesher-app-microg.ps1') -Disable 6>$null | Out-Null
-                        }
-                        if ($LASTEXITCODE -ne 0) { throw (Get-GesherText 'cp_action_failed' @($LASTEXITCODE)) }
-                        Invoke-PanelApp @('start')
-                    }
-                    'Install' {
-                        foreach ($file in $request.Files) {
-                            try {
-                                Install-PanelApk ([string]$file) ([IO.Path]::GetFileName([string]$file)) 6>$null | Out-Null
-                            } catch { $failures.Add($_.Exception.Message) }
-                        }
-                    }
-                    'Store' {
-                        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                        $storeApk = Join-Path ([IO.Path]::GetTempPath()) 'AuroraStore-4.8.4.apk'
-                        if (-not (Test-Path -LiteralPath $storeApk)) {
-                            $temporary = [IO.Path]::GetTempFileName()
-                            try {
-                                Invoke-WebRequest -Uri 'https://auroraoss.com/downloads/AuroraStore/Release/AuroraStore-4.8.4.apk' -OutFile $temporary -UseBasicParsing -TimeoutSec 120
-                                Move-Item -LiteralPath $temporary -Destination $storeApk -Force
-                            } finally {
-                                if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
-                            }
-                        }
-                        Install-PanelApk $storeApk 'Aurora Store' 6>$null | Out-Null
-                    }
-                    'Uninstall' {
-                        $global:LASTEXITCODE = 0
-                        & (Join-Path $here 'gesher-app.ps1') uninstall ([string]$request.Package) 6>$null | Out-Null
-                        if ($LASTEXITCODE -ne 0) { throw (Get-GesherText 'cp_uninstall_failed' @([string]$request.Label)) }
-                    }
-                    default { throw 'Unknown dashboard operation.' }
-                }
-            } catch { $failures.Add($_.Exception.Message) }
-            [PSCustomObject]@{ Errors = $failures.ToArray() }
-        }
-        $owner = {
-            param($body, $here, $operation, $request, $installDefinition, $language)
-            $ErrorActionPreference = 'Stop'
-            # ConsoleHost preserves the packaged helpers' native stderr semantics.
-            # A bare PowerShell API runspace turns even successful ART diagnostics
-            # into terminating errors under ErrorActionPreference=Stop.
-            # Declare Unicode Win32 entry points in memory. Runtime CodeDOM compilation
-            # uses ANSI-dependent native temporary-path code on some .NET Framework builds.
-            # Sequential value types keep pointer-size-dependent layout with the CLR marshaler.
-            function Initialize-PanelActionNative {
-                if ('Gesher.PanelActionNative' -as [type]) { return }
-                $name = [Reflection.AssemblyName]::new('Gesher.PanelActionNative')
-                if ($PSVersionTable.PSEdition -eq 'Core') {
-                    $assembly = [Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)
-                } else {
-                    $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly($name, [Reflection.Emit.AssemblyBuilderAccess]::Run)
-                }
-                $module=$assembly.DefineDynamicModule('Native')
-                function Define-Struct([string] $name, $fields) {
-                    $builder=$module.DefineType($name,[Reflection.TypeAttributes]'Public,Sealed,SequentialLayout',[ValueType])
-                    foreach($name in $fields.Keys) { $null=$builder.DefineField($name,$fields[$name],[Reflection.FieldAttributes]::Public) }
-                    $builder.CreateType()
-                }
-                $security=Define-Struct 'Gesher.PanelActionSecurity' ([ordered]@{Length=[int];Descriptor=[IntPtr];Inherit=[int]})
-                $startup=Define-Struct 'Gesher.PanelActionStartup' ([ordered]@{
-                    Size=[int];Reserved=[IntPtr];Desktop=[IntPtr];Title=[IntPtr]
-                    X=[int];Y=[int];Width=[int];Height=[int];CharsX=[int];CharsY=[int];Fill=[int];Flags=[int]
-                    Show=[int16];ReservedSize=[int16];ReservedBytes=[IntPtr];Input=[IntPtr];Output=[IntPtr];Error=[IntPtr]
-                })
-                $extended=Define-Struct 'Gesher.PanelActionExtendedStartup' ([ordered]@{Startup=$startup;Attributes=[IntPtr]})
-                $process=Define-Struct 'Gesher.PanelActionProcessInfo' ([ordered]@{Process=[IntPtr];Thread=[IntPtr];ProcessId=[uint32];ThreadId=[uint32]})
-                $builder=$module.DefineType('Gesher.PanelActionNative',[Reflection.TypeAttributes]'Public,Abstract,Sealed')
-                $lastError = $builder.DefineField('LastError', [int], [Reflection.FieldAttributes]'Public,Static')
-                $threadStatic = [Reflection.Emit.CustomAttributeBuilder]::new([ThreadStaticAttribute].GetConstructor(@()), [object[]]@())
-                $lastError.SetCustomAttribute($threadStatic)
-                $getLastError = [Runtime.InteropServices.Marshal].GetMethod('GetLastWin32Error')
-                $constructor=[Runtime.InteropServices.DllImportAttribute].GetConstructor(@([string]))
-                $fields=[Reflection.FieldInfo[]]@([Runtime.InteropServices.DllImportAttribute].GetField('CharSet'),[Runtime.InteropServices.DllImportAttribute].GetField('SetLastError'),[Runtime.InteropServices.DllImportAttribute].GetField('EntryPoint'))
-                foreach($signature in @(
-                    @{Name='CreateFileW';Return=[IntPtr];Parameters=[Type[]]@([string],[uint32],[uint32],$security.MakeByRefType(),[uint32],[uint32],[IntPtr])},
-                    @{Name='InitializeProcThreadAttributeList';Return=[bool];Parameters=[Type[]]@([IntPtr],[int],[uint32],[IntPtr].MakeByRefType())},
-                    @{Name='UpdateProcThreadAttribute';Return=[bool];Parameters=[Type[]]@([IntPtr],[uint32],[IntPtr],[IntPtr],[IntPtr],[IntPtr],[IntPtr])},
-                    @{Name='DeleteProcThreadAttributeList';Return=[void];Parameters=[Type[]]@([IntPtr])},
-                    @{Name='CreateProcessW';Return=[bool];Parameters=[Type[]]@([string],[Text.StringBuilder],[IntPtr],[IntPtr],[bool],[uint32],[IntPtr],[string],$extended.MakeByRefType(),$process.MakeByRefType())},
-                    @{Name='WaitForSingleObject';Return=[uint32];Parameters=[Type[]]@([IntPtr],[uint32])},
-                    @{Name='GetExitCodeProcess';Return=[bool];Parameters=[Type[]]@([IntPtr],[uint32].MakeByRefType())},
-                    @{Name='CloseHandle';Return=[bool];Parameters=[Type[]]@([IntPtr])}
-                )) {
-                    $values=[object[]]@([Runtime.InteropServices.CharSet]::Unicode,$true,$signature.Name)
-                    $attribute=[Reflection.Emit.CustomAttributeBuilder]::new($constructor,[object[]]@('kernel32.dll'),$fields,$values)
-                    $native=$builder.DefineMethod(('Native'+$signature.Name),[Reflection.MethodAttributes]'Private,Static,PinvokeImpl',$signature.Return,$signature.Parameters)
-                    $native.SetCustomAttribute($attribute)
-                    $native.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
-                    # PowerShell's binder can invoke other APIs before a later
-                    # GetLastWin32Error call. Preserve this call's error in managed
-                    # IL before crossing that boundary, isolated per native thread.
-                    $method=$builder.DefineMethod($signature.Name,[Reflection.MethodAttributes]'Public,Static',$signature.Return,$signature.Parameters)
-                    $il=$method.GetILGenerator()
-                    for($argument=0;$argument -lt $signature.Parameters.Count;$argument++) {
-                        $il.Emit([Reflection.Emit.OpCodes]::Ldarg,[int16]$argument)
-                    }
-                    $il.Emit([Reflection.Emit.OpCodes]::Call,$native)
-                    $result=$null
-                    if($signature.Return -ne [void]) {
-                        $result=$il.DeclareLocal($signature.Return)
-                        $il.Emit([Reflection.Emit.OpCodes]::Stloc,$result)
-                    }
-                    $il.Emit([Reflection.Emit.OpCodes]::Call,$getLastError)
-                    $il.Emit([Reflection.Emit.OpCodes]::Stsfld,$lastError)
-                    if($result) { $il.Emit([Reflection.Emit.OpCodes]::Ldloc,$result) }
-                    $il.Emit([Reflection.Emit.OpCodes]::Ret)
-                }
-                $null=$builder.CreateType()
-            }
-
-            function Invoke-PanelActionNative([string] $executable,[string] $entry,[string] $here) {
-                Initialize-PanelActionNative
-                $security=[Gesher.PanelActionSecurity]::new()
-                $security.Length=[Runtime.InteropServices.Marshal]::SizeOf([type][Gesher.PanelActionSecurity])
-                $security.Inherit=1
-                $inputHandle=[IntPtr]::Zero; $outputHandle=[IntPtr]::Zero; $attributes=[IntPtr]::Zero; $handles=[IntPtr]::Zero
-                $initialized=$false
-                $process=[Gesher.PanelActionProcessInfo]::new()
-                function Throw-NativeFailure {
-                    $errorCode=[Gesher.PanelActionNative]::LastError
-                    throw [ComponentModel.Win32Exception]::new($errorCode)
-                }
-                function Valid([IntPtr] $handle) { $handle -ne [IntPtr]::Zero -and $handle -ne [IntPtr]::new(-1) }
-                try {
-                    $inputHandle=[Gesher.PanelActionNative]::CreateFileW('NUL',2147483648,3,[ref]$security,3,0,[IntPtr]::Zero)
-                    if(-not (Valid $inputHandle)) { Throw-NativeFailure }
-                    $outputHandle=[Gesher.PanelActionNative]::CreateFileW('NUL',1073741824,3,[ref]$security,3,0,[IntPtr]::Zero)
-                    if(-not (Valid $outputHandle)) { Throw-NativeFailure }
-                    $size=[IntPtr]::Zero
-                    $null=[Gesher.PanelActionNative]::InitializeProcThreadAttributeList([IntPtr]::Zero,1,0,[ref]$size)
-                    if($size -eq [IntPtr]::Zero) { Throw-NativeFailure }
-                    $attributes=[Runtime.InteropServices.Marshal]::AllocHGlobal($size)
-                    if(-not [Gesher.PanelActionNative]::InitializeProcThreadAttributeList($attributes,1,0,[ref]$size)) { Throw-NativeFailure }
-                    $initialized=$true
-                    $handles=[Runtime.InteropServices.Marshal]::AllocHGlobal(2*[IntPtr]::Size)
-                    [Runtime.InteropServices.Marshal]::WriteIntPtr($handles,0,$inputHandle)
-                    [Runtime.InteropServices.Marshal]::WriteIntPtr($handles,[IntPtr]::Size,$outputHandle)
-                    if(-not [Gesher.PanelActionNative]::UpdateProcThreadAttribute($attributes,0,[IntPtr]::new(0x20002),$handles,[IntPtr]::new(2*[IntPtr]::Size),[IntPtr]::Zero,[IntPtr]::Zero)) { Throw-NativeFailure }
-                    $startup=[Gesher.PanelActionStartup]::new()
-                    $startup.Size=[Runtime.InteropServices.Marshal]::SizeOf([type][Gesher.PanelActionExtendedStartup])
-                    $startup.Flags=0x100; $startup.Input=$inputHandle; $startup.Output=$outputHandle; $startup.Error=$outputHandle
-                    $extended=[Gesher.PanelActionExtendedStartup]::new()
-                    $extended.Startup=$startup; $extended.Attributes=$attributes
-                    $command=[Text.StringBuilder]::new('"'+$executable+'" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$entry+'"')
-                    if(-not [Gesher.PanelActionNative]::CreateProcessW($executable,$command,[IntPtr]::Zero,[IntPtr]::Zero,$true,0x08080000,[IntPtr]::Zero,$here,[ref]$extended,[ref]$process)) { Throw-NativeFailure }
-                    $null=[Gesher.PanelActionNative]::CloseHandle($process.Thread); $process.Thread=[IntPtr]::Zero
-                    if([Gesher.PanelActionNative]::WaitForSingleObject($process.Process,[uint32]::MaxValue) -ne 0) { Throw-NativeFailure }
-                    $code=[uint32]0
-                    if(-not [Gesher.PanelActionNative]::GetExitCodeProcess($process.Process,[ref]$code)) { Throw-NativeFailure }
-                    return [int][BitConverter]::ToInt32([BitConverter]::GetBytes($code),0)
-                } finally {
-                    if(Valid $process.Thread) { $null=[Gesher.PanelActionNative]::CloseHandle($process.Thread) }
-                    if(Valid $process.Process) { $null=[Gesher.PanelActionNative]::CloseHandle($process.Process) }
-                    if($initialized) { [Gesher.PanelActionNative]::DeleteProcThreadAttributeList($attributes) }
-                    if($attributes -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($attributes) }
-                    if($handles -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($handles) }
-                    if(Valid $inputHandle) { $null=[Gesher.PanelActionNative]::CloseHandle($inputHandle) }
-                    if(Valid $outputHandle) { $null=[Gesher.PanelActionNative]::CloseHandle($outputHandle) }
-                }
-            }
-            $directory = Join-Path ([IO.Path]::GetTempPath()) ('gesher-panel-action-' + [guid]::NewGuid().ToString('N'))
-            $null = [IO.Directory]::CreateDirectory($directory)
-            $configuration = Join-Path $directory 'request.json'
-            $resultPath = Join-Path $directory 'result.json'
-            $entry = Join-Path $directory 'action.ps1'
-            try {
-                $data = @{ Body = $body; Here = $here; Operation = $operation; Request = $request
-                    InstallDefinition = $installDefinition; Language = $language }
-                [IO.File]::WriteAllText($configuration, ($data | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($true))
-                $hostScript = @'
-$ErrorActionPreference = 'Stop'
-$resultPath = Join-Path $PSScriptRoot 'result.json'
-try {
-    $config = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'request.json')) | ConvertFrom-Json
-    $result = & ([scriptblock]::Create($config.Body)) $config.Here $config.Operation $config.Request $config.InstallDefinition $config.Language
-    [IO.File]::WriteAllText($resultPath, ($result | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($true))
-} catch {
-    [IO.File]::WriteAllText($resultPath, ([PSCustomObject]@{ Errors = @($_.Exception.Message) } | ConvertTo-Json), [Text.UTF8Encoding]::new($true))
-    exit 1
-}
-'@
-                [IO.File]::WriteAllText($entry, $hostScript, [Text.UTF8Encoding]::new($true))
-                $executable = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell/v1.0/powershell.exe'
-                $exitCode = (Invoke-PanelActionNative $executable $entry $here)
-                if (-not [IO.File]::Exists($resultPath)) { throw "Dashboard operation exited without a result (exit code $exitCode)." }
-                [IO.File]::ReadAllText($resultPath) | ConvertFrom-Json
-            } finally {
-                # Only this owner's three known files and empty directory are
-                # removed, after its native process has exited. No recursive delete.
-                foreach ($path in $entry, $configuration, $resultPath) { [IO.File]::Delete($path) }
-                [IO.Directory]::Delete($directory, $false)
-            }
-        }
-        $null = $powerShell.AddScript($owner.ToString()).AddArgument($work.ToString()).AddArgument($here).AddArgument($operation).
-            AddArgument($request).AddArgument((Get-Command Install-PanelApk).Definition).AddArgument($script:GesherUiLanguage)
-        $handle = $powerShell.BeginInvoke()
-        return [PSCustomObject]@{ PowerShell = $powerShell; Handle = $handle; Disposed = $false }
-    } catch {
-        $powerShell.Dispose()
-        throw
-    }
-}
+. (Join-Path $here 'gesher-panel-actions.ps1')
 
 function Start-PanelAction([string] $operation, $request, [string] $message = '') {
     $state = $script:ActionState
@@ -2192,7 +1978,7 @@ $btnOpenStore.Add_Click({
 $btnInstallApk.Add_Click({
     if ($script:IsBusy) { return }
     $ofd = [Microsoft.Win32.OpenFileDialog]::new()
-    $ofd.Filter = "Android Packages (*.apk;*.apks;*.xapk)|*.apk;*.apks;*.xapk|All Files (*.*)|*.*"
+    $ofd.Filter = "Android Packages (*.apk;*.apks;*.xapk;*.apkm;*.apk+)|*.apk;*.apks;*.xapk;*.apkm;*.apk+|All Files (*.*)|*.*"
     if ($ofd.ShowDialog() -eq $true) {
         $file = $ofd.FileName
         $fileName = [System.IO.Path]::GetFileName($file)
@@ -2206,7 +1992,7 @@ $window.Add_Drop({
     if ($script:IsBusy) { return }
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
-        $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk' })
+        $packages = @($files | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -in '.apk', '.apks', '.xapk', '.apkm', '.apk+' })
         if ($packages.Count) {
             [void](Start-PanelAction 'Install' @{ Files = $packages } (Get-GesherText 'cp_installing' @([IO.Path]::GetFileName($packages[0]))))
         }
@@ -2218,6 +2004,14 @@ $script:OnAppLaunch = {
     param($pkg)
     if ($script:IsBusy) { return }
     Start-Process -FilePath (Join-Path $here 'gesher-launch.exe') -ArgumentList 'launch', $pkg -WindowStyle Hidden
+}
+
+# The app's details (uninstall, special access), as an app's Settings screen opens them.
+$script:OnAppDetails = {
+    param($pkg)
+    if ($script:IsBusy -or $script:ShowingAppInfo) { return }
+    $script:ShowingAppInfo = $true
+    try { Show-AppInfoDialog $pkg -FromList } finally { $script:ShowingAppInfo = $false }
 }
 
 $script:OnAppUninstall = {
@@ -2346,6 +2140,22 @@ $btnProxyAll.Add_Click({
     if (Show-ProxyDialog) { $statusMessage.Text = Get-GesherText 'cp_proxy_saved' }
 })
 
+# The profile's logs folder (gesher-app.ps1 writes it; a portable install keeps its profile
+# beside the runtime), opened in File Explorer. Created first so a new install opens it too.
+function Open-PanelLogsFolder([string] $logs) {
+    [void][IO.Directory]::CreateDirectory($logs)
+    Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('"' + $logs + '"')
+}
+
+$btnOpenLogs = $window.FindName('BtnOpenLogs')
+$btnOpenLogs.ToolTip = Join-Path $root 'logs'
+$btnOpenLogs.Add_Click({
+    try { Open-PanelLogsFolder (Join-Path $root 'logs') }
+    catch {
+        Show-ModernMessageDialog -Title (Get-GesherText 'cp_title') -Message (Get-GesherText 'cp_open_logs_failed' @($_.Exception.Message)) -IsError $true
+    }
+})
+
 # Attach click events through visual tree dispatcher
 $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
     param($sender, $e)
@@ -2359,6 +2169,8 @@ $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windo
         $pkg = [string]$btn.Tag
         if ($btn.Content -eq (Get-GesherText 'cp_btn_launch')) {
             & $script:OnAppLaunch $pkg
+        } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_app_info')) {
+            & $script:OnAppDetails $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_uninstall')) {
             & $script:OnAppUninstall $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_proxy')) {
@@ -2402,6 +2214,7 @@ $script:LiveTimer.Start()
 try { $window.ShowDialog() | Out-Null }
 finally {
     $script:LiveTimer.Stop()
+    Complete-PanelVisitReportsOnExit
     Close-PanelMetadata
     Close-PanelUpdates
     # The window is already closed. Drain the cooperatively cancelled, bounded

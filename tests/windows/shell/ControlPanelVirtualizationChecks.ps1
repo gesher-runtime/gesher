@@ -1,4 +1,4 @@
-# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+﻿# Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # Real WPF layout and routed production buttons, with process launch/uninstall adapted.
 param([string] $SourceRef, [switch] $Measure)
 $ErrorActionPreference = 'Stop'
@@ -12,7 +12,8 @@ if ($errors.Count) { throw ($errors | Out-String) }
 $assignment = @($ast.FindAll({ param($node)
     $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '[xml]$xaml'
 }, $false))
-if ($assignment.Count -ne 1) { throw 'Expected one production window XAML' }
+if ($SourceRef -and $assignment.Count -ne 1) { throw 'Expected legacy production window XAML' }
+if (-not $SourceRef) { . (Join-Path $repo 'tools/package/gesher-panel-view.ps1') }
 $uiAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'tools/package/gesher-ui.ps1'), [ref]$tokens, [ref]$errors)
 $textFunction = $uiAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-GesherText' }, $false)
 . ([scriptblock]::Create($textFunction.Extent.Text))
@@ -47,13 +48,18 @@ function Count-Containers {
 }
 $script:OnAppLaunch = { param($pkg) $script:Launched = $pkg }
 $script:OnAppUninstall = { param($pkg) $script:Uninstalled = $pkg }
+$script:OnAppDetails = { param($pkg) $script:Detailed = $pkg }
 $script:OnAppProxy = { param($pkg) $script:ProxyEdited = $pkg }
 foreach ($language in 'en', 'he') {
     foreach ($height in 600, 820) {
         $script:GesherUiLanguage = $language
         $flowDirection = if ($language -eq 'he') { 'RightToLeft' } else { 'LeftToRight' }
-        . ([scriptblock]::Create($assignment[0].Extent.Text))
-        $window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
+        if ($SourceRef) {
+            . ([scriptblock]::Create($assignment[0].Extent.Text))
+            $window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
+        } else {
+            $window = New-PanelView 'dashboard' @{ PanelFlowDirection = [Windows.FlowDirection]$flowDirection }
+        }
         try {
             $window.ShowInTaskbar = $false; $window.WindowStartupLocation = 'Manual'; $window.Left = -12000
             $window.Width = 800; $window.Height = $height
@@ -74,7 +80,7 @@ foreach ($language in 'en', 'he') {
             . $handler
             $items = [Collections.Generic.List[object]]::new()
             for ($i = 0; $i -lt 1000; $i++) {
-                $items.Add([pscustomobject]@{ Package = "fixture.$i"; Label = "App $i"; IconImage = $null })
+                $items.Add([pscustomobject]@{ Package = "fixture.$i"; Label = "App $i"; IconImage = $null; LaunchVisibility = 'Visible' })
             }
             $appsList.ItemsSource = $items
             $window.Show(); Settle-Layout
@@ -92,12 +98,12 @@ foreach ($language in 'en', 'he') {
             $last = $appsList.ItemContainerGenerator.ContainerFromIndex(999)
             Assert-List ($null -ne $last) 'Last app cannot be reached'
             $buttons = @(Find-Visual $last ([Windows.Controls.Button]))
-            Assert-List ($buttons.Count -eq 3) 'Row actions missing'
+            Assert-List ($buttons.Count -eq 4) 'Row actions missing'
             foreach ($button in $buttons) {
                 Assert-List ($button.Tag -ceq 'fixture.999') 'Recycled button retained an old package'
                 $button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent, $button))
             }
-            Assert-List ($script:Launched -ceq 'fixture.999' -and $script:Uninstalled -ceq 'fixture.999' -and $script:ProxyEdited -ceq 'fixture.999') 'Production routed actions used stale data'
+            Assert-List ($script:Launched -ceq 'fixture.999' -and $script:Uninstalled -ceq 'fixture.999' -and $script:Detailed -ceq 'fixture.999' -and $script:ProxyEdited -ceq 'fixture.999') 'Production routed actions used stale data'
             if (-not $Measure) { Assert-List ((Count-Containers) -lt 100) 'Scrolling retained the entire row tree' }
             $viewport.ScrollToTop(); Settle-Layout
             Assert-List ($null -ne $appsList.ItemContainerGenerator.ContainerFromIndex(0)) 'First app cannot be reached after recycling'
@@ -109,11 +115,11 @@ foreach ($language in 'en', 'he') {
             Assert-List ($null -ne $appsList.ItemContainerGenerator.ContainerFromIndex(999)) 'Resize lost the final app'
             if (-not $Measure) { Assert-List ((Count-Containers) -lt 100) 'Resize retained the entire row tree' }
             $viewport.ScrollToTop(); Settle-Layout
-            $appsList.ItemsSource = @([pscustomobject]@{ Package = 'replacement'; Label = 'Replacement'; IconImage = $null })
+            $appsList.ItemsSource = @([pscustomobject]@{ Package = 'replacement'; Label = 'Replacement'; IconImage = $null; LaunchVisibility = 'Visible' })
             Settle-Layout
             $replacement = $appsList.ItemContainerGenerator.ContainerFromIndex(0)
             $buttons = @(Find-Visual $replacement ([Windows.Controls.Button]))
-            Assert-List ($buttons.Count -eq 3 -and @($buttons | Where-Object { $_.Tag -cne 'replacement' }).Count -eq 0) 'Refresh retained a removed package'
+            Assert-List ($buttons.Count -eq 4 -and @($buttons | Where-Object { $_.Tag -cne 'replacement' }).Count -eq 0) 'Refresh retained a removed package'
             $appsList.ItemsSource = @(); Settle-Layout
             Assert-List ((Count-Containers) -eq 0) 'Empty list retained row containers'
         } finally { $window.Close() }

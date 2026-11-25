@@ -96,7 +96,20 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   the method bodies it left out of the dex file back in. When an app loads such
   a shell (`libexec*.so`), `compat/bionic/art_shim.cc` writes and loads a small
   ELF `libart.so` exporting that symbol, and ART's `LoadClass`
-  (`patches/art/0800`) calls it first. `GESHER_ART_SHIM=0` turns it off.
+  (`patches/art/0800`) calls it first. For NetEase Yidun's arm64 shell
+  (`libnesec.so`) it writes two arm64 stand-ins instead: `libart.so`
+  (`LoadClass`, `Runtime::DisableVerifier`, `IsVerificationEnabled`,
+  `IsVerificationSoftFail`, `OatHeader::kOatVersion`, `Runtime::instance_`)
+  and `libdexfile.so` (`DexFileLoader::OpenCommon`, which ART calls through
+  the stand-in, `patches/art/0802` and `0803`). `GESHER_ART_SHIM=0` turns it
+  off.
+
+- **360 Jiagu shells pick their library by the device's ABI**
+  ([0095](decisions/0095-jiagu-shell-abi-selection.md)). The stub copies
+  `libjgcge_x86.so`/`libjgcge_x64.so` from the APK's assets when
+  `Build.CPU_ABI` (and its other probes) say x86, as on Gesher and any x86-64
+  device with ARM translation. An app protected without Jiagu's x86 support
+  has no such assets and fails there, as it would on such a device.
 
 - **The bionic shim** (`compat/bionic/`, CMake target `gesher_bionic`,
   `gesher/bionic_shim.h`): the libc/libm/libdl/liblog/pthread symbols an app
@@ -107,7 +120,12 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   - `shim.cc`: memory (CRT malloc; over-aligned blocks from
     `posix_memalign`/`memalign` are tracked so `free`/`realloc` accept them;
     `mallinfo` walks that heap and fills the fields bionic's jemalloc fills:
-    mapped, allocated, free),
+    mapped, allocated, free; `mallopt`'s `M_PURGE`/`M_PURGE_ALL` compact it
+    with `HeapCompact`; `M_BIONIC_SET_HEAP_TAGGING_LEVEL` accepts only
+    `M_HEAP_TAGGING_LEVEL_NONE`, as there are no memory tags; settings the
+    Windows heap cannot apply, such as `M_DECAY_TIME` (which Android's own
+    allocators accept), return 0, mallopt's error result, rather than claim
+    them),
     strings, FORTIFY `__*_chk`, ctype, `long`-returning functions widened to
     64 bits (`strtol`, `lseek`, `sysconf`, `lround`...), `__errno` (the CRT's
     errno, which gesher-base keeps in Linux numbering), time (`clock_gettime`
@@ -133,6 +151,87 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     again (the freed bytes became the next allocation: `dlopen failed:
     cannot open cko_mozglue_GeckoLoader_loadNSSLibsNative/libxul.so`).
     Setting the value a variable already has changes nothing.
+  - `android_dlopen_ext` (`shim.cc`, `<android/dlext.h>`): `dlopen` with
+    bionic's extended options. As bionic's `do_dlopen`, a flag outside
+    `ANDROID_DLEXT_VALID_FLAG_BITS`, `USE_LIBRARY_FD_OFFSET` without
+    `USE_LIBRARY_FD` and `USE_NAMESPACE` with a null namespace fail with its
+    dlerror texts; a null `extinfo` is `dlopen`. The valid flags gesher does
+    not implement fail the call with `android_dlopen_ext: extended flags
+    0x... are not supported` before any lookup, so also for a library
+    already loaded, rather than being ignored: `WRITE_RELRO`, `USE_RELRO`,
+    `USE_LIBRARY_FD` (and `_OFFSET`: the fd is not read),
+    `RESERVED_ADDRESS_RECURSIVE` and `USE_NAMESPACE` (no linker namespaces
+    exist here). `FORCE_LOAD` only skips bionic's match of a loaded library
+    by its file: a library not loaded yet loads as usual, a bare name finds a
+    loaded one by soname as bionic does, and a path to a loaded one fails the
+    same way (this loader cannot load a second copy). Otherwise a library
+    already loaded is returned where it is, whatever reservation is offered.
+    `RESERVED_ADDRESS` loads the library with its first page at
+    `reserved_addr` (load bias `reserved_addr - page_start(min p_vaddr)`), its
+    segments mapped `MAP_FIXED` over the caller's reservation; beyond the
+    load span (`page_end(max p_vaddr + p_memsz) - page_start(min p_vaddr)`)
+    the reservation is left as it was, and pages of the span between
+    segments are `PROT_NONE` (the caller's own with file views; mapped
+    `PROT_NONE` when segments are copied, as without placeholders, which
+    loads anywhere also do). If the span exceeds `reserved_size` the call
+    fails with bionic's text (`reserved address space <reserved_size - span>
+    smaller than <span> bytes needed for "<realpath>"`) without touching the
+    reservation; only the span is checked against the end of the address
+    space. bionic maps over whatever is at `reserved_addr`; gesher-base's
+    `MAP_FIXED` replaces only its own mappings, each within one mapping of the
+    caller's (one placeholder group, or one plain anonymous region without
+    placeholders). Every mapping the load will make is checked against
+    exactly that first (`gesher_mmap_fixed_replaces`), so a span reaching
+    address space nobody mapped, or a mapping crossing from one of the
+    caller's mappings into another, fails before anything is mapped (`... is
+    not one mapping of the caller's at [...]`). A reservation made of several
+    mappings works when no single mapping of the load crosses between them:
+    file-view loads map each segment on its own, a copied load maps the
+    whole span at once. `RESERVED_ADDRESS_HINT` loads the same way when the
+    span fits and anywhere when it does not; with `RESERVED_ADDRESS` too, the
+    strict one wins. A load that fails after mapping into the reservation
+    maps exactly the ranges it mapped back `PROT_NONE`, as bionic's
+    `soinfo_free` does (`Library::caller_ranges`); if that fails it unmaps
+    what of the library is left there and logs it. That happens inside the
+    load, under the loader's lock, so no other load (into the same
+    reservation or not) runs in between. Only the named library goes there;
+    its dependencies load anywhere.
+  - A library loaded into a reservation is never unloaded: `dlclose` returns
+    0 and keeps it loaded, as it does every library in gesher (bionic would
+    unload it at its last reference). The caller may still unmap its
+    reservation after `dlclose`, or map over it, as the contract allows: once
+    such a `munmap` or anonymous `MAP_FIXED` `mmap` through the shim is
+    certain to take place (valid arguments, and for `MAP_FIXED` a range of one
+    of gesher-base's mappings) - or, for a `MAP_FIXED` file mapping, which can
+    also fail on the file (`EACCES`, an executable view, seals), once it
+    succeeded - the library leaves `dlsym`, `dl_iterate_phdr`, `dladdr`,
+    symbol binding of later loads and the arm64 translator's code ranges
+    without running any of its code (`ForgetReservedMappings`). A call that
+    fails leaves it listed; one that fails natively after the check (out of
+    resources) leaves it unlisted but mapped; between a successful file
+    `MAP_FIXED` and the retirement, a lookup on another thread can still read
+    the replaced pages. A `dl_iterate_phdr` in progress skips a library
+    unmapped since its snapshot, and the unmap waits (a condition variable,
+    no timeout) for callbacks already running for that library on other
+    threads before the pages go, as bionic's `dl_iterate_phdr` holds the
+    loader lock while `dlclose` unmaps. It does not wait when the unmapping
+    thread is itself inside a `dl_iterate_phdr` callback or holds the
+    loader's lock (a constructor or IFUNC resolver), where waiting could
+    deadlock with a callback that unmaps in turn or looks symbols up; then a
+    callback still running on another thread for that library may read its
+    unmapped program headers. The in-callback count is undone when a
+    callback returns or is unwound; a `longjmp` out of a callback (gesher's
+    `longjmp` skips host frames without running their cleanups) leaves it
+    counted, and a later unmap of that library's reservation from another
+    thread then waits for good. Its `PT_TLS` initialization image is copied into
+    loader memory at load time, so threads created after the unmap still
+    initialize its (still registered) TLS. Its unresolved-import stubs and
+    data placeholders stay allocated (a few pages). Code another library
+    bound to it, or addresses handed out by `dlsym`, point into whatever the
+    caller maps there next, as on Android after an unload. `GESHER_TRACE_DL`
+    prints the flags, `reserved_addr` and `reserved_size` of each call, and
+    each library retired so. Tested from x86-64 and arm64-v8a code, with and
+    without placeholder mappings, by `tests/native/dlext_test.c`.
   - `stdio_bionic.cc`: `FILE` functions (also mapping API < 23's `__sF`), and
     the **variadic** ones — `printf`, `fprintf`, `snprintf`, `sprintf`,
     `asprintf`, `dprintf`, `sscanf`, `syslog`, `__android_log_print`,
@@ -198,7 +297,7 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     ART's (libsigchain): `sigaction` (bionic's LP64 layout, System V
     handlers, `SA_SIGINFO` with a Linux `siginfo_t`, `SA_RESETHAND`,
     `SA_NODEFER`), `signal`, per-thread masks, `raise`/`kill`/`sigqueue`/
-    `pthread_kill`, `sigpending`, `sigwait*`, `sigsuspend`, `pause`,
+    `pthread_kill`/`tgkill`/`tkill`, `sigpending`, `sigwait*`, `sigsuspend`, `pause`,
     `strsignal`, and `abort()` running a `SIGABRT` handler first. See "Not
     done" for what Windows does not allow.
   - `time_bionic.cc`: bionic's 56-byte `struct tm` (`tm_gmtoff`, `tm_zone`):
@@ -307,7 +406,14 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     (`AInputTransferToken_*`; `AInputReceiver_create*` return null: Gesher's
     window manager grants no input channels to layers). Checked by
     `tests/native/surface_control_test.c` through
-    `surface_control_host_test.exe`.
+    `surface_control_host_test.exe`. `hardware_buffer_java.cc` adds
+    `AHardwareBuffer_fromHardwareBuffer` for the HardwareBuffers of an
+    `ImageReader`'s images (the Java HardwareBuffers of
+    `compat/media/surface/reader_surface.cc`, [media.md](media.md)): the
+    image's pooled RGBA8 AHardwareBuffer (`gesher/rgba_buffers.h`, in
+    `hardware_buffer.cc`), checked by `tests/native/reader_buffer_test.c`; it
+    also registers `android.hardware.SyncFence`'s natives over the native
+    fences.
 
 - **NativeActivity** ([0032](decisions/0032-native-libs-native-activity.md),
   `compat/bionic/native_activity.cmake`: the OBJECT library
@@ -689,11 +795,27 @@ see "After that" for what is left._
   report errors.
 - **Signals** (`signal_bionic.cc`) are the shim's own bookkeeping, since
   Windows has none: a signal for the calling thread runs its handler before
-  `raise`/`kill`/`pthread_kill` returns; one for another thread (or blocked)
-  is pending and runs at that thread's next delivery point (lowering its
-  mask, `sigsuspend`/`pause`, and the shim's sleeps, `poll`, `select`,
-  `epoll_wait`, `ALooper_pollOnce`), so it cannot interrupt a thread busy or
-  blocked elsewhere. Not done: **synchronous signals from faults** (`SIGSEGV`,
+  `raise`/`kill`/`pthread_kill`/`tgkill` returns; one for another thread (or
+  blocked) is pending and runs at that thread's next delivery point (lowering
+  its mask, `sigsuspend`/`pause`, and the shim's sleeps, `poll`, `select`,
+  `epoll_wait`, `ALooper_pollOnce`). `tgkill`/`tkill` (also as raw
+  `syscall(SYS_tgkill/SYS_tkill)`, both ABIs' numbers) address any live thread
+  of the process by its `gettid()` ID with Linux's errors (`EINVAL` for a bad
+  signal or ID, `ESRCH` for an exited or unknown thread or another thread
+  group; signal 0 checks existence); a thread of another process can only be
+  checked (signal 0), a signal for it is `ENOSYS`. A thread running
+  translated ARM64 code is stopped at the translator's next block boundary to
+  take a signal queued for it, and an ARM64 `SA_SIGINFO` handler gets Bionic's
+  arm64 `ucontext_t` with the guest registers there (as Chromium's SIGURG
+  stack sampler reads them; its FPCR/FPSR changes do not reach the interrupted
+  code). A thread-directed signal the target does not block also interrupts
+  its futex wait (`syscall(SYS_futex, FUTEX_WAIT*)`: the handler runs, then an
+  untimed wait restarts under `SA_RESTART`; a timed one, or one whose handler
+  lacks `SA_RESTART`, returns `EINTR`, as Linux's restart rules give) and the
+  shim's pthread waits (a spurious wake after the handler), through
+  `gesher/futex_interrupt.h`. x86-64
+  code cannot be interrupted, and other blocking calls take the signal only at
+  a delivery point. Not done: **synchronous signals from faults** (`SIGSEGV`,
   `SIGBUS`, `SIGFPE`, `SIGILL`, `SIGTRAP`) do not reach the `.so`'s handlers
   (a crash reporter's): Windows exceptions in loaded code go to ART's fault
   handling and the loader's diagnostics; the handler gets no machine context
@@ -705,8 +827,9 @@ see "After that" for what is left._
   fail cleanly), OBB mounting (unsupported; scanning works),
   AChoreographer's vsync (a 60 Hz clock, not the display's). Not provided at
   all (they bind to the aborting stubs):
-  `ASurfaceTexture_*`, `AHardwareBuffer_fromHardwareBuffer`/`toHardwareBuffer`
-  (Java HardwareBuffer has no natives), `ASurfaceTransaction_fromJava`,
+  `ASurfaceTexture_*`, `AHardwareBuffer_toHardwareBuffer` (the only Java
+  HardwareBuffers are ImageReader images' buffers, which
+  `AHardwareBuffer_fromHardwareBuffer` imports), `ASurfaceTransaction_fromJava`,
   `ASurfaceTransaction_setLuts`, `AThermal_*`,
   `ASharedMemory_dupFromJava`, `android_getaddrinfofornetwork` & co.
   AInputReceivers are refused (null): no input channels for layers.
@@ -732,8 +855,9 @@ see "After that" for what is left._
   creation records asynchronous DXGI completion. Exporting a native fd waits
   for completion outside ANGLE's mutex and returns an immutable native event;
   this preserves server-wait isolation with ANGLE's shared immediate queue,
-  but native export still costs CPU/GPU overlap. `sync_file` ioctls remain
-  unsupported. GPU writes to a buffer reach another process's mapping
+  but native export still costs CPU/GPU overlap. Of the `sync_file`
+  ioctls only `SYNC_IOC_FILE_INFO` is provided (one signaled fence, timed
+  when Gesher saw it complete); `SYNC_IOC_MERGE` fails with `ENOTTY`. GPU writes to a buffer reach another process's mapping
   only after the writing process reads the buffer back (a CPU lock there, or
   when it sends the buffer); a window's layers and frames the app posts to
   the same window directly replace each other; damage regions, data spaces,
@@ -766,7 +890,8 @@ see "After that" for what is left._
 ### After that (not started)
 
 - The remaining shim gaps as real apps need them; `ASurfaceTexture`; Java
-  HardwareBuffer's natives (and `AHardwareBuffer_fromHardwareBuffer`); YUV
+  HardwareBuffer's natives beyond ImageReader images' buffers (and
+  `AHardwareBuffer_toHardwareBuffer`); YUV
   hardware buffers (AImageReader); RGB_565 windows.
 - Faults in loaded code as `SIGSEGV`/`SIGBUS` to the `.so`'s own handlers
   (crash reporters), chained with ART's fault handling; asynchronous delivery
@@ -874,6 +999,44 @@ Design: [ADR 0057](decisions/0057-native2-shim-and-filesystem.md). Brief:
   path (pseudo handles, `PlatformLibraryHandle`), bare names searched in app
   library dirs (noted by `jni_bridge.cc`) and `$LD_LIBRARY_PATH`; `dlsym`
   falls back to the shim table for RTLD_DEFAULT and library handles.
+- `cxx_bionic.cc`: bionic's `libstdc++.so` (the platform library on every
+  device, and the NDK's "system" C++ runtime). It registers exactly the LP64
+  exports of `bionic/libc/libstdc++.map.txt` (android-16.0.0_r4):
+  `_ZSt7nothrow`; `_Znwm`, `_Znam` and their `RKSt9nothrow_t` forms;
+  `_ZdlPv`, `_ZdaPv` and their nothrow forms; `__cxa_guard_acquire`,
+  `__cxa_guard_release`, `__cxa_guard_abort`; `__cxa_pure_virtual`. The sized
+  deletes that bionic's `new.cpp` defines are local in the map and are not
+  exported. `dlopen("libstdc++.so")` (probe `__cxa_guard_acquire`) succeeds
+  because of them; before, it failed with "library not found" (the NetEase
+  Yidun packer's `libnesec.so` opens it). Semantics follow bionic:
+  - operator new/new[] call the shim's `malloc` (so their memory crosses with
+    `free`, and `malloc`'s with operator delete); on failure they end the
+    process as `async_safe_fatal` does ("new failed to allocate N bytes",
+    "new[] ..."): stderr, the log (tag `libc`, FATAL), the abort message,
+    then `abort()` (a SIGABRT handler runs). The nothrow forms return null.
+    Delete calls `free`;
+  - the guards use bionic's state word in the first four bytes of the 64-bit
+    guard (0 not started, 1 complete, 0x100 underway, 0x200 underway with a
+    waiter), so the compiler's inline check of the first byte (bit 0 on
+    arm64) agrees. A waiter sleeps in `WaitOnAddress` on the word while it
+    is 0x200, as bionic's futex wait does; release/abort wake every waiter
+    when one announced itself;
+  - `__cxa_pure_virtual` ends the process with bionic's message.
+
+  An arm64 guest calls the same entry points through its host-call
+  trampolines (integer and pointer arguments only, no guest-specific form).
+  Symbol lookup is unchanged: relocations search the object, its dependencies
+  and every loaded object before the shim, and `dlsym(RTLD_DEFAULT)` searches
+  loaded objects first, so an app's own `libc++_shared.so` (or a static
+  libc++) keeps its operator new and guards. As for every platform library,
+  `dlsym` on any platform handle reaches the whole shim table, and a
+  translated guest's bound import and the `dlsym` result are different
+  addresses for the same host function (trampoline vs. host entry).
+  Tests: `tests/native/libstdcxx_test.cc` (x86_64 via `elf_load_test`,
+  arm64-v8a via `arm64_elf_test`: exports, new/delete, the guard protocol,
+  eight threads racing on a guard with abort and retry, compiler-generated
+  guards) and `tests/native/libstdcxx_order_test.cc` (an app library with
+  `libc++_shared.so`). The fatal paths are not exercised.
 - `compat/arm64/dll/guest_libc.cc`: the ~50 fallbacks removed (now in the
   shim); pseudo dlopen handles removed; kept arm64-specific: stat/epoll,
   syscalls (+inotify, flock numbers), setjmp, getauxval, FP environment, and

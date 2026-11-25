@@ -628,6 +628,9 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ActivityInfo getActivityInfo(ComponentName className, long flags, int userId) {
         if (isRemovalPending(className.getPackageName())) return null;
+        if (userId == 0 && PackageInstallerService.CONFIRM_ACTIVITY.equals(className)) {
+            return mInstallerService.confirmationInfo();
+        }
         ApkPackage p = get(className.getPackageName());
         if (p == null && userId == 0 && ExactAlarmAccessRequests.PACKAGE.equals(className.getPackageName())) {
             ActivityInfo nativeActivity = exactAlarmAccessRequests().activityInfo(className, flags);
@@ -671,6 +674,12 @@ public final class PackageManagerService extends IPackageManager.Default {
     // A query spanning multiple records must not straddle an atomic enabled-state
     // batch. These readers do metadata/filter work only, never application callbacks.
     private synchronized List<ResolveInfo> query(Intent intent, String resolvedType, long flags, int userId) {
+        if (userId == 0 && PackageInstallerService.isConfirmationIntent(intent)) {
+            ResolveInfo confirmation = new ResolveInfo();
+            confirmation.activityInfo = mInstallerService.confirmationInfo();
+            confirmation.isDefault = true;
+            return List.of(confirmation);
+        }
         if (ExactAlarmAccessRequests.handles(intent, resolvedType)) {
             if (userId != 0) return new ArrayList<>();
             Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
@@ -1161,11 +1170,13 @@ public final class PackageManagerService extends IPackageManager.Default {
      * (docs/bluetooth.md) is there when the host has a radio: FEATURE_BLUETOOTH with an
      * adapter, FEATURE_BLUETOOTH_LE when Windows reports LE support (apps such as
      * companion apps check it before anything else). Cameras follow the real devices
-     * ({@link #addCameraFeatures}). FEATURE_MICROPHONE is there when Windows has an audio
+     * ({@link #addCameraFeatures}): FEATURE_CAMERA_AUTOFOCUS only when the camera reported
+     * as FEATURE_CAMERA (the rear one) really focuses automatically. FEATURE_MICROPHONE is there when Windows has an audio
      * capture endpoint, the input AudioRecord and AudioManager report. FEATURE_LOCATION and
      * FEATURE_LOCATION_NETWORK describe {@link LocationManagerService}'s network provider,
      * which is always registered (Windows' location service, with the IP fallback);
-     * FEATURE_LOCATION_GPS is not claimed, as no GNSS receiver is known. Google Play filters
+     * FEATURE_LOCATION_GPS only when Windows has a GNSS receiver ({@link
+     * WindowsLocation#hasGnssReceiver}). Google Play filters
      * on these (a RECORD_AUDIO or location permission implies the feature unless the app
      * marks it not required), so an absent one hides an app the device can run.
      */
@@ -1176,7 +1187,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (String name : new String[] {PackageManager.FEATURE_APP_WIDGETS,
                 PackageManager.FEATURE_TOUCHSCREEN,
                 PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
-                PackageManager.FEATURE_SCREEN_LANDSCAPE}) {
+                PackageManager.FEATURE_SCREEN_LANDSCAPE,
+                // Gesher's built-in WebView (WebView2, ADR 0041; WebViewUpdateService). The
+                // WebView2 Runtime is the installer's prerequisite; without it WebViews
+                // stay empty and webviewupdate names no valid provider.
+                PackageManager.FEATURE_WEBVIEW}) {
             android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
             f.name = name;
             FEATURES.put(name, f);
@@ -1196,7 +1211,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no input to report.
         }
-        addLocationFeatures(FEATURES);
+        addLocationFeatures(FEATURES, WindowsLocation.hasGnssReceiver());
     }
 
     /** Whether the audio input has a real device (AudioSystem, compat/media/audio/capture.cc). */
@@ -1213,24 +1228,35 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (input) addFeature(features, PackageManager.FEATURE_MICROPHONE);
     }
 
-    /** The network location provider's features; no GPS claim. */
-    static void addLocationFeatures(
-            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features) {
+    /**
+     * The network location provider's features, and FEATURE_LOCATION_GPS when Windows has
+     * a GNSS receiver ({@code gnss}), whose fixes the gps provider then gets.
+     */
+    public static void addLocationFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean gnss) {
         addFeature(features, PackageManager.FEATURE_LOCATION);
         addFeature(features, PackageManager.FEATURE_LOCATION_NETWORK);
+        if (gnss) addFeature(features, PackageManager.FEATURE_LOCATION_GPS);
     }
 
     /**
      * Report real cameras: a configured rear camera as FEATURE_CAMERA, the others as front
      * cameras (a PC's camera faces the user; CONTRIBUTING.md), without inferred capabilities.
+     * FEATURE_CAMERA_AUTOFOCUS describes the FEATURE_CAMERA camera, as on Android: it is
+     * there only when a rear camera's driver really focuses automatically
+     * ({@link WindowsCamera.Device#autofocus}); a front camera's autofocus does not add it.
      */
-    static void addCameraFeatures(android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+    public static void addCameraFeatures(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
             List<WindowsCamera.Device> cameras) {
         if (cameras == null || cameras.isEmpty()) return;
         addFeature(features, PackageManager.FEATURE_CAMERA_ANY);
         for (WindowsCamera.Device camera : cameras) {
             addFeature(features, camera.isRearFacing() ? PackageManager.FEATURE_CAMERA
                     : PackageManager.FEATURE_CAMERA_FRONT);
+            if (camera.isRearFacing() && camera.autofocus) {
+                addFeature(features, PackageManager.FEATURE_CAMERA_AUTOFOCUS);
+            }
         }
     }
 
@@ -1263,7 +1289,16 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public ParceledListSlice<android.content.pm.FeatureInfo> getSystemAvailableFeatures() {
-        return new ParceledListSlice<>(new ArrayList<>(FEATURES.values()));
+        // As AOSP's: the named features, then an unnamed one carrying the OpenGL ES
+        // version (ro.opengles.version), which PackageManager.getSystemAvailableFeatures
+        // callers read as reqGlEsVersion.
+        ArrayList<android.content.pm.FeatureInfo> features = new ArrayList<>(FEATURES.size() + 1);
+        features.addAll(FEATURES.values());
+        android.content.pm.FeatureInfo gles = new android.content.pm.FeatureInfo();
+        gles.reqGlEsVersion = android.os.SystemProperties.getInt("ro.opengles.version",
+                android.content.pm.FeatureInfo.GL_ES_VERSION_UNDEFINED);
+        features.add(gles);
+        return new ParceledListSlice<>(features);
     }
 
     @Override
@@ -1465,19 +1500,52 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public boolean canRequestPackageInstalls(String packageName, int userId) {
-        if (userId != 0 || packageName == null || isRemovalPending(packageName)) {
-            return false;
+        if (userId != 0 || packageName == null) return false;
+        // The answer reveals a user decision. Authenticate the attached installation,
+        // not merely its numeric UID: a retired process retains that UID after reinstall.
+        // Capture the ATM identity before taking PM, then read one current generation.
+        int callingUid = Binder.getCallingUid();
+        // Standalone mode serves the app in this process; a local PID is not authority.
+        if (callingUid != android.os.Process.SYSTEM_UID
+                && callingUid != android.os.Process.ROOT_UID) {
+            ApkPackage caller = installSourceCaller(callingUid);
+            synchronized (this) {
+                ApkPackage owner = get(packageName);
+                if (caller == null || owner == null || get(caller.packageName) != caller
+                        || isRemovalPending(caller.packageName) || caller.uid() != callingUid
+                        || !sameInstallSourceIdentity(caller, owner)) {
+                    throw new SecurityException("Caller does not own package " + packageName);
+                }
+                return canRequestPackageInstallsInternal(packageName);
+            }
         }
+        return canRequestPackageInstallsInternal(packageName);
+    }
+
+    /** canRequestPackageInstalls for the server's own use (no caller to check). */
+    boolean canRequestPackageInstallsInternal(String packageName) {
+        if (packageName == null || isRemovalPending(packageName)) return false;
         if ("android".equals(packageName)) {
             return true;
         }
         ApkPackage pkg = get(packageName);
-        // Android exposes this capability only to installers targeting O or later.
-        // Gesher permits the request; PackageInstallerService still asks the host
-        // for fresh consent on every commit, regardless of this query's result.
-        return pkg != null && pkg.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.O
-                && pkg.parsed.getRequestedPermissions()
-                .contains(android.Manifest.permission.REQUEST_INSTALL_PACKAGES);
+        // Android exposes this capability only to installers targeting O or later that
+        // request REQUEST_INSTALL_PACKAGES. As in AOSP (canRequestPackageInstallsInternal,
+        // ExternalSourcesPolicy) an INSTALL_PACKAGES holder may; any other app only once
+        // the user allowed "Install unknown apps" (OP_REQUEST_INSTALL_PACKAGES MODE_ALLOWED),
+        // which Gesher's Control Center offers (SpecialAccess). PackageInstallerService
+        // still asks the host for fresh consent on every commit, whatever this answers.
+        if (pkg == null || pkg.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O
+                || !pkg.parsed.getRequestedPermissions()
+                        .contains(android.Manifest.permission.REQUEST_INSTALL_PACKAGES)) {
+            return false;
+        }
+        if (mPermissions.checkPermission(packageName, android.Manifest.permission.INSTALL_PACKAGES)
+                == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }
+        return appOps().checkRawMode(android.app.AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
+                pkg.uid(), packageName) == android.app.AppOpsManager.MODE_ALLOWED;
     }
 
     @Override
@@ -1642,6 +1710,10 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     private final PackageInstallerService mInstallerService = new PackageInstallerService(this);
+
+    PackageInstallerService packageInstallerService() {
+        return mInstallerService;
+    }
 
     private java.io.File appMetadata(String packageName, int userId) {
         if (userId != 0) throw new SecurityException("Only user 0 is supported");

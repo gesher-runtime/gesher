@@ -402,6 +402,9 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
         // The Windows IME bridge does not offer connectionless handwriting.
         // Complete the request as AOSP does for an IME without that capability,
         // so clients do not wait indefinitely for recognition that never starts.
+        // The callback is @NonNull in AOSP; a missing one has nobody to notify, and must
+        // not fail the service call with a NullPointerException.
+        if (callback == null) return;
         try {
             callback.onError(CONNECTIONLESS_HANDWRITING_ERROR_UNSUPPORTED);
         } catch (RemoteException e) {
@@ -424,6 +427,8 @@ public final class InputMethodManagerService extends IInputMethodManager.Default
     public void acceptStylusHandwritingDelegationAsync(IInputMethodClient client, int userId,
             String delegatePackageName, String delegatorPackageName, int flags,
             com.android.internal.inputmethod.IBooleanListener callback) {
+        // No delegation is ever accepted; a missing listener has nobody to tell.
+        if (callback == null) return;
         try {
             callback.onResult(false);
         } catch (RemoteException e) {

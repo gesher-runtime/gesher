@@ -40,6 +40,8 @@ def main():
             (d / 'gesher').mkdir()
             (d / 'gesher/clocks.h').write_text((ROOT / 'compat/posix/include/gesher/clocks.h').read_text())
             (d / 'gesher/awake_clock.h').write_text((ROOT / 'compat/posix/include/gesher/awake_clock.h').read_text())
+            interrupt = ROOT / 'compat/posix/include/gesher/futex_interrupt.h'
+            if interrupt.exists(): (d / 'gesher/futex_interrupt.h').write_text(interrupt.read_text())
             owner = 'reinterpret_cast<FARPROC>(&gesher_futex_owner_v1)' if 'gesher_futex_owner_v1(' in source else 'nullptr'
             generated = '''#define _GNU_SOURCE 1
 #include <time.h>
@@ -58,6 +60,14 @@ struct LinuxTimespec { int64_t tv_sec, tv_nsec; };
 static constexpr int kENOSYS=ENOSYS, kEINVAL=EINVAL, kEAGAIN=EAGAIN, kETIMEDOUT=ETIMEDOUT;
 static bool DispatchTimerfdSyscall(int64_t,int64_t,int64_t,int64_t,int64_t,int64_t*) { return false; }
 static int64_t RawSyscallX64(int64_t,const int64_t*) { return -ENOSYS; }
+static int64_t MonotonicNanos() { return gesher::MonotonicNanos(); }
+// Directed-signal interruption is a boundary here: no fixture thread has
+// signal state (signal_bionic.cc), so guest futex waits are never attached.
+struct gesher_futex_interrupt;
+static ::gesher_futex_interrupt* AttachSignalInterrupt() { return nullptr; }
+static void DetachSignalInterrupt() {}
+static constexpr int kNoHandler=0, kHandlersWithoutRestart=2, kEINTR=EINTR;
+static int DeliverAfterInterrupt() { return kNoHandler; }
 ''' + guest + '''
 #undef syscall
 #define FUTEX_TEST_CLOCK_GETTIME gesher::AndroidClockGettime
