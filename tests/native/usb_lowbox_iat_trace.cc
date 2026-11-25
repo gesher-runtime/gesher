@@ -49,6 +49,8 @@ using DuplicateToken = NTSTATUS(NTAPI*)(HANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,
 using QueryTokenInformation = NTSTATUS(NTAPI*)(HANDLE, TOKEN_INFORMATION_CLASS, PVOID, ULONG, PULONG);
 using SetTokenInformation = NTSTATUS(NTAPI*)(HANDLE, TOKEN_INFORMATION_CLASS, PVOID, ULONG);
 using StatusToWin32 = ULONG(NTAPI*)(NTSTATUS);
+using CreateFileFn = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+    PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
 using LastNtStatus = NTSTATUS(NTAPI*)();
 using SetNtStatus = VOID(NTAPI*)(NTSTATUS);
 
@@ -57,7 +59,8 @@ constexpr const char* kNames[kLowboxTraceSymbolCount] = {
     "NtOpenThreadToken", "NtOpenThreadTokenEx", "NtOpenProcessToken", "NtOpenProcessTokenEx",
     "NtOpenDirectoryObject", "NtCreateDirectoryObject", "NtCreateDirectoryObjectEx", "NtCreateLowBoxToken",
     "NtCreateSymbolicLinkObject", "NtOpenSymbolicLinkObject", "NtQuerySecurityObject", "NtSetSecurityObject",
-    "NtDuplicateObject", "NtDuplicateToken", "NtQueryInformationToken", "NtSetInformationToken", "RtlNtStatusToDosError"};
+    "NtDuplicateObject", "NtDuplicateToken", "NtQueryInformationToken", "NtSetInformationToken",
+    "RtlNtStatusToDosError", "NtCreateFile"};
 struct Slot { void* volatile* address = nullptr; void* original = nullptr; void* hook = nullptr; DWORD api = 0; bool installed = false; };
 struct Page { void* address = nullptr; DWORD original = 0; bool writable = false; };
 struct State {
@@ -482,6 +485,16 @@ TRACE_NOINLINE ULONG NTAPI HookStatusToWin32(NTSTATUS status) noexcept {
   return Forward<ULONG>(LowboxTraceApi::status_to_win32, in, nullptr, nullptr, TRACE_CALLER(),
       [&] { return Original<StatusToWin32>(LowboxTraceApi::status_to_win32)(status); });
 }
+TRACE_NOINLINE NTSTATUS NTAPI HookCreateFile(PHANDLE file, ACCESS_MASK access, POBJECT_ATTRIBUTES attributes,
+    PIO_STATUS_BLOCK iosb, PLARGE_INTEGER allocation, ULONG file_attributes, ULONG share, ULONG disposition,
+    ULONG options, PVOID ea, ULONG ea_length) noexcept {
+  LowboxTraceCall in{}; in.access = access;
+  in.flags = disposition;
+  return Forward(LowboxTraceApi::create_file, in, attributes, file, TRACE_CALLER(), [&] {
+    return Original<CreateFileFn>(LowboxTraceApi::create_file)(file, access, attributes, iosb,
+        allocation, file_attributes, share, disposition, options, ea, ea_length);
+  });
+}
 static_assert(std::is_convertible_v<decltype(&HookCreateSymbolicLink), CreateSymbolicLink> &&
               std::is_convertible_v<decltype(&HookOpenSymbolicLink), Directory> &&
               std::is_convertible_v<decltype(&HookQuerySecurity), QuerySecurity> &&
@@ -501,7 +514,7 @@ void* Hook(DWORD api) {
       reinterpret_cast<void*>(&HookQuerySecurity), reinterpret_cast<void*>(&HookSetSecurity),
       reinterpret_cast<void*>(&HookDuplicateObject), reinterpret_cast<void*>(&HookDuplicateToken),
       reinterpret_cast<void*>(&HookQueryTokenInformation), reinterpret_cast<void*>(&HookSetTokenInformation),
-      reinterpret_cast<void*>(&HookStatusToWin32)};
+      reinterpret_cast<void*>(&HookStatusToWin32), reinterpret_cast<void*>(&HookCreateFile)};
   return hooks[api];
 }
 

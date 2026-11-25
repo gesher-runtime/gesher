@@ -12,7 +12,7 @@ enum class LowboxTraceApi : DWORD {
   create_directory_ex, create_lowbox_token, create_symbolic_link,
   open_symbolic_link, query_security, set_security, duplicate_object,
   duplicate_token, query_token_information, set_token_information,
-  status_to_win32, count,
+  status_to_win32, create_file, count,
 };
 inline constexpr DWORD kLowboxTraceSymbolCount = static_cast<DWORD>(LowboxTraceApi::count);
 inline constexpr DWORD kLowboxTraceRecordCount = 64;
