@@ -8,6 +8,7 @@
 #include <bcrypt.h>
 #include <urlmon.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,6 +31,27 @@ constexpr wchar_t kParkingClass[] = L"GesherWebViewParking";
 constexpr wchar_t kBridgePrefix[] = L"/.gesher-js-bridge/";
 constexpr size_t kBridgeBodyLimit = 1024 * 1024;
 constexpr ULONGLONG kBridgeTimeoutMs = 30'000;
+
+bool NavigationTracing() {
+  static const bool enabled = [] {
+    const char* value = getenv("GESHER_TRACE_WEBVIEW_NAVIGATION");
+    return value != nullptr && strcmp(value, "1") == 0;
+  }();
+  return enabled;
+}
+
+// Opt-in event-order diagnostics. IDs and outcomes only, no URLs or document data.
+void TraceNavigation(const void* host, const char* format, ...) {
+  if (!NavigationTracing()) return;
+  char message[512] = {};
+  va_list args;
+  va_start(args, format);
+  vsnprintf(message, sizeof(message), format, args);
+  va_end(args);
+  fprintf(stderr, "gesher-webview: navigation-trace native host=%p tick=%llu %s\n", host,
+          static_cast<unsigned long long>(GetTickCount64()), message);
+  fflush(stderr);
+}
 
 // --- The WebView thread ---------------------------------------------------
 
@@ -1147,6 +1169,15 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         bool api = impl->api_navigation && !redirect;
                         if (!redirect) impl->api_navigation = false;
                         std::wstring url = uri.str();
+                        if (NavigationTracing()) {
+                          UINT64 nav = 0;
+                          args->get_NavigationId(&nav);
+                          TraceNavigation(impl.get(),
+                              "event=start nav=%llu handed=%lld api=%d redirect=%d user=%d",
+                              static_cast<unsigned long long>(nav),
+                              static_cast<long long>(started_number), api,
+                              redirect != FALSE, user != FALSE);
+                        }
                         if (!impl->auth_retry.empty() && url == impl->auth_retry && !redirect) {
                           impl->auth_retry.clear();
                           impl->main_document = url;
@@ -1209,6 +1240,12 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         std::wstring url = source.str();
                         if (url.empty() || url == L"about:blank") url = impl->main_document;
                         int64_t started = impl->NavigationEnded(nav);
+                        TraceNavigation(impl.get(),
+                            "event=finished nav=%llu handed=%lld latest=%lld ok=%d status=%d http=%d",
+                            static_cast<unsigned long long>(nav),
+                            static_cast<long long>(started),
+                            static_cast<long long>(impl->api_number), ok != FALSE,
+                            static_cast<int>(status), http);
                         if (auth_wait) {
                           impl->auth_finish = {true, http, static_cast<int32_t>(status), url, started};
                           return S_OK;
@@ -1413,6 +1450,10 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         int64_t id = impl->next_request++;
                         impl->requests.emplace(id, std::move(r));
                         bool main = document && SameDocumentUrl(url, impl->main_document);
+                        if (document) TraceNavigation(impl.get(),
+                            "event=request request=%lld handed=%lld context=%d main=%d file=%d",
+                            static_cast<long long>(id), static_cast<long long>(impl->api_number),
+                            static_cast<int>(context), main, file);
                         impl->listener->OnResourceRequest(id, url, method.str(),
                                                           Headers(headers.get()),
                                                           static_cast<int32_t>(context), main);
@@ -2132,10 +2173,14 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
       }
       if (SUCCEEDED(hr)) {
         if (number > impl->api_number) impl->api_number = number;
+        TraceNavigation(impl, "event=navigate api=%lld handed=%lld request-api=1",
+                        static_cast<long long>(number), static_cast<long long>(impl->api_number));
         hr = wv2->NavigateWithWebResourceRequest(request.get());
       }
     } else {
       if (number > impl->api_number) impl->api_number = number;
+      TraceNavigation(impl, "event=navigate api=%lld handed=%lld request-api=0",
+                      static_cast<long long>(number), static_cast<long long>(impl->api_number));
       hr = impl->webview->Navigate(url.c_str());
     }
     if (FAILED(hr)) {
@@ -2336,6 +2381,9 @@ void Host::RespondToRequest(int64_t id, int32_t status, const std::wstring& reas
   PostToWebViewThread([shared, id, status, reason, headers, body = std::move(bytes)] {
     Impl* impl = shared.get();
     auto it = impl->requests.find(id);
+    TraceNavigation(impl, "event=response request=%lld status=%d found=%d bytes=%llu",
+                    static_cast<long long>(id), status, it != impl->requests.end(),
+                    static_cast<unsigned long long>(body ? body->size() : 0));
     if (it == impl->requests.end()) return;
     Impl::Request r = std::move(it->second);
     impl->requests.erase(it);
@@ -2354,7 +2402,9 @@ void Host::RespondToRequest(int64_t id, int32_t status, const std::wstring& reas
       if (SUCCEEDED(OwnedStream::Create(body, stream.Put())) &&
           SUCCEEDED(impl->env->CreateWebResourceResponse(
                         stream.get(), status, reason.c_str(), response_headers, response.Put()))) {
-        r.args->put_Response(response.get());
+        HRESULT response_hr = r.args->put_Response(response.get());
+        TraceNavigation(impl, "event=response-applied request=%lld status=%d hr=%ld",
+                        static_cast<long long>(id), status, static_cast<long>(response_hr));
       }
     }
     r.deferral->Complete();

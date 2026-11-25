@@ -512,6 +512,18 @@ bool VisitEnvironment(void (*visit)(const char*, void*), void* context) {
   visit("GESHER_OFD_TRANSFER_ENV=fixture", context);
   return true;
 }
+// FIFO descriptions (fifo.cc) are outside this envelope: none is exported.
+HANDLE FifoRingSection(const DescriptorSnapshotPtr&) { errno = EOPNOTSUPP; return nullptr; }
+// gesher/fork.h (ADR 0092): this fixture is never a forked child, so the
+// builder creates its process itself, under the spawn lock a fork excludes.
+static int spawn_lock_depth = 0;
+bool InForkedChild() { return false; }
+void AcquireSpawnLock() { ++spawn_lock_depth; }
+void ReleaseSpawnLock() { --spawn_lock_depth; }
+DWORD BrokeredCreateProcess(const wchar_t*, const wchar_t*, const wchar_t*, const wchar_t*, DWORD,
+                            const STARTUPINFOW&, const HANDLE*, size_t, PROCESS_INFORMATION*) {
+  std::abort();  // only a forked child asks its root
+}
 }
 namespace gesher::exec {
 static wchar_t* GetEnvironmentStringsW() {
@@ -553,6 +565,7 @@ static BOOL CreateProcessW(const wchar_t* app, wchar_t* command, void*, void*, B
                            DWORD flags, void* environment, const wchar_t* cwd,
                            STARTUPINFOW* raw_startup, PROCESS_INFORMATION* info) {
   ++host::create_process_calls;
+  if (gesher::spawn_lock_depth != 1) std::abort();  // a fork may not clone meanwhile
   const auto* inherited = static_cast<const wchar_t*>(environment);
   static constexpr wchar_t expected[] = L"=C:=C:\\fixture\xd800\0"
       L"=D:=D:\\fixture\xd83d\xde00\0GESHER_OFD_TRANSFER_ENV=fixture\0";

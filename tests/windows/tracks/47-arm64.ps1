@@ -13,6 +13,16 @@
 # ($Dir). Absolute paths: $Dir may be relative to the starting directory.
 $a64 = (Resolve-Path $Dir).Path
 
+# Ends what a run left behind: processes whose parent it was, and theirs (a
+# guest fork's children outlive a parent that is killed, as orphans do on
+# Linux; the test job must not keep them).
+function A64StopDescendants([int] $ProcessId) {
+  foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue)) {
+    A64StopDescendants $child.ProcessId
+    Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
   $out = Join-Path $env:RUNNER_TEMP "a64-$([guid]::NewGuid()).out"
   $err = "$out.err"
@@ -20,6 +30,7 @@ function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
   $p = Start-Process -FilePath $Exe -ArgumentList $quoted -NoNewWindow -PassThru `
     -RedirectStandardOutput $out -RedirectStandardError $err
   if (-not $p.WaitForExit($Seconds * 1000)) {
+    A64StopDescendants $p.Id
     $p.Kill()
     $p.WaitForExit()
     Write-Output "TIMEOUT after $Seconds s: $Exe $($Arguments -join ' ')"
@@ -27,6 +38,7 @@ function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
   } else {
     $global:LASTEXITCODE = $p.ExitCode
   }
+  A64StopDescendants $p.Id
   Get-Content $out -ErrorAction SilentlyContinue
   Get-Content $err -ErrorAction SilentlyContinue
   Remove-Item $out, $err -ErrorAction SilentlyContinue
@@ -200,6 +212,63 @@ if (Test-Path "$a64exec/libexectest.so") {
 } else {
   Write-Host 'FAIL  arm64: the arm64 executable (arm64-exec/libexectest.so) is missing'
   $failed++
+}
+
+# fork/vfork/clone/wait4/exit in guest code (ADR 0092): real child processes
+# made with RtlCloneUserProcess. Exit codes, copy-on-write, a pipe, __WCLONE/
+# __WALL/WNOHANG, signals, pthread_atfork, Ijiami's two check shapes (0086),
+# a child that forks, and 120 forks while four threads run translated code.
+Check 'arm64: guest fork, vfork and raw clone make real children; wait4 reports their status' {
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-exec", 'arm64-fork-exec', (NoDrive "$a64/arm64-fork-exec")) 300
+} @('arm64_fork_exec all passed', 'fork + execve: the program''s death by SIGTERM is the child''s',
+    'fork + posix_spawn in the child: it starts the program and waits for it')
+# Forks while other threads hold each system call path's locks (and threads
+# start and leave, holding ntdll's loader lock), signals sent at once, a fork
+# from a library constructor, forks from four threads and nested forks.
+foreach ($forkCase in 'malloc', 'mmap', 'stdio', 'thread', 'env', 'prop', 'dlopen', 'exit', 'epoll', 'fifo') {
+  Check "arm64: fork while three threads use $forkCase (no child or parent hangs)" {
+    A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
+      'contend', '40', $forkCase) 300
+  } @("contend $forkCase", 'hung=0 bad=0 of 40')
+}
+foreach ($forkSignal in '10', '23') {
+  Check "arm64: signal $forkSignal sent right after fork reaches the child's handler" {
+    A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
+      'killrace', '40', $forkSignal) 300
+  } @("handled=40 killed=0 lost=0 of 40")
+}
+Check 'arm64: a library constructor forks; the loader works in both processes' {
+  $env:LD_LIBRARY_PATH = NoDrive $a64
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
+    'ctor', (NoDrive "$a64/libarm64forkctor.so")) 120
+  Remove-Item Env:LD_LIBRARY_PATH
+} @('loader usable after: ok')
+Check 'arm64: a fork while another thread is in a dl_iterate_phdr callback; the child unmaps the reservation' {
+  $env:LD_LIBRARY_PATH = NoDrive $a64
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
+    'cbfork', (NoDrive "$a64/libarm64forkctor.so")) 120
+  Remove-Item Env:LD_LIBRARY_PATH
+} @('cbfork: the child unmapped the reservation: ok',
+    'cbfork: forked 100 callbacks deep, the child unmapped the reservation: ok')
+Check 'arm64: four threads fork at once; a chain of nested forks' {
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial', 'multi', '25') 300
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial', 'chain', '8') 300
+} @('multi: 100 of 100 ok', 'chain depth 8: ok')
+# The same fork checks inside ART: dalvikvm loads the arm64 JNI library, and
+# the guest forks while ART's and a Java thread run.
+Check 'arm64: guest fork inside dalvikvm (ART threads running); children compute and exit' {
+  A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/arm64-fork.dex"), 'gesher.Arm64Fork',
+    (NoDrive (Resolve-Path "$Dir/libarm64fork.so").Path)) 600
+} @('arm64_fork_exec all passed', 'Java thread computed while forking: true', 'Arm64Fork all passed')
+# Forks while Java threads keep starting and leaving: a thread's exit
+# callbacks run under ntdll's loader lock, which the clone waits for.
+foreach ($churnRun in 1..3) {
+  Check "arm64: 200 guest forks inside dalvikvm while four Java threads churn threads (run $churnRun)" {
+    A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+      '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/arm64-fork.dex"), 'gesher.Arm64ForkChurn',
+      (NoDrive (Resolve-Path "$Dir/libarm64fork.so").Path), '4', '200') 600
+  } @('forkLoop n=200 fail=0 hung=0 bad=0', 'Arm64ForkChurn all passed')
 }
 
 # An arm64-only APK through gesher-app: tests/apps/nativeactivity built with

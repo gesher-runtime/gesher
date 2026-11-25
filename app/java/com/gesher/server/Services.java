@@ -205,9 +205,38 @@ public final class Services {
         services.put(CameraSourceService.NAME, new CameraSourceService(am));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 clipboard).asBinder());
+        // content://media: MediaStore over the shared volume (docs/media-provider.md).
+        try {
+            MediaStoreProvider.create(am, pm, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/media")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to index.
+            SystemServer.log("media: provider unavailable: " + e);
+        }
+        // print (docs/print.md): FEATURE_PRINTING means the runtime has the Windows
+        // print bridge, even with no default printer. Without the native bridge,
+        // PrintManager never asks for the service.
+        if (PrintManagerService.supported()) {
+            PrintManagerService print = new PrintManagerService(am,
+                    new java.io.File(android.os.Environment.getDataDirectory(), "system/print"),
+                    new WindowsPrint());
+            atm.attachPrint(print);
+            services.put(Context.PRINT_SERVICE, StandIn.of(android.print.IPrintManager.class,
+                    print).asBinder());
+        }
         // Construct the network provider before jobs subscribe to its changes.
         ConnectivityService connectivity = new ConnectivityService(pm, atm);
         services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
+        // content://downloads: DownloadManager's provider and downloader (docs/downloads.md).
+        try {
+            DownloadProvider.create(am, pm, connectivity, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/downloads")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to download.
+            SystemServer.log("downloads: provider unavailable: " + e);
+        }
         // Device state from Windows (devsvc track, ADR 0038): jobs, the battery.
         services.put(Context.JOB_SCHEDULER_SERVICE, StandIn.of(android.app.job.IJobScheduler.class,
                 new JobSchedulerService(am, atm, pm, connectivity)).asBinder());
@@ -317,6 +346,14 @@ public final class Services {
         // that name registerTelephonyCallback / listen threw NullPointerException (Waze).
         services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class, telephony.registry).asBinder());
+        // credential: CredentialManager for passkeys (docs/passkeys.md, ADR 0093). The system
+        // server is the one credential provider, over Windows' WebAuthn API (WindowsWebAuthn,
+        // null without its natives). Without that API, and for other credential types, the
+        // answers are AOSP's for a device without a provider.
+        services.put(Context.CREDENTIAL_SERVICE, StandIn.of(
+                android.credentials.ICredentialManager.class,
+                new CredentialManagerService(new CredentialManagerHost(am, pm),
+                        WindowsWebAuthn.create(), new AssetLinks.Https())).asBinder());
         StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
                 android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
         services.put(Context.TRUST_SERVICE, trust.asBinder());
