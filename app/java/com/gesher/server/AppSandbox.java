@@ -5,6 +5,7 @@
 package com.gesher.server;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -147,7 +148,9 @@ final class AppSandbox {
             SystemServer.log("sandbox: cannot create " + logcat + ": " + e);
         }
         grantContainer(logcat.getPath(), container, MODIFY, false);
-        grantStorageAccess(pm, pkg, packageName, container);
+        // Publication prepares the replacement file's ACL and reconciles live
+        // storage grants through the same path as permission/AppOp changes.
+        ExternalStorageAccess.syncPackage(pm, pkg);
         List<String> caps = capabilities(internet);
         SystemServer.log("sandbox: " + packageName + " in AppContainer " + container
                 + " with " + caps);
@@ -156,73 +159,101 @@ final class AppSandbox {
     }
 
     /**
-     * Grants AppContainer access to the package's storage-policy file, its own
-     * {@code Android/{data,obb,media}/<pkg>} directories, and (when permitted) shared
-     * storage without inheriting into other packages' {@code Android/data} or {@code Android/obb}.
+     * Prepare the new inode before atomic policy publication: replacing a file
+     * does not copy its old explicit AppContainer ACE to the replacement.
      */
-    private static void grantStorageAccess(PackageManagerService pm, ApkPackage pkg,
-            String packageName, String container) {
-        ExternalStorageAccess.syncPackage(pm, pkg);
-        File policyFile = ExternalStorageAccess.policyFile(packageName);
-        if (policyFile != null) {
-            grantContainer(policyFile.getPath(), container, READ_EXECUTE, false);
+    static void prepareStoragePolicyFile(String packageName, File stagedFile) throws IOException {
+        if (!enabled()) return;
+        File policyRoot = new File(Device.dataDir(), "system/storage-policy").getCanonicalFile();
+        File staged = stagedFile.getCanonicalFile();
+        if (!policyRoot.equals(staged.getParentFile()) || !staged.isFile()) {
+            throw new IOException("Storage policy file outside the policy directory: " + stagedFile);
         }
-        File sharedRoot = new File(Device.dataDir(), "media/0");
-        for (String sub : new String[] {"data", "obb", "media"}) {
-            File appDir = new File(sharedRoot, "Android/" + sub + "/" + packageName);
-            appDir.mkdirs();
-            grantContainer(appDir.getPath(), container, MODIFY, true);
+        setStorageAccess(staged, containerName(packageName), READ_EXECUTE, false);
+    }
+
+    /**
+     * Reconcile one immutable policy for a running package as well as at spawn.
+     * The publisher serializes this with policy publication; failures propagate
+     * so a requested permission change is never reported as successfully applied.
+     * A null policy removes an uninstalled package's grants without creating paths.
+     */
+    static void syncStorageAccess(String packageName, ExternalStorageAccess.Policy policy)
+            throws IOException {
+        if (!enabled()) return;
+        if (packageName == null || packageName.isEmpty() || packageName.indexOf('/') >= 0
+                || packageName.indexOf('\\') >= 0 || ".".equals(packageName)
+                || "..".equals(packageName)) {
+            throw new IOException("Invalid storage package name: " + packageName);
         }
-        ExternalStorageAccess.Policy policy = ExternalStorageAccess.computePolicy(pm, pkg);
-        int sharedAccess = switch (policy.mode()) {
+        String container = containerName(packageName);
+        File sharedRoot = new File(Device.dataDir(), "media/0").getCanonicalFile();
+        boolean removed = policy == null;
+        if (removed && !sharedRoot.exists()) return;
+        requireDirectory(sharedRoot);
+        File android = storageDirectory(sharedRoot, "Android", !removed);
+        // Protect these roots before making the shared-root ACE inheritable.
+        // Protection retains Windows owner/SYSTEM access and explicit grants on
+        // each package's own directory; it does not add a deny ACE to all apps.
+        for (String sub : new String[] {"data", "obb"}) {
+            File privateRoot = storageDirectory(android, sub, !removed);
+            if (removed && !privateRoot.exists()) continue;
+            int error = Zygote.nativeProtectPrivateStorage(Zygote.windowsPath(privateRoot.getPath()));
+            if (error != 0) throw storageFailure("protecting", privateRoot, error);
+        }
+        File media = storageDirectory(android, "media", !removed);
+        int sharedAccess = removed ? 0 : switch (policy.mode()) {
             case MANAGER, LEGACY_RW -> MODIFY;
             case LEGACY_RO, MEDIA_RO -> READ_EXECUTE;
             case SCOPED -> 0;
         };
-        if (!sharedRoot.isDirectory()) return;
+        setStorageAccess(sharedRoot, container, sharedAccess, true);
+
+        // Migrate the earlier non-inheriting-root layout. Explicit child grants
+        // otherwise survive a root downgrade/revoke and continue to allow writes.
         File[] children = sharedRoot.listFiles();
-        if (sharedAccess == 0) {
-            revokeContainer(sharedRoot.getPath(), container);
-            if (children != null) {
-                for (File child : children) {
-                    if ("Android".equalsIgnoreCase(child.getName())) {
-                        revokeContainer(child.getPath(), container);
-                        File androidMedia = new File(child, "media");
-                        if (androidMedia.isDirectory()) {
-                            revokeContainer(androidMedia.getPath(), container);
-                        }
-                    } else {
-                        revokeContainer(child.getPath(), container);
-                    }
-                }
+        if (children == null) throw new IOException("Cannot enumerate shared storage: " + sharedRoot);
+        for (File child : children) {
+            File resolved = child.getCanonicalFile();
+            if (!sharedRoot.equals(resolved.getParentFile())
+                    || !child.getName().equals(resolved.getName())) {
+                throw new IOException("Reparse child in shared storage: " + child);
             }
-            return;
+            setStorageAccess(child, container, 0, false);
         }
-        // Grant sharedRoot non-inheriting so it never propagates into Android/data or Android/obb.
-        grantContainer(sharedRoot.getPath(), container, sharedAccess, false);
-        if (children != null) {
-            for (File child : children) {
-                if ("Android".equalsIgnoreCase(child.getName())) {
-                    grantContainer(child.getPath(), container, READ_EXECUTE, false);
-                    File androidMedia = new File(child, "media");
-                    if (androidMedia.isDirectory()) {
-                        grantContainer(androidMedia.getPath(), container, sharedAccess, true);
-                    }
-                } else {
-                    grantContainer(child.getPath(), container, sharedAccess, true);
-                }
-            }
+        if (media.exists()) setStorageAccess(media, container, 0, false);
+        for (String sub : new String[] {"data", "obb", "media"}) {
+            File appDir = storageDirectory(new File(android, sub), packageName, !removed);
+            if (appDir.exists()) setStorageAccess(appDir, container, removed ? 0 : MODIFY, true);
         }
     }
 
-    private static void revokeContainer(String path, String container) {
-        if (path == null || !new File(path).exists()) return;
-        String target = Zygote.windowsPath(path);
-        int error = Zygote.nativeRevokeFromAppContainer(target, container);
-        if (error != 0) {
-            SystemServer.log("sandbox: revoking " + container + " " + target
-                    + ": Win32 error " + error);
+    private static File storageDirectory(File parent, String name, boolean create) throws IOException {
+        File child = new File(parent, name);
+        File resolved = child.getCanonicalFile();
+        if (!parent.equals(resolved.getParentFile()) || !name.equals(resolved.getName())) {
+            throw new IOException("Storage directory outside its parent: " + child);
         }
+        if (create) requireDirectory(child);
+        return child;
+    }
+
+    private static void requireDirectory(File directory) throws IOException {
+        if (!directory.isDirectory() && !directory.mkdirs() && !directory.isDirectory()) {
+            throw new IOException("Cannot create storage directory: " + directory);
+        }
+    }
+
+    private static void setStorageAccess(File path, String container, int access, boolean inherit)
+            throws IOException {
+        int error = Zygote.nativeSetAppContainerStorageAccess(
+                Zygote.windowsPath(path.getPath()), container, access, inherit);
+        if (error != 0) throw storageFailure("setting permissions on", path, error);
+    }
+
+    private static IOException storageFailure(String operation, File path, int error) {
+        return new IOException("AppContainer storage: " + operation + " " + path
+                + ": Win32 error " + error);
     }
 
     /** The package is uninstalled: its container's profile goes with it. */

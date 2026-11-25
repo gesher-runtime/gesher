@@ -940,7 +940,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         } }
         // Process retirement and notifications run outside the PM and policy monitors.
         if (changed) permissionsChanged(expected, () -> killOnRevoke && revoked.stream()
-                .anyMatch(name -> !granted(name, expected.packageName)));
+                .anyMatch(name -> !granted(name, expected.packageName)),
+                ExternalStorageAccess.isStoragePermission(background));
     }
 
     /**
@@ -964,7 +965,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             scheduleWrite();
             publishRuntimeModes(expected.uid(), before);
         } }
-        permissionsChanged(expected, () -> false);
+        permissionsChanged(expected, () -> false, ExternalStorageAccess.isStoragePermission(background));
     }
 
     /**
@@ -994,7 +995,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         if (!commitUserDecision(expected, permissions, allowed, false, false, new ArrayList<>())) return;
         // Every changed permission was still denied at commit time. In particular,
         // an old dialog cannot revoke a grant that another controller just made.
-        permissionsChanged(expected, () -> false);
+        permissionsChanged(expected, () -> false,
+                permissions.stream().anyMatch(ExternalStorageAccess::isStoragePermission));
     }
 
     /**
@@ -1098,23 +1100,32 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             publishRuntimeModes(installed.uid(), before);
         } }
         if (killOnRevoke) permissionChanged(installed, permission, wasGranted);
-        else permissionsChanged(installed, () -> false);
+        else permissionsChanged(installed, () -> false, ExternalStorageAccess.isStoragePermission(permission));
     }
 
     private void permissionChanged(ApkPackage installed, String permission, boolean wasGranted) {
-        permissionsChanged(installed, () -> wasGranted && !granted(permission, installed.packageName));
+        permissionsChanged(installed, () -> wasGranted && !granted(permission, installed.packageName),
+                ExternalStorageAccess.isStoragePermission(permission));
     }
 
     private void permissionsChanged(ApkPackage installed, java.util.function.BooleanSupplier stillRevoked) {
+        permissionsChanged(installed, stillRevoked, true);
+    }
+
+    private void permissionsChanged(ApkPackage installed, java.util.function.BooleanSupplier stillRevoked,
+            boolean storageChanged) {
         invalidateCaches();
-        ExternalStorageAccess.syncUid(mPm, installed.uid());
-        NotificationManagerService notifications = NotificationManagerService.sLast;
-        if (notifications != null) for (ApkPackage member : uidMembers(installed.uid())) {
-            notifications.permissionChanged(member.packageName);
-        }
-        Services.Created services = Services.sLast;
-        if (services != null && services.pm == mPm && stillRevoked.getAsBoolean()) {
-            services.atm.killUidForPermissionChange(installed, stillRevoked);
+        try {
+            if (storageChanged) ExternalStorageAccess.syncUid(mPm, installed.uid());
+        } finally {
+            NotificationManagerService notifications = NotificationManagerService.sLast;
+            if (notifications != null) for (ApkPackage member : uidMembers(installed.uid())) {
+                notifications.permissionChanged(member.packageName);
+            }
+            Services.Created services = Services.sLast;
+            if (services != null && services.pm == mPm && stillRevoked.getAsBoolean()) {
+                services.atm.killUidForPermissionChange(installed, stillRevoked);
+            }
         }
     }
 
@@ -1247,7 +1258,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             if (changed) { scheduleWrite(); publishRuntimeModes(uid, before); }
         } }
         invalidateCaches();
-        ExternalStorageAccess.syncUid(mPm, uid);
+        if (ExternalStorageAccess.isStorageOp(switchOp)) ExternalStorageAccess.syncUid(mPm, uid);
         return true;
     }
 
@@ -1288,24 +1299,52 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         return exemptions;
     }
 
-    /** The caller's authority over {@code target}'s allowlists; null when it cannot see it. */
+    private record AllowlistIdentity(boolean system, ApkPackage code, int uid) { }
     private record AllowlistCaller(boolean privileged, boolean installer) { }
 
-    private AllowlistCaller allowlistCaller(ApkPackage target) {
+    /** ATM can enter PM; authenticate attached code before acquiring either state monitor. */
+    private AllowlistIdentity allowlistIdentity() {
         CallerIdentity callers = mCallers;
         if (callers == null) throw new SecurityException("Unrecognized allowlist caller");
-        if (callers.isSystem()) return new AllowlistCaller(true, false);
-        String caller = callers.callerPackage();
-        ApkPackage code = mPm.get(caller);
-        boolean privileged = granted(Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS, caller);
-        // AOSP filterAppAccess: an invisible package answers as if absent.
-        if (!privileged && !caller.equals(target.packageName)
-                && !mPm.canSeeInstalledPackage(caller, target.packageName)) return null;
-        return new AllowlistCaller(privileged, target.installSource().isInstaller(code));
+        int uid = callers.callerUid();
+        boolean system = callers.isSystem();
+        ApkPackage code = system ? null : callers.requireCurrentPackage(callers.callerPackage());
+        return new AllowlistIdentity(system, code, uid);
+    }
+
+    /** PM and policy are locked: revalidate installation, attribution and permission together. */
+    private AllowlistCaller allowlistCaller(ApkPackage target, AllowlistIdentity identity) {
+        if (identity.system) return new AllowlistCaller(true, false);
+        ApkPackage code = identity.code;
+        if (code == null || mPm.get(code.packageName) != code || code.uid() != identity.uid
+                || mPm.isRemovalPending(code.packageName)) {
+            throw new SecurityException("Unknown or retired allowlist caller");
+        }
+        boolean privileged = granted(Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS, code.packageName);
+        PackageInstallSource source = target.installSource();
+        ApkPackage recorded = mPm.get(source.installer());
+        boolean installer = source.isInstaller(recorded) && !mPm.isRemovalPending(recorded.packageName)
+                && PackageManagerService.sameInstallSourceIdentity(code, recorded);
+        // The current installer (including its admitted shared UID) can see its installation.
+        // Other invisible packages answer as absent, before category-specific authorization.
+        if (!privileged && !installer && !code.packageName.equals(target.packageName)
+                && !mPm.canSeeInstalledPackage(code.packageName, target.packageName)) return null;
+        return new AllowlistCaller(privileged, installer);
     }
 
     private static void checkAllowlistFlags(int flags) {
         if ((flags & ~ALLOWLIST_FLAGS) != 0) throw new IllegalArgumentException("Invalid allowlist flags: " + flags);
+    }
+
+    private static void requireAllowlistAuthority(AllowlistCaller caller, int flags) {
+        if ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) != 0 && !caller.privileged) {
+            throw new SecurityException("System allowlist requires " + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
+        }
+        if ((flags & (PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE | PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER)) != 0
+                && !caller.privileged && !caller.installer) {
+            throw new SecurityException("Upgrade or installer allowlist requires being installer on record or "
+                    + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
+        }
     }
 
     /** AOSP PermissionManagerServiceImpl.getAllowlistedRestrictedPermissions, including its caller checks. */
@@ -1314,23 +1353,19 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         checkAllowlistFlags(flags);
         if (userId < 0) throw new IllegalArgumentException("Invalid user " + userId);
         if (userId != 0) return null;
-        ApkPackage target = mPm.get(pkg);
-        if (target == null || mPm.isRemovalPending(pkg)) return null;
-        AllowlistCaller caller = allowlistCaller(target);
-        if (caller == null) return null;
-        if ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) != 0 && !caller.privileged) {
-            throw new SecurityException("Querying system allowlist requires "
-                    + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
-        }
-        if ((flags & (PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE | PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER)) != 0
-                && !caller.privileged && !caller.installer) {
-            throw new SecurityException("Querying upgrade or installer allowlist requires being installer on record or "
-                    + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
-        }
-        return allowlisted(target, flags);
+        AllowlistIdentity identity = allowlistIdentity();
+        synchronized (mPm) { synchronized (this) {
+            ApkPackage target = mPm.get(pkg);
+            if (target == null || mPm.isRemovalPending(pkg)) return null;
+            AllowlistCaller caller = allowlistCaller(target, identity);
+            if (caller == null) return null;
+            requireAllowlistAuthority(caller, flags);
+            return allowlisted(target, flags);
+        } }
     }
 
-    private synchronized List<String> allowlisted(ApkPackage target, int allowlists) {
+    /** Called with PM and policy locked. */
+    private List<String> allowlisted(ApkPackage target, int allowlists) {
         int query = exemptionFlags(allowlists);
         List<ApkPackage> members = uidMembers(target.uid());
         List<String> result = new ArrayList<>();
@@ -1344,69 +1379,53 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     @Override public boolean addAllowlistedRestrictedPermission(String pkg, String permission, int flags, int userId) {
-        java.util.Objects.requireNonNull(permission);
-        if (!checkAllowlistPermission(permission)) return false;
-        List<String> permissions = getAllowlistedRestrictedPermissions(pkg, flags, userId);
-        permissions = permissions == null ? new ArrayList<>() : new ArrayList<>(permissions);
-        if (permissions.contains(permission)) return false;
-        permissions.add(permission);
-        return setAllowlistedRestrictedPermissions(pkg, permissions, flags, userId);
+        return updateAllowlistedRestrictedPermission(pkg, permission, flags, userId, true);
     }
 
     @Override public boolean removeAllowlistedRestrictedPermission(String pkg, String permission, int flags, int userId) {
-        java.util.Objects.requireNonNull(permission);
-        if (!checkAllowlistPermission(permission)) return false;
-        List<String> permissions = getAllowlistedRestrictedPermissions(pkg, flags, userId);
-        if (permissions == null) return false;
-        permissions = new ArrayList<>(permissions);
-        return permissions.remove(permission) && setAllowlistedRestrictedPermissions(pkg, permissions, flags, userId);
+        return updateAllowlistedRestrictedPermission(pkg, permission, flags, userId, false);
     }
 
-    /** AOSP checkExistsAndEnforceCannotModifyImmutablyRestrictedPermission. */
-    private boolean checkAllowlistPermission(String permission) {
-        PermissionInfo info = mCatalog.get(permission);
-        if (info == null) return false;
-        if (info.isRestricted() && (info.flags & PermissionInfo.FLAG_IMMUTABLY_RESTRICTED) != 0) {
-            CallerIdentity callers = mCallers;
-            boolean privileged = callers != null && (callers.isSystem()
-                    || granted(Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS, callers.callerPackage()));
-            if (!privileged) {
-                throw new SecurityException("Cannot modify allowlisting of an immutably restricted permission: " + permission);
-            }
-        }
-        return true;
-    }
-
-    private boolean setAllowlistedRestrictedPermissions(String pkg, List<String> permissions, int flags, int userId) {
+    /** Authorize and change one entry against one current installation and state snapshot. */
+    private boolean updateAllowlistedRestrictedPermission(String pkg, String permission, int flags, int userId,
+            boolean add) {
         java.util.Objects.requireNonNull(pkg);
+        java.util.Objects.requireNonNull(permission);
         checkAllowlistFlags(flags);
         if (Integer.bitCount(flags) != 1) throw new IllegalArgumentException("Exactly one allowlist is changed");
         if (userId < 0) throw new IllegalArgumentException("Invalid user " + userId);
         if (userId != 0) return false;
-        ApkPackage target = mPm.get(pkg);
-        if (target == null || mPm.isRemovalPending(pkg)) return false;
-        AllowlistCaller caller = allowlistCaller(target);
-        if (caller == null) return false;
-        if ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) != 0 && !caller.privileged) {
-            throw new SecurityException("Modifying system allowlist requires "
-                    + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
-        }
-        if ((flags & (PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE | PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER)) != 0
-                && !caller.privileged && !caller.installer) {
-            throw new SecurityException("Modifying upgrade or installer allowlist requires being installer on record or "
-                    + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
-        }
-        if ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE) != 0 && !caller.privileged) {
-            // Only the system can add to the upgrade allowlist; the installer can only remove.
+        AllowlistIdentity identity = allowlistIdentity();
+        ApkPackage target;
+        List<String> lostGrants;
+        synchronized (mPm) { synchronized (this) {
+            target = mPm.get(pkg);
+            if (target == null || mPm.isRemovalPending(pkg)) return false;
+            AllowlistCaller caller = allowlistCaller(target, identity);
+            if (caller == null) return false;
+            requireAllowlistAuthority(caller, flags);
+            PermissionInfo info = mCatalog.get(permission);
+            if (info == null) return false;
+            if (info.isRestricted() && (info.flags & PermissionInfo.FLAG_IMMUTABLY_RESTRICTED) != 0
+                    && !caller.privileged) {
+                throw new SecurityException("Cannot modify allowlisting of an immutably restricted permission: " + permission);
+            }
             List<String> current = allowlisted(target, flags);
-            for (String permission : permissions) {
-                if (current == null || !current.contains(permission)) {
+            List<String> permissions = current == null ? new ArrayList<>() : new ArrayList<>(current);
+            if (add) {
+                if (permissions.contains(permission)) return false;
+                if (flags == PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE && !caller.privileged) {
                     throw new SecurityException("Adding to upgrade allowlist requires "
                             + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
                 }
-            }
-        }
-        setAllowlist(target, permissions, flags, false);
+                permissions.add(permission);
+            } else if (!permissions.remove(permission)) return false;
+            // Both the read and write stay under the same locks. Independent add/remove
+            // operations cannot overwrite each other's changes or adopt a replacement APK.
+            lostGrants = setAllowlistLocked(target, permissions, flags, false);
+        } }
+        if (lostGrants == null) return false;
+        notifyAllowlistChanged(target, lostGrants);
         return true;
     }
 
@@ -1418,42 +1437,54 @@ public final class PermissionPolicy extends IPermissionManager.Default {
 
     /** AOSP setAllowlistedRestrictedPermissionsInternal followed by restorePermissionState. */
     private void setAllowlist(ApkPackage target, java.util.Collection<String> permissions, int allowlist, boolean addOnly) {
-        int exemption = exemptionFlags(allowlist);
-        List<String> lostGrants = new ArrayList<>();
+        List<String> lostGrants;
         synchronized (mPm) { synchronized (this) {
             if (mPm.get(target.packageName) != target || mPm.isRemovalPending(target.packageName)) return;
-            List<ApkPackage> members = uidMembers(target.uid());
-            Map<Integer, Integer> before = runtimeModes(target.uid());
-            boolean changed = false;
-            for (String permission : target.parsed.getRequestedPermissions()) {
-                PermissionInfo info = mCatalog.get(permission);
-                if (info == null || !info.isRestricted()) continue;
-                PermissionState old = permissionState(target.uid(), permission, members, info);
-                int flags = old.flags;
-                if (permissions.contains(permission)) flags |= exemption;
-                else if (!addOnly) flags &= ~exemption;
-                boolean wasAllowlisted = (old.flags & RESTRICTION_EXEMPT) != 0;
-                boolean isAllowlisted = (flags & RESTRICTION_EXEMPT) != 0;
-                // Allowlisting trumps policy: a policy-fixed grant that loses every allowlist
-                // is no longer fixed.
-                if ((flags & PackageManager.FLAG_PERMISSION_POLICY_FIXED) != 0 && !isAllowlisted && old.granted) {
-                    flags &= ~PackageManager.FLAG_PERMISSION_POLICY_FIXED;
-                }
-                int target23 = requestingTargetSdk(permission, members);
-                if (target23 < 23 && !wasAllowlisted && isAllowlisted) flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
-                boolean legacy = storedLegacyGrant(target.uid(), permission, info, target23);
-                flags = implicitPermissionFlags(applyRestriction(info, flags), legacy);
-                if (flags == old.flags) continue;
-                changed = true;
-                mDecisions.setProperty(legacyGrantKey(target.uid(), permission), Boolean.toString(legacy));
-                mDecisions.setProperty(flagsKey(target.uid(), permission), Integer.toString(flags));
-                if (old.granted && !permissionState(target.uid(), permission, members, info).granted) lostGrants.add(permission);
-            }
-            if (!changed) return;
-            scheduleWrite();
-            publishRuntimeModes(target.uid(), before);
+            lostGrants = setAllowlistLocked(target, permissions, allowlist, addOnly);
         } }
-        // If this resulted in losing a permission the app is stopped, as in AOSP.
+        if (lostGrants != null) notifyAllowlistChanged(target, lostGrants);
+    }
+
+    /** Called with PM then policy locked; null means no state changed. */
+    private List<String> setAllowlistLocked(ApkPackage target, java.util.Collection<String> permissions,
+            int allowlist, boolean addOnly) {
+        int exemption = exemptionFlags(allowlist);
+        List<String> lostGrants = new ArrayList<>();
+        List<ApkPackage> members = uidMembers(target.uid());
+        Map<Integer, Integer> before = runtimeModes(target.uid());
+        boolean changed = false;
+        for (String permission : target.parsed.getRequestedPermissions()) {
+            PermissionInfo info = mCatalog.get(permission);
+            if (info == null || !info.isRestricted()) continue;
+            PermissionState old = permissionState(target.uid(), permission, members, info);
+            int flags = old.flags;
+            if (permissions.contains(permission)) flags |= exemption;
+            else if (!addOnly) flags &= ~exemption;
+            boolean wasAllowlisted = (old.flags & RESTRICTION_EXEMPT) != 0;
+            boolean isAllowlisted = (flags & RESTRICTION_EXEMPT) != 0;
+            // Allowlisting trumps policy: a policy-fixed grant that loses every allowlist
+            // is no longer fixed.
+            if ((flags & PackageManager.FLAG_PERMISSION_POLICY_FIXED) != 0 && !isAllowlisted && old.granted) {
+                flags &= ~PackageManager.FLAG_PERMISSION_POLICY_FIXED;
+            }
+            int target23 = requestingTargetSdk(permission, members);
+            if (target23 < 23 && !wasAllowlisted && isAllowlisted) flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+            boolean legacy = storedLegacyGrant(target.uid(), permission, info, target23);
+            flags = implicitPermissionFlags(applyRestriction(info, flags), legacy);
+            if (flags == old.flags) continue;
+            changed = true;
+            mDecisions.setProperty(legacyGrantKey(target.uid(), permission), Boolean.toString(legacy));
+            mDecisions.setProperty(flagsKey(target.uid(), permission), Integer.toString(flags));
+            if (old.granted && !permissionState(target.uid(), permission, members, info).granted) lostGrants.add(permission);
+        }
+        if (!changed) return null;
+        scheduleWrite();
+        publishRuntimeModes(target.uid(), before);
+        return lostGrants;
+    }
+
+    private void notifyAllowlistChanged(ApkPackage target, List<String> lostGrants) {
+        // Cache invalidation and application callbacks run after both state monitors are released.
         permissionsChanged(target, () -> lostGrants.stream().anyMatch(name -> !granted(name, target.packageName)));
     }
     @Override public List<android.content.pm.permission.SplitPermissionInfoParcelable> getSplitPermissions() { return Collections.emptyList(); }

@@ -388,11 +388,14 @@ std::string ArtShimImage() {
   return std::string(out.begin(), out.end());
 }
 
+// The stand-ins are loaded once, under these (in the fork set, ADR 0092).
+std::mutex g_art_shim_mutex;
+std::mutex g_art_shim_arm64_mutex;
+
 void* LoadArtShim(const std::string& dir, std::string* path, std::string* error) {
-  static std::mutex mutex;
   static void* entry = nullptr;
   static std::string loaded_path;
-  std::lock_guard<std::mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(g_art_shim_mutex);
   if (entry != nullptr) {
     *path = loaded_path;
     return entry;
@@ -824,11 +827,10 @@ void* ResolveArtShimImport(const char* name) {
 void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, void* runtime,
                        const ArtShimArm64Imports& imports, void** open_common_entry,
                        std::string* path, std::string* error) {
-  static std::mutex mutex;
   static void* entry = nullptr;
   static void* open_common = nullptr;
   static std::string loaded_path;
-  std::lock_guard<std::mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(g_art_shim_arm64_mutex);
   if (entry != nullptr) {
     *path = loaded_path;
     *open_common_entry = open_common;
@@ -893,3 +895,13 @@ void* LoadArtShimArm64(const std::string& dir, const std::string& oat_version, v
 }
 
 }  // namespace gesher::bionic
+
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): loading the ART stand-ins in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::bionic::g_art_shim_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::bionic::g_art_shim_arm64_mutex);
+#endif

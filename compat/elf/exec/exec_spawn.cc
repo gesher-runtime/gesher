@@ -1,10 +1,13 @@
 // gesher: starting programs the way Linux's execvp would (exec_spawn.h).
 
 #include "exec_spawn.h"
+
+#include <gesher/fork.h>
 #include "pe_exports.h"
 
 #include <gesher/reserved_names.h>
 #include <gesher/environment.h>
+#include <gesher/storage_policy.h>
 #include <gesher/environment_utf16.h>
 
 #include <algorithm>
@@ -20,6 +23,7 @@ namespace gesher::exec {
 namespace {
 
 constexpr int kEIO = 5;
+constexpr int kEAGAIN = 11;
 constexpr int kENAMETOOLONG = 36;
 // CreateProcessW's limit on a command line, in characters with the NUL.
 constexpr size_t kMaxCommandLine = 32767;
@@ -314,6 +318,10 @@ int ErrnoFromWin32(DWORD error) {
       return kENOMEM;
     case ERROR_FILENAME_EXCED_RANGE:
       return kENAMETOOLONG;
+    case ERROR_BAD_LENGTH:  // a forked child's request too large (gesher/fork.h)
+      return kE2BIG;
+    case ERROR_TIMEOUT:     // its root busy for too long
+      return kEAGAIN;
     case ERROR_INVALID_HANDLE:
       return kEBADF;
     case ERROR_INVALID_PARAMETER:
@@ -552,6 +560,8 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
     if (inherited_environment.empty()) return ERROR_NO_UNICODE_TRANSLATION;
     environment = inherited_environment.c_str();
   }
+  std::wstring storage_environment = gesher::ExternalStorageChildEnvironment(environment);
+  if (!storage_environment.empty()) environment = storage_environment.c_str();
   struct ImagePin {
     HANDLE value = nullptr;
     ~ImagePin() { if (value) CloseHandle(value); }
@@ -723,9 +733,22 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   if (!(extra_flags & (CREATE_NEW_CONSOLE | CREATE_NO_WINDOW | DETACHED_PROCESS)))
     flags |= owned.values.empty() ? DETACHED_PROCESS : CREATE_NO_WINDOW;
   if (attributes) flags |= EXTENDED_STARTUPINFO_PRESENT;
-  BOOL started = CreateProcessW(launch.application.c_str(), command_line.data(), nullptr, nullptr, attributes ? TRUE : FALSE,
-      flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, info);
-  DWORD error = started ? ERROR_SUCCESS : GetLastError();
+  DWORD error = ERROR_SUCCESS;
+  BOOL started = FALSE;
+  if (gesher::InForkedChild()) {
+    // A forked child cannot call CreateProcess: its root creates the process
+    // with this child as its parent (gesher/fork.h, ADR 0092).
+    error = gesher::BrokeredCreateProcess(launch.application.c_str(), command_line.c_str(), environment,
+                                          cwd.empty() ? nullptr : cwd.c_str(), flags, startup.StartupInfo,
+                                          owned.values.data(), owned.values.size(), info);
+    started = error == ERROR_SUCCESS;
+  } else {
+    gesher::AcquireSpawnLock();
+    started = CreateProcessW(launch.application.c_str(), command_line.data(), nullptr, nullptr, attributes ? TRUE : FALSE,
+        flags, const_cast<wchar_t*>(environment), cwd.empty() ? nullptr : cwd.c_str(), &startup.StartupInfo, info);
+    error = started ? ERROR_SUCCESS : GetLastError();
+    gesher::ReleaseSpawnLock();
+  }
   if (started) for (auto& reservation : native_exports) reservation->Commit();
   return error;
 } catch (const std::bad_alloc&) {

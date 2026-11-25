@@ -17,6 +17,7 @@
 #include <string_view>
 
 #include "internal.h"
+#include "storage_policy.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_liveness.h"
 #include "xattr_access.h"
@@ -438,6 +439,8 @@ int PinFd(int fd, bool allow_path, Target* target) {
 }
 
 int AuthorizeTarget(Target* target, const Request& request) {
+  if (!gesher::CheckExternalStorageHandle(target->original.value,
+          request.Mutates() ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) return errno;
   int error = 0;
   if (target->path_only) {
     // Bionic's fget/fset/flist fallback follows /proc/self/fd, which pins the

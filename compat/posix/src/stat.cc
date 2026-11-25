@@ -96,7 +96,8 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
                              FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
                              nullptr);
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-      int result = FromHandle(h, buf);
+      int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)
+                       ? FromHandle(h, buf) : -1;
       if (result == 0 && !follow && gesher::IsSymlinkHandle(h)) {
         // A symbolic link (or a junction): Linux reports the link, its size
         // the length of its target.

@@ -198,9 +198,9 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   if ((flags & O_PATH) != 0) {
     disposition = OPEN_EXISTING;
   } else if ((flags & O_CREAT) != 0) {
-    disposition = (flags & O_EXCL) != 0 ? CREATE_NEW : (flags & O_TRUNC) != 0 ? CREATE_ALWAYS : OPEN_ALWAYS;
+    disposition = (flags & O_EXCL) != 0 ? CREATE_NEW : OPEN_ALWAYS;
   } else {
-    disposition = (flags & O_TRUNC) != 0 ? TRUNCATE_EXISTING : OPEN_EXISTING;
+    disposition = OPEN_EXISTING;
   }
   // Backup semantics open directories too, as Linux does for reading. A new
   // file without the owner's write permission is read-only, as chmod makes
@@ -245,6 +245,10 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     CloseHandle(h);
     return errno = ELOOP, -1;
   }
+  if (!CheckExternalStorageHandle(h, access_kind)) {
+    CloseHandle(h);
+    return errno = EACCES, -1;
+  }
   BY_HANDLE_FILE_INFORMATION info;
   const bool have_info = GetFileInformationByHandle(h, &info) != 0;
   bool directory = have_info && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
@@ -259,6 +263,15 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   if (directory && (access & GENERIC_WRITE) != 0) {
     CloseHandle(h);
     return errno = EISDIR, -1;
+  }
+  // Never truncate while resolving a mutable pathname. Authorize the actual
+  // object first, then change that same handle; a swapped junction cannot
+  // redirect the truncation to a different file between the two operations.
+  if (!is_path_only && (flags & O_TRUNC) != 0 && !SetEndOfFile(h)) {
+    const DWORD error = GetLastError();
+    CloseHandle(h);
+    SetLastError(error);
+    return FailWithLastError();
   }
   return FdFromHandle(h, flags);
 }
@@ -413,8 +426,8 @@ bool ExternalStoragePath(const char* path, std::wstring* windows) {
     }
   }
   if (!matched) return false;
-  const char* android_data = getenv("ANDROID_DATA");
-  if (android_data == nullptr || android_data[0] == '\0') return false;
+  std::wstring base = ExternalStorageDataRoot();
+  if (base.empty()) return false;
   // Normalize and clamp '..' within the external storage root so /sdcard/../foo
   // cannot escape $ANDROID_DATA/media/0.
   std::string norm_suffix;
@@ -436,15 +449,9 @@ bool ExternalStoragePath(const char* path, std::wstring* windows) {
     norm_suffix.push_back('/');
     norm_suffix.append(part);
   }
-  std::string base(android_data);
-  while (!base.empty() && (base.back() == '/' || base.back() == '\\')) base.pop_back();
-  std::string target = base + "/media/0" + norm_suffix;
-  if (!DrivePath(target.c_str(), windows)) {
-    *windows = Widen(target.c_str());
-    for (wchar_t& c : *windows) {
-      if (c == L'/') c = L'\\';
-    }
-  }
+  while (!base.empty() && (base.back() == L'/' || base.back() == L'\\')) base.pop_back();
+  *windows = base + L"\\media\\0" + Widen(norm_suffix.c_str());
+  for (wchar_t& c : *windows) if (c == L'/') c = L'\\';
   reserved_names::Encode(windows);
   Lengthen(windows);
   return true;
@@ -573,6 +580,10 @@ int PosixDelete(const std::wstring& windows, bool directory) {
     Sleep(10);
   }
   if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
+  if (!CheckExternalStorageHandle(h, AccessKind::kWrite)) {
+    CloseHandle(h);
+    return errno = EACCES, -1;
+  }
   FILE_BASIC_INFO basic;
   bool is_directory = GetFileInformationByHandleEx(h, FileBasicInfo, &basic, sizeof(basic)) &&
                       (basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
@@ -790,7 +801,8 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
                                  ((flags & AT_SYMLINK_NOFOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0),
                              nullptr);
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-      const int result = SetHandleTimes(h, times);
+      const int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite)
+                             ? SetHandleTimes(h, times) : -1;
       CloseTimeHandle(h);
       return result;
     }
@@ -810,6 +822,7 @@ int futimens(int fd, const struct timespec times[2]) {
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   if (gesher::system_linker::RefuseChangeHandle(snapshot->handle) != 0) return -1;
+  if (!gesher::CheckExternalStorageHandle(snapshot->handle, gesher::AccessKind::kWrite)) return -1;
   return SetHandleTimes(snapshot->handle, times);
 }
 

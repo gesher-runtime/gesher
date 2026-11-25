@@ -88,6 +88,8 @@ include(cmake/aosp/media.cmake)
 target_link_libraries(dalvikvm PRIVATE ole32 mmdevapi)
 # Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
 include(compat/devices/devices.cmake)
+# Printing (docs/print.md): Windows printers for android.print; uses devices' winrt.cc.
+include(compat/print/print.cmake)
 # Camera (compat/camera): Media Foundation webcam capture and Camera2 delivery
 include(compat/camera/camera.cmake)
 target_link_libraries(framework_runtime PUBLIC mfplat mfreadwrite mfuuid)
@@ -170,7 +172,7 @@ target_link_libraries(xattr_fd_host_test PRIVATE gesher_posix advapi32)
 
 add_executable(storage_policy_host_test tests/native/storage_policy_host_test.cc)
 target_compile_options(storage_policy_host_test PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(storage_policy_host_test PRIVATE gesher_posix)
+target_link_libraries(storage_policy_host_test PRIVATE gesher_posix sqlite)
 
 add_executable(sqlite_path_test tests/native/sqlite_path_test.cc)
 target_compile_options(sqlite_path_test PRIVATE -Wall -Wextra -Werror)

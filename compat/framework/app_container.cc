@@ -11,9 +11,16 @@
 #include <sddl.h>
 #include <userenv.h>
 
+#include <cstring>
+#include <mutex>
+
 namespace gesher {
 namespace appcontainer {
 namespace {
+
+// DACL updates read, merge and write the whole ACL. Keep concurrent package
+// reconciliations from losing one another's entries inside the broker.
+std::mutex g_acl_lock;
 
 // The AppContainer APIs, resolved at run time from System32's userenv.dll and
 // kernelbase.dll: linking userenv or mincore would change every importer's
@@ -88,6 +95,88 @@ bool HasExplicitAce(PACL dacl, PSID trustee, DWORD access, BYTE inherit_flags) {
     if (EqualSid(reinterpret_cast<PSID>(&ace->SidStart), trustee)) return true;
   }
   return false;
+}
+
+struct StorageObject {
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  ~StorageObject() {
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+  }
+};
+
+std::wstring WithoutExtendedPrefix(std::wstring path) {
+  if (path.compare(0, 8, L"\\\\?\\UNC\\") == 0) path = L"\\\\" + path.substr(8);
+  else if (path.compare(0, 4, L"\\\\?\\") == 0) path.erase(0, 4);
+  while (path.size() > 3 && path.back() == L'\\') path.pop_back();
+  return path;
+}
+
+// Storage paths come from the broker's canonical data tree. Pin the object
+// before inspecting/changing its DACL, and reject a final or ancestor reparse
+// point instead of granting an unrelated target through a mutable pathname.
+DWORD OpenStorageObject(const std::wstring& path, StorageObject* object) {
+  DWORD size = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
+  if (size == 0) return GetLastError();
+  std::vector<wchar_t> full(size);
+  DWORD length = GetFullPathNameW(path.c_str(), size, full.data(), nullptr);
+  if (length == 0) return GetLastError();
+  if (length >= size) return ERROR_INSUFFICIENT_BUFFER;
+  size = GetLongPathNameW(full.data(), nullptr, 0);
+  if (size == 0) return GetLastError();
+  std::vector<wchar_t> expanded(size);
+  length = GetLongPathNameW(full.data(), expanded.data(), size);
+  if (length == 0) return GetLastError();
+  if (length >= size) return ERROR_INSUFFICIENT_BUFFER;
+  object->handle = CreateFileW(expanded.data(), READ_CONTROL | WRITE_DAC,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                               OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (object->handle == INVALID_HANDLE_VALUE) return GetLastError();
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!GetFileInformationByHandle(object->handle, &info)) return GetLastError();
+  if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return ERROR_CANT_ACCESS_FILE;
+  size = GetFinalPathNameByHandleW(object->handle, nullptr, 0, FILE_NAME_NORMALIZED);
+  if (size == 0) return GetLastError();
+  std::vector<wchar_t> resolved(size + 1);
+  length = GetFinalPathNameByHandleW(object->handle, resolved.data(),
+                                    static_cast<DWORD>(resolved.size()), FILE_NAME_NORMALIZED);
+  if (length == 0) return GetLastError();
+  if (length >= resolved.size()) return ERROR_INSUFFICIENT_BUFFER;
+  std::wstring expected = WithoutExtendedPrefix(expanded.data());
+  std::wstring actual = WithoutExtendedPrefix(std::wstring(resolved.data(), length));
+  return CompareStringOrdinal(expected.c_str(), -1, actual.c_str(), -1, TRUE) == CSTR_EQUAL
+             ? ERROR_SUCCESS : ERROR_CANT_ACCESS_FILE;
+}
+
+// DACL allow/deny ACEs (including object and conditional forms) carry a SID.
+// Preserve their bytes instead of flattening ACLs and losing conditional data.
+PSID AceTrustee(ACE_HEADER* header) {
+  auto* bytes = reinterpret_cast<BYTE*>(header);
+  DWORD offset = sizeof(ACE_HEADER) + sizeof(ACCESS_MASK);
+  switch (header->AceType) {
+    case ACCESS_ALLOWED_ACE_TYPE:
+    case ACCESS_DENIED_ACE_TYPE:
+    case ACCESS_ALLOWED_CALLBACK_ACE_TYPE:
+    case ACCESS_DENIED_CALLBACK_ACE_TYPE:
+      break;
+    case ACCESS_ALLOWED_OBJECT_ACE_TYPE:
+    case ACCESS_DENIED_OBJECT_ACE_TYPE:
+    case ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE:
+    case ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE: {
+      if (header->AceSize < offset + sizeof(DWORD)) return nullptr;
+      DWORD flags = *reinterpret_cast<DWORD*>(bytes + offset);
+      offset += sizeof(DWORD);
+      if (flags & ACE_OBJECT_TYPE_PRESENT) offset += sizeof(GUID);
+      if (flags & ACE_INHERITED_OBJECT_TYPE_PRESENT) offset += sizeof(GUID);
+      break;
+    }
+    default:
+      return nullptr;
+  }
+  if (header->AceSize < offset + 8) return nullptr;
+  auto* sid = reinterpret_cast<PSID>(bytes + offset);
+  if (!IsValidSid(sid) || GetLengthSid(sid) > header->AceSize - offset) return nullptr;
+  return sid;
 }
 
 }  // namespace
@@ -182,6 +271,7 @@ DWORD FolderPath(PSID container, std::wstring* path) {
 
 DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) {
   if (path.empty() || trustee == nullptr || access == 0) return ERROR_INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(g_acl_lock);
   PACL dacl = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   DWORD error = GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
@@ -194,7 +284,7 @@ DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) 
   }
   EXPLICIT_ACCESS_W entry{};
   entry.grfAccessPermissions = access;
-  entry.grfAccessMode = SET_ACCESS;
+  entry.grfAccessMode = GRANT_ACCESS;
   entry.grfInheritance = inherit ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
   entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
   entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
@@ -213,24 +303,97 @@ DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) 
 }
 
 DWORD Revoke(const std::wstring& path, PSID trustee) {
+  return SetStorageAccess(path, trustee, 0, false);
+}
+
+DWORD SetStorageAccess(const std::wstring& path, PSID trustee, DWORD access, bool inherit) {
   if (path.empty() || trustee == nullptr) return ERROR_INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(g_acl_lock);
+  StorageObject object;
+  DWORD error = OpenStorageObject(path, &object);
+  if (error != ERROR_SUCCESS) return error;
   PACL dacl = nullptr;
   PSECURITY_DESCRIPTOR descriptor = nullptr;
-  DWORD error = GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                      nullptr, nullptr, &dacl, nullptr, &descriptor);
+  error = GetSecurityInfo(object.handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                          nullptr, nullptr, &dacl, nullptr, &descriptor);
   if (error != ERROR_SUCCESS) return error;
+  // A null DACL grants everyone access. Do not pretend a per-package entry can
+  // enforce the policy in that case, or discard the owner's existing access.
+  if (dacl == nullptr) {
+    LocalFree(descriptor);
+    return ERROR_INVALID_ACL;
+  }
   EXPLICIT_ACCESS_W entry{};
-  entry.grfAccessMode = REVOKE_ACCESS;
+  entry.grfAccessPermissions = access;
+  entry.grfAccessMode = access == 0 ? REVOKE_ACCESS : SET_ACCESS;
+  entry.grfInheritance = access != 0 && inherit
+                            ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
   entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
   entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
   entry.Trustee.ptstrName = static_cast<LPWSTR>(trustee);
   PACL updated = nullptr;
   error = SetEntriesInAclW(1, &entry, dacl, &updated);
   if (error == ERROR_SUCCESS) {
-    std::wstring target = path;
-    error = SetNamedSecurityInfoW(target.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                  nullptr, nullptr, updated, nullptr);
+    // Always propagate storage changes. In particular a prior Modify ACE must
+    // not satisfy a new Read request just because it contains all Read bits.
+    error = SetSecurityInfo(object.handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                             nullptr, nullptr, updated, nullptr);
     LocalFree(updated);
+  }
+  LocalFree(descriptor);
+  return error;
+}
+
+DWORD ProtectPrivateStorage(const std::wstring& path) {
+  if (path.empty()) return ERROR_INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(g_acl_lock);
+  StorageObject object;
+  DWORD error = OpenStorageObject(path, &object);
+  if (error != ERROR_SUCCESS) return error;
+  PACL dacl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  error = GetSecurityInfo(object.handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                          nullptr, nullptr, &dacl, nullptr, &descriptor);
+  if (error != ERROR_SUCCESS) return error;
+  if (dacl == nullptr) {
+    LocalFree(descriptor);
+    return ERROR_INVALID_ACL;
+  }
+  std::vector<BYTE> bytes(dacl->AclSize);
+  auto* protected_dacl = reinterpret_cast<PACL>(bytes.data());
+  if (!InitializeAcl(protected_dacl, dacl->AclSize, dacl->AclRevision)) {
+    error = GetLastError();
+  } else {
+    SID_IDENTIFIER_AUTHORITY packages = SECURITY_APP_PACKAGE_AUTHORITY;
+    for (DWORD i = 0; i < dacl->AceCount; ++i) {
+      void* raw = nullptr;
+      if (!GetAce(dacl, i, &raw)) {
+        error = GetLastError();
+        break;
+      }
+      auto* ace = static_cast<ACE_HEADER*>(raw);
+      PSID sid = AceTrustee(ace);
+      if (sid == nullptr) {
+        error = ERROR_INVALID_ACL;
+        break;
+      }
+      // No package or capability may inherit the shared-root grant through
+      // Android/data or Android/obb. Retain Windows user/SYSTEM access; the
+      // own-package grants on child directories remain explicit and untouched.
+      if (std::memcmp(GetSidIdentifierAuthority(sid), &packages, sizeof(packages)) == 0) continue;
+      std::vector<BYTE> copy(reinterpret_cast<BYTE*>(raw),
+                             reinterpret_cast<BYTE*>(raw) + ace->AceSize);
+      reinterpret_cast<ACE_HEADER*>(copy.data())->AceFlags &= ~INHERITED_ACE;
+      if (!AddAce(protected_dacl, dacl->AclRevision, MAXDWORD, copy.data(), ace->AceSize)) {
+        error = GetLastError();
+        break;
+      }
+    }
+    if (error == ERROR_SUCCESS) {
+      error = SetSecurityInfo(object.handle, SE_FILE_OBJECT,
+                               DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                               nullptr, nullptr, protected_dacl, nullptr);
+    }
   }
   LocalFree(descriptor);
   return error;

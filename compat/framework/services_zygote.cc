@@ -334,6 +334,18 @@ uint32_t RevokeFromAppContainer(const std::u16string& path, const std::u16string
   return appcontainer::Revoke(Wide(path), sid.value);
 }
 
+uint32_t SetAppContainerStorageAccess(const std::u16string& path, const std::u16string& name,
+                                      uint32_t access, bool inherit) {
+  appcontainer::Sid sid;
+  DWORD error = appcontainer::ContainerSid(Wide(name), &sid);
+  if (error != ERROR_SUCCESS) return error;
+  return appcontainer::SetStorageAccess(Wide(path), sid.value, access, inherit);
+}
+
+uint32_t ProtectPrivateStorage(const std::u16string& path) {
+  return appcontainer::ProtectPrivateStorage(Wide(path));
+}
+
 uint32_t GrantToCapability(const std::u16string& path, const std::u16string& capability,
                            uint32_t access, bool inherit) {
   appcontainer::Sid sid;

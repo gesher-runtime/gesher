@@ -149,6 +149,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     void revokePackageCapabilities(String name) {
+        ExternalStorageAccess.removePackage(this, name);
         List<Consumer<String>> cleanup;
         synchronized (this) { cleanup = new ArrayList<>(mPackageRemoval); }
         for (Consumer<String> action : cleanup) action.accept(name);
@@ -182,6 +183,16 @@ public final class PackageManagerService extends IPackageManager.Default {
     public AutoCloseable onPackageChange(Consumer<ApkPackage> listener) {
         mPackageChanges.add(java.util.Objects.requireNonNull(listener));
         return () -> mPackageChanges.remove(listener);
+    }
+
+    /** Failure retirement must not inherit the caller's installer or PM monitor. */
+    void storagePublicationFailed(ApkPackage pkg, java.util.function.BooleanSupplier stillFailed) {
+        mPackageEventExecutor.execute(() -> {
+            Services.Created services = Services.sLast;
+            if (services != null && services.pm == this) {
+                services.atm.killUidForPermissionChange(pkg, stillFailed);
+            }
+        });
     }
 
 
@@ -294,7 +305,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         Runnable permissions = mPermissions.publishPackage(p, () -> {
             publishPackages(map);
             PackageManager.invalidatePackageInfoCache();
-            ExternalStorageAccess.syncUid(PackageManagerService.this, p.uid());
         }, publicationLock);
         mPackageEventExecutor.execute(() -> {
             synchronized (publicationLock) { }
@@ -324,7 +334,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (p != null) {
             p.clearComponentStates();
             PackageManager.invalidatePackageInfoCache();
-            ExternalStorageAccess.removePackage(packageName);
+            ExternalStorageAccess.removePackage(this, packageName);
         }
         return p;
     }
@@ -1231,6 +1241,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         addLocationFeatures(FEATURES, WindowsLocation.hasGnssReceiver());
         try {
+            addPrintingFeature(FEATURES, PrintManagerService.supported());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no printing to report.
+        }
+        try {
             // Probe the properties' natives first: ActivityManager's static initializer
             // reads them, and failing there would break the class for the whole process.
             android.os.SystemProperties.getBoolean("ro.config.low_ram", false);
@@ -1255,6 +1270,16 @@ public final class PackageManagerService extends IPackageManager.Default {
         addWifiFeature(FEATURES, com.gesher.net.WindowsWifi.hardware());
         // ro.opengles.version, set before app processes start (they may read it).
         glEsVersion();
+    }
+
+    /**
+     * FEATURE_PRINTING when the runtime prints through Windows (PrintManagerService). It
+     * describes the print framework, as on Android, not whether a printer is installed:
+     * with none, Windows' print dialog says so and the job is canceled.
+     */
+    static void addPrintingFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean supported) {
+        if (supported) addFeature(features, PackageManager.FEATURE_PRINTING);
     }
 
     /**
@@ -2013,7 +2038,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     /** Called with PM locked after checking current installations; admission verified shared signers. */
-    private static boolean sameInstallSourceIdentity(ApkPackage first, ApkPackage second) {
+    static boolean sameInstallSourceIdentity(ApkPackage first, ApkPackage second) {
         if (first == second) return true;
         String group = first.sharedUserId();
         return first.uid() == second.uid() && group != null && !group.isEmpty()

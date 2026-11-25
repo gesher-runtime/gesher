@@ -31,6 +31,8 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/path.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/pipe_io.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/process.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/fork_locks.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/spawn_broker.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_descriptors.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_duplicate.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_liveness.cc
@@ -97,6 +99,7 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_ofd_owner_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_descriptor_transaction_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_stdio_output_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_storage_policy_anchor_v1)
 # GNU scanf's parser uses public getc/ungetc; retain one stream lock around
 # its complete conversion sequence, including ANSI-mode assembly aliases.
 target_link_options(gesher_posix INTERFACE -Wl,--wrap=__mingw_vfscanf -Wl,--wrap=__mingw_vfwscanf)

@@ -3,6 +3,7 @@ package gesher.services;
 
 import android.Manifest;
 import android.app.AppOpsManager;
+import android.content.pm.PackageManager;
 import android.os.IBinder;
 import android.os.Process;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
@@ -162,14 +163,49 @@ public final class ExternalStorageAccessTest {
         check(m33Policy.mode() == ExternalStorageAccess.Mode.MEDIA_RO && m33Policy.mediaMask() == 5,
                 "media33 should be MEDIA_RO/5, got " + m33Policy);
 
-        // API 34 with READ_MEDIA_VISUAL_USER_SELECTED -> MEDIA_RO/3
+        // A runtime AppOps denial keeps the permission bit but withholds access.
+        pm.appOps().setUidMode(AppOpsManager.OP_READ_MEDIA_IMAGES, media33.uid(), AppOpsManager.MODE_IGNORED);
+        check(pm.permissions().checkUidPermission(media33.uid(), Manifest.permission.READ_MEDIA_IMAGES, 0)
+                        == PackageManager.PERMISSION_GRANTED,
+                "runtime AppOps denial should preserve the permission grant bit");
+        ExternalStorageAccess.Policy imagesDenied = ExternalStorageAccess.computePolicy(pm, media33);
+        check(imagesDenied.mode() == ExternalStorageAccess.Mode.MEDIA_RO
+                        && imagesDenied.mediaMask() == ExternalStorageAccess.MEDIA_AUDIO,
+                "runtime image AppOps denial should retain only the audio category: " + imagesDenied);
+        File mediaFile = ExternalStorageAccess.policyFile(media33.packageName);
+        if (mediaFile != null) {
+            check(Files.readString(mediaFile.toPath()).contains("media_mask=4\n"),
+                    "runtime AppOps denial must update the persisted media mask");
+        }
+        check(!ExternalStorageAccess.canAccessPath(pm, media33.uid(), media33.packageName,
+                "/sdcard/Pictures/photo.jpg", false), "denied image AppOp must deny image paths");
+        check(ExternalStorageAccess.canAccessPath(pm, media33.uid(), media33.packageName,
+                "/sdcard/Music/song.mp3", false), "image AppOps denial must preserve the audio grant");
+        pm.appOps().setUidMode(AppOpsManager.OP_READ_MEDIA_IMAGES, media33.uid(), AppOpsManager.MODE_ALLOWED);
+        check(ExternalStorageAccess.computePolicy(pm, media33).mediaMask() == 5,
+                "restoring the image AppOp should restore only the granted media categories");
+
+        // Selected-only consent must not grant all images or videos by path.
         pm.permissions().grantRuntimePermission(scoped34.packageName,
                 Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED, "default:0", 0);
+        check(pm.permissions().checkUidPermission(scoped34.uid(),
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED, 0) == PackageManager.PERMISSION_GRANTED,
+                "selected-only consent should be granted for the policy check");
         ExternalStorageAccess.Policy s34Policy = ExternalStorageAccess.computePolicy(pm, scoped34);
-        check(s34Policy.mode() == ExternalStorageAccess.Mode.MEDIA_RO && s34Policy.mediaMask() == 3,
-                "scoped34 should be MEDIA_RO/3, got " + s34Policy);
+        check(s34Policy.mode() == ExternalStorageAccess.Mode.SCOPED && s34Policy.mediaMask() == 0,
+                "selected-only consent must stay SCOPED/0, got " + s34Policy);
+        for (String path : new String[] {"/sdcard/Pictures/unselected.jpg", "/sdcard/Movies/unselected.mp4"}) {
+            check(!ExternalStorageAccess.canAccessPath(pm, scoped34.uid(), scoped34.packageName, path, false),
+                    "selected-only consent must not grant category access: " + path);
+        }
+        File selectedFile = ExternalStorageAccess.policyFile(scoped34.packageName);
+        if (selectedFile != null) {
+            String content = Files.readString(selectedFile.toPath());
+            check(content.contains("mode=SCOPED\n") && content.contains("media_mask=0\n"),
+                    "persisted selected-only policy must not grant a media category: " + content);
+        }
 
-        // Revoke returns to SCOPED/0
+        // Revoking selected-only consent also leaves category access scoped.
         pm.permissions().revokeRuntimePermission(scoped34.packageName,
                 Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED, "default:0", 0, "test");
         ExternalStorageAccess.Policy s34Revoked = ExternalStorageAccess.computePolicy(pm, scoped34);

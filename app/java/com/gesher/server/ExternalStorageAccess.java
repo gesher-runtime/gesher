@@ -11,6 +11,7 @@ import android.os.UserHandle;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -19,6 +20,8 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Android {@code MANAGE_EXTERNAL_STORAGE} and scoped/external storage policy for
@@ -51,6 +54,20 @@ public final class ExternalStorageAccess {
 
     public record Policy(Mode mode, int mediaMask) { }
 
+    private static final Policy SCOPED = new Policy(Mode.SCOPED, 0);
+    private static final Object PUBLICATION_LOCK = new Object();
+    private static final AtomicLong PUBLICATION_REVISION = new AtomicLong();
+    private record PackageKey(PackageManagerService pm, String name) { }
+    private record PublicationFailure(ApkPackage pkg, IOException cause) { }
+    private static final ConcurrentHashMap<PackageKey, PublicationFailure> FAILURES =
+            new ConcurrentHashMap<>();
+
+    /** Only the filesystem boundary is replaceable by isolated slow/failing-disk tests. */
+    interface SnapshotWriter {
+        void write(ApkPackage pkg, Policy policy, File target) throws IOException;
+    }
+    private static volatile SnapshotWriter sWriter = ExternalStorageAccess::writeAtomically;
+
     private ExternalStorageAccess() { }
 
     public static boolean isStoragePermission(String permission) {
@@ -63,7 +80,11 @@ public final class ExternalStorageAccess {
 
     public static boolean isExternalStorageManager(PackageManagerService pm, ApkPackage pkg) {
         if (pm == null || pkg == null) return false;
-        int mode = pm.appOps().checkRawMode(
+        return !publicationFailed(pm, pkg.packageName) && requestedExternalStorageManager(pm, pkg);
+    }
+
+    private static boolean requestedExternalStorageManager(PackageManagerService pm, ApkPackage pkg) {
+        int mode = pm.appOps().checkRawModeForStoragePolicy(
                 AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, pkg.uid(), pkg.packageName);
         if (mode == AppOpsManager.MODE_ALLOWED) return true;
         if (mode == AppOpsManager.MODE_DEFAULT) {
@@ -76,27 +97,24 @@ public final class ExternalStorageAccess {
 
     public static Policy computePolicy(PackageManagerService pm, ApkPackage pkg) {
         if (pm == null || pkg == null) return new Policy(Mode.SCOPED, 0);
-        if (isExternalStorageManager(pm, pkg)) {
+        if (requestedExternalStorageManager(pm, pkg)) {
             return new Policy(Mode.MANAGER, MEDIA_ALL);
         }
-        int uid = pkg.uid();
         int targetSdk = pkg.parsed.getTargetSdkVersion();
         boolean isLegacy = targetSdk < 29
                 || (targetSdk == 29 && pkg.parsed.isRequestLegacyExternalStorage());
 
-        boolean hasReadExternal = hasUidPermission(pm, uid, Manifest.permission.READ_EXTERNAL_STORAGE);
-        boolean hasWriteExternal = hasUidPermission(pm, uid, Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        boolean hasImages = hasUidPermission(pm, uid, Manifest.permission.READ_MEDIA_IMAGES);
-        boolean hasVideo = hasUidPermission(pm, uid, Manifest.permission.READ_MEDIA_VIDEO);
-        boolean hasAudio = hasUidPermission(pm, uid, Manifest.permission.READ_MEDIA_AUDIO);
-        boolean hasVisualUserSelected = hasUidPermission(pm, uid,
-                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED);
-
+        boolean hasReadExternal = hasUidPermission(pm, pkg, Manifest.permission.READ_EXTERNAL_STORAGE);
+        boolean hasWriteExternal = hasUidPermission(pm, pkg, Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        boolean hasImages = hasUidPermission(pm, pkg, Manifest.permission.READ_MEDIA_IMAGES);
+        boolean hasVideo = hasUidPermission(pm, pkg, Manifest.permission.READ_MEDIA_VIDEO);
+        boolean hasAudio = hasUidPermission(pm, pkg, Manifest.permission.READ_MEDIA_AUDIO);
+        // Selected visual-media consent applies to individual items, not a whole
+        // media category. This path policy cannot represent those item grants.
         int mediaMask = 0;
         if (hasImages) mediaMask |= MEDIA_IMAGES;
         if (hasVideo) mediaMask |= MEDIA_VIDEO;
         if (hasAudio) mediaMask |= MEDIA_AUDIO;
-        if (hasVisualUserSelected) mediaMask |= MEDIA_IMAGES | MEDIA_VIDEO;
         if (targetSdk <= 32 && hasReadExternal) mediaMask = MEDIA_ALL;
 
         if (isLegacy && hasWriteExternal) {
@@ -111,13 +129,27 @@ public final class ExternalStorageAccess {
         return new Policy(Mode.SCOPED, 0);
     }
 
-    private static boolean hasUidPermission(PackageManagerService pm, int uid, String permission) {
-        return pm.permissions().checkUidPermission(uid, permission, 0)
-                == PackageManager.PERMISSION_GRANTED;
+    private static boolean hasUidPermission(PackageManagerService pm, ApkPackage pkg, String permission) {
+        if (pm.permissions().checkUidPermission(pkg.uid(), permission, 0)
+                != PackageManager.PERMISSION_GRANTED) return false;
+        int op = AppOpsManager.permissionToOpCode(permission);
+        return op == AppOpsManager.OP_NONE || pm.appOps().checkRawModeForStoragePolicy(op, pkg.uid(), pkg.packageName)
+                == AppOpsManager.MODE_ALLOWED;
+    }
+
+    static boolean publicationFailed(PackageManagerService pm, String packageName) {
+        PublicationFailure failure = FAILURES.get(new PackageKey(pm, packageName));
+        return failure != null && pm.get(packageName) == failure.pkg();
+    }
+
+    static boolean isStorageOp(int op) {
+        return op == AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE
+                || isStoragePermission(AppOpsManager.opToPermission(op));
     }
 
     public static File policyFile(String packageName) {
-        if (packageName == null || packageName.isEmpty() || !isDataDirAvailable()) return null;
+        if (packageName == null || !packageName.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*")
+                || !isDataDirAvailable()) return null;
         return new File(new File(Device.dataDir(), "system/storage-policy"), packageName);
     }
 
@@ -128,50 +160,106 @@ public final class ExternalStorageAccess {
     }
 
     public static void syncPackage(PackageManagerService pm, ApkPackage pkg) {
-        if (pm == null || pkg == null || pkg.uid() < 0 || pm.isRemovalPending(pkg.packageName)) {
-            return;
-        }
+        if (pm == null || pkg == null || pkg.uid() < 0) return;
         File file = policyFile(pkg.packageName);
         if (file == null) return;
-        Policy policy = computePolicy(pm, pkg);
+        PackageKey key = new PackageKey(pm, pkg.packageName);
+        long revision = PUBLICATION_REVISION.incrementAndGet();
+        PublicationFailure failure;
+        for (;;) {
+            if (pm.get(pkg.packageName) != pkg || pm.isRemovalPending(pkg.packageName)) return;
+            // Never acquire PM, PermissionPolicy or AppOps monitors under PUBLICATION_LOCK.
+            // Some callers already hold an installer/PM publication monitor. A newer
+            // request invalidates a snapshot computed before waiting for disk publication.
+            Policy policy = computePolicy(pm, pkg);
+            synchronized (PUBLICATION_LOCK) {
+                long current = PUBLICATION_REVISION.get();
+                if (revision != current) { revision = current; continue; }
+                if (pm.get(pkg.packageName) != pkg || pm.isRemovalPending(pkg.packageName)) return;
+                try {
+                    // Revoke native access before touching ACLs. A failed downgrade must
+                    // not leave the old permissive policy active in running processes.
+                    sWriter.write(pkg, SCOPED, file);
+                    AppSandbox.syncStorageAccess(pkg.packageName, policy);
+                    if (!policy.equals(SCOPED)) sWriter.write(pkg, policy, file);
+                    FAILURES.remove(key);
+                    return;
+                } catch (IOException error) {
+                    try { Files.deleteIfExists(file.toPath()); }
+                    catch (IOException cleanup) { error.addSuppressed(cleanup); }
+                    failure = new PublicationFailure(pkg, error);
+                    FAILURES.put(key, failure);
+                }
+            }
+            break;
+        }
+        // Retire only this failed publication, after releasing the file/ACL monitor.
+        // A later successful retry removes the marker before a delayed retirement runs.
+        Services.Created services = Services.sLast;
+        PublicationFailure failed = failure;
+        if (services != null && services.pm == pm) {
+            pm.storagePublicationFailed(pkg, () -> FAILURES.get(key) == failed);
+        }
+        throw new UncheckedIOException("Cannot publish storage permissions for " + pkg.packageName,
+                failure.cause());
+    }
+
+    public static void syncUid(PackageManagerService pm, int uid) {
+        if (pm == null || uid < 0) return;
+        UncheckedIOException failure = null;
+        for (ApkPackage pkg : pm.packages()) {
+            if (pkg.uid() == uid && !pm.isRemovalPending(pkg.packageName)) {
+                try { syncPackage(pm, pkg); }
+                catch (UncheckedIOException error) {
+                    if (failure == null) failure = error;
+                    else failure.addSuppressed(error);
+                }
+            }
+        }
+        if (failure != null) throw failure;
+    }
+
+    public static void syncAll(PackageManagerService pm) {
+        if (pm == null) return;
+        UncheckedIOException failure = null;
+        for (ApkPackage pkg : pm.packages()) {
+            if (!pm.isRemovalPending(pkg.packageName)) {
+                try { syncPackage(pm, pkg); }
+                catch (UncheckedIOException error) {
+                    if (failure == null) failure = error;
+                    else failure.addSuppressed(error);
+                }
+            }
+        }
+        if (failure != null) throw failure;
+    }
+
+    public static void removePackage(String packageName) {
+        removePackage(null, packageName);
+    }
+
+    static void removePackage(PackageManagerService pm, String packageName) {
+        File file = policyFile(packageName);
+        if (file == null) return;
+        PUBLICATION_REVISION.incrementAndGet();
+        synchronized (PUBLICATION_LOCK) {
+            try {
+                Files.deleteIfExists(file.toPath());
+                AppSandbox.syncStorageAccess(packageName, null);
+                if (pm != null) FAILURES.remove(new PackageKey(pm, packageName));
+            } catch (IOException e) {
+                throw new UncheckedIOException("Cannot retire storage permissions for " + packageName, e);
+            }
+        }
+    }
+
+    private static void writeAtomically(ApkPackage pkg, Policy policy, File targetFile) throws IOException {
         String content = "v=1\n"
                 + "pkg=" + pkg.packageName + "\n"
                 + "uid=" + pkg.uid() + "\n"
                 + "declared=" + (declaresPermission(pkg) ? "1" : "0") + "\n"
                 + "mode=" + policy.mode().name() + "\n"
                 + "media_mask=" + policy.mediaMask() + "\n";
-        writeAtomically(file, content);
-    }
-
-    public static void syncUid(PackageManagerService pm, int uid) {
-        if (pm == null || uid < 0) return;
-        for (ApkPackage pkg : pm.packages()) {
-            if (pkg.uid() == uid && !pm.isRemovalPending(pkg.packageName)) {
-                syncPackage(pm, pkg);
-            }
-        }
-    }
-
-    public static void syncAll(PackageManagerService pm) {
-        if (pm == null) return;
-        for (ApkPackage pkg : pm.packages()) {
-            if (!pm.isRemovalPending(pkg.packageName)) {
-                syncPackage(pm, pkg);
-            }
-        }
-    }
-
-    public static void removePackage(String packageName) {
-        File file = policyFile(packageName);
-        if (file == null) return;
-        try {
-            Files.deleteIfExists(file.toPath());
-        } catch (IOException e) {
-            SystemServer.log("storage-policy: cannot remove " + file + ": " + e.getMessage());
-        }
-    }
-
-    private static void writeAtomically(File targetFile, String content) {
         Path target = targetFile.toPath();
         Path dir = target.getParent();
         Path temp = null;
@@ -179,14 +267,13 @@ public final class ExternalStorageAccess {
             Files.createDirectories(dir);
             temp = Files.createTempFile(dir, targetFile.getName() + ".", ".tmp");
             Files.writeString(temp, content, StandardCharsets.UTF_8);
+            AppSandbox.prepareStoragePolicyFile(pkg.packageName, temp.toFile());
             try {
                 Files.move(temp, target,
                         StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException e) {
                 Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
             }
-        } catch (IOException e) {
-            SystemServer.log("storage-policy: cannot write " + targetFile + ": " + e.getMessage());
         } finally {
             if (temp != null) {
                 try {
@@ -303,6 +390,7 @@ public final class ExternalStorageAccess {
 
         ApkPackage pkg = resolveUidPackage(pm, uid, callingPkg);
         if (pkg == null) return false;
+        if (publicationFailed(pm, pkg.packageName)) return false;
         Policy policy = computePolicy(pm, pkg);
         if (write) {
             return policy.mode() == Mode.MANAGER || policy.mode() == Mode.LEGACY_RW;
@@ -312,6 +400,42 @@ public final class ExternalStorageAccess {
             return isAllowedMediaRead(target, policy.mediaMask());
         }
         return true;
+    }
+
+    /**
+     * Resolve the mount-service helper's app directory before creating it. A null
+     * owner is reserved for an already authenticated system caller; ordinary apps
+     * may prepare only their own Android/{data,obb,media} directory through Binder.
+     */
+    static File resolveMkdirsPath(PackageManagerService pm, ApkPackage owner, String path) {
+        if (path == null || path.isEmpty()) throw new IllegalArgumentException("Missing directory path");
+        try {
+            Path sharedRoot = new File(Device.dataDir(), "media/0").getCanonicalFile().toPath();
+            String mapped = mapGuestExternalPath(path, sharedRoot);
+            if (mapped == null) throw new SecurityException("Invalid mkdirs path: " + path);
+            File target = new File(mapped).getCanonicalFile();
+            if (owner != null) {
+                if (pm == null || pm.get(owner.packageName) != owner
+                        || pm.isRemovalPending(owner.packageName)) {
+                    throw new SecurityException("Storage caller belongs to retired package code");
+                }
+                Path resolved = target.toPath();
+                if (!resolved.startsWith(sharedRoot)) {
+                    throw new SecurityException("Invalid mkdirs path: " + target);
+                }
+                Path relative = sharedRoot.relativize(resolved);
+                if (relative.getNameCount() < 3
+                        || !"Android".equalsIgnoreCase(relative.getName(0).toString())
+                        || !Set.of("data", "obb", "media").contains(
+                                relative.getName(1).toString().toLowerCase(Locale.ROOT))
+                        || !owner.packageName.equals(relative.getName(2).toString())) {
+                    throw new SecurityException("Invalid mkdirs path for " + owner.packageName + ": " + target);
+                }
+            }
+            return target;
+        } catch (IOException failure) {
+            throw new IllegalStateException("Failed to resolve " + path, failure);
+        }
     }
 
     private static boolean uidOwnsPackage(PackageManagerService pm, int uid, String packageName) {

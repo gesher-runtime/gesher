@@ -205,6 +205,26 @@ public final class Services {
         services.put(CameraSourceService.NAME, new CameraSourceService(am));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 clipboard).asBinder());
+        // content://media: MediaStore over the shared volume (docs/media-provider.md).
+        try {
+            MediaStoreProvider.create(am, pm, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/media")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to index.
+            SystemServer.log("media: provider unavailable: " + e);
+        }
+        // print (docs/print.md): FEATURE_PRINTING means the runtime has the Windows
+        // print bridge, even with no default printer. Without the native bridge,
+        // PrintManager never asks for the service.
+        if (PrintManagerService.supported()) {
+            PrintManagerService print = new PrintManagerService(am,
+                    new java.io.File(android.os.Environment.getDataDirectory(), "system/print"),
+                    new WindowsPrint());
+            atm.attachPrint(print);
+            services.put(Context.PRINT_SERVICE, StandIn.of(android.print.IPrintManager.class,
+                    print).asBinder());
+        }
         // Construct the network provider before jobs subscribe to its changes.
         ConnectivityService connectivity = new ConnectivityService(pm, atm);
         services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
@@ -754,19 +774,23 @@ public final class Services {
         @Override
         public void mkdirs(String callingPkg, String path) {
             Created created = sLast;
+            ApkPackage owner = null;
             if (created != null) {
                 CallerIdentity callers = created.am.callers();
                 if (!callers.isSystem()) {
-                    String actualPkg = callers.requirePackage(callingPkg);
-                    int uid = callers.callerUid();
-                    if (!ExternalStorageAccess.canAccessPath(created.pm, uid, actualPkg, path, true)) {
-                        throw new SecurityException("Permission denied: cannot create " + path);
-                    }
+                    owner = callers.requireCurrentPackage(callingPkg);
                 }
             } else if (!android.os.UserHandle.isCore(android.os.Binder.getCallingUid())) {
                 throw new SecurityException("Cannot verify storage caller");
             }
-            new java.io.File(path).mkdirs();
+            java.io.File target = ExternalStorageAccess.resolveMkdirsPath(
+                    created == null ? null : created.pm, owner, path);
+            if (!target.isDirectory()) {
+                target.mkdirs();
+                if (!target.isDirectory()) {
+                    throw new IllegalStateException("Failed to prepare " + target);
+                }
+            }
         }
     }
 

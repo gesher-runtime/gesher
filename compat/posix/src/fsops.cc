@@ -177,6 +177,10 @@ int Rename(const char* oldpath, const char* newpath, unsigned flags) {
                          OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite)) {
+    CloseHandle(h);
+    return errno = EACCES, -1;
+  }
   BY_HANDLE_FILE_INFORMATION info;
   if (!GetFileInformationByHandle(h, &info)) {
     int r = gesher::FailWithLastError();
@@ -284,7 +288,8 @@ int Chmod(const char* path, mode_t mode, bool follow) {
                          FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-  int result = !follow && gesher::IsSymlinkHandle(h) ? (errno = EOPNOTSUPP, -1) : SetMode(h, mode);
+  int result = !gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite) ? -1
+      : !follow && gesher::IsSymlinkHandle(h) ? (errno = EOPNOTSUPP, -1) : SetMode(h, mode);
   CloseHandle(h);
   return result;
 }
@@ -621,6 +626,7 @@ int fchmod(int fd, mode_t mode) {
   HANDLE h = snapshot->handle;
   if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
   if (gesher::system_linker::RefuseChangeHandle(h) != 0) return -1;
+  if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite)) return -1;
   HANDLE writable = ReOpenFile(h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                FILE_FLAG_BACKUP_SEMANTICS);

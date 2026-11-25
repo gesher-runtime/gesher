@@ -9,6 +9,7 @@
 #include <wchar.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -212,12 +213,48 @@ std::wstring CanonicalizeWindowsPath(std::wstring_view input) {
   return lex;
 }
 
+struct ProcessIdentity {
+  std::string package;
+  std::string uid;
+  std::wstring data_root;
+  std::wstring media_root;
+};
+
+extern "C" __declspec(dllexport) ProcessIdentity* gesher_storage_policy_owner_v1() {
+  // The launcher calls this before entering guest code. Never consult mutable
+  // process environment again to decide an application's authorization.
+  static ProcessIdentity* identity = [] {
+    auto* value = new ProcessIdentity();
+    const char* package = getenv("GESHER_APP_PACKAGE");
+    if (package) value->package = package;
+    const char* uid = getenv("GESHER_UID");
+    if (uid) value->uid = uid;
+    value->data_root = EnvDirToWindows(getenv("ANDROID_DATA"));
+    if (!value->data_root.empty())
+      value->media_root = CanonicalizeWindowsPath(value->data_root + L"\\media\\0");
+    return value;
+  }();
+  return identity;
+}
+
+const ProcessIdentity& Identity() {
+  using Resolve = ProcessIdentity* (*)();
+  static const auto resolve = [] {
+    auto shared = reinterpret_cast<Resolve>(GetProcAddress(GetModuleHandleW(nullptr),
+                                                            "gesher_storage_policy_owner_v1"));
+    return shared ? shared : gesher_storage_policy_owner_v1;
+  }();
+  return *resolve();
+}
+
 bool ParsePolicyContent(std::string_view content, std::string_view expected_pkg,
-                        StorageMode* out_mode, int* out_media_mask) {
+                        std::string_view expected_uid, StorageMode* out_mode, int* out_media_mask) {
   std::string_view version;
   std::string_view pkg;
+  std::string_view uid;
   std::string_view mode_str;
   int media_mask = 0;
+  bool has_media_mask = false;
 
   size_t pos = 0;
   while (pos < content.size()) {
@@ -235,19 +272,25 @@ bool ParsePolicyContent(std::string_view content, std::string_view expected_pkg,
       version = val;
     } else if (key == "pkg") {
       pkg = val;
+    } else if (key == "uid") {
+      uid = val;
     } else if (key == "mode") {
       mode_str = val;
     } else if (key == "media_mask") {
+      if (has_media_mask) return false;
+      has_media_mask = true;
       std::string tmp(val);
       char* end = nullptr;
       long parsed = strtol(tmp.c_str(), &end, 10);
-      if (end != tmp.c_str() && *end == '\0' && parsed >= 0) {
+      if (end != tmp.c_str() && *end == '\0' && parsed >= 0 && parsed <= 7) {
         media_mask = static_cast<int>(parsed);
-      }
+      } else return false;
     }
   }
 
-  if (version != "1" || pkg != expected_pkg) return false;
+  if (version != "1" || pkg != expected_pkg || expected_uid.empty() || uid != expected_uid ||
+      !has_media_mask)
+    return false;
 
   StorageMode mode;
   if (mode_str == "MANAGER") {
@@ -269,7 +312,7 @@ bool ParsePolicyContent(std::string_view content, std::string_view expected_pkg,
   return true;
 }
 
-void LoadPolicy(const std::wstring& policy_path, std::string_view app_pkg,
+void LoadPolicy(const std::wstring& policy_path, std::string_view app_pkg, std::string_view app_uid,
                 StorageMode* out_mode, int* out_media_mask) {
   PolicyCache& cache = GetPolicyCache();
   std::lock_guard<std::mutex> lock(cache.mu);
@@ -314,6 +357,7 @@ void LoadPolicy(const std::wstring& policy_path, std::string_view app_pkg,
 
   StorageMode mode = StorageMode::kScoped;
   int media_mask = 0;
+  bool read_complete = false;
   if (info.nFileSizeHigh == 0 && info.nFileSizeLow <= 65536) {
     std::string buf(info.nFileSizeLow, '\0');
     DWORD total = 0;
@@ -325,15 +369,15 @@ void LoadPolicy(const std::wstring& policy_path, std::string_view app_pkg,
       }
       total += chunk;
     }
-    buf.resize(total);
-    if (!ParsePolicyContent(buf, app_pkg, &mode, &media_mask)) {
+    read_complete = total == info.nFileSizeLow;
+    if (!read_complete || !ParsePolicyContent(buf, app_pkg, app_uid, &mode, &media_mask)) {
       mode = StorageMode::kScoped;
       media_mask = 0;
     }
   }
   CloseHandle(h);
 
-  cache.valid = !recent_write;
+  cache.valid = !recent_write && read_complete;
   cache.policy_path = policy_path;
   cache.app_pkg = std::string(app_pkg);
   cache.mtime_low = info.ftLastWriteTime.dwLowDateTime;
@@ -416,21 +460,10 @@ bool AllowSharedStorage(const std::wstring& canon_path, bool is_root_or_android_
   return false;
 }
 
-}  // namespace
-
-bool CheckExternalStorageAccess(const std::wstring& windows_path, AccessKind kind) {
-  const char* app_pkg = getenv("GESHER_APP_PACKAGE");
-  if (app_pkg == nullptr || app_pkg[0] == '\0') return true;
-  const char* enforce = getenv("GESHER_STORAGE_ENFORCE");
-  if (enforce != nullptr && strcmp(enforce, "0") == 0) return true;
-
-  std::wstring data_root = EnvDirToWindows(getenv("ANDROID_DATA"));
-  if (data_root.empty()) return true;
-
-  std::wstring media_root = CanonicalizeWindowsPath(data_root + L"\\media\\0");
-  std::wstring canon_path = CanonicalizeWindowsPath(windows_path);
-  if (media_root.empty()) return true;
-  if (canon_path.empty()) {
+bool CheckCanonicalPath(const ProcessIdentity& identity, const std::wstring& canon_path,
+                        AccessKind kind) {
+  const std::wstring& media_root = identity.media_root;
+  if (media_root.empty() || canon_path.empty()) {
     errno = EACCES;
     return false;
   }
@@ -457,7 +490,7 @@ bool CheckExternalStorageAccess(const std::wstring& windows_path, AccessKind kin
     if (!part.empty()) comps.push_back(part);
   }
 
-  std::wstring pkg_w = Widen(app_pkg);
+  std::wstring pkg_w = Widen(identity.package.c_str());
 
   // Android/data, Android/obb, and Android/media handling.
   bool is_root_or_android_dir = comps.empty();
@@ -479,10 +512,10 @@ bool CheckExternalStorageAccess(const std::wstring& windows_path, AccessKind kin
     }
   }
 
-  std::wstring policy_path = data_root + L"\\system\\storage-policy\\" + pkg_w;
+  std::wstring policy_path = identity.data_root + L"\\system\\storage-policy\\" + pkg_w;
   StorageMode mode = StorageMode::kScoped;
   int media_mask = 0;
-  LoadPolicy(policy_path, app_pkg, &mode, &media_mask);
+  LoadPolicy(policy_path, identity.package, identity.uid, &mode, &media_mask);
 
   if (!AllowSharedStorage(canon_path, is_root_or_android_dir, mode, media_mask, kind)) {
     errno = EACCES;
@@ -491,4 +524,60 @@ bool CheckExternalStorageAccess(const std::wstring& windows_path, AccessKind kin
   return true;
 }
 
+}  // namespace
+
+extern "C" void gesher_storage_policy_anchor_v1() {}
+
+void InitializeExternalStoragePolicy() { (void)Identity(); }
+
+std::wstring ExternalStorageDataRoot() {
+  const ProcessIdentity& identity = Identity();
+  return identity.package.empty() ? EnvDirToWindows(getenv("ANDROID_DATA")) : identity.data_root;
+}
+
+std::wstring ExternalStorageChildEnvironment(const wchar_t* environment) {
+  const ProcessIdentity& identity = Identity();
+  if (identity.package.empty()) return {};
+  std::vector<std::wstring> entries;
+  for (const wchar_t* item = environment; item && *item; item += wcslen(item) + 1) {
+    std::wstring_view entry(item);
+    const auto name = entry.substr(0, entry.find(L'=', 1));
+    if (!EqualsIgnoreCase(name, L"GESHER_APP_PACKAGE") &&
+        !EqualsIgnoreCase(name, L"GESHER_UID") && !EqualsIgnoreCase(name, L"ANDROID_DATA"))
+      entries.emplace_back(entry);
+  }
+  entries.push_back(L"GESHER_APP_PACKAGE=" + Widen(identity.package.c_str()));
+  entries.push_back(L"GESHER_UID=" + Widen(identity.uid.c_str()));
+  entries.push_back(L"ANDROID_DATA=" + identity.data_root);
+  std::sort(entries.begin(), entries.end(), [](const std::wstring& a, const std::wstring& b) {
+    return _wcsicmp(a.c_str(), b.c_str()) < 0;
+  });
+  std::wstring block;
+  for (const auto& entry : entries) { block += entry; block += L'\0'; }
+  block += L'\0';
+  return block;
+}
+
+bool CheckExternalStorageAccess(const std::wstring& windows_path, AccessKind kind) {
+  const ProcessIdentity& identity = Identity();
+  if (identity.package.empty()) return true;
+  return CheckCanonicalPath(identity, CanonicalizeWindowsPath(windows_path), kind);
+}
+
+bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind) {
+  const ProcessIdentity& identity = Identity();
+  if (identity.package.empty() || GetFileType(handle) != FILE_TYPE_DISK) return true;
+  wchar_t path[32768];
+  DWORD length = GetFinalPathNameByHandleW(handle, path, 32768,
+                                           FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (!length || length >= 32768) return errno = EACCES, false;
+  return CheckCanonicalPath(identity, LexicalCanonicalize(std::wstring(path, length)), kind);
+}
+
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// The policy cache is process-local state. Rebuild its lock in a forked child
+// just like the filesystem caches registered by the rest of gesher_posix.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::GetPolicyCache().mu);
+#endif

@@ -411,6 +411,7 @@ public final class SystemServer {
                 return AppSandbox.spawn(command, env, logFile, pm, pkg, packageName,
                         ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
             }
+            ExternalStorageAccess.syncPackage(pm, pkg);
             return Zygote.spawn(command, env, logFile.getPath(), false);
             }
         });
@@ -482,6 +483,8 @@ public final class SystemServer {
             ControlCenter.clearResults(Device.dataDir());
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
+            // The speech recognition service, when Windows has recognizers (docs/speech-recognition.md).
+            SttEngineApp.sync(mInstaller, mServices.pm);
             trackLauncherRecords(mServices.pm);
             // The launcher waits for this file: the services are registered.
             File ready = Device.readyFile();
@@ -540,6 +543,11 @@ public final class SystemServer {
         @Override
         public String[] install(String apk) throws Exception {
             return mInstaller.install(apk);
+        }
+
+        @Override
+        public String[] install(String apk, boolean explicitInstall) throws Exception {
+            return mInstaller.install(apk, explicitInstall);
         }
 
         @Override

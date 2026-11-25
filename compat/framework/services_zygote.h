@@ -51,6 +51,9 @@ uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& di
 uint32_t GrantToAppContainer(const std::u16string& path, const std::u16string& name,
                              uint32_t access, bool inherit);
 uint32_t RevokeFromAppContainer(const std::u16string& path, const std::u16string& name);
+uint32_t SetAppContainerStorageAccess(const std::u16string& path, const std::u16string& name,
+                                      uint32_t access, bool inherit);
+uint32_t ProtectPrivateStorage(const std::u16string& path);
 uint32_t GrantToCapability(const std::u16string& path, const std::u16string& capability,
                            uint32_t access, bool inherit);
 

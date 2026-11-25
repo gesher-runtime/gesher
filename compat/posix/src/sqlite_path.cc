@@ -2,8 +2,39 @@
 // filename/URI/journal metadata. Translate at that boundary, using the same
 // namespace as Java/POSIX file operations. Compiled into the sqlite target.
 #include "internal.h"
+#include "storage_policy.h"
 
 #include <sqlite3.h>
+
+// SQLite's VFS receives the canonical name and owns the trailing URI metadata.
+// Inspect that name without replacing its pointer. Canonicalization alone has
+// no knowledge of the eventual read/write/create/delete request.
+extern "C" int gesher_sqlite_path_allowed(const char* path, int access) {
+  std::wstring windows;
+  if (!gesher::DiskPath(path, &windows, EINVAL)) return 0;
+  const auto kind = access == SQLITE_ACCESS_READWRITE ? gesher::AccessKind::kWrite
+      : access == SQLITE_ACCESS_READ ? gesher::AccessKind::kRead : gesher::AccessKind::kStat;
+  return gesher::CheckExternalStorageAccess(windows, kind) ? 1 : 0;
+}
+
+extern "C" int gesher_sqlite_open_flags(const char* path, int flags) {
+  const bool writes = (flags & (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+                               SQLITE_OPEN_DELETEONCLOSE)) != 0;
+  if (gesher_sqlite_path_allowed(path, writes ? SQLITE_ACCESS_READWRITE : SQLITE_ACCESS_READ))
+    return flags;
+  // Preserve SQLite's documented read-only fallback for existing databases.
+  // Exclusive creation and delete-on-close cannot become read-only operations.
+  if ((flags & SQLITE_OPEN_READWRITE) != 0 &&
+      (flags & (SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_DELETEONCLOSE)) == 0 &&
+      gesher_sqlite_path_allowed(path, SQLITE_ACCESS_READ))
+    return (flags & ~(SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE)) | SQLITE_OPEN_READONLY;
+  return 0;
+}
+
+extern "C" int gesher_sqlite_handle_allowed(void* handle, int writes) {
+  return gesher::CheckExternalStorageHandle(handle, writes ? gesher::AccessKind::kWrite
+                                                         : gesher::AccessKind::kRead) ? 1 : 0;
+}
 
 extern "C" int gesher_sqlite_full_pathname(
     sqlite3_vfs* vfs, const char* path, int capacity, char* full,

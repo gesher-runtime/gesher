@@ -3,7 +3,10 @@
 # test app (<dir name>.apk).
 #
 #   tests/apps/lifecycle/build.sh <out-dir> --framework-res <framework-res.apk> \
-#       --framework-classes <dir|jar> [--core-classes <dir>]
+#       --framework-classes <dir|jar> [--core-classes <dir>] [--app-classes <jar>]
+#
+# --app-classes: gesher-app-classes.jar (app/build.sh), for an app that calls Gesher's
+#   boot class path (app/gesher-tts: com.gesher.server.WindowsSpeech); compile-only.
 #
 # aapt2 compiles the resources and links them with the manifest against
 # framework-res.apk, which also writes R.java; javac compiles the app against
@@ -36,12 +39,13 @@ app=${APP_DIR:-$(cd "$(dirname "$0")" && pwd)}
 name=$(basename "$app")
 out=$(mkdir -p "$1" && cd "$1" && pwd)
 shift
-framework_res= framework= core=
+framework_res= framework= core= app_classes=
 while [[ $# -gt 0 ]]; do
   case $1 in
     --framework-res) framework_res=$2; shift 2 ;;
     --framework-classes) framework=$2; shift 2 ;;
     --core-classes) core=$2; shift 2 ;;
+    --app-classes) app_classes=$2; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -55,11 +59,11 @@ fi
 if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then
   native() { cygpath -w "$1"; }
   native_list() { cygpath -w -f "$1" > "$1.w" && mv "$1.w" "$1"; }
-  host=windows exe=.exe
+  host=windows exe=.exe sep=';'
 else
   native() { echo "$1"; }
   native_list() { :; }
-  host=linux exe=
+  host=linux exe= sep=':'
 fi
 
 work=$(mktemp -d)
@@ -99,8 +103,10 @@ fi
 find "$app/java" "$work/gen" -name '*.java' > "$work/sources.txt"
 native_list "$work/sources.txt"
 mkdir -p "$work/classes" "$work/dex"
+classpath=$(native "$framework")
+if [[ -n $app_classes ]]; then classpath="$classpath$sep$(native "$app_classes")"; fi
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
-  -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
+  -cp "$classpath" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
 (cd "$work" && find classes -name '*.class' > dex.txt &&
   java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
     --output dex @dex.txt)

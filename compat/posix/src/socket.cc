@@ -19,6 +19,7 @@
 #include <stdlib.h>
 
 #include "internal.h"
+#include "storage_policy.h"
 #include "linux_socket.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
