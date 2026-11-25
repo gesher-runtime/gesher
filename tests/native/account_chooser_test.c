@@ -91,12 +91,30 @@ int wmain(int argc, WCHAR** argv) {
   CHECK(ResumeThread(process.hThread) != (DWORD)-1);
   if (!inputs && !client) {
     Search search = {process.dwProcessId, NULL};
-    ULONGLONG deadline = GetTickCount64() + 10000;
+    ULONGLONG started = GetTickCount64();
+    ULONGLONG deadline = started + 10000;
+    BOOL enum_result = FALSE;
+    DWORD enum_error = ERROR_SUCCESS;
     do {
-      EnumDesktopWindows(desktop, FindDialog, (LPARAM)&search);
+      SetLastError(ERROR_SUCCESS);
+      enum_result = EnumDesktopWindows(desktop, FindDialog, (LPARAM)&search);
+      enum_error = enum_result ? ERROR_SUCCESS : GetLastError();
       if (search.dialog != NULL || WaitForSingleObject(process.hProcess, 0) == WAIT_OBJECT_0) break;
       Sleep(10);
     } while (GetTickCount64() < deadline);
+    if (search.dialog == NULL) {
+      ULONGLONG elapsed = GetTickCount64() - started;
+      DWORD child_wait = WaitForSingleObject(process.hProcess, 0);
+      DWORD child_wait_error = child_wait == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
+      DWORD child_exit = 0;
+      BOOL child_exit_ok = GetExitCodeProcess(process.hProcess, &child_exit);
+      DWORD child_exit_error = child_exit_ok ? ERROR_SUCCESS : GetLastError();
+      fprintf(stderr, "account chooser dialog lookup: elapsed_ms=%llu last_enum_result=%d "
+          "last_enum_error=%lu child_wait=0x%08lx child_wait_error=%lu "
+          "child_exit_ok=%d child_exit=%lu child_exit_error=%lu\n",
+          elapsed, enum_result, enum_error, child_wait, child_wait_error,
+          child_exit_ok, child_exit, child_exit_error);
+    }
     CHECK(search.dialog != NULL);
     HWND dialog = search.dialog;
     HWND list = NULL;
