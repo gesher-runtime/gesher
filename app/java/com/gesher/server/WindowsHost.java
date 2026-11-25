@@ -281,6 +281,16 @@ public final class WindowsHost {
     }
 
     /**
+     * Display-off time without input as {@link #jobIdleMillis()} reads it, or
+     * {@link DeviceConstraints#NOT_OFF} unless Windows reported the session display OFF. Unlike
+     * jobIdleMillis, a display that has just gone off (0) is told apart from one that is on.
+     */
+    public static long jobIdleReading() {
+        if (sessionDisplayState() != DISPLAY_STATE_OFF) return DeviceConstraints.NOT_OFF;
+        return jobIdleMillis();
+    }
+
+    /**
      * The hardware behind system features (compat/devsvc/devsvc_hardware.cc,
      * docs/system-features.md): {touch digitizer contacts (0 without a touch digitizer),
      * audio render endpoints active or unplugged, wired Ethernet interfaces}, -1 for a count Windows
