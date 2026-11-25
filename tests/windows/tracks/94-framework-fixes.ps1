@@ -845,3 +845,19 @@ Check 'framework: SpeechRecognizer connection callback and cancellation contract
   $global:LASTEXITCODE = $recognizerClientCode
   $recognizerClientOut
 } @('SpeechRecognizerConnectionTest all passed:')
+
+$externalStorageOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExternalStorageAccessTest') 60
+$externalStorageCode = $LASTEXITCODE
+Check 'services: MANAGE_EXTERNAL_STORAGE, policy persistence and StorageService.mkdirs' {
+  $global:LASTEXITCODE = $externalStorageCode
+  $externalStorageOut
+} @('ExternalStorageAccessTest passed')
+
+$storagePublicationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExternalStoragePolicyContractTest') 90
+$storagePublicationCode = $LASTEXITCODE
+Check 'services: external storage grant, revoke, publication failures and authenticated directories' {
+  $global:LASTEXITCODE = $storagePublicationCode
+  $storagePublicationOut
+} @('ExternalStoragePolicyContractTest passed:')
