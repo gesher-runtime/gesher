@@ -54,6 +54,58 @@ Downloads and Files collections over the shared volume) from the system server, 
 Android's scoped-storage ownership, pending items and scanner; see
 [media-provider.md](media-provider.md).
 
+## Restricted permissions at installation
+
+An installer's restricted-permission allowlist makes declared permissions eligible
+for a later runtime request. It does not grant them. Gesher captures
+`PackageInstaller.SessionParams` at session creation: the Android default allows
+all declared restricted permissions, while an explicit empty or null selection
+adds none. An explicit subset is copied and filtered to platform restricted
+permissions; undeclared names cannot affect the installed package. Returning
+`SessionInfo` does not expose the server's mutable state.
+
+After installation consent and the existing signing, caller-generation and
+target-generation checks succeed, publication adds the selected installer
+exemptions atomically with package metadata. Updates union the new selection
+with existing installer exemptions. Runtime grants and user/fixed denial choices
+remain separate. Existing upgrade and system exemptions are preserved. A fixed
+grant remains fixed when its final exemption is still valid. Allowlist reads and
+mutations authenticate the attached current installer (including an admitted
+shared-UID peer), or the established trusted-host/privileged permission boundary.
+Independent add/remove operations update one locked snapshot; a replacement
+installer cannot inherit an already authenticated call's authority.
+
+The runtime's one-time boot migration restores installer eligibility for older
+permission ledgers while preserving runtime decisions and fixed denials. After
+that migration, run `gesher-app install "path\app.apk"` with the updated runtime
+to explicitly refresh default installer eligibility. This is
+an explicit reinstall, including when the APK bytes are identical; it preserves
+the app's data and its runtime permission choices. The supplied APK still passes
+the normal parsing and signing checks. Ordinary launch of an unchanged APK
+preserves the prior installer selection. A successful `PackageInstaller` session
+reinstall likewise applies that session's captured selection. A normal launch
+never restores an exemption that was removed, and a fixed denial still requires
+the appropriate user/settings action. The extended host-install RPC requires an
+explicit acknowledgment; an older running device must be restarted after an
+update rather than silently treating the request as an ordinary launch.
+
+The contract follows Android 16's
+[SessionParams default and setter](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/content/pm/PackageInstaller.java),
+[installer sanitation](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/core/java/com/android/server/pm/PackageInstallerService.java),
+and [permission installation callback and queries](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt).
+The production policy/controller fixture checks eligibility separately from
+Allow, denial/fixed choices, persistence and removal. The production installer
+host fixture checks captured session parameters and unchanged publication. Its
+APK metadata and native identity are test boundaries. Windows/ART fixtures
+separately exercise real session metadata and the host-install Binder protocol;
+their execution results must be reported separately from host JVM results.
+
+This repairs a runtime eligibility gap relevant to the call-log permission
+screen in [issue #472](https://github.com/gesher-runtime/gesher/issues/472).
+The report does not identify the Truecaller APK version or Gesher build, so
+these checks do not establish that app's complete setup flow. The special-access
+controls from #332 cover a separate set of Android permissions.
+
 ## Storage Access Framework documents
 
 `DocumentsStorageProvider` publishes `com.gesher.documents` through the platform's
