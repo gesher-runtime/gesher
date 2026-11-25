@@ -316,7 +316,7 @@ public final class SettingsProviderContractTest {
         provider.call("DELETE_system", "observe", null);
         check(seen.equals(Arrays.asList(item("observe"), item("observe"), item("observe"))), "Changed-row notifications only");
     }
-    /** location_mode / location_providers_allowed follow the location service's live state. */
+    /** location_mode follows the location service's live state; the service owns it. */
     private static void location(ContentProvider provider) throws Exception {
         Class<?> type = provider.getClass();
         Class<?> stateType = Class.forName("com.gesher.server.SettingsProvider$LocationState");
@@ -324,65 +324,62 @@ public final class SettingsProviderContractTest {
         java.lang.reflect.Method changed = type.getDeclaredMethod("locationStateChanged");
         set.setAccessible(true); changed.setAccessible(true);
         Uri secure = Uri.parse("content://settings/secure");
-        String mode = Settings.Secure.LOCATION_MODE, allowed = Settings.Secure.LOCATION_PROVIDERS_ALLOWED;
+        String mode = Settings.Secure.LOCATION_MODE, allowed = "location_providers_allowed";
         java.util.function.Function<String, String> get = name ->
                 provider.call("GET_secure", name, null).getString("value");
-        // Without a location service the stored rows answer, as before.
+        // Without a location service the stored row answers, as before.
         set.invoke(null, (Object) null);
         check("0".equals(get.apply(mode)), "Stored location_mode without a location service");
-        check("".equals(get.apply(allowed)), "Stored location_providers_allowed default");
-        boolean[] enabled = {true}; String[] providers = {"network,gps"}; boolean[] fail = {false};
+        boolean[] enabled = {true}; boolean[] fail = {false};
         Object state = java.lang.reflect.Proxy.newProxyInstance(stateType.getClassLoader(),
                 new Class<?>[]{stateType}, (proxy, method, arguments) -> {
+                    if (!"locationEnabled".equals(method.getName())) throw new AssertionError(method);
+                    // The location service may wait for Windows: never under the provider monitor.
+                    check(!Thread.holdsLock(provider), "Location state asked under the provider monitor");
                     if (fail[0]) throw new IllegalStateException("location service unavailable");
-                    switch (method.getName()) {
-                        case "locationEnabled": return enabled[0];
-                        case "providersAllowed": return providers[0];
-                        default: throw new AssertionError(method);
-                    }
+                    return enabled[0];
                 });
         try {
             set.invoke(null, state);
-            check("3".equals(get.apply(mode)), "location_mode on: LOCATION_MODE_ON");
             check(Settings.Secure.LOCATION_MODE_ON == 3, "LOCATION_MODE_ON value");
-            check("network,gps".equals(get.apply(allowed)), "Live location_providers_allowed");
+            check("3".equals(get.apply(mode)), "location_mode on: LOCATION_MODE_ON");
             try (Cursor c = provider.query(Uri.withAppendedPath(secure, mode), new String[]{"name", "value"}, null, null, null)) {
                 check(c.getCount() == 1 && c.moveToFirst() && "3".equals(c.getString(1)), "Item query: live location_mode");
             }
-            try (Cursor c = provider.query(secure, new String[]{"value"}, "name=?", new String[]{allowed}, null)) {
-                check(c.moveToFirst() && "network,gps".equals(c.getString(0)), "Selection query: live providers");
+            try (Cursor c = provider.query(secure, new String[]{"value"}, "name=?", new String[]{mode}, null)) {
+                check(c.moveToFirst() && "3".equals(c.getString(0)), "Selection query: live location_mode");
             }
-            boolean listedMode = false, listedAllowed = false;
+            boolean listedMode = false;
             try (Cursor c = provider.query(secure, new String[]{"name", "value"}, null, null, null)) {
                 while (c.moveToNext()) {
                     if (mode.equals(c.getString(0))) listedMode = "3".equals(c.getString(1));
-                    if (allowed.equals(c.getString(0))) listedAllowed = "network,gps".equals(c.getString(1));
+                    check(!allowed.equals(c.getString(0)), "No location_providers_allowed row (Android S+)");
                 }
             }
-            check(listedMode && listedAllowed, "Table query: live location rows");
+            check(listedMode, "Table query: live location_mode");
             ArrayList<String> list = provider.call("LIST_secure", null, null).getStringArrayList("result_settings_list");
-            check(list.contains(mode + "=3") && list.contains(allowed + "=network,gps"), "LIST: live location rows " + list);
+            check(list.contains(mode + "=3"), "LIST: live location_mode " + list);
+            check(get.apply(allowed) == null, "location_providers_allowed does not exist (Android S+)");
             // Windows turns location off: the next read says so.
-            enabled[0] = false; providers[0] = "";
+            enabled[0] = false;
             check("0".equals(get.apply(mode)), "location_mode off: LOCATION_MODE_OFF");
-            check("".equals(get.apply(allowed)), "No providers allowed when off");
-            // Windows' location setting owns them: writes neither take effect nor are stored.
-            enabled[0] = true; providers[0] = "network";
+            // Windows' location setting owns it: writes neither take effect nor are stored.
+            enabled[0] = true;
             provider.call("PUT_secure", mode, value("0"));
             check("3".equals(get.apply(mode)), "Ignored location_mode PUT");
             check(provider.call("DELETE_secure", mode, null).getInt("result_rows_deleted") == 0, "Ignored location_mode DELETE");
-            check(provider.insert(secure, values(allowed, "gps")) == null, "Ignored location_providers_allowed insert");
-            check(provider.update(Uri.withAppendedPath(secure, mode), values(mode, "1"), null, null) == 0, "Ignored location_mode update");
-            check(provider.delete(Uri.withAppendedPath(secure, allowed), null, null) == 0, "Ignored providers delete");
-            check("network".equals(get.apply(allowed)), "Live providers after ignored writes");
-            // Other secure rows are untouched by the live rows.
+            check(provider.insert(secure, values(mode, "0")) == null, "Ignored location_mode insert");
+            check(provider.update(Uri.withAppendedPath(secure, mode), values(mode, "0"), null, null) == 0, "Ignored location_mode update");
+            check(provider.delete(Uri.withAppendedPath(secure, mode), null, null) == 0, "Ignored location_mode delete");
+            check("3".equals(get.apply(mode)), "Live location_mode after ignored writes");
+            // Other secure rows are untouched.
             provider.call("PUT_secure", "contract_secure", value("kept"));
             check("kept".equals(get.apply("contract_secure")), "Other secure rows still stored");
-            // A failing location service: the stored rows answer instead of an error.
+            // A failing location service: the stored row answers instead of an error.
             fail[0] = true;
             check("0".equals(get.apply(mode)), "Stored location_mode when the service fails");
             fail[0] = false;
-            // State changes notify observers of both rows, outside the provider monitor.
+            // A state change notifies location_mode's observers, outside the provider monitor.
             ArrayList<Uri> seen = new ArrayList<>();
             class TestContext extends ContextWrapper {
                 ContentResolver resolver;
@@ -410,8 +407,7 @@ public final class SettingsProviderContractTest {
             provider.attachInfo(context, (ProviderInfo) info.get(provider));
             seen.clear();
             changed.invoke(null);
-            check(seen.equals(Arrays.asList(Uri.withAppendedPath(secure, mode), Uri.withAppendedPath(secure, allowed))),
-                    "Location change notifies both rows " + seen);
+            check(seen.equals(Arrays.asList(Uri.withAppendedPath(secure, mode))), "Location change notifies location_mode " + seen);
         } finally {
             set.invoke(null, (Object) null);
         }

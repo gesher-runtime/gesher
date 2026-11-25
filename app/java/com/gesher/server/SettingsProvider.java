@@ -177,17 +177,16 @@ final class SettingsProvider extends ContentProvider {
     private static volatile SettingsProvider sInstance;
 
     /**
-     * The location service's live state, for the Settings.Secure rows Android's location
-     * service keeps: {@code location_mode} and {@code location_providers_allowed}. Apps read
-     * them to tell whether location is on (react-native-wifi-reborn before a Wi-Fi scan), so
-     * they follow Windows' location setting exactly as LocationManager.isLocationEnabled
-     * does (docs/devices.md). Null without a location service: the stored rows answer.
+     * The location service's live state, for the Settings.Secure row Android's location
+     * service keeps: {@code location_mode}. Apps read it to tell whether location is on
+     * (react-native-wifi-reborn before a Wi-Fi scan), so it answers what
+     * LocationManager.isLocationEnabled answers (docs/devices.md). Null without a location
+     * service: the stored row answers. ({@code location_providers_allowed} no longer exists
+     * from Android S on, and is left alone.)
      */
     interface LocationState {
         /** LocationManager.isLocationEnabled's answer. */
         boolean locationEnabled();
-        /** The enabled providers, comma-separated (no passive or fused), as Android lists them. */
-        String providersAllowed();
     }
 
     private static volatile LocationState sLocation;
@@ -196,17 +195,15 @@ final class SettingsProvider extends ContentProvider {
         sLocation = state;
     }
 
-    /** Tells observers of the location rows that the location service's state changed. */
+    /** Tells observers of location_mode that the location service's state changed. */
     static void locationStateChanged() {
         SettingsProvider p = sInstance;
         if (p == null) return;
         p.notifySetting(SECURE, Settings.Secure.LOCATION_MODE);
-        p.notifySetting(SECURE, Settings.Secure.LOCATION_PROVIDERS_ALLOWED);
     }
 
     private static boolean locationKey(String table, String name) {
-        return SECURE.equals(table) && (Settings.Secure.LOCATION_MODE.equals(name)
-                || Settings.Secure.LOCATION_PROVIDERS_ALLOWED.equals(name));
+        return SECURE.equals(table) && Settings.Secure.LOCATION_MODE.equals(name);
     }
 
     /**
@@ -217,22 +214,23 @@ final class SettingsProvider extends ContentProvider {
     private static Map<String, String> locationRows(String table) {
         LocationState state = sLocation;
         if (state == null || !SECURE.equals(table)) return java.util.Collections.emptyMap();
-        Map<String, String> rows = new LinkedHashMap<>();
+        boolean enabled;
         try {
-            boolean enabled = state.locationEnabled();
-            // Android P+: LOCATION_MODE_ON (== LOCATION_MODE_HIGH_ACCURACY) when location is on.
-            rows.put(Settings.Secure.LOCATION_MODE, Integer.toString(enabled
-                    ? Settings.Secure.LOCATION_MODE_ON : Settings.Secure.LOCATION_MODE_OFF));
-            String providers = state.providersAllowed();
-            rows.put(Settings.Secure.LOCATION_PROVIDERS_ALLOWED, providers == null ? "" : providers);
+            enabled = state.locationEnabled();
         } catch (RuntimeException failure) {
             SystemServer.log("settings: location state unavailable: " + failure);
             return java.util.Collections.emptyMap();
         }
-        return rows;
+        // Android P+ (SystemSettingsHelper.setLocationEnabled): LOCATION_MODE_ON or _OFF.
+        return java.util.Collections.singletonMap(Settings.Secure.LOCATION_MODE, Integer.toString(
+                enabled ? Settings.Secure.LOCATION_MODE_ON : Settings.Secure.LOCATION_MODE_OFF));
     }
 
-    /** A write to a live location row: Windows' location setting owns it (as LocationManagerService.setLocationEnabledForUser). */
+    /**
+     * A write to location_mode while a location service answers it: Windows' location setting
+     * turns location on and off, so it is ignored, as LocationManagerService's
+     * setLocationEnabledForUser is (docs/devices.md).
+     */
     private static boolean ignoredLocationWrite(String table, String name) {
         if (sLocation == null || !locationKey(table, name)) return false;
         SystemServer.log("settings: write to secure " + name + " ignored: Windows' location"
@@ -387,10 +385,9 @@ final class SettingsProvider extends ContentProvider {
         // unset). Added to existing stores too, so Settings.Global readers agree with
         // TelephonyManager (docs/telephony.md, "Mobile data switches").
         mStore.addDefault(GLOBAL, Settings.Global.MOBILE_DATA, "1");
-        // The location rows exist in every profile; with a location service their values
-        // are its live state (locationRows), these only answer without one.
+        // location_mode exists in every profile; with a location service its value is the
+        // service's live state (locationRows), this one only answers without one.
         mStore.addDefault(SECURE, Settings.Secure.LOCATION_MODE, "0");
-        mStore.addDefault(SECURE, Settings.Secure.LOCATION_PROVIDERS_ALLOWED, "");
         // Single-process mode executes app code in the server's own PID and cannot
         // authenticate a privileged writer. Never expose its process to host selection state.
         mTextStore = mPm != null && mPm.hasTransientPackageState() ? null
