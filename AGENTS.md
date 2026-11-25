@@ -14,8 +14,10 @@ asks for a general code review without repeating the policy.
 - Keep the operation the application asked for: the user performs it through
   the PC's real equivalent. Do not replace it with a different operation because
   the real one is hard (for example, choosing an existing image when the
-  application asked for a live camera capture), and do not report success for
-  something that did not happen.
+  application asked for a live camera capture) — unless it is a
+  maintainer-approved alternative operation for a missing PC capability gated
+  behind an explicit, documented setting listed in CONTRIBUTING.md's examples —
+  and do not report success for something that did not happen.
 - Report features, capabilities and hardware characteristics the PC and
   Gesher really provide. Desktop adaptations (presentation, input, orientation) are in scope when
   they are documented, named as Gesher's where applications can see them, and
@@ -23,7 +25,13 @@ asks for a general code review without repeating the policy.
   substitute content, and a new default applications can see needs a
   maintainer decision listed in CONTRIBUTING.md's examples, which list the
   decided ones (display-relative camera orientation, the front-facing PC camera, the
-  stationary accelerometer).
+  stationary accelerometer, the PC's own device identity). For capabilities that may be missing on a PC, a
+  maintainer-approved adaptation may substitute a similar available capability
+  (e.g., using a regular PC camera in place of a missing rear camera) even
+  without a setting, whereas an alternative operation (e.g., choosing an
+  existing image from the PC) requires both maintainer approval and an
+  explicit, documented setting; both must be listed in CONTRIBUTING.md's
+  examples.
 - Preserve permissions, consent, security and lifecycle behavior. Discuss
   unclear scope questions in the issue or PR; the maintainer decides them.
   Continue ordinary compatibility work without additional scope approval.
@@ -47,9 +55,11 @@ asks for a general code review without repeating the policy.
    differences from AOSP are not sufficient grounds for rejection.
    Recommend removal or redesign of the violating behavior,
    and do not recommend approval while the violation remains unresolved.
-   Follow the maintainer's scope decisions: a new application-visible default
-   must be listed in CONTRIBUTING.md's examples; other classification
-   questions may be decided in the linked discussion.
+   Follow the maintainer's scope decisions: a new application-visible default,
+   a maintainer-approved substitution for a missing PC capability, or a
+   documented setting for an alternative operation must be listed in
+   CONTRIBUTING.md's examples; other classification questions may be decided in
+   the linked discussion.
 4. Verify contract evidence and any relevant scope discussion in the supplied or
    accessible sources. If evidence is unavailable, state what is missing and
    withhold an approval recommendation. Do not treat a contributor's assertion

@@ -69,6 +69,7 @@ public final class LegacyPreviewHost {
             final int width, height, frames;
             final Session session;
             int read, calls;
+            boolean isFrame() { return false; }
             Capture(Session session, int width, int height, int frames) {
                 this.session = session; this.width = width; this.height = height; this.frames = frames;
                 session.capture = this;
@@ -85,6 +86,10 @@ public final class LegacyPreviewHost {
                 return 0;
             }
         }
+    }
+    /** The session's camera-or-image answer (the image-picker setting); unused here. */
+    private static final class CameraImageSource {
+        static final class Choice {}
     }
     private static final class CameraAutoFocus {
         interface Lens {}
