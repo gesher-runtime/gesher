@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '15a86c1f81b1b39006ffd4e606cae8d07982fb1aacf69b70b7d5e21f325cd12b'
+OFD_QUALIFICATION_SHA256 = '5378851e857b757eaca36539aec1ea1e723c805a8c0665be2b959447a3bd4dbf'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -328,7 +328,7 @@ def preceding_shared_stdio_sources(qualification):
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
 # the original OFD receipt and every one of its hashes remain unchanged below.
 # This source qualification grants no supplier, controller or runtime approval.
-PROPERTY_REVISION_SHA256 = 'fc2e4d97ee02d1f32e49aeccd648ee386cd44debf9092b4eef48b0c7e2f1499a'
+PROPERTY_REVISION_SHA256 = '585710b140ba0236108dd859575bf45665b8ff4204cef5e77503427b93b7178b'
 PROPERTY_REVISION_HEADER_SHA256 = '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3'
 PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27'
 # #421 makes the property area's build.prop loader keep ro.opengles.version only
@@ -336,9 +336,9 @@ PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf
 # one filter line in Initial(). Reverse only that exact transition to the bytes
 # PROPERTY_REVISION_SHA256 pins, then the NATIVE-13 transition below as before.
 # This source qualification grants no supplier, controller or runtime approval.
-GLES_PROPERTY_SHA256 = '86d891dd085fbe1475049008525079c8bb05c8069d2b0165fee19a830debb87d'
+GLES_PROPERTY_SHA256 = 'a48210e7a649d4485db01d9cddfa31af62c01cfbc206d57acb6483f177c323eb'
 GLES_PROPERTY_PATCH = 'tools/net-tcp-priority/qualified/gles-property-source.patch'
-GLES_PROPERTY_PATCH_SHA256 = 'b737c60818c1c300dc96d75d605fa42b33d7b59e0dc3ee2b91ad873882c06930'
+GLES_PROPERTY_PATCH_SHA256 = '72a6c1c9ba827072ba13c9aac32774e4dcda74260d54f8853e25ae7971be06f6'
 def preceding_gles_property_source():
  path='compat/posix/src/system_properties.cc'
  source=(ROOT/path).read_bytes()

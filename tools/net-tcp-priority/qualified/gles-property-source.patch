@@ -1,10 +1,10 @@
 diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
-index 8e960fbb5..b6cee05f1 100644
+index 7cc8b6f81..6cf787d60 100644
 --- a/compat/posix/src/system_properties.cc
 +++ b/compat/posix/src/system_properties.cc
 @@ -7,0 +8 @@
 +#include <gesher/gles_version_property.h>
-@@ -258,0 +260,3 @@ Snapshot Initial() {
+@@ -276,0 +278,3 @@ Snapshot Initial() {
 +    // The rule every build.prop loader shares: ro.opengles.version only as a
 +    // version Gesher serves, else unset so the probe declares it.
 +    if (!ServedBuildProperty(key, value)) continue;

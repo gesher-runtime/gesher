@@ -21,24 +21,28 @@ ro.build.date=Fri Dec  5 00:00:00 UTC 2025
 ro.build.date.utc=1764892800
 ro.build.type=user
 ro.build.user=android-build
-ro.build.host=google.com
+ro.build.host=gesher
 ro.build.tags=release-keys
-ro.build.flavor=shiba-user
-ro.build.fingerprint=google/shiba/shiba:16/BP4A.251205.006/11252199:user/release-keys
-ro.product.brand=google
-ro.product.name=shiba
-ro.product.device=shiba
-ro.product.board=shiba
-ro.product.manufacturer=Google
-ro.product.model=Pixel 8
+# Gesher's own device identity (docs/device-identity.md). The fingerprint is
+# $(BRAND)/$(PRODUCT)/$(DEVICE):$(VERSION.RELEASE)/$(ID)/$(VERSION.INCREMENTAL):$(TYPE)/$(TAGS)
+# of the values in this file; tests/windows/tracks/43-exec2.ps1 checks that.
+# ro.product.manufacturer and ro.product.model are not set here: they are the
+# PC's own (SMBIOS), set when the property area is created
+# (compat/posix/include/gesher/device_identity.h).
+ro.build.flavor=gesher-user
+ro.build.fingerprint=gesher/gesher/gesher:16/BP4A.251205.006/11252199:user/release-keys
+ro.product.brand=gesher
+ro.product.name=gesher
+ro.product.device=gesher
+ro.product.board=gesher
 ro.product.cpu.abi=x86_64
 ro.product.cpu.abilist=x86_64,arm64-v8a
 ro.product.cpu.abilist64=x86_64,arm64-v8a
 ro.product.cpu.abilist32=
 ro.product.first_api_level=34
 ro.product.locale=en-US
-ro.hardware=shiba
-ro.bootloader=shiba-1.0
+ro.hardware=gesher
+ro.bootloader=gesher
 ro.debuggable=0
 ro.secure=1
 ro.sf.lcd_density=420
