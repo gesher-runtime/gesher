@@ -9,7 +9,6 @@
 #include <unistd.h>
 #include <windows.h>
 
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -17,6 +16,7 @@
 
 #include "internal.h"
 #include "storage_policy.h"
+#include "ofd_internal.h"
 #include <gesher/file_description.h>
 #include <gesher/procfs_fd.h>
 #include <gesher/reserved_names.h>
@@ -115,7 +115,7 @@ bool DirectoryOfFd(int fd, std::string* path) {
   if (!GetFileInformationByHandle(h, &info)) return errno = ENOTDIR, false;
   unsigned type;
   if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 &&
-      gesher::procfs::DescribeHandle(h, &type, path)) {
+      gesher::procfs::DescribeTemporaryFile(h, &type, path)) {
     return type == S_IFDIR || (errno = ENOTDIR, false);
   }
   if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) return errno = ENOTDIR, false;
@@ -126,42 +126,68 @@ bool DirectoryOfFd(int fd, std::string* path) {
   return true;
 }
 
-// getdents64's listing of a directory, kept per open file description as
-// Linux keeps a directory's position there: one enumeration serves every
-// call that continues where the last one stopped (no re-reading the
-// directory up to the position on each call). A call at position 0
-// (rewind), or at a position this listing did not stop at (lseek, or
-// another process sharing the description after fork), enumerates afresh.
-struct Listed {
-  std::string name;
-  unsigned char type;
-  unsigned long long ino;
-};
+// getdents64's place in a directory, kept on the open file description as
+// Linux keeps a directory's position there: an open enumeration (a find
+// handle, or a /proc directory's entries) that each call continuing where the
+// last one stopped reads on from. A call at a position the stream did not
+// stop at (lseek, or a process sharing the description after fork) opens the
+// directory again and skips to it. The stream goes with the description when
+// its last fd closes.
 struct DirectoryStream {
-  std::weak_ptr<gesher::OpenFileDescription> description;
+  // The description's f_pos_lock: calls on one description take turns, so
+  // threads reading one fd share its entries out; calls on other fds do not
+  // wait. Never held across fork by the child (see StreamOf).
+  std::mutex lock;
+  DWORD process = GetCurrentProcessId();
+  DIR* dir = nullptr;
   std::string path;
-  std::vector<Listed> entries;
   long long next = -1;  // the position the last call left the fd at
-};
-// One lock serializes getdents64 calls, as Linux's f_pos_lock does those on
-// one description: two threads reading one fd share its entries out between
-// them. Taken first at fork (nothing holds another lock when it is taken).
-std::mutex g_streams_lock;
-std::map<const void*, DirectoryStream> g_streams;
+  // An entry read from `dir` that the last call's buffer could not hold.
+  bool pending = false;
+  std::string pending_name;
+  unsigned char pending_type = 0;
+  unsigned long long pending_ino = 0;
 
-// The directory's entries, as readdir gives them.
-bool ListDirectory(const std::string& path, std::vector<Listed>* entries) {
-  DIR* dir = Open(path.c_str(), -1);
-  if (dir == nullptr) return false;
-  entries->clear();
-  int saved = errno;
-  errno = 0;
-  while (struct dirent* e = readdir(dir)) entries->push_back({e->d_name, e->d_type, e->d_ino});
-  const int error = errno;
-  closedir(dir);
-  if (error != 0) return errno = error, false;
-  errno = saved;
-  return true;
+  void Close() {
+    if (dir == nullptr) return;
+    if (process != GetCurrentProcessId()) {
+      // A forked child's copy: the find handle is the parent's, not this
+      // process's, and must not be closed here (the value may name another
+      // handle of the child's).
+      dir->find = INVALID_HANDLE_VALUE;
+      dir->fd = -1;
+    }
+    closedir(dir);
+    dir = nullptr;
+  }
+  ~DirectoryStream() { Close(); }
+};
+
+// Taken only to find or attach a description's stream, never while waiting
+// on anything else: a leaf in the fork set.
+std::mutex g_attach_lock;
+
+// The stream of fd's open file description, made on first use. A forked
+// child does not use the parent's (its lock may have been held at fork, and
+// its find handle is the parent's): it gets one of its own, which opens the
+// directory again at the shared position.
+std::shared_ptr<DirectoryStream> StreamOf(int fd) {
+  std::shared_ptr<gesher::OpenFileDescription> description;
+  if (!gesher::LookupOfd(fd, &description) || !description) {
+    if (gesher::DescriptorSnapshotPtr snapshot = gesher::CaptureDescriptor(fd)) {
+      description = snapshot->description;
+    }
+  }
+  if (!description) return std::make_shared<DirectoryStream>();  // this call's only
+  std::shared_ptr<DirectoryStream> stale;  // released after the lock
+  std::lock_guard<std::mutex> guard(g_attach_lock);
+  auto stream = std::static_pointer_cast<DirectoryStream>(description->directory_stream);
+  if (!stream || stream->process != GetCurrentProcessId()) {
+    stale = std::move(stream);
+    stream = std::make_shared<DirectoryStream>();
+    description->directory_stream = stream;
+  }
+  return stream;
 }
 
 }  // namespace
@@ -216,67 +242,72 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
   std::string path;
   if (!DirectoryOfFd(fd, &path)) return -1;
   if (buffer == nullptr) return errno = EFAULT, -1;
-  std::lock_guard<std::mutex> guard(g_streams_lock);
+  std::shared_ptr<DirectoryStream> stream = StreamOf(fd);
+  std::lock_guard<std::mutex> guard(stream->lock);
   // The position is the fd's (its open file description's, shared by dup
   // and fork), as Linux keeps a directory's.
   HANDLE h = gesher::HandleFromFd(fd);
   LARGE_INTEGER zero = {}, position = {};
   if (!SetFilePointerEx(h, zero, &position, FILE_CURRENT)) return gesher::FailWithLastError();
-  // Listings of closed descriptions go.
-  for (auto it = g_streams.begin(); it != g_streams.end();) {
-    it = it->second.description.expired() ? g_streams.erase(it) : std::next(it);
-  }
-  DirectoryStream local;
-  DirectoryStream* stream = &local;
-  if (gesher::DescriptorSnapshotPtr snapshot = gesher::CaptureDescriptor(fd)) {
-    if (snapshot->description) {
-      stream = &g_streams[snapshot->description.get()];
-      if (stream->description.lock() != snapshot->description) {
-        *stream = DirectoryStream();
-        stream->description = snapshot->description;
-      }
-    }
-  }
-  if (position.QuadPart == 0 || position.QuadPart != stream->next || stream->path != path) {
+  long long index = position.QuadPart < 0 ? 0 : position.QuadPart;
+  if (stream->dir == nullptr || index != stream->next || stream->path != path) {
+    stream->Close();
+    stream->pending = false;
     stream->next = -1;
+    stream->dir = Open(path.c_str(), -1);
+    if (stream->dir == nullptr) return -1;
     stream->path = path;
-    if (!ListDirectory(path, &stream->entries)) {
-      stream->entries.clear();
-      return -1;
-    }
+    long long skipped = 0;
+    while (skipped < index && readdir(stream->dir) != nullptr) ++skipped;
+    index = skipped;  // past the end: stays at the end
   }
   auto* out = static_cast<unsigned char*>(buffer);
   size_t used = 0;
-  long long index = position.QuadPart < 0 ? 0 : position.QuadPart;
   // struct linux_dirent64: d_ino (8), d_off (8), d_reclen (2), d_type (1),
   // d_name (NUL-terminated), the record padded to 8 bytes.
   constexpr size_t kNameOffset = 19;
-  for (; index < static_cast<long long>(stream->entries.size()); ++index) {
-    const Listed& e = stream->entries[static_cast<size_t>(index)];
-    const size_t name_length = e.name.size();
+  for (;;) {
+    if (!stream->pending) {
+      const int saved = errno;
+      errno = 0;
+      struct dirent* e = readdir(stream->dir);
+      if (e == nullptr) {
+        if (errno != 0 && used == 0) return -1;
+        errno = saved;
+        break;
+      }
+      errno = saved;
+      stream->pending = true;
+      stream->pending_name = e->d_name;
+      stream->pending_type = e->d_type;
+      stream->pending_ino = e->d_ino;
+    }
+    const size_t name_length = stream->pending_name.size();
     const size_t record = (kNameOffset + name_length + 1 + 7) & ~size_t{7};
     if (used + record > size) {
-      // Not taken: the next call (from `index`) starts with it.
+      // Kept: the next call starts with it.
       if (used == 0) return errno = EINVAL, -1;  // the buffer cannot hold one entry
       break;
     }
+    stream->pending = false;
+    ++index;
     unsigned char* r = out + used;
     memset(r, 0, record);
-    const unsigned long long ino = e.ino;
-    const long long next = index + 1;
+    const unsigned long long ino = stream->pending_ino;
+    const long long next = index;
     const unsigned short reclen = static_cast<unsigned short>(record);
     memcpy(r, &ino, 8);
     memcpy(r + 8, &next, 8);
     memcpy(r + 16, &reclen, 2);
-    r[18] = e.type;
-    memcpy(r + kNameOffset, e.name.data(), name_length);
+    r[18] = stream->pending_type;
+    memcpy(r + kNameOffset, stream->pending_name.data(), name_length);
     used += record;
   }
-  if (index > static_cast<long long>(stream->entries.size())) {
-    index = static_cast<long long>(stream->entries.size());  // past the end: stays there
-  }
   position.QuadPart = index;
-  if (!SetFilePointerEx(h, position, nullptr, FILE_BEGIN)) return gesher::FailWithLastError();
+  if (!SetFilePointerEx(h, position, nullptr, FILE_BEGIN)) {
+    stream->next = -1;
+    return gesher::FailWithLastError();
+  }
   stream->next = index;
   return static_cast<ssize_t>(used);
 }
@@ -366,7 +397,10 @@ int dirfd(DIR* dir) {
 }  // extern "C"
 
 #ifdef GESHER_FORK_LOCK
-// fork (gesher/fork.h): before every other lock, since getdents64 takes
-// descriptor and loader locks while it holds it.
-GESHER_FORK_LOCK(gesher::kForkOrderLoader - 10, std::mutex, g_streams_lock);
+// fork (gesher/fork.h): a leaf, held only to attach a stream. The streams'
+// own locks stay out of the fork set: a child never takes the parent's
+// (StreamOf gives it new streams), so one held at fork cannot block it, and a
+// getdents64 running under the loader lock (a constructor) does not hold up
+// fork by its whole scan.
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, g_attach_lock);
 #endif

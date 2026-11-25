@@ -239,26 +239,36 @@ closed three of this layer's leftovers:
 - An fd keeps the `/proc/<pid>` it was opened on, as Linux's does: after
   `fork` or `exec` it names the parent's process. Gesher serves
   `/proc/<pid>` only for the process itself, so in the child the `*at`
-  calls on such a directory fd fail with `ENOENT`, as `/proc/<parent
-  pid>/...` by name does (on Linux, only once the parent has exited), and so
-  does `getdents64`, except where a forked child continues a listing the
-  parent began (it reads on from the parent's listing). `fstat`, `readlink`
-  and the shared position still work.
+  calls and `getdents64` on such a directory fd fail with `ENOENT`, as
+  `/proc/<parent pid>/...` by name does (on Linux, only once the parent has
+  exited). This does not depend on what the parent read before the fork: a
+  child never reads on from the parent's listing, it opens the directory
+  again at the shared position. `fstat`, `readlink` and the shared position
+  still work.
 - `/proc/self/map_files` (`dr-x------`) lists a link per file-backed line of
   `maps` (named `%lx-%lx`, as Linux names them; a name in uppercase hex is the
   same link, as the kernel parses it). `readlink` and `lstat` look the one
   mapping up directly (`VirtualQuery`), whatever the number of mappings. A
   link's mode is its file's open mode: `0600` when `mmap` was given an fd open
-  for writing, `0400` otherwise. Following one (`open`, `stat`, `access`,
+  for writing, `0400` otherwise; an fd opened on the link (`O_PATH |
+  O_NOFOLLOW`) keeps the mode it had then, after a `munmap` too, as the
+  procfs inode does. `readlinkat(fd, "")` on such a link fd (any `/proc`
+  link, or a symbolic link on disk) reads the link. Following one (`open`, `stat`, `access`,
   `realpath`, `statfs`) fails with `EPERM`, as Linux refuses it to a process
   without `CAP_CHECKPOINT_RESTORE`.
-- `getdents64` keeps the listing of a directory per open file description:
-  calls that continue where the last one stopped read on from it, and one at
-  position 0, or at a position the listing did not stop at (`lseek`, a
-  process sharing the description after `fork`), lists the directory afresh.
-  Calls are serialized, as Linux's `f_pos_lock` does, so threads reading one
-  fd share its entries out between them. The fd's file position is the index
-  of the next entry; `d_ino` is the entry's position, as `readdir`'s.
+- `getdents64` keeps an open enumeration of the directory (a find handle) on
+  the open file description: a call that continues where the last one
+  stopped reads on from it, and one at a position it did not stop at
+  (`lseek`, a process sharing the description after `fork`) opens the
+  directory again and skips to that position. Nothing is copied: the
+  enumeration's memory is the find handle's, and it goes when the last fd on
+  the description closes. Calls on one description take turns, as Linux's
+  per-file `f_pos_lock` makes them, so threads reading one fd share its
+  entries out between them; calls on other fds do not wait. The fd's file
+  position is the index of the next entry; `d_ino` is the entry's position,
+  as `readdir`'s.
+- `fstatfs` of a pipe reports pipefs (`0x50495045`), of a socket sockfs
+  (`0x534f434b`), and `statfs` of `/proc/self/fd/<n>` the same for them.
 - Permissions are the read-only attribute only: regular files show
   `0755` (`0555` read-only) and `access(X_OK)` holds for every file (native2,
   ADR 0057), as on an NTFS volume mounted on Linux; `chmod` changes only the

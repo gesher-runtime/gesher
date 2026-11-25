@@ -8,6 +8,7 @@
 
 #include "fifo_internal.h"
 #include "internal.h"
+#include "ofd_internal.h"
 #include "revocable_internal.h"
 #include "storage_policy.h"
 
@@ -57,26 +58,36 @@ void ProcName(const std::string& linux_path, unsigned type, unsigned mode, struc
   buf->st_atim = buf->st_mtim = buf->st_ctim = ToTimespec(time);
 }
 
+// An fd open on a /proc (or /sys) name (an anonymous, temporary file that
+// procfs.cc marked): what stat of the name reports (lstat for a link opened
+// O_PATH | O_NOFOLLOW), not the snapshot file. `description` caches whether
+// the file is one, so a memfd's fstat reads the attribute once only.
+bool ProcFile(HANDLE h, gesher::OpenFileDescription* description, struct stat* buf) {
+  if (description != nullptr && description->procfs_file.load(std::memory_order_relaxed) == 0) {
+    return false;
+  }
+  unsigned type, mode;
+  std::string path;
+  const bool tagged = gesher::procfs::DescribeTemporaryFile(h, &type, &path, &mode);
+  if (description != nullptr) description->procfs_file.store(tagged ? 1 : 0, std::memory_order_relaxed);
+  if (tagged) ProcName(path, type, mode, buf);
+  return tagged;
+}
+
 // A file or directory on disk.
-int FromHandle(HANDLE h, struct stat* buf) {
+int FromHandle(HANDLE h, struct stat* buf, gesher::OpenFileDescription* description = nullptr) {
   BY_HANDLE_FILE_INFORMATION info;
+  if (!GetFileInformationByHandle(h, &info)) return gesher::FailWithLastError();
+  if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 && ProcFile(h, description, buf)) {
+    return 0;
+  }
   FILE_BASIC_INFO basic;
   FILE_STANDARD_INFO standard;
-  if (!GetFileInformationByHandle(h, &info) ||
-      !GetFileInformationByHandleEx(h, FileBasicInfo, &basic, sizeof(basic)) ||
+  if (!GetFileInformationByHandleEx(h, FileBasicInfo, &basic, sizeof(basic)) ||
       !GetFileInformationByHandleEx(h, FileStandardInfo, &standard, sizeof(standard))) {
     return gesher::FailWithLastError();
   }
   Clear(buf);
-  unsigned proc_type;
-  std::string proc_path;
-  if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 &&
-      gesher::procfs::DescribeHandle(h, &proc_type, &proc_path)) {
-    // An fd open on a /proc (or /sys) name: what stat of the name reports
-    // (lstat for a link opened O_PATH | O_NOFOLLOW), not the snapshot file.
-    ProcName(proc_path, proc_type, gesher::procfs::Mode(proc_path, proc_type), buf);
-    return 0;
-  }
   buf->st_dev = info.dwVolumeSerialNumber;
   buf->st_ino = (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
   buf->st_nlink = info.nNumberOfLinks;
@@ -208,7 +219,7 @@ int fstat(int fd, struct stat* buf) {
   }
   switch (GetFileType(h)) {
     case FILE_TYPE_DISK:
-      return FromHandle(h, buf);
+      return FromHandle(h, buf, snapshot->description.get());
     case FILE_TYPE_PIPE:
       Clear(buf);
       buf->st_mode = S_IFIFO | 0600;

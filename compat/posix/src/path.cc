@@ -370,7 +370,7 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
   unsigned proc_type;
   std::string proc_path;
   if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 &&
-      procfs::DescribeHandle(h, &proc_type, &proc_path)) {
+      procfs::DescribeTemporaryFile(h, &proc_type, &proc_path)) {
     // A directory fd under /proc: names relative to its path.
     if (proc_type != S_IFDIR) return errno = ENOTDIR, false;
     *out = proc_path + "/" + path;
