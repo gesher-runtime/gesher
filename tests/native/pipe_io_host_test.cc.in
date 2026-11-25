@@ -265,6 +265,9 @@ static int ReadFileDescription(const DescriptorSnapshotPtr&, void*, unsigned) {
 static int TransferFifo(const DescriptorSnapshotPtr&, void*, unsigned, bool, HANDLE, HANDLE) { std::abort(); }
 static int PollFifo(const DescriptorSnapshotPtr&, short, short*) { std::abort(); }
 static int FifoBytesAvailable(const DescriptorSnapshotPtr&, int*) { std::abort(); }
+// gesher/fork.h (ADR 0092): this fixture is never a forked child, so its
+// transfers keep their asynchronous cancellation.
+static bool InForkedChild() { return false; }
 }
 
 // The production pipe I/O marks its blocking waits for gesher-base's ptrace

@@ -6,6 +6,7 @@ import android.app.AppOpsManager;
 import android.app.IApplicationThread;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.PermissionInfo;
 import android.content.pm.Signature;
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -50,6 +52,10 @@ public final class RuntimePermissionStateTest {
     private static final String COARSE = Manifest.permission.ACCESS_COARSE_LOCATION;
     private static final String BACKGROUND = Manifest.permission.ACCESS_BACKGROUND_LOCATION;
     private static final String STORAGE = Manifest.permission.READ_EXTERNAL_STORAGE;
+    private static final String READ_LOG = Manifest.permission.READ_CALL_LOG;
+    private static final String WRITE_LOG = Manifest.permission.WRITE_CALL_LOG;
+    private static final String OUTGOING = Manifest.permission.PROCESS_OUTGOING_CALLS;
+    private static final List<String> CALL_LOG = List.of(READ_LOG, WRITE_LOG, OUTGOING);
     private static final String NORMAL = Manifest.permission.VIBRATE;
     private static final String UNKNOWN = "fixture.permission.UNKNOWN";
     private static final String CUSTOM_READ = "fixture.permission.CUSTOM_READ";
@@ -65,7 +71,8 @@ public final class RuntimePermissionStateTest {
     private static final int GRANTED = PackageManager.PERMISSION_GRANTED, DENY = PackageManager.PERMISSION_DENIED;
     // These are the actual JNI/controller protocol values, not injected permission results.
     private static final int DISMISSED = 0, DENIED = 1, ALLOWED = 2, FOREGROUND_ONLY = 3, ALWAYS = 4;
-    private static final List<String> RUNTIME = List.of(CAMERA, AUDIO, ANSWER, CONTACTS, WRITE_CONTACTS, FINE, COARSE, BACKGROUND, STORAGE);
+    private static final List<String> RUNTIME = List.of(CAMERA, AUDIO, ANSWER, CONTACTS, WRITE_CONTACTS,
+            FINE, COARSE, BACKGROUND, STORAGE, READ_LOG, WRITE_LOG, OUTGOING);
     private static final List<String> CUSTOM = List.of(CUSTOM_READ, CUSTOM_WRITE, CUSTOM_OTHER);
     private static int checks;
     private static boolean binder;
@@ -94,8 +101,12 @@ public final class RuntimePermissionStateTest {
         return method.invoke(value, args);
     }
     private static ApkPackage pkg(String name, int uid, int target, byte signer) throws Exception {
+        return pkg(name, uid, target, signer, null);
+    }
+    private static ApkPackage pkg(String name, int uid, int target, byte signer, String sharedUid) throws Exception {
         PackageImpl parsed = (PackageImpl)PackageImpl.forTesting(name, "/fixture/" + name + "/base.apk");
         parsed.setEnabled(true); parsed.setTargetSdkVersion(target);
+        if (sharedUid != null) parsed.setSharedUserId(sharedUid);
         for (String permission : RUNTIME) parsed.addUsesPermission(new ParsedUsesPermissionImpl(permission, 0, java.util.Set.of()));
         for (String permission : CUSTOM) parsed.addUsesPermission(new ParsedUsesPermissionImpl(permission, 0, java.util.Set.of()));
         if (NAME.equals(name)) {
@@ -168,7 +179,7 @@ public final class RuntimePermissionStateTest {
                     }
                     if (name.equals(ANSWER)) info.protectionLevel |= PermissionInfo.PROTECTION_FLAG_RUNTIME_ONLY;
                     info.group = UNDEFINED_GROUP;
-                    if (name.equals(BACKGROUND)) info.flags = PermissionInfo.FLAG_HARD_RESTRICTED;
+                    if (name.equals(BACKGROUND) || CALL_LOG.contains(name)) info.flags = PermissionInfo.FLAG_HARD_RESTRICTED;
                     if (name.equals(STORAGE)) info.flags = PermissionInfo.FLAG_SOFT_RESTRICTED | PermissionInfo.FLAG_IMMUTABLY_RESTRICTED;
                     definitions.put(name, info);
                 }
@@ -240,6 +251,26 @@ public final class RuntimePermissionStateTest {
             return restored;
         }
         void install(ApkPackage replacement) throws Exception {
+            call(pm, "add", new Class<?>[]{ApkPackage.class}, replacement);
+            owner = replacement; set(process, "packageCode", owner);
+        }
+        Collection<String> selection(PackageInstaller.SessionParams params) {
+            return (params.installFlags & PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS) != 0
+                    ? null : params.whitelistedRestrictedPermissions == null ? List.of()
+                    : List.copyOf(params.whitelistedRestrictedPermissions);
+        }
+        void publishSession(PackageInstaller.SessionParams params) throws Exception {
+            // The identical admitted APK models a verified reinstall. This invokes the
+            // production Installer's unchanged-publication boundary; session capture is
+            // exercised independently by PackageInstallerSessionTest and its host test.
+            call(policy, "addInstallerAllowlist", new Class<?>[]{ApkPackage.class, Collection.class},
+                    owner, selection(params));
+        }
+        void freshInstall(PackageInstaller.SessionParams params) throws Exception {
+            policy.forgetPackage(NAME);
+            call(pm, "remove", new Class<?>[]{String.class}, NAME);
+            ApkPackage replacement = pkg(NAME, UID, 36, (byte)7);
+            call(replacement, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, selection(params));
             call(pm, "add", new Class<?>[]{ApkPackage.class}, replacement);
             owner = replacement; set(process, "packageCode", owner);
         }
@@ -520,6 +551,259 @@ public final class RuntimePermissionStateTest {
         h.install(pkg(NAME, UID, 36, (byte)7));
         h.reset(); h.flush();
     }
+
+
+    private static PackageInstaller.SessionParams session(Set<String> names) {
+        PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        params.setWhitelistedRestrictedPermissions(names);
+        return params;
+    }
+    private static void withIdentity(int uid, int pid, Checked action) throws Exception {
+        long identity = Binder.clearCallingIdentity();
+        try { Binder.restoreCallingIdentity(((long)uid << 32) | pid); action.run(); }
+        finally { Binder.restoreCallingIdentity(identity); }
+    }
+    private static void queryDenied(Checked action, String message) throws Exception {
+        try { action.run(); throw new AssertionError(message); }
+        catch (SecurityException expected) { checks++; }
+    }
+    private static Object installSource(ApkPackage installer) throws Exception {
+        return make(type("PackageInstallSource"), new Class<?>[]{String.class, String.class,
+                int.class, android.content.pm.SigningDetails.class}, installer.packageName,
+                call(installer, "enabledStateOwner", new Class<?>[0]), PackageInstaller.PACKAGE_SOURCE_STORE, null);
+    }
+    @SuppressWarnings("unchecked")
+    private static void allowlistQueries(Harness h) throws Exception {
+        int category = PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER;
+        call(h.pm, "attachInstallSourceCallers", new Class<?>[]{h.atm.getClass()}, h.atm);
+        check(call(h.pm, "getVisibleSearchPackage", new Class<?>[]{int.class, String.class, String.class},
+                UID, NAME, PEER) == null, "allowlist visibility fixture must hide the installed peer");
+        h.asApp(() -> check(h.query.getAllowlistedRestrictedPermissions(PEER, category, 0) == null
+                && h.query.getAllowlistedRestrictedPermissions("fixture.permission.absent", category, 0) == null,
+                "allowlist query distinguished an invisible package from a missing package"));
+        Object originalSource = call(h.owner, "installSource", new Class<?>[0]);
+        call(h.owner, "setInstallSource", new Class<?>[]{type("PackageInstallSource")}, installSource(h.owner));
+        h.asApp(() -> check(h.query.getAllowlistedRestrictedPermissions(NAME, category, 0).containsAll(CALL_LOG),
+                "current recorded installer could not query its allowlist"));
+        h.asApp(() -> queryDenied(() -> h.query.getAllowlistedRestrictedPermissions(NAME,
+                PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM, 0), "installer read the privileged system allowlist"));
+        withIdentity(1001, PID + 20, () -> queryDenied(
+                () -> h.query.getAllowlistedRestrictedPermissions(NAME, category, 0),
+                "an unattached reserved UID acquired allowlist authority"));
+
+        String group = "fixture.permission.installers";
+        ApkPackage recorded = pkg(group + ".owner", UID + 10, 36, (byte)9, group);
+        ApkPackage shared = pkg(group + ".peer", UID + 10, 36, (byte)9, group);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, recorded);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, shared);
+        IApplicationThread thread = new IApplicationThread.Default() {
+            final Binder token = new Binder(); @Override public IBinder asBinder() { return token; }
+        };
+        Object[] process = new Object[1];
+        withIdentity(UID + 10, PID + 30, () -> process[0] = make(type("ActivityTaskManagerService$ProcessRecord"),
+                new Class<?>[]{h.atm.getClass(), int.class, IApplicationThread.class}, h.atm, PID + 30, thread));
+        set(process[0], "packageName", shared.packageName); set(process[0], "processName", shared.packageName);
+        set(process[0], "packageCode", shared); set(process[0], "ready", true);
+        List<Object> processes = (List<Object>)get(h.atm, "mProcesses"); processes.add(process[0]);
+        try {
+            call(h.owner, "setInstallSource", new Class<?>[]{type("PackageInstallSource")}, installSource(recorded));
+            withIdentity(UID + 10, PID + 30, () -> check(
+                    h.query.getAllowlistedRestrictedPermissions(NAME, category, 0).containsAll(CALL_LOG),
+                    "admitted shared-UID installer peer lost query authority"));
+            java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+            Thread pending = new Thread(() -> {
+                try {
+                    withIdentity(UID + 10, PID + 30, () -> {
+                        try {
+                            h.policy.removeAllowlistedRestrictedPermission(NAME, READ_LOG, category, 0);
+                            throw new AssertionError("in-flight retired installer mutation was accepted");
+                        } catch (SecurityException expected) { }
+                    });
+                } catch (Throwable problem) { failure.set(problem); }
+            }, "allowlist-retired-installer");
+            pending.setDaemon(true);
+            synchronized (h.pm) {
+                pending.start();
+                blockedAtMonitor(pending);
+                // Replacement after authentication must not be adopted by the pending call.
+                call(h.pm, "add", new Class<?>[]{ApkPackage.class},
+                        pkg(shared.packageName, UID + 10, 36, (byte)9, group));
+            }
+            joined(pending, failure);
+            check(h.policy.getAllowlistedRestrictedPermissions(NAME, category, 0).contains(READ_LOG),
+                    "in-flight retired installer mutation changed permission state");
+            withIdentity(UID + 10, PID + 30, () -> queryDenied(
+                    () -> h.query.getAllowlistedRestrictedPermissions(NAME, category, 0),
+                    "retired installer code borrowed its replacement's allowlist authority"));
+            withIdentity(UID + 10, PID + 30, () -> queryDenied(
+                    () -> h.query.removeAllowlistedRestrictedPermission(NAME, READ_LOG, category, 0),
+                    "retired installer code removed a replacement's allowlist entry"));
+            withIdentity(UID + 10, PID + 30, () -> queryDenied(
+                    () -> h.query.addAllowlistedRestrictedPermission(NAME, READ_LOG, category, 0),
+                    "retired installer code added a replacement's allowlist entry"));
+        } finally {
+            processes.remove(process[0]);
+            call(h.owner, "setInstallSource", new Class<?>[]{type("PackageInstallSource")}, originalSource);
+            for (String name : List.of(recorded.packageName, shared.packageName)) {
+                h.policy.forgetPackage(name); call(h.pm, "remove", new Class<?>[]{String.class}, name);
+            }
+        }
+    }
+    private static void blockedAtMonitor(Thread thread) throws Exception {
+        long until = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (thread.isAlive() && thread.getState() != Thread.State.BLOCKED && System.nanoTime() < until) {
+            Thread.sleep(1);
+        }
+        check(thread.getState() == Thread.State.BLOCKED, "allowlist worker did not reach the held monitor");
+    }
+    private static void joined(Thread thread, java.util.concurrent.atomic.AtomicReference<Throwable> failure) throws Exception {
+        thread.join(5000);
+        check(!thread.isAlive(), "allowlist worker deadlocked");
+        if (failure.get() != null) throw new AssertionError("allowlist worker failed", failure.get());
+    }
+    private static void concurrentAllowlists(Harness h) throws Exception {
+        final int category = PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER;
+        h.freshInstall(session(Set.of()));
+        for (boolean add : new boolean[]{true, false}) {
+            java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+            List<Thread> workers = new ArrayList<>();
+            for (String permission : List.of(READ_LOG, WRITE_LOG)) {
+                Thread thread = new Thread(() -> {
+                    try {
+                        boolean changed = add ? h.policy.addAllowlistedRestrictedPermission(NAME, permission, category, 0)
+                                : h.policy.removeAllowlistedRestrictedPermission(NAME, permission, category, 0);
+                        if (!changed) throw new AssertionError("independent allowlist update reported no change");
+                    } catch (Throwable problem) { failure.compareAndSet(null, problem); }
+                }, "allowlist-" + permission);
+                thread.setDaemon(true); workers.add(thread);
+            }
+            // The old implementation read both lists before blocking on PM to write,
+            // deterministically losing the first update. The fixed implementation blocks
+            // before reading, so the second update includes the first one's result.
+            synchronized (h.pm) {
+                for (Thread thread : workers) thread.start();
+                for (Thread thread : workers) blockedAtMonitor(thread);
+            }
+            for (Thread thread : workers) joined(thread, failure);
+            List<String> result = h.policy.getAllowlistedRestrictedPermissions(NAME, category, 0);
+            check(add ? result != null && result.containsAll(List.of(READ_LOG, WRITE_LOG)) : result == null,
+                    "concurrent independent allowlist updates overwrote one another");
+        }
+        h.flush();
+    }
+
+    private static void installerAllowlist(Harness h) throws Exception {
+        final int installer = PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
+        final int restricted = PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
+        final int installerList = PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER;
+        final String[] calls = CALL_LOG.toArray(new String[0]);
+        PackageInstaller.SessionParams defaults = new PackageInstaller.SessionParams(
+                PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+
+        // An explicit empty installer decision remains restricted. The real controller
+        // must return denial without showing a dialog that cannot grant the permission.
+        h.freshInstall(session(Set.of()));
+        AtomicInteger prompts = new AtomicInteger();
+        Reply blocked = h.request(choose(h, ALLOWED, prompts), calls);
+        check(blocked.count == 1 && prompts.get() == 0, "empty allowlist showed futile call-log consent");
+        for (int i = 0; i < calls.length; i++) {
+            check(blocked.grant(i) == PackageManager.PERMISSION_DENIED && !h.policy.canRequest(NAME, calls[i])
+                    && (h.flags(calls[i]) & restricted) != 0, "empty installer allowlist enabled " + calls[i]);
+            check(h.pm.appOps().checkOperationRaw(AppOpsManager.permissionToOpCode(calls[i]), UID, NAME, null)
+                    == AppOpsManager.MODE_IGNORED, "restricted call-log AppOp was allowed without consent");
+        }
+
+        // The framework's default session enables eligibility for the installed
+        // manifest, while every modern runtime permission still requires consent.
+        h.publishSession(defaults);
+        List<String> listed = h.query.getAllowlistedRestrictedPermissions(NAME, installerList, 0);
+        check(listed.containsAll(CALL_LOG) && !listed.contains(CAMERA),
+                "installer allowlist query omitted restricted entries or included a normal runtime permission");
+        for (String name : calls) {
+            check(h.policy.canRequest(NAME, name) && (h.flags(name) & (installer | restricted)) == installer,
+                    "default installer session left call-log permission unrequestable: " + name);
+            check(h.policy.checkPermission(NAME, name) == PackageManager.PERMISSION_DENIED,
+                    "installer eligibility granted a modern runtime permission without consent");
+        }
+        h.asApp(() -> {
+            try {
+                h.query.getAllowlistedRestrictedPermissions(NAME, installerList, 0);
+                throw new AssertionError("an app without installer authority read the installer allowlist");
+            } catch (SecurityException expected) { checks++; }
+        });
+        Reply approved = h.request(choose(h, ALLOWED, prompts), calls);
+        check(approved.count == 1 && prompts.get() == 1, "call-log group did not produce one real controller decision");
+        for (int i = 0; i < calls.length; i++) {
+            check(approved.grant(i) == PackageManager.PERMISSION_GRANTED
+                    && h.policy.checkPermission(NAME, calls[i]) == PackageManager.PERMISSION_GRANTED
+                    && (h.flags(calls[i]) & USER_SET) != 0, "Allow did not reach the call-log callback and policy");
+            check(h.pm.appOps().checkOperationRaw(AppOpsManager.permissionToOpCode(calls[i]), UID, NAME, null)
+                    == AppOpsManager.MODE_ALLOWED, "call-log consent did not enable its derived AppOp");
+        }
+        allowlistQueries(h);
+        h.publishSession(session(Set.of()));
+        check(h.query.getAllowlistedRestrictedPermissions(NAME, installerList, 0).containsAll(CALL_LOG)
+                && h.policy.checkPermission(NAME, READ_LOG) == PackageManager.PERMISSION_GRANTED,
+                "an update's empty list revoked existing installer eligibility or consent");
+        h.flush();
+        PermissionPolicy restored = h.reopen();
+        check(api(restored).getAllowlistedRestrictedPermissions(NAME, installerList, 0).containsAll(CALL_LOG)
+                && restored.checkPermission(NAME, READ_LOG) == PackageManager.PERMISSION_GRANTED,
+                "installer eligibility or explicit consent was lost after permission-store restart");
+        int upgrade = PackageManager.FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT;
+        int policyFixed = PackageManager.FLAG_PERMISSION_POLICY_FIXED;
+        h.flags(READ_LOG, upgrade | policyFixed);
+        h.publishSession(defaults);
+        check(h.policy.checkPermission(NAME, READ_LOG) == PackageManager.PERMISSION_GRANTED
+                && (h.flags(READ_LOG) & (installer | upgrade | restricted | policyFixed)) == (installer | upgrade | policyFixed),
+                "installer eligibility discarded the existing upgrade exemption or fixed grant policy");
+
+        // Only requested restricted permissions from an explicit subset can become
+        // eligible. Ordinary publication/relaunch does not replace that decision.
+        h.freshInstall(session(Set.of(READ_LOG, CAMERA, UNKNOWN, Manifest.permission.RECEIVE_SMS)));
+        check(h.query.getAllowlistedRestrictedPermissions(NAME, installerList, 0).equals(List.of(READ_LOG)),
+                "explicit subset included an unknown, nonrestricted or undeclared permission");
+        call(h.pm, "publishPrepared", new Class<?>[]{ApkPackage.class, Object.class}, h.owner, h.pm);
+        check(h.policy.canRequest(NAME, READ_LOG) && !h.policy.canRequest(NAME, WRITE_LOG)
+                && !h.policy.canRequest(NAME, OUTGOING), "ordinary publication reset the installer subset");
+        h.publishSession(session(null));
+        check(h.policy.canRequest(NAME, READ_LOG) && !h.policy.canRequest(NAME, WRITE_LOG),
+                "an explicit null list removed prior installer exemptions or became ALL");
+        prompts.set(0);
+        Object deny = choose(h, DENIED, prompts);
+        Reply firstDenial = h.request(deny, READ_LOG);
+        check(firstDenial.grant(0) == PackageManager.PERMISSION_DENIED && prompts.get() == 1
+                && h.rationale(READ_LOG), "restricted permission denial did not preserve retry history");
+        check(h.pm.appOps().checkOperationRaw(AppOpsManager.OP_READ_CALL_LOG, UID, NAME, null)
+                == AppOpsManager.MODE_IGNORED, "call-log denial enabled its derived AppOp");
+        h.request(deny, READ_LOG);
+        check((h.flags(READ_LOG) & (USER_SET | USER_FIXED)) == (USER_SET | USER_FIXED),
+                "repeated call-log denial did not become fixed");
+        h.publishSession(defaults);
+        Reply stillDenied = h.request(choose(h, ALLOWED, prompts), READ_LOG);
+        check(stillDenied.grant(0) == PackageManager.PERMISSION_DENIED && prompts.get() == 2
+                && !h.policy.canRequest(NAME, READ_LOG) && (h.flags(READ_LOG) & USER_FIXED) != 0,
+                "installer eligibility overrode the user's fixed denial");
+        check(h.policy.canRequest(NAME, WRITE_LOG) && h.policy.checkPermission(NAME, WRITE_LOG) == PackageManager.PERMISSION_DENIED,
+                "update failed to add newly eligible permissions or granted them without consent");
+
+        // A completed uninstall retires both consent and installer eligibility.
+        // Null and empty are both explicit restrictions, not SessionParams.ALL.
+        h.freshInstall(session(null));
+        check(h.query.getAllowlistedRestrictedPermissions(NAME, installerList, 0) == null
+                && !h.policy.canRequest(NAME, READ_LOG) && (h.flags(READ_LOG) & (USER_SET | USER_FIXED)) == 0,
+                "reinstallation inherited the removed install's eligibility or user history");
+        prompts.set(0);
+        Reply removed = h.request(choose(h, ALLOWED, prompts), calls);
+        check(prompts.get() == 0 && removed.grant(0) == PackageManager.PERMISSION_DENIED,
+                "a fresh explicitly restricted installation reused an earlier grant");
+        h.publishSession(session(PackageInstaller.SessionParams.RESTRICTED_PERMISSIONS_ALL));
+        check(h.policy.canRequest(NAME, READ_LOG) && h.policy.checkPermission(NAME, READ_LOG) == PackageManager.PERMISSION_DENIED,
+                "explicit ALL did not restore requestability without restoring a retired grant");
+        h.reset(); h.flush();
+    }
+
     private static int allowlist(Harness h, String pkg, int flags) {
         List<String> list = h.policy.getAllowlistedRestrictedPermissions(pkg, flags, 0);
         int result = 0;
@@ -1039,6 +1323,9 @@ public final class RuntimePermissionStateTest {
         Harness harness = new Harness();
         exemptions(harness); legacyRestricted(harness); decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
         backgroundConsent(harness);
+        installerAllowlist(harness);
+        concurrentAllowlists(harness);
+
         return checks;
     }
     public static void main(String[] args) throws Exception {

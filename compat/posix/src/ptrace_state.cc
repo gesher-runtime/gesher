@@ -38,6 +38,8 @@
 // no loader lock, no thread pool, since a suspended thread may hold them.
 #include <gesher/ptrace_state.h>
 
+#include <gesher/fork.h>
+
 #include <errno.h>
 #include <unistd.h>
 #include <windows.h>
@@ -58,9 +60,17 @@ std::wstring DoneName(DWORD pid) { return L"Local\\gesher-ptrace-done-" + std::t
 SRWLOCK g_lock = SRWLOCK_INIT;
 DWORD g_pid = 0;  // the pid g_state belongs to (a cloned process has another)
 SharedState* g_state = nullptr;
+HANDLE g_section = nullptr;
 HANDLE g_request = nullptr;
 HANDLE g_done = nullptr;
 bool g_owner = false;  // this copy of gesher-base is the executable's
+// This process's identity as a tracer (SelfTracerId), 0 until computed; a
+// forked child computes its own.
+volatile LONG64 g_self_tracer_id = 0;
+// The dumpable flag at the last fork's clone (-1: no state yet), which the
+// child keeps (CreateLocked). Read with g_lock held by the fork (below), so
+// the parent cannot change it between the clone and the child's reading.
+LONG g_fork_dumpable = -1;
 PublishedCodeWrites g_code_writes = {};
 volatile HaltHook g_halt_hook = nullptr;
 
@@ -311,7 +321,9 @@ void Watch(int64_t tracer) {
 // The tracer exited without detaching: Linux detaches its tracees, and kills
 // them first if it asked for PTRACE_O_EXITKILL.
 void TracerGone(SharedState* state, int64_t tracer) {
-  if ((state->options & kOptExitkill) != 0) TerminateProcess(GetCurrentProcess(), 128 + 9);
+  // As a death by SIGKILL: the exit code this process's parent decodes as one
+  // (a forked child's differs from 128 + 9, gesher/fork.h).
+  if ((state->options & kOptExitkill) != 0) TerminateProcess(GetCurrentProcess(), gesher::SignalExitCode(9));
   if (InterlockedCompareExchange64(&state->tracer, 0, tracer) == tracer) {
     InterlockedExchange(&state->options, 0);
     InterlockedExchange(&state->want_stop, 0);
@@ -489,10 +501,27 @@ void CreateLocked(DWORD pid) {
   if (g_state != nullptr) {
     // A clone of another process: its view still maps the parent's section,
     // and the parent's handle values mean nothing here. Keep the dumpable
-    // flag (a forked child keeps it); everything else (tracer, ptracer
-    // exception) belongs to the parent.
-    dumpable = g_state->dumpable;
+    // flag as it was at the clone (a forked child keeps its mm's);
+    // everything else (tracer, ptracer exception, stop request, parked
+    // threads: none of the parent's threads is here) belongs to the parent.
+    // The view is the parent's live section: it is unmapped, not written.
+    dumpable = g_fork_dumpable >= 0 ? g_fork_dumpable : g_state->dumpable;
+    g_fork_dumpable = -1;
+    UnmapViewOfFile(g_state);
+    InterlockedExchange64(&g_self_tracer_id, 0);
+    // A fork's clone inherits the handles open when it made them inheritable
+    // (CloneProcess), at the same values: this process's copies of the
+    // parent's are closed. The guard's (the tracer it watches, threads it
+    // suspended: the parent's) may have been opened after that, so only a
+    // value the clone really brought is closed (InheritedAtFork).
+    for (HANDLE h : {g_section, g_request, g_done, g_probe_mutex, g_watched_process}) {
+      if (gesher::InheritedAtFork(h)) CloseHandle(h);
+    }
+    for (int i = 0; i < g_suspended_count; ++i) {
+      if (gesher::InheritedAtFork(g_suspended[i])) CloseHandle(g_suspended[i]);
+    }
     g_state = nullptr;
+    g_section = nullptr;
     g_request = nullptr;
     g_done = nullptr;
     g_probe_mutex = nullptr;
@@ -542,19 +571,20 @@ void CreateLocked(DWORD pid) {
   }
   // The section and events stay open for the life of the process.
   g_state = state;
+  g_section = section;
   g_request = request;
   g_done = done;
   g_pid = pid;
   if (g_owner && g_next_thread != nullptr) {
     if (g_probe_mutex == nullptr) g_probe_mutex = CreateMutexW(nullptr, FALSE, nullptr);
     // A small stack: the guard only makes system calls. Its id is published
-    // before the state is, so that a tracer never finds a state without it.
+    // before the state is, so that a tracer never finds a state without it;
+    // it is published once the guard runs its own code (in a forked child,
+    // within the helper start bound: a guard that does not start leaves 0,
+    // and GuardRunning says so).
     DWORD guard_tid = 0;
-    HANDLE guard = CreateThread(nullptr, 64 * 1024, GuardMain, state,
-                                STACK_SIZE_PARAM_IS_A_RESERVATION, &guard_tid);
-    if (guard != nullptr) {
+    if (gesher::StartHelperThread(GuardMain, state, 64 * 1024, &guard_tid)) {
       InterlockedExchange(&state->guard_tid, static_cast<LONG>(guard_tid));
-      CloseHandle(guard);
     }
   }
   if (state->version != kStateVersion) InterlockedExchange(&state->version, kStateVersion);
@@ -588,6 +618,14 @@ const bool g_started = [] {
 
 }  // namespace
 
+bool GuardRunning() {
+  SharedState* state = Self();
+  if (state == nullptr) return false;
+  // Only the executable's copy of gesher-base starts one (with ntdll's
+  // NtGetNextThread, which every supported Windows has).
+  return !g_owner || g_next_thread == nullptr || state->guard_tid != 0;
+}
+
 SharedState* Self() {
   const DWORD pid = GetCurrentProcessId();
   AcquireSRWLockShared(&g_lock);
@@ -603,13 +641,12 @@ SharedState* Self() {
 
 int64_t SelfTracerId() {
   // Cached per process: a process cloned from this one (fork) has another
-  // pid and creation time, and computes its own.
-  static volatile LONG64 cached_id = 0;
+  // pid and creation time, and computes its own (its Self() also clears it).
   const DWORD pid = GetCurrentProcessId();
-  const int64_t cached = cached_id;
+  const int64_t cached = g_self_tracer_id;
   if (cached != 0 && TracerIdPid(cached) == pid) return cached;
   const int64_t id = TracerId(pid, ProcessStartTime(GetCurrentProcess()));
-  InterlockedExchange64(&cached_id, id);
+  InterlockedExchange64(&g_self_tracer_id, id);
   return id;
 }
 
@@ -622,7 +659,10 @@ int SetDumpable(uint64_t value) {
   if (value != 0 && value != 1) return -EINVAL;  // SUID_DUMP_DISABLE, SUID_DUMP_USER
   SharedState* state = Self();
   if (state == nullptr) return -ENOMEM;
+  // Under g_lock (shared): a fork records the flag with it held exclusively.
+  AcquireSRWLockShared(&g_lock);
   InterlockedExchange(&state->dumpable, static_cast<LONG>(value));
+  ReleaseSRWLockShared(&g_lock);
   return 0;
 }
 
@@ -793,3 +833,22 @@ void RecordCodeWrite(const Remote& remote, uint64_t address, uint64_t size) {
 
 // Anchors this file (-u in posix.cmake): every process starts its guard.
 extern "C" int gesher_ptrace_state_anchor_v1 = 0;
+
+// fork (gesher/fork.h, ADR 0092): g_lock is in the fork set, so no thread is
+// creating the state or changing the dumpable flag at the clone; the flag is
+// recorded with it held, for the child to keep. The child makes the lock
+// anew; its own state and guard come with ReinitializeAfterFork's Self().
+namespace {
+bool PtraceLockTry(void* lock) {
+  if (TryAcquireSRWLockExclusive(static_cast<SRWLOCK*>(lock)) == 0) return false;
+  using namespace gesher::ptrace;
+  g_fork_dumpable = g_state != nullptr && g_pid == GetCurrentProcessId() ? g_state->dumpable : -1;
+  return true;
+}
+void PtraceLockUnlock(void* lock) { ReleaseSRWLockExclusive(static_cast<SRWLOCK*>(lock)); }
+void PtraceLockChild(void* lock) { InitializeSRWLock(static_cast<SRWLOCK*>(lock)); }
+const gesher::ForkLockOps kPtraceLockOps = {&PtraceLockTry, &PtraceLockUnlock, &PtraceLockChild};
+const gesher::ForkLockRegistration g_ptrace_fork_lock(
+    gesher::kForkOrderLeaf, "gesher::ptrace::g_lock",
+    []() -> void* { return static_cast<void*>(&gesher::ptrace::g_lock); }, &kPtraceLockOps);
+}  // namespace

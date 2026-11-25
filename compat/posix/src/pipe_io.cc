@@ -14,6 +14,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <winternl.h>
+#include <gesher/fork.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -117,7 +118,9 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
   operation.file = file;
   operation.overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (!operation.overlapped.hEvent) return FailWithLastError();
-  if (canceled || interrupted) {
+  // A forked child has no thread pool (gesher/fork.h): its pipe transfers
+  // block without asynchronous cancellation; they still end at EOF or data.
+  if ((canceled || interrupted) && !InForkedChild()) {
     if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(),
           &operation.thread, THREAD_TERMINATE, FALSE, 0)) return FailWithLastError();
     if (canceled) {
