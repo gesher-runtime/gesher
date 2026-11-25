@@ -558,6 +558,28 @@ void CopyReaderPlane(const uint8_t* source, int stride, int width, int height,
     }
     return;
   }
+  if (width > 0 && height > 0 && target_width > 0 && target_height > 0) {
+    // Walk the exact floor(x * width / target_width) coordinates using a
+    // quotient and remainder. This keeps nearest-neighbour pixels unchanged
+    // without a division for every output byte or an allocated coordinate map.
+    const int step = width / target_width, remainder = width % target_width;
+    for (int y = 0; y < target_height; ++y) {
+      const size_t row = static_cast<size_t>(static_cast<int64_t>(y) * height / target_height) * stride;
+      uint8_t* out = target + static_cast<size_t>(y) * target_width;
+      int source_x = 0;
+      int64_t error = 0;
+      for (int x = 0; x < target_width; ++x) {
+        out[x] = source[row + source_x];
+        source_x += step;
+        error += remainder;
+        if (error >= target_width) {
+          error -= target_width;
+          ++source_x;
+        }
+      }
+    }
+    return;
+  }
   for (int y = 0; y < target_height; ++y) {
     const size_t row = static_cast<size_t>(static_cast<int64_t>(y) * height / target_height) * stride;
     for (int x = 0; x < target_width; ++x)
