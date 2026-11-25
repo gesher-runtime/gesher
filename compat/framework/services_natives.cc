@@ -24,6 +24,7 @@
 //   (services_zygote.cc): starting them detached, their liveness, a job that
 //   ends them with the system server, a named mutex and event.
 
+#include <atomic>
 #include <jni.h>
 #include <log/log.h>
 #include <nativehelper/JNIHelp.h>
@@ -112,6 +113,26 @@ static const JNINativeMethod gActivityThreadMethods[] = {
 int register_gesher_ActivityThread(JNIEnv* env) {
     return RegisterGesherNatives(env, "android/app/ActivityThread", gActivityThreadMethods,
                                 NELEM(gActivityThreadMethods));
+}
+
+// com.android.internal.os.RuntimeInit: what RuntimeInit.applicationInit calls in an app
+// process (ZygoteInit's Gesher app-process path, ADR 0098). On a device it makes the
+// VM's exit hook end the process with _exit, skipping native cleanup. Gesher's runtime
+// has no exit hook: System.exit keeps the CRT's exit, whose atexit work releases Windows
+// resources (UI Automation, audio) the process holds; the request is recorded only.
+static std::atomic<bool> gExitWithoutCleanup{false};
+
+static void RuntimeInit_nativeSetExitWithoutCleanup(JNIEnv*, jclass, jboolean exitWithoutCleanup) {
+    gExitWithoutCleanup.store(exitWithoutCleanup != JNI_FALSE);
+}
+
+static const JNINativeMethod gRuntimeInitMethods[] = {
+    {"nativeSetExitWithoutCleanup", "(Z)V", GESHER_JNI(RuntimeInit_nativeSetExitWithoutCleanup)},
+};
+
+int register_gesher_RuntimeInit(JNIEnv* env) {
+    return RegisterGesherNatives(env, "com/android/internal/os/RuntimeInit", gRuntimeInitMethods,
+                                NELEM(gRuntimeInitMethods));
 }
 
 static jlong DebugStore_beginEvent(JNIEnv*, jclass, jstring, jobject) { return 0; }

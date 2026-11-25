@@ -10,7 +10,9 @@ import java.util.List;
 /**
  * The Gesher device's processes: a zygote, lite. Windows has no fork, so an app process
  * is a new dalvikvm, started with this process's own runtime options (its command line up
- * to the main class) and {@link android.app.GesherAppProcess} as the main class, given its
+ * to the main class) and {@code com.android.internal.os.ZygoteInit --gesher-app-process}
+ * (ADR 0098: what a forked child runs, ActivityThread.main through RuntimeInit's caller,
+ * after {@link android.app.GesherAppProcess#specializeChild}), given its
  * package and a start sequence number it attaches with, as ActivityManagerService's
  * ProcessList asks the zygote for a process and pairs it by {@code startSeq}.
  *

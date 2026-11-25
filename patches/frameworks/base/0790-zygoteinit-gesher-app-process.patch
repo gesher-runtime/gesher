@@ -1,0 +1,68 @@
+diff --git a/core/java/com/android/internal/os/ZygoteInit.java b/core/java/com/android/internal/os/ZygoteInit.java
+--- a/core/java/com/android/internal/os/ZygoteInit.java
++++ b/core/java/com/android/internal/os/ZygoteInit.java
+@@ -105,6 +105,12 @@ public class ZygoteInit {
+     // --usap-socket-name parameter.
+     private static final String SOCKET_NAME_ARG = "--socket-name=";
+ 
++    /**
++     * Gesher: the first argument of an app process its device's zygote started in place of a
++     * fork (com.gesher.server.Zygote; Windows has no fork).
++     */
++    private static final String GESHER_APP_PROCESS_ARG = "--gesher-app-process";
++
+     /**
+      * The path of a file that contains classes to preload.
+      */
+@@ -812,6 +818,16 @@ public class ZygoteInit {
+      */
+     @UnsupportedAppUsage
+     public static void main(String[] argv) {
++        // Gesher: Windows has no fork. An app process is a new runtime that starts here with
++        // GESHER_APP_PROCESS_ARG and the child's arguments, in place of the child a fork of
++        // this zygote would make: it runs what that child runs from runSelectLoop's return
++        // on, its command's main (ActivityThread.main) through RuntimeInit's caller.
++        if (argv.length > 0 && GESHER_APP_PROCESS_ARG.equals(argv[0])) {
++            Runnable caller = gesherAppProcessInit(argv);
++            caller.run();
++            return;
++        }
++
+         ZygoteServer zygoteServer = null;
+ 
+         // Mark zygote start. This ensures that thread creation will throw
+@@ -930,6 +946,34 @@ public class ZygoteInit {
+         }
+     }
+ 
++    /**
++     * Gesher: the child's part of an app process (ZygoteConnection.handleChildProc), in a
++     * process the device's zygote started. The device's own setup and the child's
++     * specialization (android.app.GesherAppProcess.specializeChild, on the boot class path
++     * after this framework) return the command, its target SDK first; then, as
++     * ZygoteInit.zygoteInit does, RuntimeInit's application init gives the caller of its
++     * main.
++     */
++    private static Runnable gesherAppProcessInit(String[] argv) {
++        final String[] command;
++        try {
++            command = (String[]) Class.forName("android.app.GesherAppProcess")
++                    .getMethod("specializeChild", String[].class)
++                    .invoke(null, (Object) argv);
++        } catch (java.lang.reflect.InvocationTargetException ex) {
++            Throwable cause = ex.getCause();
++            if (cause instanceof RuntimeException) throw (RuntimeException) cause;
++            if (cause instanceof Error) throw (Error) cause;
++            throw new RuntimeException(cause);
++        } catch (ReflectiveOperationException ex) {
++            throw new RuntimeException("Gesher app process setup not found", ex);
++        }
++        String[] startArgs = new String[command.length - 1];
++        System.arraycopy(command, 1, startArgs, 0, startArgs.length);
++        return RuntimeInit.applicationInit(Integer.parseInt(command[0]),
++                /* disabledCompatChanges */ null, startArgs, /* classLoader */ null);
++    }
++
+     /**
+      * Return {@code true} if this device configuration has another zygote.
+      *

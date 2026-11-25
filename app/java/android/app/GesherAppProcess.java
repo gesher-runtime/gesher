@@ -38,10 +38,11 @@ import java.util.List;
  * intent, then (unless the activity finished itself) {@code removeTask}, which makes the
  * server pause, stop and destroy the activity and then end the process.
  *
- * <p>{@link #main} is the entry of a process the system server starts for a package (its
- * zygote, lite: {@code com.gesher.server.Zygote}): {@code --package P --start-seq N
- * --target-sdk S}. It attaches with the start sequence number, which pairs it with the
- * package, and has no launcher part: the server drives it, and tells it when to exit.
+ * <p>A process the system server starts for a package (its zygote, lite:
+ * {@code com.gesher.server.Zygote}) enters through {@code ZygoteInit.main} (ADR 0098):
+ * {@link #specializeChild} does this process's setup, then {@code ActivityThread.main}
+ * attaches with the start sequence number, which pairs it with the package. It has no
+ * launcher part: the server drives it, and tells it when to exit.
  *
  * <p>Windows (docs/graphics.md, ADR 0029): the process draws its own windows. In window
  * mode ({@code $GESHER_APP_WINDOW}: {@code window}, the default, or {@code hidden}) the
@@ -107,75 +108,147 @@ public final class GesherAppProcess {
     }
 
     /**
-     * {@code android.app.GesherAppProcess --package P --start-seq N [--target-sdk S]
-     * [--runtime-flags F]}: an app
-     * process the system server started for package P (ActivityThread.main after the
-     * zygote's fork). Exits with 0 when the server ends it, 1 on a failure.
+     * An app process the system server started for a package: {@code
+     * com.android.internal.os.ZygoteInit --gesher-app-process --package P --start-seq N
+     * --target-sdk S --runtime-flags F} (ADR 0098). Windows has no fork, so the device's
+     * zygote ({@code com.gesher.server.Zygote}) starts a new runtime in place of a forked
+     * child; ZygoteInit.main calls this for what the zygote and the child's specialization
+     * did, then runs the child's command as a forked child does: RuntimeInit's caller of
+     * {@code ActivityThread.main}. So the main thread's stack is the one of an Android app
+     * process ({@code ActivityThread.main}, {@code Method.invoke},
+     * {@code RuntimeInit$MethodAndArgsCaller.run}, {@code ZygoteInit.main}).
+     *
+     * <p>Returns that command, its target SDK first: {@code S}, {@code
+     * android.app.ActivityThread}, {@code seq=N}. The process ends with 0 when the server ends
+     * it ({@code scheduleExit}), with 1 when its main thread fails (an uncaught exception, as
+     * Android's KillApplicationHandler ends the process).
      */
-    public static void main(String[] args) {
+    public static String[] specializeChild(String[] argv) throws Exception {
         // stdout/stderr are the package's .log file: no credentials (docs/logging.md).
         com.gesher.app.LogRedaction.installStandardStreams();
-        int code = 0;
-        try {
-            String packageName = null;
-            long startSeq = 0;
-            int targetSdk = 0;
-            int runtimeFlags = 0;
-            for (int i = 0; i + 1 < args.length; i += 2) {
-                switch (args[i]) {
-                    case "--runtime-flags": runtimeFlags = Integer.parseInt(args[i + 1]); break;
-                    case "--package": packageName = args[i + 1]; break;
-                    case "--start-seq": startSeq = Long.parseLong(args[i + 1]); break;
-                    case "--target-sdk": targetSdk = Integer.parseInt(args[i + 1]); break;
-                    default: throw new IllegalArgumentException("unknown option " + args[i]);
-                }
+        endProcessWithMainThread();
+        String packageName = null;
+        long startSeq = 0;
+        int targetSdk = 0;
+        int runtimeFlags = 0;
+        // argv[0] is ZygoteInit's --gesher-app-process.
+        for (int i = 1; i + 1 < argv.length; i += 2) {
+            switch (argv[i]) {
+                case "--runtime-flags": runtimeFlags = Integer.parseInt(argv[i + 1]); break;
+                case "--package": packageName = argv[i + 1]; break;
+                case "--start-seq": startSeq = Long.parseLong(argv[i + 1]); break;
+                case "--target-sdk": targetSdk = Integer.parseInt(argv[i + 1]); break;
+                default: throw new IllegalArgumentException("unknown option " + argv[i]);
             }
-            if (packageName == null || startSeq <= 0) {
-                throw new IllegalArgumentException("usage: GesherAppProcess --package P"
-                        + " --start-seq N [--target-sdk S]");
-            }
-            log("app process for " + packageName + ": pid " + android.os.Process.myPid()
-                    + ", start seq " + startSeq);
-            // The zygote's specialisation: not dumpable unless debuggable (ADR 0093).
-            com.gesher.app.ProcessSpecialization.apply(runtimeFlags, TAG);
-            String trace = System.getenv("GESHER_APP_METHOD_TRACE");
-            if (trace != null && !trace.isEmpty()) {
-                // Debugging: ART's method trace of the whole process, streamed (it survives an
-                // abort), to <dir>/<package>-<pid>.trace.
-                java.io.FileOutputStream out = new java.io.FileOutputStream(trace + "/"
-                        + packageName + "-" + android.os.Process.myPid() + ".trace");
-                dalvik.system.VMDebug.startMethodTracing("app", out.getFD(), 8 << 20, 0, false,
-                        0, true);
-            }
-            String androidRoot = System.getenv("ANDROID_ROOT");
-            if (androidRoot == null || androidRoot.isEmpty()) androidRoot = "/system";
-            com.gesher.app.Main.bootstrap(TAG, androidRoot + "/build.prop",
-                    androidRoot + "/framework/framework-res.apk");
-            // Its windows group under the package's Start menu shortcut on the taskbar
-            // ($GESHER_APP_USER_MODEL_ID, from the system server; docs/installer.md).
-            com.gesher.app.shell.AppShell.applyProcessAppUserModelId(TAG);
-            if (System.getenv("GESHER_APP_STRICT_SERVICES") != null) {
-                com.gesher.server.StandIn.setStrict(true);
-            }
-            // The system server gone, so is the device: this process too (on a device the
-            // zygote's children die with system_server).
-            android.os.IBinder am = android.os.ServiceManager.getService("activity");
-            if (am != null) {
-                am.linkToDeath(() -> {
-                    System.err.println(TAG + ": the system server died; exiting");
-                    if (!com.gesher.app.accessibility.UiaBridge.shutdown()) Runtime.getRuntime().halt(1);
-                    System.exit(3);
-                }, 0);
-            }
-            run(null, targetSdk, false, startSeq, com.gesher.app.window.WindowMode
-                    .fromEnvironment(com.gesher.app.window.WindowMode.WINDOW));
-        } catch (Throwable t) {
-            System.out.flush();
-            System.err.println(TAG + ": failed: " + t);
-            t.printStackTrace();
-            com.gesher.app.AppCrash.report(t);
-            code = 1;
         }
+        if (packageName == null || startSeq <= 0) {
+            throw new IllegalArgumentException("usage: ZygoteInit --gesher-app-process"
+                    + " --package P --start-seq N [--target-sdk S] [--runtime-flags F]");
+        }
+        log("app process for " + packageName + ": pid " + android.os.Process.myPid()
+                + ", start seq " + startSeq);
+        // The zygote's specialisation: not dumpable unless debuggable (ADR 0093).
+        com.gesher.app.ProcessSpecialization.apply(runtimeFlags, TAG);
+        String trace = System.getenv("GESHER_APP_METHOD_TRACE");
+        if (trace != null && !trace.isEmpty()) {
+            // Debugging: ART's method trace of the whole process, streamed (it survives an
+            // abort), to <dir>/<package>-<pid>.trace.
+            java.io.FileOutputStream out = new java.io.FileOutputStream(trace + "/"
+                    + packageName + "-" + android.os.Process.myPid() + ".trace");
+            dalvik.system.VMDebug.startMethodTracing("app", out.getFD(), 8 << 20, 0, false,
+                    0, true);
+        }
+        String androidRoot = System.getenv("ANDROID_ROOT");
+        if (androidRoot == null || androidRoot.isEmpty()) androidRoot = "/system";
+        // What the zygote has done before a fork; ActivityThread.main prepares the main
+        // Looper and the mainline modules' service managers itself.
+        com.gesher.app.Main.bootstrapForActivityThreadMain(TAG, androidRoot + "/build.prop",
+                androidRoot + "/framework/framework-res.apk");
+        // Its windows group under the package's Start menu shortcut on the taskbar
+        // ($GESHER_APP_USER_MODEL_ID, from the system server; docs/installer.md).
+        com.gesher.app.shell.AppShell.applyProcessAppUserModelId(TAG);
+        if (System.getenv("GESHER_APP_STRICT_SERVICES") != null) {
+            com.gesher.server.StandIn.setStrict(true);
+        }
+        // The system server gone, so is the device: this process too (on a device the
+        // zygote's children die with system_server).
+        android.os.IBinder am = android.os.ServiceManager.getService("activity");
+        if (am != null) {
+            am.linkToDeath(() -> {
+                System.err.println(TAG + ": the system server died; exiting");
+                if (!com.gesher.app.accessibility.UiaBridge.shutdown()) Runtime.getRuntime().halt(1);
+                System.exit(3);
+            }, 0);
+        }
+        prepareProcess(com.gesher.app.window.WindowMode.fromEnvironment(
+                com.gesher.app.window.WindowMode.WINDOW));
+        android.os.Looper.setObserver(new MainThreadObserver());
+        log("starting ActivityThread.main (start seq " + startSeq + ")");
+        return new String[] {String.valueOf(targetSdk), "android.app.ActivityThread",
+                "seq=" + startSeq};
+    }
+
+    /**
+     * What the process follows of its ActivityThread's messages: once the Application
+     * exists (BIND_APPLICATION handled), the process's Activities, for the camera's
+     * orientation, before the first activity transaction creates one; and
+     * EXIT_APPLICATION, whose {@code Looper.quit()} the main Looper refuses with an
+     * exception: the server ended the process, which then exits with 0 (on a device the
+     * server kills it).
+     */
+    private static final class MainThreadObserver implements android.os.Looper.Observer {
+        @Override
+        public Object messageDispatchStarting() {
+            return null;
+        }
+
+        @Override
+        public void messageDispatched(Object token, Message msg) {
+            if (msg.getTarget() instanceof ActivityThread.H
+                    && (msg.what == ActivityThread.H.BIND_APPLICATION
+                            || msg.what == ActivityThread.H.EXECUTE_TRANSACTION)) {
+                GesherActivityWindow.trackActivities();
+            }
+        }
+
+        @Override
+        public void dispatchingThrewException(Object token, Message msg, Exception exception) {
+            if (msg.getTarget() instanceof ActivityThread.H
+                    && msg.what == ActivityThread.H.EXIT_APPLICATION) {
+                log("the system server ended the process (scheduleExit)");
+                endProcess(0);
+            }
+        }
+    }
+
+    /**
+     * The main thread's uncaught failure ends the process with 1, after the crash notice
+     * (docs/app-crash-notices.md); other threads' go to the handler as before. An app's own
+     * default handler (a crash reporter) that hands on to the previous one comes here too.
+     */
+    private static void endProcessWithMainThread() {
+        final Thread main = Thread.currentThread();
+        final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((thread, failure) -> {
+            if (thread != main) {
+                if (previous != null) {
+                    previous.uncaughtException(thread, failure);
+                } else {
+                    System.err.println("FATAL EXCEPTION: " + thread.getName());
+                    failure.printStackTrace(System.err);
+                }
+                return;
+            }
+            System.out.flush();
+            System.err.println(TAG + ": failed: " + failure);
+            failure.printStackTrace();
+            com.gesher.app.AppCrash.report(failure);
+            endProcess(1);
+        });
+    }
+
+    /** Ends the process: the method trace's last buffer, UI Automation, then exit. */
+    private static void endProcess(int code) {
         String methodTrace = System.getenv("GESHER_APP_METHOD_TRACE");
         if (methodTrace != null && !methodTrace.isEmpty()) {
             // The trace's last buffer, with how the process got here (docs/e2e.md).
@@ -198,6 +271,16 @@ public final class GesherAppProcess {
         // which static final fields JNI may still overwrite, as Typeface's font map
         // does) follow it.
         dalvik.system.VMRuntime.getRuntime().setTargetSdkVersion(targetSdkVersion);
+        prepareProcess(windowMode);
+        useUserCaCertificates();
+        attachAndLoop(launch, removeTaskWhenIdle, startSeq);
+    }
+
+    /**
+     * What the process needs before its ActivityThread attaches: the binder threads, the
+     * display, cameras, accessibility, the proxy, fonts, frame timing and the windows.
+     */
+    private static void prepareProcess(String windowMode) throws Exception {
         // The zygote's child starts its binder thread pool (ZygoteInit.nativeZygoteInit);
         // here two Java threads join it, before the server can call in.
         com.gesher.server.SystemServer.startBinderThreads("app", 2);
@@ -230,9 +313,11 @@ public final class GesherAppProcess {
             // integration ci run 40003812869).
             android.view.ThreadedRenderer.sRendererEnabled = false;
         }
+    }
 
-        useUserCaCertificates();
-
+    /** The launcher's app process: attaches, starts {@code launch}, loops. */
+    private static void attachAndLoop(Intent launch, boolean removeTaskWhenIdle, long startSeq)
+            throws Exception {
         // ActivityThread.main: the main Looper is prepared (Main.bootstrap), then
         // new ActivityThread().attach(false, startSeq).
         ActivityThread thread = new ActivityThread();

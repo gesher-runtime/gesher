@@ -54,8 +54,12 @@ import java.util.Set;
  */
 public final class SystemServer {
     static final String TAG = "system_server";
-    /** The app processes' main class (android.app.GesherAppProcess.main). */
-    private static final String APP_PROCESS = "android.app.GesherAppProcess";
+    /**
+     * The app processes' main class: the zygote's, whose Gesher path runs what a forked
+     * child runs (android.app.GesherAppProcess.specializeChild, then ActivityThread.main;
+     * ADR 0098).
+     */
+    private static final String APP_PROCESS = "com.android.internal.os.ZygoteInit";
 
     private SystemServer() {
     }
@@ -403,7 +407,8 @@ public final class SystemServer {
             // ProcessList's runtime flags for the app (ptrace: ADR 0093).
             int runtimeFlags = com.gesher.app.ProcessSpecialization.runtimeFlagsFor(
                     pkg.applicationInfo(0));
-            String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
+            String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--gesher-app-process",
+                    "--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
                     String.valueOf(targetSdk), "--runtime-flags", String.valueOf(runtimeFlags)));
             // Experimental (ADR 0090): the package's own AppContainer.

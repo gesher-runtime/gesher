@@ -341,6 +341,22 @@ public final class Main {
      */
     public static void bootstrap(String tag, String buildProp, String frameworkRes)
             throws Exception {
+        bootstrap(tag, buildProp, frameworkRes, false);
+    }
+
+    /**
+     * {@link #bootstrap} for an app process that goes on with {@code ActivityThread.main}
+     * (android.app.GesherAppProcess.specializeChild, ADR 0098): ActivityThread.main prepares
+     * the main Looper and sets the mainline modules' service managers itself (each may be
+     * set once), so those steps are its.
+     */
+    public static void bootstrapForActivityThreadMain(String tag, String buildProp,
+            String frameworkRes) throws Exception {
+        bootstrap(tag, buildProp, frameworkRes, true);
+    }
+
+    private static void bootstrap(String tag, String buildProp, String frameworkRes,
+            boolean activityThreadMain) throws Exception {
         // 0. JCA providers that exist on Gesher's boot class path, and digests
         //    (Digests): before anything uses JCA.
         Digests.install();
@@ -354,13 +370,15 @@ public final class Main {
         System.out.flush();
 
         // Zygote installs this on Android, before any MediaSessionManager is created.
-        if (android.media.MediaFrameworkPlatformInitializer.getMediaServiceManager() == null) {
+        if (!activityThreadMain
+                && android.media.MediaFrameworkPlatformInitializer.getMediaServiceManager() == null) {
             android.media.MediaFrameworkPlatformInitializer.setMediaServiceManager(
                     new android.media.MediaServiceManager());
         }
 
         // Telephony mainline service manager stand-in, needed by TelephonyManager.
-        if (android.telephony.TelephonyFrameworkInitializer.getTelephonyServiceManager() == null) {
+        if (!activityThreadMain
+                && android.telephony.TelephonyFrameworkInitializer.getTelephonyServiceManager() == null) {
             android.telephony.TelephonyFrameworkInitializer.setTelephonyServiceManager(
                     new android.os.TelephonyServiceManager());
         }
@@ -385,7 +403,7 @@ public final class Main {
         com.gesher.app.locale.SystemLocale.applyDefault();
 
         // 3. The main Looper.
-        Looper.prepareMainLooper();
+        if (!activityThreadMain) Looper.prepareMainLooper();
 
         // 4. The framework's resources. AssetManager's own path is the device's
         //    /system/framework/framework-res.apk; on Windows that is a path on the current

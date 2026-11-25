@@ -112,7 +112,7 @@ $watcher = [PowerShell]::Create()
   for ($i = 0; $i -lt 6000; $i++) {
     foreach ($p in Get-CimInstance Win32_Process -Filter "Name = 'dalvikvm.exe'" -ErrorAction SilentlyContinue) {
       # This layout's app processes only: other Gesher installations may run too.
-      if ($p.CommandLine -match 'GesherAppProcess' -and $p.CommandLine.Contains($layout) -and
+      if ($p.CommandLine -match '--gesher-app-process' -and $p.CommandLine.Contains($layout) -and
           -not $watch.ContainsKey([int]$p.ProcessId)) {
         $watch[[int]$p.ProcessId] = [GesherToken]::Describe([int]$p.ProcessId)
       }

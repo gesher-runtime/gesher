@@ -97,6 +97,7 @@ int register_gesher_ApplicationSharedMemory(JNIEnv* env);
 int register_gesher_ClassLoaderFactory(JNIEnv* env);
 int register_gesher_ActivityThread(JNIEnv* env);
 int register_gesher_DebugStore(JNIEnv* env);
+int register_gesher_RuntimeInit(JNIEnv* env);
 int register_gesher_PropertyInvalidatedCache(JNIEnv* env);  // services_natives_pic.cc
 int register_gesher_Zygote(JNIEnv* env);  // services_natives.cc, services_zygote.cc
 int register_gesher_Shell(JNIEnv* env);  // compat/shell/shell_natives.cc (shell track)
@@ -1277,6 +1278,7 @@ static const struct {
      register_gesher_ClassLoaderFactory},
     {"gesher_ActivityThread", "android/app/ActivityThread", register_gesher_ActivityThread},
     {"gesher_DebugStore", "com/android/internal/os/DebugStore", register_gesher_DebugStore},
+    {"gesher_RuntimeInit", "com/android/internal/os/RuntimeInit", register_gesher_RuntimeInit},
     {"gesher_PropertyInvalidatedCache", "android/app/PropertyInvalidatedCache",
      register_gesher_PropertyInvalidatedCache},
     {"gesher_Zygote", "com/gesher/server/Zygote", register_gesher_Zygote},

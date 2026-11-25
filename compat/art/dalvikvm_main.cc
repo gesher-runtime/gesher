@@ -13,8 +13,61 @@
 #include <gesher/storage_policy.h>
 #include "exec_spawn.h"
 
+#include <cstring>
+#include <jni.h>
+
 // Only upstream dalvikvm.cc is compiled with this main rename.
 int gesher_dalvikvm_main(int argc, char** argv);
+
+namespace {
+
+// The zygote's main class: an app process enters through it (ADR 0098).
+constexpr char kZygoteInit[] = "com.android.internal.os.ZygoteInit";
+bool g_zygote_runtime = false;
+
+// The main class dalvikvm.cc will run: the first argument after the VM options
+// (-cp and -classpath take an operand).
+std::string MainClass(const std::vector<std::string>& arguments) {
+  bool operand = false;
+  for (std::size_t i = 1; i < arguments.size(); ++i) {
+    const std::string& argument = arguments[i];
+    if (operand) { operand = false; continue; }
+    if (argument.empty() || argument[0] != '-') return argument;
+    operand = argument == "-cp" || argument == "-classpath";
+  }
+  return std::string();
+}
+
+}  // namespace
+
+// dalvikvm.cc's JNI_CreateJavaVM (renamed for it). As app_process's AndroidRuntime
+// registers the framework's natives (startReg) before it calls ZygoteInit.main, the
+// zygote's runtime loads them before its main class is initialized: ZygoteInit's static
+// initializer already calls Log.isLoggable. Other main classes load them themselves
+// (com.gesher.app.Main.bootstrap), or never need them.
+#undef JNI_CreateJavaVM
+extern "C" jint gesher_dalvikvm_create_vm(JavaVM** vm, JNIEnv** env, void* args) {
+  jint result = JNI_CreateJavaVM(vm, env, args);
+  if (result != JNI_OK || !g_zygote_runtime) return result;
+  JNIEnv* e = *env;
+  jclass system = e->FindClass("java/lang/System");
+  jmethodID load = system != nullptr
+                       ? e->GetStaticMethodID(system, "loadLibrary", "(Ljava/lang/String;)V")
+                       : nullptr;
+  jstring name = load != nullptr ? e->NewStringUTF("android_runtime") : nullptr;
+  if (name != nullptr) e->CallStaticVoidMethod(system, load, name);
+  if (e->ExceptionCheck()) {
+    // As AndroidRuntime's startReg failing: the zygote does not start.
+    e->ExceptionDescribe();
+    e->ExceptionClear();
+    std::fprintf(stderr, "dalvikvm: the framework's natives (android_runtime) did not load\n");
+    (*vm)->DestroyJavaVM();
+    return JNI_ERR;
+  }
+  if (name != nullptr) e->DeleteLocalRef(name);
+  if (system != nullptr) e->DeleteLocalRef(system);
+  return JNI_OK;
+}
 
 namespace {
 
@@ -145,6 +198,7 @@ extern "C" int wmain(int argc, wchar_t** wide_argv) {
     values.push_back(std::move(utf8));
   }
   if (!InitializeTemporaryDirectory(values)) return EXIT_FAILURE;
+  g_zygote_runtime = MainClass(values) == kZygoteInit;
   std::vector<char*> argv;
   argv.reserve(values.size() + 1);
   for (auto& value : values) argv.push_back(value.data());

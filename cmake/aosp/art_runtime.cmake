@@ -154,7 +154,9 @@ target_link_libraries(art_runtime PUBLIC ${ART_RUNTIME_DEPS})
 # --- dalvikvm (art/dalvikvm/Android.bp) -------------------------------------
 # Keep upstream ART entry semantics while receiving Windows argv as UTF-16.
 set_property(SOURCE ${_art}/dalvikvm/dalvikvm.cc APPEND PROPERTY COMPILE_DEFINITIONS
-  main=gesher_dalvikvm_main)
+  main=gesher_dalvikvm_main
+  # The zygote's runtime starts with the framework's natives (compat/art/dalvikvm_main.cc).
+  JNI_CreateJavaVM=gesher_dalvikvm_create_vm)
 add_executable(dalvikvm ${_art}/dalvikvm/dalvikvm.cc
   ${CMAKE_SOURCE_DIR}/compat/art/dalvikvm_main.cc
   # Gesher: in place of libnativehelper's dlopen-based JniInvocation.

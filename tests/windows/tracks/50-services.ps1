@@ -606,7 +606,7 @@ if ($failed -ne $failedBefore) {
 # first launcher (com.gesher.app.Launcher, what gesher-app runs) and found by
 # the next ones through data/system/gesher-device under a named mutex;
 # installed packages (data/app/<package>-<n>/base.apk, data/system/packages.list);
-# app processes the system server starts on demand (android.app.GesherAppProcess,
+# app processes the system server starts on demand (ZygoteInit's app-process path, ADR 0098,
 # paired by their start sequence number) and ends when nothing keeps them.
 $launcher = $dvmApp + 'com.gesher.app.Launcher'
 # These apps run headless (no Win32 windows; the launcher removes the task once
@@ -818,7 +818,7 @@ $out = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'launch', (NoDrive "$Dir/lifecy
 $code = $LASTEXITCODE
 $pidLifecycle = ServerPid $out
 # The launcher's lines and the app's (copied from its log) interleave: each in order.
-if (-not (CheckSequences 'services: gesher-app launch lifecycle.apk: the system server starts its process (GesherAppProcess, start seq), onResume, the task removed, the process ended' $out @(
+if (-not (CheckSequences 'services: gesher-app launch lifecycle.apk: the system server starts its process (ZygoteInit's app process path, start seq), onResume, the task removed, the process ended' $out @(
   @('gesher-app: connected to the running Gesher device ',
     'gesher-app: com.gesher.lifecycle is installed and unchanged',
     'gesher-app: startActivityAndWait: result 0, com.gesher.lifecycle/.LifecycleActivity',
@@ -826,8 +826,9 @@ if (-not (CheckSequences 'services: gesher-app launch lifecycle.apk: the system 
     'gesher-app: the process of com.gesher.lifecycle ended (exit code 0)',
     'gesher-app: done'),
   @('gesher-app: app process for com.gesher.lifecycle: pid ',
-    'gesher-app: attached to the system server',
+    'gesher-app: starting ActivityThread.main (start seq ',
     'LifecycleApplication onCreate, package=com.gesher.lifecycle',
+    'LifecycleApplication process entry: android.app.ActivityThread.main < java.lang.reflect.Method.invoke < com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run < com.android.internal.os.ZygoteInit.main',
     'label=Lifecycle Activity, greeting=Hello from a resource, theme attr=from-theme, windowActionBar=false',
     'LifecycleActivity onDestroy',
     'gesher-app: the system server ended the process (scheduleExit)',
