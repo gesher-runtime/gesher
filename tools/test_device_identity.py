@@ -80,11 +80,17 @@ def main() -> int:
     args = parser.parse_args()
     checks = check_build_prop(ROOT / 'app/build.prop')
     print(f'build.prop identity checks passed: {checks}', flush=True)
-    flags = ['-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fno-exceptions',
-             '-I', str(ROOT / 'compat/posix/include')]
-    if args.sanitize:
-        flags += ['-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer']
     with tempfile.TemporaryDirectory(prefix='gesher-device-identity-') as temporary:
+        # Only the production header: compat/posix/include also replaces libc
+        # headers, which a Linux host must not pick up.
+        include = Path(temporary) / 'include/gesher'
+        include.mkdir(parents=True)
+        (include / 'device_identity.h').write_bytes(
+            (ROOT / 'compat/posix/include/gesher/device_identity.h').read_bytes())
+        flags = ['-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fno-exceptions',
+                 '-I', str(include.parent)]
+        if args.sanitize:
+            flags += ['-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer']
         executable = Path(temporary) / ('test.exe' if os.name == 'nt' else 'test')
         subprocess.run(shlex.split(args.cxx) + flags + [str(ROOT / 'tests/native/device_identity_test.cc'),
                        '-o', str(executable)], check=True, timeout=120)
