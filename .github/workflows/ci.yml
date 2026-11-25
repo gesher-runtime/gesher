@@ -224,6 +224,8 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
           tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelLaunchChecks.ps1
@@ -239,6 +241,14 @@ jobs:
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
           tests/windows/shell/NativeStderrChecks.ps1
+      - name: Control panel startup helpers on PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/PreferredLanguagesChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
       - name: Production modal dialogs on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         timeout-minutes: 2
@@ -1205,6 +1215,8 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
           tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
           tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
