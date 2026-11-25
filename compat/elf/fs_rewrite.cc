@@ -23,6 +23,10 @@
 
 #include "tls.h"
 #include "x86_decode.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 // Internal POSIX mapper outcome, consumed immediately after a failed mmap.
 extern "C" int gesher_mmap_replaced_private_pages(void);
@@ -2050,3 +2054,9 @@ int UnmapLoadedMemory(void* addr, size_t len) {
 }
 
 }  // namespace gesher::elf
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, SRWLOCK, gesher::elf::g_lock);
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, SRWLOCK, gesher::elf::g_lazy_lock);
+#endif

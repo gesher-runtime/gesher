@@ -5,11 +5,17 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+// The fork set (gesher/fork.h); a host test that compiles this file alone
+// supplies a stub of it, or none.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher::elf {
 
@@ -46,6 +52,7 @@ struct Arena {
   // establish its own invalidation contract before retiring these addresses.
   std::unordered_map<size_t, uint8_t*> published_base;
   std::vector<void*> dynamic;         // dynamic copies to free
+  Arena* retired_next = nullptr;      // in g_retired_arenas
 };
 
 struct ModuleRecord {
@@ -71,19 +78,44 @@ void FreeArena(Arena* a) {
   delete a;
 }
 
+// Arenas of threads that left while a fork held g_mutex: freed by the next
+// thread that takes it (a lock-free list; the FLS callback runs under ntdll's
+// loader lock, which the fork's clone waits for, so it must not wait).
+std::atomic<Arena*> g_retired_arenas{nullptr};
+
+// Under g_mutex.
+void RemoveArenaLocked(Arena* a) {
+  for (size_t i = 0; i < g_arenas.size(); ++i) {
+    if (g_arenas[i] == a) {
+      g_arenas.erase(g_arenas.begin() + static_cast<ptrdiff_t>(i));
+      break;
+    }
+  }
+}
+void FreeRetiredArenasLocked() {
+  Arena* a = g_retired_arenas.exchange(nullptr, std::memory_order_acq_rel);
+  while (a != nullptr) {
+    Arena* next = a->retired_next;
+    RemoveArenaLocked(a);
+    FreeArena(a);
+    a = next;
+  }
+}
+
 void WINAPI ArenaDestructor(void* p) {
   if (p == nullptr) return;
   auto* a = static_cast<Arena*>(p);
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    for (size_t i = 0; i < g_arenas.size(); ++i) {
-      if (g_arenas[i] == a) {
-        g_arenas.erase(g_arenas.begin() + static_cast<ptrdiff_t>(i));
-        break;
-      }
-    }
-  }
   if (g_slot_index != TLS_OUT_OF_INDEXES) TlsSetValue(g_slot_index, nullptr);
+  if (!gesher::LockUnlessForkHolds(g_mutex)) {
+    a->retired_next = g_retired_arenas.load(std::memory_order_relaxed);
+    while (!g_retired_arenas.compare_exchange_weak(a->retired_next, a, std::memory_order_release,
+                                                   std::memory_order_relaxed)) {
+    }
+    return;
+  }
+  RemoveArenaLocked(a);
+  FreeRetiredArenasLocked();
+  g_mutex.unlock();
   FreeArena(a);
 }
 
@@ -166,6 +198,7 @@ Arena* BuildArena() {
       if (!m->ready) a->module_base.emplace(m->module_id, base);
     }
   }
+  FreeRetiredArenasLocked();
   g_arenas.push_back(a);
   return a;
 }
@@ -433,3 +466,8 @@ void* TlsGetAddr(size_t module_id, size_t offset) {
 }
 
 }  // namespace gesher::elf
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): ELF TLS in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, std::mutex, gesher::elf::g_mutex);
+#endif
