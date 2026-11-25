@@ -29,6 +29,15 @@ is substituted for the profile name. This agrees with the
 That failed attempt provides no production-deletion acceptance; a new exact-head
 run must exercise the operation after this correction.
 
+The corrected profile candidate `346ce277d21bed3956925dd6f94d4a04b37a22b4`
+ran in [45591406389](https://github.com/gesher-runtime/gesher/actions/runs/45591406389).
+Both runtimes passed the profile checks, five persisted-key measurements and
+the expanded thirteen-key fixture. They then exceeded the CDP deadline while
+writing the nested A → B → A case, still before any production deletion call.
+The next candidate gives outer A a distinct owned document URL, as described
+below. That change is supported by the HTML ancestor-URL rule; its causal
+confirmation and production acceptance require the next actual runtime.
+
 ## State and operations
 
 The fixture first writes and closes all five baseline databases: A first-party,
@@ -93,6 +102,15 @@ out-of-process frames. The nested A → B → A case is not assigned a fabricate
 frame ID. Its write must add exactly one distinct, positive registry key with
 the browser's `^31` serialization; the original observed string is retained.
 Full inventory validation rejects collapsed, missing or unexpected keys.
+
+For the nested case, outer A uses the separately supplied document
+`/storage-nested-top.html`, while middle B and inner A use `/storage.html`.
+Both paths are exact owned fixture responses with the same page code and real
+origin. This avoids requesting an ancestor-identical document URL, which the
+[HTML iframe attribute rules](https://html.spec.whatwg.org/multipage/iframe-embed-object.html#shared-attribute-processing-steps-for-iframe-and-frame-elements)
+reject even when only the fragment differs. The browser must still perform the
+nested write and report the distinct positive `^31` registry entry; changing the
+fixture path supplies neither storage data nor a key.
 
 Every one of the fourteen contexts has a localStorage sentinel. Each of the six
 first-party contexts also has a persistent host-only cookie. Final database

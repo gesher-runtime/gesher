@@ -12,6 +12,7 @@
 #include "owned_stream.h"
 #include "browser_session_probe.h"
 #include "worker_response_server.h"
+#include "worker_denial_probe.h"
 
 namespace worker_response_probe {
 using namespace gesher::webview;
@@ -360,6 +361,10 @@ inline int Run(HWND parent) {
   const std::string sdk = GESHER_WEBVIEW2_PROBE_SDK_VERSION, loader = LoaderKind();
   wprintf(L"INFO  worker-response: sdk=%ls loader=%ls; real worker; diagnostic only\n",
           std::wstring(sdk.begin(), sdk.end()).c_str(), std::wstring(loader.begin(), loader.end()).c_str());
+  if (!CheckLoopbackRequestAccounting(work_deadline)) {
+    state->Failure(L"independent HTTP byte accounting controls failed"); return 1;
+  }
+  wprintf(L"PASS  worker-response: independent HTTP byte accounting controls verified\n");
   wchar_t temp[MAX_PATH]{}, identity[40]{}; GUID guid{};
   const DWORD length = GetTempPathW(MAX_PATH, temp);
   if (!parent || !length || length >= MAX_PATH || FAILED(CoCreateGuid(&guid)) ||
@@ -547,6 +552,7 @@ inline int Run(HWND parent) {
                state->failed ? L"FAIL" : L"PASS", state->failed ? L"harness failed; no qualification conclusion" :
                L"controls and independent network counters verified; error outcomes recorded");
   fflush(stdout);
-  return state->failed ? 1 : unavailable ? 2 : 0;
+  if (state->failed || unavailable) return state->failed ? 1 : 2;
+  return worker_denial_probe::Run(parent, deadline);
 }
 }  // namespace worker_response_probe

@@ -17,7 +17,7 @@ inline constexpr wchar_t kInitializeIndexedDb[] = LR"JS((async () => {
       return {unavailable: 'IndexedDB discovery method unavailable'};
     const result = await handler.getAllBucketsAcrossAllStorageKeys();
     if (result?.error !== null) throw Error('IndexedDB discovery failed: ' + result?.error);
-    if (!Array.isArray(result.partitions) || result.partitions.length === 0 || result.partitions.length > 64)
+    if (!Array.isArray(result.partitions) || result.partitions.length === 0)
       throw Error('invalid IndexedDB discovery partitions');
     return {initialized: true, partitions: String(result.partitions.length)};
   })())JS";

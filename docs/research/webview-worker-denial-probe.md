@@ -1,10 +1,15 @@
 # Bounded worker denial experiments
 
-This diagnostic adds two hypotheses to `webview2_probe.exe --worker-response`.
+The first phase of `webview2_probe.exe --worker-response` tests two hypotheses.
 It changes no production worker API, setting, feature flag or activation gate.
 The original pass-through, supplied HTTP 200, supplied HTTP 403 and three
 faulting-stream cases remain. A final ordinary worker fetch must succeed in the
 same worker instance after both new cases.
+
+A second, isolated scope matrix now exercises five remaining denial risks.
+Its source and local validation are described below. The actual execution
+receipt in this document covers the first phase at its stated commit only;
+it does not contain outcomes for the later scope matrix.
 
 ## New cases
 
@@ -116,3 +121,88 @@ disprove synchronous handler `E_ABORT` as a denial mechanism on these runtimes:
 the original request was sent and its response consumed. None of the unmeasured
 contracts listed above is closed by this result, and no production worker
 capability was enabled.
+
+The server version in this first-phase receipt began its path counters only
+after complete HTTP headers. Its zero counters therefore do not independently
+exclude a request line or partial-header prefix that arrived before the socket
+closed. The later byte-accounting repair described below closes that measurement
+gap in source; only a new Windows run can establish the stronger observation.
+The earlier recorded `TypeError`, JavaScript identity and resource-timing values
+remain the actual outcomes of that older run.
+
+## Scope matrix extension: awaiting actual Windows outcomes
+
+The same command continues into a fresh profile with two ephemeral loopback
+origins and two controllers, within its existing 120-second native budget.
+The original nine observations and their supplied-response controls still run
+first. No production source, activation flag or Android worker API is changed.
+
+| Risk | Actual worker fixture and independent control |
+| --- | --- |
+| POST/upload escape | A permitted and a denied same-origin POST each construct a complete 32 KiB body containing the case name and worker identity. The server verifies every byte of the permitted body. A complete method and request target count immediately, even if the remaining request line, headers or body never complete. Nonempty bytes that cannot be attributed invalidate the measurement. |
+| Cross-origin/preflight escape | A second loopback origin accepts a permitted JSON/custom-header POST after a real OPTIONS preflight. A separate denied POST uses the same request shape and a distinct URL. OPTIONS and non-OPTIONS requests are counted separately; any escaped preflight disqualifies network blocking even if the worker fetch rejects. |
+| Redirect routing | Both GETs intentionally reach an initial URL that redirects to the second origin. The permitted chain must return the real final response. The denied case mutates only an observed final-target callback. Logs record the initial network request and whether that target callback occurred; zero `target-network` means only the final target was blocked. It never means the initial redirect request was blocked or that Android redirect callback parity was established. |
+| Request identity and completion order | Two concurrent POSTs share exactly one URL but carry distinct case tags and full bodies. Native deferrals complete in reverse admission order, permitting one and denying the other. A subsequent permitted POST to that same URL verifies continued operation. The two permitted bodies must independently match their expected content. |
+| Pending terminal denial during owner closure | An observer controller in the same profile reuses the existing worker. Native code obtains its POST deferral, applies and reads back the terminal nonnetwork URI, clears the upload and only then removes the owner's filters and closes that controller. The observer remains alive to report the actual fetch result and a further real fetch. A later test callback attempts to allow the old request; the proposed terminal-decision gate must reject it before any API can restore the original URI. |
+
+Only the owner registers `SERVICE_WORKER` filters. Both controllers install
+external-launch cancellation guards before navigation. The observer does not
+register a second worker or a second resource filter. All eleven matrix
+observations must retain one actual worker identity. Native logs contain each
+observed source-kind callback, original request method and URL, terminal URI
+readback, deferral completion, close result, and the observer's exact messages.
+The original and final JavaScript `Request.url` and `Request.method` are checked
+without replacing any observed value. Resource-timing entries retain their
+actual names; the concurrent pair must yield two entries for their shared URL.
+
+Each denied case reports `network-rejection-observed` only for a real initial
+`TypeError`, preserved request/timing identities, no deadline abort, zero HTTP
+requests at its denial target and zero preflight requests. Redirect qualification
+additionally requires an observed target callback. Valid negative outcomes are
+kept as `not-qualified`. Missing controls, malformed observations, uncertain
+ownership, failed mutation or cleanup, unknown origin requests, and any external
+launch attempt fail the harness instead. Total accepted TCP connections are
+reported for both servers; those aggregate counts are not per-case attribution
+or system-wide DNS/packet telemetry.
+
+The server retains received-byte counts for every request, including documents
+and scripts. EOF, per-client deadline and Stop cleanup drain pending nonblocking
+input and classify any remaining prefix. An incomplete request target with
+nonempty input makes the server unhealthy; an attributable prefix contributes
+to that target's request count. Empty speculative TCP connections remain
+informational. After shutdown the sum of all recorded and unattributed bytes
+must equal the total received count. The Windows diagnostic begins with bounded
+real-socket controls for partial request lines/headers/body, complete requests,
+malformed headers, empty connections and unclassifiable EOF/deadline/Stop input.
+They also verify 80 consecutive real HTTP 200 responses on the ordinary
+storage-deletion control route. Repeated requests have no per-request record
+ceiling; the existing process deadline, simultaneous-client, unique-route and
+input-size bounds remain.
+
+The late-allow guard is a test of the proposed terminal-decision design, not a
+claim that a production Java callback or Android permission path was exercised.
+An undecided deferral at owner closure is not covered or treated as safely
+denied. Production integration must preserve this decision ordering and obtain
+its own callback/permission/lifecycle evidence. Cached loads, Android cache
+modes, incremental streams and stream-read errors remain separate open work.
+
+Local validation of this extension:
+
+- Both static and DLL probe targets compile with cached llvm-mingw/Clang
+  23.1.3, SDK 1.0.4258.31 and the project's `-Wall -Werror` flags.
+- The original exact scripts retain 159 passing adapter checks. The new
+  `worker_denial_script_test.js` executes the exact embedded scripts for 451
+  checks covering complete uploads, CORS request shape, reversed same-URL
+  concurrency, response and body errors, deadlines, observed timing, observer
+  reuse and its real-follow-up protocol. These are isolated protocol checks.
+- `worker_response_gate_test.ps1` feeds the exact Windows log gate 28 isolated
+  fixtures, including escaped preflights, incomplete headers/uploads, missing redirect
+  callbacks, contradictory counters, lost identities and attempted late
+  restoration. Fixture logs are suppressed so they cannot be mistaken for real
+  native observations in CI. Actual Windows outcomes remain unmeasured until
+  attached to a new tested commit and runtime receipt.
+
+The new socket accounting controls compile locally but require the actual
+Windows run; their presence is not a claim that they already ran in this Linux
+workspace. The Windows sparse checkout includes both the gate and its fixture
+script.

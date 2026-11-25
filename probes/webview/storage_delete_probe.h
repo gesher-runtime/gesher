@@ -127,13 +127,17 @@ inline bool StartOrdinary(const std::shared_ptr<quota::State>& state, HWND paren
   for (const auto& origin : origins) {
     std::string page = Page(origin);
     if (page.empty()) return state->Fail(L"storage fixture page construction failed");
+    // Give outer A a distinct document URL in A -> B -> A. An iframe must not
+    // request an ancestor-identical URL; the origin and its storage key stay A.
+    state->pages[origin + L"/storage-nested-top.html"] = page;
     state->pages[origin + L"/storage.html"] = std::move(page);
   }
   return true;
 }
 
-inline bool Visit(const std::shared_ptr<quota::State>& state, const std::wstring& origin) {
-  const std::wstring url = origin + L"/storage.html";
+inline bool Visit(const std::shared_ptr<quota::State>& state, const Case& item) {
+  const std::wstring url = item.top +
+      (item.middle.empty() ? L"/storage.html" : L"/storage-nested-top.html");
   CoString source;
   if (!state->Check(state->core->get_Source(source.Put()), L"fixture current document")) return false;
   return source.str() == url || quota::Navigate(state, url);
@@ -141,7 +145,7 @@ inline bool Visit(const std::shared_ptr<quota::State>& state, const std::wstring
 
 inline bool Content(const std::shared_ptr<quota::State>& state, const Case& item,
                     const wchar_t* mode) {
-  if (!Visit(state, item.top)) return false;
+  if (!Visit(state, item)) return false;
   const bool first_party = item.middle.empty() && item.top == item.observed.origin;
   const std::wstring arguments = Quote(mode) + L"," + Quote(item.observed.label);
   const std::wstring expression = !item.middle.empty()

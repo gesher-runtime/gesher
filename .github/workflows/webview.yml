@@ -50,6 +50,7 @@ jobs:
         run: |
           python3 tools/test_quota_registry_probe.py --sanitize
           node tests/native/worker_response_script_test.js
+          node tests/native/worker_denial_script_test.js
 
       # The same toolchain cache as .github/actions/setup-build.
       - name: Cache toolchain
@@ -183,7 +184,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: tests/windows
+          sparse-checkout: |
+            tests/windows
+            tests/native
 
       - uses: actions/download-artifact@v4
         with:
@@ -214,6 +217,10 @@ jobs:
           $p = Start-Process 'dist/webview_owned_stream_test.exe' -NoNewWindow -PassThru
           if (-not $p.WaitForExit(60000)) { $p.Kill($true); throw 'Owned stream COM gate timed out' }
           if ($p.ExitCode -ne 0) { throw "Owned stream COM gate failed: $($p.ExitCode)" }
+
+      - name: Worker diagnostic gate fixtures
+        shell: pwsh
+        run: ./tests/native/worker_response_gate_test.ps1
 
       - name: Live storage deletion and worker response qualification
         timeout-minutes: 20

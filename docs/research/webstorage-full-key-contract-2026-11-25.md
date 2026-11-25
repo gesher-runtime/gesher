@@ -77,6 +77,18 @@ application origin in its ordinary profile. [WebView2 profile isolation][profile
 allows an ordinary and off-the-record controller with the same profile name;
 the resolver must verify that distinction and close the controller.
 
+OPFS registration does not depend on an IndexedDB database for the same key.
+In pinned Chromium 131 and 156, `FileSystemContext::OpenFileSystem` ensures a
+default quota bucket for the complete storage key before opening the file
+system. The quota table enumerates all supported buckets, and file-system
+usage is read from its disk usage cache or recalculated. The additional
+IndexedDB discovery barrier addresses that client's lazy context map; it does
+not filter the table to IndexedDB-owned buckets. These are
+[source findings][opfs-registration], with the [bucket-table path][quota-manager]
+and [file-system usage path][opfs-usage] inspected independently. The Windows
+fixture checks real first-party OPFS deletion/preservation; an OPFS-only
+third-party key has not been separately exercised by that fixture.
+
 The implementation and its real Windows fixture must qualify this resolver,
 including same-site subdomains, port and scheme differences, implicit-site
 keys, and preservation of data types outside Android's deletion mask. A public
@@ -119,8 +131,11 @@ remain unchanged.
 
 The native host compiled with warnings treated as errors for x64 and ARM64,
 both static and DLL loader definitions. The complete existing standalone
-probe linked for both x64 loaders. The shared registry expressions are
-byte-for-byte the previously qualified expressions. The selector/parser test
+probe linked for both x64 loaders. The shared registry-table expression remains
+byte-for-byte the previously qualified expression. The awaited IndexedDB
+discovery barrier now accepts the complete partition list without the former
+64-partition diagnostic cap; its exact-script control verifies 65 partitions
+and rejects the old capped implementation. The selector/parser test
 passed 71 checks under AddressSanitizer and UndefinedBehaviorSanitizer,
 including same-site versus exact-origin matching, nonce and ancestor-chain
 keys, opaque sites with and without a precursor, and rejection of incomplete
@@ -140,3 +155,5 @@ as runtime-verified; the earlier raw-CDP qualification is not its substitute.
 [partition]: https://chromium.googlesource.com/chromium/src/+/refs/tags/156.0.8078.48/content/browser/storage_partition_impl.cc
 [storage-key]: https://chromium.googlesource.com/chromium/src/+/refs/tags/156.0.8078.48/third_party/blink/common/storage_key/storage_key.cc
 [profiles]: https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/multi-profile-support
+[opfs-registration]: https://chromium.googlesource.com/chromium/src/+/refs/tags/156.0.8078.48/storage/browser/file_system/file_system_context.cc#412
+[opfs-usage]: https://chromium.googlesource.com/chromium/src/+/refs/tags/156.0.8078.48/storage/browser/file_system/sandbox_file_system_backend_delegate.cc#373
