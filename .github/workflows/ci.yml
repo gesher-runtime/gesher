@@ -180,6 +180,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_key_windows_test.cc compat\devices\hello_key_win.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:hello-key-windows.exe ole32.lib user32.lib
+      - name: Compile the interactive Windows Hello key probe (no ceremony in CI)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_key_probe.cc compat\devices\hello_key_win.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:hello-key-probe.exe ole32.lib user32.lib bcrypt.lib crypt32.lib
       - name: Windows Hello key support, missing key and foreground-owner refusal without UI
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -624,6 +628,9 @@ jobs:
 
       - name: AndroidKeyStore user authentication contracts (ADR 0095)
         run: python3 tools/test_keystore_auth_contracts.py --java-home "$JAVA_HOME"
+
+      - name: Manual Hello probe failure and lifetime contracts (scripted boundaries)
+        run: python3 tools/test_hello_key_probe_contracts.py
 
       - name: MediaDataSource adapter contracts with checked JNI and UBSan
         run: python3 tools/test_media_callback_adapter.py

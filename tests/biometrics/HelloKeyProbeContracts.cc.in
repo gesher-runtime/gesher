@@ -1,0 +1,220 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// The manual probe's actual Run and main functions are inserted unchanged (main
+// is renamed). All Windows/Hello/cryptography boundaries below are scripted.
+// This verifies the probe's failure reporting and worker lifetime, not Windows
+// Hello, its cryptography, native UI dismissal, or ART behavior.
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <thread>
+#include <vector>
+
+using DWORD = uint32_t;
+using HRESULT = int32_t;
+using HWND = void*;
+constexpr HRESULT S_OK = 0;
+
+static std::string scenario;
+static bool cancelMode;
+static std::atomic<DWORD> ticks{0};
+static HWND foreground;
+static int starts, releases, signStarts, cancelCalls, deleteCalls, openCalls;
+static int supportedCalls, windows, destroyedWindows, earlyReleases;
+static bool created;
+static const std::vector<uint8_t> publicBytes = {1, 2, 3};
+
+static bool Is(const char* name) { return scenario == name; }
+static DWORD GetTickCount() { return ticks.load(); }
+static DWORD GetCurrentProcessId() { return 7; }
+static HWND GetForegroundWindow() { return foreground; }
+static void SetForegroundWindow(HWND window) { foreground = window; }
+static void Sleep(DWORD delay) {
+  ticks.fetch_add(delay);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+static void Pump() { std::this_thread::yield(); }
+static HWND MakeWindow() {
+  if (Is("window-failure")) return nullptr;
+  ++windows;
+  foreground = reinterpret_cast<HWND>(uintptr_t{1});
+  return foreground;
+}
+static void DestroyWindow(HWND) { ++destroyedWindows; }
+
+namespace gesher::devices::hello_key {
+constexpr int kSuccess = 0;
+constexpr int kFailed = -1;
+constexpr int kNotForeground = -2;
+struct Operation {
+  bool sign;
+  int sequence;
+  std::atomic<bool> canceled{false};
+  std::atomic<bool> finished{false};
+};
+static int Supported(HRESULT* hr) {
+  ++supportedCalls;
+  *hr = Is("supported-error") ? -1 : 0;
+  if (Is("supported-error")) return -1;
+  return Is("unsupported-run") || Is("supported-absent") ? 0 : 1;
+}
+static Operation* StartCreate(DWORD, const wchar_t*, size_t) {
+  ++starts;
+  return new Operation{false, 0};
+}
+static Operation* StartSign(DWORD, const wchar_t*, size_t, const uint8_t*, size_t) {
+  ++starts;
+  return new Operation{true, ++signStarts};
+}
+static int Await(Operation* operation, std::vector<uint8_t>* bytes) {
+  bytes->clear();
+  int result = kSuccess;
+  if (!operation->sign) {
+    if (Is("create-failure")) result = kFailed;
+    else {
+      created = true;
+      if (!Is("empty-public-key")) *bytes = publicBytes;
+    }
+  } else if (cancelMode) {
+    if (Is("user-cancels-first")) result = 3;
+    else if (Is("sign-completes-first")) *bytes = {4, 5};
+    else {
+      while (!operation->canceled.load()) std::this_thread::yield();
+      result = Is("cancel-wrong-status") ? kSuccess : 3;
+      if (Is("cancel-result-bytes")) *bytes = {4, 5};
+    }
+  } else if ((Is("first-sign-failure") && operation->sequence == 1) ||
+             (Is("second-sign-failure") && operation->sequence == 2)) {
+    result = kFailed;
+  } else if (!Is("empty-signatures")) {
+    *bytes = Is("different-signatures") && operation->sequence == 2
+                 ? std::vector<uint8_t>{6, 7} : std::vector<uint8_t>{4, 5};
+  }
+  operation->finished.store(true);
+  return result;
+}
+static void Cancel(Operation* operation) {
+  ++cancelCalls;
+  operation->canceled.store(true);
+}
+static void Release(Operation* operation) {
+  if (!operation->finished.load()) ++earlyReleases;
+  ++releases;
+  delete operation;
+}
+static int Open(const wchar_t*, size_t, std::vector<uint8_t>* bytes, HRESULT* hr) {
+  *hr = S_OK;
+  bytes->clear();
+  if (++openCalls == 1) {
+    if (Is("open-failure")) return kFailed;
+    if (!Is("empty-public-key")) *bytes = Is("open-mismatch")
+        ? std::vector<uint8_t>{9} : publicBytes;
+    return kSuccess;
+  }
+  if (Is("open-after-delete-success")) {
+    *bytes = publicBytes;
+    return kSuccess;
+  }
+  if (Is("open-after-delete-bytes")) *bytes = publicBytes;
+  return 2;
+}
+static int Delete(const wchar_t*, size_t, HRESULT* hr) {
+  ++deleteCalls;
+  *hr = S_OK;
+  return Is("delete-failure") ? kFailed : kSuccess;
+}
+}  // namespace gesher::devices::hello_key
+
+using namespace gesher::devices;
+
+static bool Sha256(const std::vector<uint8_t>& bytes, uint8_t out[32]) {
+  if (Is("hash-failure")) return false;
+  memset(out, bytes.empty() ? 0 : bytes[0], 32);
+  return true;
+}
+static bool Verifies(const std::vector<uint8_t>&, const std::vector<uint8_t>&,
+                     const std::vector<uint8_t>&, bool pss) {
+  return !pss && !Is("pkcs1-failure");
+}
+static bool Gcm(bool encrypt, const uint8_t[32], const std::vector<uint8_t>& in,
+                std::vector<uint8_t>* out, uint8_t[16]) {
+  if ((encrypt && Is("wrap-failure")) || (!encrypt && Is("unwrap-failure"))) return false;
+  *out = in;
+  return true;
+}
+
+// PROBE_STATUS_NAME
+
+// PROBE_RUN
+
+// PROBE_MAIN
+
+static int checks, failures;
+static void Check(bool value, const char* what) {
+  ++checks;
+  if (!value) {
+    ++failures;
+    fprintf(stderr, "FAIL [%s] %s\n", scenario.c_str(), what);
+  }
+}
+
+int main() {
+  struct Case { const char* name; const char* mode; bool success; };
+  const Case cases[] = {
+      {"supported", "supported", true},
+      {"supported-absent", "supported", true},
+      {"supported-error", "supported", false},
+      {"unsupported-run", "run", false},
+      {"invalid-mode", "invalid", false},
+      {"run", "run", true},
+      {"window-failure", "run", false},
+      {"create-failure", "run", false},
+      {"empty-public-key", "run", false},
+      {"open-failure", "run", false},
+      {"open-mismatch", "run", false},
+      {"first-sign-failure", "run", false},
+      {"second-sign-failure", "run", false},
+      {"empty-signatures", "run", false},
+      {"different-signatures", "run", false},
+      {"pkcs1-failure", "run", false},
+      {"hash-failure", "run", false},
+      {"wrap-failure", "run", false},
+      {"unwrap-failure", "run", false},
+      {"delete-failure", "run", false},
+      {"open-after-delete-success", "run", false},
+      {"open-after-delete-bytes", "run", false},
+      {"cancel", "cancel", true},
+      {"cancel-wrong-status", "cancel", false},
+      {"cancel-result-bytes", "cancel", false},
+      {"user-cancels-first", "cancel", false},
+      {"sign-completes-first", "cancel", false},
+  };
+  puts("Scripted probe contracts: not real Windows Hello or ART evidence");
+  for (const Case& test : cases) {
+    scenario = test.name;
+    cancelMode = strcmp(test.mode, "cancel") == 0;
+    ticks.store(0);
+    foreground = nullptr;
+    starts = releases = signStarts = cancelCalls = deleteCalls = openCalls = 0;
+    supportedCalls = windows = destroyedWindows = earlyReleases = 0;
+    created = false;
+    char program[] = "hello_key_probe";
+    char* argv[] = {program, const_cast<char*>(test.mode), nullptr};
+    int result = ProbeMain(2, argv);
+    Check((result == 0) == test.success, "exit status must reflect every required result");
+    Check(starts == releases && earlyReleases == 0, "release every operation once after Await");
+    Check(windows == destroyedWindows, "destroy every created probe window");
+    Check(!created || deleteCalls == 1, "attempt deletion of every successfully created key");
+    if (Is("invalid-mode")) Check(supportedCalls == 0, "reject invalid mode before native work");
+    if (Is("open-failure") || Is("open-mismatch") || Is("empty-public-key")) {
+      Check(signStarts == 0, "do not prompt for signatures after an invalid public key");
+    }
+    if (cancelMode && !Is("user-cancels-first") && !Is("sign-completes-first")) {
+      Check(cancelCalls == 2, "exercise idempotent app cancellation while Await is pending");
+    }
+  }
+  printf("%d checks, %d failures\n", checks, failures);
+  return failures == 0 ? 0 : 1;
+}
