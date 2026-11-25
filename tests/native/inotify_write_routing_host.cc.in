@@ -290,6 +290,9 @@ static bool DiskPath(const char* input, std::wstring* result, int) {
 }
 void InotifyNoteWrite(HANDLE);
 void InotifyNoteWrite(int);
+// gesher/fork.h (ADR 0092): this fixture is never a forked child, so its
+// watches complete through the thread pool.
+static bool InForkedChild() { return false; }
 }
 
 @INOTIFY_SOURCE@

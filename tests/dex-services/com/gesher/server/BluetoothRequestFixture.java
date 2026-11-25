@@ -413,12 +413,12 @@ public final class BluetoothRequestFixture {
             Object status = start.invoke(atm, null, intent, null, "android", null, null, -1, null);
             check(Integer.valueOf(ActivityManager.START_SUCCESS).equals(status), "actual activity route rejected " + action);
             check(h.queue.work.size() == 1, "actual route did not enqueue helper");
-            check(((java.util.Set<?>) get(atm, "mBluetoothActivities")).size() == 1,
+            check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).size() == 1,
                     "native request did not reserve its idle lifetime");
             check((long) invoke(atm, "idleSince", new Class<?>[]{}) == 0,
                     "runtime went idle while native request was pending");
             h.queue.next();
-            check(((java.util.Set<?>) get(atm, "mBluetoothActivities")).isEmpty(),
+            check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).isEmpty(),
                     "native request completion leaked idle reservation");
         }
         h.radio.on = true;
@@ -528,7 +528,7 @@ public final class BluetoothRequestFixture {
         }
         void released(Object source) throws Exception {
             check((int) get(source, "nativeUiCount") == 0, "native UI cover count leaked");
-            check(((java.util.Set<?>) get(atm, "mBluetoothActivities")).isEmpty(), "native UI idle reservation leaked");
+            check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).isEmpty(), "native UI idle reservation leaked");
         }
     }
     private static void resultRoutes() throws Exception {

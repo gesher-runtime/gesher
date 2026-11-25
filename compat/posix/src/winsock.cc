@@ -2235,3 +2235,12 @@ bool ListInterfaces(std::vector<Interface>* interfaces) {
 }
 
 }  // namespace gesher::ws
+
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the local IPv4 address cache recvmsg's IP_PKTINFO reads.
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::ws::LocalAddressCache().mutex);
+#endif

@@ -1229,6 +1229,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         addLocationFeatures(FEATURES, WindowsLocation.hasGnssReceiver());
         try {
+            addPrintingFeature(FEATURES, PrintManagerService.supported());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no printing to report.
+        }
+        try {
             // Probe the properties' natives first: ActivityManager's static initializer
             // reads them, and failing there would break the class for the whole process.
             android.os.SystemProperties.getBoolean("ro.config.low_ram", false);
@@ -1253,6 +1258,16 @@ public final class PackageManagerService extends IPackageManager.Default {
         addWifiFeature(FEATURES, com.gesher.net.WindowsWifi.hardware());
         // ro.opengles.version, set before app processes start (they may read it).
         glEsVersion();
+    }
+
+    /**
+     * FEATURE_PRINTING when the runtime prints through Windows (PrintManagerService). It
+     * describes the print framework, as on Android, not whether a printer is installed:
+     * with none, Windows' print dialog says so and the job is canceled.
+     */
+    static void addPrintingFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features, boolean supported) {
+        if (supported) addFeature(features, PackageManager.FEATURE_PRINTING);
     }
 
     /**

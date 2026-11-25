@@ -48,6 +48,11 @@
 #include <tuple>
 #include <vector>
 
+// The fork set (gesher/fork.h); a host test that compiles this file alone
+// declares InForkedChild itself.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 #include <gesher/reserved_names.h>
 
 #include "event_internal.h"
@@ -828,6 +833,8 @@ extern "C" {
 
 int inotify_init1(int flags) {
   if ((flags & ~(IN_NONBLOCK | IN_CLOEXEC)) != 0) return errno = EINVAL, -1;
+  // File watches complete through the thread pool, which a forked child has not.
+  if (gesher::InForkedChild()) return errno = ENOSYS, -1;
   auto in = std::make_shared<Inotify>();
   in->ready = gesher::NewReadiness((flags & IN_NONBLOCK) != 0);
   in->port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 1);
@@ -945,3 +952,8 @@ int inotify_rm_watch(int fd, int wd) {
 }
 
 }  // extern "C"
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_live_mutex);
+#endif
