@@ -44,9 +44,16 @@ public final class PackageInstallerIdentityHost {
         } finally { Binder.restoreCallingIdentity(saved); }
     }
     private static ApkPackage pkg(String name, String generation) throws Exception {
+        return pkg(name, generation, null);
+    }
+    private static ApkPackage pkg(String name, String generation, String sharedUserId) throws Exception {
         String path = data.resolve("app/" + name + "-" + generation + "/base.apk").toString();
         PackageImpl parsed = (PackageImpl)PackageImpl.forTesting(name, path);
-        parsed.setTargetSdkVersion(36); parsed.setEnabled(true); parsed.hideAsFinal();
+        parsed.setTargetSdkVersion(36); parsed.setEnabled(true);
+        if (sharedUserId != null) parsed.setSharedUserId(sharedUserId);
+        parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                android.Manifest.permission.REQUEST_INSTALL_PACKAGES, 0, java.util.Set.of()));
+        parsed.hideAsFinal();
         ApkPackage pkg = (ApkPackage)unsafe.allocateInstance(ApkPackage.class);
         set(pkg, "packageName", name); set(pkg, "parsed", parsed); set(pkg, "apkPath", path);
         set(pkg, "mDataDir", data.resolve("data/" + name).toString());
@@ -153,6 +160,87 @@ public final class PackageInstallerIdentityHost {
                 "Local system caller lost its own session inventory");
         service.abandonSession(system);
     }
+
+    /** Query user decisions through current attached code, including shared-UID peers. */
+    private static void sourceAccessQueries() throws Exception {
+        ApkPackage original = pkg("fixture.installer.query", "1");
+        // Transient policy keeps these constructed manifests isolated from durable grants.
+        PackageManagerService pm = new PackageManagerService(List.of(original), false);
+        ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        pm.attachInstallSourceCallers(atm);
+        pm.appOps().attach(new CallerIdentity(pm, atm), Map::of);
+        var old = attach(atm, original, 851001);
+        int op = android.app.AppOpsManager.OP_REQUEST_INSTALL_PACKAGES;
+        as(old.pid, old.uid, () -> check(!pm.canRequestPackageInstalls(original.packageName, 0),
+                "Current installer did not read its denied source decision"));
+        pm.appOps().setMode(op, original.uid(), original.packageName, android.app.AppOpsManager.MODE_ALLOWED);
+        as(old.pid, old.uid, () -> check(pm.canRequestPackageInstalls(original.packageName, 0),
+                "Current installer could not read its granted source decision"));
+        check(pm.canRequestPackageInstalls(original.packageName, 0), "Server-local source query denied");
+        for (int uid : new int[]{android.os.Process.SYSTEM_UID, android.os.Process.ROOT_UID}) {
+            as(851900 + uid, uid, () -> check(pm.canRequestPackageInstalls(original.packageName, 0),
+                    "System or root source query denied"));
+        }
+        as(851999, old.uid, () -> rejected(() -> pm.canRequestPackageInstalls(original.packageName, 0),
+                "Unattached caller read a package's user decision by numeric UID"));
+
+        ApkPackage unrelated = pkg("fixture.installer.query.other", "1");
+        // Model an equal numeric UID without an admitted Android sharedUserId.
+        set(unrelated, "mUid", original.uid());
+        pm.add(unrelated);
+        var stranger = attach(atm, unrelated, 851002);
+        as(stranger.pid, stranger.uid, () -> rejected(
+                () -> pm.canRequestPackageInstalls(original.packageName, 0),
+                "Unrelated same-UID caller read another package's user decision"));
+        as(stranger.pid, stranger.uid, () -> check(!pm.canRequestPackageInstalls(unrelated.packageName, 0),
+                "Unrelated same-UID caller could not read its own decision"));
+
+        // Standalone Services runs inside the application PID, without host authority.
+        int localPid = android.os.Process.myPid();
+        as(localPid, original.uid(), () -> rejected(
+                () -> pm.canRequestPackageInstalls(original.packageName, 0),
+                "Unattached local application acquired source-query authority"));
+        attach(atm, original, localPid);
+        as(localPid, original.uid(), () -> {
+            check(pm.canRequestPackageInstalls(original.packageName, 0),
+                    "Standalone application could not read its own decision");
+            rejected(() -> pm.canRequestPackageInstalls("android", 0),
+                    "Standalone application borrowed the platform's source decision");
+            rejected(() -> pm.canRequestPackageInstalls(unrelated.packageName, 0),
+                    "Standalone application read an unrelated equal-UID decision");
+        });
+
+        ApkPackage first = pkg("fixture.installer.query.shared.one", "1", "fixture.query.shared");
+        ApkPackage second = pkg("fixture.installer.query.shared.two", "1", "fixture.query.shared");
+        set(second, "mUid", first.uid());
+        pm.add(first); pm.add(second);
+        var member = attach(atm, first, 851003);
+        pm.appOps().setMode(op, second.uid(), second.packageName, android.app.AppOpsManager.MODE_ALLOWED);
+        as(member.pid, member.uid, () -> check(pm.canRequestPackageInstalls(second.packageName, 0),
+                "An admitted shared-identity member cannot query its peer"));
+
+        pm.remove(original.packageName);
+        ApkPackage replacement = pkg(original.packageName, "2");
+        pm.add(replacement);
+        pm.appOps().setMode(op, replacement.uid(), replacement.packageName, android.app.AppOpsManager.MODE_ALLOWED);
+        check(replacement.uid() == old.uid, "Source query fixture did not retain its numeric UID");
+        as(old.pid, old.uid, () -> rejected(() -> pm.canRequestPackageInstalls(replacement.packageName, 0),
+                "Retired process read its replacement's source decision"));
+        as(localPid, original.uid(), () -> rejected(
+                () -> pm.canRequestPackageInstalls(replacement.packageName, 0),
+                "Retired standalone application read its replacement's source decision"));
+        var current = attach(atm, replacement, 851004);
+        as(current.pid, current.uid, () -> check(pm.canRequestPackageInstalls(replacement.packageName, 0),
+                "Replacement process lost its own source decision"));
+        pm.beginPackageRemoval(replacement);
+        as(current.pid, current.uid, () -> rejected(() -> pm.canRequestPackageInstalls(replacement.packageName, 0),
+                "Retiring package retained source-query authority"));
+        pm.endPackageRemoval(replacement);
+        current.dead = true;
+        as(current.pid, current.uid, () -> rejected(() -> pm.canRequestPackageInstalls(replacement.packageName, 0),
+                "Dead process retained source-query authority"));
+    }
+
     private static void recompileUnchanged(Installer backend, PackageManagerService pm, ApkPackage pkg)
             throws Exception {
         String code = Path.of(pkg.apkPath).getParent().toString();
@@ -177,11 +265,31 @@ public final class PackageInstallerIdentityHost {
                 ? Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
                         ApkPackage.class, entry)
                 : Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
-                        ApkPackage.class, entry, source);
+                        ApkPackage.class, entry, source, Runnable.class);
         unchanged.setAccessible(true);
+        int[] authorizations = {0};
+        if (source != null) {
+            byte[] before = Files.readAllBytes(registry);
+            Runnable deny = () -> {
+                authorizations[0]++;
+                throw new SecurityException("Fixture source access was revoked");
+            };
+            try {
+                unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null, deny);
+                throw new AssertionError("Unchanged compilation bypassed source authorization");
+            } catch (java.lang.reflect.InvocationTargetException expected) {
+                if (!(expected.getCause() instanceof SecurityException)) throw expected;
+            }
+            check(authorizations[0] == 1 && pm.get(pkg.packageName) == pkg
+                            && java.util.Arrays.equals(before, Files.readAllBytes(registry))
+                            && !Files.exists(Dexopt.oatDir(code).toPath().resolve("base.odex")),
+                    "Denied compilation changed the installed generation or registry");
+        }
         String[] result = (String[])(source == null
                 ? unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed)
-                : unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null));
+                : unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null,
+                        (Runnable)() -> authorizations[0]++));
+        if (source != null) check(authorizations[0] == 2, "Allowed compilation skipped source authorization");
         check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
                 "Compiled-code refresh changed the installed generation identity");
     }
@@ -197,6 +305,7 @@ public final class PackageInstallerIdentityHost {
         ((android.app.PropertyInvalidatedCache<?, ?>)field(PackageManager.class, "sPackageInfoCache")
                 .get(null)).testPropertyName();
         run(args.length > 1 && args[1].equals("open"));
+        sourceAccessQueries();
         System.out.println("PackageInstallerIdentityHost passed: " + checks + " checks; protected="
                 + GmsSignatureSpoofing.isEnabled());
         System.out.println("Actual PMS/ATM/session methods; constructed manifests and process records, native identity adapter. No Windows/ART/Binder transport or APK-install execution claim.");

@@ -589,22 +589,32 @@ void Window::ResizeBuffer(int width, int height) {
   pixels_.swap(pixels);
   buffer_width_ = width;
   buffer_height_ = height;
+  ++buffer_version_;
+  layered_full_dirty_ = true;
 }
 
-uint8_t* Window::Lock(int* width, int* height, int* stride) {
+uint8_t* Window::Lock(int* width, int* height, int* stride, uint64_t* version) {
   buffer_mutex_.lock();
   ResizeBuffer(client_width_, client_height_);
   *width = buffer_width_;
   *height = buffer_height_;
   *stride = buffer_width_;
+  if (version != nullptr) *version = buffer_version_;
   return pixels_.data();
 }
 
 void Window::Unlock() {
+  ++buffer_version_;
+  layered_full_dirty_ = true;
   buffer_mutex_.unlock();
 }
 
-void Window::UnlockAndPost() {
+void Window::UnlockAndPost(const PixelRect* dirty) {
+  PixelRect damage = dirty != nullptr ? dirty->Clip(buffer_width_, buffer_height_) : PixelRect{};
+  const bool full = damage.empty();
+  if (full) layered_full_dirty_ = true;
+  else layered_dirty_.Unite(damage);
+  ++buffer_version_;
   frames_++;
   buffer_mutex_.unlock();
   if (translucent_) {
@@ -612,7 +622,8 @@ void Window::UnlockAndPost() {
     PostMessageW(static_cast<HWND>(hwnd_), kMsgPresentLayered, 0, 0);
     return;
   }
-  InvalidateRect(static_cast<HWND>(hwnd_), nullptr, FALSE);
+  RECT rect = {damage.left, damage.top, damage.right, damage.bottom};
+  InvalidateRect(static_cast<HWND>(hwnd_), full ? nullptr : &rect, FALSE);
 }
 
 int Window::width() const {
