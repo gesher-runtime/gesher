@@ -46,8 +46,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify exact worker response scripts
-        run: node tests/native/worker_response_script_test.js
+      - name: Verify storage and worker observation contracts
+        run: |
+          python3 tools/test_quota_registry_probe.py --sanitize
+          node tests/native/worker_response_script_test.js
 
       # The same toolchain cache as .github/actions/setup-build.
       - name: Cache toolchain
@@ -213,8 +215,8 @@ jobs:
           if (-not $p.WaitForExit(60000)) { $p.Kill($true); throw 'Owned stream COM gate timed out' }
           if ($p.ExitCode -ne 0) { throw "Owned stream COM gate failed: $($p.ExitCode)" }
 
-      - name: Live storage registry and worker response qualification
-        timeout-minutes: 8
+      - name: Live storage deletion and worker response qualification
+        timeout-minutes: 20
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -226,6 +228,7 @@ jobs:
             . ([scriptblock]::Create($definition))
           }
           . './tests/windows/webview/QuotaRegistry.ps1'
+          . './tests/windows/webview/StorageDelete.ps1'
           . './tests/windows/webview/WorkerResponse.ps1'
           if ($script:failed -gt 0) { throw "WebView runtime qualification failures: $script:failed" }
           exit 0

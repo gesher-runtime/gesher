@@ -1,5 +1,58 @@
 # Round 2 continuation status and validation
 
+## Current continuation — 25 November 2026
+
+Account: `palmoni5`. The continuation remains in existing draft
+[PR391](https://github.com/gesher-runtime/gesher/pull/391).
+The branch now incorporates main
+`a0291539acd9fef036a305c23a0cd33dd297048a` and the successful runtime diagnostic
+`908d99eb480b6d40480235e13c678fb791e7e636`.
+
+- PR381 and PR399 have already merged. Their R1, graphics and usage production
+  changes are retained exactly from main; PR388 is externally closed, not
+  merged. The continuation does not reopen it or repeat those implementations.
+- The nine remaining production differences from the pinned main are WebView
+  files. Their contents still match the previously published `4fe77c03`
+  continuation; worker entry points remain unavailable. Main's later WebView
+  provider allocation improvement is retained.
+- The [fresh open-PR audit](../research/webview-open-prs-2026-11-25.json) fetched
+  all 86 listed pull refs and inspected their file diffs. PR493 advanced between
+  listing and fetch; both identities are recorded and its fetched code was
+  inspected. PR414 is the only other open PR intersecting the remaining
+  production files: its change converts profile paths in `Host::Configure` and
+  is independent of the storage/worker continuation. No other PR was changed.
+- The corrected quota experiment passed its complete persisted/live/deletion/
+  payload sequence on WebView2 131 and 157 in actual Windows run 45498551083.
+  The [runtime report](../research/webview-runtime-results-2026-11-25.md) and
+  linked machine-readable evidence retain exact source, artifact and job IDs.
+  This proves the measured registry mechanism; it does not complete a production
+  `getOrigins` implementation or arbitrary per-storage-key effective quotas.
+- The same runtime experiment showed that all three injected worker stream
+  faults produced successfully consumed HTTP 200 bodies. It does not qualify
+  Android network-error behavior, cache modes or progressive streaming.
+
+The reconstruction preserves main's complete selected-source qualification
+policy and every workflow file. Only the four successful quota-probe repair/
+test files are imported from the diagnostic branch; its temporary push trigger
+is excluded. Independent inspection found no reconstruction defects. The
+reconciled actual player suite passed 240 checks with ASan, UBSan and
+float-cast-overflow instrumentation, including main's large-timestamp regression
+and the continuation's feeder-room/starvation cases. LeakSanitizer alone was
+disabled because the local process is traced.
+The unchanged current-main selected-source policy also passes on this combined
+tree (`TCP_SELECTED_POLICY_PASS`); it starts no native processes and does not
+replace the Windows acceptance gates.
+
+These checks and the historical runs below do not substitute for full CI on the
+newly published integration. Full WebStorage and worker completion remain open;
+the current continuation is not ready for final approval.
+
+## Historical validation record — 23–24 November 2026
+
+The following records describe their stated commits and runs. References to an
+active PR388 or unmerged R1/graphics/usage work reflect that earlier state and
+are superseded by the current continuation above.
+
 Date: 2026-11-23. Account: `palmoni5`.
 PR: [#391](https://github.com/gesher-runtime/gesher/pull/391).
 Round 1: [#388](https://github.com/gesher-runtime/gesher/pull/388).

@@ -1530,6 +1530,32 @@ int gesher_mmap_placeholders(void) { return Placeholders().available() ? 1 : 0; 
 // Internal outcome of the most recent mmap, not a guest libc interface.
 int gesher_mmap_replaced_private_pages(void) { return g_mmap_replaced_private_pages ? 1 : 0; }
 
+// Internal, for the ELF loader (android_dlopen_ext's reserved address space):
+// whether mmap(addr, length, ..., MAP_PRIVATE | MAP_FIXED, ...) - anonymous,
+// or a file at a page-aligned offset - replaces only mappings of this layer,
+// exactly as mmap decides it: with placeholders, regions of one placeholder
+// group cover the whole range (GroupAnonymous/GroupFile punch them); in a
+// plain region (no placeholders, or one made without them), one anonymous
+// region contains it (MapAnonymous/CopyFileInto). Anything else - free or
+// foreign address space, two groups, a plain view - would map somewhere new
+// or fail, so the loader refuses the span before mapping any of it.
+int gesher_mmap_fixed_replaces(const void* addr, size_t length) {
+  State& s = state();
+  const uintptr_t begin = reinterpret_cast<uintptr_t>(addr);
+  if (length == 0 || begin % s.page_size != 0 || length % s.page_size != 0 ||
+      length > UINTPTR_MAX - begin) {
+    return 0;
+  }
+  const uintptr_t end = begin + length;
+  std::lock_guard<std::mutex> guard(s.lock);
+  auto it = FindRegion(s, begin);
+  if (it == s.regions.end()) return 0;
+  if (it->second.group == 0) {
+    return it->second.kind == Kind::kAnon && end <= it->first + it->second.size ? 1 : 0;
+  }
+  return Placeholders().available() && CoveringGroup(s, begin, end) != 0 ? 1 : 0;
+}
+
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
   g_mmap_replaced_private_pages = false;
   State& s = state();

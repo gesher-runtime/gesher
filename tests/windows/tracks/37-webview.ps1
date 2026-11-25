@@ -167,6 +167,7 @@ if (-not (Get-Command RunTimed -CommandType Function -ErrorAction SilentlyContin
   }
 }
 . "$PSScriptRoot/../webview/QuotaRegistry.ps1"
+. "$PSScriptRoot/../webview/StorageDelete.ps1"
 . "$PSScriptRoot/../webview/WorkerResponse.ps1"
 
 # --- 2. webapp.apk ----------------------------------------------------------
@@ -313,7 +314,7 @@ $webAppExpect = @(
   'WebActivity progress 100',
   'gesher-webview: preview of file:///android_asset/index.html: 400x300, center #00ff00',
   'WebActivity setCookie: true',
-  'WebActivity cookie: gesher=1',
+  'WebActivity cookies read back: gesher=1',
   'view(s) over the WebView cut out of its window: rect 360,220-400,260',
   'WebActivity onDestroy')
 $webAppName = 'webapp.apk''s WebViews on WebView2 (child windows of its Win32 window at the views'' bounds, moved and hidden with them, a view over one cut out of it): an asset page whose script calls a @JavascriptInterface method, console, alert through WebChromeClient, shouldInterceptRequest and shouldOverrideUrlLoading, evaluateJavascript returns values, onPageFinished; a remote https page; cookies; the window read back with PW_RENDERFULLCONTENT'

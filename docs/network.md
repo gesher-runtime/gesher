@@ -16,6 +16,7 @@ on a phone. Design: [ADR 0037](decisions/0037-net-networking.md). Branch:
                                                                  Network List Manager,
   system CAs: $ANDROID_ROOT/etc/security/cacerts ◄── Android's   NotifyIpInterfaceChange
               set + Windows' ROOT/CA stores (trust_store.cc)
+  user CAs:   $ANDROID_DATA/misc/user/0/cacerts-added ◄── roots installed on this PC
 ```
 
 ## Sockets and DNS
@@ -171,8 +172,111 @@ A manifest (`etc/security/.gesher-cacerts`, next to the directory rather than
 in it, so that cacerts holds only certificates, as Conscrypt expects) makes
 the check cheap when nothing changed; a
 named mutex serializes writers; `GESHER_WINDOWS_CERTS=0` leaves Windows'
-stores out; `GESHER_TRACE_CACERTS=1` reports what was written. User CAs
-(`$ANDROID_DATA/misc/keychain`) are Android's, unchanged.
+stores out; `GESHER_TRACE_CACERTS=1` reports what was written.
+
+### User-added CAs: roots installed on this PC
+
+On a phone, a CA its user or a device admin installs is a *user-added* CA:
+KeyChain writes it to `/data/misc/user/<user>/cacerts-added`, and
+`TrustedCertificateStore` (the `AndroidCAStore` KeyStore) lists it with a
+`user:` alias. Some apps trust only their own roots plus these: Chrome (its
+Chrome Root Store plus `X509Util.getUserAddedRoots`, the `user:` aliases),
+apps whose network security config has `<certificates src="user"/>`, and,
+by the default config, apps targeting API 23 or lower
+(`UserCertificateSource`, the same directory). Behind a content filter that
+re-signs TLS (NetFree) such apps fail with an unknown authority unless the
+filter's root is a user-added CA, as it is on a phone set up for it.
+
+So the same sync also writes `$ANDROID_DATA/misc/user/0/cacerts-added` (user 0:
+Gesher's device has one user) with the roots that were **installed on this
+PC**, by its user, an administrator, group policy, an enterprise or a program
+such as a content filter:
+
+- the roots of Windows' ROOT stores (the user's and the machine's, with their
+  group policy and enterprise parts) whose enhanced key usage allows server
+  authentication,
+- less those in Microsoft's root program: the SHA-1 thumbprints of Windows'
+  AuthRoot certificate trust lists, the one automatic root update keeps in
+  `HKLM\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\AutoUpdate`
+  (`EncodedCtl`) and the one built into crypt32.dll (its `AUTHROOTSTL`
+  resource), taken together, and the roots automatic root update marked as
+  taken from such a list (their `CERT_AUTH_ROOT_SHA256_HASH_PROP_ID`
+  property);
+- less Android's own CA set (`cacerts\`) and Windows' Disallowed stores.
+
+Microsoft's list is what tells a distributed root from an installed one,
+wherever Windows keeps it: the roots automatic root update adds on demand go
+to the machine's AuthRoot store (part of the ROOT store) and are all listed,
+and so are the ones Windows ships in the machine's ROOT store (Microsoft Root
+Certificate Authority 2010/2011, the timestamping roots). The store a root is
+in does not tell (an administrator's import and Microsoft's own roots are both
+in `LocalMachine\ROOT\.Default`), and Windows' shipped roots carry no mark of
+their own. Two 1997
+Microsoft roots that are in neither list (`Copyright (c) 1997 Microsoft
+Corp.`, `Microsoft Authenticode(tm) Root Authority`) are limited to other
+purposes by their enhanced key usage and are left out of both stores. The CA
+stores' self-signed certificates (such as `Root Agency` and the TPM roots
+Windows keeps there) are not taken: Windows does not trust a root there either.
+If neither list can be read, no root can be told apart and none is user-added:
+a sync then removes Gesher's user CAs (the safe direction; they come back at
+the next sync that can read a list).
+The lists are not signature-checked: only an administrator can change the
+registry copy, and crypt32.dll is a system file.
+
+Such a root stays a system CA too (the system directory is as above), so apps
+that trust only system CAs keep working, and Android's network security
+config and `AndroidCAStore` now also see it as a user-added CA: both a
+`system:` and a `user:` alias. (Android's own KeyChain installs no user copy of
+a system CA; here the system copy is Gesher's import from Windows, and the
+`user:` alias is what tells apps it was installed locally.) Apps see what they
+would on a phone with that CA installed by the user:
+`TrustedCertificateStore.isUserAddedCertificate` and
+`X509TrustManagerExtensions.isUserAddedCertificate` return true for chains
+that end at it, Chrome's `X509Util.getUserAddedRoots` lists it, and apps or
+browsers that warn that the network may be monitored when a user CA is
+installed will warn here.
+
+The directory is laid out as `TrustedCertificateStore` keeps it: DER files
+`<subject hash>.<n>`, a new one after the last index of its hash, a removed
+one truncated to an empty tombstone while a later index exists and deleted,
+with the tombstones before it, otherwise. A root removed from Windows is
+removed at the next sync. Two records name the entries Gesher wrote and their
+SHA-256, and either one is enough: the manifest `misc/user/0/.gesher-user-cacerts`
+(next to the directory), written before the entries it adds, and an NTFS named
+stream `:gesher-owner` on each entry (the entry's name and SHA-256), written
+on the temporary file so the rename moves data and mark together. A lost or unwritable manifest, or a crash
+between writes, so leaves no entry behind that outlives its root (nothing in
+Gesher could remove it: there is no KeyChain or Settings). If the manifest
+cannot be written, no entry is written (a volume without named streams would
+have no other record). An entry Gesher did not write, or whose contents
+changed since, is never touched. That includes a file someone put there with
+the same certificate, and a copy of Gesher's entry at another name (copies
+carry the stream, but it names the original). It does not include a file
+with Gesher's certificate put at the very name Gesher's records give: that
+one cannot be told from Gesher's own and goes with its root. A new entry
+never replaces a file: if one appears at its name after the scan, the entry
+takes the next index. Removing an entry opens it shared, so a reader that
+shares writing and deletion (as Gesher's own file layer does) does not keep
+it from going; one that still cannot be removed (a reader that shares only
+reading, such as .NET's `File.OpenRead`) stays recorded, goes at a later
+sync, and does not hold up new entries; while it cannot be read, it still
+counts as present. The manifest is read leniently (CRLF, case, malformed lines skip only themselves). As in Conscrypt's
+`findCert`, the indexes of a hash end at the first one that is not a file: a
+directory there leaves the certificate out (the sync reports a failure)
+rather than writing it past the directory, where it would be unreachable.
+`cacerts-removed` (system CAs the user disabled) is Android's, unchanged.
+`GESHER_TRACE_CACERTS=1` lists the user-added roots.
+
+App processes look there as on Android: `ActivityThread.main` calls
+`TrustedCertificateStore.setDefaultUserDirectory(Environment.getUserConfigDirectory(userId))`;
+`GesherAppProcess`, which runs `main`'s steps itself, and gesher-app's
+in-process driver do the same (`GesherAppProcess.useUserCaCertificates`).
+Without it Conscrypt looked in `$ANDROID_DATA/misc/keychain` while the network
+security config's `UserCertificateSource` looked in `misc/user/0`. In the
+experimental AppContainer sandbox (docs/sandbox.md) the system server opens
+`misc/user/0` to the runtime files capability for reading. KeyChain, its
+Settings screens and `DevicePolicyManager.installCaCert` are not implemented:
+apps cannot add or remove user CAs.
 
 ### Native TLS clients
 
@@ -270,14 +374,22 @@ processes of packages without it; gesher-app applies it in its own process
   return it.
 - **Gesher's own proxy**, over Windows' settings (`com.gesher.net.ProxySetting`): for every
   app or for one package, saved in `<data>/system/proxy.properties` by
-  `gesher-app proxy [PACKAGE] host:port|direct|windows` (no argument shows them; `direct`
+  `gesher-app proxy [PACKAGE] host:port|direct|windows` or in the control panel ("Proxy for
+  every app" above the app list, and each app's "Proxy" button, where "Same as every app"
+  removes the package's own setting) (no argument shows them; `direct`
   is no proxy; `windows` for a package is Windows' settings over every app's setting), or for
   one launch (`gesher-app launch PACKAGE --proxy host:port`). The system server gives an app
   process its setting (the launch's, else the package's, else every app's) as
   `$GESHER_PROXY` when it starts it, with `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for HTTP
   clients that read those (Dart's HttpClient: Flutter apps); `WindowsProxy` then takes it
   instead of Windows' settings (an HTTP proxy server, with localhost, 127.0.0.1 and [::1] left out) and does not
-  follow Windows' changes. A running app keeps its proxy until its process ends.
+  follow Windows' changes. A running app keeps its proxy until its process ends: reopening
+  its window or an Activity can reuse that process, so a changed setting needs the app
+  closed completely (or the device stopped) and started again, as the control panel says.
+  It covers HTTP clients that use the system proxy or those variables. WebView pages are
+  not given it: without the app's own `ProxyController` override (androidx.webkit, ADR
+  0058) the process's WebView2 environment gets no proxy arguments and uses Windows'
+  settings.
 - **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
   sticky query, as BatteryService's battery broadcast) and sends it when the default
   network (its netId or kind) changes: EXTRA_NETWORK_INFO, EXTRA_NETWORK_TYPE,
@@ -299,11 +411,22 @@ plain Java on the core boot class path) and `tests/apps/netapp`,
   (NativeBN), the JCA providers, digests, HMAC, AES-GCM, RSA and EC
   signatures, PBKDF2 (BouncyCastle), SecureRandom, the default SSLContext;
 - the system CA directory (Android's and Windows' certificates);
+- the user-added CAs (`tests/native/trust_store_user_test.cc`): synthetic roots in
+  temporary directories (a root in neither list is local, one in the root program list,
+  Android's set or Disallowed is not; DER `<hash>.<n>` files, tombstones and appends as
+  `TrustedCertificateStore` keeps them, entries Gesher did not write left alone, the
+  manifest), then the production sync against the machine's real stores in temporary
+  roots: every user-added root is in Windows' ROOT store, outside Microsoft's root
+  program and still a system CA, and `GESHER_WINDOWS_CERTS=0` removes them;
 - TCP and UDP echo by .NET servers;
 - a test root made by the script: an HTTPS server (SChannel) on 127.0.0.1 with
   a certificate for localhost from it is rejected, trusted once the root is in
   the machine's ROOT store, rejected with `GESHER_WINDOWS_CERTS=0`, and
-  rejected again once the root is removed;
+  rejected again once the root is removed; while it is there `AndroidCAStore`
+  (`NetTest cas`) lists it as `user:` and `system:`, and a root of the
+  machine's AuthRoot store (Microsoft's) as `system:` only; once removed, not at all.
+  netapp.apk (`NetApp user CA`), in its own process and in an app process of a
+  system server, finds it among its `user:` aliases;
 - netapp.apk's HTTPS check (`NetApp https`) goes to an HTTPS server of the script with a
   certificate from the test root, kept in the machine's ROOT store while the apps run
   (`$GESHER_NETAPP_HTTPS`; web3 track: ci 40240210807 had failed when example.com did not
@@ -455,7 +578,24 @@ descriptors still store independent `O_NONBLOCK` metadata rather than sharing
 an open-file description. `recvmsg` drops ancillary data and output flags;
 `sendmsg` has no ancillary transport. `SCM_RIGHTS`, `IP_PKTINFO`, full datagram
 length reporting with `MSG_TRUNC`, and urgent-data readiness (`POLLPRI`) remain
-unsupported. `AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
+unsupported. (Since then, `IP_PKTINFO` works on IPv4 UDP sockets and on the
+IPv4 datagrams of dual-stack IPv6 UDP sockets: the option is stored, reported
+and carried with a socket sent over `SCM_RIGHTS`, and `recvmsg` delivers each
+datagram's `in_pktinfo` with `ipi_ifindex`, `ipi_addr` and `ipi_spec_dst`. As
+Linux's `fib_compute_spec_dst`, `ipi_spec_dst` is the destination for a local
+unicast address, and for a limited, subnet-directed broadcast or multicast
+destination the preferred source address of the route back to the sender
+(`GetBestRoute2`), or an address of the arrival interface for a sender of
+0.0.0.0; the host's addresses and recent choices are cached for a second and
+consulted only for a datagram Windows marks broadcast or multicast
+(`MSG_BCAST`, `MSG_MCAST`), so unicast receives take no shared lock. As
+Linux's `do_ip_setsockopt`, the option's value is an `int`, else a byte, and
+an `optlen` of 0 turns it off. A
+control buffer too small for it gets what fits, as `put_cmsg` writes it, and
+`MSG_CTRUNC`. An `AF_UNIX` socketpair rejects the option with `EOPNOTSUPP`;
+`tests/native/udp_pktinfo_test.cc`. `IPV6_RECVPKTINFO` and sending with an
+`in_pktinfo` control message remain unsupported.)
+`AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
 Legacy host/service/protocol resolver functions have no Gesher implementation
 (the separate thread-local `h_errno` does exist). The existing bionic exports
 forward directly to the Windows imports. A small probe using Gesher headers

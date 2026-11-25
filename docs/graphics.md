@@ -249,7 +249,8 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   redraw keeps the rest.
   CPU damage now limits retained-buffer conversion and Win32 invalidation;
   layered popups also retain their DIB and coalesce pending damage. See the
-  [Round 2 validation and contract notes](audits/round2-graphics-validation.md)
+  [PR 399 validation and contract notes](audits/pr399-review.md) and the
+  [earlier cumulative validation](audits/round2-graphics-validation.md)
   for fallback cases, pinned AOSP evidence and host-only measurements.
 - **hwui's renderer into the window** (step 3, `HardwareRendererTest`,
   `PASS  dalvikvm: HardwareRenderer: a RenderNode tree into the Win32 window
@@ -675,6 +676,10 @@ pieces are listed in [native-libs.md](native-libs.md) ("Graphics").
   `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` makes an EGLImage of it
   (`EGL_ANGLE_image_d3d11_texture`). CPU locks read the texture back when the
   GPU may have drawn; unlocks after writing upload.
+  `AHardwareBuffer_fromHardwareBuffer` imports the HardwareBuffer of an
+  ImageReader image (RGBA or PRIVATE reader) as such a buffer, so a platform
+  view's frame (Flutter) is sampled through the same EGL path
+  ([media.md](media.md)).
 - `ASurfaceControl_*`: each window an ASurfaceControl tree hangs from (a
   SurfaceView's surface, the forwarding Surface Chromium's GPU process holds,
   a Gesher window) is composed on the GPU thread after every applied

@@ -143,7 +143,7 @@ def main() -> int:
         command = cxx + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                          "-pthread", str(source), "-o", str(binary)]
         if args.sanitize:
-            command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+            command += ["-fsanitize=address,undefined,float-cast-overflow", "-fno-sanitize-recover=all",
                         "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, timeout=120)
         if args.measure:

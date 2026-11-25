@@ -12,6 +12,14 @@ and the API descriptions in
 No AOSP implementation code is copied. Usage session observers and persistent
 usage-limit observers remain explicitly unsupported.
 
+The clock contract was verified against the exact Android 16 r4 source:
+`AppTimeLimitController.java` Git blob
+`1b34b817def139c47734e1799dd52ee0646b40d6`, SHA-256
+`06fae6bdf1af1da03dc01bf6d273e40c4174f746505e06114eca0b01522af80c`.
+Its `getElapsedRealtime()` returns `SystemClock.elapsedRealtime()` and is used
+for registration, usage start/stop and timeout accounting. An older AOSP
+revision used uptime; that older contract does not govern this runtime.
+
 The older handoff describes these budgets as foreground time. Android 16's actual
 `reportEvent` path starts observation on `ACTIVITY_RESUMED` **or a first
 `ACTIVITY_PAUSED`**, and stops it at `ACTIVITY_STOPPED` / destruction. Pausing a
@@ -41,7 +49,11 @@ follows that behavior independently of the historical foreground-time statistic.
   namespace. Duplicate starts and unmatched stops fail. Backdated starts count
   past usage without double-counting an earlier completed interval; stopping or
   destroying the activity also terminates its reports. All accounting uses the
-  monotonic elapsed clock, independently of wall-clock corrections.
+  monotonic elapsed-realtime clock, independently of wall-clock corrections.
+  Suspend and hibernate time count while a usage interval remains open, matching
+  Android 16's AppTimeLimitController. The timer does not wake the suspended
+  host; the next lifecycle accounting or timer callback observes the elapsed
+  budget. Stopped intervals do not count.
 - The timer sends a real `PendingIntent` target with `EXTRA_OBSERVER_ID`,
   `EXTRA_TIME_LIMIT`, and `EXTRA_TIME_USED` in milliseconds. One-shot registration
   removal precedes callback delivery. Sends use the runtime's existing
@@ -77,7 +89,7 @@ type/permission/Binder/intent-sender boundaries are explicit host fixtures, not
 alternative observer implementations. It covers deadlines, overlap, multiple
 windows, paused-first visibility, registration while active, replacement,
 unregister races, UID isolation, minimum/quota errors, token reports, source
-attribution, package retirement, permission errors, callback extras, failure,
+attribution, package retirement, permission errors, callback extras, suspend, failure,
 reentrancy and concurrent registration with the real scheduled executor.
 The service fixture also models CallerIdentity's actual ATM monitor boundary:
 six concurrent lifecycle/admission cases reject the PM-to-ATM inversion, and
@@ -97,17 +109,25 @@ Windows lifecycle integration remain separate framework/Windows validation.
 
 ## Integrated framework validation
 
-On the combined round-2 source, the unchanged `app/build.sh` compiled the complete
-app with actual downloaded framework classes and the Android core module,
-generated all AIDL delegates, passed BootLinkCheck (292 references, zero
+On the repaired PR 399 source, including the latest-main merge at `16e474e2`,
+the unchanged `app/build.sh` compiled the complete app with actual downloaded
+framework classes and the Android core module, generated all AIDL delegates,
+passed BootLinkCheck (296 references, zero
 unresolved) and completed D8. With its generated `gesher-app-classes.jar`, the
-unchanged actual-framework `test_activity_finish.py --group usage` passed 41
-checks and `--group usage-query` passed 901,153 checks; the query model passed
-12,655 checks. Both entry points also reran the 1,117-check observer suite.
+unchanged actual-framework `test_activity_finish.py --group all` passed 901,542
+checks; the query model passed 12,655 checks. This entry point also reran the
+1,117-check observer engine, complete service and task-root hook suites. A
+separate suspend regression models 30,000 ms of awake usage and 86,400,000 ms
+suspended while the activity remains visible. At the next STOPPED event and
+callback opportunity it reports 86,430,000 ms exactly once. It fails against
+the initial review's mistaken uptime change (`b3ee32c5`) and passes with the
+restored elapsed clock required by the pinned Android 16 source.
 
 These runs execute real framework/service Java with controlled native identity
 and app acknowledgements. They do not establish ART/Parcel transport, native
 resource loading or Windows window rendering. The local framework class inputs
 are prebuilt; AOSP source inputs for the complete SOURCE-retention compatibility
 change table are unavailable, so the locally generated app package is a
-validation artifact rather than a distributable runtime build.
+validation artifact rather than a distributable runtime build. The
+[PR review record](../audits/pr399-review.md) identifies the reviewed base,
+repair provenance, other checks and remaining runtime limits.

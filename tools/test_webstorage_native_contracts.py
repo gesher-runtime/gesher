@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Build/run actual native WebStorage admission and dispatch with a recording COM seam.
+"""Build/run actual origin admission and quota dispatch with inert recording seams.
 
 The Windows URLMON parser and Gesher callback implementation are real. No browser
 or profile is ever created. --source-ref replaces only ClearOriginData for a safe
-negative control; the current origin parser remains separately tested.
+negative control; the current origin parser remains separately tested. Deletion
+is recorded at its operation queue boundary; its backend is qualified by the
+separate actual-Host --storage-delete Windows fixture, not this admission gate.
 """
 import argparse
 from pathlib import Path

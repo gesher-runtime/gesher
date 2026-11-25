@@ -1,10 +1,36 @@
 # Inert service-worker preparation and WebStorage measurements
 
+## Runtime update — 25 November 2026
+
+[Actual run 45583346318](https://github.com/gesher-runtime/gesher/actions/runs/45583346318)
+established a bounded deferred-denial primitive at source
+`6c104766a73d0778747111898744326f22e00ade` on WebView2 131.0.2903.86 and
+157.0.4341.46. Changing a retained worker request to a fresh unregistered
+nonnetwork URI after `Invoke` returned produced an initial `fetch` `TypeError`,
+zero original-origin requests, unchanged JavaScript request/resource-timing
+identity, no timeout/abort or external launch, and a successful later request
+from the same worker. Synchronous handler `E_ABORT` did not cancel; all three
+response-stream failures also remained successful HTTP responses.
+
+The [exact report and receipt](webview-worker-denial-probe.md) distinguish this
+same-origin bodyless-GET observation from the still-unmeasured upload, CORS,
+redirect, concurrent-ownership and teardown contracts. It supersedes the older
+absence of runtime evidence for URI rewriting below. It does not supply cache
+modes, unrestricted streaming or a complete production worker implementation;
+the public gates remain unavailable.
+
+The separately qualified quota registry now backs a candidate production
+partition-aware origin deletion operation with owned ordinary/InPrivate
+controllers. Its [full-key contract record](webstorage-full-key-contract-2026-11-25.md)
+states the implementation and actual-Host acceptance requirement. Full origin
+enumeration still needs effective quotas for arbitrary full storage keys.
+
 ## Delivered behavior and remaining scope
 
 This change replaces constant zero quota/usage answers with actual Chromium
 storage measurements. The prepared service-worker request bridge is unavailable:
-its WebView2 response API cannot preserve Android request-failure semantics.
+its retained HTTP-response failure path does not preserve Android's network
+error, and the newly measured denial primitive is not a complete worker backend.
 All worker feature flags are withheld, both provider controller getters throw
 before initialization, and native activation rejects admission before scheduling
 work or installing a filter. The retained dispatch code is inert preparation,
@@ -18,7 +44,7 @@ remains incomplete.
 | Prepared worker internals | The retained request/settings/response helpers have isolated component coverage. They do not establish a supported worker capability, faithful failures, complete streaming or working file/content routing. |
 | Worker capability reporting | All `SERVICE_WORKER_*` flags are withheld. `SupportLib.Factory.getSupportedFeatures()` returns a copy of the supported-feature list and performs no worker initialization. |
 | Storage usage/quota | `Storage.getUsageAndQuota` on a real controller, including the hidden controller when no public WebView exists. Native URLMON admission validates/canonicalizes HTTP(S) tuple origins. Java returns the requested numeric field once on the caller's Looper; malformed data, failed initialization, rejected admission and backend errors yield Android's zero query-failure value. |
-| Storage deletion | Existing origin admission and `Storage.clearDataForStorageKey` deletion are preserved; origin deletion still targets `file_systems,indexeddb`. Existing delete-all behavior is unchanged. |
+| Storage deletion | Existing origin admission delegates to an owned asynchronous operation that discovers actual full keys, derives sites using the runtime, and calls `Storage.clearDataForStorageKey` for the selected original keys. The mask remains `file_systems,indexeddb`; delete-all is unchanged. Actual-Host acceptance is separate from the historical raw-CDP experiment. |
 | Full origin enumeration | Still unsupported. `getOrigins` retains the previous empty result, which must not be interpreted as an audited empty profile. No visited-origin or cookie list is substituted for Chromium's storage-key registry. |
 
 ### Why both provider and native activation are unavailable
@@ -54,7 +80,7 @@ contract. CDP's target-level cache disable switch cannot implement the full set
 of modes either. The retained settings helper rejects unsupported setters;
 neither it nor `SERVICE_WORKER_CACHE_MODE` is exposed as available.
 
-### Network failure is still an explicit limitation
+### The prepared failure path still needs replacement
 
 WebView2's stable `WebResourceRequested` args do not expose request cancellation.
 The retained native dispatch helper installs an HTTP 403 before calling Java
@@ -79,8 +105,10 @@ An independent review inspected both the pinned SDK 1.0.4258.31 and stable
 1.0.4370.26. Neither request-event interface has cancellation or a CDP request ID.
 The newer service-worker management interface adds lifecycle/messaging, not a
 before-start request interception guarantee. Changing an HRESULT, inventing a
-status code, failing a response stream or rewriting the request URL is not an
-established equivalent of an initial network failure.
+status code, or failing a response stream was not an established equivalent of
+an initial network failure. The later deferred URI experiment above supplies
+actual evidence for its stated GET boundary; it does not establish the other
+worker contracts.
 
 CDP `Fetch.failRequest` is a real network-failure primitive, including
 `AccessDenied`, on a request owned by `Fetch.requestPaused`. WebView2's

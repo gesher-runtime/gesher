@@ -26,8 +26,19 @@ def main():
     root = Path(__file__).resolve().parents[1]
     helper = (root / "probes/webview/browser_session_probe.h").read_text()
     probe = (root / "probes/webview/quota_registry_probe.h").read_text()
+    scripts = (root / "compat/webview/storage_registry_scripts.h").read_text()
     template = (root / "tests/native/quota_registry_probe_host.cc.in").read_text()
-    reader = section(helper, "constexpr size_t kMaxJson", "inline bool PumpUntil")
+    assert "using gesher::webview::cdp_json::JsonReader;" in helper
+    assert "storage_registry_scripts::kReadRegistry" in probe
+    assert "storage_registry_scripts::kInitializeIndexedDb" in probe
+    # Compile the exact shared production header. The probe imports these same
+    # definitions; this host test no longer extracts an independent reader copy.
+    reader = '''#include "compat/webview/cdp_json.h"
+using gesher::webview::cdp_json::Json;
+using gesher::webview::cdp_json::JsonReader;
+using gesher::webview::cdp_json::Quote;
+constexpr size_t kMaxJson = gesher::webview::cdp_json::kDefaultMaxJson;
+'''
     inventory = section(probe, "struct Observation", "struct State")
     capture = section(probe, "inline void FindFrames", "inline bool InitializeIndexedDb")
     variants = {"current": (inventory, capture, None),
@@ -49,14 +60,18 @@ def main():
                for key, (body, method, _) in variants.items() if key != "current"), "mutation did not apply"
     with tempfile.TemporaryDirectory(prefix="gesher-quota-registry-") as temp:
         work = Path(temp)
+        command = [args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-g", "-O1", "-I", str(root)]
+        if args.sanitize:
+            command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+        selector = work / "storage-key-selection"
+        subprocess.run(command + [str(root / "probes/webview/storage_key_selection_test.cc"),
+                                  "-o", str(selector)], check=True, timeout=60)
+        subprocess.run([str(selector)], check=True, timeout=15)
         for name, (body, method, required) in variants.items():
             source = work / (name + ".cc")
             executable = work / name
             source.write_text(template.replace("@JSON_READER@", reader)
                               .replace("@INVENTORY@", body).replace("@CAPTURE@", method))
-            command = [args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-g", "-O1"]
-            if args.sanitize:
-                command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
             subprocess.run(command + [str(source), "-o", str(executable)], check=True, timeout=60)
             result = subprocess.run([str(executable)], text=True, capture_output=True, timeout=15)
             print(name + ": " + result.stdout.strip(), flush=True)
@@ -69,7 +84,7 @@ def main():
                 print(name + ": intended regression rejected", flush=True)
         # Parse the exact embedded fixture script too. This does not simulate
         # IndexedDB, origins or WebView2; all of those require Windows execution.
-        node = shutil.which("node")
+        node = os.environ.get("CODEX_PRIMARY_RUNTIME_NODE") or shutil.which("node")
         if not node:
             raise RuntimeError("node is required to syntax-check the embedded browser fixture")
         page = section(probe, 'R"HTML(<!doctype html>', 'inline bool Start(')
@@ -78,12 +93,12 @@ def main():
         fixture = work / "storage-fixture.js"
         fixture.write_text(script)
         subprocess.run([node, "--check", str(fixture)], check=True, timeout=15)
-        registry = section(probe, 'static const wchar_t* script = LR"JS(', ')JS";')
+        registry = section(scripts, 'inline constexpr wchar_t kReadRegistry[] = LR"JS(', ')JS";')
         registry = registry.split('LR"JS(', 1)[1]
         fixture.write_text(registry)
         subprocess.run([node, "--check", str(fixture)], check=True, timeout=15)
         print("Embedded browser fixture and live registry script: syntax passed", flush=True)
-        initialization = section(probe, 'static const wchar_t* initialization = LR"JS(', ')JS";')
+        initialization = section(scripts, 'inline constexpr wchar_t kInitializeIndexedDb[] = LR"JS(', ')JS";')
         initialization = initialization.split('LR"JS(', 1)[1]
         control = initialization.replace(
             'const result = await handler.getAllBucketsAcrossAllStorageKeys();',

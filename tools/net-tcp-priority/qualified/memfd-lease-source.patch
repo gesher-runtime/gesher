@@ -196,7 +196,7 @@ index 0697d4a2..72f1adcf 100644
 -  return MemfdSharedMapHandleError(file, writable, deny_write);
 +  return MemfdSharedMapHandleError(file, writable, deny_write, write_lease);
 diff --git a/compat/posix/src/mman.cc b/compat/posix/src/mman.cc
-index 88e3fdc8..654d3c35 100644
+index 01eb82f8..47d539ff 100644
 --- a/compat/posix/src/mman.cc
 +++ b/compat/posix/src/mman.cc
 @@ -56,0 +57 @@
@@ -224,20 +224,20 @@ index 88e3fdc8..654d3c35 100644
 +    r.write_lease = view.write_lease;
 @@ -627,0 +645 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
 +          r.write_lease.reset();
-@@ -1572,0 +1591,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1598,0 +1617,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 +    // A writable one holds a lease on the file until its pages are unmapped, and
 +    // releases it here if the mapping cannot be made.
-@@ -1573,0 +1594 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1599,0 +1620 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 +    std::shared_ptr<void> write_lease;
-@@ -1575 +1596 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1601 +1622 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write)) {
 +      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write, &write_lease)) {
-@@ -1581 +1602 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1607 +1628 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -    if (result != MAP_FAILED && deny_write) {
 +    if (result != MAP_FAILED && (deny_write || write_lease)) {
-@@ -1584 +1605,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1610 +1631,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -        it->second.deny_write = true;
 +        if (deny_write) it->second.deny_write = true;
 +        if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;
-@@ -1667,0 +1690 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
+@@ -1693,0 +1716 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
 +      region.write_lease.reset();

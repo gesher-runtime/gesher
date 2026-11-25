@@ -1,6 +1,6 @@
 // Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
-// The real probe's bounded JSON and inventory acceptance functions are inserted
-// verbatim. These isolated inputs test its evidence gates, not browser support.
+// The real shared JSON header is included and the probe's inventory acceptance
+// functions are inserted verbatim. These inputs test evidence gates, not browser support.
 #include <algorithm>
 #include <cstdint>
 #include <iostream>

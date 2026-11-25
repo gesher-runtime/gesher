@@ -49,7 +49,8 @@ void operator delete(void* p, size_t) noexcept { ::operator delete(p); }
 void operator delete[](void* p, size_t) noexcept { ::operator delete(p); }
 using HRESULT = int32_t;
 constexpr HRESULT S_OK = 0, E_INVALIDARG = static_cast<int32_t>(0x80070057u),
-                  E_UNEXPECTED = static_cast<int32_t>(0x8000ffffu);
+                  E_UNEXPECTED = static_cast<int32_t>(0x8000ffffu),
+                  E_NOTIMPL = static_cast<int32_t>(0x80004001u);
 bool SUCCEEDED(HRESULT value) { return value >= 0; }
 using jint = int32_t;
 using jsize = int32_t;

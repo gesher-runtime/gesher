@@ -37,7 +37,20 @@ this result does not establish arbitrary accessibility or screen-reader UX.
   would look for a WebView package, so `new WebView(context)`,
   `CookieManager.getInstance()`, `WebStorage.getInstance()`,
   `WebSettings.getDefaultUserAgent()` and `WebView.setWebContentsDebuggingEnabled`
-  work with no WebView APK and no `webviewupdate` service.
+  work with no WebView APK.
+- **The provider package.** The system server's `webviewupdate` service
+  (`com.gesher.server.WebViewUpdateService`) names the built-in provider, and
+  the device declares `android.software.webview` while the WebView2 Runtime is
+  installed (docs/system-features.md). So
+  `WebView.getCurrentWebViewPackage()` (which asks that service while no
+  provider APK is loaded in the process) returns a `PackageInfo` for
+  `com.gesher.webview` whose `versionName` is the installed WebView2 Runtime's
+  Chromium version (`158.0.4370.33`; `versionCode` build * 100000 + patch *
+  100, as Chrome numbers them). Apps that check the WebView's major version
+  before loading one (Capacitor's `Bridge.isMinimumWebViewInstalled`) work.
+  Without a runtime it is null, as on a device with no WebView package. The
+  provider is not an installed APK: `PackageManager` does not list
+  `com.gesher.webview`.
 - **One WebView = one WebView2 controller** (`GesherWebViewProvider`, which is
   the WebViewProvider, its ViewDelegate and ScrollDelegate). It is created
   with the WebView, parked in a hidden window of the WebView thread until the
@@ -185,7 +198,7 @@ Pages see the https origin: same-origin requests between assets work without
 | `ServiceWorkerController`, AndroidX service-worker adapters | Unavailable: both provider controller getters throw before initialization, native activation rejects before scheduling/filter installation, and all worker feature flags are withheld. The prepared bridge remains inert because WebView2 HTTP responses cannot preserve Android request-failure semantics. W07 is still blocked; see [worker/storage contracts](research/service-worker-storage-contracts.md). |
 | `WebStorage.getUsageForOrigin`, `getQuotaForOrigin` | Real `Storage.getUsageAndQuota` values for validated first-party HTTP(S) origins, posted once to the caller's Looper; failed queries return zero. `getOrigins` still lacks complete profile enumeration. |
 | `WebStorage.deleteAllData`, `clearCache` | `Profile2.ClearBrowsingData` (DOM storage kinds; disk cache) |
-| `WebStorage.deleteOrigin` | `Storage.clearDataForStorageKey` with `file_systems,indexeddb`, limited to the HTTP(S) origin's first-party storage; preserves other origins, local storage, cookies and cache storage. Native URLMON parsing validates and canonicalizes tuple origins before queueing. Null, empty, malformed, opaque, file and custom-scheme origins do nothing. IDN hosts use ASCII Punycode. Chromium independently rejects invalid or opaque storage keys. Associated partitioned third-party data is not yet removed, unlike Chromium's Android framework implementation. |
+| `WebStorage.deleteOrigin` | The live profile inventory supplies complete observed keys; `Storage.clearDataForStorageKey` removes `file_systems,indexeddb` for the exact first-party HTTP(S) origin and third-party keys embedded under its schemeful site. The runtime derives sites in an isolated InPrivate controller with local responses and networking disabled. This preserves the origin under other top-level sites, unrelated first-party origins, local storage, cookies and cache storage. Native validation rejects null, empty, malformed, opaque, file and custom-scheme origins before admission; IDN hosts use ASCII Punycode. Inventory, site-resolution, lifecycle or deletion failures report a native failure instead of partial success. The [full-key contract and implementation record](research/webstorage-full-key-contract-2026-11-25.md) distinguishes this operation from the still unsupported `getOrigins` quota projection. |
 | `DownloadListener` | `DownloadStarting`: WebView2's download is cancelled and the listener gets the URL, user agent, Content-Disposition, MIME type and length (Android's WebView never downloads itself) |
 | `window.open`, `window.close` | `NewWindowRequested` with a deferral: with `supportMultipleWindows` (and a user gesture or `javaScriptCanOpenWindowsAutomatically`) `onCreateWindow` gets a `WebViewTransport` and the WebView put there becomes the window (`put_NewWindow`: `window.opener` works); otherwise the page opens in the same WebView, as Android's. `WindowCloseRequested` is `onCloseWindow` |
 | Geolocation | navigator.geolocation in main frames from LocationManager (`GeolocationShim`, ADR 0058): the WebChromeClient decides per origin, positions are Windows' location service's or the app's test providers |

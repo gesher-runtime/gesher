@@ -373,7 +373,10 @@ class CaptureEngine {
       Process(command);
     } else {
       commands_.push_back(&command);
-      cv_.notify_all();
+      // The worker may be in the source's data wait, not cv_. Control requests
+      // must interrupt that wait too: preparing or starting another recorder
+      // cannot depend on the current endpoint producing a packet.
+      Wake();
       cv_.wait(lock, [&] { return command.done; });
     }
     if (error != nullptr) *error = command.error;
@@ -465,7 +468,8 @@ class CaptureEngine {
   InputInfo info_;
   std::atomic<bool> restart_{false};
   // Guards waiting_ (the source the worker is waiting on, for Wake to interrupt) and
-  // the period wait; never held with mu_ or while calling into a source but Interrupt.
+  // the period wait. Wake may hold mu_ first; the worker releases wake_mu_ before
+  // reacquiring mu_. No source call runs under wake_mu_ except Interrupt.
   std::mutex wake_mu_;
   std::condition_variable wake_cv_;
   CaptureSource* waiting_ = nullptr;

@@ -90,7 +90,8 @@ bool IsShName(const std::string& name) {
 // The tool name of a bare name or a /system/bin path, or "".
 std::string ToolName(const std::string& name) {
   static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id",
-                                       "ps",      "pm", "am", "kill",   "sleep", "toybox"};
+                                       "ps",      "pm", "am", "kill",   "sleep", "toybox",
+                                       "which",   "mount"};
   std::string base = name;
   for (const char* dir : {"/system/bin/", "/system/xbin/", "/bin/"}) {
     if (name.rfind(dir, 0) == 0) {
@@ -99,6 +100,10 @@ std::string ToolName(const std::string& name) {
     }
   }
   if (base == name && name.find('/') != std::string::npos) return "";
+  // Android's toybox installs which and mount in /system/bin only (/bin links
+  // there); /system/xbin/which is absent on a device without root tools, and
+  // root checks probe exactly that path.
+  if ((base == "which" || base == "mount") && name.rfind("/system/xbin/", 0) == 0) return "";
   for (const char* t : kTools) {
     if (base == t) return base;
   }
@@ -392,6 +397,21 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
     AppendArgs(&launch->command_line, argv, 1);
     return Finish(launch);
   }
+  if (prog == "/system/bin/linker64") {
+    // Android's dynamic linker run as a program, `linker64 PROGRAM [ARGS...]`:
+    // PROGRAM (a path, not looked up in PATH) runs with ARGS. The name is
+    // Gesher's ELF loader (compat/posix/src/system_linker.h), which does that
+    // for an ELF program. No program, linker64's own options or a program
+    // that is not ELF fail the exec instead (Android's linker prints an error).
+    if (depth > 0 || argv.size() < 2 || argv[1].empty() || argv[1][0] == '-') return kENOEXEC;
+    const std::vector<std::string> program(argv.begin() + 1, argv.end());
+    Launch inner;
+    int r = PrepareProgram(program[0], program, dir, depth + 1, false, &inner, path_override);
+    if (r != 0) return r;
+    if (inner.kind != "elf" && inner.kind != "tool") return kENOEXEC;
+    *launch = inner;
+    return 0;
+  }
   std::string tool = ToolName(prog);
   if (!tool.empty() && (search || prog.find('/') != std::string::npos)) {
     // Android's /system/bin programs that gesher-exec provides (docs/exec.md).
@@ -473,6 +493,28 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
   }
   return L"";
 }
+
+std::vector<std::string> FindAllInPath(const std::string& name, const std::string& path) {
+  std::vector<std::string> found;
+  if (name.empty()) return found;
+  bool has_ext = !Extension(Widen(name)).empty();
+  static const char* const kExtensions[] = {"", ".exe", ".com", ".cmd", ".bat"};
+  for (const std::wstring& d : PathDirectories(Widen(path))) {
+    std::string dir = Narrow(d);
+    if (!dir.empty() && dir.back() != '\\' && dir.back() != '/')
+      dir += dir.find('\\') != std::string::npos ? '\\' : '/';
+    for (const char* e : kExtensions) {
+      if (has_ext && *e != 0) break;
+      std::string candidate = dir + name + e;
+      DWORD attributes = GetFileAttributesW(WindowsPath(candidate).c_str());
+      if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+        found.push_back(candidate);
+    }
+  }
+  return found;
+}
+
+bool IsShellName(const std::string& name) { return IsShName(name); }
 
 int PrepareLaunchProgram(const std::string& program, const std::vector<std::string>& argv,
                          const std::string& dir, bool search_path, Launch* launch) {

@@ -13,7 +13,8 @@ $source = [IO.File]::ReadAllText([IO.Path]::GetFullPath($PanelPath))
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in 'Get-FileStamp', 'Get-PanelAppIcon', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'Update-AppsView') {
+foreach ($name in 'Get-FileStamp', 'Get-PanelAppIcon', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'Update-AppsView',
+        'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes', 'Get-ProxySettings', 'Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -28,13 +29,21 @@ function Assert-Launch([bool] $value, [string] $message) {
     $script:Checks++
 }
 
-# The row's Launch button follows the item's LaunchVisibility.
-Assert-Launch ($source -match '<Button Content="\$\(Get-GesherText ''cp_btn_launch''\)" Tag="\{Binding Package\}" Visibility="\{Binding LaunchVisibility\}"') 'The Launch button is not bound to LaunchVisibility'
+# The production row template lives in the dashboard resource. Verify its
+# localized button and bindings without depending on attribute order.
+[xml]$dashboard = [IO.File]::ReadAllText((Join-Path (Split-Path ([IO.Path]::GetFullPath($PanelPath))) 'gesher-panel-dashboard.xaml'))
+$launchButtons = @($dashboard.SelectNodes('//*[local-name()="Button"]') | Where-Object {
+    $_.GetAttribute('Content') -eq '{DynamicResource Text_cp_btn_launch}'
+})
+Assert-Launch ($launchButtons.Count -eq 1) 'The dashboard must define one localized Launch button'
+Assert-Launch ($launchButtons[0].GetAttribute('Tag') -eq '{Binding Package}' -and
+    $launchButtons[0].GetAttribute('Visibility') -eq '{Binding LaunchVisibility}') 'The Launch button is not bound to its package and LaunchVisibility'
 
 $scratchRoot = [IO.Path]::GetFullPath((Join-Path $repo 'out')) + [IO.Path]::DirectorySeparatorChar
 $scratch = Join-Path $scratchRoot ('gesher-panel-launch-' + [Guid]::NewGuid().ToString('N'))
 $root = $scratch
 $script:AppWindowsFile = Join-Path $root 'system/app-windows.properties'
+$script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 $icoFile = Join-Path $root 'gesher.ico'
 $appsList = [PSCustomObject]@{ ItemsSource = $null }
 $script:ViewState = @{ AppFiles = @(); Icons = @{}; AppsSignature = $null }

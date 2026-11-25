@@ -170,6 +170,8 @@ public final class SystemServer {
     }
 
     public static void main(String[] args) {
+        // stdout/stderr are system_server.log: no credentials (docs/logging.md).
+        com.gesher.app.LogRedaction.installStandardStreams();
         try {
             run(args);
         } catch (Throwable t) {
@@ -235,6 +237,15 @@ public final class SystemServer {
             log("the Gesher device " + System.getenv("GESHER_BINDER") + ": system server pid "
                     + Process.myPid() + (job ? ", its processes in one job"
                             : ", no job (processes may outlive it)"));
+        }
+
+        // The system's shared-library declarations, read at boot as SystemConfig reads
+        // them, before any binder call needs them. An invalid declaration fails only the
+        // packages that use libraries, when they are resolved.
+        try {
+            SharedLibraryRegistry.readSystem();
+        } catch (IOException e) {
+            log("shared libraries: " + e.getMessage());
         }
 
         // The packages, as PackageManagerService scans them at boot: the installed ones
@@ -387,9 +398,12 @@ public final class SystemServer {
             env.addAll(com.gesher.net.ProxySetting.environment(packageName));
             // One window for the app's tasks, or one each (ADR 0088).
             env.addAll(atm.appWindowsEnvironment(packageName, startSeq));
+            // ProcessList's runtime flags for the app (ptrace: ADR 0093).
+            int runtimeFlags = com.gesher.app.ProcessSpecialization.runtimeFlagsFor(
+                    pkg.applicationInfo(0));
             String command = Zygote.commandLine(vm, APP_PROCESS, List.of("--package",
                     packageName, "--start-seq", String.valueOf(startSeq), "--target-sdk",
-                    String.valueOf(targetSdk)));
+                    String.valueOf(targetSdk), "--runtime-flags", String.valueOf(runtimeFlags)));
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
                 return AppSandbox.spawn(command, env, logFile, pkg, packageName,
@@ -462,6 +476,8 @@ public final class SystemServer {
         }
 
         void start() throws Exception {
+            // Settings requests of an earlier device wait for nobody now (SettingsResults).
+            ControlCenter.clearResults(Device.dataDir());
             // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
             CameraApp.sync(mInstaller, mServices.pm);
             trackLauncherRecords(mServices.pm);
@@ -527,6 +543,43 @@ public final class SystemServer {
         @Override
         public boolean uninstall(String packageName) throws Exception {
             return mInstaller.uninstall(packageName);
+        }
+
+        @Override
+        public String[] specialAccess(String packageName) {
+            return SpecialAccess.rows(SpecialAccess.query(mServices.pm, packageName));
+        }
+
+        @Override
+        public String setSpecialAccess(String packageName, String opName, boolean allowed) {
+            return setSpecialAccess(packageName, opName, allowed, 0, 0, new String[0]);
+        }
+
+        @Override
+        public String setSpecialAccess(String packageName, String opName, boolean allowed,
+                int panelPid, long panelStartedAt, String[] tokens) {
+            SpecialAccess.Entry entry = SpecialAccess.set(mServices.pm, packageName, opName, allowed);
+            mServices.atm.specialAccessToggled(packageName, opName, entry.allowed(), panelPid,
+                    panelStartedAt, tokens);
+            String row = entry.row();
+            log("special access: " + packageName + " " + row.replace('	', ' ')
+                    + " (the user's choice in the Control Center)");
+            return row;
+        }
+
+        @Override
+        public int settingsScreensShown(int pid, long startedAt, String[] tokens) {
+            return mServices.atm.settingsScreensShown(pid, startedAt, tokens);
+        }
+
+        @Override
+        public int settingsScreensClosed(String[] tokens) {
+            return mServices.atm.settingsScreensClosed(tokens);
+        }
+
+        @Override
+        public int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
+            return mServices.atm.settingsScreensClosed(pid, startedAt, tokens);
         }
 
         @Override

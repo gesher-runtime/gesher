@@ -1,6 +1,7 @@
 // Production translator methods are inserted verbatim. The Win32/Jit adapter
 // below does not execute guest instructions or generated stubs. Its Jit retains
-// instruction bytes until ClearCache, making missing retirement observable.
+// instruction bytes until ClearCache or an applied InvalidateCacheRange, making
+// missing retirement or invalidation observable.
 #include "translator.h"
 #include <sys/mman.h>
 #include <algorithm>
@@ -13,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -80,52 +82,116 @@ size_t AllocationCalls() {
   return allocation_calls;
 }
 
+// dynarmic's interface/halt_reason.h values and helpers.
 namespace Dynarmic {
-enum class HaltReason : unsigned { UserDefined1 = 1, UserDefined2 = 2 };
-HaltReason operator|(HaltReason a, HaltReason b) {
-  return static_cast<HaltReason>(static_cast<unsigned>(a) | static_cast<unsigned>(b));
+enum class HaltReason : uint32_t {
+  Step = 0x00000001,
+  CacheInvalidation = 0x00000002,
+  MemoryAbort = 0x00000004,
+  UserDefined1 = 0x01000000,
+  UserDefined2 = 0x02000000,
+  UserDefined3 = 0x04000000,
+  UserDefined4 = 0x08000000,
+};
+constexpr HaltReason operator|(HaltReason a, HaltReason b) {
+  return static_cast<HaltReason>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+constexpr bool Has(HaltReason a, HaltReason b) {
+  return (static_cast<uint32_t>(a) & static_cast<uint32_t>(b)) != 0;
 }
 namespace A64 {
+enum class InstructionCacheOperation {
+  InvalidateByVAToPoU,
+  InvalidateAllToPoU,
+  InvalidateAllToPoUInnerSharable,
+};
 class UserCallbacks {
  public:
   virtual ~UserCallbacks() = default;
   virtual void CallSVC(uint32_t) = 0;
+  virtual void InstructionCacheOperationRaised(InstructionCacheOperation, uint64_t) {}
+  virtual void InstructionSynchronizationBarrierRaised() {}
 };
+// Models dynarmic's x64 A64 Jit: HaltExecution, ClearHalt and
+// InvalidateCacheRange are thread-safe; InvalidateCacheRange queues the range
+// and halts with CacheInvalidation; Run applies queued ranges before it
+// dispatches, returns at once while a halt is pending, exchanges the halt
+// reason with 0 on return and applies the ranges queued while it ran.
 class Jit {
  public:
   bool running = false;
   unsigned clear_count = 0;
+  unsigned runs = 0;  // Run calls that dispatched guest code
   std::function<void(Jit&)> run;
+  // MemoryReadCode's role: called before the Jit reads code it has not cached.
+  std::function<void(uintptr_t page)> read_code;
   std::unordered_map<uintptr_t, uint32_t> code;
   std::array<uint64_t, 31> registers{};
-  uint64_t pc = 0;
-  unsigned halt = 0;
-  void Run() {
+  uint64_t pc = 0, sp = 0;
+  std::atomic<uint32_t> halt{0};
+  std::mutex invalidation_mutex;
+  std::vector<std::pair<uintptr_t, uintptr_t>> invalid_ranges;  // queued [start, end)
+  std::vector<std::pair<uintptr_t, uintptr_t>> invalidated;    // applied [start, end)
+  HaltReason Run() {
     REQUIRE(!running && static_cast<bool>(run));
-    running = true;
-    run(*this);
-    running = false;
+    PerformRequestedCacheInvalidation(static_cast<HaltReason>(halt.load()));
+    if (halt.load() == 0) {
+      running = true;
+      ++runs;
+      run(*this);
+      running = false;
+    }
+    const HaltReason reason = static_cast<HaltReason>(halt.exchange(0));
+    PerformRequestedCacheInvalidation(reason);
+    return reason;
   }
   void ClearCache() {
     REQUIRE(!running);
+    std::lock_guard<std::mutex> lock(invalidation_mutex);
     code.clear();
+    invalid_ranges.clear();
     ++clear_count;
+  }
+  void InvalidateCacheRange(uint64_t start, size_t length) {
+    REQUIRE(length != 0);
+    {
+      std::lock_guard<std::mutex> lock(invalidation_mutex);
+      invalid_ranges.emplace_back(static_cast<uintptr_t>(start),
+                                  static_cast<uintptr_t>(start + length));
+    }
+    HaltExecution(HaltReason::CacheInvalidation);
+  }
+  size_t QueuedRanges() {
+    std::lock_guard<std::mutex> lock(invalidation_mutex);
+    return invalid_ranges.size();
   }
   uint32_t Instruction(const void* address) {
     REQUIRE(running);
     const uintptr_t key = reinterpret_cast<uintptr_t>(address);
     auto entry = code.find(key);
     if (entry != code.end()) return entry->second;
+    if (read_code) read_code(key & ~uintptr_t{0xfff});
     uint32_t value;
     std::memcpy(&value, address, sizeof(value));
     code.emplace(key, value);
     return value;
   }
-  void ClearHalt(Dynarmic::HaltReason reason) { halt &= ~static_cast<unsigned>(reason); }
+  void ClearHalt(Dynarmic::HaltReason reason) { halt.fetch_and(~static_cast<uint32_t>(reason)); }
   void HaltExecution(Dynarmic::HaltReason reason = Dynarmic::HaltReason::UserDefined1) {
-    halt |= static_cast<unsigned>(reason);
+    halt.fetch_or(static_cast<uint32_t>(reason));
+  }
+  void PerformRequestedCacheInvalidation(HaltReason reason) {
+    if (!Has(reason, HaltReason::CacheInvalidation)) return;
+    std::lock_guard<std::mutex> lock(invalidation_mutex);
+    ClearHalt(HaltReason::CacheInvalidation);
+    for (const auto& [start, end] : invalid_ranges) {
+      std::erase_if(code, [&](const auto& entry) { return entry.first >= start && entry.first < end; });
+      invalidated.emplace_back(start, end);
+    }
+    invalid_ranges.clear();
   }
   uint64_t GetPC() const { return pc; }
+  uint64_t GetSP() const { return sp; }
   uint64_t GetRegister(size_t index) const { return registers.at(index); }
   void SetRegister(size_t index, uint64_t value) { registers.at(index) = value; }
 };
@@ -140,10 +206,14 @@ extern "C" void gesher_guest_entry_shim() { std::abort(); }
 
 namespace fixture {
 constexpr int kSigSys = 31;
+constexpr int kSigIll = gesher_arm64::kSigIll;
 const gesher_arm64_host* g_host = nullptr;
 thread_local int t_guest_running = 0;
 std::shared_mutex g_host_pages_mutex;
 std::unordered_map<uintptr_t, bool> g_host_pages;
+// translator.h declares these in gesher_arm64; the protection section defines them here.
+void ForgetGuestProtection(const void* start, size_t size);
+void AddGuestCode(const void* start, size_t size);
 @FENV@
 @PROFILE@
 @REGISTRY@
@@ -152,6 +222,7 @@ std::unordered_map<uintptr_t, bool> g_host_pages;
 @RETIRE@
 @CLASSIFY@
 @BINDINGS@
+@PROTECTION@
 @COUNTERS@
 
 // Adapter around the real dispatch/SVC/Attach methods. Host ABI marshalling
@@ -170,12 +241,20 @@ class Env final : public A64::UserCallbacks {
   bool used_before_ = false, event_ = false;
   std::vector<std::unique_ptr<A64::Jit>> jits_;
   std::vector<uint64_t> code_generations_;
+  std::vector<std::unique_ptr<JitCode>> code_;  // registered, as in production
+  uint64_t icache_line_ = 64;
+  uintptr_t icache_start_ = 0, icache_end_ = 0;
+  std::vector<int64_t> code_epochs_;  // a ptrace tracer's writes seen (ADR 0093)
   std::atomic<A64::Jit*> running_jit_{nullptr};
+  std::atomic<bool> signal_interrupt_{false};
   std::atomic<uint64_t> last_syscall_{0};
   ThreadCounters counters_;
   std::function<void(A64::Jit*, void*, int, int)> host_call;
   Env() { REQUIRE(tls_block_ != nullptr); }
   ~Env() override {
+    for (auto& code : code_) UnregisterJit(code.get());
+    code_.clear();
+    jits_.clear();
     UnattachForTest();
     REQUIRE(VirtualFree(tls_block_, 0, MEM_RELEASE));
   }
@@ -187,6 +266,12 @@ class Env final : public A64::UserCallbacks {
     while (jits_.size() <= depth) {
       jits_.push_back(std::make_unique<A64::Jit>());
       code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
+      code_.push_back(std::make_unique<JitCode>(jits_.back().get()));
+      RegisterJit(code_.back().get());
+      // Production MemoryReadCode marks the page before it reads guest code.
+      JitCode* code = code_.back().get();
+      jits_.back()->read_code = [code](uintptr_t page) { code->MarkTranslated(page); };
+      code_epochs_.push_back(ExternalEpoch());
     }
     return jits_[depth].get();
   }
@@ -204,6 +289,7 @@ class Env final : public A64::UserCallbacks {
     host_call(jit, fn, index, pointer_variadic_fixed);
   }
 @ATTACH@
+@ICACHE@
 @CALLSVC@
 @DISPATCH@
   PendingHostCall pending_call_;
@@ -326,6 +412,143 @@ void TestNestedAndPooledDispatch() {
   REQUIRE(VirtualFree(image, 0, MEM_RELEASE));
   ApiUnbindHostFunction(reinterpret_cast<void*>(&NestedHost));
   std::puts("PASS ARM64 pending rollback: paused outer dispatch and pooled Jits refresh safely after remapping");
+}
+
+using Dynarmic::HaltReason;
+bool Halted(A64::Jit* jit, HaltReason reason) {
+  return Dynarmic::Has(static_cast<HaltReason>(jit->halt.load()), reason);
+}
+
+void TestGuestCodeInvalidation() {
+  auto* image = static_cast<uint32_t*>(
+      VirtualAlloc(nullptr, 2 * kPage, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+  REQUIRE(image != nullptr);
+  const uintptr_t base = reinterpret_cast<uintptr_t>(image);
+  uint32_t* other = image + kPage / sizeof(uint32_t);
+  image[0] = 17;
+  *other = 5;
+  AddRegion(base, 2 * kPage);
+  auto* trampoline = static_cast<uint32_t*>(BindHost(reinterpret_cast<void*>(&NestedHost), -1));
+  REQUIRE(trampoline != nullptr);
+  const uint32_t service = (trampoline[0] >> 5) & 0xffff;
+  Env env, idle;
+  // idle translated only the second page: a write to the first never halts it.
+  idle.Dispatch(0, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(other) == 5); });
+  A64::Jit* idle_jit = idle.jits_[0].get();
+
+  // A running Jit: IC IVAU lines wait for the ISB, which halts it at the block
+  // end; RunGuest continues the guest (no host call) with the new code.
+  unsigned runs = 0;
+  env.Dispatch(0, [&](A64::Jit& jit) {
+    switch (runs++) {
+      case 0:
+        REQUIRE(jit.Instruction(image) == 17);
+        image[0] = 23;  // an inline hook the guest places
+        REQUIRE(jit.Instruction(image) == 17);
+        env.InstructionCacheOperationRaised(A64::InstructionCacheOperation::InvalidateByVAToPoU, base + 4);
+        REQUIRE(jit.QueuedRanges() == 0 && !Halted(&jit, HaltReason::CacheInvalidation));
+        env.InstructionSynchronizationBarrierRaised();
+        REQUIRE(jit.QueuedRanges() == 1 && Halted(&jit, HaltReason::CacheInvalidation));
+        return;
+      case 1:
+        REQUIRE(jit.Instruction(image) == 23);
+        env.CallSVC(kReturnSvc);
+        return;
+      default:
+        REQUIRE(false);
+    }
+  });
+  A64::Jit* outer = env.jits_[0].get();
+  REQUIRE(runs == 2 && outer->clear_count == 0 && outer->invalidated.size() == 1);
+  REQUIRE(outer->invalidated[0].first == base && outer->invalidated[0].second == base + 64);
+  REQUIRE(idle_jit->halt.load() == 0 && idle_jit->QueuedRanges() == 0 && idle_jit->invalidated.empty());
+
+  // A Jit paused under a host call keeps another thread's invalidation queued
+  // and applies it before it dispatches again; a pending-load rollback during
+  // the same host call still clears the whole cache at that dispatch.
+  unsigned callbacks = 0;
+  runs = 0;
+  env.host_call = [&](A64::Jit* jit, void*, int, int) {
+    REQUIRE(jit == outer && !outer->running);
+    if (callbacks++ == 0) {
+      std::thread writer([&] {
+        image[0] = 31;
+        idle.InstructionCacheOperationRaised(A64::InstructionCacheOperation::InvalidateByVAToPoU, base);
+        idle.FlushIcache();
+      });
+      writer.join();
+      REQUIRE(outer->QueuedRanges() == 1 && Halted(outer, HaltReason::CacheInvalidation));
+      REQUIRE(idle_jit->QueuedRanges() == 0);
+    } else {
+      image[0] = 37;
+      idle.InstructionCacheOperationRaised(A64::InstructionCacheOperation::InvalidateByVAToPoU, base);
+      idle.FlushIcache();
+      REQUIRE(outer->QueuedRanges() == 1);
+      ApiRemoveCode(image, 2 * kPage);
+      AddRegion(base, 2 * kPage);
+    }
+  };
+  const unsigned clears = outer->clear_count;
+  const size_t applied = outer->invalidated.size();
+  env.Dispatch(0, [&](A64::Jit& jit) {
+    switch (runs++) {
+      case 0:
+        REQUIRE(jit.Instruction(image) == 23);
+        env.CallSVC(service);
+        return;
+      case 1:
+        REQUIRE(jit.Instruction(image) == 31);
+        env.CallSVC(service);
+        return;
+      case 2:
+        REQUIRE(jit.Instruction(image) == 37);
+        env.CallSVC(kReturnSvc);
+        return;
+      default:
+        REQUIRE(false);
+    }
+  });
+  REQUIRE(callbacks == 2 && runs == 3 && outer->clear_count == clears + 1);
+  REQUIRE(outer->invalidated.size() == applied + 1 && outer->QueuedRanges() == 0);
+  REQUIRE(env.code_generations_[0] == g_code_generation.load());
+
+  // Guest protection: mapping R-X drops translations; an mprotect that keeps
+  // pages R-X does not; one after the pages were writable does. A rolled-back
+  // load forgets the guest's protection, so its address is not clean later.
+  const auto queued = [&] { return outer->QueuedRanges(); };
+  const auto drain = [&] {
+    env.Dispatch(0, [&](A64::Jit& jit) { REQUIRE(jit.Instruction(image) == image[0]); });
+    REQUIRE(queued() == 0);
+  };
+  drain();
+  GuestProtectionChanged(image, kPage, true, false, true);
+  REQUIRE(queued() == 1);
+  drain();
+  GuestProtectionChanged(image, kPage, true, false, false);
+  REQUIRE(queued() == 0 && !Halted(outer, HaltReason::CacheInvalidation));
+  GuestProtectionChanged(image, kPage, false, true, false);
+  GuestProtectionChanged(image, kPage, true, false, false);
+  REQUIRE(queued() == 1);
+  drain();
+  GuestProtectionChanged(image, kPage, true, false, false);
+  REQUIRE(queued() == 0 && !g_clean_exec.empty());
+  ApiRemoveCode(image, 2 * kPage);
+  REQUIRE(g_clean_exec.empty());
+  AddRegion(base, 2 * kPage);
+  drain();
+  GuestProtectionChanged(image, kPage, true, false, false);
+  REQUIRE(queued() == 1);
+  drain();
+  // The second page reaches only idle, the Jit that translated it.
+  GuestProtectionChanged(other, kPage, false, true, false);
+  GuestProtectionChanged(other, kPage, true, false, false);
+  REQUIRE(queued() == 0 && idle_jit->QueuedRanges() == 1);
+
+  ApiRemoveCode(image, 2 * kPage);
+  REQUIRE(g_clean_exec.empty());
+  REQUIRE(VirtualFree(image, 0, MEM_RELEASE));
+  ApiUnbindHostFunction(reinterpret_cast<void*>(&NestedHost));
+  std::puts("PASS ARM64 pending rollback: IC IVAU/ISB and protection changes reach only Jits that translated the code; rollback still clears and forgets protection");
 }
 
 void TestTrampolineReuse() {
@@ -507,6 +730,7 @@ void TestPreparedAttach() {
 
 void Cleanup() {
   REQUIRE(g_tls_blocks.empty());
+  REQUIRE(g_live_jits.empty() && g_clean_exec.empty());
   g_entries.clear();
   g_free_entries.clear();
   g_regions.clear();
@@ -527,6 +751,7 @@ int main() {
   fixture::TestTls();
   fixture::TestClassificationAndEntries();
   fixture::TestNestedAndPooledDispatch();
+  fixture::TestGuestCodeInvalidation();
   fixture::TestTrampolineReuse();
   fixture::TestSvcSnapshot();
   fixture::TestAttachAfterRollback();
