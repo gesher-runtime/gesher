@@ -145,6 +145,10 @@ jobs:
             cp "$llvm/sysroot/usr/lib/$triple/libc++_shared.so" "$o/"
             "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
               -o "$o/libcxx2_test" tests/native2/libcxx2_test.cpp
+            # Linked against Android's libstdc++.so, not libc++: its fatal paths.
+            "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
+              -fno-exceptions -fno-rtti -nostdlib++ -o "$o/libstdcxx_fatal_test" \
+              tests/native2/libstdcxx_fatal_test.cpp "$llvm/sysroot/usr/lib/$triple/29/libstdc++.so"
             "$llvm/bin/${triple}29-clang++" -std=c++20 -O2 -fstack-protector-strong -Wall -Werror \
               -o "$o/net4_ifaddrs_test" tests/native2/net4_ifaddrs_main.cpp
             "$llvm/bin/${triple}29-clang++" -std=c++20 -shared -fPIC -O2 -fstack-protector-strong -Wall -Werror \
@@ -229,6 +233,7 @@ jobs:
             sets=()
             for exe in zlib_example zlib_minigzip pngtest tjunittest sqlite3 openssl; do sets+=("$exe=$o/$exe"); done
             sets+=("libcxx2=$o/libcxx2_test,$o/libc++_shared.so")
+            sets+=("libstdcxx_fatal=$o/libstdcxx_fatal_test")
             sets+=("native2=$o/libnative2.so,$o/libnative2_helper.so,$o/libc++_shared.so")
             sets+=("net4resolver=$o/net4_resolver_test,$o/libnet4resolver.so")
             sets+=("net-dns=$o/net_dns_wire")
