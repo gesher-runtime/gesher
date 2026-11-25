@@ -51,6 +51,12 @@ def main() -> int:
         if source.count(include) != 1:
             raise ValueError("platform include changed: " + include)
         source = source.replace(include, "")
+    # Optional only for --source-ref controls predating storage policy. The
+    # fixture supplies an explicit granted boundary, like its Win32 adapters.
+    policy_include = '#include "storage_policy.h"\n'
+    if source.count(policy_include) > 1:
+        raise ValueError("storage policy include is ambiguous")
+    source = source.replace(policy_include, "")
     host = (ROOT / "tests/native/inotify_write_routing_host.cc.in").read_text()
     pieces = {
         "INOTIFY_SOURCE": source,

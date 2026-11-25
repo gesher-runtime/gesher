@@ -487,6 +487,16 @@ Check 'services: runtime permission denial, rationale, fixed retry policy and ow
   $permissionStateOut
 } @('RuntimePermissionStateTest all passed:', ' checks; binder=true')
 
+# Production foreground-service permission/type admission through generated AM parcels.
+# Parsed APK metadata and the notification display sink are isolated fixture boundaries.
+$foregroundAdmissionOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ForegroundServiceAdmissionTest') 90
+$foregroundAdmissionCode = $LASTEXITCODE
+Check 'services: foreground-service manifest permission and type admission' {
+  $global:LASTEXITCODE = $foregroundAdmissionCode
+  $foregroundAdmissionOut
+} @('ForegroundServiceAdmissionTest all passed:', 'checks; binder=true')
+
 # Real UID grant decisions and the production AudioRecord/MediaRecorder JNI errors.
 . "$PSScriptRoot/../helpers/FixturePermissions.ps1"
 $audioAdmissionData = Join-Path $root 'audio-recording-admission'
@@ -835,3 +845,19 @@ Check 'framework: SpeechRecognizer connection callback and cancellation contract
   $global:LASTEXITCODE = $recognizerClientCode
   $recognizerClientOut
 } @('SpeechRecognizerConnectionTest all passed:')
+
+$externalStorageOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExternalStorageAccessTest') 60
+$externalStorageCode = $LASTEXITCODE
+Check 'services: MANAGE_EXTERNAL_STORAGE, policy persistence and StorageService.mkdirs' {
+  $global:LASTEXITCODE = $externalStorageCode
+  $externalStorageOut
+} @('ExternalStorageAccessTest passed')
+
+$storagePublicationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExternalStoragePolicyContractTest') 90
+$storagePublicationCode = $LASTEXITCODE
+Check 'services: external storage grant, revoke, publication failures and authenticated directories' {
+  $global:LASTEXITCODE = $storagePublicationCode
+  $storagePublicationOut
+} @('ExternalStoragePolicyContractTest passed:')

@@ -30,6 +30,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1112,6 +1113,65 @@ public final class RuntimePermissionStateTest {
                 "enabled legacy review groups did not clear REVIEW_REQUIRED or publish AppOps");
         retire(h, legacy);
     }
+
+    private interface ReviewChoice { int decide(String owner, String[] groups, boolean[] enabled); }
+
+    private static Object reviewController(Harness h, Executor ordinary, Executor review,
+            ReviewChoice choice) throws Exception {
+        Class<?> decisions = type("PermissionRequests$Decision");
+        Object decision = Proxy.newProxyInstance(decisions.getClassLoader(), new Class<?>[]{decisions},
+                (proxy, method, args) -> method.getName().equals("decideReview")
+                        ? choice.decide((String)args[0], (String[])args[1], (boolean[])args[2]) : DENIED);
+        return make(type("PermissionRequests"),
+                new Class<?>[]{PackageManagerService.class, Executor.class, Executor.class, decisions},
+                h.pm, ordinary, review, decision);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.concurrent.CompletableFuture<Boolean> review(Object controller,
+            ApkPackage target) throws Exception {
+        return (java.util.concurrent.CompletableFuture<Boolean>)call(controller, "reviewPermissions",
+                new Class<?>[]{ApkPackage.class}, target);
+    }
+
+    /** The actual controller's queue and package-generation boundaries, without host dialogs. */
+    private static void legacyReviewCoordinator(Harness h) throws Exception {
+        h.reset();
+        String name = "fixture.permission.legacy.coordinator";
+        ApkPackage old = pkg(name, UID + 23, 22, (byte)11);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, old);
+        List<Runnable> ordinary = new ArrayList<>(), reviews = new ArrayList<>();
+        AtomicInteger prompts = new AtomicInteger();
+        Object requests = reviewController(h, ordinary::add, reviews::add, (owner, groups, enabled) -> {
+            check(name.equals(owner) && groups.length > 0, "review lost its captured package");
+            prompts.incrementAndGet(); return ALLOWED;
+        });
+        var oldFuture = review(requests, old);
+        check(oldFuture == review(requests, old) && reviews.size() == 1,
+                "same-generation launches did not share the pending review");
+        // Ordinary permission work must retain its existing serialized consent queue.
+        Reply ordinaryReply = h.request(requests, CAMERA);
+        check(ordinary.size() == 1 && reviews.size() == 1 && ordinaryReply.count == 0,
+                "runtime consent was moved onto the legacy review executor");
+        ordinary.remove(0).run();
+        check(ordinaryReply.count == 1 && ordinaryReply.grant(0) == DENY,
+                "ordinary permission consent did not finish independently of pending legacy review");
+
+        ApkPackage replacement = pkg(name, old.uid(), 22, (byte)11);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, replacement);
+        var newFuture = review(requests, replacement);
+        check(newFuture != oldFuture && reviews.size() == 2,
+                "replacement joined a review belonging to retired package code");
+        reviews.remove(0).run();
+        check(!oldFuture.get() && !newFuture.isDone() && prompts.get() == 0,
+                "retired review was presented or completed the replacement's launch");
+        reviews.remove(0).run();
+        check(newFuture.get() && prompts.get() == 1
+                && !(Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, replacement),
+                "replacement did not receive and commit its own review");
+        retire(h, replacement);
+        h.reset();
+    }
     private static final class Prompts {
         final List<String> foreground = new ArrayList<>(), background = new ArrayList<>();
     }
@@ -1372,7 +1432,8 @@ public final class RuntimePermissionStateTest {
     public static int run(boolean binderTransport) throws Exception {
         binder = binderTransport; checks = 0;
         Harness harness = new Harness();
-        exemptions(harness); legacyRestricted(harness); legacyReview(harness); decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
+        exemptions(harness); legacyRestricted(harness); legacyReview(harness); legacyReviewCoordinator(harness);
+        decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
         backgroundConsent(harness);
         installerAllowlist(harness);
         concurrentAllowlists(harness);

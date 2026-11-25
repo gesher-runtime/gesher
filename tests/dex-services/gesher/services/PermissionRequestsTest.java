@@ -227,7 +227,7 @@ public final class PermissionRequestsTest {
     }
 
     private static Object legacyPackage(Class<?> apkClass, String name, int uid) throws Exception {
-        Class<?> parsedImpl = Class.forName("com.android.internal.pm.pkg.parsing.PackageImpl");
+        Class<?> parsedImpl = Class.forName("com.android.internal.pm.parsing.pkg.PackageImpl");
         Object parsed = parsedImpl.getMethod("forTesting", String.class, String.class)
                 .invoke(null, name, "/fixture/" + name + "/base.apk");
         parsedImpl.getMethod("setEnabled", boolean.class).invoke(parsed, true);
@@ -238,7 +238,7 @@ public final class PermissionRequestsTest {
                 Class.forName("com.android.internal.pm.pkg.component.ParsedUsesPermission"));
         addUses.invoke(parsed, usesCtor.newInstance(LOCATION, 0, Collections.emptySet()));
         addUses.invoke(parsed, usesCtor.newInstance(CAMERA, 0, Collections.emptySet()));
-        Class<?> parsedPkg = Class.forName("com.android.internal.pm.pkg.parsing.ParsedPackage");
+        Class<?> parsedPkg = Class.forName("com.android.internal.pm.parsing.pkg.ParsedPackage");
         Constructor<?> ctor = apkClass.getDeclaredConstructor(String.class, parsedPkg);
         ctor.setAccessible(true);
         Object apk = ctor.newInstance("/fixture/" + name + "/base.apk", parsed);

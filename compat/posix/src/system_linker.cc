@@ -348,8 +348,36 @@ std::wstring HashName() {
 struct Identity {
   bool known = false;
   std::wstring path;
-  DWORD volume = 0, high = 0, low = 0;
+  FILE_ID_INFO id = {};
 };
+
+// The file's identity: FileIdInfo (64-bit volume serial number, 128-bit file
+// ID, unique on ReFS and Dev Drives too); on a file system without it (FAT),
+// the 32-bit serial number and 64-bit index widened to that form. A handle
+// without access to attributes (opened with no access) is reopened for them.
+bool QueryId(HANDLE h, FILE_ID_INFO* id) {
+  if (GetFileInformationByHandleEx(h, FileIdInfo, id, sizeof(*id))) return true;
+  BY_HANDLE_FILE_INFORMATION info;
+  if (GetFileInformationByHandle(h, &info)) {
+    *id = {};
+    id->VolumeSerialNumber = info.dwVolumeSerialNumber;
+    const uint64_t index = (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+    std::memcpy(id->FileId.Identifier, &index, sizeof(index));
+    return true;
+  }
+  if (GetLastError() != ERROR_ACCESS_DENIED) return false;
+  HANDLE again = ReOpenFile(h, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            FILE_FLAG_BACKUP_SEMANTICS);
+  if (again == INVALID_HANDLE_VALUE) return false;
+  const bool ok = QueryId(again, id);
+  CloseHandle(again);
+  return ok;
+}
+
+bool SameId(const FILE_ID_INFO& a, const FILE_ID_INFO& b) {
+  return a.VolumeSerialNumber == b.VolumeSerialNumber &&
+         std::memcmp(a.FileId.Identifier, b.FileId.Identifier, sizeof(a.FileId.Identifier)) == 0;
+}
 std::mutex g_identity_mutex;
 bool g_identity_probed = false;
 Identity g_identity;
@@ -359,12 +387,10 @@ void LearnLocked(const std::wstring& path) {
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                          OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
   if (h == INVALID_HANDLE_VALUE) return;
-  BY_HANDLE_FILE_INFORMATION info;
-  if (GetFileInformationByHandle(h, &info)) {
+  FILE_ID_INFO id;
+  if (QueryId(h, &id)) {
     g_identity.known = true;
-    g_identity.volume = info.dwVolumeSerialNumber;
-    g_identity.high = info.nFileIndexHigh;
-    g_identity.low = info.nFileIndexLow;
+    g_identity.id = id;
     std::wstring final(32768, L'\0');
     DWORD n = GetFinalPathNameByHandleW(h, final.data(), static_cast<DWORD>(final.size()),
                                         FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -377,12 +403,13 @@ void LearnLocked(const std::wstring& path) {
 }
 
 // The identity, from File() when this process used the name, otherwise from
-// the file where File() would put it, looked up once without writing it (a
-// process that never used the name and finds no file has nothing to protect).
+// the file where File() would put it, looked up without writing it: once, or
+// again when `reprobe` (a write refused for sharing, which a process holding
+// the file causes) and it was not found before.
 template <typename F>
-bool WithIdentity(F f) {
+bool WithIdentity(F f, bool reprobe = false) {
   std::lock_guard<std::mutex> lock(g_identity_mutex);
-  if (!g_identity.known && !g_identity_probed) {
+  if (!g_identity.known && (!g_identity_probed || reprobe)) {
     g_identity_probed = true;
     if (g_file_ready.load(std::memory_order_acquire)) {
       if (!g_file.empty()) LearnLocked(g_file);
@@ -479,25 +506,23 @@ bool IsFile(const std::wstring& windows) {
   });
 }
 
-bool IsFileInfo(const BY_HANDLE_FILE_INFORMATION& info) {
-  return WithIdentity([&](const Identity& id) {
-    return info.dwVolumeSerialNumber == id.volume && info.nFileIndexHigh == id.high &&
-           info.nFileIndexLow == id.low;
-  });
+bool IsFileHandle(HANDLE h, bool reprobe) {
+  if (h == nullptr || h == INVALID_HANDLE_VALUE || GetFileType(h) != FILE_TYPE_DISK) return false;
+  // Most handles are not the file: only query one when there is a file.
+  if (!WithIdentity([](const Identity&) { return true; }, reprobe)) return false;
+  FILE_ID_INFO id;
+  if (!QueryId(h, &id)) return false;
+  return WithIdentity([&](const Identity& known) { return SameId(id, known.id); });
 }
 
-bool IsFileHandle(HANDLE h) {
-  BY_HANDLE_FILE_INFORMATION info;
-  return h != nullptr && h != INVALID_HANDLE_VALUE && GetFileType(h) == FILE_TYPE_DISK &&
-         GetFileInformationByHandle(h, &info) && IsFileInfo(info);
-}
-
-bool IsFilePath(const std::wstring& windows) {
+bool IsFilePath(const std::wstring& windows, bool follow, bool reprobe) {
   HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+                         OPEN_EXISTING,
+                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
+                         nullptr);
   if (h == INVALID_HANDLE_VALUE) return false;
-  const bool is = IsFileHandle(h);
+  const bool is = IsFileHandle(h, reprobe);
   CloseHandle(h);
   return is;
 }

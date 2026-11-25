@@ -940,7 +940,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         } }
         // Process retirement and notifications run outside the PM and policy monitors.
         if (changed) permissionsChanged(expected, () -> killOnRevoke && revoked.stream()
-                .anyMatch(name -> !granted(name, expected.packageName)));
+                .anyMatch(name -> !granted(name, expected.packageName)),
+                ExternalStorageAccess.isStoragePermission(background));
     }
 
     /**
@@ -964,7 +965,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             scheduleWrite();
             publishRuntimeModes(expected.uid(), before);
         } }
-        permissionsChanged(expected, () -> false);
+        permissionsChanged(expected, () -> false, ExternalStorageAccess.isStoragePermission(background));
     }
 
     /**
@@ -994,7 +995,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         if (!commitUserDecision(expected, permissions, allowed, false, false, new ArrayList<>())) return;
         // Every changed permission was still denied at commit time. In particular,
         // an old dialog cannot revoke a grant that another controller just made.
-        permissionsChanged(expected, () -> false);
+        permissionsChanged(expected, () -> false,
+                permissions.stream().anyMatch(ExternalStorageAccess::isStoragePermission));
     }
 
     /** A logical runtime permission group awaiting legacy permission review. */
@@ -1191,22 +1193,32 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             publishRuntimeModes(installed.uid(), before);
         } }
         if (killOnRevoke) permissionChanged(installed, permission, wasGranted);
-        else permissionsChanged(installed, () -> false);
+        else permissionsChanged(installed, () -> false, ExternalStorageAccess.isStoragePermission(permission));
     }
 
     private void permissionChanged(ApkPackage installed, String permission, boolean wasGranted) {
-        permissionsChanged(installed, () -> wasGranted && !granted(permission, installed.packageName));
+        permissionsChanged(installed, () -> wasGranted && !granted(permission, installed.packageName),
+                ExternalStorageAccess.isStoragePermission(permission));
     }
 
     private void permissionsChanged(ApkPackage installed, java.util.function.BooleanSupplier stillRevoked) {
+        permissionsChanged(installed, stillRevoked, true);
+    }
+
+    private void permissionsChanged(ApkPackage installed, java.util.function.BooleanSupplier stillRevoked,
+            boolean storageChanged) {
         invalidateCaches();
-        NotificationManagerService notifications = NotificationManagerService.sLast;
-        if (notifications != null) for (ApkPackage member : uidMembers(installed.uid())) {
-            notifications.permissionChanged(member.packageName);
-        }
-        Services.Created services = Services.sLast;
-        if (services != null && services.pm == mPm && stillRevoked.getAsBoolean()) {
-            services.atm.killUidForPermissionChange(installed, stillRevoked);
+        try {
+            if (storageChanged) ExternalStorageAccess.syncUid(mPm, installed.uid());
+        } finally {
+            NotificationManagerService notifications = NotificationManagerService.sLast;
+            if (notifications != null) for (ApkPackage member : uidMembers(installed.uid())) {
+                notifications.permissionChanged(member.packageName);
+            }
+            Services.Created services = Services.sLast;
+            if (services != null && services.pm == mPm && stillRevoked.getAsBoolean()) {
+                services.atm.killUidForPermissionChange(installed, stillRevoked);
+            }
         }
     }
 
@@ -1339,6 +1351,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             if (changed) { scheduleWrite(); publishRuntimeModes(uid, before); }
         } }
         invalidateCaches();
+        if (ExternalStorageAccess.isStorageOp(switchOp)) ExternalStorageAccess.syncUid(mPm, uid);
         return true;
     }
 

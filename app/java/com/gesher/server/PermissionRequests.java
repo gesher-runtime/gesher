@@ -12,14 +12,17 @@ import android.content.res.Resources;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -62,14 +65,14 @@ final class PermissionRequests {
     private final Executor mReviewExecutor;
     private final Decision mDecision;
     private final Set<String> mPending = new HashSet<>();
-    private final Map<String, CompletableFuture<Boolean>> mPendingReviews = new HashMap<>();
+    private final Map<ApkPackage, CompletableFuture<Boolean>> mPendingReviews = new IdentityHashMap<>();
 
     PermissionRequests(PackageManagerService pm) {
         this(pm, Executors.newSingleThreadExecutor(r -> {
             Thread thread = new Thread(r, "permission-consent");
             thread.setDaemon(true);
             return thread;
-        }), Executors.newCachedThreadPool(r -> {
+        }), new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(16), r -> {
             Thread thread = new Thread(r, "permission-review");
             thread.setDaemon(true);
             return thread;
@@ -183,7 +186,7 @@ final class PermissionRequests {
             return true;
         }
         try {
-            mReviewExecutor.execute(() -> {
+            mExecutor.execute(() -> {
                 try {
                     chooseBackground(policy, captured, background, true, BackgroundMode.SETTINGS);
                 } catch (RuntimeException e) {
@@ -203,7 +206,7 @@ final class PermissionRequests {
 
     /**
      * Run the pre-launch permission review for a legacy package off ATM/PM/Binder locks.
-     * Concurrent launch attempts for the same package share the in-flight future without
+     * Concurrent launch attempts for the same installed generation share the in-flight future without
      * showing duplicate dialogs. Completes with {@code true} only when the user confirms
      * (or no review remains pending) and the package generation is still current.
      */
@@ -211,10 +214,10 @@ final class PermissionRequests {
         if (captured == null) throw new IllegalArgumentException("Invalid review request");
         CompletableFuture<Boolean> future;
         synchronized (mPendingReviews) {
-            CompletableFuture<Boolean> existing = mPendingReviews.get(captured.packageName);
+            CompletableFuture<Boolean> existing = mPendingReviews.get(captured);
             if (existing != null) return existing;
             future = new CompletableFuture<>();
-            mPendingReviews.put(captured.packageName, future);
+            mPendingReviews.put(captured, future);
         }
         try {
             mReviewExecutor.execute(() -> {
@@ -238,7 +241,7 @@ final class PermissionRequests {
                                 if (enabled[i]) kept.add(groups.get(i).groupName());
                             }
                             policy.recordPermissionReview(captured, kept);
-                            proceed = current(captured);
+                            proceed = current(captured) && !policy.isReviewRequired(captured);
                         }
                     }
                 } catch (RuntimeException e) {
@@ -246,14 +249,14 @@ final class PermissionRequests {
                             + ": " + e.getClass().getSimpleName());
                 } finally {
                     synchronized (mPendingReviews) {
-                        mPendingReviews.remove(captured.packageName, future);
+                        mPendingReviews.remove(captured, future);
                     }
                     future.complete(proceed);
                 }
             });
         } catch (RuntimeException e) {
             synchronized (mPendingReviews) {
-                mPendingReviews.remove(captured.packageName, future);
+                mPendingReviews.remove(captured, future);
             }
             future.complete(false);
             throw e;
@@ -269,13 +272,13 @@ final class PermissionRequests {
             PermissionGroupInfo groupInfo = policy.getPermissionGroupInfo(group.groupName(), 0);
             if (groupInfo != null && "android".equals(groupInfo.packageName) && groupInfo.labelRes != 0) {
                 try { label = Resources.getSystem().getText(groupInfo.labelRes); }
-                catch (Resources.NotFoundException | RuntimeException ignored) { }
+                catch (RuntimeException ignored) { }
             }
             if (label == null && !group.permissions().isEmpty()) {
                 PermissionInfo permInfo = policy.getPermissionInfo(group.permissions().get(0), "android", 0);
                 if (permInfo != null && "android".equals(permInfo.packageName) && permInfo.labelRes != 0) {
                     try { label = Resources.getSystem().getText(permInfo.labelRes); }
-                    catch (Resources.NotFoundException | RuntimeException ignored) { }
+                    catch (RuntimeException ignored) { }
                 }
             }
             labels[i] = label != null
@@ -304,7 +307,7 @@ final class PermissionRequests {
             return;
         }
         try {
-            mReviewExecutor.execute(() -> {
+            mExecutor.execute(() -> {
                 int[] grants = new int[names.length];
                 Arrays.fill(grants, PackageManager.PERMISSION_DENIED);
                 try {

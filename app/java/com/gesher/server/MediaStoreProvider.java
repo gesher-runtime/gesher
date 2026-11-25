@@ -417,28 +417,14 @@ final class MediaStoreProvider extends ContentProvider {
             @Override public String[] sharedPackages() {
                 if (system) return new String[] {packageName};
                 String[] packages = mPm.getPackagesForUid(uid);
-                return packages == null || packages.length == 0 ? new String[] {packageName} : packages;
+                if (packages == null) return new String[0];
+                return java.util.Arrays.stream(packages)
+                        .filter(name -> !mPm.isRemovalPending(name))
+                        .toArray(String[]::new);
             }
             @Override public int targetSdk() { return system ? Build.VERSION.SDK_INT : app.targetSdkVersion; }
             @Override public boolean permission(String permission) {
-                if (system) return true;
-                if (MediaStoreIndex.MANAGE_EXTERNAL_STORAGE.equals(permission)) {
-                    // An app-op permission: PermissionChecker consults the op, and the
-                    // grant only for MODE_DEFAULT.
-                    if (!ConnectivityService.requests(pkg, permission)) return false;
-                    int mode = mPm.appOps().checkOperation(
-                            AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, uid, packageName);
-                    return mode == AppOpsManager.MODE_ALLOWED || (mode == AppOpsManager.MODE_DEFAULT
-                            && granted(permission));
-                }
-                if (MediaStoreIndex.ACCESS_MEDIA_OWNER_PACKAGE_NAME.equals(permission)) {
-                    return false; // signature|privileged in the MediaProvider module
-                }
-                return granted(permission);
-            }
-            private boolean granted(String permission) {
-                return mPm.permissions().checkUidPermission(uid, permission, 0)
-                        == PackageManager.PERMISSION_GRANTED;
+                return system || hasEffectivePermission(mPm, pkg, permission);
             }
             @Override public int opMode(String op) {
                 if (system) return AppOpsManager.MODE_ALLOWED;
@@ -463,6 +449,30 @@ final class MediaStoreProvider extends ContentProvider {
                 return mPm.getVisibleSearchPackage(uid, packageName, owner) != null;
             }
         };
+    }
+
+    /** PermissionChecker-style permission state, including runtime AppOps restrictions. */
+    static boolean hasEffectivePermission(PackageManagerService pm, ApkPackage pkg, String permission) {
+        int uid = pkg.uid();
+        if (MediaStoreIndex.MANAGE_EXTERNAL_STORAGE.equals(permission)) {
+            // App-op permissions consult the grant only when the op is MODE_DEFAULT.
+            if (!ConnectivityService.requests(pkg, permission)) return false;
+            int mode = pm.appOps().checkOperation(
+                    AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, uid, pkg.packageName);
+            return mode == AppOpsManager.MODE_ALLOWED || (mode == AppOpsManager.MODE_DEFAULT
+                    && pm.permissions().checkUidPermission(uid, permission, 0)
+                            == PackageManager.PERMISSION_GRANTED);
+        }
+        if (MediaStoreIndex.ACCESS_MEDIA_OWNER_PACKAGE_NAME.equals(permission)) {
+            return false; // signature|privileged in the MediaProvider module
+        }
+        if (pm.permissions().checkUidPermission(uid, permission, 0)
+                != PackageManager.PERMISSION_GRANTED) return false;
+        int op = AppOpsManager.permissionToOpCode(permission);
+        // A runtime grant can remain set after AppOps revocation. Use the effective
+        // operation so legacy collection access and failed storage publication deny it too.
+        return op == AppOpsManager.OP_NONE || pm.appOps().checkOperation(op, uid, pkg.packageName)
+                == AppOpsManager.MODE_ALLOWED;
     }
 
     private final class Host implements MediaStoreIndex.Host {
