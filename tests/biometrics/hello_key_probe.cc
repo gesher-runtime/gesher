@@ -13,6 +13,10 @@
 //   hello_key_probe cancel      creates a key, starts a signature and cancels it from
 //                               the "app" after 3 s, deletes the key
 //
+// A nonzero exit means a required result failed. In cancel mode also observe that
+// Windows dismisses its prompt: Await may abandon a request after its grace period,
+// so a canceled result alone does not prove the native UI disappeared.
+//
 // The wrapping here (SHA-256 of the signature as an AES-256-GCM key) only shows the
 // property; production derives and uses its keys in KeystoreAuthorization.java.
 // Not run in CI: every mode but "supported" needs a person at the machine.
@@ -23,6 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <atomic>
 #include <string>
 #include <thread>
 #include <vector>
@@ -59,12 +64,17 @@ static void Pump() {
 }
 
 // Waits for the operation while the window stays alive; cancels after cancelMs (0: never).
-static int Run(hello_key::Operation* o, std::vector<uint8_t>* bytes, DWORD cancelMs) {
-  int status = -100;
+static int Run(hello_key::Operation* o, std::vector<uint8_t>* bytes, DWORD cancelMs,
+               bool* appCanceled = nullptr) {
+  int status = hello_key::kFailed;
+  std::atomic<bool> completed{false};
   DWORD started = GetTickCount();
-  std::thread waiter([&] { status = hello_key::Await(o, bytes); });
+  std::thread waiter([&] {
+    status = hello_key::Await(o, bytes);
+    completed.store(true, std::memory_order_release);
+  });
   bool canceled = false;
-  while (status == -100) {
+  while (!completed.load(std::memory_order_acquire)) {
     Pump();
     if (cancelMs != 0 && !canceled && GetTickCount() - started > cancelMs) {
       printf("app cancels after %lu ms\n", (unsigned long)cancelMs);
@@ -76,6 +86,7 @@ static int Run(hello_key::Operation* o, std::vector<uint8_t>* bytes, DWORD cance
   }
   waiter.join();
   hello_key::Release(o);
+  if (appCanceled != nullptr) *appCanceled = canceled;
   return status;
 }
 
@@ -157,6 +168,11 @@ static bool Gcm(bool encrypt, const uint8_t key[32], const std::vector<uint8_t>&
 
 int main(int argc, char** argv) {
   const char* mode = argc > 1 ? argv[1] : "supported";
+  if (strcmp(mode, "supported") != 0 && strcmp(mode, "run") != 0 &&
+      strcmp(mode, "cancel") != 0) {
+    fprintf(stderr, "usage: hello_key_probe [supported|run|cancel]\n");
+    return 1;
+  }
   HRESULT hr = S_OK;
   int supported = hello_key::Supported(&hr);
   printf("supported=%d hr=0x%08lx\n", supported, (unsigned long)hr);
@@ -167,6 +183,10 @@ int main(int argc, char** argv) {
   }
 
   HWND w = MakeWindow();
+  if (w == nullptr) {
+    fprintf(stderr, "could not create the probe window\n");
+    return 3;
+  }
   for (int i = 0; i < 20 && GetForegroundWindow() != w; i++) {
     Pump();
     Sleep(50);
@@ -179,7 +199,10 @@ int main(int argc, char** argv) {
                    &publicKey, 0);
   printf("create: %d (%s), public key %zu bytes\n", status, StatusName(status),
          publicKey.size());
-  if (status != hello_key::kSuccess) return 3;
+  if (status != hello_key::kSuccess) {
+    DestroyWindow(w);
+    return 3;
+  }
   std::vector<uint8_t> opened;
   status = hello_key::Open(name.data(), name.size(), &opened, &hr);
   printf("open: %d (%s), same public key: %s\n", status, StatusName(status),
@@ -187,13 +210,20 @@ int main(int argc, char** argv) {
 
   const std::vector<uint8_t> message = {'G', 'e', 's', 'h', 'e', 'r', ' ', 'p', 'r', 'o', 'b', 'e'};
   int exitCode = 0;
-  if (strcmp(mode, "cancel") == 0) {
+  if (publicKey.empty() || status != hello_key::kSuccess || opened != publicKey) {
+    exitCode = 3;
+  } else if (strcmp(mode, "cancel") == 0) {
     SetForegroundWindow(w);
     std::vector<uint8_t> none;
+    bool appCanceled = false;
     status = Run(hello_key::StartSign(GetCurrentProcessId(), name.data(), name.size(),
                                       message.data(), message.size()),
-                 &none, 3000);
+                 &none, 3000, &appCanceled);
     printf("canceled sign: %d (%s), %zu bytes\n", status, StatusName(status), none.size());
+    printf("app cancellation issued: %s\n", appCanceled ? "yes" : "no");
+    // 3 is Windows' KeyCredentialStatus::UserCanceled. An early user cancel is
+    // not evidence that the app's cancellation path was exercised.
+    if (!appCanceled || status != 3 || !none.empty()) exitCode = 3;
   } else {
     std::vector<uint8_t> first, second;
     SetForegroundWindow(w);
@@ -209,8 +239,8 @@ int main(int argc, char** argv) {
     if (status == hello_key::kSuccess && status2 == hello_key::kSuccess) {
       bool identical = first == second;
       printf("signatures identical: %s\n", identical ? "yes" : "NO");
-      printf("verifies as PKCS#1 v1.5 SHA-256: %s\n",
-             Verifies(publicKey, message, first, false) ? "yes" : "no");
+      bool pkcs1 = Verifies(publicKey, message, first, false);
+      printf("verifies as PKCS#1 v1.5 SHA-256: %s\n", pkcs1 ? "yes" : "no");
       printf("verifies as PSS SHA-256 (salt 32): %s\n",
              Verifies(publicKey, message, first, true) ? "yes" : "no");
       // Wrap with the first signature, unwrap with the second.
@@ -222,7 +252,7 @@ int main(int argc, char** argv) {
                          Gcm(false, key2, wrapped, &unwrapped, tag) && unwrapped == secret;
       printf("wrap with signature 1: %s; unwrap with signature 2: %s\n",
              wrappedOk ? "ok" : "FAILED", unwrappedOk ? "ok, secret recovered" : "FAILED");
-      if (!identical || !unwrappedOk) exitCode = 4;
+      if (first.empty() || !identical || !pkcs1 || !unwrappedOk) exitCode = 4;
     } else {
       exitCode = 3;
     }
@@ -230,8 +260,11 @@ int main(int argc, char** argv) {
 
   status = hello_key::Delete(name.data(), name.size(), &hr);
   printf("delete: %d (%s)\n", status, StatusName(status));
+  if (status != hello_key::kSuccess && exitCode == 0) exitCode = 5;
   status = hello_key::Open(name.data(), name.size(), &opened, &hr);
   printf("open after delete: %d (%s)\n", status, StatusName(status));
+  // 2 is Windows' KeyCredentialStatus::NotFound; no public bytes may survive.
+  if ((status != 2 || !opened.empty()) && exitCode == 0) exitCode = 5;
   DestroyWindow(w);
   return exitCode;
 }
