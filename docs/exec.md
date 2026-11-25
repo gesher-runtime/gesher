@@ -99,7 +99,10 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 - **`system()`, `popen()`/`pclose()`, `posix_spawn()`/`posix_spawnp()`** (with
   its file actions: open, close, dup2, chdir) run programs directly, no fork
   needed; `system`/`popen` through the launcher's `sh -c`.
-- **`fork()` and `vfork()` return `-1` with `ENOSYS`.** A Windows process
+- **`fork()` and `vfork()` in x86-64 code return `-1` with `ENOSYS`.** In
+  translated arm64 code they, `_Fork` and fork-like raw `clone` make a real
+  child process with `RtlCloneUserProcess`, and `wait4` reports its status
+  ([ADR 0092](decisions/0092-arm64-guest-fork.md)). A Windows process
   cannot provide Android's process clone or vfork lifetime by running a
   purported child inline on its parent's thread. The former inline mechanism,
   shadow descriptor table, synthetic waitable children, fabricated pipe byte
@@ -164,8 +167,8 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   runners in CI 40338806524; the app variant remains pending. Incompatible layouts, text relocations and unsupported
   instruction forms fail or trap explicitly (ADR 0060). Emulated TLS (API
   <29) and library ELF TLS retain their existing paths.
-- Native `fork` and `vfork` are unsupported (`ENOSYS`), including the common
-  fork-then-exec pattern. This affects callers that have no supported spawn
+- Native `fork` and `vfork` in x86-64 code are unsupported (`ENOSYS`),
+  including the common fork-then-exec pattern (arm64 code: ADR 0092). This affects callers that have no supported spawn
   path. No child body runs, no PID is invented, and no pipe data is fabricated.
 - `exec*` currently launches a replacement program and waits in the original
   Windows process. It preserves real descriptor sharing but does not preserve
