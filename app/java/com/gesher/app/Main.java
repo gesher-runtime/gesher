@@ -260,6 +260,10 @@ public final class Main {
                 return application.restart();
             }
             application.install();
+            if (!application.awaitPermissionReview()) {
+                log("permission review canceled or unavailable; startup stopped");
+                return 1;
+            }
             pkg.prepareDataDirectories();
             ApplicationInfo appInfo = pkg.applicationInfo(PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES);

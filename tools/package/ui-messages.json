@@ -96,6 +96,18 @@
       "en": "This app was built for an older version of Android. Choose which permissions it may use:",
       "he": "יישום זה נבנה עבור גרסה ישנה יותר של Android. בחר באילו הרשאות הוא יוכל להשתמש:"
     },
+    "review_permission_adjustable": {
+      "en": "{0} (adjustable permissions)",
+      "he": "{0} (הרשאות הניתנות לשינוי)"
+    },
+    "review_permission_managed_allowed": {
+      "en": "Allowed by system policy",
+      "he": "מאושר לפי מדיניות המערכת"
+    },
+    "review_permission_managed_denied": {
+      "en": "Blocked by system policy",
+      "he": "חסום לפי מדיניות המערכת"
+    },
     "review_permission_confirm": {
       "en": "Continue",
       "he": "המשך"

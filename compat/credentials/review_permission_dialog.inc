@@ -1,21 +1,24 @@
 /* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
 /* Included after permission_dialog.inc (PermissionControl, host theme).
  * Pre-launch permission review for legacy applications (targetSdk < 23):
- * all requested runtime permission groups start enabled and the user may
- * toggle any group off before continuing, or cancel without launching. */
+ * adjustable permission groups can be toggled before continuing. Permissions
+ * enforced by policy show their current state without offering a false choice.
+ * Cancel always leaves the pending application unlaunched. */
 
 enum { REVIEW_PACKAGE = 1401, REVIEW_BRAND = 1402, REVIEW_HEADING = 1403,
        REVIEW_SCROLL = 1404, REVIEW_GROUP_BASE = 1500 };
 // Keep these values in sync with PermissionRequests.java (UNAVAILABLE, DISMISSED, ALLOWED).
 enum { REVIEW_UNAVAILABLE = -1, REVIEW_DISMISSED = 0, REVIEW_ALLOWED = 2 };
-enum { REVIEW_MAX_GROUPS = 32, REVIEW_VISIBLE_ROWS = 8 };
+enum { REVIEW_MAX_GROUPS = 128, REVIEW_VISIBLE_ROWS = 8, REVIEW_MANAGED_VISIBLE_ROWS = 6 };
 
 typedef struct {
   enum GesherUiLanguage language;
   const WCHAR* package_name;
   const WCHAR* const* groups;
   unsigned char* enabled;
+  const unsigned char* changeable;
   int count;
+  int visible_rows;
   int row_height;
   int scroll_pos;
   int max_scroll;
@@ -32,13 +35,12 @@ static void ReviewLayoutRows(HWND dialog, ReviewDialogState* state, int next_pos
   if (next_pos > state->max_scroll) next_pos = state->max_scroll;
   state->scroll_pos = next_pos;
   if (state->scroll_bar) SetScrollPos(state->scroll_bar, SB_CTL, state->scroll_pos, TRUE);
-  int visible_rows = state->count > REVIEW_VISIBLE_ROWS ? REVIEW_VISIBLE_ROWS : state->count;
   int width = state->max_scroll > 0 ? 204 : 218;
   for (int i = 0; i < state->count; ++i) {
     HWND box = GetDlgItem(dialog, REVIEW_GROUP_BASE + i);
     if (!box) continue;
     int row = i - state->scroll_pos;
-    if (row >= 0 && row < visible_rows) {
+    if (row >= 0 && row < state->visible_rows) {
       RECT r = {16, 128 + row * state->row_height, 16 + width, 128 + (row + 1) * state->row_height};
       MapDialogRect(dialog, &r);
       SetWindowPos(box, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
@@ -68,26 +70,42 @@ static BOOL ReviewCreateControls(HWND dialog, ReviewDialogState* state) {
       GesherUiText(state->language, "review_permission_requested"), alignment, -1, 16, 100, 218, 24);
   if (!brand || !heading || !app || !package || !requested) return FALSE;
 
-  int visible_rows = state->count > REVIEW_VISIBLE_ROWS ? REVIEW_VISIBLE_ROWS : state->count;
-  int list_height = visible_rows * state->row_height;
+  int list_height = state->visible_rows * state->row_height;
   state->scroll_pos = 0;
-  state->max_scroll = state->count > REVIEW_VISIBLE_ROWS ? state->count - REVIEW_VISIBLE_ROWS : 0;
+  state->max_scroll = state->count - state->visible_rows;
   int box_width = state->max_scroll > 0 ? 204 : 218;
-  DWORD checkbox_style = BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP | (rtl ? BS_RIGHTBUTTON : 0);
+  DWORD checkbox_style = BS_AUTOCHECKBOX | BS_MULTILINE | (rtl ? BS_RIGHTBUTTON : 0);
   for (int i = 0; i < state->count; ++i) {
-    int y = 128 + (i < visible_rows ? i : 0) * state->row_height;
-    HWND box = PermissionControl(dialog, reading, L"BUTTON", state->groups[i], checkbox_style,
+    int y = 128 + (i < state->visible_rows ? i : 0) * state->row_height;
+    const WCHAR* label = state->groups[i];
+    WCHAR* managed_label = NULL;
+    if (!state->changeable[i]) {
+      const WCHAR* managed = GesherUiText(state->language, state->enabled[i]
+          ? "review_permission_managed_allowed" : "review_permission_managed_denied");
+      SIZE_T managed_chars = wcslen(managed), label_chars = wcslen(label);
+      managed_label = (WCHAR*)HeapAlloc(GetProcessHeap(), 0,
+          (managed_chars + label_chars + 2) * sizeof(WCHAR));
+      if (managed_label == NULL) return FALSE;
+      // Put the enforced state first so it remains visible for a long label.
+      memcpy(managed_label, managed, managed_chars * sizeof(WCHAR));
+      managed_label[managed_chars] = L'\n';
+      memcpy(managed_label + managed_chars + 1, label, (label_chars + 1) * sizeof(WCHAR));
+      label = managed_label;
+    }
+    DWORD style = checkbox_style | (state->changeable[i] ? WS_TABSTOP : WS_DISABLED);
+    HWND box = PermissionControl(dialog, reading, L"BUTTON", label, style,
         REVIEW_GROUP_BASE + i, 16, y, box_width, state->row_height);
+    if (managed_label != NULL) HeapFree(GetProcessHeap(), 0, managed_label);
     if (!box) return FALSE;
     SendMessageW(box, BM_SETCHECK, state->enabled[i] ? BST_CHECKED : BST_UNCHECKED, 0);
-    if (i >= visible_rows) ShowWindow(box, SW_HIDE);
+    if (i >= state->visible_rows) ShowWindow(box, SW_HIDE);
   }
   if (state->max_scroll > 0) {
     state->scroll_bar = PermissionControl(dialog, 0, L"SCROLLBAR", L"",
         SBS_VERT | WS_TABSTOP, REVIEW_SCROLL, 224, 128, 10, list_height);
     if (!state->scroll_bar) return FALSE;
     SCROLLINFO info = {sizeof(info), SIF_RANGE | SIF_PAGE | SIF_POS, 0, state->count - 1,
-        (UINT)REVIEW_VISIBLE_ROWS, 0, 0};
+        (UINT)state->visible_rows, 0, 0};
     SetScrollInfo(state->scroll_bar, SB_CTL, &info, TRUE);
   }
 
@@ -168,8 +186,12 @@ static INT_PTR CALLBACK ReviewDialogProc(HWND dialog, UINT message, WPARAM wpara
     int command = LOWORD(wparam);
     if (command == IDOK) {
       for (int i = 0; i < state->count; ++i) {
-        state->enabled[i] = SendDlgItemMessageW(dialog, REVIEW_GROUP_BASE + i,
-            BM_GETCHECK, 0, 0) == BST_CHECKED ? 1 : 0;
+        // Disabled controls can still receive programmatic BM_SETCHECK messages.
+        // Such a visual change must not become an unenforceable user decision.
+        if (state->changeable[i]) {
+          state->enabled[i] = SendDlgItemMessageW(dialog, REVIEW_GROUP_BASE + i,
+              BM_GETCHECK, 0, 0) == BST_CHECKED ? 1 : 0;
+        }
       }
       state->decision = REVIEW_ALLOWED;
       EndDialog(dialog, IDOK);
@@ -192,22 +214,29 @@ static INT_PTR CALLBACK ReviewDialogProc(HWND dialog, UINT message, WPARAM wpara
 }
 
 static int ReviewPermissionDialog(enum GesherUiLanguage language, const WCHAR* package_name,
-        const WCHAR* const* groups, unsigned char* enabled, int count) {
-  if (package_name == NULL || groups == NULL || enabled == NULL
+        const WCHAR* const* groups, unsigned char* enabled, const unsigned char* changeable, int count) {
+  if (package_name == NULL || groups == NULL || enabled == NULL || changeable == NULL
       || count <= 0 || count > REVIEW_MAX_GROUPS) {
     return REVIEW_UNAVAILABLE;
+  }
+  BOOL managed = FALSE;
+  for (int i = 0; i < count; ++i) {
+    if (groups[i] == NULL || groups[i][0] == 0 || wcslen(groups[i]) > 1024) return REVIEW_UNAVAILABLE;
+    if (!changeable[i]) managed = TRUE;
   }
   ReviewDialogState state = {0};
   state.language = language;
   state.package_name = package_name;
   state.groups = groups;
   state.enabled = enabled;
+  state.changeable = changeable;
   state.count = count;
-  state.row_height = 18;
+  state.row_height = managed ? 26 : 18;
+  int max_visible = managed ? REVIEW_MANAGED_VISIBLE_ROWS : REVIEW_VISIBLE_ROWS;
+  state.visible_rows = count > max_visible ? max_visible : count;
   state.decision = REVIEW_DISMISSED;
 
-  int visible_rows = count > REVIEW_VISIBLE_ROWS ? REVIEW_VISIBLE_ROWS : count;
-  int button_y = 128 + visible_rows * state.row_height + 10;
+  int button_y = 128 + state.visible_rows * state.row_height + 10;
   union { DWORD alignment; WORD words[128]; } buffer = {0};
   DLGTEMPLATE* dialog = (DLGTEMPLATE*)buffer.words;
   dialog->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER | DS_SETFONT;

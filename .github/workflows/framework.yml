@@ -550,6 +550,13 @@ jobs:
             --app-classes out/app/gesher-app-classes.jar \
             --apksig "$RUNNER_TEMP/gesher-apksig.jar"
 
+      - name: Standalone pre-APK permission review and admission lifetime contracts
+        run: |
+          python3 tools/test_standalone_permission_review.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar \
+            --apksig "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Package visibility and authenticated shared-UID queries in both GMS modes
         run: |
           python3 tools/test_package_visibility.py --java-home "$JAVA_HOME" \

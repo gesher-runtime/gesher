@@ -52,10 +52,12 @@ final class PermissionRequests {
         int decideBackground(String packageName, String permissionNames);
         /**
          * The legacy permission review dialog: UNAVAILABLE, DISMISSED or ALLOWED.
-         * {@code enabled} enters with every group checked (true) and is updated
-         * in place when the user confirms (ALLOWED).
+         * Editable groups start checked; managed permission rows retain their
+         * enforced state. Only {@code changeable} rows may be updated in place
+         * when the user confirms (ALLOWED).
          */
-        default int decideReview(String packageName, String[] groupLabels, boolean[] enabled) {
+        default int decideReview(String packageName, String[] groupLabels, boolean[] enabled,
+                boolean[] changeable) {
             return UNAVAILABLE;
         }
     }
@@ -83,8 +85,9 @@ final class PermissionRequests {
             @Override public int decideBackground(String packageName, String permissionNames) {
                 return confirmBackground(packageName, permissionNames);
             }
-            @Override public int decideReview(String packageName, String[] groupLabels, boolean[] enabled) {
-                return confirmReview(packageName, groupLabels, enabled);
+            @Override public int decideReview(String packageName, String[] groupLabels, boolean[] enabled,
+                    boolean[] changeable) {
+                return confirmReview(packageName, groupLabels, enabled, changeable);
             }
         });
     }
@@ -129,10 +132,10 @@ final class PermissionRequests {
         }
     }
 
-    static int confirmReview(String packageName, String[] groupLabels, boolean[] enabled) {
+    static int confirmReview(String packageName, String[] groupLabels, boolean[] enabled, boolean[] changeable) {
         try {
             AccountSecretStore.ensureLoaded();
-            int choice = nativeReviewPermissions(packageName, groupLabels, enabled);
+            int choice = nativeReviewPermissions(packageName, groupLabels, enabled, changeable);
             return choice == DISMISSED || choice == ALLOWED ? choice : UNAVAILABLE;
         } catch (LinkageError | SecurityException e) {
             SystemServer.log("permission review unavailable: " + e.getClass().getSimpleName());
@@ -142,7 +145,8 @@ final class PermissionRequests {
 
     private static native int nativeConfirm(String packageLabel, String permissionNames);
     private static native int nativeConfirmBackground(String packageLabel, String permissionNames);
-    private static native int nativeReviewPermissions(String packageLabel, String[] groupLabels, boolean[] enabled);
+    private static native int nativeReviewPermissions(String packageLabel, String[] groupLabels,
+            boolean[] enabled, boolean[] changeable);
 
     private boolean current(ApkPackage captured) {
         return !mPm.isRemovalPending(captured.packageName) && mPm.get(captured.packageName) == captured;
@@ -233,15 +237,19 @@ final class PermissionRequests {
                     } else {
                         String[] labels = describeGroups(policy, groups);
                         boolean[] enabled = new boolean[groups.size()];
-                        Arrays.fill(enabled, true);
-                        int decision = mDecision.decideReview(captured.packageName, labels, enabled);
+                        boolean[] changeable = new boolean[groups.size()];
+                        for (int i = 0; i < groups.size(); i++) {
+                            enabled[i] = groups.get(i).enabled();
+                            changeable[i] = groups.get(i).changeable();
+                        }
+                        int decision = mDecision.decideReview(captured.packageName, labels, enabled, changeable);
                         if (decision == ALLOWED && current(captured)) {
                             Set<String> kept = new HashSet<>();
                             for (int i = 0; i < groups.size(); i++) {
-                                if (enabled[i]) kept.add(groups.get(i).groupName());
+                                if (groups.get(i).changeable() && enabled[i]) kept.add(groups.get(i).groupName());
                             }
-                            policy.recordPermissionReview(captured, kept);
-                            proceed = current(captured) && !policy.isReviewRequired(captured);
+                            proceed = policy.recordPermissionReview(captured, groups, kept)
+                                    && current(captured) && !policy.isReviewRequired(captured);
                         }
                     }
                 } catch (RuntimeException e) {
@@ -284,6 +292,8 @@ final class PermissionRequests {
             labels[i] = label != null
                     ? label + " \u202a(" + group.groupName() + ")\u202c"
                     : '\u202a' + group.groupName() + '\u202c';
+            if (group.mixed()) labels[i] = com.gesher.app.locale.UiText.text(
+                    "review_permission_adjustable", labels[i]);
         }
         return labels;
     }

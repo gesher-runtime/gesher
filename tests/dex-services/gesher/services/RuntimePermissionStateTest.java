@@ -1092,7 +1092,8 @@ public final class RuntimePermissionStateTest {
         // Keep LOCATION and STORAGE enabled; turn CAMERA off.
         Set<String> enabled = new HashSet<>(groupNames);
         enabled.remove(Manifest.permission_group.CAMERA);
-        call(h.policy, "recordPermissionReview", new Class<?>[]{ApkPackage.class, Set.class}, legacy, enabled);
+        call(h.policy, "recordPermissionReview", new Class<?>[]{ApkPackage.class, List.class, Set.class},
+                legacy, groups, enabled);
 
         check(!(Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, legacy)
                 && ((List<?>)call(h.policy, "pendingReviewGroups", new Class<?>[]{ApkPackage.class}, legacy)).isEmpty(),
@@ -1111,17 +1112,30 @@ public final class RuntimePermissionStateTest {
                 && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_READ_EXTERNAL_STORAGE, legacy.uid(),
                         legacy.packageName, null) == AppOpsManager.MODE_ALLOWED,
                 "enabled legacy review groups did not clear REVIEW_REQUIRED or publish AppOps");
+        h.flush();
+        PermissionPolicy restored = h.reopen();
+        call(restored, "initializePackages", new Class<?>[0]);
+        check(!(Boolean)call(restored, "isReviewRequired", new Class<?>[]{ApkPackage.class}, legacy)
+                && flagsOf(restored, legacy.packageName, CAMERA) == camFlags
+                && flagsOf(restored, legacy.packageName, BACKGROUND) == bgFlags
+                && flagsOf(restored, legacy.packageName, STORAGE) == storageFlags
+                && appOp(restored, AppOpsManager.OP_CAMERA, legacy.uid()) == AppOpsManager.MODE_IGNORED,
+                "Permission review decisions did not survive ledger reload and package initialization");
+        check((Boolean)call(get(restored, "mWriter"), "flush", new Class<?>[0]),
+                "Reloaded permission review ledger did not flush");
         retire(h, legacy);
     }
 
-    private interface ReviewChoice { int decide(String owner, String[] groups, boolean[] enabled); }
+    private interface ReviewChoice {
+        int decide(String owner, String[] groups, boolean[] enabled, boolean[] changeable);
+    }
 
     private static Object reviewController(Harness h, Executor ordinary, Executor review,
             ReviewChoice choice) throws Exception {
         Class<?> decisions = type("PermissionRequests$Decision");
         Object decision = Proxy.newProxyInstance(decisions.getClassLoader(), new Class<?>[]{decisions},
                 (proxy, method, args) -> method.getName().equals("decideReview")
-                        ? choice.decide((String)args[0], (String[])args[1], (boolean[])args[2]) : DENIED);
+                        ? choice.decide((String)args[0], (String[])args[1], (boolean[])args[2], (boolean[])args[3]) : DENIED);
         return make(type("PermissionRequests"),
                 new Class<?>[]{PackageManagerService.class, Executor.class, Executor.class, decisions},
                 h.pm, ordinary, review, decision);
@@ -1142,7 +1156,7 @@ public final class RuntimePermissionStateTest {
         call(h.pm, "add", new Class<?>[]{ApkPackage.class}, old);
         List<Runnable> ordinary = new ArrayList<>(), reviews = new ArrayList<>();
         AtomicInteger prompts = new AtomicInteger();
-        Object requests = reviewController(h, ordinary::add, reviews::add, (owner, groups, enabled) -> {
+        Object requests = reviewController(h, ordinary::add, reviews::add, (owner, groups, enabled, changeable) -> {
             check(name.equals(owner) && groups.length > 0, "review lost its captured package");
             prompts.incrementAndGet(); return ALLOWED;
         });
@@ -1171,6 +1185,103 @@ public final class RuntimePermissionStateTest {
                 "replacement did not receive and commit its own review");
         retire(h, replacement);
         h.reset();
+    }
+
+    /** Managed grants/denials must be visible and immutable, including within a mixed group. */
+    private static void legacyReviewManaged(Harness h) throws Exception {
+        int reviewFlag = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+        int revoked = PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
+        int systemFixed = PackageManager.FLAG_PERMISSION_SYSTEM_FIXED;
+        int policyFixed = PackageManager.FLAG_PERMISSION_POLICY_FIXED;
+        ApkPackage legacy = pkg("fixture.permission.legacy.managed", UID + 24, 22, (byte)12);
+        call(legacy, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, (Object)null);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, legacy);
+        h.policy.updatePermissionFlags(legacy.packageName, CAMERA, systemFixed, systemFixed, true, "default:0", 0);
+        h.policy.updatePermissionFlags(legacy.packageName, AUDIO, policyFixed | revoked,
+                policyFixed | revoked, true, "default:0", 0);
+        // Fine location was already reviewed; new adjustable siblings must not
+        // make this existing fixed grant disappear from the group's explanation.
+        h.policy.updatePermissionFlags(legacy.packageName, FINE, policyFixed | reviewFlag,
+                policyFixed, true, "default:0", 0);
+        List<?> rows = (List<?>)call(h.policy, "pendingReviewGroups", new Class<?>[]{ApkPackage.class}, legacy);
+        int fixedRows = 0, mixedRows = 0;
+        for (Object row : rows) {
+            List<?> permissions = (List<?>)call(row, "permissions", new Class<?>[0]);
+            boolean changeable = (Boolean)call(row, "changeable", new Class<?>[0]);
+            if (!changeable) {
+                fixedRows++;
+                check(permissions.size() == 1 && List.of(CAMERA, AUDIO, FINE).contains(permissions.get(0)),
+                        "Managed permission was merged into an editable group");
+                check((Boolean)call(row, "enabled", new Class<?>[0]) == !permissions.contains(AUDIO),
+                        "Managed review row hid its enforced on/off state");
+            } else if (Manifest.permission_group.LOCATION.equals(call(row, "groupName", new Class<?>[0]))) {
+                mixedRows++;
+                check(!permissions.contains(FINE) && permissions.contains(COARSE)
+                        && (Boolean)call(row, "mixed", new Class<?>[0]),
+                        "Mixed review group did not identify only its adjustable members");
+            }
+        }
+        check(fixedRows == 3 && mixedRows == 1, "Review omitted managed or mixed-group rows");
+        List<Runnable> queue = new ArrayList<>();
+        Object requests = reviewController(h, queue::add, queue::add, (owner, labels, enabled, changeable) -> {
+            int immutable = 0, mixed = 0;
+            for (int i = 0; i < labels.length; i++) {
+                if (!changeable[i]) {
+                    immutable++;
+                    check(enabled[i] == !labels[i].contains(AUDIO),
+                            "Controller did not pass the immutable permission's current state");
+                } else if (labels[i].contains(Manifest.permission_group.LOCATION)) {
+                    mixed++;
+                    check(labels[i].contains("adjustable permissions")
+                            || labels[i].contains("הרשאות הניתנות לשינוי"),
+                            "Mixed review group was presented as controlling its fixed members");
+                }
+            }
+            check(immutable == 3 && mixed == 1, "Controller made managed rows editable or omitted mixed explanation");
+            java.util.Arrays.fill(enabled, false);
+            java.util.Arrays.fill(changeable, true); // A backend cannot override captured policy authority.
+            return ALLOWED;
+        });
+        var future = review(requests, legacy); queue.remove(0).run();
+        check(future.get() && !(Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, legacy),
+                "Confirmed managed review did not complete its reviewed state");
+        check((flagsOf(h.policy, legacy.packageName, CAMERA) & (reviewFlag | revoked | systemFixed)) == systemFixed
+                && (flagsOf(h.policy, legacy.packageName, AUDIO) & (reviewFlag | revoked | policyFixed))
+                        == (revoked | policyFixed)
+                && (flagsOf(h.policy, legacy.packageName, FINE) & (reviewFlag | revoked | policyFixed)) == policyFixed
+                && (flagsOf(h.policy, legacy.packageName, COARSE) & (reviewFlag | revoked)) == revoked,
+                "Managed choices changed fixed grants/denials or retained an unchecked adjustable sibling");
+        check(appOp(h.policy, AppOpsManager.OP_CAMERA, legacy.uid()) != AppOpsManager.MODE_IGNORED
+                && appOp(h.policy, AppOpsManager.OP_RECORD_AUDIO, legacy.uid()) == AppOpsManager.MODE_IGNORED,
+                "Managed row states differed from enforced camera/microphone AppOps");
+        retire(h, legacy);
+
+        ApkPackage racing = pkg("fixture.permission.legacy.managedrace", UID + 25, 22, (byte)13);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, racing);
+        AtomicInteger attempts = new AtomicInteger();
+        Object concurrent = reviewController(h, queue::add, queue::add, (owner, labels, enabled, changeable) -> {
+            java.util.Arrays.fill(enabled, false);
+            if (attempts.getAndIncrement() == 0) {
+                // An administrator changes policy after this dialog's snapshot.
+                h.policy.updatePermissionFlags(racing.packageName, CAMERA, policyFixed, policyFixed,
+                        true, "default:0", 0);
+            } else {
+                boolean found = false;
+                for (int i = 0; i < labels.length; i++) if (labels[i].contains(CAMERA)) {
+                    found = true; check(!changeable[i], "Retried review did not expose the new managed permission");
+                }
+                check(found, "Retried managed review lost the camera permission");
+            }
+            return ALLOWED;
+        });
+        var obsolete = review(concurrent, racing); queue.remove(0).run();
+        check(!obsolete.get() && (Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, racing)
+                && (flagsOf(h.policy, racing.packageName, CAMERA) & (reviewFlag | policyFixed | revoked))
+                        == (reviewFlag | policyFixed),
+                "Changed administrative policy silently committed a stale editable consent screen");
+        var updated = review(concurrent, racing); queue.remove(0).run();
+        check(updated.get() && attempts.get() == 2, "Fresh managed-state review could not complete after retry");
+        retire(h, racing);
     }
     private static final class Prompts {
         final List<String> foreground = new ArrayList<>(), background = new ArrayList<>();
@@ -1433,6 +1544,7 @@ public final class RuntimePermissionStateTest {
         binder = binderTransport; checks = 0;
         Harness harness = new Harness();
         exemptions(harness); legacyRestricted(harness); legacyReview(harness); legacyReviewCoordinator(harness);
+        legacyReviewManaged(harness);
         decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
         backgroundConsent(harness);
         installerAllowlist(harness);

@@ -26,10 +26,13 @@ static int exact_action;
 enum { BG_ALWAYS, BG_FOREGROUND, BG_DENY, BG_ENTER, BG_ESCAPE, BG_CLOSE, BG_TAB_DENY };
 static int background_action;
 // Review dialog actions: confirm all, toggle one off then confirm, cancel, Enter, Escape, close.
-enum { RV_CONFIRM_ALL, RV_TOGGLE_ONE, RV_TAB_SPACE_CONFIRM, RV_CANCEL, RV_ENTER, RV_ESCAPE, RV_CLOSE };
+enum { RV_CONFIRM_ALL, RV_TOGGLE_ONE, RV_TAB_SPACE_CONFIRM, RV_CANCEL, RV_ENTER, RV_ESCAPE, RV_CLOSE,
+       RV_MANAGED_CONFIRM, RV_MANAGED_CANCEL };
 static int review_action;
 static int review_expected_count = 2;
 static int review_phase = 0;
+static unsigned char review_initial[REVIEW_MAX_GROUPS];
+static unsigned char review_changeable[REVIEW_MAX_GROUPS];
 static unsigned char exact_initial[] = {0, 1};
 static BOOL prompt_confirmation;
 static int prompt_action;
@@ -278,9 +281,23 @@ static void CALLBACK InspectReview(HWND dialog, UINT message, UINT_PTR timer, DW
         "review Confirm button uses shared host presentation");
     Check((GetWindowLongW(cancel, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW,
         "review Cancel button uses shared host presentation");
-    Check(SendMessageW(box0, BM_GETCHECK, 0, 0) == BST_CHECKED
-        && SendMessageW(box_last, BM_GETCHECK, 0, 0) == BST_CHECKED,
-        "review checkboxes default to checked");
+    for (int i = 0; i < review_expected_count; ++i) {
+      HWND box = GetDlgItem(dialog, REVIEW_GROUP_BASE + i);
+      Check(SendMessageW(box, BM_GETCHECK, 0, 0) == (review_initial[i] ? BST_CHECKED : BST_UNCHECKED),
+          "review checkbox shows its actual admitted permission state");
+      Check(!!IsWindowEnabled(box) == !!review_changeable[i],
+          "only adjustable permissions offer an enabled checkbox");
+      Check(!!(GetWindowLongW(box, GWL_STYLE) & WS_TABSTOP) == !!review_changeable[i],
+          "only adjustable permission rows participate in keyboard navigation");
+      if (!review_changeable[i]) {
+        WCHAR value[256] = {0};
+        GetWindowTextW(box, value, 256);
+        const WCHAR* managed = GesherUiText(language, review_initial[i]
+            ? "review_permission_managed_allowed" : "review_permission_managed_denied");
+        Check(wcsncmp(value, managed, wcslen(managed)) == 0 && value[wcslen(managed)] == L'\n',
+            "managed row visibly explains its enforced state in the current locale");
+      }
+    }
     Check(((GetWindowLongW(box0, GWL_STYLE) & BS_RIGHTBUTTON) != 0) == GesherUiRtl(language),
         "review checkbox alignment follows locale direction");
     WCHAR value[256] = {0};
@@ -301,7 +318,30 @@ static void CALLBACK InspectReview(HWND dialog, UINT message, UINT_PTR timer, DW
       Check(dlg_rect.bottom - dlg_rect.top <= work_area.bottom - work_area.top,
           "review dialog height fits inside work area");
     }
-    if (review_action == RV_CONFIRM_ALL) {
+    if (review_action == RV_MANAGED_CONFIRM || review_action == RV_MANAGED_CANCEL) {
+      HWND scroll = GetDlgItem(dialog, REVIEW_SCROLL);
+      if (scroll) {
+        for (int i = 0; i < review_expected_count; ++i)
+          SendMessageW(dialog, WM_VSCROLL, SB_PAGEDOWN, (LPARAM)scroll);
+        Check(IsWindowVisible(box_last), "scrolling exposes the final managed permission row");
+        Check(!IsWindowVisible(box0), "scrolled-off managed review rows do not overlap visible rows");
+        for (int i = 0; i < review_expected_count; ++i)
+          SendMessageW(dialog, WM_VSCROLL, SB_PAGEUP, (LPARAM)scroll);
+      } else {
+        Check(GetNextDlgTabItem(dialog, box0, FALSE) == cancel,
+            "keyboard navigation skips the immutable rows");
+      }
+      SendMessageW(box0, BM_CLICK, 0, 0);
+      // Programmatic changes can bypass a control's disabled visual state.
+      // The real dialog must still preserve every enforced policy decision.
+      for (int i = 0; i < review_expected_count; ++i) {
+        if (!review_changeable[i]) {
+          SendDlgItemMessageW(dialog, REVIEW_GROUP_BASE + i, BM_SETCHECK,
+              review_initial[i] ? BST_UNCHECKED : BST_CHECKED, 0);
+        }
+      }
+      SendMessageW(review_action == RV_MANAGED_CONFIRM ? confirm : cancel, BM_CLICK, 0, 0);
+    } else if (review_action == RV_CONFIRM_ALL) {
       SendMessageW(confirm, BM_CLICK, 0, 0);
     } else if (review_action == RV_TOGGLE_ONE) {
       SendMessageW(box0, BM_CLICK, 0, 0);
@@ -322,6 +362,15 @@ static void CALLBACK InspectReview(HWND dialog, UINT message, UINT_PTR timer, DW
   } else {
     SendMessageW(confirm, BM_CLICK, 0, 0);
   }
+}
+
+static int ShowReview(const WCHAR* package_name, const WCHAR* const* groups,
+        unsigned char* enabled, const unsigned char* changeable, int count) {
+  review_expected_count = count;
+  review_phase = 0;
+  memcpy(review_initial, enabled, (size_t)count);
+  memcpy(review_changeable, changeable, (size_t)count);
+  return ReviewPermissionDialog(language, package_name, groups, enabled, changeable, count);
 }
 
 static LRESULT CALLBACK AfterInit(int code, WPARAM wparam, LPARAM lparam) {
@@ -461,46 +510,75 @@ int main(void) {
         L"Location \u202a(android.permission-group.LOCATION)\u202c",
         L"Camera \u202a(android.permission-group.CAMERA)\u202c"
     };
-    review_expected_count = 2;
+    const unsigned char review_mutable[] = {1, 1};
     for (review_action = RV_CONFIRM_ALL; review_action <= RV_CLOSE; ++review_action) {
-      review_phase = 0;
       unsigned char enabled[2] = {1, 1};
-      int decision = ReviewPermissionDialog(language, L"com.example.legacy", review_groups, enabled, 2);
+      int decision = ShowReview(L"com.example.legacy", review_groups, enabled, review_mutable, 2);
       int expected = (review_action == RV_CONFIRM_ALL || review_action == RV_TOGGLE_ONE
           || review_action == RV_TAB_SPACE_CONFIRM || review_action == RV_ENTER)
           ? REVIEW_ALLOWED : REVIEW_DISMISSED;
       Check(decision == expected, "review dialog returns allowed only on explicit confirm");
       if (review_action == RV_TOGGLE_ONE || review_action == RV_TAB_SPACE_CONFIRM) {
         Check(enabled[0] == 0 && enabled[1] == 1, "toggled review group is recorded off");
-      } else if (expected == REVIEW_ALLOWED) {
-        Check(enabled[0] == 1 && enabled[1] == 1, "untoggled review groups remain enabled");
+      } else {
+        Check(enabled[0] == 1 && enabled[1] == 1, "unconfirmed or untoggled review groups retain initial values");
       }
       printf("review scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", review_action, decision);
     }
+    const WCHAR* managed_groups[] = {
+        L"Location (adjustable permissions)",
+        L"Camera \u202a(android.permission.CAMERA)\u202c",
+        L"Microphone \u202a(android.permission.RECORD_AUDIO)\u202c"
+    };
+    const unsigned char managed_changeable[] = {1, 0, 0};
+    for (review_action = RV_MANAGED_CONFIRM; review_action <= RV_MANAGED_CANCEL; ++review_action) {
+      unsigned char enabled[] = {1, 1, 0};
+      int decision = ShowReview(L"com.example.managed", managed_groups, enabled, managed_changeable, 3);
+      Check(decision == (review_action == RV_MANAGED_CONFIRM ? REVIEW_ALLOWED : REVIEW_DISMISSED),
+          "managed review still requires an explicit continue action");
+      Check(enabled[0] == (review_action == RV_MANAGED_CONFIRM ? 0 : 1),
+          "only confirmed adjustable choice is committed");
+      Check(enabled[1] == 1 && enabled[2] == 0,
+          "enforced grant and denial survive programmatic checkbox changes");
+    }
     if (locale == 0) {
       unsigned char single[1] = {1};
-      review_expected_count = 1;
       review_action = RV_CONFIRM_ALL;
-      review_phase = 0;
-      Check(ReviewPermissionDialog(language, L"com.example.single", review_groups, single, 1) == REVIEW_ALLOWED
+      Check(ShowReview(L"com.example.single", review_groups, single, review_mutable, 1) == REVIEW_ALLOWED
           && single[0] == 1, "single-group review succeeds");
       const WCHAR* many_groups[REVIEW_MAX_GROUPS];
       unsigned char many_enabled[REVIEW_MAX_GROUPS];
+      unsigned char many_changeable[REVIEW_MAX_GROUPS];
       for (int i = 0; i < REVIEW_MAX_GROUPS; ++i) {
         many_groups[i] = L"Permission group label";
         many_enabled[i] = 1;
+        many_changeable[i] = 1;
       }
-      review_expected_count = REVIEW_MAX_GROUPS;
       review_action = RV_CONFIRM_ALL;
-      review_phase = 0;
-      Check(ReviewPermissionDialog(language, L"com.example.many", many_groups, many_enabled,
+      Check(ShowReview(L"com.example.many", many_groups, many_enabled, many_changeable,
           REVIEW_MAX_GROUPS) == REVIEW_ALLOWED, "max-groups scrollable review succeeds within work area");
-      Check(ReviewPermissionDialog(language, NULL, review_groups, single, 1) == REVIEW_UNAVAILABLE,
+      for (int i = 0; i < REVIEW_MAX_GROUPS; ++i) {
+        many_enabled[i] = i == 0 || (i % 2) != 0;
+        many_changeable[i] = i == 0;
+      }
+      review_action = RV_MANAGED_CONFIRM;
+      Check(ShowReview(L"com.example.many.managed", many_groups, many_enabled, many_changeable,
+          REVIEW_MAX_GROUPS) == REVIEW_ALLOWED, "max managed rows scroll within the work area");
+      Check(many_enabled[0] == 0, "first adjustable row is still editable after scrolling");
+      for (int i = 1; i < REVIEW_MAX_GROUPS; ++i) {
+        Check(many_enabled[i] == (i % 2 != 0), "scrolling never makes a managed value adjustable");
+      }
+      Check(ReviewPermissionDialog(language, NULL, review_groups, single, review_mutable, 1) == REVIEW_UNAVAILABLE,
           "null package returns unavailable");
-      Check(ReviewPermissionDialog(language, L"com.example.empty", review_groups, single, 0) == REVIEW_UNAVAILABLE,
+      Check(ReviewPermissionDialog(language, L"com.example.empty", review_groups, single, review_mutable, 0) == REVIEW_UNAVAILABLE,
           "zero groups returns unavailable");
-      Check(ReviewPermissionDialog(language, L"com.example.overflow", many_groups, many_enabled,
+      Check(ReviewPermissionDialog(language, L"com.example.overflow", many_groups, many_enabled, many_changeable,
           REVIEW_MAX_GROUPS + 1) == REVIEW_UNAVAILABLE, "over-limit groups returns unavailable");
+      Check(ReviewPermissionDialog(language, L"com.example.no.policy", review_groups, single, NULL, 1)
+          == REVIEW_UNAVAILABLE, "missing changeability snapshot returns unavailable");
+      const WCHAR* missing_group[] = {NULL};
+      Check(ReviewPermissionDialog(language, L"com.example.no.label", missing_group, single, review_mutable, 1)
+          == REVIEW_UNAVAILABLE, "missing permission label returns unavailable");
     }
     const WCHAR* packages[] = {L"com.gesher.test.clock", L"com.gesher.test.reminder"};
     for (exact_action = 0; exact_action < 3; ++exact_action) {

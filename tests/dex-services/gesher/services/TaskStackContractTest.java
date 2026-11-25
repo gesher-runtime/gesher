@@ -40,6 +40,8 @@ import android.view.Display;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedActivityImpl;
 import com.gesher.server.ApkPackage;
+import com.gesher.server.PackageManagerService;
+import com.gesher.server.PermissionPolicy;
 import com.gesher.server.StandIn;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -118,10 +120,15 @@ public final class TaskStackContractTest {
         return new Intent(pkg + "." + name).setComponent(new ComponentName(pkg, pkg + "." + name));
     }
     private static ApkPackage code(String pkg, int uid) throws Exception {
+        return code(pkg, uid, 36, false);
+    }
+    private static ApkPackage code(String pkg, int uid, int sdk, boolean camera) throws Exception {
         String path = "/fixture/" + pkg + "/base.apk";
         PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(pkg, path);
         parsed.setEnabled(true);
-        parsed.setTargetSdkVersion(36);
+        parsed.setTargetSdkVersion(sdk);
+        if (camera) parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                "android.permission.CAMERA", 0, java.util.Set.of()));
         for (String name : List.of("Root", "Middle", "Top", "Other", "Private", "Guarded", "Single",
                 "Instance", "Doc", "DocNever", "DocAlways")) {
             ParsedActivityImpl activity = new ParsedActivityImpl();
@@ -130,7 +137,8 @@ public final class TaskStackContractTest {
             activity.setTaskAffinity(pkg);
             activity.setEnabled(true);
             activity.setExported(!name.equals("Private"));
-            if (name.equals("Guarded")) activity.setPermission("fixture.permission.NOT_GRANTED");
+            if (name.equals("Guarded")) activity.setPermission(sdk < 23
+                    ? "android.permission.CAMERA" : "fixture.permission.NOT_GRANTED");
             if (name.equals("Single")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_TASK);
             if (name.equals("Instance")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_INSTANCE);
             if (name.equals("Doc")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_INTO_EXISTING);
@@ -1429,6 +1437,406 @@ public final class TaskStackContractTest {
         check(h.records().isEmpty(), "Caller package spoofing published history");
     }
 
+    /** Real policy/controller and ATM; only the human dialog and OS process boundary are queued. */
+    private static final class ReviewFixture {
+        static final String CAMERA = "android.permission.CAMERA";
+        final Harness h;
+        final ApkPackage target;
+        final PermissionPolicy policy;
+        final AppThread targetThread = new AppThread();
+        final java.util.concurrent.BlockingQueue<Runnable> queue = new java.util.concurrent.LinkedBlockingQueue<>();
+        final CountDownLatch queued = new CountDownLatch(1);
+        int choice = 2, prompts;
+        @SuppressWarnings("unchecked")
+        ReviewFixture(String name) throws Exception { this(new Harness(), name); }
+        @SuppressWarnings("unchecked")
+        ReviewFixture(Harness harness, String name) throws Exception {
+            h = harness;
+            policy = ((PackageManagerService)h.packages).permissions();
+            if (!realBinder) {
+                // The host has no framework-res.apk. This definition is the CAMERA
+                // permission from android-16.0.0_r4; Windows reads its real manifest.
+                Object catalog = get(policy, "mCatalog");
+                android.content.pm.PermissionInfo camera = new android.content.pm.PermissionInfo(
+                        "android.permission.BACKGROUND_CAMERA");
+                camera.name = CAMERA; camera.packageName = "android";
+                camera.protectionLevel = android.content.pm.PermissionInfo.PROTECTION_DANGEROUS
+                        | android.content.pm.PermissionInfo.PROTECTION_FLAG_INSTANT;
+                camera.group = "android.permission-group.UNDEFINED";
+                ((java.util.Map<String, android.content.pm.PermissionInfo>)get(catalog, "mFramework"))
+                        .put(CAMERA, camera);
+                set(catalog, "mLoaded", true);
+            }
+            target = legacyCode("fixture.taskstack.review." + name, UID + 30);
+            publishFixtureCode(h, target.packageName, target);
+            initialize();
+            Class<?> decisionType = type("PermissionRequests$Decision");
+            Object decision = java.lang.reflect.Proxy.newProxyInstance(decisionType.getClassLoader(),
+                    new Class<?>[]{decisionType}, (proxy, method, args) -> {
+                        if (!method.getName().equals("decideReview")) return -1;
+                        check(target.packageName.equals(args[0]) && ((String[])args[1]).length == 1,
+                                "Review dialog lost its captured permission groups");
+                        prompts++; return choice;
+                    });
+            java.util.concurrent.Executor executor = task -> { queue.add(task); queued.countDown(); };
+            Object requests = make(type("PermissionRequests"), new Class<?>[]{PackageManagerService.class,
+                    java.util.concurrent.Executor.class, decisionType}, h.packages, executor, decision);
+            set(h.tasks, "mPermissionRequests", requests);
+            // An already attached test process receives real LaunchActivityItem objects;
+            // no ActivityThread, native windows or APK installation are simulated.
+            long identity = Binder.clearCallingIdentity();
+            Object process;
+            try {
+                Binder.restoreCallingIdentity(((long)target.uid() << 32) | (PID + 30));
+                process = make(type("ActivityTaskManagerService$ProcessRecord"), new Class<?>[]{
+                        type("ActivityTaskManagerService"), int.class, IApplicationThread.class},
+                        h.tasks, PID + 30, targetThread);
+            } finally { Binder.restoreCallingIdentity(identity); }
+            set(process, "packageName", target.packageName); set(process, "processName", target.packageName);
+            set(process, "packageCode", target); set(process, "ready", true);
+            ((List<Object>)get(h.tasks, "mProcesses")).add(process);
+        }
+        static ApkPackage legacyCode(String name, int uid) throws Exception {
+            return code(name, uid, 22, true);
+        }
+        void initialize() throws Exception {
+            Method initialize = policy.getClass().getDeclaredMethod("initializePackages");
+            initialize.setAccessible(true); initialize.invoke(policy);
+        }
+        Intent intent() { return launch(target.packageName, "Middle"); }
+        boolean pending() throws Exception {
+            Method pending = policy.getClass().getDeclaredMethod("isReviewRequired", ApkPackage.class);
+            pending.setAccessible(true); return (Boolean)pending.invoke(policy, target);
+        }
+        void choose() throws Exception {
+            Runnable task = queue.poll(5, TimeUnit.SECONDS);
+            check(task != null, "No pending production permission review");
+            task.run();
+        }
+        int targetRecords() throws Exception {
+            int count = 0;
+            for (Object record : h.records()) {
+                if (target.packageName.equals(((ActivityInfo)get(record, "info")).packageName)) count++;
+            }
+            return count;
+        }
+    }
+
+    /** A timed call also makes the old blocking production implementation a decisive control. */
+    private static void returnsBeforeConsent(ReviewFixture review, Checked launch) throws Exception {
+        CountDownLatch returned = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread caller = new Thread(() -> {
+            try { launch.run(); } catch (Throwable problem) { failure.set(problem); }
+            finally { returned.countDown(); }
+        }, "fixture-legacy-review-caller");
+        caller.setDaemon(true); caller.start();
+        boolean reached = review.queued.await(5, TimeUnit.SECONDS);
+        if (!reached && failure.get() != null) throw new AssertionError("Review admission failed", failure.get());
+        check(reached, "Activity start never reached permission review");
+        boolean responsive = returned.await(1, TimeUnit.SECONDS);
+        if (!responsive) {
+            // Unblock the negative control before reporting its actual failure.
+            review.choice = 0; review.choose(); caller.join(5000);
+        }
+        check(responsive, "Activity start blocked its caller until human permission review completed");
+        if (failure.get() != null) throw new AssertionError("Review admission failed", failure.get());
+    }
+
+    private static Object reviewSource(ReviewFixture review) throws Exception {
+        Harness h = review.h;
+        h.startOne(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null);
+        Object source = h.record("Root"); h.acknowledge("activityResumed", source);
+        return source;
+    }
+
+    private static List<android.app.ResultInfo> reviewResults(Harness h, Object recipient) throws Exception {
+        List<android.app.ResultInfo> result = new ArrayList<>();
+        IBinder token = (IBinder)get(recipient, "token");
+        for (ClientTransaction transaction : h.thread.transactions) {
+            for (var item : transaction.getTransactionItems()) {
+                if (item instanceof ActivityResultItem delivered && delivered.getActivityToken() == token) {
+                    for (Object value : (List<?>)get(delivered, "mResultInfoList")) result.add((android.app.ResultInfo)value);
+                }
+            }
+        }
+        for (Object value : (List<?>)get(recipient, "pendingResults")) result.add((android.app.ResultInfo)value);
+        return result;
+    }
+
+    private static void legacyReviewSlowLaunch() throws Exception {
+        ReviewFixture review = new ReviewFixture("slow");
+        Harness h = review.h;
+        Object source = reviewSource(review);
+        Intent requested = review.intent().putExtra("review-payload", "original");
+        returnsBeforeConsent(review, () -> check(h.startOne(requested, source)
+                == ActivityManager.START_SUCCESS, "Review launch was not accepted"));
+        requested.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("review-payload", "changed");
+        check(review.pending() && review.targetRecords() == 0 && review.prompts == 0
+                && review.targetThread.launches(null) == 0, "Target ran before user permission review");
+        check("PAUSING".equals(h.state(source)) && (Integer)get(source, "nativeUiCount") == 1,
+                "Review did not pause and retain its covered activity");
+        h.acknowledge("activityPaused", source);
+        CountDownLatch unrelated = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread other = new Thread(() -> {
+            try {
+                h.startOne(launch("Other").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_MULTIPLE_TASK), null);
+                Object activity = h.record("Other"); h.acknowledge("activityResumed", activity);
+                h.finish(activity);
+            } catch (Throwable problem) { failure.set(problem); }
+            finally { unrelated.countDown(); }
+        });
+        other.setDaemon(true); other.start();
+        check(unrelated.await(2, TimeUnit.SECONDS), "Slow review held launch/lifecycle work for another task");
+        if (failure.get() != null) throw new AssertionError("Unrelated launch/cancellation failed", failure.get());
+        check(review.targetRecords() == 0 && review.queue.size() == 1,
+                "Unrelated lifecycle work consumed or bypassed the review");
+        review.choose();
+        check(!review.pending() && review.prompts == 1 && review.targetRecords() == 1
+                && review.targetThread.launches(null) == 1, "Approved target did not launch exactly once");
+        Object target = h.record(review.target.packageName, "Middle");
+        check("original".equals(((Intent)get(target, "intent")).getStringExtra("review-payload"))
+                && get(target, "taskId").equals(get(source, "taskId")),
+                "Deferred review retained its caller's mutable Intent payload or task flags");
+        check(((Collection<?>)get(h.tasks, "mNativeUiActivities")).isEmpty()
+                && (Integer)get(source, "nativeUiCount") == 0, "Completed review leaked a UI reservation");
+    }
+
+    private static void legacyReviewCancellation() throws Exception {
+        for (int choice : new int[]{0, -1}) {
+            ReviewFixture review = new ReviewFixture("cancel" + -choice);
+            Harness h = review.h; Object source = reviewSource(review);
+            review.choice = choice;
+            returnsBeforeConsent(review, () -> h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null,
+                    review.intent(), null, (IBinder)get(source, "token"), "legacy-result", 76,
+                    0, null, null) == ActivityManager.START_SUCCESS, "For-result review rejected")));
+            h.acknowledge("activityPaused", source); review.choose();
+            List<android.app.ResultInfo> results = reviewResults(h, source);
+            check(review.pending() && review.targetRecords() == 0 && results.size() == 1
+                    && results.get(0).mRequestCode == 76 && "legacy-result".equals(results.get(0).mResultWho)
+                    && results.get(0).mResultCode == android.app.Activity.RESULT_CANCELED,
+                    "Dismissed/unavailable review ran a target, changed permissions or lost cancellation");
+            check(((Collection<?>)get(h.tasks, "mNativeUiActivities")).isEmpty(),
+                    "Canceled review retained its native activity reservation");
+        }
+    }
+
+    private static void legacyReviewGenerations() throws Exception {
+        for (String retired : List.of("target", "caller", "component", "delegation")) {
+            ReviewFixture review = new ReviewFixture("retire" + retired);
+            Harness h = review.h;
+            java.util.concurrent.atomic.AtomicBoolean live = new java.util.concurrent.atomic.AtomicBoolean(true);
+            returnsBeforeConsent(review, () -> check(startFromCreator(h, PKG, live::get,
+                    review.intent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) == ActivityManager.START_SUCCESS,
+                    "Verified-creator review rejected"));
+            switch (retired) {
+                case "target" -> publishFixtureCode(h, review.target.packageName,
+                        ReviewFixture.legacyCode(review.target.packageName, review.target.uid()));
+                case "caller" -> publishFixtureCode(h, PKG, code(PKG, UID));
+                case "component" -> {
+                    Method disable = ApkPackage.class.getDeclaredMethod("setComponentEnabledState", String.class, int.class);
+                    disable.setAccessible(true);
+                    disable.invoke(review.target, review.target.packageName + ".Middle",
+                            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED);
+                }
+                case "delegation" -> live.set(false);
+            }
+            review.choose();
+            check(review.targetRecords() == 0 && review.targetThread.launches(null) == 0
+                    && ((Collection<?>)get(h.tasks, "mNativeUiActivities")).isEmpty(),
+                    "Retired " + retired + " authority launched after review");
+            if (retired.equals("target")) check(review.prompts == 0,
+                    "Queued review prompted for retired target code");
+        }
+    }
+
+    private static void legacyReviewBatch() throws Exception {
+        for (boolean approve : new boolean[]{false, true}) {
+            ReviewFixture review = new ReviewFixture("batch" + approve);
+            Harness h = review.h;
+            returnsBeforeConsent(review, () -> check(h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    review.intent(), launch("Top")) == ActivityManager.START_SUCCESS, "Review batch rejected"));
+            Object root = h.record("Root");
+            check(h.records().size() == 1 && h.thread.launches(root) == 1 && review.targetRecords() == 0
+                    && (Integer)get(h.tasks, "mStackPublications") == 0,
+                    "Pending batch lost its accepted prefix, published its suffix, or retained a global history barrier");
+            h.acknowledge("activityPaused", root);
+            review.choice = approve ? 2 : 0; review.choose();
+            check((Integer)get(h.tasks, "mStackPublications") == 0 && h.records().contains(root),
+                    "Review continuation stranded its batch or erased accepted history");
+            if (approve) {
+                check(h.records().size() == 3 && review.targetRecords() == 1 && h.record("Top") != null
+                        && h.thread.launches(h.record("Top")) == 1 && review.targetThread.launches(null) == 0,
+                        "Approved review did not resume exactly its suspended batch suffix");
+                h.acknowledge("activityResumed", h.record("Top")); h.finish(h.record("Top"));
+                check(review.targetThread.launches(null) == 1,
+                        "Back did not realize approved legacy history exactly once");
+            } else check(h.records().size() == 1 && review.pending(),
+                    "Canceled batch review published a later member");
+        }
+    }
+
+    private static void legacyReviewRevokedPermission() throws Exception {
+        ReviewFixture review = new ReviewFixture("revokedpermission");
+        Harness h = review.h;
+        publishFixtureCode(h, PKG, code(PKG, UID, 36, true));
+        review.initialize();
+        review.policy.grantRuntimePermission(PKG, ReviewFixture.CAMERA, "default:0", 0);
+        returnsBeforeConsent(review, () -> check(h.startOne(launch(review.target.packageName, "Guarded")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null) == ActivityManager.START_SUCCESS,
+                "Granted component permission did not admit review"));
+        review.policy.revokeRuntimePermission(PKG, ReviewFixture.CAMERA, "default:0", 0, "review fixture");
+        review.choose();
+        check(review.targetRecords() == 0 && review.targetThread.launches(null) == 0,
+                "A component permission revoked during consent still authorized its target");
+    }
+
+    /** Review is an accepted system activity; process exit does not replace creator-package authority. */
+    private static void legacyReviewAcceptedCallerExit() throws Exception {
+        ReviewFixture review = new ReviewFixture("callerexit");
+        Harness h = review.h;
+        returnsBeforeConsent(review, () -> check(h.startOne(review.intent().addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                null) == ActivityManager.START_SUCCESS, "Review was not admitted before caller exit"));
+        set(h.process, "exiting", true);
+        review.choose();
+        check(review.targetRecords() == 1 && review.targetThread.launches(null) == 1,
+                "Accepted review depended on its caller process after admission");
+    }
+
+    /** Preserve the exact one-time standalone process enrollment across the asynchronous choice. */
+    private static void legacyReviewStandalone() throws Exception {
+        // Successful bindApplication needs Android's real ApplicationSharedMemory
+        // native region. The host exercises retirement; Windows also executes the
+        // complete binding and acknowledges the real launch transaction.
+        for (boolean retire : realBinder ? new boolean[]{false, true} : new boolean[]{true}) {
+            ReviewFixture review = new ReviewFixture("standalone" + retire);
+            Harness h = review.h;
+            Object process = null;
+            for (Object candidate : (List<?>)get(h.tasks, "mProcesses")) {
+                if (review.target.packageName.equals(get(candidate, "packageName"))) process = candidate;
+            }
+            check(process != null, "No constructed standalone process");
+            final Object bootstrap = process;
+            set(bootstrap, "packageName", null); set(bootstrap, "processName", null);
+            set(bootstrap, "packageCode", null); set(bootstrap, "ready", false);
+            Intent intent = review.intent().setAction(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            java.util.concurrent.atomic.AtomicReference<android.app.WaitResult> result = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+            CountDownLatch returned = new CountDownLatch(1);
+            Thread waiter = new Thread(() -> {
+                long identity = Binder.clearCallingIdentity();
+                try {
+                    Binder.restoreCallingIdentity(((long)review.target.uid() << 32) | (PID + 30));
+                    result.set(h.api.startActivityAndWait(review.targetThread, review.target.packageName, null,
+                            intent, null, null, null, 0, 0, null, null, 0));
+                } catch (Throwable problem) { failure.set(problem); }
+                finally { Binder.restoreCallingIdentity(identity); returned.countDown(); }
+            });
+            waiter.setDaemon(true); waiter.start();
+            boolean reached = review.queued.await(5, TimeUnit.SECONDS);
+            if (!reached && failure.get() != null) throw new AssertionError("Standalone admission failed", failure.get());
+            check(reached && returned.getCount() == 1 && get(bootstrap, "packageName") == null
+                    && review.targetRecords() == 0,
+                    "Standalone wait returned or bound its package before consent");
+            if (retire) set(bootstrap, "exiting", true);
+            review.choose();
+            if (retire) check(review.targetRecords() == 0 && get(bootstrap, "packageName") == null,
+                    "Retired standalone process was enrolled after permission review");
+            else {
+                Object activity = h.record(review.target.packageName, "Middle");
+                check(review.targetRecords() == 1 && get(activity, "app") == bootstrap
+                        && review.target.packageName.equals(get(bootstrap, "packageName")),
+                        "Standalone review spawned/replaced its authenticated initial process");
+                Method attached = h.tasks.getClass().getDeclaredMethod("finishAttachApplication", int.class);
+                attached.setAccessible(true); attached.invoke(h.tasks, PID + 30);
+                h.acknowledge("activityResumed", activity); h.acknowledge("activityIdle", activity);
+            }
+            check(returned.await(5, TimeUnit.SECONDS), "Standalone wait did not complete after review/launch");
+            if (failure.get() != null) throw new AssertionError("Standalone wait failed", failure.get());
+            check(result.get().result == (retire ? ActivityManager.START_CANCELED : ActivityManager.START_SUCCESS)
+                    && (retire || result.get().who != null && result.get().who.equals(intent.getComponent())
+                            && !result.get().timeout),
+                    "Standalone wait lost the actual reviewed launch outcome");
+        }
+    }
+
+    private static void legacyReviewHostReceipt() throws Exception {
+        for (boolean approve : new boolean[]{false, true}) {
+            ReviewFixture review = new ReviewFixture("host" + approve);
+            Harness h = review.h;
+            java.util.concurrent.atomic.AtomicReference<Object> result = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+            CountDownLatch returned = new CountDownLatch(1);
+            Thread host = new Thread(() -> {
+                try {
+                    Method start = h.tasks.getClass().getDeclaredMethod("startActivityForHost", Intent.class);
+                    start.setAccessible(true); result.set(start.invoke(h.tasks, review.intent()));
+                } catch (Throwable problem) { failure.set(problem); }
+                finally { returned.countDown(); }
+            });
+            host.setDaemon(true); host.start();
+            check(review.queued.await(5, TimeUnit.SECONDS) && returned.getCount() == 1,
+                    "Host returned an unidentified launch before consent");
+            review.choice = approve ? 2 : 0; review.choose();
+            if (approve) {
+                Object activity = h.record(review.target.packageName, "Middle");
+                h.acknowledge("activityResumed", activity); h.acknowledge("activityIdle", activity);
+            }
+            check(returned.await(5, TimeUnit.SECONDS), "Host launch receipt did not finish after review");
+            if (failure.get() != null) throw new AssertionError("Host review launch failed", failure.get());
+            android.app.WaitResult waited = (android.app.WaitResult)get(result.get(), "result");
+            if (approve) check(waited.result == ActivityManager.START_SUCCESS && waited.who != null
+                    && (Integer)get(result.get(), "taskId") >= 0 && get(result.get(), "exitReceipt") != null,
+                    "Host consent lost its real target/task launch receipt");
+            else check(waited.result == ActivityManager.START_CANCELED && (Integer)get(result.get(), "taskId") < 0,
+                    "Canceled host review reported a successful launch receipt");
+        }
+    }
+
+    private static void legacyReviewForwardedResult() throws Exception {
+        for (int trampolineState : new int[]{0, 1, 2}) {
+        for (boolean approve : new boolean[]{false, true}) {
+            ReviewFixture review = new ReviewFixture("forward" + approve + "state" + trampolineState);
+            Harness h = review.h; Object root = reviewSource(review);
+            h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("Other"), null,
+                    (IBinder)get(root, "token"), "forward-owner", 89, 0, null, null)
+                    == ActivityManager.START_SUCCESS, "Forwarding trampoline rejected"));
+            Object trampoline = h.record("Other"); h.acknowledge("activityPaused", root);
+            h.acknowledge("activityResumed", trampoline);
+            returnsBeforeConsent(review, () -> check(h.startOne(review.intent().addFlags(
+                    Intent.FLAG_ACTIVITY_FORWARD_RESULT), trampoline) == ActivityManager.START_SUCCESS,
+                    "Forwarded review rejected"));
+            check(get(trampoline, "resultTo") == null, "Review failed to consume its forwarded result route");
+            h.acknowledge("activityPaused", trampoline);
+            if (trampolineState != 0) {
+                h.finish(trampoline);
+                if (trampolineState == 2) {
+                    h.acknowledge("activityDestroyed", trampoline);
+                    check(!h.records().contains(trampoline), "Forwarding trampoline remained in task history");
+                } else check((Boolean)get(trampoline, "finishing"), "Trampoline did not enter finishing state");
+            }
+            review.choice = approve ? 2 : 0; review.choose();
+            if (approve) {
+                Object target = h.record(review.target.packageName, "Middle");
+                check(get(target, "resultTo") == root && (Integer)get(target, "requestCode") == 89
+                        && "forward-owner".equals(get(target, "resultWho"))
+                        && get(target, "taskId").equals(get(root, "taskId"))
+                        && reviewResults(h, root).isEmpty(), "Approved review lost or canceled its forwarded route");
+            } else {
+                if (trampolineState == 0) h.finish(trampoline);
+                List<android.app.ResultInfo> results = reviewResults(h, root);
+                check(results.size() == 1 && results.get(0).mRequestCode == 89
+                        && "forward-owner".equals(results.get(0).mResultWho)
+                        && results.get(0).mResultCode == android.app.Activity.RESULT_CANCELED,
+                        "Forwarded review canceled the wrong activity or delivered twice");
+            }
+        }
+        }
+    }
+
     /** IActivityClientController.onBackPressed on a task's root; true if it asked to finish. */
     private static boolean backOnRoot(Harness h, Object root) throws Exception {
         boolean[] finish = new boolean[1];
@@ -2192,6 +2600,11 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("visibility")) visibilityAndRemoval();
         if (selected.equals("all") || selected.equals("appwindow")) oneWindowPerApp();
         if (selected.equals("all") || selected.equals("permissions")) permissions();
+        if (selected.equals("all") || selected.equals("review")) {
+            legacyReviewSlowLaunch(); legacyReviewCancellation(); legacyReviewGenerations();
+            legacyReviewBatch(); legacyReviewForwardedResult(); legacyReviewRevokedPermission();
+            legacyReviewAcceptedCallerExit(); legacyReviewStandalone(); legacyReviewHostReceipt();
+        }
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
         if (selected.equals("all") || selected.equals("back")) backOnTaskRoot();
         if (selected.equals("all") || selected.equals("windowclose")) {
