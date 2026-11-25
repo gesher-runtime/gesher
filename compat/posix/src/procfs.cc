@@ -68,7 +68,7 @@ namespace gesher {
 namespace procfs {
 
 // (internal.h; declared here too for the host fixture, which compiles this file alone.)
-bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path);
+bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path, unsigned* mode);
 std::string LinuxName(const std::wstring& name);
 
 namespace {
@@ -899,7 +899,7 @@ struct Node {
   int fd = -1;
   std::string link;  // "exe", "cwd", "fd", "map_files"
   std::string target;  // map_files: the mapped file
-  unsigned mode = 0;  // stat's permission bits; 0: the type's (Mode())
+  unsigned mode = 0;  // stat's permission bits; 0: the type's (DefaultMode())
   std::vector<procfs::Entry> entries;  // directories: filled by Lookup(.., true)
 };
 
@@ -1111,7 +1111,9 @@ std::string Content(const Node& n) {
 // --- what an fd of a name here is ------------------------------------------------
 // The anonymous file behind such an fd carries an extended attribute,
 // GESHER.PROCFS: 'f', 'd' or 'l' (a link itself, opened O_PATH | O_NOFOLLOW),
-// then the Linux path. Every handle of the file
+// the permission bits as four octal digits (fixed when it was opened, as a
+// procfs inode's are: a map_files link keeps its mode after the munmap), then
+// the Linux path. Every handle of the file
 // reads it (dup, fork, exec and descriptor passing keep it), and nothing else
 // has it: memfd_create's files never get one.
 struct EaIoStatus {
@@ -1144,9 +1146,13 @@ constexpr char kTagName[] = "GESHER.PROCFS";
 constexpr size_t kTagNameLength = sizeof(kTagName) - 1;
 constexpr size_t kMaxTag = 4096;
 
-bool SetTag(HANDLE file, char type, const std::string& linux_path) {
-  if (Ea().set == nullptr || linux_path.size() + 1 > kMaxTag) return false;
-  const std::string value = type + linux_path;
+constexpr size_t kTagHead = 5;  // the type and the mode
+
+bool SetTag(HANDLE file, char type, unsigned mode, const std::string& linux_path) {
+  if (Ea().set == nullptr || linux_path.size() + kTagHead > kMaxTag) return false;
+  char head[kTagHead + 1];
+  snprintf(head, sizeof(head), "%c%04o", type, mode & 07777);
+  const std::string value = head + linux_path;
   // FILE_FULL_EA_INFORMATION: next (4), flags (1), name length (1), value
   // length (2), the name and its NUL, the value.
   std::vector<char> buffer(8 + kTagNameLength + 1 + value.size() + 8, 0);
@@ -1159,29 +1165,36 @@ bool SetTag(HANDLE file, char type, const std::string& linux_path) {
   return Ea().set(file, &io, buffer.data(), static_cast<ULONG>(buffer.size())) >= 0;
 }
 
-bool ReadTag(HANDLE file, char* type, std::string* linux_path) {
+bool ReadTag(HANDLE file, char* type, unsigned* mode, std::string* linux_path) {
   if (Ea().query == nullptr) return false;
   // FILE_GET_EA_INFORMATION for the one name: next (4), name length (1), name.
   char request[8 + kTagNameLength + 1] = {};
   request[4] = static_cast<char>(kTagNameLength);
   memcpy(&request[5], kTagName, kTagNameLength);
-  std::vector<char> buffer(8 + kTagNameLength + 1 + kMaxTag + 8, 0);
+  alignas(8) char buffer[8 + kTagNameLength + 1 + kMaxTag + 8];
+  memset(buffer, 0, 8);
   EaIoStatus io = {};
-  if (Ea().query(file, &io, buffer.data(), static_cast<ULONG>(buffer.size()), TRUE, request,
+  if (Ea().query(file, &io, buffer, static_cast<ULONG>(sizeof(buffer)), TRUE, request,
                  sizeof(request), nullptr, TRUE) < 0) {
     return false;
   }
   const unsigned name_length = static_cast<unsigned char>(buffer[5]);
   uint16_t value_length;
   memcpy(&value_length, &buffer[6], 2);
-  if (name_length != kTagNameLength || value_length < 2 ||
-      8 + name_length + 1 + value_length > buffer.size()) {
+  if (name_length != kTagNameLength || value_length < kTagHead + 1 ||
+      8 + name_length + 1 + value_length > sizeof(buffer)) {
     return false;  // no such attribute (an empty value)
   }
   const char* value = &buffer[8 + name_length + 1];
   if (value[0] != 'f' && value[0] != 'd' && value[0] != 'l') return false;
+  unsigned bits = 0;
+  for (size_t i = 1; i < kTagHead; ++i) {
+    if (value[i] < '0' || value[i] > '7') return false;
+    bits = bits * 8 + static_cast<unsigned>(value[i] - '0');
+  }
   *type = value[0];
-  linux_path->assign(value + 1, value_length - 1);
+  *mode = bits;
+  linux_path->assign(value + kTagHead, value_length - kTagHead);
   return true;
 }
 
@@ -1191,8 +1204,8 @@ bool FdTarget(int fd, std::string* target) {
   if (h == INVALID_HANDLE_VALUE) return errno = ENOENT, false;
   switch (GetFileType(h)) {
     case FILE_TYPE_DISK: {
-      unsigned type;
-      if (DescribeHandle(h, &type, target)) return true;  // "/proc/<pid>/maps"
+      unsigned type, mode;
+      if (DescribeHandle(h, &type, target, &mode)) return true;  // "/proc/<pid>/maps"
       wchar_t buf[32768];
       DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
       if (n == 0) return FailWithLastError(), false;
@@ -1246,20 +1259,6 @@ NameStatus Describe(const std::wstring& name) {
   return status;
 }
 
-unsigned Mode(const std::string& linux_path, unsigned type) {
-  if (!linux_path.empty() && linux_path[0] == '/') {
-    Node n = Lookup(Widen(linux_path.c_str() + 1), false);
-    if (n.type == type && n.mode != 0) return n.mode;
-  }
-  // Another process's map_files directory (an fd a child inherited).
-  const size_t slash = linux_path.rfind('/');
-  if (type == kDir && linux_path.rfind("/proc/", 0) == 0 && slash != std::string::npos &&
-      linux_path.compare(slash, std::string::npos, "/map_files") == 0) {
-    return 0500;
-  }
-  return DefaultMode(type);
-}
-
 namespace {
 long long FiletimeValue(const FILETIME& t) {
   return static_cast<long long>((static_cast<unsigned long long>(t.dwHighDateTime) << 32) |
@@ -1301,16 +1300,22 @@ long long Time(const std::string& linux_path) {
   return boot;
 }
 
-bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path) {
+bool DescribeTemporaryFile(HANDLE file, unsigned* type, std::string* linux_path, unsigned* mode) {
+  char tag;
+  unsigned bits;
+  if (!ReadTag(file, &tag, &bits, linux_path)) return false;
+  *type = tag == 'd' ? kDir : tag == 'l' ? kLink : kFile;
+  if (mode != nullptr) *mode = bits;
+  return true;
+}
+
+bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path, unsigned* mode) {
   FILE_BASIC_INFO basic;
   if (!GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic)) ||
       (basic.FileAttributes & FILE_ATTRIBUTE_TEMPORARY) == 0) {
     return false;  // not an anonymous file: no attribute to look for
   }
-  char tag;
-  if (!ReadTag(file, &tag, linux_path)) return false;
-  *type = tag == 'd' ? kDir : tag == 'l' ? kLink : kFile;
-  return true;
+  return DescribeTemporaryFile(file, type, linux_path, mode);
 }
 
 unsigned Type(const std::wstring& name) { return Lookup(name, false).type; }
@@ -1427,8 +1432,12 @@ int Open(const std::wstring& name, int flags) {
   // /etc/timezone, which is an ordinary file on Linux.
   const std::string linux_name =
       link_itself && self_link ? std::string("/proc/self") : LinuxName(name);
+  // The mode as lstat/stat report it now (a map_files link's from its
+  // mapping's file), kept for fstat.
+  const unsigned tag_mode = link_itself ? (n.type == kLink && n.mode != 0 ? n.mode : 0777)
+                                        : n.mode != 0 ? n.mode : DefaultMode(n.type);
   if ((linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0) &&
-      !SetTag(HandleFromFd(fd), link_itself ? 'l' : directory ? 'd' : 'f', linux_name) &&
+      !SetTag(HandleFromFd(fd), link_itself ? 'l' : directory ? 'd' : 'f', tag_mode, linux_name) &&
       (directory || link_itself)) {
     // The temp volume keeps no extended attributes (FAT): the file cannot
     // be marked as a /proc directory or link, so refuse the open rather

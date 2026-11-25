@@ -10,6 +10,7 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/file_description.h>
 #include <gesher/clocks.h>
 #include <gesher/procfs_fd.h>
 #include <gesher/ptrace_state.h>
@@ -41,6 +42,8 @@
 #include <cstring>
 #include <initializer_list>
 #include <string>
+
+extern "C" int gesher_is_socket(int fd);  // gesher-base (socket.cc)
 
 namespace gesher::bionic {
 
@@ -783,6 +786,8 @@ void AddVolumeInfo(const wchar_t* path, BionicStatfs* out) {
 constexpr uint64_t kProcSuperMagic = 0x9FA0;
 constexpr uint64_t kSysfsMagic = 0x62656572;
 constexpr uint64_t kStRelatime = 0x0400;
+constexpr uint64_t kPipefsMagic = 0x50495045;
+constexpr uint64_t kSockfsMagic = 0x534F434B;
 void FillVirtualStatfs(const std::string& linux_path, BionicStatfs* out) {
   std::memset(out, 0, sizeof(*out));
   out->f_type = linux_path.rfind("/sys", 0) == 0 ? kSysfsMagic : kProcSuperMagic;
@@ -837,6 +842,19 @@ int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
   }
   auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, -1;
+  // A pipe or a socket is on Linux's pipefs or sockfs; a FIFO is on the
+  // volume that holds its file (below).
+  const bool pipe = GetFileType(h) == FILE_TYPE_PIPE &&
+                    ::gesher::GetDescriptorKind(fd) != ::gesher::DescriptorKind::kFifo;
+  if (pipe || gesher_is_socket(fd)) {
+    std::memset(out, 0, sizeof(*out));
+    out->f_type = pipe ? kPipefsMagic : kSockfsMagic;
+    out->f_bsize = 4096;
+    out->f_frsize = 4096;
+    out->f_namelen = 255;
+    out->f_flags = kStValid;
+    return 0;
+  }
   std::wstring w(32768, L'\0');
   DWORD len =
       GetFinalPathNameByHandleW(h, w.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);

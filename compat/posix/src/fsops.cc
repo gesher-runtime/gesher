@@ -668,7 +668,31 @@ int symlinkat(const char* target, int newdirfd, const char* linkpath) {
 
 ssize_t readlink(const char* path, char* buf, size_t size) { return Readlink(path, buf, size); }
 
+// readlinkat(fd, "", ...): the link fd itself is open on (O_PATH |
+// O_NOFOLLOW), as Linux reads it since 2.6.39: a /proc link's target, or a
+// symbolic link's on disk; ENOENT for an fd on anything else.
+static ssize_t ReadlinkFd(int fd, char* buf, size_t size) {
+  if (buf == nullptr) return errno = EFAULT, -1;
+  if (size == 0) return errno = EINVAL, -1;
+  HANDLE h = gesher::HandleFromFd(fd);
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  std::string target;
+  unsigned type;
+  std::string linux_path;
+  if (GetFileType(h) != FILE_TYPE_DISK) return errno = ENOENT, -1;
+  if (gesher::procfs::DescribeHandle(h, &type, &linux_path)) {
+    if (type != S_IFLNK) return errno = ENOENT, -1;
+    if (!gesher::procfs::ReadLink(gesher::Widen(linux_path.c_str() + 1), &target)) return -1;
+  } else if (!gesher::IsSymlinkHandle(h) || !gesher::ReadSymlinkHandle(h, &target)) {
+    return errno = ENOENT, -1;
+  }
+  size_t n = target.size() < size ? target.size() : size;  // not NUL-terminated
+  memcpy(buf, target.data(), n);
+  return static_cast<ssize_t>(n);
+}
+
 ssize_t readlinkat(int dirfd, const char* path, char* buf, size_t size) {
+  if (path != nullptr && path[0] == '\0' && dirfd != AT_FDCWD) return ReadlinkFd(dirfd, buf, size);
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
   return Readlink(resolved.c_str(), buf, size);

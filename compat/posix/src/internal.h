@@ -144,18 +144,22 @@ struct NameStatus {
   int fd = -1;
 };
 NameStatus Describe(const std::wstring& name);
-// The permission bits of the Linux path, of that type, for fstat of an fd
-// open on it (map_files directories are 0500).
-unsigned Mode(const std::string& linux_path, unsigned type);
 // The times (100 ns units since 1601, FILETIME's) stat and fstat report for
 // that Linux path: the process's start for /proc/<pid>/..., boot otherwise.
 long long Time(const std::string& linux_path);
 // Whether the file behind `file` (a handle of an fd) is one that open() made
-// for a name here: its Linux path, and its type: S_IFREG, S_IFDIR, or
-// S_IFLNK for a link itself (O_PATH | O_NOFOLLOW). Such an fd stays a /proc
-// file for fstat, fstatfs, getdents64, readlink of /proc/self/fd/<n> and
-// the *at calls, as Linux's does.
-bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path);
+// for a name here: its Linux path, its type (S_IFREG, S_IFDIR, or S_IFLNK
+// for a link itself, opened O_PATH | O_NOFOLLOW) and, if `mode` is given,
+// the permission bits stat gave the name when it was opened. Such an fd
+// stays a /proc file for fstat, fstatfs, getdents64, readlink of
+// /proc/self/fd/<n> and the *at calls, as Linux's does.
+bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path,
+                    unsigned* mode = nullptr);
+// As DescribeHandle, for a file the caller already knows is
+// FILE_ATTRIBUTE_TEMPORARY (only those can be one): one query, of the
+// attribute.
+bool DescribeTemporaryFile(HANDLE file, unsigned* type, std::string* linux_path,
+                           unsigned* mode = nullptr);
 }  // namespace procfs
 
 // Whether the file view mmap made at `address` maps a file mmap was given

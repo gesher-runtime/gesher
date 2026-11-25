@@ -707,7 +707,43 @@ static void TestMapFilesLinks() {
   if (fd >= 0) close(fd);
   fd = open("/proc/self", O_PATH | O_NOFOLLOW);
   CHECK_MSG(fd >= 0 && fstat(fd, &st) == 0 && S_ISLNK(st.st_mode), "/proc/self itself is a link");
+  if (fd >= 0) {
+    char self[64];
+    const ssize_t got = readlinkat(fd, "", self, sizeof(self));
+    CHECK_MSG(got > 0 && std::string(self, got) == std::to_string(GetCurrentProcessId()),
+              "readlinkat(fd of /proc/self, \"\") gives the pid");
+    close(fd);
+  }
+  fd = open("/proc/self/exe", O_PATH | O_NOFOLLOW);
+  if (fd >= 0) {
+    char by_fd[512], by_name[512];
+    const ssize_t a = readlinkat(fd, "", by_fd, sizeof(by_fd));
+    const ssize_t b = readlink("/proc/self/exe", by_name, sizeof(by_name));
+    CHECK_MSG(a > 0 && a == b && memcmp(by_fd, by_name, a) == 0, "readlinkat(fd of exe, \"\") is readlink");
+    close(fd);
+  }
+  fd = open("/proc/self/maps", O_RDONLY);
+  errno = 0;
+  char none[8];
+  CHECK_MSG(readlinkat(fd, "", none, sizeof(none)) < 0 && errno == ENOENT,
+            "readlinkat(fd, \"\") of a file that is no link: ENOENT");
   if (fd >= 0) close(fd);
+  {
+    // A symbolic link on disk, opened O_PATH | O_NOFOLLOW.
+    const std::string base = TempName("readlinkat-empty");
+    const std::string name = base + "-link";
+    if (symlink("some/target", name.c_str()) == 0) {
+      fd = open(name.c_str(), O_PATH | O_NOFOLLOW);
+      char text[64];
+      const ssize_t got = fd >= 0 ? readlinkat(fd, "", text, sizeof(text)) : -1;
+      CHECK_MSG(got > 0 && std::string(text, got) == "some/target",
+                "readlinkat(fd of a disk symlink, \"\") gives its target");
+      if (fd >= 0) close(fd);
+      unlink(name.c_str());
+    } else {
+      printf("  (no symbolic links here: errno %d; disk readlinkat(fd, \"\") not checked)\n", errno);
+    }
+  }
   errno = 0;
   CHECK(open("/proc/self", O_RDONLY | O_NOFOLLOW) < 0 && errno == ELOOP);
   fd = open("/proc/self/exe", O_PATH);
@@ -751,7 +787,24 @@ static void TestMapFilesLinks() {
   };
   if (by_rw != MAP_FAILED) {
     CHECK_MSG(link_mode(by_rw) == 0600, "a file mapped from an O_RDWR fd: 0600");
+    // An O_PATH fd on the link keeps the mode it was opened with, and
+    // readlinkat(fd, "") reads the link, also after the munmap.
+    char text[96];
+    snprintf(text, sizeof(text), "/proc/self/map_files/%llx-%llx",
+             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(by_rw)),
+             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(by_rw) + 4096));
+    const int link_fd = open(text, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    char target[512];
+    ssize_t got = link_fd >= 0 ? readlinkat(link_fd, "", target, sizeof(target)) : -1;
+    struct stat before = {};
+    CHECK(link_fd >= 0 && fstat(link_fd, &before) == 0 && before.st_mode == (S_IFLNK | 0600));
+    CHECK_MSG(got > 0 && std::string(target, got).find("map-files-mode") != std::string::npos,
+              "readlinkat(link fd, \"\") gives the mapped file");
     munmap(by_rw, 4096);
+    struct stat after = {};
+    CHECK_MSG(link_fd >= 0 && fstat(link_fd, &after) == 0 && after.st_mode == (S_IFLNK | 0600),
+              "the link fd keeps its mode after the munmap");
+    if (link_fd >= 0) close(link_fd);
   }
   if (by_ro != MAP_FAILED) {
     CHECK_MSG(link_mode(by_ro) == 0400, "a file mapped from an O_RDONLY fd: 0400");

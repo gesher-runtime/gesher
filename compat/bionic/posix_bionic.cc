@@ -457,6 +457,8 @@ int BIONIC_SYSV Fchdir(int fd) {
 char* BIONIC_SYSV Realpath(const char* path, char* resolved) { return realpath(path, resolved); }
 int64_t BIONIC_SYSV Readlink(const char* path, char* buf, size_t n) { return readlink(path, buf, n); }
 int64_t BIONIC_SYSV Readlinkat(int dirfd, const char* path, char* buf, size_t n) {
+  // An empty path reads the link the fd itself is open on (O_PATH | O_NOFOLLOW).
+  if (path != nullptr && path[0] == '\0' && dirfd != kAtFdcwd) return readlinkat(dirfd, "", buf, n);
   std::string p;
   if (!AtPath(dirfd, path, &p)) return -1;
   return readlink(p.c_str(), buf, n);

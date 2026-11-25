@@ -618,10 +618,22 @@ int main() {
     Check(!ParseRange("10000000000000000-1", &start, &end), "ParseRange refuses more than 64 bits");
     Check(Describe(Widen(("proc/" + std::to_string(GetCurrentProcessId()) + "/map_files").c_str())).mode == 0500,
           "map_files is dr-x------");
-    Check(Mode("/proc/" + std::to_string(GetCurrentProcessId()) + "/map_files", S_IFDIR) == 0500 &&
-              Mode("/proc/1/map_files", S_IFDIR) == 0500 && Mode("/proc/self/maps", S_IFREG) == 0444 &&
-              Mode("/proc", S_IFDIR) == 0555,
-          "Mode() of a Linux path: fstat's permission bits");
+    // The mark an fd's file carries: type, mode fixed at open, Linux path.
+    {
+      const int marked = memfd_create("procfs", 0);
+      unsigned type = 0, mode = 0;
+      std::string path;
+      const bool set = marked >= 0 &&
+                       SetTag(gesher::HandleFromFd(marked), 'l', 0600, "/proc/1/map_files/1000-2000");
+      Check(!set || (DescribeHandle(gesher::HandleFromFd(marked), &type, &path, &mode) &&
+                     type == S_IFLNK && mode == 0600 && path == "/proc/1/map_files/1000-2000"),
+            "a /proc fd's mark keeps its type, open-time mode and path");
+      const int plain = memfd_create("plain", 0);
+      Check(plain >= 0 && !DescribeTemporaryFile(gesher::HandleFromFd(plain), &type, &path, &mode),
+            "a memfd carries no mark");
+      if (marked >= 0) _close(marked);
+      if (plain >= 0) _close(plain);
+    }
     const long long started = Time("/proc/self/maps");
     Check(started != 0 && Time("/proc/" + std::to_string(GetCurrentProcessId()) + "/status") == started,
           "a process's /proc files carry its start time");
