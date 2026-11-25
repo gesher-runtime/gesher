@@ -14,8 +14,10 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
+import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.graphics.Point;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
@@ -43,7 +45,7 @@ import java.util.Set;
  *
  * <p>Not implemented, and therefore not reported: the user-consent screen behind
  * {@code createWriteRequest}/{@code createDeleteRequest}/trash/favorite requests (they
- * fail with UnsupportedOperationException after AOSP's argument validation), thumbnails,
+ * fail with UnsupportedOperationException after AOSP's argument validation), audio artwork,
  * the internal volume, playlists, genres, albums and artists tables, FUSE indexing of
  * files written without the provider, and location redaction (see
  * {@link MediaStoreIndex#openFileTarget}). docs/media-provider.md lists the rest.
@@ -290,6 +292,24 @@ final class MediaStoreProvider extends ContentProvider {
 
     @Override public int delete(Uri uri, Bundle extras) {
         return mIndex.delete(caller(), uri, queryArgs(extras));
+    }
+
+    @Override public AssetFileDescriptor openTypedAssetFile(Uri uri, String mimeTypeFilter,
+            Bundle opts) throws FileNotFoundException {
+        return openTypedAssetFile(uri, mimeTypeFilter, opts, null);
+    }
+
+    @Override public AssetFileDescriptor openTypedAssetFile(Uri uri, String mimeTypeFilter,
+            Bundle opts, CancellationSignal signal) throws FileNotFoundException {
+        if (signal != null) signal.throwIfCanceled();
+        if (opts == null || !opts.containsKey(ContentResolver.EXTRA_SIZE) || mimeTypeFilter == null
+                || !mimeTypeFilter.regionMatches(true, 0, "image/", 0, 6)) {
+            return super.openTypedAssetFile(uri, mimeTypeFilter, opts);
+        }
+        Point requested = opts.getParcelable(ContentResolver.EXTRA_SIZE, Point.class);
+        MediaStoreIndex.FileTarget target = mIndex.thumbnailTarget(caller(), uri);
+        return MediaStoreThumbnail.open(target.file, target.mediaType == MediaStoreIndex.MEDIA_TYPE_VIDEO,
+                mimeTypeFilter, requested, signal);
     }
 
     @Override public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
