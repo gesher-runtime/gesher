@@ -565,6 +565,10 @@ public final class LocationRegistrationContractTest {
             // Windows' location is unavailable on the host; the IP fallback is off here, so
             // location is on exactly while a test provider is.
             fallback.set(null, false);
+            // Declared host locale boundary, as SettingsProviderContractTest: no ICU data here.
+            Field clock = Class.forName("com.gesher.app.locale.SystemLocale").getDeclaredField("sIs24Hour");
+            clock.setAccessible(true);
+            if (clock.get(null) == null) clock.set(null, Boolean.TRUE);
             Constructor<?> constructor = settingsType.getDeclaredConstructor(PackageManagerService.class,
                     Class.forName("com.gesher.server.ActivityTaskManagerService"), java.io.File.class);
             constructor.setAccessible(true);
