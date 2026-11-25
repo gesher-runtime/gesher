@@ -278,6 +278,11 @@ int Chmod(const char* path, mode_t mode, bool follow) {
                          FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  // Gesher's ELF loader through a link to it (system_linker.h).
+  if (gesher::system_linker::RefuseChangeHandle(h) != 0) {
+    CloseHandle(h);
+    return errno = EROFS, -1;
+  }
   int result = !follow && gesher::IsSymlinkHandle(h) ? (errno = EOPNOTSUPP, -1) : SetMode(h, mode);
   CloseHandle(h);
   return result;
@@ -395,7 +400,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
       std::wstring linked;
       if (!target.empty() && target[0] == '/' &&
           gesher::MapPath(target.c_str(), &linked) == PathKind::kFile &&
-          gesher::system_linker::IsFilePath(linked)) {
+          gesher::system_linker::IsFilePath(linked, false)) {
         target = gesher::system_linker::kPath;
       }
       break;

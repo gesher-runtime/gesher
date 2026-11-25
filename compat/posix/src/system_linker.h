@@ -42,11 +42,14 @@ int RefuseChange(const char* path);
 // File() puts it, if it exists, without writing it.
 bool IsFile(const std::wstring& windows);
 
-// The same by file identity (volume serial number and file index), whatever
-// name or fd reached the file: a symbolic link to it, a descriptor of it.
-bool IsFileInfo(const BY_HANDLE_FILE_INFORMATION& info);
-bool IsFileHandle(HANDLE h);
-bool IsFilePath(const std::wstring& windows);
+// The same by file identity (FileIdInfo: 64-bit volume serial number and
+// 128-bit file ID), whatever name or fd reached the file: a symbolic or hard
+// link to it, a descriptor of it. IsFilePath opens `windows` itself
+// (FILE_FLAG_OPEN_REPARSE_POINT) unless `follow`. `reprobe` looks for the
+// file again if this process found none before (for a write refused for
+// sharing, which a process holding the file causes).
+bool IsFileHandle(HANDLE h, bool reprobe = false);
+bool IsFilePath(const std::wstring& windows, bool follow = true, bool reprobe = false);
 
 // RefuseChange for calls on an fd or handle (fchmod, futimens, fsetxattr,
 // fremovexattr): -1 with errno EROFS when `h` is the file; 0 otherwise.
