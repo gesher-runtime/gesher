@@ -1007,7 +1007,12 @@ void StopNavigation(Impl* impl) {
   if (impl->destroyed || impl->closing) return;
   ++impl->navigation_generation;
   impl->CancelPendingNewWindows();
-  if (impl->webview) impl->webview->Stop();
+  if (impl->webview) {
+    TraceNavigation(impl, "event=stop-begin handed=%lld", static_cast<long long>(impl->api_number));
+    const HRESULT hr = impl->webview->Stop();
+    TraceNavigation(impl, "event=stop-return handed=%lld hr=0x%08lx",
+                    static_cast<long long>(impl->api_number), static_cast<unsigned long>(hr));
+  }
 }
 
 void FailDocumentScript(Impl* impl, HRESULT hr, const std::wstring& operation) {
