@@ -578,7 +578,24 @@ descriptors still store independent `O_NONBLOCK` metadata rather than sharing
 an open-file description. `recvmsg` drops ancillary data and output flags;
 `sendmsg` has no ancillary transport. `SCM_RIGHTS`, `IP_PKTINFO`, full datagram
 length reporting with `MSG_TRUNC`, and urgent-data readiness (`POLLPRI`) remain
-unsupported. `AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
+unsupported. (Since then, `IP_PKTINFO` works on IPv4 UDP sockets and on the
+IPv4 datagrams of dual-stack IPv6 UDP sockets: the option is stored, reported
+and carried with a socket sent over `SCM_RIGHTS`, and `recvmsg` delivers each
+datagram's `in_pktinfo` with `ipi_ifindex`, `ipi_addr` and `ipi_spec_dst`. As
+Linux's `fib_compute_spec_dst`, `ipi_spec_dst` is the destination for a local
+unicast address, and for a limited, subnet-directed broadcast or multicast
+destination the preferred source address of the route back to the sender
+(`GetBestRoute2`), or an address of the arrival interface for a sender of
+0.0.0.0; the host's addresses and recent choices are cached for a second and
+consulted only for a datagram Windows marks broadcast or multicast
+(`MSG_BCAST`, `MSG_MCAST`), so unicast receives take no shared lock. As
+Linux's `do_ip_setsockopt`, the option's value is an `int`, else a byte, and
+an `optlen` of 0 turns it off. A
+control buffer too small for it gets what fits, as `put_cmsg` writes it, and
+`MSG_CTRUNC`. An `AF_UNIX` socketpair rejects the option with `EOPNOTSUPP`;
+`tests/native/udp_pktinfo_test.cc`. `IPV6_RECVPKTINFO` and sending with an
+`in_pktinfo` control message remain unsupported.)
+`AF_NETLINK`, `AF_PACKET` and `AF_VSOCK` return `EAFNOSUPPORT`.
 Legacy host/service/protocol resolver functions have no Gesher implementation
 (the separate thread-local `h_errno` does exist). The existing bionic exports
 forward directly to the Windows imports. A small probe using Gesher headers
