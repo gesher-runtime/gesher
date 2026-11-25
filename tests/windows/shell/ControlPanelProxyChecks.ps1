@@ -19,7 +19,7 @@ if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 foreach ($name in 'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes',
         'ConvertTo-PropertiesValue', 'Get-ProxySettings', 'Set-ProxySetting', 'Get-ProxyDisplayText',
         'Initialize-ProxyEditor', 'Read-ProxyEditor', 'Get-FileStamp', 'Get-StateStamp', 'Get-AppFilesStamp',
-        'Update-AppsView', 'Test-PanelMetadataVisible', 'Request-PanelMetadataRefresh', 'Update-PanelMetadataWatch',
+        'Update-AppsView', 'Update-AppsFilter', 'Test-PanelMetadataVisible', 'Request-PanelMetadataRefresh', 'Update-PanelMetadataWatch',
         'Refresh-Dashboard', 'Invoke-LiveRefreshTick') {
     $definitions = @($ast.FindAll({
         param($node)

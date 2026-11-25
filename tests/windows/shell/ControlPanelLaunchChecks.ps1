@@ -13,7 +13,7 @@ $source = [IO.File]::ReadAllText([IO.Path]::GetFullPath($PanelPath))
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in 'Get-FileStamp', 'Get-PanelAppIcon', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'Update-AppsView',
+foreach ($name in 'Get-FileStamp', 'Get-PanelAppIcon', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'Update-AppsView', 'Update-AppsFilter',
         'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes', 'Get-ProxySettings', 'Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({
         param($node)
@@ -69,6 +69,30 @@ try {
     Update-AppsView (Get-InstalledApps)
     $camera = $appsList.ItemsSource | Where-Object Package -eq 'com.gesher.camera'
     Assert-Launch ($camera.LaunchVisibility -eq [System.Windows.Visibility]::Visible) 'Launch did not come back once the marker was removed'
+
+    # The search narrows the shown rows (name or package, any case) and a live
+    # refresh keeps applying it; clearing it shows every installed app again.
+    $script:AppSearchView = @{
+        Box = [PSCustomObject]@{ Text = ' CAMERA ' }
+        Placeholder = [PSCustomObject]@{ Visibility = $null }
+        Clear = [PSCustomObject]@{ Visibility = $null }
+        NoMatches = [PSCustomObject]@{ Visibility = $null }
+    }
+    Update-AppsFilter
+    Assert-Launch (@($appsList.ItemsSource).Count -eq 1 -and @($appsList.ItemsSource)[0].Package -ceq 'com.gesher.camera') 'Search did not narrow the list to the matching app'
+    Assert-Launch ($script:AppSearchView.Clear.Visibility -eq [System.Windows.Visibility]::Visible -and
+        $script:AppSearchView.Placeholder.Visibility -eq [System.Windows.Visibility]::Collapsed) 'Search text did not show its clear control'
+    [IO.File]::WriteAllBytes($marker, [byte[]]@())
+    Update-AppsView (Get-InstalledApps)
+    Assert-Launch (@($appsList.ItemsSource).Count -eq 1 -and @($appsList.ItemsSource)[0].LaunchVisibility -eq [System.Windows.Visibility]::Collapsed) 'A live refresh dropped the search or kept stale rows'
+    $script:AppSearchView.Box.Text = 'no-such-app'
+    Update-AppsFilter
+    Assert-Launch (@($appsList.ItemsSource).Count -eq 0 -and $script:AppSearchView.NoMatches.Visibility -eq [System.Windows.Visibility]::Visible) 'An unmatched search did not say so'
+    $script:AppSearchView.Box.Text = ''
+    Update-AppsFilter
+    Assert-Launch (@($appsList.ItemsSource).Count -eq 2 -and [Object]::ReferenceEquals($appsList.ItemsSource, $script:ViewState.AppItems) -and
+        $script:AppSearchView.NoMatches.Visibility -eq [System.Windows.Visibility]::Collapsed -and
+        $script:AppSearchView.Placeholder.Visibility -eq [System.Windows.Visibility]::Visible) 'Clearing the search did not restore every app'
     "PASS: control panel launch contracts ($script:Checks checks)"
 } finally {
     if (([IO.Path]::GetFullPath($scratch)).StartsWith($scratchRoot, [StringComparison]::OrdinalIgnoreCase)) {

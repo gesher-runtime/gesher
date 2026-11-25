@@ -856,6 +856,12 @@ char* realpath(const char* path, char* resolved_path) {
       out = "/" + gesher::Narrow(wpath.c_str());
       break;
     }
+    // Following a map_files link is EPERM (bionic's realpath opens the
+    // path O_PATH, which follows it).
+    if (const int error = gesher::procfs::Describe(wpath).follow_error) {
+      errno = error;
+      return nullptr;
+    }
     std::string target;
     if (!gesher::procfs::ReadLink(wpath, &target)) return nullptr;
     if (target.empty() || target[0] != '/' || depth > 8) {
