@@ -2119,24 +2119,24 @@ void PrintPipePolicyReadback(const storage::AuthorityNamespacePolicyResult& obse
     case Stage::kPolicy: stage = "exact-policy"; break;
     case Stage::kComplete: stage = "complete"; break;
   }
-  Require(std::strcmp(stage, "invalid") != 0 && observed.captured_bytes <= sizeof(observed.descriptor) &&
-      observed.captured_bytes <= observed.returned_bytes,
+  Require(std::strcmp(stage, "invalid") != 0 && observed.captured_bytes <= sizeof(observed.descriptor),
       "bounded-pipe-policy-readback", ERROR_INVALID_DATA);
-  std::printf("Protected pipe policy readback: stage=%s query-ntstatus=0x%08lx requested=0x%08lx returned-bytes=%lu captured-bytes=%lu\n",
+  std::printf("Protected pipe policy readback: stage=%s query-ntstatus=0x%08lx requested=0x%08lx returned-bytes=%lu allocation-prefix-bytes=%lu\n",
       stage, static_cast<unsigned long>(observed.query_status), static_cast<unsigned long>(observed.requested_information),
       static_cast<unsigned long>(observed.returned_bytes),
       static_cast<unsigned long>(observed.captured_bytes));
   if (observed.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE)) {
     SECURITY_DESCRIPTOR_RELATIVE header{};
     std::memcpy(&header, observed.descriptor, sizeof(header));
-    std::printf("Protected pipe policy relative header: revision=%u control=0x%04x owner-offset=%lu group-offset=%lu dacl-offset=%lu sacl-offset=%lu\n",
+    std::printf("Protected pipe policy allocation relative header: revision=%u control=0x%04x owner-offset=%lu group-offset=%lu dacl-offset=%lu sacl-offset=%lu\n",
         static_cast<unsigned int>(header.Revision), static_cast<unsigned int>(header.Control),
         static_cast<unsigned long>(header.Owner), static_cast<unsigned long>(header.Group),
         static_cast<unsigned long>(header.Dacl), static_cast<unsigned long>(header.Sacl));
   }
   // Print bytes without dereferencing any offsets from a rejected descriptor.
-  // The query prefix remains useful even if a Windows component is absent.
-  std::printf("Protected pipe policy descriptor hex: ");
+  // This is an allocation prefix, including any unwritten zero-filled bytes.
+  // It is never substituted for the reported length in policy verification.
+  std::printf("Protected pipe policy allocation prefix hex: ");
   for (DWORD i = 0; i < observed.captured_bytes; ++i) {
     std::printf("%02x", static_cast<unsigned int>(observed.descriptor[i]));
   }
@@ -2453,8 +2453,7 @@ Evidence RunSystem() {
         creation.pipe_create_status == 0 && creation.pipe_policy_status == ERROR_SUCCESS &&
         creation.pipe_policy.stage == storage::AuthorityNamespacePolicyStage::kComplete &&
         creation.pipe_policy.query_status >= 0 && creation.pipe_policy.returned_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) &&
-        creation.pipe_policy.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) &&
-        creation.pipe_policy.captured_bytes <= creation.pipe_policy.returned_bytes,
+        creation.pipe_policy.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE),
         "authority-package-create-scoped-privilege-and-native-success", ERROR_INVALID_DATA);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
     BOOL contained = FALSE;

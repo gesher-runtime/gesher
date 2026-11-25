@@ -763,7 +763,8 @@ class PackageNamespace {
       observed->requested_information = information;
       observed->returned_bytes = bytes;
       if (status >= 0) {
-        observed->captured_bytes = std::min<DWORD>(bytes, static_cast<DWORD>(sizeof(observed->descriptor)));
+        static_assert(sizeof(observed->descriptor) <= kSecurityLimit);
+        observed->captured_bytes = static_cast<DWORD>(sizeof(observed->descriptor));
         std::memcpy(observed->descriptor, storage.data(), observed->captured_bytes);
       }
     }

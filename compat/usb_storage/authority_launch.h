@@ -23,9 +23,10 @@ struct AuthorityNamespacePolicyResult {
   LONG query_status = 0;
   DWORD requested_information = 0;
   DWORD returned_bytes = 0, captured_bytes = 0;
-  // A bounded copy of the actual NtQuerySecurityObject return. Capture before
-  // parsing so absent or malformed components remain observable on failure.
-  // At most this prefix is copied; returned_bytes records any truncation.
+  // A fixed prefix of the zero-initialized query allocation after NT success,
+  // not a claim that this many bytes were returned. Some NPFS queries report
+  // success with returned_bytes == 0; preserve the allocation bytes so that
+  // an unwritten buffer can be distinguished from an unreported length.
   BYTE descriptor[320]{};
 };
 
