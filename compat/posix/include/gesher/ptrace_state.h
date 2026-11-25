@@ -86,6 +86,9 @@ int64_t SelfTracerId();
 // another: the state then follows the new pid and keeps the dumpable flag, as
 // a forked child keeps its mm's).
 SharedState* Self();
+// Whether this process's guard runs (true where this copy of gesher-base
+// does not own one): a tracer can stop the process only then.
+bool GuardRunning();
 
 // prctl(PR_GET_DUMPABLE) / prctl(PR_SET_DUMPABLE, value): 0 or -errno.
 int GetDumpable();

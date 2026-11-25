@@ -56,6 +56,7 @@
 #include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
+#include <gesher/fork.h>
 #include <gesher/futex_interrupt.h>
 #include <gesher/pending_signals.h>
 #include <unistd.h>
@@ -288,7 +289,10 @@ ThreadState* CreateThreadState(uint32_t tid, HANDLE lifetime) {
   if (thread == nullptr) { CloseHandle(lifetime); return nullptr; }
   thread->tid = tid;
   thread->lifetime = lifetime;
-  if (!RegisterWaitForSingleObject(&thread->retirement_wait, lifetime, RetireThread,
+  // A forked child has no thread pool (gesher/fork.h): its few threads'
+  // states are kept until it exits.
+  if (!gesher::InForkedChild() &&
+      !RegisterWaitForSingleObject(&thread->retirement_wait, lifetime, RetireThread,
                                    thread, INFINITE, WT_EXECUTEONLYONCE)) {
     delete thread;
     return nullptr;
@@ -422,10 +426,14 @@ void InterruptGuestThread(uint32_t) {}
   std::fprintf(stderr, "gesher bionic: signal %d (SIG%s) with its default action: terminating\n",
                sig, sig < 32 && kNames[sig] ? kNames[sig] : "RT");
   if (DefaultDumpsCore(sig)) PrintGuestState();
+  // A forked child ends as Linux ends a process a signal kills: no stdio
+  // flush (its buffers are copies of the parent's), no exit work, and an exit
+  // code its parent reads as that signal (ADR 0092).
+  if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), gesher::ForkSignalExitCode(sig));
   std::fflush(stdout);
   std::fflush(stderr);
-  if (DefaultDumpsCore(sig)) std::abort();
-  ExitProcess(128 + static_cast<UINT>(sig));
+  if (DefaultDumpsCore(sig) && !gesher::UsesForkExitCodes()) std::abort();
+  ExitProcess(gesher::SignalExitCode(sig));
 }
 
 // Queueing and synchronous sigwait do not request a handler frame. Validate
@@ -1122,9 +1130,10 @@ void RunOnSignalThread(int sig, const BionicSiginfo& info) {
 }
 
 [[noreturn]] void TerminateBySignal(int sig) {
+  if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), gesher::ForkSignalExitCode(sig));
   std::fflush(stdout);
   std::fflush(stderr);
-  ExitProcess(128 + static_cast<UINT>(sig));
+  ExitProcess(gesher::SignalExitCode(sig));
 }
 
 // gesher-base's hook: called with every signal another process sends. C
@@ -1239,6 +1248,48 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
   }
   RunOnSignalThread(sig, info);
   return true;
+}
+
+// --- fork (ADR 0092) -------------------------------------------------------------
+
+// The child has only the forking thread, no signal thread, and (as on Linux)
+// no pending signals. (Its locks are in the fork set.)
+void SignalForkChild() {
+  ThreadState* self = t_state;
+  for (auto it = S().threads.begin(); it != S().threads.end();) {
+    if (it->second == self) {
+      ++it;
+    } else {
+      it = S().threads.erase(it);  // never deleted: nothing of it runs in the child
+    }
+  }
+  if (self != nullptr) {
+    if (self->lifetime != nullptr) CloseHandle(self->lifetime);
+    self->lifetime = nullptr;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &self->lifetime,
+                    THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0);
+    self->retirement_wait = nullptr;  // the parent's thread pool's
+    self->pending.Clear();
+    self->any_pending.store(false, std::memory_order_relaxed);
+    self->waiting_for = 0;
+    // Its futex interrupt cell: another thread requesting an interrupt may
+    // have held its lock at the clone, and no request is pending in the child
+    // (no signal is). This thread is in fork, not in a wait.
+    self->futex_cell = GESHER_FUTEX_INTERRUPT_INIT;
+  }
+  S().process_pending.Clear();
+  g_process_pending.store(false, std::memory_order_relaxed);
+  if (g_queue != nullptr) g_queue->clear();
+  g_signal_thread_started = false;
+}
+
+bool SignalsAuthoritative() { return g_authoritative.load(); }
+
+bool ChildrenAutoReaped() {
+  constexpr int kSaNocldwait = 1;
+  std::lock_guard<std::mutex> lock(S().mutex);
+  const BionicSigaction& act = S().actions[17];
+  return act.handler == kSigIgn || (act.sa_flags & kSaNocldwait) != 0;
 }
 
 void InstallSignalHook(bool authoritative) {
@@ -1389,6 +1440,24 @@ void DeliverPendingSignals() {
   DeliverAll(self);
 }
 
+// A blocking wait's slice (wait4): EINTR if a signal handler without
+// SA_RESTART ran during it, as Linux interrupts the wait; with SA_RESTART, or
+// when no handler ran, the wait goes on. The same SA_RESTART record as the
+// futex waits' (DeliverAfterInterrupt): Dispatch sets it, and an outer
+// delivery's record comes back unchanged.
+int InterruptibleWaitPoint(uint32_t ms) {
+  const bool outer_ran = t_handler_ran, outer_no_restart = t_handler_no_restart;
+  t_handler_ran = false;
+  t_handler_no_restart = false;
+  int error = 0;
+  SleepWithObservation(ms, nullptr, [](void*) {}, nullptr, &error);
+  const bool interrupt = t_handler_ran && t_handler_no_restart;
+  t_handler_ran = outer_ran;
+  t_handler_no_restart = outer_no_restart;
+  if (error != 0) return error;
+  return interrupt ? kEINTR : 0;
+}
+
 void RegisterSignal(SymbolTable& t) {
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   E("__libc_current_sigrtmin", CurrentSigrtmin);
@@ -1446,3 +1515,9 @@ void RegisterSignal(SymbolTable& t) {
 }
 
 }  // namespace gesher::bionic
+
+// fork (gesher/fork.h): the signal queue and state in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::g_queue_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::S().mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::condition_variable, gesher::bionic::S().sent);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::condition_variable, gesher::bionic::g_queue_cv);
