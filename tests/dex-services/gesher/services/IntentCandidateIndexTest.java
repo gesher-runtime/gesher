@@ -4,6 +4,8 @@ package gesher.services;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.ComponentInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -19,6 +21,7 @@ import com.gesher.server.GmsPackageSupport;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.SharedLibraryGraph;
 import java.lang.reflect.*;
+import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -76,6 +79,25 @@ public final class IntentCandidateIndexTest {
         @Override public List<ParsedActivity> getReceivers() { reads.incrementAndGet(); return super.getReceivers(); }
         @Override public List<ParsedService> getServices() { reads.incrementAndGet(); return super.getServices(); }
         @Override public List<ParsedProvider> getProviders() { reads.incrementAndGet(); return super.getProviders(); }
+    }
+    /** Change real installed state at a deterministic point in full framework generation. */
+    private static final class TransitionPackage extends PackageImpl {
+        final Kind family;
+        Runnable transition;
+        int familyReads;
+        TransitionPackage(String name, Kind family) {
+            super(name, "/fixture/" + name + "/base.apk", "/fixture/" + name + "/base.apk", null, false, null);
+            this.family = family;
+        }
+        private <T> List<T> observe(List<T> values, Kind kind) {
+            if (transition != null && family == kind && ++familyReads == values.size() + 2) {
+                Runnable action = transition; transition = null; action.run();
+            }
+            return values;
+        }
+        @Override public List<ParsedActivity> getActivities() { return observe(super.getActivities(), Kind.ACTIVITY); }
+        @Override public List<ParsedActivity> getReceivers() { return observe(super.getReceivers(), Kind.RECEIVER); }
+        @Override public List<ParsedService> getServices() { return observe(super.getServices(), Kind.SERVICE); }
     }
     private static PackageImpl manifest(String name, boolean counted) {
         PackageImpl parsed = counted ? new CountedPackage(name)
@@ -381,5 +403,273 @@ public final class IntentCandidateIndexTest {
             }
         }
     }
-    public static void main(String[] args) throws Exception { contracts(true); benchmark(true); }
+
+    private static ComponentInfo individual(ApkPackage pkg, Kind kind, String name, long flags) {
+        return switch (kind) {
+            case ACTIVITY -> pkg.activityInfo(name, flags);
+            case RECEIVER -> pkg.receiverInfo(name, flags);
+            case SERVICE -> pkg.serviceInfo(name, flags);
+            case PROVIDER -> throw new AssertionError("Providers are a separate registration contract");
+        };
+    }
+
+    /** Compare real generated values, including fields added to the framework classes. */
+    private static void sameMetadata(Object expected, Object actual, String path) throws Exception {
+        if (expected == actual) return;
+        check(expected != null && actual != null && expected.getClass() == actual.getClass(), path);
+        if (expected.getClass().isArray()) {
+            check(Arrays.deepEquals(new Object[]{expected}, new Object[]{actual}), path); return;
+        }
+        if (expected instanceof List<?> left && actual instanceof List<?> right) {
+            check(left.size() == right.size(), path + " size");
+            for (int i = 0; i < left.size(); i++) sameMetadata(left.get(i), right.get(i), path + "[" + i + "]");
+            return;
+        }
+        if (!expected.getClass().getName().startsWith("android.content.pm.")) {
+            check(expected.equals(actual), path + " value"); return;
+        }
+        for (Class<?> type = expected.getClass(); type != Object.class; type = type.getSuperclass()) {
+            for (Field f : type.getDeclaredFields()) {
+                if (Modifier.isStatic(f.getModifiers()) || f.isSynthetic()) continue;
+                f.setAccessible(true);
+                // Each independently generated ApplicationInfo stamps its own
+                // uptime; compare validity rather than different construction instants.
+                if (type == ApplicationInfo.class && f.getName().equals("createTimestamp")) {
+                    long now = android.os.SystemClock.uptimeMillis();
+                    check(f.getLong(expected) >= 0 && f.getLong(expected) <= now
+                            && f.getLong(actual) >= 0 && f.getLong(actual) <= now, path + ".createTimestamp");
+                    continue;
+                }
+                sameMetadata(f.get(expected), f.get(actual), path + "." + f.getName());
+            }
+        }
+    }
+
+    /** Full production generation and public single-component getters form the value control. */
+    public static void metadataContracts() throws Exception {
+        int before = checks;
+        for (Kind kind : new Kind[]{Kind.ACTIVITY, Kind.RECEIVER, Kind.SERVICE}) {
+            for (int count : new int[]{7, 8}) {
+                PackageImpl parsed = manifest("fixture.metadata." + kind.name().toLowerCase(Locale.ROOT) + ".p" + count, false);
+                ParsedIntentInfoImpl first = filter(ACTION, true); first.getIntentFilter().setPriority(7);
+                ParsedIntentInfoImpl later = filter(ACTION, true); later.getIntentFilter().setPriority(99);
+                declaration(parsed, kind, "First", true, false, first, later);
+                declaration(parsed, kind, "Duplicate", false, false, filter(ACTION, true));
+                declaration(parsed, kind, "Duplicate", true, true, filter(ACTION, true));
+                declaration(parsed, kind, "Duplicate", true, false, filter(ACTION, true));
+                declaration(parsed, kind, "Other", true, false, filter(ACTION, false));
+                declaration(parsed, kind, "Explicit", true, false);
+                declaration(parsed, kind, "Unrelated", true, false, filter("other.action", true));
+                if (count == 8) declaration(parsed, kind, "BatchThreshold", true, false, filter("other.action", true));
+                if (kind != Kind.SERVICE) {
+                    List<ParsedActivity> activities = kind == Kind.ACTIVITY ? parsed.getActivities() : parsed.getReceivers();
+                    for (int i = 0; i < activities.size(); i++) {
+                        ParsedActivityImpl activity = (ParsedActivityImpl)activities.get(i);
+                        activity.setTheme(101 + i);
+                        activity.setKnownActivityEmbeddingCerts(Set.of("ab" + i));
+                        activity.setMaxAspectRatio(1.5f + i);
+                        activity.setMinAspectRatio(0.5f + i);
+                    }
+                }
+                ApkPackage pkg = apk(parsed, 12451);
+                PackageManagerService pm = pm(packages(pkg));
+                Intent intent = new Intent(ACTION).setPackage(pkg.packageName);
+                long[] flags = {0, PackageManager.GET_META_DATA | PackageManager.GET_RESOLVED_FILTER,
+                        PackageManager.MATCH_DEFAULT_ONLY, PackageManager.MATCH_DIRECT_BOOT_AWARE,
+                        PackageManager.MATCH_DIRECT_BOOT_UNAWARE, PackageManager.MATCH_DISABLED_COMPONENTS,
+                        PackageManager.MATCH_DISABLED_COMPONENTS | PackageManager.MATCH_DIRECT_BOOT_UNAWARE,
+                        PackageManager.GET_META_DATA | PackageManager.GET_SHARED_LIBRARY_FILES
+                                | PackageManager.GET_ACTIVITIES | PackageManager.GET_RECEIVERS | PackageManager.GET_SERVICES};
+                for (long flag : flags) {
+                    List<ResolveInfo> direct = declared(pkg, kind, intent, null, flag);
+                    int expected = (flag & PackageManager.MATCH_DIRECT_BOOT_AWARE) != 0 ? 3
+                            : (flag & PackageManager.MATCH_DEFAULT_ONLY) != 0 ? 4 : 5;
+                    check(direct.size() == expected, "Filtered duplicate result count: " + kind + " flags=" + flag);
+                    check(info(direct.get(0)).name.endsWith(expected == 3 ? ".Duplicate" : ".First"),
+                            "Declaration result order changed");
+                    if (expected != 3) check(direct.get(0).priority == 7, "Later matching filter replaced the first");
+                    for (ResolveInfo resolved : direct) {
+                        ComponentInfo component = info(resolved);
+                        sameMetadata(individual(pkg, kind, component.name, flag), component, kind + " " + component.name);
+                    }
+                    List<ResolveInfo> publicResults = query(pm, kind, intent, null, flag);
+                    check(describe(publicResults).equals(describe(direct)), "Public PM changed family order or flags");
+                }
+                List<ResolveInfo> duplicates = declared(pkg, kind, intent, null, PackageManager.GET_RESOLVED_FILTER);
+                ComponentInfo one = info(duplicates.get(1)), two = info(duplicates.get(2));
+                check(one != two && one.applicationInfo != two.applicationInfo, "Duplicate results share returned metadata");
+                one.applicationInfo.uid = -1; one.name = "caller.changed";
+                check(two.applicationInfo.uid == 12451 && two.name.endsWith(".Duplicate"), "Caller mutation crossed results");
+                duplicates.get(1).filter.addAction("caller.injected");
+                check(!duplicates.get(2).filter.hasAction("caller.injected"), "Resolved filters share caller mutations");
+                if (one instanceof ActivityInfo a && two instanceof ActivityInfo b) {
+                    a.getKnownActivityEmbeddingCerts().clear();
+                    check(!b.getKnownActivityEmbeddingCerts().isEmpty(), "Embedding certificate sets share caller mutations");
+                }
+                List<ResolveInfo> fresh = declared(pkg, kind, intent, null, PackageManager.GET_RESOLVED_FILTER);
+                check(info(fresh.get(1)).applicationInfo.uid == 12451 && info(fresh.get(1)).name.endsWith(".Duplicate")
+                        && !fresh.get(1).filter.hasAction("caller.injected"), "A query retained caller mutations");
+                if (info(fresh.get(1)) instanceof ActivityInfo a) check(!a.getKnownActivityEmbeddingCerts().isEmpty(),
+                        "A query retained embedding certificate mutations");
+
+                String duplicate = pkg.packageName + ".Duplicate";
+                for (int state : new int[]{PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                        PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.COMPONENT_ENABLED_STATE_DEFAULT}) {
+                    invoke(method(ApkPackage.class, "setComponentEnabledState", String.class, int.class), pkg, duplicate, state);
+                    List<ResolveInfo> result = declared(pkg, kind, intent, null, 0);
+                    check(result.size() == (state == PackageManager.COMPONENT_ENABLED_STATE_DISABLED ? 2 : 5),
+                            "Live installed enabled state was retained");
+                    for (ResolveInfo resolved : result) sameMetadata(individual(pkg, kind, info(resolved).name, 0),
+                            info(resolved), "live enabled metadata");
+                }
+                check(declared(pkg, kind, new Intent("absent"), null, 0).isEmpty(), "Empty match path changed");
+                Intent explicit = new Intent("absent").setComponent(new ComponentName(pkg.packageName, pkg.packageName + ".Explicit"));
+                check(declared(pkg, kind, explicit, null, 0).size() == 1, "Explicit unfiltered component disappeared");
+                libraryIsolation(pkg, kind, intent);
+            }
+        }
+        System.out.println("Component query metadata contracts passed: " + (checks - before) + " checks");
+    }
+
+    /** Constructed immutable installed graph, actual graph-to-ApplicationInfo generation. */
+    private static void libraryIsolation(ApkPackage pkg, Kind kind, Intent intent) throws Exception {
+        java.nio.file.Path directory = Files.createTempDirectory("gesher-component-libraries-");
+        try {
+            java.nio.file.Path library = directory.resolve("fixture.jar"); Files.write(library, new byte[]{1, 2, 3});
+            SharedLibraryGraph.Node dependency = new SharedLibraryGraph.Node("dependency", library.toFile(), List.of());
+            SharedLibraryGraph.Node first = new SharedLibraryGraph.Node("first", library.toFile(), List.of(dependency));
+            SharedLibraryGraph.Node second = new SharedLibraryGraph.Node("second", library.toFile(), List.of(dependency));
+            field(ApkPackage.class, "sharedLibraries").set(pkg, new SharedLibraryGraph(List.of(first, second), Set.of()));
+            List<ResolveInfo> results = declared(pkg, kind, intent, null, PackageManager.GET_SHARED_LIBRARY_FILES);
+            ApplicationInfo a = info(results.get(0)).applicationInfo, b = info(results.get(1)).applicationInfo;
+            check(a.sharedLibraryFiles != b.sharedLibraryFiles && a.sharedLibraryInfos != b.sharedLibraryInfos,
+                    "Application library containers share returned ownership");
+            check(a.sharedLibraryInfos.get(0) != b.sharedLibraryInfos.get(0)
+                    && a.sharedLibraryInfos.get(0).getDependencies().get(0)
+                        != b.sharedLibraryInfos.get(0).getDependencies().get(0), "Library graphs share returned nodes");
+            check(a.sharedLibraryInfos.get(0).getDependencies().get(0)
+                    == a.sharedLibraryInfos.get(1).getDependencies().get(0), "One graph lost its shared dependency");
+            a.sharedLibraryFiles[0] = "caller.changed";
+            a.sharedLibraryInfos.get(0).getDependencies().clear(); a.sharedLibraryInfos.clear();
+            check(!b.sharedLibraryFiles[0].equals("caller.changed") && b.sharedLibraryInfos.size() == 2
+                    && b.sharedLibraryInfos.get(0).getDependencies().size() == 1, "Caller mutation crossed library graphs");
+            ApplicationInfo fresh = info(declared(pkg, kind, intent, null, PackageManager.GET_SHARED_LIBRARY_FILES).get(0)).applicationInfo;
+            check(fresh.sharedLibraryInfos.size() == 2 && fresh.sharedLibraryInfos.get(0).getDependencies().size() == 1
+                    && !fresh.sharedLibraryFiles[0].equals("caller.changed"), "Caller mutated installed library metadata");
+        } finally {
+            field(ApkPackage.class, "sharedLibraries").set(pkg, SharedLibraryGraph.EMPTY);
+            Files.deleteIfExists(directory.resolve("fixture.jar")); Files.deleteIfExists(directory);
+        }
+    }
+
+    private static ApkPackage componentPackage(String scenario, int count, boolean counted) throws Exception {
+        PackageImpl parsed = manifest("fixture.component.work", counted);
+        Kind kind = scenario.startsWith("service") ? Kind.SERVICE
+                : scenario.startsWith("receiver") ? Kind.RECEIVER : Kind.ACTIVITY;
+        for (int i = 0; i < count; i++) {
+            boolean hit = !scenario.endsWith("miss") && (!scenario.endsWith("single") || i == 0)
+                    && (!scenario.endsWith("sparse") || i < 4);
+            declaration(parsed, kind, "Component" + i, !scenario.endsWith("disabled"), false,
+                    filter(hit ? ACTION : "other.action", true));
+        }
+        return apk(parsed, 12452);
+    }
+
+    private static Kind componentKind(String scenario) {
+        return scenario.startsWith("service") ? Kind.SERVICE
+                : scenario.startsWith("receiver") ? Kind.RECEIVER : Kind.ACTIVITY;
+    }
+
+    public static void metadataCoherence() throws Exception {
+        int before = checks;
+        for (Kind kind : new Kind[]{Kind.ACTIVITY, Kind.RECEIVER, Kind.SERVICE}) {
+            for (int count : new int[]{1, 2, 7, 8}) {
+                for (int setting : new int[]{PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+                        PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED}) {
+                    TransitionPackage parsed = new TransitionPackage("fixture.metadata.transition", kind);
+                    parsed.setEnabled(true); parsed.setTargetSdkVersion(36); parsed.setProcessName(parsed.getPackageName());
+                    for (int i = 0; i < count; i++) declaration(parsed, kind, "Component" + i, true, false, filter(ACTION, true));
+                    ApkPackage pkg = apk(parsed, 12453);
+                    Object enabled = invoke(method(ApkPackage.class, "enabledState"), pkg);
+                    Object disabled = invoke(method(enabled.getClass(), "application", int.class), enabled, setting);
+                    Field state = field(ApkPackage.class, "mLocalEnabledState");
+                    parsed.familyReads = 0;
+                    parsed.transition = () -> {
+                        try { state.set(pkg, disabled); }
+                        catch (IllegalAccessException impossible) { throw new AssertionError(impossible); }
+                    };
+                    List<ResolveInfo> results = declared(pkg, kind, new Intent(ACTION), null, 0);
+                    check(parsed.transition == null && state.get(pkg) == disabled, "Enabled transition was not exercised");
+                    // Batched generation captures one state. Direct tiny queries keep
+                    // their existing per-result read and stop returning newly disabled
+                    // components; each returned component/AI pair must remain coherent.
+                    check(results.size() == (count >= 8 ? count : 1), "Enabled transition changed query generation semantics");
+                    for (ResolveInfo result : results) check(info(result).enabled && info(result).applicationInfo.enabled
+                            && info(result).applicationInfo.enabledSetting == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
+                            "Returned component and application disagree about the captured enabled state");
+                    check(declared(pkg, kind, new Intent(ACTION), null, 0).isEmpty(), "Next query retained stale enabled state");
+                    List<ResolveInfo> disabledResults = declared(pkg, kind, new Intent(ACTION), null,
+                            PackageManager.MATCH_DISABLED_COMPONENTS);
+                    check(disabledResults.size() == count, "MATCH_DISABLED_COMPONENTS lost declarations");
+                    for (ResolveInfo result : disabledResults) check(!info(result).applicationInfo.enabled
+                            && info(result).applicationInfo.enabledSetting == setting, "Disabled query lost its actual application state");
+                    List<ResolveInfo> untilUsed = declared(pkg, kind, new Intent(ACTION), null,
+                            PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS);
+                    check(untilUsed.size() == (setting == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED ? count : 0),
+                            "Disabled-until-used query flags changed");
+                    for (ResolveInfo result : untilUsed) check(info(result).applicationInfo.enabled,
+                            "Disabled-until-used metadata did not honor query flags");
+                    state.set(pkg, enabled);
+                    check(declared(pkg, kind, new Intent(ACTION), null, 0).size() == count, "Reenable retained the previous snapshot");
+                }
+            }
+        }
+        System.out.println("Component query enabled-snapshot contracts passed: " + (checks - before) + " checks");
+    }
+
+    /** Counts real framework component-list reads; no metadata generator is replaced. */
+    public static void metadataWork() throws Exception {
+        int count = 64, queries = 8;
+        for (Kind kind : new Kind[]{Kind.ACTIVITY, Kind.RECEIVER, Kind.SERVICE}) {
+            String scenario = kind.name().toLowerCase(Locale.ROOT) + "-broad";
+            ApkPackage pkg = componentPackage(scenario, count, true);
+            reads.set(0);
+            for (int q = 0; q < queries; q++) {
+                List<ResolveInfo> results = declared(pkg, kind, new Intent(ACTION), null, 0);
+                check(results.size() == count, "Measured metadata query lost results");
+                for (int i = 0; i < count; i++) check(info(results.get(i)).name.equals(pkg.packageName + ".Component" + i),
+                        "Measured metadata query changed order");
+            }
+            int measured = reads.get();
+            System.out.println("COMPONENT_METADATA_WORK kind=" + kind + " components=" + count
+                    + " queries=" + queries + " component_list_reads=" + measured);
+            check(measured <= queries * (count + 2), "Query repeated full-family metadata generation: " + measured);
+        }
+    }
+
+    /** Uninstrumented manifests for host CPU/allocation measurements of real public queries. */
+    public static java.util.function.IntSupplier metadataWorkload(String scenario, int count) throws Exception {
+        ApkPackage pkg = componentPackage(scenario, count, false);
+        Kind kind = componentKind(scenario);
+        Intent intent = new Intent(ACTION);
+        long flags = PackageManager.GET_META_DATA | PackageManager.GET_RESOLVED_FILTER;
+        int expected = scenario.endsWith("miss") || scenario.endsWith("disabled") ? 0
+                : scenario.endsWith("single") ? 1 : scenario.endsWith("sparse") ? Math.min(4, count) : count;
+        return () -> {
+            List<ResolveInfo> results = declared(pkg, kind, intent, null, flags);
+            if (results.size() != expected) throw new AssertionError("Measured metadata result count");
+            int checksum = results.size();
+            for (ResolveInfo result : results) {
+                ComponentInfo component = info(result);
+                if (component.applicationInfo.uid != 12452 || !component.name.startsWith(pkg.packageName)
+                        || result.filter == null || !result.filter.hasAction(ACTION)) throw new AssertionError("Measured metadata values");
+                checksum += component.name.hashCode() + component.applicationInfo.uid + result.match;
+            }
+            return checksum;
+        };
+    }
+
+    public static void main(String[] args) throws Exception {
+        contracts(true); benchmark(true); metadataContracts(); metadataWork(); metadataCoherence();
+    }
 }
