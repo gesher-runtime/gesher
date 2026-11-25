@@ -272,11 +272,19 @@ asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execle", "gesher_bionic_vexecle", "16", 
 
 constexpr int kWNOHANG = 1;
 
+bool IsChild(int pid) {
+  std::lock_guard<std::mutex> lock(g_children_mutex);
+  return g_children.count(pid) != 0;
+}
+
 int CollectOne(int pid, int* status, int options) {
   for (;;) {
+    // A tracer's tracees report their stops and exits too (ADR 0093).
+    bool traced = false;
+    if (int got = PtraceWaitPoll(pid, options, status, &traced, &IsChild); got != 0) return got;
     {
       std::lock_guard<std::mutex> lock(g_children_mutex);
-      if (g_children.empty()) return errno = 10 /*ECHILD*/, -1;
+      if (g_children.empty() && !traced) return errno = 10 /*ECHILD*/, -1;
       // A specific pid, or any (-1/0).
       bool found = false;
       for (auto& kv : g_children) {
@@ -293,7 +301,7 @@ int CollectOne(int pid, int* status, int options) {
         if (pid > 0) break;
       }
       // None exited: wait below with the lock released.
-      if (!found) return errno = 10 /*ECHILD*/, -1;  // no such child
+      if (!found && !traced) return errno = 10 /*ECHILD*/, -1;  // no such child
     }
     if ((options & kWNOHANG) != 0) return 0;
     // Block until a child exits (the watcher sets `exited`), then re-scan.

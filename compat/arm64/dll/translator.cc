@@ -205,14 +205,74 @@ class JitCode {
 std::mutex g_live_jits_mutex;
 std::vector<JitCode*> g_live_jits;
 
+// Memory another process wrote here: a ptrace tracer's POKEs (ADR 0093), as
+// the host's ptrace guard publishes them before this process runs on (the
+// layout of gesher::ptrace::PublishedCodeWrites).
+struct ExternalWrite {
+  volatile int64_t epoch;
+  volatile int64_t address;
+  volatile int64_t size;
+};
+constexpr int64_t kExternalWrites = 64;
+struct ExternalWrites {
+  volatile int64_t epoch;
+  ExternalWrite writes[kExternalWrites];
+};
+std::atomic<const ExternalWrites*> g_external_writes{nullptr};
+
+int64_t ExternalEpoch() {
+  const ExternalWrites* external = g_external_writes.load(std::memory_order_acquire);
+  return external != nullptr ? external->epoch : 0;
+}
+
 // Called outside Jit::Run on every dispatch, also after a nested host call.
-// Pooled Envs retain their generations and invalidate on their next dispatch.
-void RefreshCodeCache(JitCode* code, uint64_t* seen) {
+// Pooled Envs retain their generations and invalidate on their next dispatch:
+// everything when this process's code changed, the written ranges when a
+// tracer wrote memory (everything if more were written than the ring keeps).
+void RefreshCodeCache(JitCode* code, uint64_t* seen, int64_t* seen_external) {
   const uint64_t generation = g_code_generation.load(std::memory_order_acquire);
   if (*seen != generation) {
     code->Clear();
     *seen = generation;
+    *seen_external = ExternalEpoch();
+    return;
   }
+  const ExternalWrites* external = g_external_writes.load(std::memory_order_acquire);
+  if (external == nullptr) return;
+  const int64_t epoch = external->epoch;
+  if (epoch == *seen_external) return;
+  if (epoch < *seen_external || epoch - *seen_external > kExternalWrites) {
+    code->Clear();
+  } else {
+    for (int64_t k = *seen_external + 1; k <= epoch; ++k) {
+      const ExternalWrite& write = external->writes[k % kExternalWrites];
+      if (write.epoch != k) {  // overwritten meanwhile
+        code->Clear();
+        break;
+      }
+      const uintptr_t start = static_cast<uintptr_t>(write.address);
+      const uintptr_t size = static_cast<uintptr_t>(write.size);
+      code->Invalidate(start, size > UINTPTR_MAX - start ? UINTPTR_MAX : start + size);
+    }
+  }
+  *seen_external = epoch;
+}
+
+// The Jit each live Env is running, for the ptrace guard's halt: a fixed,
+// lock-free table, since the guard reads it with every other thread of the
+// process suspended (one may hold any lock).
+constexpr size_t kRunningSlots = 4096;
+std::atomic<std::atomic<A64::Jit*>*> g_running_slots[kRunningSlots];
+// The halt that guard asks for when a tracer wrote guest code (a signal's
+// halt is UserDefined3, Env::kSignalHalt).
+constexpr Dynarmic::HaltReason kExternalWritesHalt = Dynarmic::HaltReason::UserDefined4;
+
+size_t AddRunningSlot(std::atomic<A64::Jit*>* running) {
+  for (size_t i = 0; i < kRunningSlots; ++i) {
+    std::atomic<A64::Jit*>* expected = nullptr;
+    if (g_running_slots[i].compare_exchange_strong(expected, running)) return i;
+  }
+  return kRunningSlots;  // full: this Env sees writes at its next dispatch only
 }
 
 void RegisterJit(JitCode* code) {
@@ -867,6 +927,7 @@ class Env final : public A64::UserCallbacks {
   ~Env() override {
     for (auto& code : code_) UnregisterJit(code.get());
     code_.clear();
+    if (running_slot_ < kRunningSlots) g_running_slots[running_slot_].store(nullptr);
     jits_.clear();
     for (size_t id : ids_) ReleaseProcessorId(id);
     VirtualFree(tls_block_, 0, MEM_RELEASE);
@@ -1017,6 +1078,7 @@ class Env final : public A64::UserCallbacks {
       code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
       code_.push_back(std::make_unique<JitCode>(jits_.back().get()));
       RegisterJit(code_.back().get());
+      code_epochs_.push_back(ExternalEpoch());
     }
     return jits_[depth].get();
   }
@@ -1365,15 +1427,22 @@ class Env final : public A64::UserCallbacks {
     for (;;) {
       // A host call can abort a nested load while this outer Jit is paused.
       // Nested Jit creation may grow the vector: keep no reference across Run.
-      RefreshCodeCache(code_[depth_ - 1].get(), &code_generations_[depth_ - 1]);
+      // The ptrace guard halts the Jit published here (kExternalWritesHalt)
+      // after a tracer wrote memory. Publish it first (a full barrier), then
+      // clear old halts (not a signal's, kSignalHalt, handled after Run), then
+      // refresh: a write published before the refresh is seen by it, and one
+      // published after it halts this Run.
+      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_seq_cst);
+      jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2 |
+                     kExternalWritesHalt);
+      RefreshCodeCache(code_[depth_ - 1].get(), &code_generations_[depth_ - 1],
+                       &code_epochs_[depth_ - 1]);
       // Run drops the ranges posted so far before it dispatches.
       code_[depth_ - 1]->Dispatched();
       pending_call_ = {};
-      jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2);
       int saved_running = t_guest_running;
       t_guest_running = 1;
       counters_.runs.Bump();
-      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_seq_cst);
       // A signal queued while this thread was not running guest code: stop
       // at once. (Interrupt() sets the flag, then halts the running Jit.)
       if (signal_interrupt_.load(std::memory_order_seq_cst)) {
@@ -1425,6 +1494,9 @@ class Env final : public A64::UserCallbacks {
         // Stopped only to drop translations an IC IVAU (of this thread or
         // another) invalidated (Run has dropped them): the guest carries on.
         continue;
+      } else if (Dynarmic::Has(halt, kExternalWritesHalt) &&
+                 !Dynarmic::Has(halt, Dynarmic::HaltReason::UserDefined1)) {
+        continue;  // a tracer wrote memory: refresh, then run on
       } else {
         return;
       }
@@ -1534,6 +1606,7 @@ class Env final : public A64::UserCallbacks {
   std::vector<std::unique_ptr<JitCode>> code_;
   uint64_t icache_line_ = 64;
   uintptr_t icache_start_ = 0, icache_end_ = 0;  // pending IC IVAU lines; end 0: none
+  std::vector<int64_t> code_epochs_;        // the external writes each has seen
   PendingHostCall pending_call_;
   uint32_t fpcr_ = 0;
   uint32_t fpsr_ = 0;
@@ -1608,6 +1681,7 @@ class Env final : public A64::UserCallbacks {
     std::memset(sc->reserved + sizeof(fp), 0, 8);  // the terminating null record
     return true;
   }
+  size_t running_slot_ = AddRunningSlot(&running_jit_);
   std::atomic<void*> sampled_host_fn_{nullptr};  // the host function called from guest code
   std::atomic<uint64_t> last_syscall_{~uint64_t{0}};
   HANDLE thread_ = nullptr;  // only while profiling
@@ -2445,6 +2519,20 @@ gesher_arm64_api g_api = {
 };
 
 }  // namespace
+
+void SetExternalCodeWrites(const void* writes) {
+  g_external_writes.store(static_cast<const ExternalWrites*>(writes), std::memory_order_release);
+}
+
+void GESHER_SYSV HaltForExternalWrites() {
+  for (auto& slot : g_running_slots) {
+    std::atomic<A64::Jit*>* running = slot.load(std::memory_order_acquire);
+    if (running == nullptr) continue;
+    if (A64::Jit* jit = running->load(std::memory_order_acquire)) {
+      jit->HaltExecution(kExternalWritesHalt);
+    }
+  }
+}
 
 bool InGuestCode(uintptr_t addr) {
   static thread_local CodeRegion last{0, 0};
