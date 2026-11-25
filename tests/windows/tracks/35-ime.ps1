@@ -257,7 +257,7 @@ function ImeChecks([string] $Mode, [IntPtr] $hwnd, [uint32] $ProcessId, [scriptb
   [GesherWin32]::Click($hwnd, 200, 270)
   $ok = WaitForLog $ReadLog 'ImeActivity focus password' 20
   [void][ImeInput]::Keys(0x50, 0x57)
-  $t = WaitText $ReadLog 'password' 'pw' 120
+  $t = WaitText $ReadLog 'password field' 'pw' 120
   $ok = $ok -and $t -ceq 'pw' -and ("$(& $ReadLog)" -match 'gesher-ime: input started in window "Gesher IME test": inputType 0x81[^\r\n]*compositions false')
   ImeCheck $Mode 'a password field: typed into, no IME compositions' $ok "text $t"
 }
