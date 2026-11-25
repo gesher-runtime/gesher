@@ -11,6 +11,24 @@ the earlier first-party-only implementation. A compiled fixture is not evidence
 that a runtime passed it: retain the exact source commit, artifact digest,
 runtime version, loader and complete Windows output when recording results.
 
+## First actual Windows attempt
+
+[Run 45590458033](https://github.com/gesher-runtime/gesher/actions/runs/45590458033)
+tested `c17855100f529b6cb3faaa6e8e4ec3a5a52e4ca5`, tree
+`e7dec0b88476f4c482ae643ed893960be8bfd775`. Its native build succeeded; both
+Windows jobs stopped at the fixture's profile-identity preflight before any
+production deletion call. WebView2 131.0.2903.86 and 157.0.4341.46 successfully
+returned the actual default profile's empty name, which the fixture incorrectly
+rejected. The candidate backend contained the same nonempty-name assumption.
+
+Both conditions are now corrected to retain the observed empty name. Successful
+property reads, the actual ordinary/private mode, nonempty profile path and
+exact resolver profile-name/path comparison remain required. No directory name
+is substituted for the profile name. This agrees with the
+[SDK's documented empty default profile name](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2environment10?view=webview2-1.0.4258.31#createcorewebview2controlleroptions).
+That failed attempt provides no production-deletion acceptance; a new exact-head
+run must exercise the operation after this correction.
+
 ## State and operations
 
 The fixture first writes and closes all five baseline databases: A first-party,

@@ -118,11 +118,12 @@ inline bool StartOrdinary(const std::shared_ptr<quota::State>& state, HWND paren
   BOOL in_private = TRUE;
   if (!state->core.As(IID_ICoreWebView2_13, &core13) ||
       !state->Check(core13->get_Profile(actual.Put()), L"fixture actual profile") || !actual ||
-      !state->Check(actual->get_ProfileName(name.Put()), L"fixture profile name") || name.str().empty() ||
+      !state->Check(actual->get_ProfileName(name.Put()), L"fixture profile name") ||
       !state->Check(actual->get_IsInPrivateModeEnabled(&in_private), L"fixture ordinary profile") || in_private) {
     return state->Fail(L"fixture did not open the actual ordinary application profile");
   }
-  Log(L"INFO", L"ordinary-profile=" + name.str() + L" path=" + state->profile_path);
+  // The actual default profile has a valid empty name. Keep it unchanged.
+  Log(L"INFO", L"ordinary-profile=\"" + name.str() + L"\" path=" + state->profile_path);
   for (const auto& origin : origins) {
     std::string page = Page(origin);
     if (page.empty()) return state->Fail(L"storage fixture page construction failed");

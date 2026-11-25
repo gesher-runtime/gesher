@@ -230,12 +230,14 @@ struct OriginStorageDelete : std::enable_shared_from_this<OriginStorageDelete> {
     Com<ICoreWebView2Profile> profile;
     CoString name, path;
     BOOL actual_private = FALSE;
+    // The default profile name is the empty string, even though its directory
+    // is named Default. Preserve that actual name when creating its private view.
     if (!view.core.As(IID_ICoreWebView2_13, &core13) ||
         FAILED(core13->get_Profile(profile.Put())) || !profile ||
         FAILED(profile->get_ProfileName(name.Put())) ||
         FAILED(profile->get_ProfilePath(path.Put())) ||
         FAILED(profile->get_IsInPrivateModeEnabled(&actual_private)) ||
-        actual_private != (in_private ? TRUE : FALSE) || name.str().empty() || path.str().empty()) {
+        actual_private != (in_private ? TRUE : FALSE) || path.str().empty()) {
       Finish(E_FAIL, L"actual profile identity"); return false;
     }
     if (!in_private) {
