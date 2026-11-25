@@ -95,6 +95,11 @@ std::u16string TimeZoneKeyName();
 // unknown or without icu.dll.
 std::u16string IanaZone(const std::u16string& windows_id);
 
+// --- device name -------------------------------------------------------------------------
+// Windows' computer name, as Settings > System > About shows it (the physical DNS
+// host name, gesher/device_identity.h); empty if Windows gives none.
+std::u16string ComputerName();
+
 // --- toasts -----------------------------------------------------------------------------
 // Shows the toast `xml` for the AppUserModelID `app_id` with `tag` and `group`
 // (one replacing an earlier with the same tag and group): its popup suppressed

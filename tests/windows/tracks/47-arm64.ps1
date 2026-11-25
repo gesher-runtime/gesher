@@ -90,6 +90,13 @@ Check 'arm64: an arm64-v8a libc/pthread .so runs its checks through the shim' {
 } @('libc_test: all passed', 'sleep contracts: complete', 'arm64_elf_test all passed',
     'Bionic realtime range contracts: all passed', 'Bionic tgkill contracts: all passed')
 
+# bionic's libstdc++.so from a translated guest (tests/native/libstdcxx_test.cc):
+# dlopen/dlsym of every export, operator new/delete crossing malloc/free, and
+# the static-local guard protocol with threads racing on one guard.
+Check 'arm64: bionic libstdc++.so (new/delete, __cxa_guard_*) through the shim' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/libstdcxx_test_arm64.so"))
+} @('libstdcxx: all passed', 'arm64_elf_test all passed')
+
 # The guest-ABI checks (tests/native/arm64_abi_test.c): ELF TLS through
 # TLSDESC in several threads, the stack protector, setjmp/longjmp, struct stat
 # and epoll_event layouts, arm64 syscall numbers, AT_HWCAP, C11 atomics,
@@ -99,6 +106,34 @@ Check 'arm64: guest ABI (TLS, stack protector, setjmp, stat, epoll, syscall, ato
   A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/arm64_abi_test.so"), (NoDrive "$a64"))
 } @('arm64_abi_test: all passed', 'arm64_elf_test all passed', 'INFO  arm64 perf: compiled C kernel',
     'Bionic setjmp contracts: all passed')
+
+# IC IALLU is an EL1 instruction, UNDEFINED at EL0: guest code executing it
+# gets SIGILL, as on a device. The guest reads the mode with getenv, which the
+# shim answers from this process's environment, inherited by A64Run's process.
+$env:GESHER_ARM64_ABI_CRASH = 'ic-iallu'
+try {
+  A64Crash 'arm64: guest IC IALLU (EL1 only) is a SIGILL crash report' "$a64/arm64_elf_test.exe" `
+    @((NoDrive "$a64/arm64_abi_test.so"), (NoDrive "$a64")) @('Fatal signal 4 (SIGILL)') 132
+} finally {
+  Remove-Item Env:GESHER_ARM64_ABI_CRASH -ErrorAction SilentlyContinue
+}
+
+# ADR 0086: the arm64 stand-in libart.so and libdexfile.so for NetEase Yidun's
+# libnesec.so, loaded by LoadArtShimArm64 (their imports bound to recording
+# host fakes, Runtime::instance_ set) and run by the translator: the OpenCommon
+# entry as ART calls it and OpenCommon as a device calls it (X8, stack
+# arguments), the Runtime functions and LoadClass, each argument where the
+# fake reads it; a load that failed after libdexfile.so retries without
+# loading it twice; the imports are visible to nothing else.
+Check 'arm64: the stand-in libart.so/libdexfile.so run translated with each argument in place' {
+  $artScratch = Join-Path $env:RUNNER_TEMP "gesher-art-shim-arm64-$([guid]::NewGuid())"
+  try {
+    A64Run "$a64/art_shim_arm64_test.exe" @((NoDrive $artScratch)) 120
+  } finally {
+    Remove-Item -LiteralPath $artScratch -Recurse -Force -ErrorAction SilentlyContinue
+  }
+} @('PASS  ... with X8 first and each argument in its place',
+    'PASS  the retry loaded each object exactly once', 'art_shim_arm64_test all passed')
 
 # android_dlopen_ext from guest code (tests/native/dlext_test.c): the guest's
 # android_dlextinfo reaches the loader as it is; RESERVED_ADDRESS loads an

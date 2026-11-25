@@ -62,6 +62,12 @@ def main() -> int:
                                         (f"compat/posix/include/gesher/{name}.h", work / f"include/gesher/{name}.h")):
                 content = read(source)
                 destination.write_text(content, encoding="utf-8")
+        # The property area's initial values include the PC's identity, from a
+        # header-only production owner (docs/device-identity.md). Stage it only
+        # when the selected source includes it.
+        if "#include <gesher/device_identity.h>" in (work / "system_properties.cc").read_text():
+            (work / "include/gesher/device_identity.h").write_text(
+                read("compat/posix/include/gesher/device_identity.h"), encoding="utf-8")
         # #118 routes property-session publication through the shared POSIX
         # owner. Stage that real dependency only when the selected source uses
         # it, retaining historical --source-ref builds without a new shim.
