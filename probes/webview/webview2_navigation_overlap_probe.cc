@@ -1,5 +1,6 @@
 // Gesher: bounded diagnostic of actual WebView2 navigation event ordering.
-// Three pairs of own loads, a fixed synthetic document, no Java/provider model.
+// Three pairs of own loads and a same-document history observation. Fixed
+// synthetic documents only; no Java/provider model.
 // Native trace supplies the real navigation IDs and latest handed API number.
 // Resource callbacks do not supply a per-request navigation/API ID; do not
 // interpret their latest-started snapshot as ownership of the request.
@@ -60,16 +61,19 @@ class Probe final : public gesher::webview::Listener {
   std::atomic<bool> warmup_done{false}, final_done{false}, script_done{false};
   std::atomic<bool> script_matches{false}, hold_first{false}, first_finished{false};
   std::atomic<int64_t> held_request{0}, latest_started{0};
+  std::atomic<int64_t> expected_script{0};
   std::atomic<ULONGLONG> last_navigation_event{0};
   std::atomic<int> starts{0}, requests{0}, finishes{0};
+  std::atomic<int> all_starts{0}, all_finishes{0}, source_changes{0}, history_changes{0};
+  std::atomic<int> source_fixture{-1};
 
   Probe(const char* label, int64_t base) : name(label), first(base + 1), second(base + 2), warmup(base) {}
 
-  bool Issue(int64_t number) {
+  bool Issue(int64_t number, const std::wstring& url = kDocument) {
     std::lock_guard<std::mutex> lock(host_mutex);
     const bool was_ready = ready.load();
     Log(name, "issue", number, 0, was_ready ? 1 : 0);
-    host.load()->Navigate(kDocument, L"", L"GET", {}, number);
+    host.load()->Navigate(url, L"", L"GET", {}, number);
     return was_ready;
   }
 
@@ -107,6 +111,7 @@ class Probe final : public gesher::webview::Listener {
       Log(name, "failure", id, 0, arg);
       failed = true;
     } else if (type == gesher::webview::kPageStarted) {
+      ++all_starts;
       last_navigation_event = GetTickCount64();
       Log(name, "start", id, handed, arg, fixture);
       if (fixture) {
@@ -114,6 +119,7 @@ class Probe final : public gesher::webview::Listener {
         if (handed >= first) ++starts;
       }
     } else if (type == gesher::webview::kPageFinished) {
+      ++all_finishes;
       last_navigation_event = GetTickCount64();
       // id is HTTP status here. The adjacent existing native trace contains
       // the actual NavigationId; matching by handed alone would be ambiguous.
@@ -126,8 +132,23 @@ class Probe final : public gesher::webview::Listener {
         // belongs to the second issue. The native NavigationId trace decides.
         if (handed == second && arg == -1 && id == 200) final_done = true;
       }
+    } else if (type == gesher::webview::kSourceChanged) {
+      last_navigation_event = GetTickCount64();
+      int known = a == kDocument ? 0 : a == std::wstring(kDocument) + L"#one" ? 1
+          : a == std::wstring(kDocument) + L"#control" ? 2 : -1;
+      source_fixture = known;
+      ++source_changes;
+      Log(name, "source", known, id, arg, known >= 0, "handed_snapshot");
+    } else if (type == gesher::webview::kHistory) {
+      last_navigation_event = GetTickCount64();
+      ++history_changes;
+      Log(name, "history", history_changes, 0, arg);
     } else if (type == gesher::webview::kScriptResult) {
-      script_matches = arg >= 0 && a == L"\"gesher-overlap\"";
+      if (id != expected_script) {
+        Log(name, "script-callback", id, 0, arg);
+        return;
+      }
+      script_matches = arg >= 0 && a == (id >= 900 ? L"true" : L"\"gesher-overlap\"");
       Log(name, "document-check", id, 0, script_matches ? 1 : 0);
       script_done = true;
     }
@@ -166,7 +187,47 @@ class Probe final : public gesher::webview::Listener {
   }
 };
 
-enum class Mode { BeforeReady, ReadyPair, HeldResource };
+enum class Mode { BeforeReady, ReadyPair, HeldResource, SameDocumentHistory };
+
+// Observe public callbacks around real history commands. A matching fixture
+// URL is a diagnostic endpoint check, never a proposed production ownership
+// rule. In particular, log page pushState separately: it may produce the same
+// SourceChanged/HistoryChanged event types as an application's history command.
+bool ObserveHistory(Probe* probe, Host* host) {
+  auto step = [&](const char* label, int expected, const std::function<void()>& issue) {
+    const int starts = probe->all_starts, finishes = probe->all_finishes;
+    const int sources = probe->source_changes, histories = probe->history_changes;
+    Log(probe->name, label, expected);
+    issue();
+    bool ok = Wait(5000, [&] { return probe->failed || probe->source_fixture == expected; })
+        && !probe->failed && probe->source_fixture == expected;
+    if (ok) ok = Wait(2000, [&] {
+      return probe->failed || GetTickCount64() - probe->last_navigation_event >= 500;
+    }) && !probe->failed;
+    probe->script_done = false;
+    probe->script_matches = false;
+    probe->expected_script = 900;
+    const std::wstring suffix = expected == 0 ? L"" : expected == 1 ? L"#one" : L"#control";
+    if (ok) {
+      host->ExecuteScript(L"location.href === '" + std::wstring(kDocument) + suffix + L"'", 900);
+      ok = Wait(5000, [&] { return probe->script_done || probe->failed; })
+          && probe->script_matches && !probe->failed;
+    }
+    Log(probe->name, "history-step-navigation-delta", probe->all_starts - starts,
+        probe->all_finishes - finishes, ok ? 1 : 0, true, "finishes");
+    Log(probe->name, "history-step-source-delta", probe->source_changes - sources,
+        probe->history_changes - histories, expected, true, "history_events");
+    return ok;
+  };
+  if (!step("issue-fragment", 1, [&] { probe->Issue(probe->first, std::wstring(kDocument) + L"#one"); }))
+    return false;
+  if (!step("issue-back", 0, [&] { host->Run(Host::kGoBack); })) return false;
+  if (!step("issue-forward", 1, [&] { host->Run(Host::kGoForward); })) return false;
+  if (!step("issue-page-push-state", 2, [&] {
+    host->ExecuteScript(L"history.pushState(null, '', '#control'); true", 901);
+  })) return false;
+  return step("issue-back-from-push-state", 1, [&] { host->Run(Host::kGoBack); });
+}
 
 bool RunCase(HWND window, const char* name, int64_t base, Mode mode) {
   Log(name, "begin", base + 1, base + 2, 0, true, "second_api");
@@ -194,12 +255,13 @@ bool RunCase(HWND window, const char* name, int64_t base, Mode mode) {
       probe->Issue(probe->warmup);
       ok = Wait(15000, [&] { return probe->warmup_done || probe->failed; }) && probe->warmup_done;
     }
+    if (ok && mode == Mode::SameDocumentHistory) ok = ObserveHistory(probe, host);
     if (ok && mode == Mode::HeldResource) probe->hold_first = true;
-    if (ok) probe->Issue(probe->first);
+    if (ok && mode != Mode::SameDocumentHistory) probe->Issue(probe->first);
     if (ok && mode == Mode::HeldResource) {
       ok = Wait(15000, [&] { return probe->held_request != 0 || probe->failed; }) && probe->held_request != 0;
     }
-    if (ok) probe->Issue(probe->second);
+    if (ok && mode != Mode::SameDocumentHistory) probe->Issue(probe->second);
     if (ok && mode == Mode::HeldResource) {
       // Observe without blocking the WebView STA. Release on a second start,
       // the first completion, or two seconds, whichever arrives first.
@@ -208,9 +270,9 @@ bool RunCase(HWND window, const char* name, int64_t base, Mode mode) {
       probe->ReleaseHeld();
     }
   }
-  if (ok) ok = Wait(mode == Mode::BeforeReady ? 60000 : 15000,
+  if (ok && mode != Mode::SameDocumentHistory) ok = Wait(mode == Mode::BeforeReady ? 60000 : 15000,
                     [&] { return probe->final_done || probe->failed; }) && probe->final_done && !probe->failed;
-  if (ok) {
+  if (ok && mode != Mode::SameDocumentHistory) {
     // Observe a finite quiet interval after every start seen so far completed.
     // This deliberately does not assert an ownership mapping for equal URLs.
     ok = Wait(10000, [&] {
@@ -220,6 +282,9 @@ bool RunCase(HWND window, const char* name, int64_t base, Mode mode) {
     Log(name, "quiet-window-ms", 500, 0, ok ? 1 : 0);
   }
   if (ok) {
+    probe->script_done = false;
+    probe->script_matches = false;
+    probe->expected_script = base + 99;
     host->ExecuteScript(L"document.title", base + 99);
     ok = Wait(5000, [&] { return probe->script_done || probe->failed; }) && probe->script_matches && !probe->failed;
   }
@@ -243,7 +308,9 @@ bool RunCase(HWND window, const char* name, int64_t base, Mode mode) {
 }
 }  // namespace
 
-int wmain() {
+int wmain(int argc, wchar_t** argv) {
+  const bool history_only = argc == 2 && std::wstring(argv[1]) == L"--history-only";
+  if (argc != 1 && !history_only) return 2;
   _putenv("GESHER_TRACE_WEBVIEW_NAVIGATION=1");
   const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   if (FAILED(initialized)) { Log("all", "com-failed", 0, 0, initialized); return 1; }
@@ -267,9 +334,11 @@ int wmain() {
                                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
   if (window == nullptr) { CoUninitialize(); return 1; }
   ShowWindow(window, SW_SHOWNOACTIVATE);
-  bool ok = RunCase(window, "before-ready-pair", 100, Mode::BeforeReady);
-  if (ok) ok = RunCase(window, "ready-pair", 200, Mode::ReadyPair);
-  if (ok) ok = RunCase(window, "held-first-resource", 300, Mode::HeldResource);
+  bool ok = true;
+  if (!history_only) ok = RunCase(window, "before-ready-pair", 100, Mode::BeforeReady);
+  if (ok && !history_only) ok = RunCase(window, "ready-pair", 200, Mode::ReadyPair);
+  if (ok && !history_only) ok = RunCase(window, "held-first-resource", 300, Mode::HeldResource);
+  if (ok) ok = RunCase(window, "same-document-history", 400, Mode::SameDocumentHistory);
   const int shutdown = Host::ShutdownIdle(10000);
   Log("all", "shutdown", shutdown);
   DestroyWindow(window);

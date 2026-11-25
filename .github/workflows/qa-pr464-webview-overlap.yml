@@ -1,4 +1,4 @@
-name: QA 464 real WebView2 overlap diagnostic
+name: QA 464 real WebView2 history diagnostic
 
 on:
   push:
@@ -130,14 +130,14 @@ jobs:
           # The executable independently requires RuntimeVersion and fails if
           # the real runtime cannot be initialized. No missing-runtime skip.
 
-      - name: Capture actual overlap event order with a 300-second watchdog
+      - name: Capture actual same-document history events with a 300-second watchdog
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Path evidence -Force | Out-Null
           Copy-Item dist-overlap/source-identity.txt, dist-overlap/artifact-sha256.txt evidence/
           $exe = (Resolve-Path dist-overlap/webview2_navigation_overlap_probe.exe).Path
-          $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -RedirectStandardOutput evidence/probe.stdout.log -RedirectStandardError evidence/probe.stderr.log
+          $p = Start-Process -FilePath $exe -ArgumentList @('--history-only') -NoNewWindow -PassThru -RedirectStandardOutput evidence/probe.stdout.log -RedirectStandardError evidence/probe.stderr.log
           $timedOut = -not $p.WaitForExit(300000)
           if ($timedOut) {
             $p.Kill($true)
@@ -147,13 +147,13 @@ jobs:
           if ($timedOut) { throw 'Native overlap diagnostic exceeded 300 seconds' }
           if ($p.ExitCode -ne 0) { throw "Native overlap diagnostic failed: $($p.ExitCode)" }
           $log = Get-Content evidence/probe.stderr.log -Raw
-          foreach ($case in @('before-ready-pair', 'ready-pair', 'held-first-resource')) {
+          foreach ($case in @('same-document-history')) {
             if ($log -notmatch "(?m)^OVERLAP case=$case .* event=end .* arg=1(?: |$)") { throw "Missing completed case: $case" }
           }
           if ($log -notmatch '(?m)^OVERLAP case=all .* event=shutdown id=1 ' -or
               $log -notmatch '(?m)^OVERLAP case=all .* event=diagnostic-complete .* arg=1(?: |$)') { throw 'Native lifecycle did not complete' }
           @('Diagnostic capture completed on actual WebView2.',
-            'Whether either modeled order occurred must be determined from the actual navigation-ID trace.',
+            'History commands and page pushState are logged separately; no ownership mapping is inferred from their URLs.',
             'A completed capture does not establish repair of the prior Notes/ART HTTP404 failure.') | Add-Content $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
