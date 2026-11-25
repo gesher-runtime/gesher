@@ -1201,7 +1201,22 @@ struct FixtureSaclRestore {
   bool dirty = false;
   NTSTATUS Restore() {
     if (!dirty) return 0;
-    const NTSTATUS result = set(object, SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION, original);
+    // Leave the captured original immutable. SC+SI requests restoration of SI;
+    // Windows consumes SC, and the fixture compares the resulting exact control.
+    SECURITY_DESCRIPTOR_CONTROL control{};
+    DWORD revision = 0;
+    PACL sacl = nullptr;
+    BOOL present = FALSE, defaulted = FALSE;
+    SECURITY_DESCRIPTOR descriptor{};
+    constexpr WORD control_bits = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ;
+    if (!GetSecurityDescriptorControl(original, &control, &revision) || revision != SECURITY_DESCRIPTOR_REVISION ||
+        !GetSecurityDescriptorSacl(original, &present, &sacl, &defaulted) || !present || !sacl ||
+        !InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorSacl(&descriptor, TRUE, sacl, defaulted)) return static_cast<NTSTATUS>(0xc0000079);
+    WORD requested_control = static_cast<WORD>(control & control_bits);
+    if (control & SE_SACL_AUTO_INHERITED) requested_control |= SE_SACL_AUTO_INHERIT_REQ;
+    if (!SetSecurityDescriptorControl(&descriptor, control_bits, requested_control)) return static_cast<NTSTATUS>(0xc0000079);
+    const NTSTATUS result = set(object, SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION, &descriptor);
     if (result >= 0) dirty = false;
     return result;
   }
@@ -1886,7 +1901,9 @@ void ObservePackageSaclReuse(HANDLE private_token, const storage::AuthorityLaunc
       L"S:P(AU;SAFA;0x00000001;;;WD)(ML;;NW;;;LW)", SDDL_REVISION_1, &audit_raw, nullptr),
       "fixture-sacl-audit-descriptor");
   const Local audit(audit_raw);
-  Require(SetSecurityDescriptorControl(audit.get(), control_bits, static_cast<WORD>(control & control_bits)),
+  WORD audit_control_request = static_cast<WORD>(control & control_bits);
+  if (control & SE_SACL_AUTO_INHERITED) audit_control_request |= SE_SACL_AUTO_INHERIT_REQ;
+  Require(SetSecurityDescriptorControl(audit.get(), control_bits, audit_control_request),
       "fixture-sacl-audit-original-control");
   PACL audit_acl = nullptr;
   Require(GetSecurityDescriptorSacl(audit.get(), &present, &audit_acl, &defaulted) && present && audit_acl &&
@@ -1897,7 +1914,9 @@ void ObservePackageSaclReuse(HANDLE private_token, const storage::AuthorityLaunc
       "fixture-sacl-apply-audit-entry", ERROR_ACCESS_DENIED);
   const Local audit_before = FullSaclSecurity(writable.get());
   PACL actual_audit = nullptr;
-  Require(GetSecurityDescriptorSacl(audit_before.get(), &present, &actual_audit, &defaulted) && present && actual_audit &&
+  SECURITY_DESCRIPTOR_CONTROL audit_control{};
+  Require(GetSecurityDescriptorControl(audit_before.get(), &audit_control, &revision) && audit_control == control &&
+      GetSecurityDescriptorSacl(audit_before.get(), &present, &actual_audit, &defaulted) && present && actual_audit &&
       SessionAclBytes(actual_audit) == audit_bytes, "fixture-sacl-audit-change-observed", ERROR_INVALID_ACL);
   // This is the independent control for the original label-only read: it still
   // looks valid even though the privileged full read exposes the extra ACE.

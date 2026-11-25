@@ -679,9 +679,14 @@ class PackageNamespace {
       stage(Stage::kDescriptor);
       SECURITY_DESCRIPTOR descriptor{};
       constexpr WORD sacl_control = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ;
+      WORD requested_control = static_cast<WORD>(control_ & sacl_control);
+      // MS-DTYP specifies that SC+SI input preserves SI while consuming SC.
+      // Request that transition only for a previously auto-inherited SACL;
+      // strict readback must still reproduce the original saved control.
+      if (control_ & SE_SACL_AUTO_INHERITED) requested_control |= SE_SACL_AUTO_INHERIT_REQ;
       if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
           !SetSecurityDescriptorSacl(&descriptor, TRUE, expected_label_, FALSE) ||
-          !SetSecurityDescriptorControl(&descriptor, sacl_control, static_cast<WORD>(control_ & sacl_control))) return GetLastError();
+          !SetSecurityDescriptorControl(&descriptor, sacl_control, requested_control)) return GetLastError();
       stage(Stage::kWrite);
       observed.value.write_called = 1;
       const NTSTATUS written = set_(writable.get(), SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION,
