@@ -7,9 +7,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <type_traits>
 #include <set>
 #include <sstream>
 #include <string>
@@ -20,7 +23,9 @@ using DWORD = uint32_t;
 using ULONG = uint32_t;
 using HANDLE = void*;
 constexpr DWORD PAGE_NOACCESS = 1, PAGE_READONLY = 2, PAGE_READWRITE = 4,
-    PAGE_EXECUTE_READ = 32, PAGE_EXECUTE_READWRITE = 64;
+    PAGE_WRITECOPY = 8, PAGE_EXECUTE_READ = 32, PAGE_EXECUTE_READWRITE = 64,
+    PAGE_EXECUTE_WRITECOPY = 128, PAGE_GUARD = 0x100, DUPLICATE_SAME_ACCESS = 2;
+constexpr bool FALSE = false;
 constexpr DWORD MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_DECOMMIT = 0x4000, MEM_RELEASE = 0x8000,
     MEM_REPLACE_PLACEHOLDER = 0x4000, MEM_RESERVE_PLACEHOLDER = 0x40000,
     MEM_PRESERVE_PLACEHOLDER = 2, MEM_COALESCE_PLACEHOLDERS = 1;
@@ -86,8 +91,17 @@ bool UnmapViewOfFile(void* address) {
   calls.push_back({"unmap", reinterpret_cast<uintptr_t>(address), 0, 0, 0});
   return true;
 }
+int open_handles = 0;
+uintptr_t next_handle = 0x5000;
+bool DuplicateHandle(int, HANDLE source, int, HANDLE* out, DWORD, bool, DWORD) {
+  if (source == nullptr) { *out = nullptr; return false; }
+  *out = reinterpret_cast<HANDLE>(next_handle++);
+  ++open_handles;
+  return true;
+}
 bool CloseHandle(HANDLE handle) {
   calls.push_back({"close", reinterpret_cast<uintptr_t>(handle), 0, 0, 0});
+  if (handle != nullptr) --open_handles;
   return true;
 }
 struct PlaceholderBoundary {
@@ -97,6 +111,11 @@ struct PlaceholderBoundary {
     bool replacement = (flags & MEM_REPLACE_PLACEHOLDER) != 0;
     if (replacement ? fail_replace : fail_reserve) return nullptr;
     return address != nullptr ? address : reinterpret_cast<void*>(kBase);
+  }
+  void* map3(HANDLE, int, void* address, uint64_t, size_t length, DWORD flags, ULONG protection, void*, int) const {
+    calls.push_back({"map3", reinterpret_cast<uintptr_t>(address), length, flags, protection});
+    if (fail_replace) return nullptr;
+    return address;
   }
   bool unmap2(int, void* address, DWORD flags) const {
     calls.push_back({"unmap", reinterpret_cast<uintptr_t>(address), 0, flags, 0});
@@ -120,17 +139,25 @@ State* active_state = nullptr;
 State& state() { return *active_state; }
 #define TRACE(...) ((void)0)
 
-// Partial file-view remapping is outside this anonymous fixture. A NOREPLACE
-// collision must fail admission before this boundary can ever be reached.
+struct MEMORY_BASIC_INFORMATION { DWORD Protect; };
+size_t VirtualQuery(const void*, MEMORY_BASIC_INFORMATION* info, size_t size) {
+  info->Protect = PAGE_READWRITE;
+  return size;
+}
+bool allow_punch_view = false;
+std::map<uintptr_t, Region>::iterator PunchViewExtracted(State& s,
+    std::map<uintptr_t, Region>::iterator it, uintptr_t x, uintptr_t y);
 std::map<uintptr_t, Region>::iterator PunchView(State& s,
-    std::map<uintptr_t, Region>::iterator, uintptr_t, uintptr_t) {
-  Check(false, "NOREPLACE cannot punch a partial live file view");
-  return s.regions.end();
+    std::map<uintptr_t, Region>::iterator it, uintptr_t x, uintptr_t y) {
+  if (!allow_punch_view) {
+    Check(false, "NOREPLACE cannot punch a partial live file view");
+    return s.regions.end();
+  }
+  return PunchViewExtracted(s, it, x, y);
 }
 
 // Unmap's locked-file-view rollback is also outside this anonymous fixture.
 // Fail if a test reaches it; do not simulate successful file locking/unlocking.
-struct MEMORY_BASIC_INFORMATION { DWORD Protect; };
 template <typename Fn>
 bool ForEachRun(void*, size_t, Fn) {
   Check(false, "NOREPLACE fixture cannot query partial locked file views");
@@ -164,7 +191,7 @@ void ResetBoundary() {
   calls.clear(); plain_reservations.clear();
   fail_reserve = fail_replace = fail_commit = false;
   failing_unmap_address = 0; native_error = 0;
-  placeholders = true; errno = 0;
+  placeholders = true; allow_punch_view = false; open_handles = 0; errno = 0;
 }
 void Prepare(State& state, int protection = PROT_READ | PROT_WRITE) {
   ResetBoundary();
@@ -452,9 +479,118 @@ void LockedViewPreflight() {
   }
 }
 
+// A writable shared view of a memfd holds the lease that keeps F_SEAL_WRITE from being
+// added (memfd_seals.cc); it must live exactly as long as any page of the view does.
+// The lease here counts its own release; the registry code under test is production.
+struct CountedLease { int* released; ~CountedLease() { ++*released; } };
+std::shared_ptr<void> MakeLease(int* released) {
+  return std::shared_ptr<void>(new CountedLease{released}, [](void* p) { delete static_cast<CountedLease*>(p); });
+}
+template <typename R>
+void WriteLeaseLifetime() {
+  if constexpr (requires(R r) { r.write_lease; }) {
+    // Dependent on R, so that the older source (no lease) still compiles as a control.
+    using S = std::conditional_t<(sizeof(R) > 0), State, void>;
+    auto make_view = [](auto& state, int* released, bool plain) {
+      if (plain) PreparePlain(state, PROT_READ | PROT_WRITE); else Prepare(state);
+      active_state = &state;
+      auto& region = state.regions.at(kBase);
+      region.kind = Kind::kView;
+      region.shared = true;
+      region.view = reinterpret_cast<void*>(kBase);
+      region.write_lease = MakeLease(released);
+    };
+    for (const bool plain : {false, true}) {
+      const size_t pages = plain ? 8 : 4;
+      int released = 0;
+      S state;
+      make_view(state, &released, plain);
+      Check(munmap(reinterpret_cast<void*>(kBase), 2 * kPage) == 0, "partial munmap of a writable view succeeds");
+      Check(released == 0 && state.regions.at(kBase).write_lease != nullptr,
+            "partial munmap keeps the lease while writable pages remain");
+      Check(munmap(reinterpret_cast<void*>(kBase + 2 * kPage), (pages - 3) * kPage) == 0 && released == 0,
+            "unmapping all but one page keeps the lease");
+      Check(munmap(reinterpret_cast<void*>(kBase + (pages - 1) * kPage), kPage) == 0, "the last page unmaps");
+      Check(released == 1, "the lease ends with the last writable page");
+      active_state = nullptr;
+      ResetBoundary();
+    }
+    {
+      // A view split in two (a hole punched in the middle, a MAP_FIXED over part of it):
+      // each piece shares the lease, which ends with the later of them.
+      int released = 0;
+      S state;
+      make_view(state, &released, false);
+      SplitEntry(state, state.regions.find(kBase), kBase + 2 * kPage);
+      Check(state.regions.at(kBase).write_lease == state.regions.at(kBase + 2 * kPage).write_lease,
+            "pieces of a split view share one lease");
+      Check(munmap(reinterpret_cast<void*>(kBase), 2 * kPage) == 0, "lower piece unmaps");
+      Check(released == 0 && state.regions.at(kBase).write_lease == nullptr,
+            "a piece that is a hole holds no lease, and the other piece still holds it");
+      Check(munmap(reinterpret_cast<void*>(kBase + 2 * kPage), 2 * kPage) == 0 && released == 1,
+            "the last piece to go ends the lease");
+      active_state = nullptr;
+      ResetBoundary();
+    }
+    {
+      // MAP_FIXED over a whole writable view replaces it: its lease is released.
+      int released = 0;
+      S state;
+      make_view(state, &released, false);
+      Check(Punch(state, kBase, kBase + 4 * kPage) != state.regions.end() && released == 1 &&
+                state.regions.at(kBase).kind == Kind::kHole && state.regions.at(kBase).write_lease == nullptr,
+            "replacing a whole writable view releases its lease");
+      active_state = nullptr;
+      ResetBoundary();
+    }
+    {
+      // Partial munmap of [2..4) followed by MAP_FIXED Punch of [0..2): PunchView
+      // must leave [2..4) as a Kind::kHole without remapping dead pages or stranding
+      // the write lease or section handle.
+      int released = 0;
+      S state;
+      make_view(state, &released, false);
+      state.regions.at(kBase).mapping = reinterpret_cast<HANDLE>(uintptr_t{0x4000});
+      state.regions.at(kBase).view_protection = PAGE_READWRITE;
+      open_handles = 1;
+      Check(munmap(reinterpret_cast<void*>(kBase + 2 * kPage), 2 * kPage) == 0 && released == 0,
+            "unmapping upper half keeps lease for live lower half");
+      allow_punch_view = true;
+      auto hole = Punch(state, kBase, kBase + 2 * kPage);
+      Check(hole != state.regions.end() && released == 1,
+            "punching remaining live half releases the write lease immediately");
+      const auto& tail = state.regions.at(kBase + 2 * kPage);
+      Check(tail.kind == Kind::kHole && tail.write_lease == nullptr && tail.mapping == nullptr && open_handles == 0,
+            "already-unmapped upper half stays a hole with no stranded lease or handle");
+      ReleaseGroupIfEmpty(state, kBase);
+      Check(state.groups.empty() && state.regions.empty(),
+            "all-hole group releases cleanly after PunchView of last live half");
+      active_state = nullptr;
+      ResetBoundary();
+    }
+    {
+      // Punching [0..2) while [2..4) is still live keeps the lease on [2..4) until unmapped.
+      int released = 0;
+      S state;
+      make_view(state, &released, false);
+      state.regions.at(kBase).mapping = reinterpret_cast<HANDLE>(uintptr_t{0x4001});
+      state.regions.at(kBase).view_protection = PAGE_READWRITE;
+      open_handles = 1;
+      allow_punch_view = true;
+      Check(Punch(state, kBase, kBase + 2 * kPage) != state.regions.end() && released == 0 && open_handles == 1,
+            "punching lower half keeps lease and one duplicated handle on live upper half");
+      Check(munmap(reinterpret_cast<void*>(kBase + 2 * kPage), 2 * kPage) == 0 && released == 1 && open_handles == 0,
+            "unmapping surviving upper half releases lease and handle");
+      active_state = nullptr;
+      ResetBoundary();
+    }
+  }
+}
+
 }  // namespace
 
 int main() {
+  WriteLeaseLifetime<Region>();
   UnmapFailureCleanup();
   LockedViewPreflight<State>();
   ArtFallback();

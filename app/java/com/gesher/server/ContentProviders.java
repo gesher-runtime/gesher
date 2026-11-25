@@ -56,6 +56,8 @@ final class ContentProviders {
     private final ActivityTaskManagerService mAtm;
     private final SettingsProvider mSettings;
     private final DocumentsStorageProvider mDocumentsStorage;
+    private final CallLogProvider mCallLog;
+    private final ContactsProvider mContacts;
     private final CallerIdentity mCallers;
     private final UriGrants mUriGrants;
 
@@ -112,7 +114,10 @@ final class ContentProviders {
         final ApkPackage owner;
         final ProviderInfo info;
         volatile boolean retired;
-        ProviderInstall(ApkPackage owner, ProviderInfo info) { this.owner = owner; this.info = info; }
+        ProviderInstall(ApkPackage owner, ProviderInfo info) {
+            this.owner = owner;
+            this.info = new ProviderInfo(info);
+        }
     }
 
     private static final class ProviderRequest {
@@ -132,6 +137,22 @@ final class ContentProviders {
     private final Map<String, Set<ActivityTaskManagerService.ProcessRecord>> mClients = new HashMap<>();
     /** The reference-counted connections, by their Binder (ContentProviderHolder.connection). */
     private final Map<IBinder, Connection> mConnections = new HashMap<>();
+    private volatile ShortcutProcessState.Snapshot mShortcutSnapshot = ShortcutProcessState.Snapshot.EMPTY;
+
+    ShortcutProcessState.Snapshot shortcutSnapshot() { return mShortcutSnapshot; }
+
+    private void publishShortcutStateLocked() {
+        List<ShortcutProcessState.Link> links = new ArrayList<>();
+        for (Connection connection : mConnections.values()) {
+            if (connection.stable == 0 && connection.unstable == 0) continue;
+            ShortcutProcessState.Owner owner = new ShortcutProcessState.Owner(connection.owner,
+                    connection.ownerCode, connection.component, ApkPackage.ComponentKind.PROVIDER);
+            links.add(new ShortcutProcessState.Link(connection.client, connection.clientCode, owner,
+                    0, false, true, () -> true));
+        }
+        mShortcutSnapshot = links.isEmpty() ? ShortcutProcessState.Snapshot.EMPTY
+                : new ShortcutProcessState.Snapshot(List.of(), links);
+    }
 
     /**
      * ContentProviderConnection: one client process's references to one published
@@ -175,12 +196,40 @@ final class ContentProviders {
         mCallers = new CallerIdentity(pm, atm);
         mUriGrants = new UriGrants(pm, atm, this);
         mSettings = new SettingsProvider(pm, atm);
+        // CaptioningManager's Secure keys follow Windows' caption style (CaptioningBridge).
+        WindowsCaptions captions = WindowsCaptions.create();
+        if (captions != null) {
+            new CaptioningBridge(captions, new CaptioningBridge.Secure() {
+                @Override public String get(String key) {
+                    return SettingsProvider.secureString(key);
+                }
+
+                @Override public void set(String key, String value) {
+                    SettingsProvider.putSecure(key, value);
+                }
+            }).start();
+        }
         mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
+        mCallLog = new CallLogProvider(this, mUriGrants);
+        mContacts = new ContactsProvider(this, pm, atm, mUriGrants);
         pm.setHostedProviders(this);
     }
 
+    PackageManagerService packageManager() { return mPm; }
     UriGrants uriGrants() { return mUriGrants; }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
+
+    /** The system server's {@code media} provider (MediaStore), once it is registered. */
+    private volatile MediaStoreProvider mMedia;
+
+    void setMedia(MediaStoreProvider media) {
+        if (media == null || registeredProvider(MediaStoreProvider.AUTHORITY) != media.registration) {
+            throw new IllegalArgumentException("Media provider is not registered");
+        }
+        mMedia = media;
+    }
+    CallLogProvider callLog() { return mCallLog; }
+    ContactsProvider contacts() { return mContacts; }
     CallerIdentity callers() { return mCallers; }
 
     SettingsProvider settingsProvider() { return mSettings; }
@@ -191,22 +240,26 @@ final class ContentProviders {
         return false;
     }
 
-    /** Ambiguous declarations never select an attacker simply because it installed first. */
+    /**
+     * Ambiguous declarations never select an attacker simply because it installed first.
+     * ApkPackage handles ordinary collisions within the same manifest: an authority
+     * belongs to the package's first provider declaring it, and one left with none has
+     * a null authority, which matches no lookup. Reject any remaining ambiguity here,
+     * including names declared by multiple packages.
+     */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
         synchronized (pm) {
             ProviderInfo found = null;
             for (ApkPackage pkg : pm.providerPackages(authority)) {
                 if (pm.isRemovalPending(pkg.packageName)) continue;
-                for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
+                ProviderInfo info = pkg.providerForAuthority(authority, PackageManager.GET_META_DATA
                         | PackageManager.GET_URI_PERMISSION_PATTERNS
-                        | PackageManager.GET_SHARED_LIBRARY_FILES)) {
-                    if (!hasAuthority(info, authority)) continue;
-                    if (found != null && (!found.packageName.equals(info.packageName)
-                            || !found.name.equals(info.name))) {
-                        throw new SecurityException("Conflicting content provider authority");
-                    }
-                    found = info;
+                        | PackageManager.GET_SHARED_LIBRARY_FILES);
+                if (info == null) continue;
+                if (found != null) {
+                    throw new SecurityException("Conflicting content provider authority");
                 }
+                found = info;
             }
             return found;
         }
@@ -279,6 +332,10 @@ final class ContentProviders {
         String processName = mAtm.componentProcess(ai.packageName, ai.processName);
         for (ProviderInfo info : declaredProviders(p, PackageManager.GET_META_DATA
                 | PackageManager.GET_SHARED_LIBRARY_FILES)) {
+            // ComponentResolver.queryProviders (generateApplicationProvidersLocked's
+            // source) skips a provider whose every authority an earlier declaration
+            // of the package registered: it is neither instantiated nor published.
+            if (info.authority == null) continue;
             if (processName.equals(mAtm.componentProcess(info.packageName, info.processName))) {
                 result.add(info);
             }
@@ -333,6 +390,33 @@ final class ContentProviders {
             enforceAccess(actualPackage, registration.info);
             return mDocumentsStorage.holder();
         }
+        MediaStoreProvider media = mMedia;
+        if (media != null && MediaStoreProvider.AUTHORITY.equals(name)) {
+            // As Android's MediaProvider, the system's provider owns the authority; it
+            // applies scoped-storage ownership and permissions to every request itself.
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration != media.registration || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Media authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return media.holder();
+        }
+        if (ContactsProviderSupport.CONTACTS_AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration == null || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Contacts authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mContacts.holder();
+        }
+        if (ContactsProviderSupport.CALL_LOG_AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration == null || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("CallLog authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mCallLog.holder();
+        }
         final ProviderInfo declared;
         final ApkPackage declaredCode;
         synchronized (mPm) {
@@ -343,6 +427,7 @@ final class ContentProviders {
         if (declaredCode == null) return null;
         ProviderRequest request = new ProviderRequest(declaredCode, declared);
         long deadline = 0;
+        boolean acquired = false;
         synchronized (this) { mRequests.add(request); }
         try {
         while (true) {
@@ -359,33 +444,48 @@ final class ContentProviders {
                 if (caller != null && (caller.exiting || caller.dead)) {
                     throw new SecurityException("Content provider caller retired before acquisition");
                 }
+                String publishedAuthority = name;
                 ContentProviderHolder published = mPublished.get(name);
+                int separator = declared.authority.indexOf(';');
+                if (published == null && separator >= 0) {
+                    // A syncable alias can refer to an already published class record.
+                    publishedAuthority = declared.authority.substring(0, separator);
+                    published = mPublished.get(publishedAuthority);
+                }
                 if (published != null) {
-                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(name);
-                    if (owner == null || owner.exiting || owner.dead || mPublishedCode.get(name) != declaredCode
+                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(publishedAuthority);
+                    if (owner == null || owner.exiting || owner.dead || mPublishedCode.get(publishedAuthority) != declaredCode
                             || !declared.packageName.equals(owner.packageName)
                             || !declared.name.equals(published.info.name)
                             || !mAtm.componentProcess(declared.packageName, declared.processName)
                                     .equals(mAtm.componentProcess(owner.packageName, owner.processName))
                             || !live.contains(owner)) {
-                        mPublished.remove(name); mPublishedBy.remove(name); mPublishedCode.remove(name);
-                        mClients.remove(name);
+                        mPublished.remove(publishedAuthority);
+                        mPublishedBy.remove(publishedAuthority);
+                        mPublishedCode.remove(publishedAuthority);
+                        mClients.remove(publishedAuthority);
                         continue;
                     }
                     if (caller != null && owner != null && caller != owner) {
-                        if (mClients.computeIfAbsent(name, k -> new HashSet<>()).add(caller)) {
+                        if (mClients.computeIfAbsent(publishedAuthority, k -> new HashSet<>()).add(caller)) {
                             SystemServer.log("getContentProvider " + name + " from "
                                     + callingPackage + ": " + owner + " has a client, "
                                     + caller);
                         }
                     }
-                    ContentProviderHolder h = new ContentProviderHolder(new ProviderInfo(declared));
+                    ContentProviderHolder h = new ContentProviderHolder(new ProviderInfo(
+                            name.equals(publishedAuthority) ? declared : published.info));
                     h.provider = published.provider;
                     h.noReleaseNeeded = true;
                     if (counted && caller != null && owner != null && caller != owner) {
                         Connection c = connectionLocked(owner, caller,
-                                published.provider.asBinder(), name, declaredCode, declared.name);
+                                published.provider.asBinder(), publishedAuthority, declaredCode, declared.name);
+                        boolean held = c.stable != 0 || c.unstable != 0;
                         if (stable) c.stable++; else c.unstable++;
+                        if (!held) {
+                            publishShortcutStateLocked();
+                            acquired = true; // a new dependency edge to observe
+                        }
                         h.connection = c;
                         h.noReleaseNeeded = false;
                         owner.markActive(SystemClock.uptimeMillis());
@@ -428,9 +528,10 @@ final class ContentProviders {
                     if (request.canceled || caller.exiting || caller.dead
                             || mPm.get(declared.packageName) != declaredCode
                             || !declaredCode.componentEnabled(declared.name, ApkPackage.ComponentKind.PROVIDER)) return null;
-                    mInstalling.computeIfAbsent(caller, ignored -> new HashMap<>())
-                            .computeIfAbsent(declared.name, ignored -> new ProviderInstall(declaredCode, declared));
-                    ContentProviderHolder local = new ContentProviderHolder(declared);
+                    ProviderInstall pending = mInstalling.getOrDefault(caller, Map.of()).get(declared.name);
+                    ProviderInfo localInfo = current(pending) && pending.owner == declaredCode
+                            ? pending.info : declared;
+                    ContentProviderHolder local = new ContentProviderHolder(new ProviderInfo(localInfo));
                     local.mLocal = true;
                     local.noReleaseNeeded = true;
                     return local;
@@ -447,6 +548,7 @@ final class ContentProviders {
         }
         } finally {
             synchronized (this) { mRequests.remove(request); }
+            if (acquired) mAtm.noteShortcutForeground(null, 0);
         }
     }
 
@@ -513,12 +615,8 @@ final class ContentProviders {
             // The process no longer owns a pending provider record after cleanup.
             // A late publish cannot recreate it or turn an ordinary race into a crash.
             if (!current(admission) || admission.owner != pkg) continue;
-            ProviderInfo declared = null;
-            for (ProviderInfo candidate : declaredProviders(pkg, PackageManager.GET_META_DATA
-                    | PackageManager.GET_SHARED_LIBRARY_FILES | PackageManager.MATCH_DISABLED_COMPONENTS)) {
-                if (candidate.name.equals(info.name)) { declared = candidate; break; }
-            }
-            if (declared == null || !pkg.packageName.equals(info.packageName)
+            ProviderInfo declared = admission.info;
+            if (!pkg.packageName.equals(info.packageName)
                     || info.applicationInfo == null || info.applicationInfo.uid != pkg.uid()
                     || !pkg.packageName.equals(info.applicationInfo.packageName)
                     || !java.util.Objects.equals(declared.authority, info.authority)
@@ -529,6 +627,8 @@ final class ContentProviders {
             }
             for (String authority : declared.authority.split(";")) {
                 if (authority.isEmpty() || SettingsProvider.AUTHORITY.equals(authority)
+                        || registeredProvider(authority) != null
+                        || ContactsProviderSupport.isSystemAuthority(authority)
                         || !batch.add(authority)) throw new SecurityException("Invalid published authority");
                 ProviderInfo canonical = declaredProvider(mPm, authority);
                 if (canonical == null || !pkg.packageName.equals(canonical.packageName)
@@ -612,6 +712,7 @@ final class ContentProviders {
         // isSystem resolves the caller through ATM. Never acquire ATM under this monitor.
         int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
         boolean system = mCallers.isSystem();
+        boolean alive, changed;
         synchronized (this) {
             Connection c = callerConnectionLocked(connection, system, pid, uid);
             if (c == null) return false;
@@ -621,11 +722,17 @@ final class ContentProviders {
                 SystemServer.log("refContentProvider " + c + ": counts would go below zero ("
                         + stable + ", " + unstable + "); kept at zero");
             }
+            boolean held = c.stable != 0 || c.unstable != 0;
             c.stable = Math.max(0, c.stable + stable);
             c.unstable = Math.max(0, c.unstable + unstable);
+            changed = held != (c.stable != 0 || c.unstable != 0);
+            if (changed) publishShortcutStateLocked();
             c.owner.markActive(SystemClock.uptimeMillis());
-            return !c.owner.exiting && !c.owner.dead;
+            alive = !c.owner.exiting && !c.owner.dead;
         }
+        // Only a held-state flip changes the provider dependency graph.
+        if (changed) mAtm.noteShortcutForeground(null, 0);
+        return alive;
     }
 
     /**
@@ -636,6 +743,7 @@ final class ContentProviders {
     void removeContentProvider(IBinder connection, boolean stable) {
         int pid = Binder.getCallingPid(), uid = Binder.getCallingUid();
         boolean system = mCallers.isSystem();
+        boolean removed = false;
         synchronized (this) {
             Connection c = callerConnectionLocked(connection, system, pid, uid);
             if (c == null) return;
@@ -646,8 +754,13 @@ final class ContentProviders {
             if (stable) c.stable = Math.max(0, c.stable - 1);
             else c.unstable = Math.max(0, c.unstable - 1);
             c.owner.markActive(SystemClock.uptimeMillis());
-            if (c.stable == 0 && c.unstable == 0) mConnections.remove(c);
+            if (c.stable == 0 && c.unstable == 0) {
+                mConnections.remove(c);
+                publishShortcutStateLocked();
+                removed = true;
+            }
         }
+        if (removed) mAtm.noteShortcutForeground(null, 0);
     }
 
     /**
@@ -781,6 +894,7 @@ final class ContentProviders {
                 lost.add(connection);
                 return true;
             });
+            publishShortcutStateLocked();
             // A waiter must re-resolve disabled declarations instead of waiting two minutes.
             notifyAll();
         }
@@ -800,6 +914,7 @@ final class ContentProviders {
                 catch (RemoteException ignored) { }
             }
         }
+        mAtm.noteShortcutForeground(null, 0);
     }
 
     /**
@@ -816,6 +931,7 @@ final class ContentProviders {
                 if (c.owner == app && c.client != app) lost.add(c);
                 return c.client == app || c.owner == app;
             });
+            publishShortcutStateLocked();
             for (Map.Entry<String,
                     Set<ActivityTaskManagerService.ProcessRecord>> e : mClients.entrySet()) {
                 if (e.getValue().remove(app) && e.getValue().isEmpty()) {

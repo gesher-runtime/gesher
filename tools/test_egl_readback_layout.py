@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile the actual GLES readback layout against an independent pixel oracle.
+"""Compile actual GLES readback layout and host display pacing contracts.
 
 No AOSP checkout or Windows machine is required. A separate Windows test
 exercises the live ImageReader/SurfaceTexture/ANGLE pipeline and its fallback.
@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,8 +32,15 @@ def main() -> int:
         env = os.environ.copy()
         if args.sanitize:
             env["UBSAN_OPTIONS"] = "halt_on_error=1:" + env.get("UBSAN_OPTIONS", "")
-        return subprocess.run([str(exe)], cwd=ROOT, env=env, timeout=120,
-                              check=False).returncode
+        result = subprocess.run([str(exe)], cwd=ROOT, env=env, timeout=120,
+                                check=False).returncode
+        if result:
+            return result
+        pacing = [sys.executable, str(ROOT / 'tools/test_display_refresh_contracts.py'),
+                  '--cxx', args.cxx]
+        if args.sanitize:
+            pacing += ['--sanitize']
+        return subprocess.run(pacing, cwd=ROOT, env=env, timeout=150, check=False).returncode
 
 if __name__ == "__main__":
     raise SystemExit(main())

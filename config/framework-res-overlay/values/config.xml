@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Gesher's device overlay for framework-res, as a device tree's
+  overlay/frameworks/base/core/res/res/values/config.xml declares what the device is.
+  Applied by tools/build-framework-res.sh. See docs/telephony.md.
+-->
+<resources>
+    <!-- No circuit-switched voice: Gesher cannot place or receive calls. With the device's
+         vendor API level below V, TelephonyManager.isVoiceCapable/isDeviceVoiceCapable use
+         this value; android.hardware.telephony.calling is never declared. -->
+    <bool name="config_voice_capable">false</bool>
+    <!-- No SMS transport is implemented (no "isms" service, no
+         android.hardware.telephony.messaging). -->
+    <bool name="config_sms_capable">false</bool>
+    <!-- Mobile data follows the real hardware: TelephonyManager.isDataCapable() consults
+         android.hardware.telephony.data first, which is declared only when Windows reports a
+         cellular modem at boot. Without one there are no phones (getActiveModemCount() 0)
+         and getPhoneType() is PHONE_TYPE_NONE. -->
+    <bool name="config_mobile_data_capable">false</bool>
+</resources>

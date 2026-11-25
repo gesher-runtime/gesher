@@ -8,6 +8,9 @@ $orgName = 'gesher-runtime'
 $groupName = 'gesher-build-trial'
 $workflow = "$repoName/.github/workflows/arm64-windows-self-hosted.yml@refs/heads/main"
 
+# The framework entry is the earlier pinned policy. ci.yml now calls
+# framework.yml locally with local-runner: false; its per-PR job_workflow_ref
+# cannot be allowed here (docs/self-hosted-ci.md).
 $allowedWorkflows = @(
     $workflow,
     "$repoName/.github/workflows/framework.yml@7a45c2468c270bfe68ee5f854aa9d4feaf2208b3"

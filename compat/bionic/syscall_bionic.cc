@@ -1,4 +1,4 @@
-// gesher bionic shim: raw x86-64 Linux system calls, ptrace and POSIX regex.
+// gesher bionic shim: raw x86-64 Linux system calls and POSIX regex.
 //
 // Raw system calls (ADR 0084). Packers' stubs and anti-tamper code make Linux
 // system calls with the `syscall` instruction instead of calling libc (UPX's
@@ -11,11 +11,7 @@
 // of its own for. A call with no shim function returns -ENOSYS, as an old
 // kernel would.
 //
-// ptrace: nothing traces a Gesher process and it traces nothing. The first
-// PTRACE_TRACEME succeeds, as on a device, and a second one then fails with
-// EPERM (the process is "traced" by its parent, as anti-debugging checks
-// expect); attaching to or peeking at another process fails with EPERM, and
-// any other request with ESRCH (no such tracee).
+// ptrace (101) is the system call's ABI in ptrace_bionic.cc (ADR 0093).
 //
 // regcomp/regexec/regerror/regfree: bionic's (BSD) regex ABI over
 // posix_regex::Program (POSIX BRE/ERE with leftmost-longest whole-match selection,
@@ -76,7 +72,7 @@ constexpr RawCall kRawCalls[] = {
     {88, "symlink", 'i'},      {89, "readlink", 'l'},      {90, "chmod", 'i'},
     {91, "fchmod", 'i'},       {95, "umask", 'i'},         {96, "gettimeofday", 'i'},
     {97, "getrlimit", 'i'},    {98, "getrusage", 'i'},     {99, "sysinfo", 'i'},
-    {100, "times", 'l'},       {101, "ptrace", 'l'},       {102, "getuid", 'i'},
+    {100, "times", 'l'},       {101, "__gesher_ptrace_syscall", 'l'}, {102, "getuid", 'i'},
     {104, "getgid", 'i'},      {107, "geteuid", 'i'},      {108, "getegid", 'i'},
     {110, "getppid", 'i'},     {111, "getpgrp", 'i'},      {112, "setsid", 'i'},
     {131, "sigaltstack", 'i'}, {137, "statfs", 'i'},       {138, "fstatfs", 'i'},
@@ -162,31 +158,6 @@ int64_t RtSigaction(const int64_t a[6]) {
     out->mask = old.mask;
   }
   return 0;
-}
-
-// --- ptrace ------------------------------------------------------------------------
-
-std::atomic<bool> g_traceme{false};
-
-int64_t BIONIC_SYSV Ptrace(int request, int pid, void* addr, void* data) {
-  (void)pid;
-  (void)addr;
-  (void)data;
-  constexpr int kTraceme = 0, kPeektext = 1, kPeekdata = 2, kPeekuser = 3, kAttach = 16,
-                kSeize = 0x4206;
-  switch (request) {
-    case kTraceme:
-      if (g_traceme.exchange(true)) return errno = kEPERM, -1;
-      return 0;
-    case kAttach:
-    case kSeize:
-    case kPeektext:
-    case kPeekdata:
-    case kPeekuser:
-      return errno = kEPERM, -1;
-    default:
-      return errno = kESRCH, -1;
-  }
 }
 
 // --- POSIX regex (bionic's BSD ABI) ------------------------------------------------
@@ -402,7 +373,6 @@ int64_t RawSyscallX64(int64_t nr, const int64_t a[6]) {
 }
 
 void RegisterSyscall(SymbolTable& t) {
-  t["ptrace"] = reinterpret_cast<void*>(&Ptrace);
   t["regcomp"] = reinterpret_cast<void*>(&Regcomp);
   t["regexec"] = reinterpret_cast<void*>(&Regexec);
   t["regerror"] = reinterpret_cast<void*>(&Regerror);

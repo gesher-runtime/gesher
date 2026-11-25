@@ -51,6 +51,8 @@ public final class AudioRecordingPermissionTest {
     }
     /** Host only: the exact production MayRecordAudio JNI body calls the real Java policy. */
     public static native boolean nativeAllowed(boolean throughProvider);
+    /** Host only: detached std::thread calls RecordingAllowed() -> MayRecordAudio(nullptr) and verifies RAII detach. */
+    public static native boolean nativeDetachedAllowed();
     private interface Work { void run() throws Exception; }
     private static void check(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
@@ -120,7 +122,8 @@ public final class AudioRecordingPermissionTest {
         check(AudioService.recordAudioAllowed() == expected, message + " (Java)");
         if (nativeBridge) {
             check(nativeAllowed(false) == expected, message + " (actual JNI body)");
-            check(nativeAllowed(true) == expected, message + " (actual native input provider)");
+            check(nativeAllowed(true) == expected, message + " (attached native input provider)");
+            check(nativeDetachedAllowed() == expected, message + " (detached native input provider)");
         }
     }
     private static ContextWrapper context() {

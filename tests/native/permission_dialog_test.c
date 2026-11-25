@@ -9,6 +9,7 @@
 #include <wchar.h>
 #include "../../compat/locale/ui_locale.h"
 #include "../../compat/credentials/permission_dialog.inc"
+#include "../../compat/credentials/background_permission_dialog.inc"
 #include "../../compat/credentials/exact_alarm_dialog.inc"
 
 enum { DENY, ALLOW, CLOSE, ENTER, ESCAPE, TAB_ALLOW };
@@ -20,6 +21,9 @@ static BOOL expect_icon;
 static enum GesherUiLanguage language;
 static WCHAR permissions[8193];
 static int exact_action;
+// Background dialog actions: its three buttons, then Enter, Escape and close.
+enum { BG_ALWAYS, BG_FOREGROUND, BG_DENY, BG_ENTER, BG_ESCAPE, BG_CLOSE, BG_TAB_DENY };
+static int background_action;
 static unsigned char exact_initial[] = {0, 1};
 static BOOL prompt_confirmation;
 static int prompt_action;
@@ -44,7 +48,7 @@ static void CALLBACK Inspect(HWND dialog, UINT message, UINT_PTR timer, DWORD ti
   }
   HWND package = GetDlgItem(dialog, PERMISSION_PACKAGE);
   HWND details = GetDlgItem(dialog, PERMISSION_DETAILS);
-  HWND deny = GetDlgItem(dialog, IDCANCEL);
+  HWND deny = GetDlgItem(dialog, IDNO);
   HWND allow = GetDlgItem(dialog, IDYES);
   Check(package && details && deny && allow, "all interactive controls exist");
   Check(GetWindow(dialog, GW_OWNER) == NULL && (GetWindowLongW(dialog, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0,
@@ -64,7 +68,7 @@ static void CALLBACK Inspect(HWND dialog, UINT message, UINT_PTR timer, DWORD ti
   Check(package_text.top >= GetSystemMetrics(SM_CYBORDER),
       "package identifier has a bounded read-only surface");
   Check(GetFocus() == deny, "initial focus is Deny");
-  Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == IDCANCEL, "default action is Deny");
+  Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == IDNO, "default action is Deny");
   Check((GetWindowLongW(package, GWL_EXSTYLE) & (WS_EX_RTLREADING | WS_EX_LAYOUTRTL)) == 0,
       "package identifier stays LTR in both locales");
   Check((GetWindowLongW(package, GWL_STYLE) & ES_READONLY) != 0, "package is read-only");
@@ -89,7 +93,7 @@ static void CALLBACK Inspect(HWND dialog, UINT message, UINT_PTR timer, DWORD ti
   MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
   Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "Allow fits inside dialog");
   if (action == DENY || action == ALLOW) {
-    SendMessageW(GetDlgItem(dialog, action == ALLOW ? IDYES : IDCANCEL), BM_CLICK, 0, 0);
+    SendMessageW(GetDlgItem(dialog, action == ALLOW ? IDYES : IDNO), BM_CLICK, 0, 0);
   } else if (action == CLOSE) {
     PostMessageW(dialog, WM_CLOSE, 0, 0);
   } else if (action == TAB_ALLOW) {
@@ -124,6 +128,66 @@ static void CALLBACK InspectExactAlarm(HWND dialog, UINT message, UINT_PTR timer
     SendMessageW(allowed, BM_CLICK, 0, 0);
   }
   SendMessageW(apply, BM_CLICK, 0, 0);
+}
+
+/* The separate background-access choice (Android 16 BackgroundGrantBehavior). */
+static void CALLBACK InspectBackground(HWND dialog, UINT message, UINT_PTR timer, DWORD time) {
+  (void)message; (void)time;
+  KillTimer(dialog, timer);
+  HWND always = GetDlgItem(dialog, BACKGROUND_ALWAYS);
+  HWND foreground = GetDlgItem(dialog, BACKGROUND_FOREGROUND);
+  HWND deny = GetDlgItem(dialog, BACKGROUND_DENY);
+  if (phase == 1) {
+    // Android order: Allow all the time, Allow only while using the app (default), Don't allow.
+    Check(GetFocus() == deny, "Tab from the default reaches Don't allow");
+    PostMessageW(GetFocus(), WM_KEYDOWN, VK_RETURN, 0);
+    return;
+  }
+  HWND package = GetDlgItem(dialog, BACKGROUND_PACKAGE);
+  HWND details = GetDlgItem(dialog, BACKGROUND_DETAILS);
+  Check(always && foreground && deny && package && details, "all background dialog controls exist");
+  Check(GetWindow(dialog, GW_OWNER) == NULL && (GetWindowLongW(dialog, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0,
+      "background dialog gets its own taskbar button");
+  Check(GetFocus() == foreground, "background dialog focuses the choice that grants no background access");
+  Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == BACKGROUND_FOREGROUND,
+      "background dialog default grants no background access");
+  Check((GetWindowLongW(package, GWL_EXSTYLE) & (WS_EX_RTLREADING | WS_EX_LAYOUTRTL)) == 0,
+      "background dialog package identifier stays LTR");
+  Check((GetWindowLongW(details, GWL_STYLE) & (ES_READONLY | ES_MULTILINE)) == (ES_READONLY | ES_MULTILINE),
+      "background permission text is read-only");
+  WCHAR value[256];
+  GetWindowTextW(always, value, 256);
+  Check(wcscmp(value, GesherUiText(language, "background_permission_always")) == 0, "localized Allow all the time label");
+  GetWindowTextW(foreground, value, 256);
+  Check(wcscmp(value, GesherUiText(language, "background_permission_foreground")) == 0,
+      "localized Allow only while using the app label");
+  GetWindowTextW(deny, value, 256);
+  Check(wcscmp(value, GesherUiText(language, "background_permission_deny")) == 0, "localized background Deny label");
+  RECT client, bounds;
+  GetClientRect(dialog, &client);
+  GetWindowRect(deny, &bounds);
+  MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
+  Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "background choices fit inside the dialog");
+  RECT first, second;
+  GetWindowRect(always, &first);
+  GetWindowRect(foreground, &second);
+  GetWindowRect(deny, &bounds);
+  Check(first.bottom <= second.top && second.bottom <= bounds.top,
+      "background choices follow Android's order: all the time, while using, don't allow");
+  Check(GetNextDlgTabItem(dialog, always, FALSE) == foreground && GetNextDlgTabItem(dialog, foreground, FALSE) == deny,
+      "background choices tab in Android's order");
+  if (background_action <= BG_DENY) {
+    HWND button = background_action == BG_ALWAYS ? always : background_action == BG_FOREGROUND ? foreground : deny;
+    SendMessageW(button, BM_CLICK, 0, 0);
+  } else if (background_action == BG_CLOSE) {
+    PostMessageW(dialog, WM_CLOSE, 0, 0);
+  } else if (background_action == BG_TAB_DENY) {
+    phase = 1;
+    PostMessageW(GetFocus(), WM_KEYDOWN, VK_TAB, 0);
+    SetTimer(dialog, 1, 20, InspectBackground);
+  } else {
+    PostMessageW(GetFocus(), WM_KEYDOWN, background_action == BG_ESCAPE ? VK_ESCAPE : VK_RETURN, 0);
+  }
 }
 
 /* The same UI component handles the system-server's account-token consent and
@@ -194,6 +258,7 @@ static LRESULT CALLBACK AfterInit(int code, WPARAM wparam, LPARAM lparam) {
     CWPRETSTRUCT* call = (CWPRETSTRUCT*)lparam;
     if (call->message == WM_INITDIALOG) {
       if (GetDlgItem(call->hwnd, PERMISSION_DETAILS)) SetTimer(call->hwnd, 1, 20, Inspect);
+      else if (GetDlgItem(call->hwnd, BACKGROUND_DETAILS)) SetTimer(call->hwnd, 1, 20, InspectBackground);
       else if (GetDlgItem(call->hwnd, GESHER_HOST_MESSAGE_TEXT))
         SetTimer(call->hwnd, 1, 20, InspectHostPrompt);
     }
@@ -303,9 +368,22 @@ int main(void) {
     }
     for (action = DENY; action <= TAB_ALLOW; ++action) {
       phase = 0;
-      BOOL allowed = PermissionDialog(language, L"com.ideomobile.mercantile", permissions);
-      Check(allowed == (action == ALLOW || action == TAB_ALLOW), "only explicit Allow grants consent");
-      printf("scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", action, allowed);
+      int decision = PermissionDialog(language, L"com.ideomobile.mercantile", permissions);
+      int expected = action == ALLOW || action == TAB_ALLOW ? PERMISSION_ALLOWED
+          : action == DENY || action == ENTER ? PERMISSION_DENIED : PERMISSION_DISMISSED;
+      Check(decision == expected, "only explicit buttons record a permission decision");
+      printf("scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", action, decision);
+    }
+    for (background_action = BG_ALWAYS; background_action <= BG_TAB_DENY; ++background_action) {
+      phase = 0;
+      int choice = BackgroundPermissionDialog(language, L"com.google.android.gms",
+          L"access location in the background \u202a(android.permission.ACCESS_BACKGROUND_LOCATION)\u202c");
+      int expected = background_action == BG_ALWAYS ? BACKGROUND_ALWAYS_ALLOWED
+          : background_action == BG_FOREGROUND || background_action == BG_ENTER ? BACKGROUND_FOREGROUND_ONLY
+          : background_action == BG_DENY || background_action == BG_TAB_DENY ? BACKGROUND_DENIED
+          : BACKGROUND_DISMISSED;
+      Check(choice == expected, "only explicit background choices record a decision");
+      printf("background scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", background_action, choice);
     }
     const WCHAR* packages[] = {L"com.gesher.test.clock", L"com.gesher.test.reminder"};
     for (exact_action = 0; exact_action < 3; ++exact_action) {

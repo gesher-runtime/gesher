@@ -225,7 +225,8 @@ public class WebActivity extends Activity {
         CookieManager cookies = CookieManager.getInstance();
         cookies.setCookie("https://example.com/", "gesher=1; path=/", ok -> {
             say("WebActivity setCookie: " + ok);
-            say("WebActivity cookie: " + cookies.getCookie("https://example.com/"));
+            // Not "cookie: value": Gesher redacts cookie values in persisted logs (docs/logging.md).
+            say("WebActivity cookies read back: " + cookies.getCookie("https://example.com/"));
             mHandler.postDelayed(this::phase3, 1500);
         });
     }

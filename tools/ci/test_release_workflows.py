@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from github_read import GitHubReadError
 import publish_release as pub
-from release_version import API, REPOSITORY, REPOSITORY_ID, build_version, installer_name, stable_version
+from release_version import API, REPOSITORY, REPOSITORY_ID, build_version, installer_name, portable_name, stable_version
 
 
 HEAD = 'a' * 40
@@ -34,6 +34,7 @@ SOURCE = pub.Source(TAG, HEAD, RUN, ATTEMPT, SUITE)
 ISSUER = pub.Issuer(WORKFLOW, PUBLISH_RUN, 2, MAIN)
 PREVIOUS = pub.Issuer(WORKFLOW, PUBLISH_RUN, 1, MAIN)
 PAYLOAD = b'tested installer bytes; never executed by the publisher'
+PORTABLE_PAYLOAD = b'tested portable ZIP bytes; never executed by the publisher'
 
 
 def release_row(identity, tag, *, draft=False, prerelease=False):
@@ -181,8 +182,13 @@ class StubGitHub:
         directory.mkdir()
         installer = directory / installer_name(SOURCE.version)
         installer.write_bytes(PAYLOAD)
+        archive = directory / portable_name(SOURCE.version)
+        archive.write_bytes(PORTABLE_PAYLOAD)
         checksum = hashlib.sha256(PAYLOAD).hexdigest() if not self.corrupt_checksum else 'b' * 64
-        (directory / pub.CHECKSUM_NAME).write_bytes(f'{checksum}  {installer.name}\r\n'.encode('ascii'))
+        portable_checksum = hashlib.sha256(PORTABLE_PAYLOAD).hexdigest()
+        portable_line = f'{portable_checksum}  {archive.name}\r\n'
+        (directory / (archive.name + '.sha256')).write_bytes(portable_line.encode('ascii'))
+        (directory / pub.CHECKSUM_NAME).write_bytes((f'{checksum}  {installer.name}\r\n' + portable_line).encode('ascii'))
 
     def mutate(self, method, endpoint, *, body=None, file=None):
         self.calls.append((method, endpoint))
@@ -208,7 +214,9 @@ class StubGitHub:
         return deepcopy(self.own)
 
     def asset_row(self, name, data, public):
-        return {'id': 600 if name.endswith('.exe') else 601, 'name': name, 'state': 'uploaded',
+        names = [installer_name(SOURCE.version), portable_name(SOURCE.version),
+                 portable_name(SOURCE.version) + '.sha256', pub.CHECKSUM_NAME]
+        return {'id': 600 + names.index(name), 'name': name, 'state': 'uploaded',
                 'size': len(data), 'digest': 'sha256:' + hashlib.sha256(data).hexdigest(),
                 'browser_download_url': f"https://github.com/{REPOSITORY}/releases/download/{TAG if public else 'untagged-abc'}/{name}"}
 
@@ -264,7 +272,10 @@ class PublisherTests(unittest.TestCase):
         self.assertIn('Publication confirmed', self.publish())
         self.assertFalse(self.api.own['draft'])
         methods = [method for method, _ in self.mutations]
-        self.assertEqual(methods, ['POST', 'POST', 'POST', 'PATCH'])
+        self.assertEqual(methods, ['POST', 'POST', 'POST', 'POST', 'POST', 'PATCH'])
+        self.assertEqual({asset['name'] for asset in self.api.own['assets']},
+                         {installer_name(SOURCE.version), portable_name(SOURCE.version),
+                          portable_name(SOURCE.version) + '.sha256', pub.CHECKSUM_NAME})
         self.assertRegex(self.emit.call_args.args[0], rf'^GESHER_RELEASE_DRAFT id={DRAFT} claim=[0-9a-f]{{64}}$')
         patch_index = self.api.calls.index(('PATCH', f'{API}/releases/{DRAFT}'))
         self.assertEqual(self.api.calls[patch_index - 1], ('GET', f'{API}/git/ref/tags/{TAG}'))
@@ -343,6 +354,8 @@ class PublisherTests(unittest.TestCase):
         self.owned_draft((0,))
         self.assertIn('Publication confirmed', self.publish())
         self.assertEqual(self.mutations, [
+            ('POST', f'https://uploads.github.com/{API}/releases/{DRAFT}/assets?name={portable_name(SOURCE.version)}'),
+            ('POST', f'https://uploads.github.com/{API}/releases/{DRAFT}/assets?name={portable_name(SOURCE.version)}.sha256'),
             ('POST', f'https://uploads.github.com/{API}/releases/{DRAFT}/assets?name=SHA256SUMS.txt'),
             ('PATCH', f'{API}/releases/{DRAFT}'),
         ])
@@ -365,6 +378,32 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaisesRegex(pub.ReleaseError, 'does not match'):
             self.publish()
         self.assertEqual(self.mutations, [])
+
+    def test_portable_payload_failures_leave_releases_untouched(self):
+        for problem in ('missing', 'bytes', 'individual-checksum', 'combined-checksum', 'wrong-version', 'extra'):
+            with self.subTest(problem=problem):
+                self.api = StubGitHub()
+                download = self.api.download
+                def corrupt(identity, digest, directory):
+                    download(identity, digest, directory)
+                    archive = directory / portable_name(SOURCE.version)
+                    if problem == 'missing':
+                        archive.unlink()
+                    elif problem == 'bytes':
+                        archive.write_bytes(PORTABLE_PAYLOAD + b'changed')
+                    elif problem == 'individual-checksum':
+                        (directory / (archive.name + '.sha256')).write_bytes(b'wrong\n')
+                    elif problem == 'combined-checksum':
+                        checksum = directory / pub.CHECKSUM_NAME
+                        checksum.write_bytes(checksum.read_bytes().splitlines()[0] + b'\n')
+                    elif problem == 'wrong-version':
+                        archive.rename(directory / 'gesher-0.2.2-portable.zip')
+                    else:
+                        (directory / 'unverified.zip').write_bytes(PORTABLE_PAYLOAD)
+                self.api.download = corrupt
+                with self.assertRaises(pub.ReleaseError):
+                    self.publish()
+                self.assertEqual(self.mutations, [])
 
     def test_tag_moved_or_deleted_after_upload_leaves_draft(self):
         for updated in (None, {'ref': f'refs/tags/{TAG}', 'object': {'type': 'commit', 'sha': MAIN}}):
@@ -411,7 +450,7 @@ class PublisherTests(unittest.TestCase):
         self.assertFalse(self.api.own['draft'])
 
     def test_exact_published_release_is_idempotent_after_newer_release(self):
-        self.owned_draft((0, 1), public=True)
+        self.owned_draft((0, 1, 2, 3), public=True)
         self.api.releases.append(release_row(901, 'v0.3.0'))
         self.assertIn('Publication already confirmed', self.publish())
         self.assertEqual(self.mutations, [])

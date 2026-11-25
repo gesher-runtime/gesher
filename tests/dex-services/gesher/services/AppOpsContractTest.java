@@ -127,10 +127,13 @@ public final class AppOpsContractTest {
         final IPermissionChecker checker;
         Harness() throws Exception { this(null); }
         @SuppressWarnings("unchecked") Harness(Integer ownerTarget, String... permissions) throws Exception {
-            // Metadata must be final before PM boot admission reconciles the UID's
-            // legacy/runtime grant basis. Mutating an admitted owner is not an install.
+            // Metadata must be final before the install reconciles the UID's
+            // legacy/runtime grant basis. Mutating an installed owner is not an install.
             if (ownerTarget != null) requested(owner, ownerTarget, permissions);
-            pm = (PackageManagerService)make(PackageManagerService.class, new Class<?>[]{Collection.class, boolean.class}, List.of(owner, peer), false);
+            // PM boots without the fixture packages; they are installed below. A boot never
+            // invents a restriction exemption once the ledger's one-time migration has run,
+            // and the data directory may hold a ledger a previous process already migrated.
+            pm = (PackageManagerService)make(PackageManagerService.class, new Class<?>[]{Collection.class, boolean.class}, List.of(), false);
             // This isolated PM has no remote broadcast transport; keep its production
             // publication executor and lifecycle listeners, replacing only that boundary.
             set(pm, "mPackageEventSender", (java.util.function.Consumer<Intent>)event -> { });
@@ -169,6 +172,14 @@ public final class AppOpsContractTest {
                 // boundary must perform that same production boot reconciliation now.
                 call(pm.permissions(), "initializePackages", new Class<?>[0]);
             }
+            // The Installer's path: AOSP's default restricted-permission allowlist
+            // (SessionParams, INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS) recorded on the
+            // installed APK, then its publication.
+            for (ApkPackage installed : List.of(owner, peer)) {
+                call(installed, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, (Object)null);
+                call(pm, "add", new Class<?>[]{ApkPackage.class}, installed);
+            }
+            ((java.util.concurrent.ExecutorService)get(pm, "mPackageEventExecutor")).submit(() -> { }).get(5, TimeUnit.SECONDS);
             service = pm.appOps();
             ops = binder ? IAppOpsService.Stub.asInterface(parcelTransport(StandIn.of(IAppOpsService.class, service).asBinder())) : service;
             IPermissionChecker real = (IPermissionChecker)make(type("AppOpsPermissionChecker"), new Class<?>[]{PackageManagerService.class}, pm);
@@ -329,6 +340,12 @@ public final class AppOpsContractTest {
         h.pm.permissions().grantRuntimePermission(NAME, Manifest.permission.ACCESS_COARSE_LOCATION, "default:0", 0);
         check(h.ops.checkOperationRaw(OP_GPS, UID, NAME, null) == MODE_FOREGROUND,
                 "Runtime switch aliases use the permission-derived mode");
+        int exempt = PackageManager.FLAGS_PERMISSION_RESTRICTION_ANY_EXEMPT, apply = PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
+        check((h.pm.permissions().getPermissionFlags(NAME, Manifest.permission.ACCESS_BACKGROUND_LOCATION, "default:0", 0)
+                & (exempt | apply)) == PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT,
+                "An install records AOSP's default installer exemption instead of APPLY_RESTRICTION");
+        // An install that opted out of the restricted-permission allowlist.
+        flags(h, Manifest.permission.ACCESS_BACKGROUND_LOCATION, exempt | apply, apply);
         h.pm.permissions().grantRuntimePermission(NAME, Manifest.permission.ACCESS_BACKGROUND_LOCATION, "default:0", 0);
         check(h.pm.permissions().checkPermission(NAME, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_DENIED,
                 "A hard-restricted permission is not granted before its restriction is removed");
@@ -354,8 +371,25 @@ public final class AppOpsContractTest {
         flags(h, Manifest.permission.READ_EXTERNAL_STORAGE, PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION,
                 PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION);
         check(h.pm.permissions().checkPermission(NAME, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, UID, NAME, null) == MODE_IGNORED,
-                "Soft restriction denies AppOps while retaining the runtime permission grant");
+                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, UID, NAME, null) == MODE_ALLOWED,
+                "From target Q a soft restriction keeps the storage AppOp (AOSP SoftRestrictedPermissionPolicy)");
+        // A pre-Q UID without an exemption holds the grant without its AppOp; an exemption restores it.
+        ApkPackage older = pkg("fixture.appops.storage.older", UID + 3, (byte)7, 28);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, older);
+        h.pm.permissions().updatePermissionFlags(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE,
+                exempt | apply, apply, true, "default:0", 0);
+        h.pm.permissions().grantRuntimePermission(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE, "default:0", 0);
+        check(h.pm.permissions().checkPermission(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_DENIED
+                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, older.uid(), older.packageName, null) == MODE_IGNORED,
+                "A restricted pre-Q UID cannot be granted storage or its AppOp");
+        h.pm.permissions().updatePermissionFlags(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE,
+                exempt | apply, PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT, true, "default:0", 0);
+        h.pm.permissions().grantRuntimePermission(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE, "default:0", 0);
+        check(h.pm.permissions().checkPermission(older.packageName, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, older.uid(), older.packageName, null) == MODE_ALLOWED,
+                "An allowlisted pre-Q UID holds storage with its AppOp");
+        h.pm.permissions().forgetPackage(older.packageName);
+        call(h.pm, "remove", new Class<?>[]{String.class}, older.packageName);
 
         ApkPackage shared = pkg("fixture.appops.shared", UID, (byte)7);
         call(h.pm, "add", new Class<?>[]{ApkPackage.class}, shared);
@@ -375,6 +409,22 @@ public final class AppOpsContractTest {
 
         ApkPackage legacy = pkg("fixture.appops.legacy", UID + 2, (byte)7, 22);
         call(h.pm, "add", new Class<?>[]{ApkPackage.class}, legacy);
+        // Admitted with AOSP's default installer allowlist. Like AOSP restorePermissionState, a
+        // legacy app holds its restricted permissions too, with REVIEW_REQUIRED; their AppOps
+        // stay withheld until that review is cleared (Gesher has no review screen).
+        int review = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+        check(h.pm.permissions().checkPermission(legacy.packageName, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED
+                && (h.pm.permissions().getPermissionFlags(legacy.packageName, Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+                        "default:0", 0) & (exempt | apply | review)) == (PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT | review)
+                && h.pm.permissions().checkPermission(legacy.packageName, Manifest.permission.READ_EXTERNAL_STORAGE)
+                        == PackageManager.PERMISSION_GRANTED
+                && h.pm.permissions().checkPermission(legacy.packageName, Manifest.permission.ACCESS_FINE_LOCATION)
+                        == PackageManager.PERMISSION_GRANTED,
+                "A legacy app lost its compatibility grants or the review of its restricted permissions");
+        check(h.ops.checkOperationRaw(OP_FINE_LOCATION, legacy.uid(), legacy.packageName, null) == MODE_FOREGROUND
+                && h.ops.checkOperationRaw(OP_READ_EXTERNAL_STORAGE, legacy.uid(), legacy.packageName, null) == MODE_IGNORED,
+                "An installer exemption gave a legacy app's unreviewed restricted permissions their AppOps");
         h.pm.permissions().revokeRuntimePermission(legacy.packageName, Manifest.permission.CAMERA, "default:0", 0, "legacy contract");
         check(h.pm.permissions().checkPermission(legacy.packageName, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
                 "Legacy runtime permission grants cannot be revoked as modern binary grants");
@@ -1177,6 +1227,13 @@ public final class AppOpsContractTest {
         return process;
     }
 
+    /** Probe availability without introducing a policy-to-operation lock order. */
+    private static void inspectRetirementMonitors(Harness h, Object policy, Object operationLock) {
+        synchronized (h.pm) { }
+        synchronized (policy) { }
+        synchronized (operationLock) { }
+    }
+
     /** Real uninstall stages and killUid/processDied, with only APK, client death and disk boundaries controlled. */
     private static void sharedRetirement(boolean stillRequested, boolean legacy, boolean failDisk) throws Exception {
         Harness h = new Harness(legacy ? 22 : 36, Manifest.permission.READ_CONTACTS);
@@ -1241,7 +1298,7 @@ public final class AppOpsContractTest {
             Thread remover = new Thread(retirement, "shared-permission-retirement-contract"); remover.setDaemon(true); remover.start();
             check(disk.entered.await(5, TimeUnit.SECONDS), "Uninstall reaches its explicit permission durability boundary");
             java.util.concurrent.FutureTask<Void> inspect = new java.util.concurrent.FutureTask<>(() -> {
-                synchronized (h.pm) { synchronized (policy) { synchronized (operationLock) { } } }
+                inspectRetirementMonitors(h, policy, operationLock);
                 return null;
             });
             Thread observer = new Thread(inspect, "shared-retirement-monitor-contract"); observer.setDaemon(true); observer.start();
