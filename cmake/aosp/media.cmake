@@ -291,3 +291,29 @@ target_compile_options(media_retriever_pixels_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_retriever_pixels_test PRIVATE skia)
 gesher_graphics_cxx(media_retriever_pixels_test)
+
+# Complete production RGBA conversion/AVC encoder TUs and the actual input
+# callback bodies. Source generation adds only a test coordinate-mapping observer.
+set(_rgba_fixture "${CMAKE_CURRENT_BINARY_DIR}/rgba-i420-fixture")
+set(_rgba_video "${_rgba_fixture}/rgba_i420_video_decoder.cc")
+set(_rgba_encoder "${_rgba_fixture}/rgba_i420_soft_avc_encoder.cc")
+set(_rgba_callbacks "${_rgba_fixture}/rgba_i420_callbacks.h")
+add_custom_command(OUTPUT "${_rgba_video}" "${_rgba_encoder}" "${_rgba_callbacks}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/test_rgba_i420.py"
+    --generate-only --output-dir "${_rgba_fixture}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tools/test_rgba_i420.py"
+    "${CMAKE_SOURCE_DIR}/tests/media/rgba_i420_callbacks.h.in"
+    "${_media}/video/video_decoder.cc" "${_media}/encode/soft_avc_encoder.cc"
+    "${_media}/jni/media_codec_jni.cc" "${_media}/record/recorder.cc"
+  VERBATIM)
+add_executable(media_rgba_i420_test
+  "${CMAKE_SOURCE_DIR}/tests/media/rgba_i420_test.cc"
+  "${_rgba_video}" "${_rgba_encoder}" "${_rgba_callbacks}")
+target_include_directories(media_rgba_i420_test PRIVATE "${CMAKE_SOURCE_DIR}"
+  "${_rgba_fixture}" "${_media}/video" "${_media}/encode"
+  "${CMAKE_SOURCE_DIR}/tests/media/rgba-host/include")
+target_include_directories(media_rgba_i420_test SYSTEM PRIVATE ${GESHER_SOFT_AVCENC_INCLUDES})
+target_compile_definitions(media_rgba_i420_test PRIVATE GESHER_MEDIA_STANDALONE GESHER_COUNT_COORDINATES=1)
+target_compile_options(media_rgba_i420_test PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+target_link_libraries(media_rgba_i420_test PRIVATE avc pthread)
+set_target_properties(media_rgba_i420_test PROPERTIES CXX_STANDARD 23)

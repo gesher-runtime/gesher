@@ -295,6 +295,33 @@ void RgbaToI420(const uint32_t* src, int src_w, int src_h, VideoFrame* f) {
   uint8_t* yp = f->data.data();
   uint8_t* up = yp + static_cast<size_t>(f->stride_y) * h;
   uint8_t* vp = up + static_cast<size_t>(f->stride_uv) * ((h + 1) / 2);
+  if (src_w == w && src_h == h) {
+    // Input Surfaces normally already have the encoder's dimensions. Preserve
+    // the same conversion and top-left chroma sample without remapping every
+    // pixel through nearest-neighbour integer division. Separate plane passes
+    // also preserve the original read/write order if source storage overlaps.
+    for (int y = 0; y < h; ++y) {
+      const uint32_t* row = src + static_cast<size_t>(y) * src_w;
+      uint8_t* dst = yp + static_cast<size_t>(y) * f->stride_y;
+      for (int x = 0; x < w; ++x) {
+        const uint32_t c = row[x];
+        const int r = c & 0xff, g = (c >> 8) & 0xff, b = (c >> 16) & 0xff;
+        dst[x] = Clamp8(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
+      }
+    }
+    for (int y = 0; y < (h + 1) / 2; ++y) {
+      const uint32_t* row = src + static_cast<size_t>(2 * y) * src_w;
+      uint8_t* u = up + static_cast<size_t>(y) * f->stride_uv;
+      uint8_t* v = vp + static_cast<size_t>(y) * f->stride_uv;
+      for (int x = 0; x < (w + 1) / 2; ++x) {
+        const uint32_t c = row[2 * x];
+        const int r = c & 0xff, g = (c >> 8) & 0xff, b = (c >> 16) & 0xff;
+        u[x] = Clamp8(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
+        v[x] = Clamp8(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
+      }
+    }
+    return;
+  }
   auto at = [&](int x, int y) {
     const int sx = static_cast<int>(static_cast<int64_t>(x) * src_w / w);
     const int sy = static_cast<int>(static_cast<int64_t>(y) * src_h / h);
