@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import ssl
@@ -71,6 +72,55 @@ with tempfile.TemporaryDirectory(prefix='surface-archive-negative-') as temporar
     assembly.assemble(root/'refresh', root/'assembled', root/'owners.json', 'current_framework')
     assert (root/'assembled/framework.jar').read_text() == 'new'
 print('SURFACE_ARCHIVE_NEGATIVES complete=15', flush=True)
+
+
+class SpeechAssemblyControls(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='surface-speech-assembly-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def suppliers(self, case, names, owner='base_framework'):
+        root = self.root / case
+        base, current = root / 'base', root / 'current'
+        base.mkdir(parents=True)
+        current.mkdir()
+        for name in names:
+            (base / name).write_bytes(('old ' + name).encode())
+            (current / name).write_bytes(('new ' + name).encode())
+        destination, ledger = root / 'assembled', root / 'owners.json'
+        assembly.assemble(base, destination, ledger, owner)
+        return current, destination, ledger
+
+    def test_both_speech_apks_replace_their_base_framework_artifact(self):
+        for name in ('gesher-tts.apk', 'gesher-stt.apk'):
+            with self.subTest(apk=name):
+                current, destination, ledger = self.suppliers(name, (name,))
+                assembly.assemble(current, destination, ledger, 'current_framework')
+                self.assertEqual((destination / name).read_bytes(), ('new ' + name).encode())
+                self.assertEqual(json.loads(ledger.read_text())[name],
+                                 dict(path=name, owner='current_framework'))
+
+    def test_speech_apks_cannot_replace_an_unrelated_supplier(self):
+        for owner in ('base_graphics', 'unknown_owner'):
+            for name in ('gesher-tts.apk', 'gesher-stt.apk'):
+                with self.subTest(apk=name, owner=owner):
+                    current, destination, ledger = self.suppliers(owner + name, (name,), owner)
+                    before = ledger.read_bytes()
+                    with self.assertRaisesRegex(RuntimeError, 'Unexpected supplier collision'):
+                        assembly.assemble(current, destination, ledger, 'current_framework')
+                    self.assertEqual((destination / name).read_bytes(), ('old ' + name).encode())
+                    self.assertEqual(ledger.read_bytes(), before)
+
+    def test_unknown_apk_collision_rejects_the_entire_replacement(self):
+        names = ('gesher-tts.apk', 'unknown-engine.apk')
+        current, destination, ledger = self.suppliers('unknown-file', names)
+        before = ledger.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'Unexpected supplier collision'):
+            assembly.assemble(current, destination, ledger, 'current_framework')
+        for name in names:
+            self.assertEqual((destination / name).read_bytes(), ('old ' + name).encode())
+        self.assertEqual(ledger.read_bytes(), before)
 
 
 class DownloadControls(unittest.TestCase):
