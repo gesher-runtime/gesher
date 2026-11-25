@@ -118,6 +118,8 @@ public final class Services {
                 StandIn.of(IActivityManager.class, am).asBinder());
         services.put(Context.ACTIVITY_TASK_SERVICE,
                 StandIn.of(IActivityTaskManager.class, atm).asBinder());
+        AlertWindowPolicy alerts = new AlertWindowPolicy(pm, atm);
+        services.put(AlertWindowPolicy.NAME, alerts);
         WindowManagerService wm = new WindowManagerService();
         services.put(Context.WINDOW_SERVICE,
                 StandIn.of(IWindowManager.class, wm).asBinder());
@@ -298,7 +300,7 @@ public final class Services {
         // StorageStatsManager: app and volume sizes for file managers and cleaners.
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,
-                new StorageStatsService(pm)).asBinder());
+                new StorageStatsService(pm, atm::authenticatedPackageCodeForPid)).asBinder());
         services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
                 android.app.admin.IDevicePolicyManager.class,
                 new DeviceServices.DevicePolicyService()).asBinder());
