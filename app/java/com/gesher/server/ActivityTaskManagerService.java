@@ -2947,17 +2947,15 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             return startSerialized(caller, intent, resolvedType, callingPackage, resultToToken,
                     resultWho, requestCode, launchTaskId, shareIdentity, started, requiredTask);
         }
-        synchronized (mLaunchLock) {
-            if (requiredTask != null) {
-                synchronized (this) {
-                    if (!hasAppTaskLocked(requiredTask)) {
-                        throw new IllegalArgumentException("Unable to find task ID " + launchTaskId);
-                    }
+        if (requiredTask != null) {
+            synchronized (this) {
+                if (!hasAppTaskLocked(requiredTask)) {
+                    throw new IllegalArgumentException("Unable to find task ID " + launchTaskId);
                 }
             }
-            return startSerialized(caller, intent, resolvedType, callingPackage, resultToToken,
-                    resultWho, requestCode, launchTaskId, shareIdentity, started, requiredTask);
         }
+        return startSerialized(caller, intent, resolvedType, callingPackage, resultToToken,
+                resultWho, requestCode, launchTaskId, shareIdentity, started, requiredTask);
     }
 
     private int startSerialized(IApplicationThread caller, Intent intent, String resolvedType,
@@ -3284,6 +3282,63 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 componentCallerUid, info.applicationInfo.uid, info.exported) != PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException(info.exported ? "Activity permission denied" : "Activity is not exported");
         }
+        if (targetCode != null && mPm.permissions().isReviewRequired(targetCode)) {
+            boolean confirmed;
+            try {
+                confirmed = mPermissionRequests.reviewPermissions(targetCode).get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                confirmed = false;
+            } catch (java.util.concurrent.ExecutionException | RuntimeException e) {
+                confirmed = false;
+            }
+            if (!confirmed) {
+                final ActivityRecord resultSource;
+                final ProcessRecord expectedResultProcess;
+                final String resultTargetWho;
+                final int resultTargetCode;
+                synchronized (this) {
+                    ActivityRecord source = resultToToken != null ? forToken(resultToToken) : null;
+                    boolean authenticated = internalCreator
+                            ? publication != null && publication.getAsBoolean()
+                            : originalProcess != null && source != null && source.app == originalProcess;
+                    if (authenticated && source != null
+                            && (intent.getFlags() & Intent.FLAG_ACTIVITY_FORWARD_RESULT) != 0) {
+                        if (requestCode >= 0) {
+                            return ActivityManager.START_FORWARD_AND_REQUEST_CONFLICT;
+                        }
+                        ActivityRecord recipient = source.resultTo;
+                        resultSource = recipient != null && !isActivityRetired(recipient) ? recipient : null;
+                        resultTargetWho = source.resultWho;
+                        resultTargetCode = source.requestCode;
+                        source.resultTo = null;
+                        if (resultSource != null) {
+                            resultSource.pendingResults.removeIf(result -> {
+                                if (!(result instanceof PendingActivityResult pending)
+                                        || pending.source != source
+                                        || result.mRequestCode != source.requestCode
+                                        || !java.util.Objects.equals(result.mResultWho, source.resultWho)) return false;
+                                resultSource.callerState.remove(result.mCallerToken);
+                                return true;
+                            });
+                        }
+                        expectedResultProcess = null;
+                    } else {
+                        resultSource = authenticated && requestCode >= 0 ? source : null;
+                        resultTargetWho = resultWho;
+                        resultTargetCode = requestCode;
+                        expectedResultProcess = resultSource == null ? null : resultSource.app;
+                    }
+                }
+                if (resultSource != null) {
+                    deliverResult(resultSource, new ResultInfo(resultTargetWho, resultTargetCode,
+                            android.app.Activity.RESULT_CANCELED, null, null), null, null,
+                            expectedResultProcess);
+                }
+                return ActivityManager.START_CANCELED;
+            }
+        }
+        synchronized (mLaunchLock) {
         final String attributedCaller = verifiedCaller;
         final boolean systemCreator = internalCreator && "android".equals(attributedCaller)
                 && originalCallerCode == null;
@@ -3579,6 +3634,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         for (ActivityRecord a : reconfigure) ensureConfiguration(a);
         if (!r.deferredHistory) updateTopResumed();
         return ActivityManager.START_SUCCESS;
+        }
     }
 
     private static String callerName(String callingPackage, int callingPid) {

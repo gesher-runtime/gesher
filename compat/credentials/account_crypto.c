@@ -113,6 +113,7 @@ Java_com_gesher_server_AccountSecretStore_nativeUnprotect(JNIEnv* env, jclass cl
 
 #include "permission_dialog.inc"
 #include "background_permission_dialog.inc"
+#include "review_permission_dialog.inc"
 #include "exact_alarm_dialog.inc"
 
 JNIEXPORT jboolean GESHER_NATIVE
@@ -196,6 +197,57 @@ Java_com_gesher_server_PermissionRequests_nativeConfirmBackground(JNIEnv* env, j
                                                                  jstring label, jstring permissions) {
   (void)cls;
   return Consent(env, label, permissions, BackgroundPermissionDialog, BACKGROUND_UNAVAILABLE);
+}
+
+JNIEXPORT jint GESHER_NATIVE
+Java_com_gesher_server_PermissionRequests_nativeReviewPermissions(JNIEnv* env, jclass cls,
+        jstring label, jobjectArray groups, jbooleanArray enabled) {
+  (void)cls;
+  if (!server_process && !standalone_process) {
+    Fail(env, "java/lang/SecurityException", "Permission review requires an active runtime");
+    return REVIEW_UNAVAILABLE;
+  }
+  if (label == NULL || groups == NULL || enabled == NULL) return REVIEW_UNAVAILABLE;
+  jsize ln = (*env)->GetStringLength(env, label);
+  jsize count = (*env)->GetArrayLength(env, groups);
+  if (ln <= 0 || ln > 1024 || count <= 0 || count > REVIEW_MAX_GROUPS
+      || count != (*env)->GetArrayLength(env, enabled)) {
+    return REVIEW_UNAVAILABLE;
+  }
+  WCHAR* label_text = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)ln + 1) * sizeof(WCHAR));
+  WCHAR** group_names = (WCHAR**)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)count + 1) * sizeof(WCHAR*));
+  jboolean* values = (jboolean*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)count + 1);
+  int decision = REVIEW_UNAVAILABLE;
+  if (label_text == NULL || group_names == NULL || values == NULL) goto done;
+  (*env)->GetStringRegion(env, label, 0, ln, (jchar*)label_text);
+  if ((*env)->ExceptionCheck(env)) goto done;
+  (*env)->GetBooleanArrayRegion(env, enabled, 0, count, values);
+  if ((*env)->ExceptionCheck(env)) goto done;
+  for (jsize i = 0; i < count; ++i) {
+    jstring group = (jstring)(*env)->GetObjectArrayElement(env, groups, i);
+    if (group == NULL) goto done;
+    jsize length = (*env)->GetStringLength(env, group);
+    if (length <= 0 || length > 1024) { (*env)->DeleteLocalRef(env, group); goto done; }
+    group_names[i] = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)length + 1) * sizeof(WCHAR));
+    if (group_names[i] == NULL) { (*env)->DeleteLocalRef(env, group); goto done; }
+    (*env)->GetStringRegion(env, group, 0, length, (jchar*)group_names[i]);
+    (*env)->DeleteLocalRef(env, group);
+    if ((*env)->ExceptionCheck(env)) goto done;
+  }
+  decision = ReviewPermissionDialog(GesherUiCurrentLanguage(), label_text,
+      (const WCHAR* const*)group_names, values, (int)count);
+  if (decision == REVIEW_ALLOWED) {
+    (*env)->SetBooleanArrayRegion(env, enabled, 0, count, values);
+    if ((*env)->ExceptionCheck(env)) decision = REVIEW_UNAVAILABLE;
+  }
+done:
+  if (group_names != NULL) {
+    for (jsize i = 0; i < count; ++i) if (group_names[i] != NULL) HeapFree(GetProcessHeap(), 0, group_names[i]);
+    HeapFree(GetProcessHeap(), 0, group_names);
+  }
+  if (values != NULL) HeapFree(GetProcessHeap(), 0, values);
+  if (label_text != NULL) HeapFree(GetProcessHeap(), 0, label_text);
+  return decision;
 }
 
 JNIEXPORT jboolean GESHER_NATIVE

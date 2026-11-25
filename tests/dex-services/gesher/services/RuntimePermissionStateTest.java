@@ -1061,6 +1061,57 @@ public final class RuntimePermissionStateTest {
         retire(h, modern);
         h.flush();
     }
+
+    /** Legacy pre-launch review: logical group listing, confirm/toggle-off transitions, and AppOps. */
+    private static void legacyReview(Harness h) throws Exception {
+        final int review = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+        final int revokedCompat = PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
+        ApkPackage modern = admit(h, "fixture.permission.modern.noreview", UID + 21, List.of(), true, false);
+        check(!(Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, modern)
+                && ((List<?>)call(h.policy, "pendingReviewGroups", new Class<?>[]{ApkPackage.class}, modern)).isEmpty(),
+                "modern targetSdk >= 23 package required legacy permission review");
+        retire(h, modern);
+
+        ApkPackage legacy = pkg("fixture.permission.legacy.review", UID + 22, 22, (byte)9);
+        call(legacy, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, (Object)null);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, legacy);
+        check((Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, legacy),
+                "newly admitted legacy package did not require permission review");
+        List<?> groups = (List<?>)call(h.policy, "pendingReviewGroups", new Class<?>[]{ApkPackage.class}, legacy);
+        List<String> groupNames = new ArrayList<>();
+        for (Object group : groups) {
+            groupNames.add((String)call(group, "groupName", new Class<?>[]{}));
+        }
+        check(groupNames.contains(Manifest.permission_group.LOCATION)
+                && groupNames.contains(Manifest.permission_group.CAMERA)
+                && groupNames.contains(Manifest.permission_group.STORAGE)
+                && groupNames.size() < RUNTIME.size(),
+                "legacy review groups were not collapsed into logical RuntimePermissionGroups");
+
+        // Keep LOCATION and STORAGE enabled; turn CAMERA off.
+        Set<String> enabled = new HashSet<>(groupNames);
+        enabled.remove(Manifest.permission_group.CAMERA);
+        call(h.policy, "recordPermissionReview", new Class<?>[]{ApkPackage.class, Set.class}, legacy, enabled);
+
+        check(!(Boolean)call(h.policy, "isReviewRequired", new Class<?>[]{ApkPackage.class}, legacy)
+                && ((List<?>)call(h.policy, "pendingReviewGroups", new Class<?>[]{ApkPackage.class}, legacy)).isEmpty(),
+                "confirmed legacy review left REVIEW_REQUIRED pending");
+        int camFlags = flagsOf(h.policy, legacy.packageName, CAMERA);
+        check((camFlags & review) == 0 && (camFlags & (revokedCompat | USER_SET)) == (revokedCompat | USER_SET)
+                && h.policy.checkPermission(legacy.packageName, CAMERA) == GRANTED
+                && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_CAMERA, legacy.uid(), legacy.packageName, null)
+                        == AppOpsManager.MODE_IGNORED,
+                "turned-off review group did not set REVOKED_COMPAT | USER_SET or deny its AppOp");
+        int bgFlags = flagsOf(h.policy, legacy.packageName, BACKGROUND);
+        int storageFlags = flagsOf(h.policy, legacy.packageName, STORAGE);
+        check((bgFlags & (review | revokedCompat)) == 0 && (storageFlags & (review | revokedCompat)) == 0
+                && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, legacy.uid(), legacy.packageName, null)
+                        == AppOpsManager.MODE_ALLOWED
+                && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_READ_EXTERNAL_STORAGE, legacy.uid(),
+                        legacy.packageName, null) == AppOpsManager.MODE_ALLOWED,
+                "enabled legacy review groups did not clear REVIEW_REQUIRED or publish AppOps");
+        retire(h, legacy);
+    }
     private static final class Prompts {
         final List<String> foreground = new ArrayList<>(), background = new ArrayList<>();
     }
@@ -1321,7 +1372,7 @@ public final class RuntimePermissionStateTest {
     public static int run(boolean binderTransport) throws Exception {
         binder = binderTransport; checks = 0;
         Harness harness = new Harness();
-        exemptions(harness); legacyRestricted(harness); decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
+        exemptions(harness); legacyRestricted(harness); legacyReview(harness); decisions(harness); groups(harness); exclusions(harness); lifecycle(harness);
         backgroundConsent(harness);
         installerAllowlist(harness);
         concurrentAllowlists(harness);

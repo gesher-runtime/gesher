@@ -10,6 +10,7 @@
 #include "../../compat/locale/ui_locale.h"
 #include "../../compat/credentials/permission_dialog.inc"
 #include "../../compat/credentials/background_permission_dialog.inc"
+#include "../../compat/credentials/review_permission_dialog.inc"
 #include "../../compat/credentials/exact_alarm_dialog.inc"
 
 enum { DENY, ALLOW, CLOSE, ENTER, ESCAPE, TAB_ALLOW };
@@ -24,6 +25,11 @@ static int exact_action;
 // Background dialog actions: its three buttons, then Enter, Escape and close.
 enum { BG_ALWAYS, BG_FOREGROUND, BG_DENY, BG_ENTER, BG_ESCAPE, BG_CLOSE, BG_TAB_DENY };
 static int background_action;
+// Review dialog actions: confirm all, toggle one off then confirm, cancel, Enter, Escape, close.
+enum { RV_CONFIRM_ALL, RV_TOGGLE_ONE, RV_TAB_SPACE_CONFIRM, RV_CANCEL, RV_ENTER, RV_ESCAPE, RV_CLOSE };
+static int review_action;
+static int review_expected_count = 2;
+static int review_phase = 0;
 static unsigned char exact_initial[] = {0, 1};
 static BOOL prompt_confirmation;
 static int prompt_action;
@@ -253,12 +259,78 @@ static void CALLBACK InspectHostPrompt(HWND dialog, UINT message, UINT_PTR timer
   }
 }
 
+static void CALLBACK InspectReview(HWND dialog, UINT message, UINT_PTR timer, DWORD time) {
+  (void)message; (void)time;
+  KillTimer(dialog, timer);
+  HWND package = GetDlgItem(dialog, REVIEW_PACKAGE);
+  HWND box0 = GetDlgItem(dialog, REVIEW_GROUP_BASE);
+  HWND box_last = GetDlgItem(dialog, REVIEW_GROUP_BASE + review_expected_count - 1);
+  HWND confirm = GetDlgItem(dialog, IDOK);
+  HWND cancel = GetDlgItem(dialog, IDCANCEL);
+  Check(package && box0 && box_last && confirm && cancel, "all review controls exist");
+  if (review_phase == 0) {
+    Check(GetFocus() == confirm, "review initial focus is Confirm");
+    Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == IDOK, "review default action is Confirm");
+    Check((GetWindowLongW(package, GWL_EXSTYLE) & (WS_EX_RTLREADING | WS_EX_LAYOUTRTL)) == 0,
+        "review package identifier stays LTR in both locales");
+    Check((GetWindowLongW(package, GWL_STYLE) & ES_READONLY) != 0, "review package is read-only");
+    Check((GetWindowLongW(confirm, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW,
+        "review Confirm button uses shared host presentation");
+    Check((GetWindowLongW(cancel, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW,
+        "review Cancel button uses shared host presentation");
+    Check(SendMessageW(box0, BM_GETCHECK, 0, 0) == BST_CHECKED
+        && SendMessageW(box_last, BM_GETCHECK, 0, 0) == BST_CHECKED,
+        "review checkboxes default to checked");
+    Check(((GetWindowLongW(box0, GWL_STYLE) & BS_RIGHTBUTTON) != 0) == GesherUiRtl(language),
+        "review checkbox alignment follows locale direction");
+    WCHAR value[256] = {0};
+    GetWindowTextW(confirm, value, 256);
+    Check(wcscmp(value, GesherUiText(language, "review_permission_confirm")) == 0, "localized review Confirm");
+    GetWindowTextW(cancel, value, 256);
+    Check(wcscmp(value, GesherUiText(language, "review_permission_cancel")) == 0, "localized review Cancel");
+    RECT client, bounds, work_area, dlg_rect;
+    GetClientRect(dialog, &client);
+    GetWindowRect(confirm, &bounds);
+    MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
+    Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "review Confirm fits inside dialog");
+    GetWindowRect(cancel, &bounds);
+    MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
+    Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "review Cancel fits inside dialog");
+    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0)) {
+      GetWindowRect(dialog, &dlg_rect);
+      Check(dlg_rect.bottom - dlg_rect.top <= work_area.bottom - work_area.top,
+          "review dialog height fits inside work area");
+    }
+    if (review_action == RV_CONFIRM_ALL) {
+      SendMessageW(confirm, BM_CLICK, 0, 0);
+    } else if (review_action == RV_TOGGLE_ONE) {
+      SendMessageW(box0, BM_CLICK, 0, 0);
+      SendMessageW(confirm, BM_CLICK, 0, 0);
+    } else if (review_action == RV_TAB_SPACE_CONFIRM) {
+      review_phase = 1;
+      SetFocus(box0);
+      PostMessageW(box0, WM_KEYDOWN, VK_SPACE, 0);
+      PostMessageW(box0, WM_KEYUP, VK_SPACE, 0);
+      SetTimer(dialog, 1, 20, InspectReview);
+    } else if (review_action == RV_CANCEL) {
+      SendMessageW(cancel, BM_CLICK, 0, 0);
+    } else if (review_action == RV_CLOSE) {
+      PostMessageW(dialog, WM_CLOSE, 0, 0);
+    } else {
+      PostMessageW(GetFocus(), WM_KEYDOWN, review_action == RV_ESCAPE ? VK_ESCAPE : VK_RETURN, 0);
+    }
+  } else {
+    SendMessageW(confirm, BM_CLICK, 0, 0);
+  }
+}
+
 static LRESULT CALLBACK AfterInit(int code, WPARAM wparam, LPARAM lparam) {
   if (code >= 0) {
     CWPRETSTRUCT* call = (CWPRETSTRUCT*)lparam;
     if (call->message == WM_INITDIALOG) {
       if (GetDlgItem(call->hwnd, PERMISSION_DETAILS)) SetTimer(call->hwnd, 1, 20, Inspect);
       else if (GetDlgItem(call->hwnd, BACKGROUND_DETAILS)) SetTimer(call->hwnd, 1, 20, InspectBackground);
+      else if (GetDlgItem(call->hwnd, REVIEW_PACKAGE)) SetTimer(call->hwnd, 1, 20, InspectReview);
       else if (GetDlgItem(call->hwnd, GESHER_HOST_MESSAGE_TEXT))
         SetTimer(call->hwnd, 1, 20, InspectHostPrompt);
     }
@@ -384,6 +456,51 @@ int main(void) {
           : BACKGROUND_DISMISSED;
       Check(choice == expected, "only explicit background choices record a decision");
       printf("background scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", background_action, choice);
+    }
+    const WCHAR* review_groups[] = {
+        L"Location \u202a(android.permission-group.LOCATION)\u202c",
+        L"Camera \u202a(android.permission-group.CAMERA)\u202c"
+    };
+    review_expected_count = 2;
+    for (review_action = RV_CONFIRM_ALL; review_action <= RV_CLOSE; ++review_action) {
+      review_phase = 0;
+      unsigned char enabled[2] = {1, 1};
+      int decision = ReviewPermissionDialog(language, L"com.example.legacy", review_groups, enabled, 2);
+      int expected = (review_action == RV_CONFIRM_ALL || review_action == RV_TOGGLE_ONE
+          || review_action == RV_TAB_SPACE_CONFIRM || review_action == RV_ENTER)
+          ? REVIEW_ALLOWED : REVIEW_DISMISSED;
+      Check(decision == expected, "review dialog returns allowed only on explicit confirm");
+      if (review_action == RV_TOGGLE_ONE || review_action == RV_TAB_SPACE_CONFIRM) {
+        Check(enabled[0] == 0 && enabled[1] == 1, "toggled review group is recorded off");
+      } else if (expected == REVIEW_ALLOWED) {
+        Check(enabled[0] == 1 && enabled[1] == 1, "untoggled review groups remain enabled");
+      }
+      printf("review scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", review_action, decision);
+    }
+    if (locale == 0) {
+      unsigned char single[1] = {1};
+      review_expected_count = 1;
+      review_action = RV_CONFIRM_ALL;
+      review_phase = 0;
+      Check(ReviewPermissionDialog(language, L"com.example.single", review_groups, single, 1) == REVIEW_ALLOWED
+          && single[0] == 1, "single-group review succeeds");
+      const WCHAR* many_groups[REVIEW_MAX_GROUPS];
+      unsigned char many_enabled[REVIEW_MAX_GROUPS];
+      for (int i = 0; i < REVIEW_MAX_GROUPS; ++i) {
+        many_groups[i] = L"Permission group label";
+        many_enabled[i] = 1;
+      }
+      review_expected_count = REVIEW_MAX_GROUPS;
+      review_action = RV_CONFIRM_ALL;
+      review_phase = 0;
+      Check(ReviewPermissionDialog(language, L"com.example.many", many_groups, many_enabled,
+          REVIEW_MAX_GROUPS) == REVIEW_ALLOWED, "max-groups scrollable review succeeds within work area");
+      Check(ReviewPermissionDialog(language, NULL, review_groups, single, 1) == REVIEW_UNAVAILABLE,
+          "null package returns unavailable");
+      Check(ReviewPermissionDialog(language, L"com.example.empty", review_groups, single, 0) == REVIEW_UNAVAILABLE,
+          "zero groups returns unavailable");
+      Check(ReviewPermissionDialog(language, L"com.example.overflow", many_groups, many_enabled,
+          REVIEW_MAX_GROUPS + 1) == REVIEW_UNAVAILABLE, "over-limit groups returns unavailable");
     }
     const WCHAR* packages[] = {L"com.gesher.test.clock", L"com.gesher.test.reminder"};
     for (exact_action = 0; exact_action < 3; ++exact_action) {

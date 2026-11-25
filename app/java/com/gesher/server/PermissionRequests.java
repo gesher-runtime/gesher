@@ -6,14 +6,18 @@ package com.gesher.server;
 
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.PermissionGroupInfo;
 import android.content.pm.PermissionInfo;
 import android.content.res.Resources;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -43,16 +47,30 @@ final class PermissionRequests {
         int decide(String packageName, String permissionNames);
         /** The background dialog: UNAVAILABLE, DISMISSED, DENIED, FOREGROUND_ONLY or ALWAYS. */
         int decideBackground(String packageName, String permissionNames);
+        /**
+         * The legacy permission review dialog: UNAVAILABLE, DISMISSED or ALLOWED.
+         * {@code enabled} enters with every group checked (true) and is updated
+         * in place when the user confirms (ALLOWED).
+         */
+        default int decideReview(String packageName, String[] groupLabels, boolean[] enabled) {
+            return UNAVAILABLE;
+        }
     }
 
     private final PackageManagerService mPm;
     private final Executor mExecutor;
+    private final Executor mReviewExecutor;
     private final Decision mDecision;
     private final Set<String> mPending = new HashSet<>();
+    private final Map<String, CompletableFuture<Boolean>> mPendingReviews = new HashMap<>();
 
     PermissionRequests(PackageManagerService pm) {
         this(pm, Executors.newSingleThreadExecutor(r -> {
             Thread thread = new Thread(r, "permission-consent");
+            thread.setDaemon(true);
+            return thread;
+        }), Executors.newCachedThreadPool(r -> {
+            Thread thread = new Thread(r, "permission-review");
             thread.setDaemon(true);
             return thread;
         }), new Decision() {
@@ -62,13 +80,22 @@ final class PermissionRequests {
             @Override public int decideBackground(String packageName, String permissionNames) {
                 return confirmBackground(packageName, permissionNames);
             }
+            @Override public int decideReview(String packageName, String[] groupLabels, boolean[] enabled) {
+                return confirmReview(packageName, groupLabels, enabled);
+            }
         });
     }
 
     /** Server-local injection for regression tests; never exposed through Binder or env. */
     PermissionRequests(PackageManagerService pm, Executor executor, Decision decision) {
+        this(pm, executor, executor, decision);
+    }
+
+    private PermissionRequests(PackageManagerService pm, Executor executor, Executor reviewExecutor,
+            Decision decision) {
         mPm = pm;
         mExecutor = executor;
+        mReviewExecutor = reviewExecutor;
         mDecision = decision;
     }
 
@@ -99,8 +126,20 @@ final class PermissionRequests {
         }
     }
 
+    static int confirmReview(String packageName, String[] groupLabels, boolean[] enabled) {
+        try {
+            AccountSecretStore.ensureLoaded();
+            int choice = nativeReviewPermissions(packageName, groupLabels, enabled);
+            return choice == DISMISSED || choice == ALLOWED ? choice : UNAVAILABLE;
+        } catch (LinkageError | SecurityException e) {
+            SystemServer.log("permission review unavailable: " + e.getClass().getSimpleName());
+            return UNAVAILABLE;
+        }
+    }
+
     private static native int nativeConfirm(String packageLabel, String permissionNames);
     private static native int nativeConfirmBackground(String packageLabel, String permissionNames);
+    private static native int nativeReviewPermissions(String packageLabel, String[] groupLabels, boolean[] enabled);
 
     private boolean current(ApkPackage captured) {
         return !mPm.isRemovalPending(captured.packageName) && mPm.get(captured.packageName) == captured;
@@ -144,7 +183,7 @@ final class PermissionRequests {
             return true;
         }
         try {
-            mExecutor.execute(() -> {
+            mReviewExecutor.execute(() -> {
                 try {
                     chooseBackground(policy, captured, background, true, BackgroundMode.SETTINGS);
                 } catch (RuntimeException e) {
@@ -160,6 +199,90 @@ final class PermissionRequests {
             throw e;
         }
         return true;
+    }
+
+    /**
+     * Run the pre-launch permission review for a legacy package off ATM/PM/Binder locks.
+     * Concurrent launch attempts for the same package share the in-flight future without
+     * showing duplicate dialogs. Completes with {@code true} only when the user confirms
+     * (or no review remains pending) and the package generation is still current.
+     */
+    CompletableFuture<Boolean> reviewPermissions(ApkPackage captured) {
+        if (captured == null) throw new IllegalArgumentException("Invalid review request");
+        CompletableFuture<Boolean> future;
+        synchronized (mPendingReviews) {
+            CompletableFuture<Boolean> existing = mPendingReviews.get(captured.packageName);
+            if (existing != null) return existing;
+            future = new CompletableFuture<>();
+            mPendingReviews.put(captured.packageName, future);
+        }
+        try {
+            mReviewExecutor.execute(() -> {
+                boolean proceed = false;
+                try {
+                    PermissionPolicy policy = mPm.permissions();
+                    List<PermissionPolicy.ReviewGroup> groups = current(captured)
+                            ? policy.pendingReviewGroups(captured) : List.of();
+                    if (!current(captured)) {
+                        proceed = false;
+                    } else if (groups.isEmpty()) {
+                        proceed = true;
+                    } else {
+                        String[] labels = describeGroups(policy, groups);
+                        boolean[] enabled = new boolean[groups.size()];
+                        Arrays.fill(enabled, true);
+                        int decision = mDecision.decideReview(captured.packageName, labels, enabled);
+                        if (decision == ALLOWED && current(captured)) {
+                            Set<String> kept = new HashSet<>();
+                            for (int i = 0; i < groups.size(); i++) {
+                                if (enabled[i]) kept.add(groups.get(i).groupName());
+                            }
+                            policy.recordPermissionReview(captured, kept);
+                            proceed = current(captured);
+                        }
+                    }
+                } catch (RuntimeException e) {
+                    SystemServer.log("permission review failed for " + captured.packageName
+                            + ": " + e.getClass().getSimpleName());
+                } finally {
+                    synchronized (mPendingReviews) {
+                        mPendingReviews.remove(captured.packageName, future);
+                    }
+                    future.complete(proceed);
+                }
+            });
+        } catch (RuntimeException e) {
+            synchronized (mPendingReviews) {
+                mPendingReviews.remove(captured.packageName, future);
+            }
+            future.complete(false);
+            throw e;
+        }
+        return future;
+    }
+
+    private static String[] describeGroups(PermissionPolicy policy, List<PermissionPolicy.ReviewGroup> groups) {
+        String[] labels = new String[groups.size()];
+        for (int i = 0; i < groups.size(); i++) {
+            PermissionPolicy.ReviewGroup group = groups.get(i);
+            CharSequence label = null;
+            PermissionGroupInfo groupInfo = policy.getPermissionGroupInfo(group.groupName(), 0);
+            if (groupInfo != null && "android".equals(groupInfo.packageName) && groupInfo.labelRes != 0) {
+                try { label = Resources.getSystem().getText(groupInfo.labelRes); }
+                catch (Resources.NotFoundException | RuntimeException ignored) { }
+            }
+            if (label == null && !group.permissions().isEmpty()) {
+                PermissionInfo permInfo = policy.getPermissionInfo(group.permissions().get(0), "android", 0);
+                if (permInfo != null && "android".equals(permInfo.packageName) && permInfo.labelRes != 0) {
+                    try { label = Resources.getSystem().getText(permInfo.labelRes); }
+                    catch (Resources.NotFoundException | RuntimeException ignored) { }
+                }
+            }
+            labels[i] = label != null
+                    ? label + " \u202a(" + group.groupName() + ")\u202c"
+                    : '\u202a' + group.groupName() + '\u202c';
+        }
+        return labels;
     }
 
     void request(ApkPackage captured, String[] requested, Consumer<Intent> completion) {
@@ -181,7 +304,7 @@ final class PermissionRequests {
             return;
         }
         try {
-            mExecutor.execute(() -> {
+            mReviewExecutor.execute(() -> {
                 int[] grants = new int[names.length];
                 Arrays.fill(grants, PackageManager.PERMISSION_DENIED);
                 try {
