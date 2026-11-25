@@ -17,6 +17,7 @@ import com.gesher.server.ApkPackage;
 import com.gesher.server.BrowserPackageSupport;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.SharedLibraryGraph;
+import com.gesher.server.WindowsUriHandlers;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
@@ -134,6 +135,12 @@ public final class IntentCandidateIndexTest {
         PackageManagerService result = (PackageManagerService)unsafe().allocateInstance(PackageManagerService.class);
         field(PackageManagerService.class, "mPackages").set(result, packages);
         field(PackageManagerService.class, "mRemoving").set(result, Map.of());
+        // Unsafe skips field initializers; this manifest-index fixture has no Windows associations.
+        try {
+            field(PackageManagerService.class, "mUriHandlers").set(result, new WindowsUriHandlers(null));
+        } catch (NoSuchFieldException beforeUriHandlers) {
+            // The documented --source-ref comparison predates this optional host package.
+        }
         var policy = Class.forName("com.gesher.server.PermissionPolicy").getDeclaredConstructor(PackageManagerService.class);
         policy.setAccessible(true);
         field(PackageManagerService.class, "mPermissions").set(result, policy.newInstance(result));

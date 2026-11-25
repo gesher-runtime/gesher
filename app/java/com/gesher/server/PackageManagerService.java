@@ -54,6 +54,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
+    /** Windows' mailto/tel/sms/geo handlers (WindowsUriHandlers), present only when registered. */
+    private final WindowsUriHandlers mUriHandlers = new WindowsUriHandlers(WindowsHost::hasUrlHandler);
     private final Executor mPackageEventExecutor = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "gesher-package-events");
         thread.setDaemon(true);
@@ -149,6 +151,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     void revokePackageCapabilities(String name) {
+        ExternalStorageAccess.removePackage(this, name);
         List<Consumer<String>> cleanup;
         synchronized (this) { cleanup = new ArrayList<>(mPackageRemoval); }
         for (Consumer<String> action : cleanup) action.accept(name);
@@ -182,6 +185,16 @@ public final class PackageManagerService extends IPackageManager.Default {
     public AutoCloseable onPackageChange(Consumer<ApkPackage> listener) {
         mPackageChanges.add(java.util.Objects.requireNonNull(listener));
         return () -> mPackageChanges.remove(listener);
+    }
+
+    /** Failure retirement must not inherit the caller's installer or PM monitor. */
+    void storagePublicationFailed(ApkPackage pkg, java.util.function.BooleanSupplier stillFailed) {
+        mPackageEventExecutor.execute(() -> {
+            Services.Created services = Services.sLast;
+            if (services != null && services.pm == this) {
+                services.atm.killUidForPermissionChange(pkg, stillFailed);
+            }
+        });
     }
 
 
@@ -317,6 +330,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (p != null) {
             p.clearComponentStates();
             PackageManager.invalidatePackageInfoCache();
+            ExternalStorageAccess.removePackage(this, packageName);
         }
         return p;
     }
@@ -526,7 +540,18 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (userId != 0) return false;
         if ("android".equals(packageName)) return true;
         return get(packageName) != null
-                || BrowserPackageSupport.isBrowserPackage(packageName);
+                || BrowserPackageSupport.isBrowserPackage(packageName)
+                || uriHandlerPackage(packageName);
+    }
+
+    WindowsUriHandlers uriHandlers() {
+        return mUriHandlers;
+    }
+
+    /** The Windows URI handler package, while no APK of that name is installed and Windows has a handler. */
+    private boolean uriHandlerPackage(String packageName) {
+        return WindowsUriHandlers.isHandlerPackage(packageName) && get(packageName) == null
+                && mUriHandlers.exists();
     }
 
     @Override
@@ -552,6 +577,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         if (BrowserPackageSupport.isBrowserPackage(packageName)) {
             return BrowserPackageSupport.createPackageInfo(flags);
+        }
+        if (WindowsUriHandlers.isHandlerPackage(packageName)) {
+            return mUriHandlers.packageInfo(flags);
         }
         return null;
     }
@@ -591,6 +619,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (BrowserPackageSupport.isBrowserPackage(packageName)) {
             return BrowserPackageSupport.createApplicationInfo(flags);
         }
+        if (WindowsUriHandlers.isHandlerPackage(packageName)) {
+            return mUriHandlers.applicationInfo(flags);
+        }
         return null;
     }
 
@@ -626,6 +657,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         if (p == null && BrowserPackageSupport.isBrowserPackage(className.getPackageName())) {
             return BrowserPackageSupport.activityInfo(className.getClassName(), flags);
+        }
+        if (p == null && userId == 0 && WindowsUriHandlers.isHandlerPackage(className.getPackageName())) {
+            return mUriHandlers.activityInfo(className.getClassName(), flags);
         }
         return p == null ? null : p.activityInfo(className.getClassName(), flags);
     }
@@ -691,6 +725,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (intent != null && get(BrowserPackageSupport.PACKAGE) == null) {
             result.addAll(BrowserPackageSupport.queryIntentActivities(intent, resolvedType,
                     flags));
+        }
+        // Windows' mailto/tel/sms/geo handlers (WindowsUriHandlers), likewise after the
+        // installed apps, and only while Windows has a handler registered for the scheme.
+        if (intent != null && userId == 0 && get(WindowsUriHandlers.PACKAGE) == null) {
+            result.addAll(mUriHandlers.queryIntentActivities(intent, resolvedType, flags));
         }
         return result;
     }
@@ -909,9 +948,10 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage installed = get(pkg);
         if (installed != null) return installed.componentEnabledState(componentName.getClassName());
         // As Settings.getComponentEnabledSettingLPr: an unknown package throws, an unknown
-        // class of a known package is DEFAULT. Gesher's browser package is a known
-        // package whose components keep their manifest state.
-        if (get(pkg) == null && !BrowserPackageSupport.isBrowserPackage(pkg)) {
+        // class of a known package is DEFAULT. Gesher's browser and available Windows
+        // URI handler packages keep their host component state.
+        if (get(pkg) == null && !BrowserPackageSupport.isBrowserPackage(pkg)
+                && !uriHandlerPackage(pkg)) {
             throw new IllegalArgumentException("Unknown package: " + pkg);
         }
         return PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
@@ -1125,7 +1165,8 @@ public final class PackageManagerService extends IPackageManager.Default {
         enforceCrossUser(userId);
         ApkPackage installed = get(packageName);
         if (installed != null) return installed.applicationEnabledState();
-        if (BrowserPackageSupport.isBrowserPackage(packageName)) {
+        if (BrowserPackageSupport.isBrowserPackage(packageName)
+                || uriHandlerPackage(packageName)) {
             return PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
         }
         throw new IllegalArgumentException("Unknown package: " + packageName);

@@ -1,15 +1,113 @@
 From: Gesher Authors
-Subject: [PATCH] Map guest paths at the Win32 VFS canonicalization boundary
+Subject: [PATCH] Map guest paths and authorize Win32 VFS storage operations
 
-Use the existing POSIX disk namespace before SQLite constructs canonical
-filename, URI and journal metadata. All main and attached databases then
-share file identity with Context/File operations, including cross-drive paths.
-Leave xOpen's core-owned pointer and native IO/error handling intact. Reject
-canonical UTF-8 output that does not fit instead of silently truncating it.
+Map names before SQLite owns canonical filenames and URI/journal metadata.
+Check storage policy for xOpen, xAccess, xDelete and direct SHM opens using
+actual requested access. Keep SQLite filename ownership and native I/O/error
+handling intact, including read-only fallback. Check opened handles before
+returning data access. Reject canonical output that does not fit.
 
 --- a/dist/sqlite-autoconf-3500400/sqlite3.c
 +++ b/dist/sqlite-autoconf-3500400/sqlite3.c
-@@ -53189,6 +53189,22 @@
+@@ -51433,6 +51433,12 @@
+ ** If SQLITE_ENABLE_SETLK_TIMEOUT is defined at build time, then the file
+ ** is opened with FILE_FLAG_OVERLAPPED specified. If not, it is not.
+ */
++#ifdef GESHER
++/* These checks preserve SQLite's filename/URI ownership and native I/O. */
++extern int gesher_sqlite_path_allowed(const char*, int);
++extern int gesher_sqlite_open_flags(const char*, int);
++extern int gesher_sqlite_handle_allowed(void*, int);
++#endif
+ static int winHandleOpen(
+   const char *zUtf8,              /* File to open */
+   int *pbReadonly,                /* IN/OUT: True for readonly handle */
+@@ -51449,6 +51455,14 @@
+   const DWORD flag_overlapped = 0;
+ #endif
+
++#ifdef GESHER
++  /* SHM is opened directly here, without going through the VFS xOpen. */
++  if( !gesher_sqlite_path_allowed(zUtf8, bReadonly ? SQLITE_ACCESS_READ
++                                                : SQLITE_ACCESS_READWRITE) ){
++    *ph = INVALID_HANDLE_VALUE;
++    return SQLITE_CANTOPEN_BKPT;
++  }
++#endif
+   /* Convert the filename to the system encoding. */
+   zConverted = winConvertFromUtf8Filename(zUtf8);
+   if( zConverted==0 ){
+@@ -51515,6 +51529,13 @@
+     }
+   }
+
++#ifdef GESHER
++  if( h!=INVALID_HANDLE_VALUE && !gesher_sqlite_handle_allowed(h, !bReadonly) ){
++    osCloseHandle(h);
++    h = INVALID_HANDLE_VALUE;
++    rc = SQLITE_CANTOPEN_BKPT;
++  }
++#endif
+  winopenfile_out:
+   sqlite3_free(zConverted);
+   *pbReadonly = bReadonly;
+@@ -52639,6 +52660,16 @@
+     zUtf8Name = zTmpname;
+   }
+
++#ifdef GESHER
++  {
++    int permitted = gesher_sqlite_open_flags(zUtf8Name, flags);
++    if( permitted!=flags ){
++      sqlite3_free(zTmpname);
++      return permitted ? winOpen(pVfs, zName, id, permitted, pOutFlags)
++                       : SQLITE_CANTOPEN_BKPT;
++    }
++  }
++#endif
+   /* Database filenames are double-zero terminated if they are not
+   ** URIs with parameters.  Hence, they can always be passed into
+   ** sqlite3_uri_parameter().
+@@ -52791,6 +52822,14 @@
+     }
+   }
+
++#ifdef GESHER
++  if( !gesher_sqlite_handle_allowed(h, isReadWrite) ){
++    osCloseHandle(h);
++    sqlite3_free(zConverted);
++    sqlite3_free(zTmpname);
++    return SQLITE_CANTOPEN_BKPT;
++  }
++#endif
+   if( pOutFlags ){
+     if( isReadWrite ){
+       *pOutFlags = SQLITE_OPEN_READWRITE;
+@@ -52876,6 +52915,10 @@
+   UNUSED_PARAMETER(pVfs);
+   UNUSED_PARAMETER(syncDir);
+
++#ifdef GESHER
++  if( !gesher_sqlite_path_allowed(zFilename, SQLITE_ACCESS_READWRITE) )
++    return SQLITE_IOERR_DELETE;
++#endif
+   SimulateIOError(return SQLITE_IOERR_DELETE);
+   OSTRACE(("DELETE name=%s, syncDir=%d\n", zFilename, syncDir));
+
+@@ -53000,6 +53043,12 @@
+     return SQLITE_OK;
+   }
+
++#ifdef GESHER
++  if( !gesher_sqlite_path_allowed(zFilename, flags) ){
++    *pResOut = 0;
++    return SQLITE_OK;
++  }
++#endif
+   zConverted = winConvertFromUtf8Filename(zFilename);
+   if( zConverted==0 ){
+     OSTRACE(("ACCESS name=%s, rc=SQLITE_IOERR_NOMEM\n", zFilename));
+@@ -53189,6 +53238,22 @@
  ** pathname into zOut[].  zOut[] will be at least pVfs->mxPathname
  ** bytes in size.
  */
@@ -32,7 +130,7 @@ canonical UTF-8 output that does not fit instead of silently truncating it.
  static int winFullPathnameNoMutex(
    sqlite3_vfs *pVfs,            /* Pointer to vfs object */
    const char *zRelative,        /* Possibly relative input path */
-@@ -53397,7 +53413,15 @@
+@@ -53397,7 +53462,15 @@
        sqlite3_snprintf(MIN(nFull, pVfs->mxPathname), zFull, "%s", zOut+6);
      }
  #else
@@ -48,7 +146,7 @@ canonical UTF-8 output that does not fit instead of silently truncating it.
  #endif /* __CYGWIN__ */
      sqlite3_free(zOut);
      return SQLITE_OK;
-@@ -53406,6 +53430,14 @@
+@@ -53406,6 +53479,14 @@
    }
  #endif
  }
@@ -63,7 +161,7 @@ canonical UTF-8 output that does not fit instead of silently truncating it.
  static int winFullPathname(
    sqlite3_vfs *pVfs,            /* Pointer to vfs object */
    const char *zRelative,        /* Possibly relative input path */
-@@ -53416,7 +53448,17 @@
+@@ -53416,7 +53497,17 @@
    MUTEX_LOGIC( sqlite3_mutex *pMutex; )
    MUTEX_LOGIC( pMutex = sqlite3MutexAlloc(SQLITE_MUTEX_STATIC_TEMPDIR); )
    sqlite3_mutex_enter(pMutex);
