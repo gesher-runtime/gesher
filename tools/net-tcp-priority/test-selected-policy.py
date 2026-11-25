@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'ece3f13247078114f7fd4273c6eeb38544636272fa7e1b0d6d7811dea89ad389'
+OFD_QUALIFICATION_SHA256 = '3c124d36ecc944528f736455efd0ccca9c40af27f93a4795b3910bfe47d145df'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -273,7 +273,7 @@ OFD_QUALIFICATION_SHA256 = 'ece3f13247078114f7fd4273c6eeb38544636272fa7e1b0d6d78
 # qualifies Windows execution nor replaces review of the production delta.
 SHARED_STDIO_BASE = '6d7638b789e21cba6270c1dbfabe5091680c4100'
 SHARED_STDIO_FEATURE_HEAD = 'de1e43c391275137c7b7b25dc170892684d55b5e'
-SHARED_STDIO_TRANSITION_SHA256 = '6de1e4d1363de0477e9c89aec4ae4b9b16cd1ee5b2bd1c002d626e5e129dd443'
+SHARED_STDIO_TRANSITION_SHA256 = '93519e62b0ffbb4306a7460cc9c7283680355b6e98b5652fb71dcd3ad5da4a49'
 SHARED_STDIO_PATHS = (
  'compat/bionic/stdio_bionic.cc',
  'compat/posix/include/gesher/stdio.h',
