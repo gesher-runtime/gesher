@@ -27,14 +27,22 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
   new working directory, as after the child's `chdir`); a bare name is looked
   up in `PATH` (Windows' `;` list, or a Linux `:` list), with `.exe`, `.com`,
   `.cmd`, `.bat` tried for names without an extension. By the file's contents:
-  - an **ELF x86-64** file runs in `gesher-exec.exe --elf` (below); other ELF
-    machines (arm64) fail with `ENOEXEC`;
+  - an **ELF64 little-endian x86-64 or arm64** file runs in
+    `gesher-exec.exe --elf` (below; arm64 through the translator,
+    [arm64.md](arm64.md)); other ELF machines, and static executables
+    (`ET_EXEC`, which make Linux system calls themselves, ADR 0055), fail with
+    `ENOEXEC`;
   - a **PE** image (`MZ`) runs as itself; a **`.cmd`/`.bat`** through
     `cmd.exe /d /s /c`;
   - **`sh`, `/system/bin/sh`, `/bin/sh`** (also `/system/xbin`, `/vendor/bin`)
     and **`#!...sh` scripts** run in gesher-exec's shell; other `#!`
     interpreters are looked up like programs; a text file without `#!` runs
     with the shell, as the JDK's `execvp` fallback does;
+  - **`/system/bin/linker64 PROGRAM [ARGS...]`**, Android's way of running a
+    program through the dynamic linker (here Gesher's ELF loader, ADR 0096),
+    runs PROGRAM (a path; an ELF executable or one of the tools below) with
+    ARGS; without a program, with one of linker64's options or with a program
+    that is not ELF it is `ENOEXEC`;
   - anything else is `ENOEXEC`; a directory is `EACCES`; nothing found is
     `ENOENT`.
 - **The launcher** (`compat/elf/exec/gesher_exec.cc`, `gesher-exec.exe` next
@@ -62,6 +70,21 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
     A missing command is 127. Commands come from -c, a script or incremental
     stdin. The status section distinguishes CI-verified cases from pending
     conformance fixes; this is not a claim of complete mksh compatibility.
+    As Android's mksh (`lex.c`, `syn.c`): `[n]&>file` is `[n]>file 2>&n`
+    (likewise `&>>`, `&>|` and `&>&fd`), a foreground redirection, not `&`
+    followed by `>file`; `>&word` needs a descriptor (`sh: >&word: illegal
+    file descriptor name`, status 1). An asynchronous list's stdin is
+    `/dev/null` before its own redirections (mksh `jobs.c`, no job control),
+    so a background command never consumes a script fed on the shell's
+    stdin, as root-check libraries (RootShell, libsuperuser, libsu) do.
+- **The exec log**: `gesher: exec <program> (<kind>) started as pid <pid>`
+  and `gesher: exec <program> failed: error=<errno>, <text>` end with
+  `, <n> args` when there are arguments. Arguments can carry tokens or
+  personal data and these logs are attached to bug reports, so the arguments
+  themselves are logged only with `GESHER_TRACE_EXEC=1`: `, args: <argv[1..]>`,
+  shell words, control bytes escaped, at most 200 bytes of argument text,
+  `... [truncated]` beyond. The child's stdin is never logged. `gesher: exec pid <pid> exited with status
+  <n>` is unchanged; match it to the start line by pid.
 - **Loader additions** (`gesher/elf_loader.h`, additive): `GetExecutableInfo`
   (entry point, program headers, `PT_INTERP`), `SetInitArguments` (what init
   functions are called with; dalvikvm never sets it, so `.so` files there get
@@ -99,7 +122,13 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   protocol. Closed standard descriptors are not replaced with NUL for it.
 - **`exec*()` outside a fork** spawns the program with this process's fds,
   environment and working directory, waits and exits with its status (the pid
-  changes).
+  changes). The list forms take their argv as bionic's `execl.cpp` does, from
+  x86-64 code and from translated arm64 code alike, including list items past
+  the argument registers that the caller passes on the stack: `execl` runs the
+  path as `execv` does; `execlp` looks a bare name up in `PATH` as `execvp`
+  does; `execle` takes the envp that follows the list's null and runs the path
+  with it as `execve` does, not with `environ`, and a null envp there is an
+  empty environment.
 - **`waitpid`/`wait`/`wait4`** return Linux's status word
   (`WIFEXITED`/`WIFSIGNALED`); a child's exit raises `SIGCHLD`.
 - **`kill(pid, sig)` to another process** (any Gesher process, children
@@ -110,8 +139,18 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   program with none is terminated with 143); **`destroyForcibly()`** kills
   (137), through a new `UNIXProcess` native.
 - **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `id`, `ps`,
-  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, as a bare name or a
-  `/system/bin` path; `sh` is the launcher's shell. `su` stays absent (no root),
+  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, `which`, `mount`, as a bare name or a
+  `/system/bin` path; `sh` is the launcher's shell. `which [-a] NAME...` is
+  toybox's: a name exec runs as one of these programs (or `sh`) is
+  `/system/bin/<name>`, otherwise `$PATH` is searched as exec searches it;
+  no match prints nothing and exits 1 (`which su`); like a device without
+  root tools there is no `/system/xbin/which` or `/system/xbin/mount`. `mount` is toybox's as an
+  app's uid: with no device or directory it lists `/proc/mounts` (the same
+  table Gesher's `/proc/mounts` and `getmntent` serve, currently empty) as
+  `DEVICE on DIR type TYPE (OPTIONS)`; mounting goes through `/etc/fstab`
+  first, as toybox does for a non-root uid, and fails with its message and
+  status 1 (`mount: bad /etc/fstab: ...`, `'DIR' not in fstab`, `'DEV' not
+  user mountable in fstab`, or EPERM from mount(2) for a `user` entry). `su` stays absent (no root),
   getprop/setprop use the shared backend in ADR 0060. Structured logcat and
   the pm/am Binder client are prepared; the new property ABI, log capture and
   command/device assertions still need CI proof.
@@ -140,6 +179,24 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
   are not supported (`ENOEXEC`).
 - Windows programs get the command line quoted for the CRT's rules; a
   Windows program's exit code is passed through unchanged (it may exceed 255).
+- Known differences of the `exec*` path from bionic, unchanged for now:
+  - `ENOEXEC` does not fall back to `/system/bin/sh`. bionic's
+    `execvp`/`execvpe` retry a file the kernel rejects with the shell; here a
+    file whose first bytes contain a NUL and that is not a supported ELF or PE
+    image fails with `ENOEXEC`. A text file without `#!` instead runs in the
+    launcher's shell for every form, `execv`/`execve` included, where bionic
+    would return `ENOEXEC`.
+  - With `PATH` unset, `execvp`/`execlp`/`execvpe` do not use bionic's
+    `_PATH_DEFPATH`: an unset or empty `PATH` is read as a single empty entry,
+    so a bare name is looked up only in the current directory (apart from the
+    `/system/bin` tools above).
+  - A `#!` script with an interpreter other than `sh` gets the caller's
+    `argv[0]` after the interpreter and its option, where Linux passes the
+    script's path; `#!...sh` scripts are run by path.
+  - An ELF program run without a device session (standalone `gesher-exec`)
+    sets its own `GESHER_PROPERTY_SESSION` for the property backend, so even an
+    empty environment (`execle`/`execve` with a null or empty envp) shows that
+    one variable to the program.
 
 ## Status and next steps
 

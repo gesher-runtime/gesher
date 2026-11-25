@@ -118,6 +118,11 @@ final class AppSandbox {
         for (String dir : runtimeDirectories()) {
             grantCapability(dir, RUNTIME_FILES, READ_EXECUTE, true);
         }
+        // The user's CA certificates, which every app reads as on Android (KeyChain makes
+        // them world-readable): $ANDROID_DATA/misc/user/0 (docs/network.md).
+        File userCas = new File(Device.dataDir(), "misc/user/0/cacerts-added");
+        userCas.mkdirs();
+        grantCapability(userCas.getParent(), RUNTIME_FILES, READ_EXECUTE, true);
         // The APK itself; its directory (and the oat files in it) only when it is the
         // package's own code directory under data/app. An APK run from where the user
         // keeps it (Downloads) must not open that directory to the container.

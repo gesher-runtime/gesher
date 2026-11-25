@@ -12,11 +12,49 @@ outside the [Android API permission boundary](microg.md); it is not an OS sandbo
 without the optional Wi-Fi DLL can still start Gesher normally.
 
 The backend reads `WlanEnumInterfaces`, `WlanQueryInterface` and
-`WlanGetNetworkBssList`. Interface GUIDs are converted to IP interface indices;
+`WlanGetNetworkBssList`. A census (`nativeHardware`, on its own thread; its first
+caller waits at most 5 s, see docs/wifi.md) reports the
+interface count and, per adapter, `WlanGetInterfaceCapability` PHY types and the
+`wlan_intf_opcode_supported_infrastructure_auth_cipher_pairs` list; IHV-defined
+PHY types and malformed pair lists contribute nothing. One watcher thread
+(`nativeWatch`) registers ACM and MSM notifications on its own handle. The Windows
+callback only ORs an event class into an atomic and signals an event; the Java
+thread that owns the handle drains it, so no JNI runs on Windows' threads. The
+first delivery after registration requests a full re-read, so a change racing
+startup is not lost. Unregistration and close drain callbacks before the state is
+freed; a failed close retains it as the scan path does. When WLAN cannot be opened
+(stopped service), the watcher retries with a 30 s to 5 min backoff. A registration
+silently stops delivering when the WLAN service restarts, so a quiet poll interval
+(30 s) checks that the handle still reaches the service; if not, the watch ends and is
+reopened through the same backoff, which also repeats the census. Interface GUIDs are converted to IP interface indices;
 a request for one `Network` never receives another adapter's SSID, address or
 link state. SSIDs cross the native boundary as their original bytes, so they do
 not depend on a shell's code page or translated command labels. The backend does
 not run `netsh` or PowerShell.
+
+User-approved connections (`WifiConnections`, [Wi-Fi contracts](wifi.md#connecting))
+use four more calls. `nativeConnect` stores a per-user profile with
+`WlanSetProfile(WLAN_PROFILE_USER)`, registers ACM notifications on its own handle
+before `WlanConnect`, and returns only the outcome Windows reports for that profile
+on that interface (`connection_complete` or `connection_attempt_fail`); another
+profile's completion is ignored, and no notification within the deadline is
+`NO_RESPONSE`. The requester's liveness is checked before any Windows change and
+while waiting. Reason codes map to Android's local-only failure codes (security
+reasons and the MSM security range to `AUTHENTICATION`, association
+rejection/timeout to `ASSOCIATION`, not visible/not available to `NOT_FOUND`).
+`nativeDisconnect` disconnects, deletes the temporary profile and reconnects the
+previous profile (used only while the interface is still on Gesher's profile or on
+none); `nativeStoreProfile` stores or deletes suggestion profiles and moves a stored
+one to the end of the preference list with `WlanSetProfilePosition` (deleting it if
+that fails);
+`nativeInterfaceProfiles` lists, for every WLAN interface `WlanEnumInterfaces`
+returns (radio on or off), only per-user profiles with Gesher's prefix (all-user
+profiles are never listed or removed), marking an interface whose list could not be
+read as unknown and returning null when the interfaces cannot be enumerated;
+deleting a profile Windows reports not found (`ERROR_NOT_FOUND`) counts as deleted; `nativeCurrentProfile` reads the connected
+profile name. Profile XML (`WlanProfiles`) carries the SSID as hex bytes and
+escapes every text value; the native copy of the XML, which may hold a passphrase,
+is zeroed after use.
 
 ## Observable behavior
 
@@ -46,7 +84,7 @@ not run `netsh` or PowerShell.
   No DHCP server or lease duration is inferred from a gateway. No Android-owned
   profile is created: configured networks are empty and `WifiInfo.networkId` is -1.
 - Radio/configuration mutation, SoftAP and the privileged `WifiScanner` service
-  remain unsupported. `FEATURE_WIFI` is not added for this partial API subset.
+  remain unsupported. `FEATURE_WIFI` follows the adapter census below.
   Android permissions, location redaction and protected broadcasts are handled
   by the authenticated service/caller layer, independently of Windows consent.
 
@@ -75,11 +113,20 @@ nonblocking reads, coalescing, callbacks, deadlines and queued grant revocation.
 `tools/test_windows_wifi_native.py` compiles the unchanged production native source
 against explicit test Win32/WLAN calls under ASan/UBSan. It covers callback ordering,
 bounded waits, denied operations, exact byte fields, size checks and teardown.
-Its two negative controls demonstrate that premature notifications and omission of
-the live eligibility check are detected. This host boundary does not verify the
+Its three negative controls demonstrate that premature notifications, omission of
+the live eligibility check, and a profile list that could not be read being reported
+as an empty one are detected. This host boundary does not verify the
 Windows ABI; the source is also compiled against the real llvm-mingw headers.
 
 Windows track 50 runs `WindowsWifiTest` on ART and checks that live reads remain
 nonblocking without assuming an adapter exists. Standard hosted CI has no physical
 radio; scan reception, actual Wi-Fi hardware and the Windows consent UI require
 separate hardware validation. Host results are not a claim of that validation.
+
+The census, capability mapping and notification watcher are covered the same
+way: the native fixture checks PHY/auth/cipher unions, failure cases and watcher
+teardown; `WindowsWifiFixture` checks that only successful reads report state
+transitions and that a requested scan's echo is not published twice; the service
+harness checks permissions, sticky state broadcasts and callback delivery.
+Whether a given adapter driver reports its PHY types and auth/cipher pairs
+completely, and the timing of real WLAN notifications, need hardware validation.

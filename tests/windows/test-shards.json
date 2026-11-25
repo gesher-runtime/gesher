@@ -107,6 +107,7 @@
       "70-exec4-exit.ps1",
       "74-exec4-actions.ps1",
       "77-exec4-spawn.ps1",
+      "78-ptrace.ps1",
       "93-microg-gms.ps1",
       "94-framework-fixes.ps1",
       "95-browser.ps1",

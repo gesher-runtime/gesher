@@ -25,7 +25,12 @@ Windows without them (no location service, no Media Foundation) gets clean
 
 - Providers `passive`, `network`, `fused`, `gps`. gps, network and fused are
   Windows' location service (gps asks for high accuracy); passive gets what
-  the others report. `isLocationEnabled()` is Windows' setting for desktop
+  the others report.
+- Features: `android.hardware.location` and `location.network` always;
+  `location.gps` only when Windows has a GNSS receiver (a present device
+  interface of the GNSS driver class, `GUID_DEVINTERFACE_GNSS`, which Windows'
+  location service uses for high-accuracy fixes). Google Play filters apps that
+  require `location.gps` on it. `isLocationEnabled()` is Windows' setting for desktop
   apps ("Let desktop apps access your location"), or a test provider being on.
 - Permissions: the app's manifest must ask for ACCESS_FINE_LOCATION or
   ACCESS_COARSE_LOCATION (Gesher grants what an app requests; there is no
@@ -51,6 +56,22 @@ Windows without them (no location service, no Media Foundation) gets clean
 - `ActivityManagerService.isIntentSenderTargetedToPackage` (as Android's): the
   client checks it before registering a PendingIntent.
 
+### Country (`country_detector`)
+
+`CountryDetectorService` answers `android.location.CountryDetector` (`ICountryDetector`)
+as AOSP's `ComprehensiveCountryDetector` does on a device without a mobile network, a
+SIM or a location-based country: the country of the system's locale settings, with
+source `Country.COUNTRY_SOURCE_LOCALE`. On Windows that setting is the user's "Country or
+region" (`GetUserDefaultGeoName`, or `GetUserGeoID` + `GetGeoInfoW(GEO_ISO2)` before
+Windows 10 1709), a preference rather than a detection, so it is never reported as
+NETWORK, LOCATION or SIM. When Windows has no two-letter code (a UN M.49 area such as
+`419`, or no natives), the answer is AOSP's own fallback: the default Locale's country.
+Location gives no country (there is no geocoder). Listeners get the current country when
+added and again when it changes (WM_SETTINGCHANGE, `WindowsHost.EVENT_SETTING_CHANGED`).
+Tests: `tools/test_country_detector_contracts.py` (host, AOSP classes from android-all),
+`tests/country-detector/home_region_windows_test.cc` (windows-host-contracts) and
+`gesher.services.CountryDetectorTest` (track 95-browser.ps1).
+
 ## Sensors
 
 - Windows.Devices.Sensors' default accelerometer, gyrometer, magnetometer,
@@ -58,7 +79,36 @@ Windows without them (no location service, no Media Foundation) gets clean
   TYPE_ACCELEROMETER (m/s^2, Android's sign), TYPE_GYROSCOPE (rad/s),
   TYPE_MAGNETIC_FIELD, TYPE_LIGHT and TYPE_ROTATION_VECTOR (the quaternion).
   Readings are polled at the rate asked for; on-change sensors report changes
-  only. The CI runners have none.
+  only. The CI runners have no Windows sensor (their list is Gesher's
+  stationary accelerometer, below, unless `GESHER_SENSOR_FALLBACK=0`).
+- The package manager's system features follow the same list
+  (`PackageManagerService.addSensorFeatures`, through `WindowsSensors`):
+  `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass` (the
+  magnetometer) and `.light` when SensorManager lists that type, so
+  `hasSystemFeature` and Google Play's filtering agree with `getDefaultSensor`.
+  The rotation vector has no feature of its own. Without a sensor no feature
+  is claimed. Gesher's stationary accelerometer (below) declares no feature:
+  it is a desktop default, not hardware, and the native list marks where each
+  sensor comes from (`Origin` in `compat/devices/sensors.h`), so
+  `WindowsSensors.types()` gives only Windows' sensors and, under the test
+  switch, `GESHER_SENSOR_TEST`'s. On a PC without
+  an accelerometer, `hasSystemFeature` and feature filtering (an app's required
+  `<uses-feature>`) answer that there is none, while an app that asks
+  SensorManager gets the gravity-only reading. The features are the system server's list at boot, like every
+  system feature (docs/system-features.md): a sensor attached later appears in
+  SensorManager in newly started app processes, and in the features after
+  Gesher restarts. The feature says the sensor exists, as on Android; how closely
+  a real PC sensor meets the CDD (section 7.3: rates, ranges, magnetometer
+  calibration) is not established, as no real sensor has been checked (below).
+  Checked by `PackageServiceQueriesTest` in the framework-fixes track. Through
+  `ServiceFixtureRunner` (which registers the runtime natives): with
+  `GESHER_SENSOR_TEST=1`, the test accelerometer and light sensor are
+  `hasSystemFeature` and `getSystemAvailableFeatures` answers; with the
+  defaults, SensorManager's native list holds the stationary accelerometer and
+  no sensor feature is declared; with `GESHER_SENSOR_FALLBACK=0`, the list has
+  no stationary accelerometer and still no feature. Its plain run has no
+  natives, so it checks only the mapping and that nothing is claimed without a
+  sensor.
 - `GESHER_SENSOR_TEST=1` adds a test accelerometer (gravity on Z) and a test
   light sensor (250 lux), below the framework's natives, so the whole path is
   checked where there is no hardware.
@@ -73,7 +123,8 @@ Windows without them (no location service, no Media Foundation) gets clean
   processes; the native sensor list decides, nothing is set per package), and
   any real motion sensor replaces it. A motion sensor class Windows fails to
   activate (rather than reporting none) keeps it out, so it never stands in for
-  hardware that is present. `GESHER_SENSOR_FALLBACK=0` turns it off:
+  hardware that is present. It declares no system feature (above).
+  `GESHER_SENSOR_FALLBACK=0` turns it off:
   the list is then empty on the runners and `registerListener` answers false.
   Both are checked in the single-process mode.
 - Each event queue is an eventfd watched by the queue's Looper, as Android's
@@ -112,10 +163,43 @@ Windows without them (no location service, no Media Foundation) gets clean
   timing. A virtual camera (`MFCreateVirtualCamera`, Windows 11) needs the
   source as a registered COM server and the Frame Server service; not done.
 - Characteristics: an EXTERNAL-level camera (as Android's USB cameras): fixed
-  focus, auto exposure and white balance, YUV_420_888, PRIVATE and JPEG at the
+  focus unless the camera really focuses (below), auto exposure and white
+  balance, YUV_420_888, PRIVATE and JPEG at the
   device's sizes, LENS_FACING_FRONT unless configured as the rear camera
   (`GESHER_CAMERA_REAR_ID`; the test camera: BACK), one partial
   result, the available request/result/characteristics keys.
+- Autofocus: a camera has it when its driver's focus control
+  (`IAMCameraControl`, which Media Foundation's capture source answers to
+  `QueryInterface`; UVC's Focus (Absolute) and Focus, Auto controls) reports
+  both the automatic and the manual flag over a range of lens positions
+  (`HasAutofocus` in camera_mf.cc; the device line's `af` flag,
+  `WindowsCamera.Device.autofocus`). The test camera has fixed focus. Such a
+  camera offers CONTROL_AF_AVAILABLE_MODES AUTO, CONTINUOUS_VIDEO and
+  CONTINUOUS_PICTURE (not OFF: manual focus by LENS_FOCUS_DISTANCE is not
+  implemented), a nonzero LENS_INFO_MINIMUM_FOCUS_DISTANCE (10) in the
+  unspecified units of UNCALIBRATED distances (it claims no real distance), no AF regions, and continuous focus in the default
+  requests (CONTINUOUS_VIDEO for record and video snapshot). A fixed-focus
+  camera keeps `{OFF}`, 0 and AF state INACTIVE as before.
+  `CameraAutoFocus` runs Android's AF state machine on the capture thread: the
+  driver focuses (its automatic focus on in the continuous modes and during an
+  AUTO scan) and a lock turns it off with the lens kept where it is (the
+  position read back and set as manual). A UVC control does not say when a scan
+  has ended, so Gesher observes it: converged when the reported lens position
+  and the centre's sharpness (normalised luma gradient) stay still for 400 ms
+  after at least 600 ms of scanning; failed after 4 s (a dark or featureless
+  picture never converges). A converged scan is locked, then the picture must
+  keep 80% of its sharpness 150 ms later, else NOT_FOCUSED_LOCKED. Triggers
+  follow CaptureResult's tables: AUTO's START scans (ACTIVE_SCAN, then
+  FOCUSED_LOCKED or NOT_FOCUSED_LOCKED), CANCEL stops; in the continuous modes
+  the driver's scans are PASSIVE_SCAN/PASSIVE_FOCUSED/PASSIVE_UNFOCUSED, START
+  locks (CONTINUOUS_PICTURE during a scan once it ends), CANCEL resumes.
+  LENS_STATE is MOVING during a scan. `FEATURE_CAMERA_AUTOFOCUS` is reported
+  only when the camera reported as `FEATURE_CAMERA` (a configured rear camera)
+  has autofocus, as Android defines it for the rear camera. Not verified
+  without such a camera: drivers that report a stale lens position while
+  focusing automatically would move the lens at the lock (the sharpness check
+  then reports NOT_FOCUSED_LOCKED), and whether a driver keeps a locked focus
+  when the legacy `takePicture` reopens the device (Gesher locks it again).
 - Orientation (maintainer-approved desktop adaptation, CONTRIBUTING.md): the
   frames are upright for the desktop monitor and Gesher does not rotate preview
   buffers for the legacy `setDisplayOrientation`. So SENSOR_ORIENTATION and the
@@ -143,7 +227,8 @@ Windows without them (no location service, no Media Foundation) gets clean
   after `onConfigured`. An open that fails there is retried by the first
   request, which reports the failure. Then one frame per request, for each
   target: an ImageReader gets YUV_420_888 (I420 planes),
-  RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
+  PRIVATE (the same I420, no visible planes; the reader also has a native
+  producer Surface, so apps can draw into it), RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
   reader's size; another surface with a native window gets RGBA through
   `ANativeWindow_lock`. Then `onCaptureStarted` and the result
   (`CameraMetadataInfo.metadata`, SENSOR_TIMESTAMP and the 3A states).
@@ -167,11 +252,15 @@ Windows without them (no location service, no Media Foundation) gets clean
 - Legacy `android.hardware.Camera` (hwsvc2, ADR 0051): the same devices as
   Camera2, in the app's process (`LegacyCamera`, natives in camera_frames.cc that
   call it): ids in Windows' order, a PC's camera FRONT, the test camera BACK;
-  parameters of a fixed-focus camera without flash, zoom or face detection; preview
+  parameters of a camera without flash, zoom or face detection; preview
   callbacks (NV21 or YV12, callback buffers) and a preview surface with a native
   window; `setPreviewTexture` accepted without frames; `takePicture` (shutter, a
   null raw image, postview, JPEG at the picture size; the preview stops);
-  `autoFocus` succeeds at once; a current CAMERA grant is required, else `Fail to connect to
+  `autoFocus` succeeds at once with fixed focus; on a camera with autofocus the
+  focus modes are auto (the default), continuous-video and continuous-picture,
+  `autoFocus` (while previewing) is the AF trigger of the preview's
+  `CameraAutoFocus` and answers success or failure when the lens is locked, and
+  `cancelAutoFocus` cancels it; a current CAMERA grant is required, else `Fail to connect to
   camera service`. Without a camera: `getNumberOfCameras()` 0, `open()` null.
 - `MediaStore.ACTION_IMAGE_CAPTURE`: Gesher Camera (`app/gesher-camera`,
   `gesher-camera.apk` next to dalvikvm.exe; `CameraApp`): the persistent device
@@ -192,6 +281,59 @@ Windows without them (no location service, no Media Foundation) gets clean
   producers than the camera (MediaCodec...), preview into SurfaceView or
   TextureView (they get no native window on Gesher today; frames go to any
   surface that has one).
+
+### Choosing an image instead of the camera (Control Center setting)
+
+An alternative operation for a missing PC capability, approved by the maintainer
+and off by default (CONTRIBUTING.md): a PC usually has no rear camera to
+photograph a document such as a cheque. The Control Center's Camera card has
+"Allow choosing an image from the PC instead of taking a photo", stored as
+`image_picker_fallback=true` in `<data>/system/camera.properties`.
+
+- While it is on, the camera list ends with `gesher-image-picker`
+  (`CameraImageSource.DEVICE_ID`), a fixed-focus rear camera whose frames are an
+  image the user selects with the Windows file picker when an app starts using
+  it (offered at 2592x1944, 1920x1080, 1280x960, 1280x720 and 640x480; the image
+  is scaled into the configured size with its shape kept, on black). Opening one
+  of the PC's cameras asks first: "Use the PC camera" or "Choose an image from
+  the PC". Without the setting nothing changes. The image is shown as Windows
+  shows the file (its EXIF orientation applied), and has nothing to focus: an
+  autofocus PC camera used for an image answers `autoFocus` at once and its
+  Camera2 AF state stays INACTIVE, as a fixed-focus camera.
+- The question is asked once per client: from an app's open of the camera until
+  it closes it, a new size, a picture (`takePicture` reopens the device) or a
+  restarted preview keep the answer, and a cancelled question fails the client's
+  opens (`ERROR_CANCELLED`): Camera2's frames do not ask again, while a legacy
+  `startPreview` that failed after a cancel asks again when the app retries it.
+  Legacy `Camera.open()` and
+  `getParameters()` do not ask (apps probe a camera that way); `startPreview` asks,
+  outside the session's lock, and Camera2 asks when the capture thread first opens
+  the device.
+- The camera service runs in the app's process, which neither reads data/system
+  nor opens the PC's files (and, in an AppContainer, cannot): the system server's
+  `gesher.camera_source` (`CameraSourceService`) answers whether the setting is on
+  and shows the question and the file picker, owned by the app's process. Choosing
+  requires the caller's CAMERA grant, as opening the camera does, and only one
+  question is open at a time (it holds a binder thread until the user answers; another
+  caller meanwhile is refused, as a cancel). The selection is admitted as the
+  document picker admits one (canonical, local, not in Android/data, obb or sandbox),
+  must start as a JPEG, PNG, GIF, BMP or WebP image does and be at most 32 MiB, and
+  reaches the app's process as a read-only descriptor; the log names only the file.
+  The file's bytes, its metadata included, are in the app's process while it decodes
+  them.
+- `MediaStore.ACTION_IMAGE_CAPTURE` keeps going to Gesher Camera, installed at the
+  device's start when there is a camera or the setting is on; its Camera2 open asks
+  the same question, and the photo it takes, written to `EXTRA_OUTPUT` with the
+  requesting app's own URI grant, is the selected image at the camera's largest size.
+- The setting is followed as it changes for the camera list and the question. What
+  the device decides at its start follows it at the next start: `FEATURE_CAMERA`
+  (the selected-image camera is a rear camera) and whether Gesher Camera is
+  installed on a PC without a camera. An app that cached the camera list keeps it.
+- Validation: `tools/test_camera_image_picker.py` runs the production classes
+  (including the Binder round trip and the descriptor) over framework shims, and
+  `tests/windows/shell/CameraImagePickerChecks.ps1` the Control Center's file
+  handling. The Windows question and file picker and an app's live use of the
+  frames are not exercised in CI.
 
 ## Speech recognition
 

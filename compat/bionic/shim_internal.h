@@ -14,6 +14,8 @@
 #include <string>
 #include <unordered_map>
 
+struct gesher_futex_interrupt;  // <gesher/futex_interrupt.h>
+
 namespace gesher::bionic {
 
 // bionic's semaphore bound, shared by enforcement and _SC_SEM_VALUE_MAX.
@@ -139,11 +141,21 @@ void RegisterDnsWire(SymbolTable& table); // dns_wire.cc
 void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
 void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
 void RegisterTime(SymbolTable& table);     // time_bionic.cc
+// libstdc++.so: operator new/delete, static-local guards, __cxa_pure_virtual.
+void RegisterCxx(SymbolTable& table);      // cxx_bionic.cc
 // x86-64 Linux numeric timerfd syscalls share the libc exports' implementation.
 bool DispatchTimerfdSyscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                            int64_t* result);
-// ptrace (a process nobody traces) and the POSIX regex functions.
+// The raw system call table and the POSIX regex functions.
 void RegisterSyscall(SymbolTable& table);  // syscall_bionic.cc
+// ptrace between Gesher processes (ADR 0093).
+void RegisterPtrace(SymbolTable& table);  // ptrace_bionic.cc
+// wait4's hook for this process's tracees (ptrace_bionic.cc): a stop or exit
+// of a tracee `pid` selects (any for -1/0) as a Linux status word, returning
+// its pid; 0 if none is ready. `*matched` says whether `pid` selects any
+// tracee. An exit of a tracee that is also this process's child is left to the
+// child's own wait (`is_child`).
+int PtraceWaitPoll(int pid, int options, int* status, bool* matched, bool (*is_child)(int));
 // A raw x86-64 Linux system call, as the kernel takes it: the shim function
 // that does the same, and the kernel's result or -errno. The ELF loader's
 // handler for `syscall` instructions in loaded code (ADR 0084), and
@@ -180,6 +192,21 @@ int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*),
 // and sleeps, and wherever the signal mask is lowered. Cheap when none are
 // pending.
 void DeliverPendingSignals();
+// Waits a signal directed at the calling thread (pthread_kill, tgkill,
+// tkill from another thread) interrupts, as Linux interrupts a blocked futex:
+// AttachSignalInterrupt makes the thread's futex waits through ::syscall end
+// with EINTR then (nullptr if the thread has no signal state; Detach undoes
+// it); DeliverAfterInterrupt runs the deliverable signals and says which
+// handlers ran (kNoHandler, kHandlersRestart: all with SA_RESTART,
+// kHandlersWithoutRestart: one without).
+// InterruptibleAddressWait is WaitOnAddress (true: woken, false: timed out)
+// that also wakes, after running the signals, for such a signal.
+::gesher_futex_interrupt* AttachSignalInterrupt();
+void DetachSignalInterrupt();
+constexpr int kNoHandler = 0, kHandlersRestart = 1, kHandlersWithoutRestart = 2;
+int DeliverAfterInterrupt();
+bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
+                              unsigned long ms);
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();

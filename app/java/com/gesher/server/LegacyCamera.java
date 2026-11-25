@@ -29,14 +29,19 @@ import java.util.WeakHashMap;
  * display rotation of the Activity using the camera (CameraService.sensorOrientation). Opening
  * needs a current CAMERA permission grant, else "Fail to connect to camera service". Parameters: the
  * device's sizes for preview, picture and video, preview formats NV21 (yuv420sp, the
- * default) and YV12, 30 fps, fixed focus, no flash, no zoom, no face detection, JPEG
+ * default) and YV12, 30 fps, fixed focus (or, for a camera whose driver really focuses
+ * automatically, the focus modes auto, continuous-video and continuous-picture run by
+ * {@link CameraAutoFocus}), no flash, no zoom, no face detection, JPEG
  * pictures and thumbnails. Preview frames go to the preview callback (NV21 or YV12; with
  * callback buffers when the app adds them) and to a preview surface that has a native
  * window ({@code setPreviewDisplay}: frames drawn as RGBA, as Camera2's are);
  * {@code setPreviewTexture}: the same through a Surface over the SurfaceTexture (surfaces
  * track, ADR 0056). {@code takePicture} sends the shutter, a null raw image, a postview if asked and
- * the JPEG at the picture size, then the preview stops, as on Android; autofocus answers
- * success at once (fixed focus).
+ * the JPEG at the picture size, then the preview stops, as on Android. {@code autoFocus}
+ * answers success at once in a mode without autofocus (fixed focus, as Android documents);
+ * in an autofocus mode it is CONTROL_AF_TRIGGER_START for the preview's state machine and
+ * answers once the lens is locked: success when the scan converged, failure when it did not.
+ * {@code cancelAutoFocus} is AF_TRIGGER_CANCEL and drops a pending answer.
  */
 public final class LegacyCamera {
     private static final int MSG_ERROR = 0x001;
@@ -47,6 +52,12 @@ public final class LegacyCamera {
     private static final int MSG_RAW_IMAGE = 0x080;
     private static final int MSG_COMPRESSED_IMAGE = 0x100;
     private static final int ENODEV = 19;
+    private static final int AF_TRIGGER_IDLE =
+            android.hardware.camera2.CameraMetadata.CONTROL_AF_TRIGGER_IDLE;
+    private static final int AF_TRIGGER_START =
+            android.hardware.camera2.CameraMetadata.CONTROL_AF_TRIGGER_START;
+    private static final int AF_TRIGGER_CANCEL =
+            android.hardware.camera2.CameraMetadata.CONTROL_AF_TRIGGER_CANCEL;
     private static final int EACCES = 13;
 
     private LegacyCamera() {
@@ -92,7 +103,19 @@ public final class LegacyCamera {
         Thread preview;
         volatile boolean previewing;
         WindowsCamera.Capture capture;
+        /** The camera-or-image answer (CameraImageSource), kept until the camera's release. */
+        final CameraImageSource.Choice sourceChoice = new CameraImageSource.Choice();
         int audioRestriction;
+        /** The AF trigger for the preview's next frame (CONTROL_AF_TRIGGER_*). */
+        int afTrigger = AF_TRIGGER_IDLE;
+        /** autoFocus waits for a locked state. */
+        boolean focusPending;
+        /** The autoFocus call {@link #focusPending} answers (each call a new one). */
+        long focusRequest;
+        /** The autoFocus call whose START a preview frame has handed to the AF machine. */
+        long focusStarted;
+        /** The preview's AF ended locked (takePicture keeps the lens there). */
+        boolean focusLocked;
 
         Session(Object weakThis, WindowsCamera.Device device) {
             this.weakThis = weakThis;
@@ -177,8 +200,15 @@ public final class LegacyCamera {
         p.put("video-size", size);
         p.put("video-size-values", all);
         p.put("preferred-preview-size-for-video", size);
-        p.put("focus-mode", "fixed");
-        p.put("focus-mode-values", "fixed");
+        if (s.device.autofocus) {
+            // The driver focuses automatically (CameraAutoFocus runs it); "auto" focuses
+            // on autoFocus(), as Android's default.
+            p.put("focus-mode", "auto");
+            p.put("focus-mode-values", "auto,continuous-video,continuous-picture");
+        } else {
+            p.put("focus-mode", "fixed");
+            p.put("focus-mode-values", "fixed");
+        }
         p.put("focal-length", "4.0");
         p.put("focus-distances", "Infinity,Infinity,Infinity");
         p.put("horizontal-view-angle", "60");
@@ -266,6 +296,18 @@ public final class LegacyCamera {
         if (format != null && !format.equals("yuv420sp") && !format.equals("yuv420p")) {
             throw new RuntimeException("setParameters failed");
         }
+        String focus = p.get("focus-mode");
+        if (focus != null) {
+            String supported;
+            synchronized (s) {
+                supported = s.params.get("focus-mode-values");
+            }
+            // As the HAL: a mode the camera does not offer (infinity on an autofocus
+            // camera, auto on a fixed-focus one) is rejected, not run as another mode.
+            if (supported == null || !("," + supported + ",").contains("," + focus + ",")) {
+                throw new RuntimeException("setParameters failed");
+            }
+        }
         synchronized (s) {
             s.params.putAll(p);
         }
@@ -350,7 +392,8 @@ public final class LegacyCamera {
 
     private static WindowsCamera.Capture open(Session s, Size size) {
         try {
-            return WindowsCamera.open(s.device.id, size.getWidth(), size.getHeight());
+            return CameraImageSource.open(s.device.id, size.getWidth(), size.getHeight(),
+                    s.sourceChoice);
         } catch (WindowsCamera.OpenException e) {
             log(e.getMessage());
             return null;
@@ -359,6 +402,14 @@ public final class LegacyCamera {
 
     public static void startPreview(Camera camera) {
         Session s = session(camera);
+        // The camera-or-image question (asked once) waits for the user: not under the
+        // session's lock, which preview frames and the app's other calls take. A cancel
+        // fails this start, as an unavailable camera does, and the app's next start asks again.
+        if (CameraImageSource.decide(s.device.id, s.sourceChoice).kind
+                == CameraImageSource.Selection.CANCELLED) {
+            s.sourceChoice.resetCancelled();
+            throw new RuntimeException("startPreview failed");
+        }
         synchronized (s) {
             if (s.previewing) return;
             Size size = size(s, "preview-size");
@@ -373,9 +424,57 @@ public final class LegacyCamera {
         log("preview started at " + size(s, "preview-size"));
     }
 
+    /** The Camera2 AF mode of a legacy focus mode (OFF: no autofocus). */
+    static int afMode(String focusMode) {
+        if ("auto".equals(focusMode)) {
+            return android.hardware.camera2.CameraMetadata.CONTROL_AF_MODE_AUTO;
+        } else if ("continuous-picture".equals(focusMode)) {
+            return android.hardware.camera2.CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE;
+        } else if ("continuous-video".equals(focusMode)) {
+            return android.hardware.camera2.CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+        }
+        return android.hardware.camera2.CameraMetadata.CONTROL_AF_MODE_OFF;
+    }
+
+    /** One preview frame through the AF state machine; answers a pending autoFocus. */
+    private static void focusFrame(Session s, CameraAutoFocus af, WindowsCamera.Capture capture,
+            byte[] nv12) {
+        int trigger;
+        int mode;
+        synchronized (s) {
+            trigger = s.afTrigger;
+            s.afTrigger = AF_TRIGGER_IDLE;
+            mode = afMode(s.params.get("focus-mode"));
+            // Only a scan started for the pending call may answer it: a lock left by an
+            // earlier scan must not, while this call's START waits for the next frame.
+            if (trigger == AF_TRIGGER_START) s.focusStarted = s.focusRequest;
+        }
+        int state = af.frame(mode, trigger, android.os.SystemClock.uptimeMillis(),
+                CameraAutoFocus.sharpness(nv12, capture.width, capture.height));
+        boolean locked = state == android.hardware.camera2.CameraMetadata
+                .CONTROL_AF_STATE_FOCUSED_LOCKED
+                || state == android.hardware.camera2.CameraMetadata
+                        .CONTROL_AF_STATE_NOT_FOCUSED_LOCKED;
+        synchronized (s) {
+            if (!s.previewing || s.capture != capture) return;
+            s.focusLocked = locked;
+            if (s.focusPending && locked && s.afTrigger != AF_TRIGGER_CANCEL
+                    && s.focusStarted == s.focusRequest) {
+                s.focusPending = false;
+                boolean focused = state == android.hardware.camera2.CameraMetadata
+                        .CONTROL_AF_STATE_FOCUSED_LOCKED;
+                log("autoFocus: " + (focused ? "focused" : "not focused") + ", lens locked");
+                post(s, MSG_FOCUS, focused ? 1 : 0, 0, null);
+            }
+        }
+    }
+
     private static void previewLoop(Session s, WindowsCamera.Capture capture, Size size) {
         byte[] nv12 = new byte[capture.width * capture.height * 3 / 2];
         boolean surfaceFailed = false;
+        CameraAutoFocus af = s.device.autofocus && !capture.isFrame()
+                ? new CameraAutoFocus(CameraAutoFocus.lensOf(capture, "legacy " + s.device.name))
+                : null;
         while (true) {
             synchronized (s) {
                 if (!s.previewing || s.capture != capture) break;
@@ -391,6 +490,7 @@ public final class LegacyCamera {
                 log(String.format("reading a frame: 0x%08x", hr));
                 break;
             }
+            if (af != null) focusFrame(s, af, capture, nv12);
             int w = size.getWidth();
             int h = size.getHeight();
             Surface surface;
@@ -499,6 +599,9 @@ public final class LegacyCamera {
             if (!s.previewing && s.capture == null) return;
             s.previewing = false;
             s.frameInFlight = false;
+            // A stopped preview runs no scan: a pending autoFocus is not answered.
+            s.focusPending = false;
+            s.afTrigger = AF_TRIGGER_IDLE;
             t = s.preview;
             capture = s.capture;
             s.preview = null;
@@ -520,7 +623,29 @@ public final class LegacyCamera {
     // --- pictures -------------------------------------------------------------------------
 
     public static void autoFocus(Camera camera) {
-        post(session(camera), MSG_FOCUS, 1 /* success */, 0, null);
+        Session s = session(camera);
+        synchronized (s) {
+            // A selected image has nothing to focus: success at once, as for fixed focus.
+            if (s.device.autofocus && !s.sourceChoice.image() && CameraAutoFocus.isAutofocusMode(
+                    afMode(s.params.get("focus-mode")))) {
+                // The preview's frames run the scan (Android: only while previewing).
+                if (!s.previewing) throw new RuntimeException("autoFocus failed");
+                s.afTrigger = AF_TRIGGER_START;
+                s.focusPending = true;
+                s.focusRequest++;
+                return;
+            }
+        }
+        // No autofocus in this mode: success at once, as Android documents for fixed focus.
+        post(s, MSG_FOCUS, 1 /* success */, 0, null);
+    }
+
+    public static void cancelAutoFocus(Camera camera) {
+        Session s = session(camera);
+        synchronized (s) {
+            s.focusPending = false;
+            if (s.device.autofocus) s.afTrigger = AF_TRIGGER_CANCEL;
+        }
     }
 
     public static void takePicture(Camera camera, int msgType) {
@@ -531,12 +656,18 @@ public final class LegacyCamera {
         Thread t = new Thread(() -> {
             // The frame comes from a capture at the picture size; the preview stops, as
             // a picture ends it on Android.
+            boolean keepFocus;
+            synchronized (s) {
+                keepFocus = s.device.autofocus && s.focusLocked;
+            }
             stop(s);
             WindowsCamera.Capture c = open(s, picture);
             if (c == null) {
                 post(s, MSG_ERROR, 1, 0, null);
                 return;
             }
+            // A locked focus stays locked for the picture's capture.
+            if (keepFocus) c.focus(WindowsCamera.Capture.FOCUS_LOCK, null);
             byte[] nv12 = new byte[c.width * c.height * 3 / 2];
             int hr;
             try {
