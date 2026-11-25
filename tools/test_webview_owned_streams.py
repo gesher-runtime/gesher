@@ -63,11 +63,17 @@ def main() -> int:
                      "  host.Navigate(url, headers, method, std::move(body));"
                     if legacy_number else
                     "host.Navigate(url, headers, method, std::move(body), number);")
+    # Keep the opt-in diagnostics in the extracted production functions. Older
+    # source controls have no tracing helpers and retain their original path.
+    trace = (function(source, "bool NavigationTracing(") +
+             function(source, "void TraceNavigation(")
+             if "bool NavigationTracing(" in source else "")
     replacements = {
         "@OWNED_STREAM@": str(helper), "@COM_POINTER@": com,
         "@DO@": function(source, "void Do("),
         "@NAVIGATE_DECLARATION@": declaration,
         "@NAVIGATE@": navigate,
+        "@NAVIGATION_TRACE@": trace,
         "@NUMBERED_NAVIGATION@": "1" if numbered else "0",
         "@NAVIGATION_STATE@": state,
         "@NAV_START_CALLBACK@": callback,
