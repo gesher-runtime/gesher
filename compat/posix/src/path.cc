@@ -421,10 +421,17 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
   HANDLE h = HandleFromFd(dirfd);
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
   BY_HANDLE_FILE_INFORMATION info;
-  if (!GetFileInformationByHandle(h, &info) ||
-      (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
-    return errno = ENOTDIR, false;
+  if (!GetFileInformationByHandle(h, &info)) return errno = ENOTDIR, false;
+  unsigned proc_type;
+  std::string proc_path;
+  if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 &&
+      procfs::DescribeTemporaryFile(h, &proc_type, &proc_path)) {
+    // A directory fd under /proc: names relative to its path.
+    if (proc_type != S_IFDIR) return errno = ENOTDIR, false;
+    *out = proc_path + "/" + path;
+    return true;
   }
+  if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) return errno = ENOTDIR, false;
   DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   std::wstring dir(n, L'\0');
   n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);

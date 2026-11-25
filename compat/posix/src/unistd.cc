@@ -790,7 +790,8 @@ off_t lseek(int fd, off_t offset, int whence) {
   if (!snapshot) return -1;
   int64_t block_result;
   if (gesher::usb_block::Seek(snapshot, offset, whence, &block_result)) return block_result;
-  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
+  // USB virtual directories use the tagged readonly file's shared cursor,
+  // just like procfs directories; aliases observe the same getdents position.
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = gesher::FileDescriptionIoFlags(snapshot);
@@ -876,6 +877,12 @@ char* realpath(const char* path, char* resolved_path) {
     if (type != S_IFLNK) {
       out = "/" + gesher::Narrow(wpath.c_str());
       break;
+    }
+    // Following a map_files link is EPERM (bionic's realpath opens the
+    // path O_PATH, which follows it).
+    if (const int error = gesher::procfs::Describe(wpath).follow_error) {
+      errno = error;
+      return nullptr;
     }
     std::string target;
     if (!gesher::procfs::ReadLink(wpath, &target)) return nullptr;

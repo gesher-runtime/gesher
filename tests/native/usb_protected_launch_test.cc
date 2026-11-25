@@ -2104,6 +2104,7 @@ void PrintPipePolicyReadback(const storage::AuthorityNamespacePolicyResult& obse
   const char* stage = "invalid";
   switch (observed.stage) {
     case Stage::kNotAttempted: stage = "not-attempted"; break;
+    case Stage::kSizeQuery: stage = "native-size-query"; break;
     case Stage::kQuery: stage = "native-query"; break;
     case Stage::kLength: stage = "returned-length"; break;
     case Stage::kControl: stage = "relative-control"; break;
@@ -2119,10 +2120,12 @@ void PrintPipePolicyReadback(const storage::AuthorityNamespacePolicyResult& obse
     case Stage::kPolicy: stage = "exact-policy"; break;
     case Stage::kComplete: stage = "complete"; break;
   }
-  Require(std::strcmp(stage, "invalid") != 0 && observed.captured_bytes <= sizeof(observed.descriptor),
+  Require(std::strcmp(stage, "invalid") != 0 && observed.captured_bytes <= sizeof(observed.descriptor) &&
+      observed.captured_bytes <= observed.allocation_bytes,
       "bounded-pipe-policy-readback", ERROR_INVALID_DATA);
-  std::printf("Protected pipe policy readback: stage=%s query-ntstatus=0x%08lx requested=0x%08lx returned-bytes=%lu allocation-prefix-bytes=%lu\n",
-      stage, static_cast<unsigned long>(observed.query_status), static_cast<unsigned long>(observed.requested_information),
+  std::printf("Protected pipe policy readback: stage=%s size-ntstatus=0x%08lx allocation-bytes=%lu query-ntstatus=0x%08lx requested=0x%08lx returned-bytes=%lu allocation-prefix-bytes=%lu\n",
+      stage, static_cast<unsigned long>(observed.size_query_status), static_cast<unsigned long>(observed.allocation_bytes),
+      static_cast<unsigned long>(observed.query_status), static_cast<unsigned long>(observed.requested_information),
       static_cast<unsigned long>(observed.returned_bytes),
       static_cast<unsigned long>(observed.captured_bytes));
   if (observed.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE)) {
@@ -2452,7 +2455,9 @@ Evidence RunSystem() {
         creation.context_restore_status == ERROR_SUCCESS && creation.pipe_create_called == 1 &&
         creation.pipe_create_status == 0 && creation.pipe_policy_status == ERROR_SUCCESS &&
         creation.pipe_policy.stage == storage::AuthorityNamespacePolicyStage::kComplete &&
-        creation.pipe_policy.query_status >= 0 && creation.pipe_policy.returned_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) &&
+        creation.pipe_policy.size_query_status == static_cast<LONG>(0xc0000023) &&
+        creation.pipe_policy.allocation_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) &&
+        creation.pipe_policy.allocation_bytes <= 16384 && creation.pipe_policy.query_status >= 0 &&
         creation.pipe_policy.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE),
         "authority-package-create-scoped-privilege-and-native-success", ERROR_INVALID_DATA);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");

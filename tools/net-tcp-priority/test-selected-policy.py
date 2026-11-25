@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = 'b009b50f04a8e076bd89527a7237da02f2f547d8e41ab88e2841aea2b9e61d15'
+OFD_QUALIFICATION_SHA256 = 'caeea5f5dd515a2522011a0a1f0dc5271dadfa8929e87ac1393f668bf096e49b'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -379,7 +379,7 @@ def preceding_logging_property_source(source):
 # This source qualification grants no supplier, controller or runtime approval.
 MEMFD_LEASE_QUALIFICATION='tools/net-tcp-priority/qualified/memfd-lease-source.json'
 MEMFD_LEASE_PATCH='tools/net-tcp-priority/qualified/memfd-lease-source.patch'
-MEMFD_LEASE_QUALIFICATION_SHA256 = 'f80baede63b053f6b4a7d845a94f83b31a6e45c8129746ca1a5b85cd902f9443'
+MEMFD_LEASE_QUALIFICATION_SHA256 = '6cf8d4bbad04834885426b63c468f0f7f4b1b64784190ed8cab523bbf082ae8c'
 MEMFD_LEASE_BASELINE='e074b67b2f83ce9128c11713171329e9fbbf6739'
 MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
 def preceding_memfd_lease_sources(usb_block):
@@ -533,7 +533,61 @@ USB_BLOCK_PATH_BASES.update(dict.fromkeys((
  'tests/native/ofd_transfer_host_test.cc.in',
  'tools/test_temp_directory.py',
 ), '43edc832893d4cd21843c7c6d56424556b625016'))
-USB_BLOCK_TRANSITION_SHA256 = '015efa81c7176119cf4db43f9fb2113e1e278461619dd69d7fda8fd9736359f2'
+# Main #513 changes the exact intermediate procfs/OFD/storage bytes underneath
+# USB. Keep every historical USB path anchor above, and prove this separately
+# pinned main transition to d631 in both directions before removing USB edits.
+# The incoming main receipts then see their exact reviewed bytes; their original
+# OFD/memfd/storage baselines and approval boundaries are unchanged.
+USB_MAIN513_QUALIFICATION='tools/net-tcp-priority/qualified/usb-main513-source.json'
+USB_MAIN513_PATCH='tools/net-tcp-priority/qualified/usb-main513-source.patch'
+USB_MAIN513_QUALIFICATION_SHA256='f65441e94acb1064d97d2a78f2161ed47f543844833707dcfd31d530de6b3b78'
+USB_MAIN513_BASE='156abd94bbe733e07171931027d5eb3613565dc1'
+USB_MAIN513_COMMIT='d63126a95129f4e9bad54676b8e076b12542c86b'
+USB_MAIN513_PATHS=[
+ 'compat/posix/src/fsops.cc',
+ 'compat/posix/src/internal.h',
+ 'compat/posix/src/ofd_internal.h',
+ 'compat/posix/src/procfs.cc',
+ 'compat/posix/src/unistd.cc',
+]
+def qualified_usb_main513_endpoints():
+ raw=(ROOT/USB_MAIN513_QUALIFICATION).read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==USB_MAIN513_QUALIFICATION_SHA256,'USB main513 qualification changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'base','commit','paths','path_bases','before_sha256','after_sha256',
+                          'patch_sha256','native_runtime_approval'},'USB main513 schema changed'
+ assert transition['base']==USB_MAIN513_BASE and transition['commit']==USB_MAIN513_COMMIT
+ assert transition['native_runtime_approval'] is False
+ assert transition['paths']==USB_MAIN513_PATHS
+ assert transition['path_bases']=={p:USB_BLOCK_PATH_BASES.get(p,USB_BLOCK_BASE) for p in USB_MAIN513_PATHS}
+ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==USB_MAIN513_PATHS
+ assert subprocess.check_output(['git','-C',str(ROOT),'show','-s','--format=%P',USB_MAIN513_COMMIT]).decode().strip()==USB_MAIN513_BASE
+ delta=(ROOT/USB_MAIN513_PATCH).read_bytes()
+ assert hashlib.sha256(delta).hexdigest()==transition['patch_sha256'],'USB main513 patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in delta.splitlines() if line.startswith(b'diff --git ')]==USB_MAIN513_PATHS
+ before={p:subprocess.check_output(['git','-C',str(ROOT),'show',USB_BLOCK_PATH_BASES.get(p,USB_BLOCK_BASE)+':'+p])
+         for p in USB_MAIN513_PATHS}
+ after={p:subprocess.check_output(['git','-C',str(ROOT),'show',USB_MAIN513_COMMIT+':'+p])
+        for p in USB_MAIN513_PATHS}
+ for p in USB_MAIN513_PATHS:
+  assert hashlib.sha256(before[p]).hexdigest()==transition['before_sha256'][p],('USB main513 historical endpoint',p)
+  assert hashlib.sha256(after[p]).hexdigest()==transition['after_sha256'][p],('USB main513 incoming endpoint',p)
+  assert before[p]!=after[p],('empty USB main513 transition',p)
+ with tempfile.TemporaryDirectory(prefix='gesher-usb-main513-qualification-') as temporary:
+  work=Path(temporary)
+  for p in USB_MAIN513_PATHS:
+   (work/p).parent.mkdir(parents=True,exist_ok=True)
+   (work/p).write_bytes(after[p])
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
+  for p in USB_MAIN513_PATHS:assert (work/p).read_bytes()==before[p],('USB main513 reverse endpoint',p)
+  subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
+  for p in USB_MAIN513_PATHS:assert (work/p).read_bytes()==after[p],('USB main513 forward endpoint',p)
+ return after
+
+
+USB_BLOCK_TRANSITION_SHA256 = 'c4e354b3a3a154ff3399202d7fba0a0bd4957392fb46745fa552cef5cf7fb789'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
@@ -567,6 +621,7 @@ USB_BLOCK_TRANSITION_PATHS = (
 
 
 def preceding_usb_block_sources(folder):
+ main513 = qualified_usb_main513_endpoints()
  raw = (folder/'usb-block-source.json').read_bytes()
  assert hashlib.sha256(raw).hexdigest() == USB_BLOCK_TRANSITION_SHA256, 'USB block source transition changed'
  transition = json.loads(raw)
@@ -596,9 +651,12 @@ def preceding_usb_block_sources(folder):
                  input=delta,cwd=work,check=True,capture_output=True)
   for path in paths:
    preceding[path] = (work/path).read_bytes()
-   historical = subprocess.check_output(['git','-C',str(ROOT),'show',
-                                        USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)+':'+path])
+   historical = main513[path] if path in main513 else subprocess.check_output(
+       ['git','-C',str(ROOT),'show',USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)+':'+path])
    assert preceding[path] == historical, path
+  subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
+  for path in paths:assert (work/path).read_bytes()==(ROOT/path).read_bytes(),('USB forward endpoint',path)
  return preceding
 
 
@@ -609,7 +667,7 @@ def preceding_usb_block_sources(folder):
 # neither this transition nor a passing source check qualifies native execution.
 STORAGE_POLICY_QUALIFICATION='tools/net-tcp-priority/qualified/storage-policy-source.json'
 STORAGE_POLICY_PATCH='tools/net-tcp-priority/qualified/storage-policy-source.patch'
-STORAGE_POLICY_QUALIFICATION_SHA256='80311c4e30c7e551ab08d09028fb57e641bb1e05ac44b70c5803ad7adde10a43'
+STORAGE_POLICY_QUALIFICATION_SHA256='1274a14dce7607f2ea1a6eea833f4036a48a8fe306b58e799cb04080e613cc41'
 STORAGE_POLICY_BASELINE='43e210f4eb7505b8e118044e28d4870433bbb23f'
 STORAGE_POLICY_PATHS=[
  'compat/art/dalvikvm_main.cc',
@@ -894,6 +952,55 @@ def check():
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
  print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition exact_gles_property_transition exact_memfd_lease_transition exact_storage_policy_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
 
+def usb_main513_negative_controls():
+ # These substitutions touch only in-memory reads, never the worktree. Even
+ # repinning a changed receipt/patch cannot move either historical endpoint.
+ from unittest.mock import patch
+ original=Path.read_bytes
+ qualification=json.loads(original(ROOT/USB_MAIN513_QUALIFICATION))
+ delta=original(ROOT/USB_MAIN513_PATCH)
+ checked=0
+ cases=[]
+ for field in ('base','commit','native_runtime_approval','path_bases','before_sha256','after_sha256'):
+  changed=json.loads(json.dumps(qualification))
+  if field in ('path_bases','before_sha256','after_sha256'):
+   changed[field][USB_MAIN513_PATHS[0]]='0'*len(changed[field][USB_MAIN513_PATHS[0]])
+  elif field=='native_runtime_approval':changed[field]=True
+  else:changed[field]='0'*40
+  receipt=(json.dumps(changed,indent=2,sort_keys=True)+'\n').encode()
+  cases.append((field,receipt,None,True))
+ cases.append(('unrepinned receipt',original(ROOT/USB_MAIN513_QUALIFICATION)+b'\n',None,False))
+ for repin in (False,True):
+  bad=delta.replace(b'@@',b'@x',1)
+  assert bad!=delta
+  changed=json.loads(json.dumps(qualification))
+  if repin:changed['patch_sha256']=hashlib.sha256(bad).hexdigest()
+  receipt=(json.dumps(changed,indent=2,sort_keys=True)+'\n').encode()
+  cases.append(('patch syntax repin='+str(repin),receipt,bad,repin))
+ # A valid patch with a changed transition must also fail after updating its
+ # hash: the unchanged authoritative incoming bytes will not reverse to it.
+ marker=b'+  std::atomic<signed char> procfs_file{-1};'
+ assert delta.count(marker)==1
+ bad=delta.replace(marker,b'+  std::atomic<signed char> procfs_file{0};',1)
+ changed=json.loads(json.dumps(qualification));changed['patch_sha256']=hashlib.sha256(bad).hexdigest()
+ cases.append(('semantic patch repin',(json.dumps(changed,indent=2,sort_keys=True)+'\n').encode(),bad,True))
+ for name,receipt,changed_patch,repin in cases:
+  def reads(path):
+   if path==ROOT/USB_MAIN513_QUALIFICATION:return receipt
+   if changed_patch is not None and path==ROOT/USB_MAIN513_PATCH:return changed_patch
+   return original(path)
+  pins={'USB_MAIN513_QUALIFICATION_SHA256':hashlib.sha256(receipt).hexdigest()} if repin else {}
+  rejected=None
+  with patch.object(Path,'read_bytes',reads),patch.dict(globals(),pins):
+   try:qualified_usb_main513_endpoints()
+   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+  assert rejected is not None,'USB main513 invalid transition accepted: '+name
+  if repin:
+   assert 'qualification changed' not in str(rejected) and 'patch changed' not in str(rejected),name
+  checked+=1
+ print('TCP_USB_MAIN513_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(checked)+' native_processes_started=0')
+
+
 def storage_policy_negative_controls():
  usb_preceding=preceding_usb_block_sources(ROOT/'tools/net-tcp-priority/qualified')
  # Isolated read substitution only: no source files are changed or executed.
@@ -1053,6 +1160,7 @@ if __name__=='__main__':
  import sys
  check()
  if '--selftest' in sys.argv:
+  usb_main513_negative_controls()
   storage_policy_negative_controls()
   transition_negative_controls()
   import runpy

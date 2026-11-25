@@ -48,7 +48,7 @@ add_executable(gesher_usb_block_guest_test
   tests/exec/usb_block_guest.cc
   compat/usb_storage/block_channel.cc)
 target_compile_options(gesher_usb_block_guest_test PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(gesher_usb_block_guest_test PRIVATE gesher_posix)
+target_link_libraries(gesher_usb_block_guest_test PRIVATE gesher_posix gesher_bionic)
 
 # The executable and independently linked DLL must share the exact same
 # authorized media session, including its stream serialization and revocation.

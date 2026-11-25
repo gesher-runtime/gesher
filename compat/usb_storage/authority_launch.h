@@ -14,16 +14,18 @@ namespace gesher::usb_storage {
 // Identifies the last check reached by the unchanged namespace policy verifier.
 // This is diagnostic output, never a policy selector or a reason to retry.
 enum class AuthorityNamespacePolicyStage : DWORD {
-  kNotAttempted, kQuery, kLength, kControl, kOwner, kGroup, kDacl, kLabel,
+  kNotAttempted, kSizeQuery, kQuery, kLength, kControl, kOwner, kGroup, kDacl, kLabel,
   kOwnerBounds, kGroupBounds, kDaclBounds, kLabelBounds, kDescriptor, kPolicy,
   kComplete,
 };
 struct AuthorityNamespacePolicyResult {
   AuthorityNamespacePolicyStage stage = AuthorityNamespacePolicyStage::kNotAttempted;
+  LONG size_query_status = 0;
+  DWORD allocation_bytes = 0;
   LONG query_status = 0;
   DWORD requested_information = 0;
   DWORD returned_bytes = 0, captured_bytes = 0;
-  // A fixed prefix of the zero-initialized query allocation after NT success,
+  // A bounded prefix of the zero-initialized query allocation after NT success,
   // not a claim that this many bytes were returned. Some NPFS queries report
   // success with returned_bytes == 0; preserve the allocation bytes so that
   // an unwritten buffer can be distinguished from an unreported length.

@@ -752,32 +752,49 @@ class PackageNamespace {
     const auto stage = [observed](AuthorityNamespacePolicyStage value) {
       if (observed) observed->stage = value;
     };
-    std::vector<DWORD> storage(kSecurityLimit / sizeof(DWORD));
-    ULONG bytes = 0;
-    stage(AuthorityNamespacePolicyStage::kQuery);
     constexpr SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
         DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
-    const NTSTATUS status = query_(directory, information, storage.data(), kSecurityLimit, &bytes);
+    // NPFS secure prefixes return a valid descriptor but zero LengthNeeded on
+    // successful queries on Windows 2022 and 2025. Obtain a bounded allocation
+    // from the size probe; never infer a missing descriptor or an implicit label.
+    ULONG allocation = 0;
+    stage(AuthorityNamespacePolicyStage::kSizeQuery);
+    const NTSTATUS sized = query_(directory, information, nullptr, 0, &allocation);
+    if (observed) {
+      observed->size_query_status = sized;
+      observed->allocation_bytes = allocation;
+      observed->requested_information = information;
+    }
+    if (sized != static_cast<NTSTATUS>(0xc0000023) /* STATUS_BUFFER_TOO_SMALL */) {
+      return sized < 0 ? Error(sized) : ERROR_INVALID_SECURITY_DESCR;
+    }
+    stage(AuthorityNamespacePolicyStage::kLength);
+    if (allocation < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || allocation > kSecurityLimit) return ERROR_INVALID_SECURITY_DESCR;
+    std::vector<DWORD> storage((allocation + sizeof(DWORD) - 1) / sizeof(DWORD));
+    ULONG returned = 0;
+    stage(AuthorityNamespacePolicyStage::kQuery);
+    const NTSTATUS status = query_(directory, information, storage.data(), allocation, &returned);
     if (observed) {
       observed->query_status = status;
-      observed->requested_information = information;
-      observed->returned_bytes = bytes;
+      observed->returned_bytes = returned;
       if (status >= 0) {
         static_assert(sizeof(observed->descriptor) <= kSecurityLimit);
-        observed->captured_bytes = static_cast<DWORD>(sizeof(observed->descriptor));
+        observed->captured_bytes = std::min<DWORD>(allocation, static_cast<DWORD>(sizeof(observed->descriptor)));
         std::memcpy(observed->descriptor, storage.data(), observed->captured_bytes);
       }
     }
     if (status < 0) return Error(status);
     stage(AuthorityNamespacePolicyStage::kLength);
-    if (bytes < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || bytes > kSecurityLimit) return ERROR_INVALID_SECURITY_DESCR;
+    if (returned && (returned < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || returned > allocation)) return ERROR_INVALID_SECURITY_DESCR;
+    const DWORD bytes = returned ? returned : allocation;
     SECURITY_DESCRIPTOR_CONTROL control = 0;
     DWORD revision = 0;
     PSID owner = nullptr, group = nullptr;
     PACL dacl = nullptr, label = nullptr;
     BOOL present = FALSE, defaulted = FALSE;
     stage(AuthorityNamespacePolicyStage::kControl);
-    if (!GetSecurityDescriptorControl(storage.data(), &control, &revision) || !(control & SE_SELF_RELATIVE)) return ERROR_INVALID_SECURITY_DESCR;
+    if (!GetSecurityDescriptorControl(storage.data(), &control, &revision) ||
+        revision != SECURITY_DESCRIPTOR_REVISION || !(control & SE_SELF_RELATIVE)) return ERROR_INVALID_SECURITY_DESCR;
     stage(AuthorityNamespacePolicyStage::kOwner);
     if (!GetSecurityDescriptorOwner(storage.data(), &owner, &defaulted)) return ERROR_INVALID_SECURITY_DESCR;
     stage(AuthorityNamespacePolicyStage::kGroup);

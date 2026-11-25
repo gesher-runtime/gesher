@@ -985,21 +985,21 @@ index a8fb022e2de..153ab18cfd8 100644
 +    return true;
 +  }
 diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
-index 51c659701c4..d8e12f4e218 100644
+index a1c1f62488f..4b6254d6bea 100644
 --- a/compat/posix/src/fsops.cc
 +++ b/compat/posix/src/fsops.cc
 @@ -27,0 +28 @@
 +#include "usb_block_internal.h"
 @@ -322,0 +324,4 @@ int Access(const char* path, int mode, bool follow) {
-+      if (type == S_IFBLK) {
++      if (name.type == S_IFBLK) {
 +        return (mode & X_OK) != 0 || ((mode & W_OK) != 0 && !gesher::usb_block::Writable())
 +            ? (errno = EACCES, -1) : 0;
 +      }
 diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
-index 1b662913d6f..fc71c3841d4 100644
+index 92fc0c24d3b..b65ab5ac265 100644
 --- a/compat/posix/src/internal.h
 +++ b/compat/posix/src/internal.h
-@@ -143,0 +144,3 @@ std::string WindowsZoneId();
+@@ -181,0 +182,3 @@ std::string WindowsZoneId();
 +// A non-inheritable native file object for reserving a CRT descriptor slot.
 +// A contained process can receive a private anonymous pipe's read end.
 +HANDLE OpenFdPlaceholder(bool* pipe = nullptr);
@@ -1014,7 +1014,7 @@ index c1495ced562..2142c6826c7 100644
 +    const DWORD type = snapshot->kind == DescriptorKind::kUnshareable
 +        ? FILE_TYPE_CHAR : GetFileType(file);
 diff --git a/compat/posix/src/ofd_internal.h b/compat/posix/src/ofd_internal.h
-index 437dc5182b8..355e19ac3e3 100644
+index 11cdeb5b6fc..f656ad2d29c 100644
 --- a/compat/posix/src/ofd_internal.h
 +++ b/compat/posix/src/ofd_internal.h
 @@ -9,0 +10 @@
@@ -1023,20 +1023,22 @@ index 437dc5182b8..355e19ac3e3 100644
 +namespace usb_block { struct Description; }
 @@ -43,0 +46,4 @@ struct OpenFileDescription {
 +  std::shared_ptr<usb_block::Description> usb_block;
-+  // Immutable after publication. A virtual directory is a local capability,
-+  // marked kUnshareable so no raw NUL backing handle can escape as a directory.
++  // Immutable after publication. A USB virtual directory is a local capability,
++  // marked kUnshareable so its readonly metadata file cannot escape as a directory.
 +  std::wstring virtual_directory;
 diff --git a/compat/posix/src/procfs.cc b/compat/posix/src/procfs.cc
-index efd62e3b862..9c6cc3c8487 100644
+index 29f16f8e670..3071f5ff6ae 100644
 --- a/compat/posix/src/procfs.cc
 +++ b/compat/posix/src/procfs.cc
-@@ -43,0 +44 @@
+@@ -54,0 +55 @@
 +#include "usb_block_internal.h"
-@@ -807,0 +809 @@ struct Node {
+@@ -897,0 +899,2 @@ struct Node {
 +  std::string usb_content;
-@@ -825,0 +828,99 @@ Node Lookup(const std::wstring& name, bool list) {
++  bool usb_namespace = false;  // Lookup admitted this name through the live USB session.
+@@ -936,0 +940,102 @@ Node Lookup(const std::wstring& name, bool list) {
 +  if (p.size() >= 3 && p[0] == "sys" && p[1] == "dev" && p[2] == "block") {
 +    if (!usb_block::Attached()) return n;
++    n.usb_namespace = true;
 +    if (p.size() == 3) {
 +      n.type = kDir;
 +      if (list) for (const auto& node : usb_block::Devices()) {
@@ -1055,6 +1057,7 @@ index efd62e3b862..9c6cc3c8487 100644
 +  if (p.size() >= 5 && p[0] == "sys" && p[1] == "devices" && p[2] == "gesher" &&
 +      p[3] == "usb" && p[4] == "sdb") {
 +    if (!usb_block::Attached()) return n;
++    n.usb_namespace = true;
 +    if (p.size() == 5) {
 +      n.type = kDir;
 +      if (list) for (const char* field : {"model", "serial"}) {
@@ -1067,6 +1070,7 @@ index efd62e3b862..9c6cc3c8487 100644
 +  }
 +  if (p.size() >= 2 && (p[0] == "dev" || p[0] == "sys") && p[1] == "block") {
 +    if (!usb_block::Attached()) return n;
++    n.usb_namespace = true;
 +    if (p.size() == 2) {
 +      n.type = kDir;
 +      if (list) {
@@ -1134,29 +1138,35 @@ index efd62e3b862..9c6cc3c8487 100644
 +    }
 +    return n;
 +  }
-@@ -947,0 +1049 @@ std::string Content(const Node& n) {
+@@ -1086,0 +1192 @@ std::string Content(const Node& n) {
 +  if (!n.usb_content.empty()) return n.usb_content;
-@@ -1015,0 +1118 @@ bool ReadLink(const std::wstring& name, std::string* target) {
+@@ -1339,0 +1446 @@ bool ReadLink(const std::wstring& name, std::string* target) {
 +  if (n.link == "usb-alias") { *target = n.usb_content; return true; }
-@@ -1050,0 +1154,2 @@ int Open(const std::wstring& name, int flags) {
+@@ -1378,0 +1486,2 @@ int Open(const std::wstring& name, int flags) {
 +  if (n.type == S_IFBLK) return usb_block::OpenNode(
 +      Narrow(name.substr(name.find_last_of(L'/') + 1).c_str()), flags);
-@@ -1069 +1174,15 @@ int Open(const std::wstring& name, int flags) {
--  if (n.type == kDir) return errno = (flags & O_ACCMODE) != O_RDONLY ? EISDIR : EOPNOTSUPP, -1;
-+  if (n.type == kDir) {
-+    if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) return errno = EISDIR, -1;
-+    if (flags & (O_DIRECT | O_APPEND)) return errno = EOPNOTSUPP, -1;
-+    const int fd = ReserveFd();
-+    if (fd < 0) return -1;
-+    if (RegisterOfd(fd, flags | O_DIRECTORY) < 0 || SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
-+      const int error = errno;
-+      close(fd);
-+      return errno = error, -1;
-+    }
+@@ -1406,0 +1516,2 @@ int Open(const std::wstring& name, int flags) {
++  const bool usb_directory = directory && n.usb_namespace;
++  if (usb_directory && (flags & (O_DIRECT | O_APPEND)) != 0) return errno = EOPNOTSUPP, -1;
+@@ -1431,2 +1542,4 @@ int Open(const std::wstring& name, int flags) {
+-  // What the fd is open on (DescribeHandle): /proc and /sys names; not
+-  // /etc/timezone, which is an ordinary file on Linux.
++  // What the fd is open on (DescribeHandle): /proc, /sys and the admitted
++  // USB /dev/block directory; not /etc/timezone, an ordinary file on Linux.
++  // The USB directory remains a process-local capability below. Its tagged
++  // readonly file supplies the shared getdents64/lseek position, never disk I/O.
+@@ -1439 +1552 @@ int Open(const std::wstring& name, int flags) {
+-  if ((linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0) &&
++  if ((linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0 || usb_directory) &&
+@@ -1483 +1596,2 @@ int Open(const std::wstring& name, int flags) {
+-  if (RegisterOfd(fd, flags | ((flags & O_PATH) == 0 ? O_LARGEFILE : 0)) < 0) {
++  if (RegisterOfd(fd, flags | ((flags & O_PATH) == 0 ? O_LARGEFILE : 0)) < 0 ||
++      (usb_directory && SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0)) {
+@@ -1487,0 +1602,5 @@ int Open(const std::wstring& name, int flags) {
++  if (usb_directory) {
 +    auto snapshot = CaptureDescriptor(fd);
 +    if (!snapshot) { const int error = errno; close(fd); return errno = error, -1; }
 +    snapshot->description->virtual_directory = name;
-+    return fd;
 +  }
 diff --git a/compat/posix/src/storage_policy.cc b/compat/posix/src/storage_policy.cc
 index bfa1fe81677..fca36f32665 100644
@@ -1397,7 +1407,7 @@ index 877217bc604..406ce51fd9f 100644
 -      if (!lock.held || !Refresh(area)) return false;
 +      if ((!area->read_only && !lock.held) || !Refresh(area)) return false;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
-index 2a4f8b7fd6c..74d73b5d0f5 100644
+index ec17691ccf6..2497370f388 100644
 --- a/compat/posix/src/unistd.cc
 +++ b/compat/posix/src/unistd.cc
 @@ -26,0 +27,3 @@
@@ -1440,11 +1450,12 @@ index 2a4f8b7fd6c..74d73b5d0f5 100644
 +  int block_result;
 +  if (gesher::usb_block::Io(snapshot, buf, want, writing, offset, &block_result)) return block_result;
 +  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
-@@ -772,0 +791,3 @@ off_t lseek(int fd, off_t offset, int whence) {
+@@ -772,0 +791,4 @@ off_t lseek(int fd, off_t offset, int whence) {
 +  int64_t block_result;
 +  if (gesher::usb_block::Seek(snapshot, offset, whence, &block_result)) return block_result;
-+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
-@@ -920,0 +942,4 @@ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void
++  // USB virtual directories use the tagged readonly file's shared cursor,
++  // just like procfs directories; aliases observe the same getdents position.
+@@ -926,0 +949,4 @@ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void
 +  int block_result;
 +  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, offset, &block_result)) {
 +    return block_result;
