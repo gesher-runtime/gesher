@@ -27,7 +27,9 @@ import java.util.Map;
  * process with Windows' own evaluation of the script (WinHttpGetProxyForUrl). A watcher
  * applies Windows' changes. The natives are compat/net/windows_proxy.cc
  * (libgesher_proxy.so). Gesher's own proxy for the process ({@link ProxySetting}) comes
- * before Windows' settings.
+ * before Windows' settings. Static SOCKS5 settings are exposed through the Java proxy
+ * properties for clients that use ProxySelector (including HttpURLConnection and OkHttp).
+ * Android's ordinary Socket constructor does not use the default proxy selector.
  */
 public final class WindowsProxy {
     private WindowsProxy() {
@@ -153,7 +155,11 @@ public final class WindowsProxy {
             String server = eq > 0 ? part.substring(eq + 1) : part;
             int sep = server.indexOf("://");
             if (sep >= 0) {
-                if (scheme.isEmpty()) scheme = server.substring(0, sep).toLowerCase(java.util.Locale.ROOT);
+                String urlScheme = server.substring(0, sep).toLowerCase(java.util.Locale.ROOT);
+                // A SOCKS URL is never an HTTP endpoint, even behind an http= key.
+                if (urlScheme.equals("socks") || urlScheme.equals("socks5")
+                        || urlScheme.equals("socks4")) continue;
+                if (scheme.isEmpty()) scheme = urlScheme;
                 server = server.substring(sep + 3);
             }
             if (server.endsWith("/")) server = server.substring(0, server.length() - 1);
@@ -166,8 +172,9 @@ public final class WindowsProxy {
     }
 
     /**
-     * The SOCKS5 proxy of a WinINet / GESHER_PROXY string: "socks=host:port",
-     * "socks5=host:port", "socks5://host:port", or "socks://host:port".
+     * The validated SOCKS5 endpoint of a WinINet / GESHER_PROXY string: "socks=host:port",
+     * "socks5=host:port", "socks5://host:port", or "socks://host:port". A missing port
+     * becomes 1080; invalid endpoints are ignored rather than published as properties.
      */
     static String socksServerFor(String proxy) {
         if (proxy == null || proxy.isEmpty()) return "";
@@ -178,34 +185,48 @@ public final class WindowsProxy {
             String server = eq > 0 ? part.substring(eq + 1) : part;
             int sep = server.indexOf("://");
             if (sep >= 0) {
-                if (scheme.isEmpty()) scheme = server.substring(0, sep).toLowerCase(java.util.Locale.ROOT);
+                String urlScheme = server.substring(0, sep).toLowerCase(java.util.Locale.ROOT);
+                if (!urlScheme.equals("socks") && !urlScheme.equals("socks5")) continue;
+                if (scheme.isEmpty()) scheme = urlScheme;
                 server = server.substring(sep + 3);
             }
-            if (server.endsWith("/")) server = server.substring(0, server.length() - 1);
-            if (scheme.equals("socks") || scheme.equals("socks5")) return server;
+            if (scheme.equals("socks") || scheme.equals("socks5")) {
+                String setting = ProxySetting.parse("socks5://" + server);
+                if (setting != null) return setting.substring("socks5://".length());
+            }
         }
         return "";
     }
 
     private static void applySocks(Config c) {
-        String server = c != null ? socksServerFor(c.proxy) : "";
+        // PAC owns per-URL routing; a static SOCKS entry must not override its DIRECT
+        // answers or linger after a switch from static proxy settings to PAC.
+        String server = c != null && c.pacUrl.isEmpty() ? socksServerFor(c.proxy) : "";
         if (server.isEmpty()) {
             System.clearProperty("socksProxyHost");
             System.clearProperty("socksProxyPort");
             System.clearProperty("socksProxyVersion");
+            System.clearProperty("socksNonProxyHosts");
             return;
         }
         int colon = server.lastIndexOf(':');
-        String host = colon > 0 ? server.substring(0, colon) : server;
-        int port = 1080;
-        try {
-            if (colon > 0) port = Integer.parseInt(server.substring(colon + 1));
-        } catch (NumberFormatException ignored) {
-            port = 1080;
-        }
+        // socksServerFor returns a validated endpoint with an explicit port, including
+        // for bracketed IPv6 literals without a port in the original settings.
+        String host = server.substring(0, colon);
+        if (host.startsWith("[") && host.endsWith("]")) host = host.substring(1, host.length() - 1);
+        int port = Integer.parseInt(server.substring(colon + 1));
         System.setProperty("socksProxyHost", host);
         System.setProperty("socksProxyPort", String.valueOf(port));
         System.setProperty("socksProxyVersion", "5");
+        // Android's selector uses separate bypass properties for HTTP, HTTPS and SOCKS.
+        // setHttpProxyConfiguration(null) cleared the HTTP ones for a SOCKS-only config.
+        // Leave these absent when there are no exclusions so libcore keeps its default
+        // loopback exclusions (an explicitly empty property disables those defaults).
+        String bypass = String.join("|", exclusions(c.bypass));
+        for (String property : new String[] {"http.nonProxyHosts", "https.nonProxyHosts", "socksNonProxyHosts"}) {
+            if (bypass.isEmpty()) System.clearProperty(property);
+            else System.setProperty(property, bypass);
+        }
         System.out.println("gesher-net: SOCKS5 proxy: " + host + ":" + port);
     }
 
@@ -283,18 +304,24 @@ public final class WindowsProxy {
     }
 
     private static synchronized void apply() {
-        Config c = config();
+        apply(config());
+    }
+
+    /** Applies one coherent settings snapshot; also exercised by the proxy contract tests. */
+    static synchronized void apply(Config c) {
         String now = c.toString();
         if (now.equals(sApplied)) return;
         boolean first = sApplied == null;
         sApplied = now;
         android.net.ProxyInfo p = defaultProxy(c);
+        // Publish or clear SOCKS before the HTTP setter, which preserves its bypass
+        // list for a SOCKS-only configuration, including ActivityThread's later bind.
+        applySocks(c);
         try {
             android.net.Proxy.setHttpProxyConfiguration(p);
         } catch (RuntimeException | LinkageError e) {
             System.out.println("gesher-net: setHttpProxyConfiguration: " + e);
         }
-        applySocks(c);
         String own = ProxySetting.ofProcess();
         if (own != null) {
             System.out.println("gesher-net: Gesher's proxy (" + ProxySetting.ENV + "=" + own

@@ -49,7 +49,7 @@ import java.util.Properties;
  * <pre>
  *   Launcher [--build-prop FILE] [--framework-res FILE] COMMAND
  *     launch APK|PACKAGE [--activity CLASS] [--ez KEY true|false]...
- *            [--proxy host:port|direct|windows]
+ *            [--proxy host:port|socks5://host:port|direct|windows]
  *            [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]
  *                       install or update the APK, start its launcher activity through the
  *                       system server (am start -W) and show the app's output until the
@@ -62,11 +62,11 @@ import java.util.Properties;
  *                       closed. --hidden-window: the same, never shown (tests read them
  *                       back). --headless: no windows; once the activity is idle its task
  *                       is removed (with --keep-task it runs until it finishes).
- *                       --proxy: the app's HTTP proxy for this launch (its next process)
+ *                       --proxy: the app's HTTP or SOCKS5 proxy for this launch (its next process)
  *     windows PACKAGE separate|shared
  *                       Whether the app's tasks are windows of their own, or share one
  *                       window (the default; ADR 0088), from the app's next start.
- *     proxy [[PACKAGE] host:port|direct|windows]
+ *     proxy [[PACKAGE] host:port|socks5://host:port|direct|windows]
  *                       Gesher's own proxy, over Windows' settings: for every app, or for
  *                       one package (windows: Windows' settings for it); no argument
  *                       shows them. App processes started from now on use it
@@ -301,7 +301,7 @@ public final class Launcher {
     }
 
     /**
-     * {@code proxy [[PACKAGE] host:port|direct|windows]}: Gesher's own proxy for every app,
+     * {@code proxy [[PACKAGE] host:port|socks5://host:port|direct|windows]}: Gesher's own proxy for every app,
      * or for one package, over Windows' settings (com.gesher.net.ProxySetting); no
      * argument shows the saved settings. App processes started from now on use it.
      */
@@ -347,9 +347,9 @@ public final class Launcher {
 
     private static int usage() {
         System.err.println(text("usage") + "gesher-app launch APK|PACKAGE [--activity CLASS] [--ez KEY"
-                + " true|false]... [--proxy host:port|direct|windows]"
+                + " true|false]... [--proxy host:port|socks5://host:port|direct|windows]"
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
-                + " | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
+                + " | proxy [[PACKAGE] host:port|socks5://host:port|direct|windows] | windows PACKAGE separate|shared | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
                 + " | shutdown | apk-icon APK | spell-checker list|use COMPONENT|automatic|enable|disable|language ID");
         return 2;
     }

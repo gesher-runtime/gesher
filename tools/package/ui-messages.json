@@ -297,8 +297,8 @@
       "he": "כל היישומים"
     },
     "proxy_invalid": {
-      "en": "{0}: not host:port, direct or windows",
-      "he": "{0}: יש להזין host:port, direct או windows"
+      "en": "{0}: not host:port, socks5://host:port, direct or windows",
+      "he": "{0}: יש להזין host:port, socks5://host:port, direct או windows"
     },
     "proxy_saved": {
       "en": "proxy of {0}: {1} (app processes started from now on)",
@@ -517,8 +517,8 @@
       "he": "כל משימה של האפליקציה נפתחת בחלון משלה, במקום חלון אחד לאפליקציה. חל מההפעלה הבאה של האפליקציה."
     },
     "cp_proxy_desc": {
-      "en": "Gesher's own HTTP proxy for every app, instead of Windows' proxy settings. Each app can have its own with its Proxy button. It applies to app processes started from now on: close a running app completely and start it again, or stop and start the device (reopening a window can keep the app's process and its previous proxy). It covers the HTTP clients that use the system proxy; WebView pages keep Windows' settings.",
-      "he": "פרוקסי HTTP של גשר לכל היישומים, במקום הגדרות הפרוקסי של Windows. לכל יישום אפשר לקבוע פרוקסי משלו בכפתור 'פרוקסי' שלו. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש, או לכבות ולהפעיל את המערכת (פתיחה מחדש של חלון יכולה להשאיר את תהליך היישום עם הפרוקסי הקודם). חל על לקוחות HTTP שמשתמשים בפרוקסי המערכת; דפי WebView ממשיכים לפי הגדרות Windows."
+      "en": "Gesher's own HTTP or SOCKS5 proxy for every app, instead of Windows' proxy settings. Each app can have its own with its Proxy button. It applies to app processes started from now on: close a running app completely and start it again, or stop and start the device (reopening a window can keep the app's process and its previous proxy). It covers clients that support the selected proxy type and use the system proxy; WebView pages keep Windows' settings.",
+      "he": "פרוקסי HTTP או SOCKS5 של גשר לכל היישומים, במקום הגדרות הפרוקסי של Windows. לכל יישום אפשר לקבוע פרוקסי משלו בכפתור 'פרוקסי' שלו. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש, או לכבות ולהפעיל את המערכת (פתיחה מחדש של חלון יכולה להשאיר את תהליך היישום עם הפרוקסי הקודם). חל על לקוחות שתומכים בסוג הפרוקסי הנבחר ומשתמשים בפרוקסי המערכת; דפי WebView ממשיכים לפי הגדרות Windows."
     },
     "cp_proxy_mode_inherit": {
       "en": "Same as every app",
@@ -537,8 +537,8 @@
       "he": "שרת פרוקסי"
     },
     "cp_proxy_address_hint": {
-      "en": "Proxy server address: host:port, for example 127.0.0.1:8080",
-      "he": "כתובת שרת הפרוקסי: כתובת:פורט, למשל 127.0.0.1:8080"
+      "en": "HTTP: host:port (127.0.0.1:8080). SOCKS5: socks5://host:port (socks5://127.0.0.1:1080).",
+      "he": "HTTP: כתובת:פורט (127.0.0.1:8080). SOCKS5: למשל socks5://127.0.0.1:1080."
     },
     "cp_proxy_save": {
       "en": "Save",
@@ -549,8 +549,8 @@
       "he": "הפרוקסי נשמר. חל על תהליכי יישומים שיופעלו מעכשיו: יש לסגור יישום פועל לגמרי ולהפעיל אותו מחדש."
     },
     "cp_proxy_invalid": {
-      "en": "⁨{0}⁩ is not a proxy server address. Enter host:port, for example 127.0.0.1:8080.",
-      "he": "⁨{0}⁩ אינה כתובת של שרת פרוקסי. יש להזין כתובת:פורט, למשל 127.0.0.1:8080."
+      "en": "⁨{0}⁩ is not a proxy server address. Enter host:port for HTTP or socks5://host:port for SOCKS5.",
+      "he": "⁨{0}⁩ אינה כתובת של שרת פרוקסי. יש להזין host:port עבור HTTP או socks5://host:port עבור SOCKS5."
     },
     "cp_proxy_save_failed": {
       "en": "Failed to save the proxy: {0}",

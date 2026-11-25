@@ -4,6 +4,24 @@
 # Dot-sourced by run-tests.ps1: Check, RunDex, NoDrive, $Dir, $root, $bcp and
 # $failed are its.
 
+# Production settings and Android's repeated app-bind proxy setter, followed by a
+# real SOCKS5/HTTP loopback exchange on ART and Windows sockets. Track 50 supplies
+# the bounded process helper; no native Windows settings are changed by this fixture.
+$proxyTestBoot = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') |
+  ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+Check 'SOCKS5 settings, app-bind bypass and real Java HTTP transport' {
+  $proxyTestSavedOverride = $env:GESHER_PROXY
+  try {
+    $env:GESHER_PROXY = 'direct'
+    RunTimed "$Dir/dalvikvm.exe" @("-Xbootclasspath:$proxyTestBoot",
+      "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
+      '-cp', (NoDrive "$Dir/services-tests.dex"), 'com.gesher.net.ProxySettingsRuntimeTest', 'art') 120
+  } finally {
+    if ($null -eq $proxyTestSavedOverride) { Remove-Item Env:GESHER_PROXY -ErrorAction SilentlyContinue }
+    else { $env:GESHER_PROXY = $proxyTestSavedOverride }
+  }
+} @('PROXY_RUNTIME_CONTRACTS_OK')
+
 # Runs gesher.NetTest (net-tests.dex, tests/dex-net) on the core boot class path,
 # with a time limit; each of its "OK"/"FAIL" lines becomes a PASS/FAIL line here.
 function NetDex([string] $Name, [string[]] $Arguments, [int] $Seconds = 300, [hashtable] $Environment = @{}) {
