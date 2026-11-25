@@ -2345,6 +2345,14 @@ jobs:
           & ./dist/sqlite_path_test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Real Windows external storage permissions and live revocation
+        if: matrix.shard == 'native'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          & ./dist/storage_policy_host_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify and assemble framework artifact
         shell: pwsh
         run: |

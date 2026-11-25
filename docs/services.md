@@ -541,15 +541,19 @@ ordinary standalone application hosts the service in its own process. Usage acce
 SettingsProvider writes are decided for the caller's current installation: a process
 retained from an earlier installation of the same package and UID is refused, including
 when the replacement happens during a storage scan.
-All files access (`OP_MANAGE_EXTERNAL_STORAGE`) and Media management (`OP_MANAGE_MEDIA`)
-are neither offered nor accepted by the special-access command. Gesher's raw filesystem
-operations do not enforce Android shared-storage authorization, and no MediaProvider
-implements the media consent decision. Writing these app-ops would change a capability
-query without changing the requested operation. Those backends and their grant/revoke
-tests must exist before the corresponding switches can be added. The existing MediaStore
-SDK facade tests exercise controlled provider and app-op boundaries; they do not establish
-that a production media provider exists. Apps needing All files access (including the
-File Manager X example in #310) remain unsupported by this change.
+All files access (`OP_MANAGE_EXTERNAL_STORAGE`) is offered by the special-access command
+and Control Center. The effective grant is published to the package's shared-storage
+policy before capability queries and permission callbacks report it as available.
+Gesher's POSIX and SQLite paths enforce that policy, including later revocation;
+another package's private `Android/data` and `Android/obb` directories remain excluded.
+FIFO creation, opens and file-metadata operations use the same checks, including the
+actual FIFO reached through a symbolic link. An application retains access to its own
+external directories. These checks govern Gesher's filesystem interfaces; they do not
+isolate arbitrary native Windows code or revoke already granted Windows handles
+(see [App isolation](sandbox.md)). Media management (`OP_MANAGE_MEDIA`) remains unavailable
+through the special-access command because its separate media-consent contract is not
+implemented. The production [MediaStore provider](media-provider.md) retains its own
+ownership and permission checks.
 Alert window admission uses the caller's installed process identity and Android's
 target-SDK and AppOps rules. A window admitted in a hidden mode stays hidden, including
 its attached children. Changing the alert-window mode updates the existing surfaces

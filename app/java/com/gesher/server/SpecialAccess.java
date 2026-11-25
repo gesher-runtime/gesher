@@ -32,10 +32,9 @@ import java.util.List;
  * stays ungranted (these are appop permissions: the framework's checks read the mode, and
  * fall back to the permission only for MODE_DEFAULT).
  *
- * <p>Left out: All files access and Media management. Gesher has neither shared-storage
- * authorization on raw filesystem operations nor a MediaProvider enforcing media consent.
- * Writing their app-ops would report a grant without changing the requested operation.
- * These operations are therefore absent from both the query and the writable allowlist.
+ * <p>Left out: Media management. Gesher has no MediaProvider enforcing media consent.
+ * Writing its app-op would report a grant without changing the requested operation.
+ * It is therefore absent from both the query and the writable allowlist.
  * Also left out: exact alarms (AlarmManagerService allows every app exact alarms, so the
  * switch would change nothing an app observes), full-screen intents
  * (NotificationManagerService does not implement {@code canUseFullScreenIntent}), and
@@ -64,7 +63,10 @@ final class SpecialAccess {
             new Kind(AppOpsManager.OPSTR_WRITE_SETTINGS, AppOpsManager.OP_WRITE_SETTINGS,
                     Manifest.permission.WRITE_SETTINGS, AppOpsManager.MODE_ERRORED),
             new Kind(AppOpsManager.OPSTR_GET_USAGE_STATS, AppOpsManager.OP_GET_USAGE_STATS,
-                    Manifest.permission.PACKAGE_USAGE_STATS, AppOpsManager.MODE_IGNORED));
+                    Manifest.permission.PACKAGE_USAGE_STATS, AppOpsManager.MODE_IGNORED),
+            new Kind(AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE,
+                    AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE,
+                    Manifest.permission.MANAGE_EXTERNAL_STORAGE, AppOpsManager.MODE_ERRORED));
 
     /**
      * A switch's state for one app: whether the app's own check reads "allowed", and whether

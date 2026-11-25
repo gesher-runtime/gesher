@@ -19,6 +19,7 @@
 #include <stdlib.h>
 
 #include "internal.h"
+#include "storage_policy.h"
 #include "linux_socket.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
@@ -110,6 +111,10 @@ bool MapUnixPath(ws::Address* address, bool binding) {
   std::wstring windows;
   switch (gesher::MapPath(path.c_str(), &windows)) {
     case gesher::PathKind::kFile:
+      if (!gesher::CheckExternalStorageAccess(
+              windows, binding ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) {
+        return false;
+      }
       break;
     case gesher::PathKind::kMissing:
       return errno = ENOENT, false;

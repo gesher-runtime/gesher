@@ -178,6 +178,11 @@ static BOOL SetFileTime(HANDLE handle, const FILETIME* created, const FILETIME* 
 }
 
 namespace gesher {
+// This fixture isolates timestamp/descriptor semantics with authorization
+// granted. storage_policy_host_test exercises the actual storage boundary.
+enum class AccessKind { kStat, kRead, kWrite };
+static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
+static bool CheckExternalStorageHandle(HANDLE, AccessKind) { return true; }
 enum class PathKind { kFile, kMissing, kVirtual };
 static int FailWithLastError() { errno = static_cast<int>(last_error); return -1; }
 static HANDLE HandleFromFd(int fd) {
