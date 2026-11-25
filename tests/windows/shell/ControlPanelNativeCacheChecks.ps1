@@ -74,6 +74,10 @@ try {
     [IO.File]::WriteAllText($cold.Location, 'incomplete cached assembly')
     $repaired = Load-Cache $cache (Join-Path $work 'repaired.json')
     Assert-Cache ($repaired.Location -ceq $cold.Location -and (Get-Item -LiteralPath $cold.Location).Length -gt 1024) 'Corrupt cache did not recover'
+    $repairedHash = (Get-FileHash -LiteralPath $cold.Location -Algorithm SHA256).Hash
+    $repairedWarm = Load-Cache $cache (Join-Path $work 'repaired-warm.json')
+    Assert-Cache ($repairedWarm.Location -ceq $cold.Location -and
+        (Get-FileHash -LiteralPath $cold.Location -Algorithm SHA256).Hash -ceq $repairedHash) 'Repaired cache was not reusable by a fresh process'
 
     $otherSource = Join-Path $work 'different-native.ps1'
     $sourceText = [IO.File]::ReadAllText($nativeFile).Replace('using System;', 'using System; // distinct source input')

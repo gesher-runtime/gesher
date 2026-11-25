@@ -223,6 +223,9 @@ namespace Gesher {
         $dllPath = Join-Path $cacheDir ("Gesher.PanelNative.{0}.dll" -f $hash)
         if ([IO.File]::Exists($dllPath)) {
             try {
+                # Inspect the file without binding it. Windows PowerShell's CLR caches
+                # failed LoadFrom calls, even after a corrupt file has been replaced.
+                [void][Reflection.AssemblyName]::GetAssemblyName($dllPath)
                 [void][Reflection.Assembly]::LoadFrom($dllPath)
                 $loaded = $null -ne ('Gesher.PanelChangeMonitor' -as [type])
             } catch {
