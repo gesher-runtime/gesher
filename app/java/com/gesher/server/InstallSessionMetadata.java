@@ -20,12 +20,7 @@ final class InstallSessionMetadata {
     static final int MAX_METADATA = 32_000, MAX_SIGNATURE = 35 * 1024;
     private final List<File> files;
     private final List<File> compared;
-    final InstallerPermissionAllowlist permissionAllowlist;
     InstallSessionMetadata(File canonical) {
-        this(canonical, InstallerPermissionAllowlist.ALL);
-    }
-    InstallSessionMetadata(File canonical, InstallerPermissionAllowlist permissionAllowlist) {
-        this.permissionAllowlist = java.util.Objects.requireNonNull(permissionAllowlist);
         File[] found = canonical.listFiles((dir, name) -> auxiliary(name));
         files = found == null ? Collections.emptyList() : Arrays.asList(found);
         File[] all = canonical.listFiles((dir, name) -> auxiliary(name) || name.endsWith(".dm"));

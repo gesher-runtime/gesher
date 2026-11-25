@@ -457,25 +457,32 @@ final class Installer {
         return install(apk, false);
     }
 
-    /** A host install command may reapply eligibility; merely launching an APK may not. */
+    /** An explicit host install verifies the APK and may refresh installer eligibility. */
     synchronized String[] install(String apk, boolean explicitInstall) throws Exception {
-        return install(apk, null, null, null, explicitInstall ? InstallerPermissionAllowlist.ALL : null);
+        return install(apk, null, null, null, null, explicitInstall);
     }
 
-    /** Server-owned immutable session metadata, copied before package publication. */
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
             PackageInstallSource installSource) throws Exception {
-        return install(apk, sessionMetadata, installSource, null);
+        return install(apk, sessionMetadata, installSource, null, null);
     }
 
+    /**
+     * Server-owned immutable session metadata, copied before package publication.
+     * {@code restrictedAllowlist} is the request's restricted-permission allowlist; null is
+     * AOSP's default INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS (as {@code pm install}).
+     * {@code authorize}, when present, rechecks the app installer's source access before
+     * the commit (see {@link #commitAuthorized}).
+     */
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
-            PackageInstallSource installSource, Runnable authorize) throws Exception {
-        return install(apk, sessionMetadata, installSource, authorize,
-                sessionMetadata == null ? null : sessionMetadata.permissionAllowlist);
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize) throws Exception {
+        return install(apk, sessionMetadata, installSource, restrictedAllowlist, authorize, true);
     }
 
     private String[] install(String apk, InstallSessionMetadata sessionMetadata,
-            PackageInstallSource installSource, Runnable authorize, InstallerPermissionAllowlist allowlist) throws Exception {
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize, boolean explicitInstall) throws Exception {
         if (authorize != null) authorize.run();
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
@@ -483,13 +490,14 @@ final class Installer {
         File source = new File(apk);
         if (!source.isFile()) throw new IllegalArgumentException("no such file: " + apk);
         final File original = source;
-        // Only ordinary launches may reuse the path/size/time cache. An explicit
-        // install verifies the supplied bytes before reapplying installer eligibility.
-        Entry recorded = sessionMetadata == null && allowlist == null ? recordedSource(original) : null;
+        // Explicit installs verify supplied bytes, including a same-size/time replacement.
+        // An ordinary launch may reuse the recorded source without restoring a removed exemption.
+        Entry recorded = sessionMetadata == null && !explicitInstall ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             ContactsProviderSupport.checkPackageAdmission(parsed);
-            return unchanged(apk, recorded.packageName, parsed, recorded, null, authorize);
+            return unchanged(apk, recorded.packageName, parsed, recorded, null, restrictedAllowlist,
+                    authorize);
         }
         File tempDir = null;
         File pendingCode = null;
@@ -576,7 +584,7 @@ final class Installer {
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
                 return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
-                        installSource, authorize, allowlist);
+                        installSource, restrictedAllowlist, authorize, explicitInstall);
             }
             int n = 1;
             if (old != null) {
@@ -658,6 +666,7 @@ final class Installer {
             Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
                     now, installSource == null ? PackageInstallSource.UNKNOWN : installSource);
             ApkPackage installed = open(entry);
+            installed.setRestrictedPermissionAllowlist(restrictedAllowlist);
             if (previous != null && previous.isSystemAddon()) {
                 if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
                     throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
@@ -675,7 +684,7 @@ final class Installer {
                     NotificationManagerService notifications = NotificationManagerService.sLast;
                     if (notifications != null) notifications.packageRemoved(pkg);
                 }
-                publishInstalled(entry, installed, allowlist == null ? InstallerPermissionAllowlist.ALL : allowlist);
+                publishInstalled(entry, installed);
                 return null;
             });
             if (old != null && !old.codePath.equals(entry.codePath)) {
@@ -687,6 +696,7 @@ final class Installer {
                             + ")" : ""));
             recordSource(original, pkg, code.getPath());
             mPm.packageInstalled(installed, old != null || previous != null, this);
+            persistPermissionAdmission();
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
         } finally {
             if (pendingCode != null) {
@@ -714,7 +724,7 @@ final class Installer {
     }
 
     /** Owner creation can fail; finish it before committing the installed registry. */
-    private void publishInstalled(Entry entry, ApkPackage installed, InstallerPermissionAllowlist allowlist) throws IOException {
+    private void publishInstalled(Entry entry, ApkPackage installed) throws IOException {
         synchronized (mPm) {
             try (PackageUids.Admission identity = mPm.prepareAdd(installed)) {
                 identity.commit();
@@ -722,7 +732,7 @@ final class Installer {
                 // the unaccepted UID/signer membership transaction on close.
                 commitEntry(entry);
                 identity.acceptPublished();
-                mPm.publishPrepared(installed, this, allowlist);
+                mPm.publishPrepared(installed, this);
             }
         }
         Dexopt.packagesChanged();
@@ -741,15 +751,30 @@ final class Installer {
         }
     }
 
+    /**
+     * The registry already records the package; write the permission ledger with the
+     * admission's restriction exemptions (or the session's opt-out) now rather than after
+     * the usual delay. A boot finding no recorded state for a restricted permission keeps
+     * it restricted, so a lost write can only withhold an exemption, never grant one.
+     */
+    private void persistPermissionAdmission() {
+        if (!mPm.permissions().flushDecisions()) {
+            SystemServer.log("install: permission state not yet persisted; it is retried with the next change");
+        }
+    }
+
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
     private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
-            PackageInstallSource installSource, Runnable authorize) throws Exception {
-        return unchanged(apk, pkg, parsed, old, installSource, authorize, null);
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize) throws Exception {
+        return unchanged(apk, pkg, parsed, old, installSource, restrictedAllowlist, authorize,
+                installSource != null);
     }
 
     private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
-            PackageInstallSource installSource, Runnable authorize, InstallerPermissionAllowlist allowlist) throws Exception {
-        return commitAuthorized(authorize, () -> {
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize, boolean explicitInstall) throws Exception {
+        String[] result = commitAuthorized(authorize, () -> {
             Entry entry = old.withInstallSource(installSource);
             SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
                     + old.codePath + ")");
@@ -767,6 +792,8 @@ final class Installer {
             // Replacing the PM object would retire their identity without changing code.
             if (recompile && (libraryChange || mPm.get(pkg) == null)) {
                 ApkPackage installed = open(entry);
+                // A verified host reinstall is also an install request; attribution may be absent.
+                if (explicitInstall) installed.setRestrictedPermissionAllowlist(restrictedAllowlist);
                 ApkPackage previous = mPm.get(pkg);
                 if (previous != null && previous.isSystemAddon()) {
                     if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
@@ -775,22 +802,28 @@ final class Installer {
                     installed.setSystemAddon(true);
                 }
                 installed.prepareInstalledDataDirectories();
-                if (entry != old) publishInstalled(entry, installed, allowlist);
-                else mPm.add(installed, this, allowlist);
-            } else if (entry != old || allowlist != null) {
-                // An explicit session reinstall can change attribution even when code bytes
-                // are unchanged. A direct host launch of the same file keeps the old record.
-                synchronized (mPm) {
-                    ApkPackage installed = mPm.get(pkg);
-                    if (entry != old) persistInstallSource(installed, entry.installSource);
-                    // An explicit reinstall is still an installer decision, even with identical
-                    // code. Publish it under the same lock as the current installation identity.
-                    if (allowlist != null) mPm.publishPrepared(installed, this, allowlist);
+                if (entry != old) publishInstalled(entry, installed);
+                else mPm.add(installed, this);
+            } else {
+                if (entry != old) {
+                    // An explicit session reinstall can change attribution even when code bytes
+                    // are unchanged. A direct host launch of the same file keeps the old record.
+                    synchronized (mPm) {
+                        persistInstallSource(mPm.get(pkg), entry.installSource);
+                    }
                 }
+                // A verified explicit host or session reinstall adds installer eligibility.
+                // Attribution alone cannot distinguish it from an ordinary launch.
+                ApkPackage current = explicitInstall ? mPm.get(pkg) : null;
+                if (current != null) mPm.permissions().addInstallerAllowlist(current, restrictedAllowlist);
             }
             return new String[] {pkg, "unchanged", old.codePath,
                     String.valueOf(parsed.versionCode())};
         });
+        // After the authorized commit releases the AppOps mode lock (a policy write is
+        // never flushed under an operation monitor), still before the result is reported.
+        persistPermissionAdmission();
+        return result;
     }
 
     /** {@code file}'s line in install-sources.list: path, size, time, .dm size and time. */

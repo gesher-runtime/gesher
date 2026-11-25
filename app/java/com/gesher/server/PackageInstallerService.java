@@ -227,7 +227,10 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     }
 
     private record PreparedInstall(File frozen, File canonical, String pkg, ApkPackage target,
-            InstalledSplitSet inherited, Set<String> stagedNames, Set<String> stagedSplits, Set<String> removals, long version) {}
+            InstalledSplitSet inherited, Set<String> stagedNames, Set<String> stagedSplits, Set<String> removals, long version,
+            // The session's restricted-permission allowlist (null: all), carried unchanged
+            // through a parked confirmation so an opt-out never becomes "allow all".
+            List<String> restrictedAllowlist) {}
 
     private static final class Confirmation {
         final IBinder token = new Binder();
@@ -306,10 +309,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         reapStaleSessions();
         if (ownerCode == null && !"android".equals(owner)) throw new SecurityException("Installer disappeared");
-        // Restricted-permission allowlisting only makes a later runtime request eligible.
-        // Capture the caller's selection now; grant flags, originating UID and
-        // USER_ACTION_NOT_REQUIRED never select privileged behavior or bypass consent.
-        InstallerPermissionAllowlist permissionAllowlist = InstallerPermissionAllowlist.fromSession(p, mPm.permissions());
+        // Client installFlags, permission grants, originating UID and USER_ACTION_NOT_REQUIRED
+        // never select privileged behavior. Every caller, including Play, needs fresh consent.
+        List<String> permissionAllowlist = restrictedAllowlist(p);
         Session created;
         synchronized (mSessions) {
             if (mPm.get(owner) != ownerCode || mPm.isRemovalPending(owner)) {
@@ -327,12 +329,35 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 int id = mIds.getAndIncrement();
                 created = new Session(id, owner, ownerCode, p.appPackageName, p.mode, p.sizeBytes,
                         PackageInstallSource.category(p.packageSource), !"android".equals(actual),
-                        p.requireUserAction == PackageInstaller.SessionParams.USER_ACTION_REQUIRED, stage, permissionAllowlist);
+                        p.requireUserAction == PackageInstaller.SessionParams.USER_ACTION_REQUIRED, stage,
+                        permissionAllowlist);
                 mSessions.put(id, created);
             } catch (IOException e) { throw io(); }
         }
         notify(created, c -> c.onSessionCreated(created.id));
         return created.id;
+    }
+    /**
+     * AOSP SessionParams.setWhitelistedRestrictedPermissions: the default
+     * INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS (null here) allowlists every requested
+     * restricted permission; a session that clears it allowlists exactly its list, which
+     * may be empty (pm install --restrict-permissions).
+     */
+    private List<String> restrictedAllowlist(PackageInstaller.SessionParams p) {
+        if ((p.installFlags & PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS) != 0) return null;
+        List<String> allowlist = new ArrayList<>();
+        if (p.whitelistedRestrictedPermissions != null) {
+            if (p.whitelistedRestrictedPermissions.size() > 1024) {
+                throw new IllegalArgumentException("Invalid restricted permission allowlist");
+            }
+            for (String name : new ArrayList<>(p.whitelistedRestrictedPermissions)) {
+                android.content.pm.PermissionInfo info = name == null ? null
+                        : mPm.permissions().getPermissionInfo(name, null, 0);
+                if (info != null && "android".equals(info.packageName) && info.isRestricted()
+                        && !allowlist.contains(name)) allowlist.add(name);
+            }
+        }
+        return List.copyOf(allowlist);
     }
     private Session owned(int id) {
         Session s; synchronized (mSessions) { s = mSessions.get(id); }
@@ -645,8 +670,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         final int packageSource;
         final boolean hasApplicationInitiator;
         final boolean requestedUserAction;
-        final InstallerPermissionAllowlist permissionAllowlist;
         final File stage;
+        final List<String> restrictedAllowlist; // null: all requested restricted permissions
         final IPackageInstallerSession binder;
         final Map<String, InstallFileBridge> writes = new HashMap<>();
         final Map<String, InstallSessionMetadata.Digests> checksums = new HashMap<>();
@@ -657,13 +682,14 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         float progress;
         long bytes;
         Session(int id, String owner, ApkPackage code, String pkg, int mode, long size, int packageSource,
-                boolean hasApplicationInitiator, boolean requestedUserAction, File stage, InstallerPermissionAllowlist permissionAllowlist) {
+                boolean hasApplicationInitiator, boolean requestedUserAction, File stage,
+                List<String> restrictedAllowlist) {
             this.id = id; this.owner = owner; ownerCode = code; expectedPackage = pkg;
+            this.restrictedAllowlist = restrictedAllowlist;
             this.mode = mode; expectedSize = size;
             this.packageSource = packageSource;
             this.hasApplicationInitiator = hasApplicationInitiator;
             this.requestedUserAction = requestedUserAction;
-            this.permissionAllowlist = permissionAllowlist;
             this.stage = stage;
             binder = StandIn.of(IPackageInstallerSession.class, this).asInterface();
         }
@@ -699,8 +725,12 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             i.sealed = sealed; i.active = !writes.isEmpty() || committing;
             i.sizeBytes = expectedSize; i.appPackageName = expectedPackage;
             i.packageSource = packageSource;
-            permissionAllowlist.describe(i);
             i.requireUserAction = PackageInstaller.SessionParams.USER_ACTION_REQUIRED;
+            if (restrictedAllowlist == null) {
+                i.installFlags |= PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS;
+            } else {
+                i.whitelistedRestrictedPermissions = new ArrayList<>(restrictedAllowlist);
+            }
             i.createdMillis = created; i.updatedMillis = created; return i;
         }
         @Override public synchronized void setClientProgress(float value) {
@@ -900,7 +930,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                     version = first == null ? targetCode.versionCode() : first.getLongVersionCode();
                 }
                 PreparedInstall prepared = new PreparedInstall(frozen, canonical, pkg, targetCode,
-                        installedSplits, canonicalNames, stagedSplits.keySet(), removals, version);
+                        installedSplits, canonicalNames, stagedSplits.keySet(), removals, version,
+                        restrictedAllowlist);
                 int source = installSourceMode();
                 if (source != AppOpsManager.MODE_ALLOWED && source != AppOpsManager.MODE_DEFAULT
                         && source != AppOpsManager.MODE_ERRORED) {
@@ -1056,9 +1087,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                                 prepared.stagedSplits, prepared.removals);
                     }
                     installed = mInstaller.install(new File(prepared.canonical, "base.apk").getPath(),
-                            new InstallSessionMetadata(prepared.canonical, permissionAllowlist), PackageInstallSource.fromSession(
+                            new InstallSessionMetadata(prepared.canonical), PackageInstallSource.fromSession(
                                     hasApplicationInitiator ? ownerCode : null, packageSource),
-                            this::verifyInstallSource);
+                            prepared.restrictedAllowlist, this::verifyInstallSource);
                     if (!prepared.pkg.equals(installed[0]) || mPm.get(prepared.pkg) == null) {
                         throw new IllegalStateException("Not published");
                     }
@@ -1123,7 +1154,10 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         @Override public synchronized boolean isMultiPackage() { checkOwner(); return false; }
         @Override public synchronized boolean isStaged() { checkOwner(); return false; }
-        @Override public synchronized int getInstallFlags() { checkOwner(); return permissionAllowlist.installFlags(); }
+        @Override public synchronized int getInstallFlags() {
+            checkOwner();
+            return restrictedAllowlist == null ? PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS : 0;
+        }
         @Override public synchronized int[] getChildSessionIds() { checkOwner(); return new int[0]; }
         @Override public synchronized int getParentSessionId() { checkOwner(); return -1; }
         @Override public void transfer(String pkg) { throw new UnsupportedOperationException("Transfer unsupported"); }

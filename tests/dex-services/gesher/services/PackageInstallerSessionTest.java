@@ -637,18 +637,39 @@ public final class PackageInstallerSessionTest {
         params.setInstallerPackageName("fixture.fake.store");
         rejected(() -> service.createSession(params, pkg, null, 0), SecurityException.class);
         params.setInstallerPackageName(null);
+        // The session opts out of AOSP's default (allowlist every requested restricted
+        // permission) with an explicit list. The fixture requests no permissions, so "all"
+        // would publish an empty allowlist; the explicit entry tells the two apart.
+        Set<String> optOut = Set.of(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION);
+        params.setWhitelistedRestrictedPermissions(optOut);
         int id = service.createSession(params, pkg, null, 0);
         params.setPackageSource(PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE);
+        params.setWhitelistedRestrictedPermissions(Set.of());
         require(service.getSessionInfo(id).getPackageSource() == PackageInstaller.PACKAGE_SOURCE_STORE,
                 "Session retained mutable package source input");
+        require(optOut.equals(service.getSessionInfo(id).getWhitelistedRestrictedPermissions()),
+                "Session did not report its explicit restricted-permission allowlist");
         stage(service, id, rotated, "download.apk");
         result.set(null);
         service.openSession(id).commit(receiver(result), false);
         jobs.remove(0).run();
+        // The install is parked for the user's confirmation; it resumes from the prepared
+        // install, which must still carry the session's opt-out rather than "all".
+        Object parkedSession;
+        Field sessions = field(service.getClass(), "mSessions");
+        synchronized (sessions.get(service)) { parkedSession = ((Map<?, ?>)sessions.get(service)).get(id); }
+        Object parked = field(parkedSession.getClass(), "confirmation").get(parkedSession);
+        require(parked != null, "Preauthorized installer session was not parked for confirmation");
+        Object prepared = field(parked.getClass(), "prepared").get(parked);
+        require(List.copyOf(optOut).equals(method(prepared.getClass(), "restrictedAllowlist").invoke(prepared)),
+                "Parked confirmation lost the session's restricted-permission opt-out");
         confirmAllowedSource(service, atm, (com.gesher.server.PackageManagerService)pm,
                 id, result, jobs, false);
         require(result.get().getIntExtra(PackageInstaller.EXTRA_STATUS, -99)
                 == PackageInstaller.STATUS_SUCCESS, "Rotated installer session did not update");
+        com.gesher.server.ApkPackage published = ((com.gesher.server.PackageManagerService)pm).get(pkg);
+        require(optOut.equals(method(published.getClass(), "restrictedPermissionAllowlist").invoke(published)),
+                "Confirmed install published another restricted-permission allowlist than the session's");
         InstallSourceInfo source = pm.getInstallSourceInfo(pkg, 0);
         Signature[] original = com.gesher.server.ApkPackage.verifySignatures(v2.getPath());
         require(pkg.equals(source.getInitiatingPackageName()) && pkg.equals(source.getInstallingPackageName())

@@ -603,15 +603,35 @@ public final class CallLogContractTest {
                         () -> content.notifyChange(new Uri[] { callLogUri }, null, false, 0, 0, 36, PKG_READ));
             });
 
-            // Legacy targetSdk 22 app: allowed initially, then AppOps-revoked via FLAG_PERMISSION_REVOKED_COMPAT
-            // while PermissionPolicy.checkPermission STILL reports PERMISSION_GRANTED
+            // Legacy targetSdk 22 app: its exempt READ_CALL_LOG is a legacy grant awaiting the
+            // user's review (REVIEW_REQUIRED). Like AOSP, checkPermission reports it granted but
+            // its AppOp stays withheld, so the framework soft-denies (no rows, no exception).
+            check(pm.permissions().checkPermission(PKG_LEGACY, Manifest.permission.READ_CALL_LOG)
+                            == PackageManager.PERMISSION_GRANTED
+                    && (pm.permissions().getPermissionFlags(PKG_LEGACY, Manifest.permission.READ_CALL_LOG,
+                            "default:0", 0) & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) != 0,
+                    "Legacy app holds READ_CALL_LOG pending review");
             as(9204, 13204, () -> {
                 ContentProviderHolder h = (ContentProviderHolder) getProvider.invoke(
                         providers, procLegacy, PKG_LEGACY, "call_log");
                 check(h != null && h.provider != null, "Legacy app acquires call_log holder");
                 try (Cursor c = h.provider.query(source(13204, PKG_LEGACY), callLogUri,
                         new String[] { CallLog.Calls._ID }, null, null)) {
-                    check(c != null && c.getCount() == 2, "Legacy app initially reads call_log");
+                    check(c != null && c.getCount() == 0, "Legacy app is soft-denied until its review");
+                }
+            });
+            // The system clears REVIEW_REQUIRED (standing in for the user's review): the legacy
+            // app reads, then is AppOps-revoked via FLAG_PERMISSION_REVOKED_COMPAT while
+            // PermissionPolicy.checkPermission STILL reports PERMISSION_GRANTED
+            as(Process.myPid(), Process.SYSTEM_UID, () -> pm.permissions().updatePermissionFlags(
+                    PKG_LEGACY, Manifest.permission.READ_CALL_LOG,
+                    PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED, 0, true, "default:0", 0));
+            as(9204, 13204, () -> {
+                ContentProviderHolder h = (ContentProviderHolder) getProvider.invoke(
+                        providers, procLegacy, PKG_LEGACY, "call_log");
+                try (Cursor c = h.provider.query(source(13204, PKG_LEGACY), callLogUri,
+                        new String[] { CallLog.Calls._ID }, null, null)) {
+                    check(c != null && c.getCount() == 2, "Legacy app reads call_log after its review");
                 }
             });
             as(Process.myPid(), Process.SYSTEM_UID, () -> {

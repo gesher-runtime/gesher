@@ -315,8 +315,17 @@ public final class PackageInstallerIdentityHost {
                 ? Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
                         ApkPackage.class, entry)
                 : Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
-                        ApkPackage.class, entry, source, Runnable.class);
+                        ApkPackage.class, entry, source, java.util.Collection.class, Runnable.class);
         unchanged.setAccessible(true);
+        int exempt = PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
+        String permission = android.Manifest.permission.READ_CALL_LOG;
+        long setupIdentity = Binder.clearCallingIdentity();
+        try {
+            pm.permissions().removeAllowlistedRestrictedPermission(pkg.packageName, permission,
+                    PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, 0);
+        } finally { Binder.restoreCallingIdentity(setupIdentity); }
+        check((pm.permissions().getPermissionFlags(pkg.packageName, permission, "default:0", 0) & exempt) == 0,
+                "Fixture did not remove the prior installer exemption");
         int[] authorizations = {0};
         if (source != null) {
             byte[] before = Files.readAllBytes(registry);
@@ -325,7 +334,7 @@ public final class PackageInstallerIdentityHost {
                 throw new SecurityException("Fixture source access was revoked");
             };
             try {
-                unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null, deny);
+                unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null, null, deny);
                 throw new AssertionError("Unchanged compilation bypassed source authorization");
             } catch (java.lang.reflect.InvocationTargetException expected) {
                 if (!(expected.getCause() instanceof SecurityException)) throw expected;
@@ -337,21 +346,18 @@ public final class PackageInstallerIdentityHost {
         }
         String[] result = (String[])(source == null
                 ? unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed)
-                : unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null,
+                : unchanged.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed, null, null,
                         (Runnable)() -> authorizations[0]++));
         if (source != null) check(authorizations[0] == 2, "Allowed compilation skipped source authorization");
         check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
                 "Compiled-code refresh changed the installed generation identity");
-        int exempt = PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
-        String permission = android.Manifest.permission.READ_CALL_LOG;
         check((pm.permissions().getPermissionFlags(pkg.packageName, permission, "default:0", 0) & exempt) == 0,
                 "Ordinary unchanged launch added installer eligibility");
-        Class<?> allowlist = Class.forName("com.gesher.server.InstallerPermissionAllowlist");
         var explicit = Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
-                ApkPackage.class, entry, source, Runnable.class, allowlist);
+                ApkPackage.class, entry, source, java.util.Collection.class, Runnable.class, boolean.class);
         explicit.setAccessible(true);
         result = (String[])explicit.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed,
-                null, (Runnable)() -> authorizations[0]++, field(allowlist, "ALL").get(null));
+                null, null, (Runnable)() -> authorizations[0]++, true);
         check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
                 "Explicit same-code reinstall replaced the attached installation");
         check(authorizations[0] == 3, "Explicit reinstall skipped install-source authorization");

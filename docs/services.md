@@ -61,21 +61,26 @@ After installation consent and the existing signing, caller-generation and
 target-generation checks succeed, publication adds the selected installer
 exemptions atomically with package metadata. Updates union the new selection
 with existing installer exemptions. Runtime grants and user/fixed denial choices
-remain separate. The installation replaces an ordinary package's upgrade-time
-exemption, while system packages and requesting system shared-UID peers retain
-it. A fixed grant remains fixed when its final exemption is still valid. The
-allowlist query requires the current installer of record or the established
-trusted-host/privileged permission boundary.
+remain separate. Existing upgrade and system exemptions are preserved. A fixed
+grant remains fixed when its final exemption is still valid. Allowlist reads and
+mutations authenticate the attached current installer (including an admitted
+shared-UID peer), or the established trusted-host/privileged permission boundary.
+Independent add/remove operations update one locked snapshot; a replacement
+installer cannot inherit an already authenticated call's authority.
 
-For an app installed before this support, run `gesher-app install "path\app.apk"`
-with the updated runtime to reapply the default installer eligibility. This is
+The runtime's one-time boot migration restores installer eligibility for older
+permission ledgers while preserving runtime decisions and fixed denials. After
+that migration, run `gesher-app install "path\app.apk"` with the updated runtime
+to explicitly refresh default installer eligibility. This is
 an explicit reinstall, including when the APK bytes are identical; it preserves
 the app's data and its runtime permission choices. The supplied APK still passes
 the normal parsing and signing checks. Ordinary launch of an unchanged APK
 preserves the prior installer selection. A successful `PackageInstaller` session
-reinstall likewise applies that session's captured selection. Neither startup
-nor a normal launch silently migrates existing permission decisions, and a
-fixed denial still requires the appropriate user/settings action.
+reinstall likewise applies that session's captured selection. A normal launch
+never restores an exemption that was removed, and a fixed denial still requires
+the appropriate user/settings action. The extended host-install RPC requires an
+explicit acknowledgment; an older running device must be restarted after an
+update rather than silently treating the request as an ordinary launch.
 
 The contract follows Android 16's
 [SessionParams default and setter](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/content/pm/PackageInstaller.java),

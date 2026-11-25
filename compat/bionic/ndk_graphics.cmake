@@ -13,6 +13,8 @@ set(_gl_gen ${CMAKE_BINARY_DIR}/gen/bionic)
 set(_gl_handwritten eglGetDisplay eglGetPlatformDisplay eglGetPlatformDisplayEXT
   eglCreateWindowSurface eglCreatePlatformWindowSurface eglCreatePlatformWindowSurfaceEXT
   eglDestroySurface eglChooseConfig eglGetConfigAttrib eglGetProcAddress
+  # The context version the default display gives at most (egl_gles_version.h).
+  eglCreateContext
   eglDebugMessageControlKHR eglSetBlobCacheFuncsANDROID glDebugMessageCallback
   glDebugMessageCallbackKHR
   # surfaces track (egl_child_surface.cc): a child surface's frame is posted before the swap.
@@ -103,6 +105,14 @@ target_include_directories(egl_fence_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}
 target_link_libraries(egl_fence_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
   gesher_window_surface graphics_native_headers user32 gdi32 d3d11)
 target_compile_options(egl_fence_test PRIVATE -Wall -Wextra -Werror)
+
+# eglDestroyContext on one thread while another thread keeps drawing with its
+# own context of the default display (issue #485; also on WARP).
+add_executable(egl_context_destroy_test ${CMAKE_SOURCE_DIR}/tests/native/egl_context_destroy_test.cc)
+target_include_directories(egl_context_destroy_test PRIVATE ${_gl_include})
+target_link_libraries(egl_context_destroy_test PRIVATE gesher_ndk_graphics gesher_bionic gesher_elf
+  gesher_window_surface graphics_native_headers user32 gdi32)
+target_compile_options(egl_context_destroy_test PRIVATE -Wall -Wextra -Werror)
 
 # A GL test library's gesher_selftest() with the same EGL/GLES
 # (tests/native/gl_extension_test.cc; gl_extension_procs_test.so in CI).

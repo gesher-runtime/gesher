@@ -146,11 +146,12 @@ public final class InstallSourceHost {
             PackageInstallSource source, Runnable authorize) throws Exception {
         Object entry = ((Map<?, ?>)get(storage, "mEntries")).get(pkg.packageName);
         var method = Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
-                ApkPackage.class, entry.getClass(), PackageInstallSource.class, Runnable.class);
+                ApkPackage.class, entry.getClass(), PackageInstallSource.class, java.util.Collection.class,
+                Runnable.class);
         method.setAccessible(true);
         try {
             synchronized (storage) {
-                return (String[])method.invoke(storage, pkg.apkPath, pkg.packageName, pkg, entry, source,
+                return (String[])method.invoke(storage, pkg.apkPath, pkg.packageName, pkg, entry, source, null,
                         authorize);
             }
         } catch (java.lang.reflect.InvocationTargetException failure) {
@@ -225,8 +226,7 @@ public final class InstallSourceHost {
         constructor.setAccessible(true);
         Object replacementEntry = constructor.newInstance(current.packageName,
                 new File(replacement.apkPath).getParent(), 1L, 2L, source);
-        var publish = Installer.class.getDeclaredMethod("publishInstalled", type, ApkPackage.class,
-                InstallerPermissionAllowlist.class);
+        var publish = Installer.class.getDeclaredMethod("publishInstalled", type, ApkPackage.class);
         publish.setAccessible(true);
         Path registry = data.resolve("system/packages.list");
         String before = Files.readString(registry);
@@ -237,7 +237,7 @@ public final class InstallSourceHost {
         try {
             expect(java.io.IOException.class, () -> {
                 synchronized (storage) {
-                    try { publish.invoke(storage, replacementEntry, replacement, InstallerPermissionAllowlist.ALL); }
+                    try { publish.invoke(storage, replacementEntry, replacement); }
                     catch (java.lang.reflect.InvocationTargetException failure) {
                         if (failure.getCause() instanceof Exception cause) throw cause;
                         throw failure;
