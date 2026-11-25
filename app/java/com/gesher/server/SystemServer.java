@@ -170,6 +170,8 @@ public final class SystemServer {
     }
 
     public static void main(String[] args) {
+        // stdout/stderr are system_server.log: no credentials (docs/logging.md).
+        com.gesher.app.LogRedaction.installStandardStreams();
         try {
             run(args);
         } catch (Throwable t) {

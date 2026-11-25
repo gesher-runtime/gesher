@@ -71,7 +71,7 @@
     "tests/native/stdio_ofd_contract.inc": "f638b91091ac185e14bde112737baa156fd5254c59f279ee687581e42c1a1e0e",
     "tests/native/ofd_transfer_host_test.cc.in": "fc3910b11ad3834f83173a47c71fa3d1a3c67b92cf5a6aaa2af808289017de98",
     "tests/exec/environment-host-test.cc": "af4c4472bcc29de2f3fdafef11de16ccb5944e3f109943d314fc49f211927da0",
-    "tests/exec/exec2_child.c": "beded4b7de72fee7f62fefcd9203414b9af1df1a2c74026bb177eec13365caab",
+    "tests/exec/exec2_child.c": "6306d31f2df7db15934edba890f0ec456d1526886aec9745e9a50f325e0c629a",
     "tests/exec/exec4_environment.c": "8bedcf928bfddbac3d268cf6d9b96ad44ef2b4483be4c4afc12a44c7a7a5a37d",
     "tools/test_environment_contracts.py": "6ebd0a8ffdeab2be5bd80526398b0d0c68cf0b05fb1dfb3f2dd761489501e023",
     "tools/test_environment_lookup_contracts.py": "a367388aa45f6aeb60a01ec9d3e32dd2323878c07452741d845da87a41119229",

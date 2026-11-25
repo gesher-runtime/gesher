@@ -87,9 +87,11 @@ def main() -> int:
             source.write_text(native, encoding="utf-8")
             environment_sources.append(source)
         revised = "struct Revision" in (work / "include/gesher/system_properties.h").read_text()
+        redaction = "RedactCredentials" in (work / "include/gesher/logging.h").read_text()
         flags = ["-std=c++20", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-pthread",
                  "-I", str(work / "include"), f"-DLOGGING_HAS_REVISION={int(revised)}",
-                 f"-DLOGGING_HAS_ENVIRONMENT_OWNER={int(environment_owner)}"]
+                 f"-DLOGGING_HAS_ENVIRONMENT_OWNER={int(environment_owner)}",
+                 f"-DLOGGING_HAS_REDACTION={int(redaction)}"]
         if windows:
             flags += ["-D_WIN32_WINNT=0x0A00", "-static"]
         else:
