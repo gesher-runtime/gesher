@@ -48,6 +48,7 @@ function Count-Containers {
 }
 $script:OnAppLaunch = { param($pkg) $script:Launched = $pkg }
 $script:OnAppUninstall = { param($pkg) $script:Uninstalled = $pkg }
+$script:OnAppDetails = { param($pkg) $script:Detailed = $pkg }
 $script:OnAppProxy = { param($pkg) $script:ProxyEdited = $pkg }
 foreach ($language in 'en', 'he') {
     foreach ($height in 600, 820) {
@@ -79,11 +80,11 @@ foreach ($language in 'en', 'he') {
             . $handler
             $items = [Collections.Generic.List[object]]::new()
             for ($i = 0; $i -lt 1000; $i++) {
-                $items.Add([pscustomobject]@{ Package = "fixture.$i"; Label = "App $i"; IconImage = $null })
+                $items.Add([pscustomobject]@{ Package = "fixture.$i"; Label = "App $i"; IconImage = $null; LaunchVisibility = 'Visible' })
             }
             $appsList.ItemsSource = $items
             $window.Show(); Settle-Layout
-            $panelLayout.Height = [Math]::Max(640, $panelScroll.ActualHeight - 48)
+            $panelLayout.Height = [Math]::Max(740, $panelScroll.ActualHeight - 48)
             Settle-Layout
             $viewport = $window.FindName('AppsViewport')
             if (-not $viewport) { $viewport = $appsList.Template.FindName('AppsViewport', $appsList) }
@@ -97,28 +98,28 @@ foreach ($language in 'en', 'he') {
             $last = $appsList.ItemContainerGenerator.ContainerFromIndex(999)
             Assert-List ($null -ne $last) 'Last app cannot be reached'
             $buttons = @(Find-Visual $last ([Windows.Controls.Button]))
-            Assert-List ($buttons.Count -eq 3) 'Row actions missing'
+            Assert-List ($buttons.Count -eq 4) 'Row actions missing'
             foreach ($button in $buttons) {
                 Assert-List ($button.Tag -ceq 'fixture.999') 'Recycled button retained an old package'
                 $button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent, $button))
             }
-            Assert-List ($script:Launched -ceq 'fixture.999' -and $script:Uninstalled -ceq 'fixture.999' -and $script:ProxyEdited -ceq 'fixture.999') 'Production routed actions used stale data'
+            Assert-List ($script:Launched -ceq 'fixture.999' -and $script:Uninstalled -ceq 'fixture.999' -and $script:Detailed -ceq 'fixture.999' -and $script:ProxyEdited -ceq 'fixture.999') 'Production routed actions used stale data'
             if (-not $Measure) { Assert-List ((Count-Containers) -lt 100) 'Scrolling retained the entire row tree' }
             $viewport.ScrollToTop(); Settle-Layout
             Assert-List ($null -ne $appsList.ItemContainerGenerator.ContainerFromIndex(0)) 'First app cannot be reached after recycling'
             $window.Height = if ($height -eq 600) { 820 } else { 600 }
             Settle-Layout
-            $panelLayout.Height = [Math]::Max(640, $panelScroll.ActualHeight - 48)
+            $panelLayout.Height = [Math]::Max(740, $panelScroll.ActualHeight - 48)
             Settle-Layout
             $viewport.ScrollToEnd(); Settle-Layout
             Assert-List ($null -ne $appsList.ItemContainerGenerator.ContainerFromIndex(999)) 'Resize lost the final app'
             if (-not $Measure) { Assert-List ((Count-Containers) -lt 100) 'Resize retained the entire row tree' }
             $viewport.ScrollToTop(); Settle-Layout
-            $appsList.ItemsSource = @([pscustomobject]@{ Package = 'replacement'; Label = 'Replacement'; IconImage = $null })
+            $appsList.ItemsSource = @([pscustomobject]@{ Package = 'replacement'; Label = 'Replacement'; IconImage = $null; LaunchVisibility = 'Visible' })
             Settle-Layout
             $replacement = $appsList.ItemContainerGenerator.ContainerFromIndex(0)
             $buttons = @(Find-Visual $replacement ([Windows.Controls.Button]))
-            Assert-List ($buttons.Count -eq 3 -and @($buttons | Where-Object { $_.Tag -cne 'replacement' }).Count -eq 0) 'Refresh retained a removed package'
+            Assert-List ($buttons.Count -eq 4 -and @($buttons | Where-Object { $_.Tag -cne 'replacement' }).Count -eq 0) 'Refresh retained a removed package'
             $appsList.ItemsSource = @(); Settle-Layout
             Assert-List ((Count-Containers) -eq 0) 'Empty list retained row containers'
         } finally { $window.Close() }

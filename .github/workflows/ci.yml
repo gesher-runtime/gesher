@@ -219,6 +219,16 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
+      - name: Build actual Windows Country or region lookup
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\home_region_win.cc tests\country-detector\home_region_windows_test.cc /Fe:home-region-test.exe
+      - name: Country or region agrees with GetUserDefaultGeoName and GetUserGeoID
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\home-region-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Country or region checks failed' }
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell
@@ -229,6 +239,8 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
           tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelLaunchChecks.ps1
@@ -236,13 +248,23 @@ jobs:
           tests/windows/shell/ControlPanelLogsChecks.ps1
           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
           tests/windows/shell/ControlPanelActionChecks.ps1
+          tests/windows/shell/CameraImagePickerChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
           tests/windows/shell/NativeStderrChecks.ps1
+      - name: Control panel startup helpers on PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/PreferredLanguagesChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
       - name: Production modal dialogs on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         timeout-minutes: 2
@@ -374,6 +396,7 @@ jobs:
           python3 tools/test_bionic_system_contracts.py --sanitize
           python3 tools/test_environment_contracts.py --sanitize
           python3 tools/test_environment_lookup_contracts.py
+          python3 tools/test_device_identity.py --sanitize
           python3 tools/test_bionic_signal_masks.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
@@ -385,6 +408,7 @@ jobs:
           python3 tools/test_file_io_contracts.py --sanitize
           python3 tools/test_pipe_io_contracts.py --sanitize
           python3 tools/test_revocable_file_contracts.py --sanitize
+          python3 tools/test_record_lock_liveness.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
@@ -538,6 +562,7 @@ jobs:
           python3 tools/test_media_callback_state.py --sanitize
           python3 tools/test_media_http_contracts.py --sanitize
           python3 tools/test_mf_encoder_input.py --sanitize
+          python3 tools/test_mf_video_output.py --sanitize
           python3 tools/test_media_surface_contracts.py --sanitize
           python3 tools/test_codec_output_storage.py --sanitize
           python3 tools/test_codec_reader_delivery.py --sanitize
@@ -561,6 +586,7 @@ jobs:
           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_receiver_lifetimes.py
           python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
+          python3 tools/test_media_session_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_encoder_selection.py
 
       - name: Android HttpEngine requests over real HTTP sockets
@@ -583,8 +609,10 @@ jobs:
           python3 tools/test_bluetooth_native_contracts.py --sanitize
           python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_bluetooth_sdp_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
 
       - name: Biometric and device-credential auth service contracts (ADR 0091)
         run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
@@ -601,6 +629,9 @@ jobs:
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
 
+      - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
+        run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
+
       - name: Portable code relocation, shell ownership and native profile selection
         run: |
           python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
@@ -614,9 +645,11 @@ jobs:
           python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
+          python3 tools/test_log_redaction.py --java-home "$JAVA_HOME"
           python3 tools/test_install_metadata_comparison.py --java-home "$JAVA_HOME"
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
+          python3 tools/test_camera_image_picker.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
           python3 tools/test_capture_permission_flow.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_callback_admission.py --java-home "$JAVA_HOME"
@@ -1201,8 +1234,11 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
           tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1

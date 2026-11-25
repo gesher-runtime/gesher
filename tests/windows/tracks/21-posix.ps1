@@ -116,6 +116,13 @@ Check 'posix probe: paths, /proc, /etc/timezone, inotify, processes' { & "$Dir/p
 Check 'native dlopen paths, safe search and module references' {
   & "$Dir/dlopen_windows_test.exe" (Resolve-Path -LiteralPath (Join-Path $Dir 'dlopen-fixtures')).Path
 } @('dlopen Windows:', '0 failures')
+# Gesher's ELF loader as /system/bin/linker64 (ADR 0096): the ELF header apps
+# read for the machine, its /proc/self/maps line, exec of linker64.
+Check 'system linker64: ELF header, /proc/self/maps, exec' {
+  $linkerData = Join-Path ([IO.Path]::GetTempPath()) ('gesher-linker64-' + [guid]::NewGuid())
+  try { & "$Dir/system_linker_test.exe" $linkerData }
+  finally { Remove-Item -Recurse -Force -LiteralPath $linkerData -ErrorAction SilentlyContinue }
+} @('PASS  /proc/self/maps maps /system/bin/linker64 once', 'system_linker_test: all')
 if (Test-Path "$Dir/procfs_sysfs_contract_test.exe") {
   Check 'procfs & sysfs virtual filesystem contracts' { & "$Dir/procfs_sysfs_contract_test.exe" } @('procfs & sysfs contracts: all passed')
 }

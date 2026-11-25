@@ -73,6 +73,11 @@ instead of running a child body in the parent or fabricating synchronization.
 - **Static executables** (`ET_EXEC`, no `PT_INTERP`): `ENOEXEC`. They make Linux
   system calls directly, which the loader and shim do not provide.
 
+**Amended 2026-11-24 ([0093](0093-cross-process-ptrace.md)):** `wait4`
+also reports the stops and exits of the caller's ptrace tracees, through one
+hook (`PtraceWaitPoll`) before the children are scanned; a tracee that is also
+a child is reported once, by the child's own entry. `__WALL` is accepted.
+
 ## Consequences
 
 - `system`, `popen`, `posix_spawn` and Java `ProcessBuilder` retain their

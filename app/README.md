@@ -70,7 +70,9 @@ framework.jar lacks (below), which must never shadow real ones.
    library on Windows.
 2. Loads the build.prop (`app/build.prop`, android-16.0.0_r4's
    `BP4A.251205.006`, SDK 36) into `SystemProperties`, before anything
-   initializes `android.os.Build`.
+   initializes `android.os.Build`. Build.MANUFACTURER and Build.MODEL are
+   the PC's own, from SMBIOS, set when the property area is created; the
+   brand and fingerprint are Gesher's ([device-identity.md](../docs/device-identity.md)).
 3. `Looper.prepareMainLooper()`.
 4. `AssetManager.createSystemAssetsInZygoteLocked(false, <framework-res.apk>)`:
    the system assets, from `$ANDROID_ROOT`'s copy. AssetManager's own path,
