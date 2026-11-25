@@ -436,13 +436,20 @@ void AppendRegistration(Api& api, mbn::Interface* modem, std::string& line) {
     line += "\t-\t-\t-\t-\t-";
     return;
   }
+  // Each call completes before its value is formatted: the order in which a call's
+  // arguments are evaluated is unspecified (GCC reads `state` before the call).
   ULONG state = 0, data = 0;
-  line += '\t' + Number(registration.value->GetRegisterState(&state), state);
+  HRESULT read = registration.value->GetRegisterState(&state);
+  line += '\t' + Number(read, state);
   String id(api), name(api), roaming(api);
-  line += '\t' + Field(api, registration.value->GetProviderID(&id.value), id.value);
-  line += '\t' + Field(api, registration.value->GetProviderName(&name.value), name.value);
-  line += '\t' + Field(api, registration.value->GetRoamingText(&roaming.value), roaming.value);
-  line += '\t' + Number(registration.value->GetCurrentDataClass(&data), data);
+  read = registration.value->GetProviderID(&id.value);
+  line += '\t' + Field(api, read, id.value);
+  read = registration.value->GetProviderName(&name.value);
+  line += '\t' + Field(api, read, name.value);
+  read = registration.value->GetRoamingText(&roaming.value);
+  line += '\t' + Field(api, read, roaming.value);
+  read = registration.value->GetCurrentDataClass(&data);
+  line += '\t' + Number(read, data);
 }
 
 void AppendSignal(Api& api, mbn::Interface* modem, std::string& line) {
@@ -453,8 +460,10 @@ void AppendSignal(Api& api, mbn::Interface* modem, std::string& line) {
     return;
   }
   ULONG strength = 0, error = 0;
-  line += '\t' + Number(signal.value->GetSignalStrength(&strength), strength);
-  line += '\t' + Number(signal.value->GetSignalError(&error), error);
+  HRESULT read = signal.value->GetSignalStrength(&strength);
+  line += '\t' + Number(read, strength);
+  read = signal.value->GetSignalError(&error);
+  line += '\t' + Number(read, error);
 }
 
 void AppendConnection(Api& api, mbn::Interface* modem, std::string& line) {
@@ -466,7 +475,8 @@ void AppendConnection(Api& api, mbn::Interface* modem, std::string& line) {
   }
   ULONG state = 0;
   String profile(api);
-  line += '\t' + Number(connection.value->GetConnectionState(&state, &profile.value), state);
+  HRESULT read = connection.value->GetConnectionState(&state, &profile.value);
+  line += '\t' + Number(read, state);
 }
 
 // IMbnRadio: the software (Windows' cellular switch, airplane mode) and hardware radio
@@ -478,8 +488,10 @@ void AppendRadio(mbn::Interface* modem, std::string& line) {
     return;
   }
   mbn::MBN_RADIO software = mbn::MBN_RADIO_OFF, hardware = mbn::MBN_RADIO_OFF;
-  line += '\t' + Number(radio.value->get_SoftwareRadioState(&software), static_cast<ULONG>(software));
-  line += '\t' + Number(radio.value->get_HardwareRadioState(&hardware), static_cast<ULONG>(hardware));
+  HRESULT read = radio.value->get_SoftwareRadioState(&software);
+  line += '\t' + Number(read, static_cast<ULONG>(software));
+  read = radio.value->get_HardwareRadioState(&hardware);
+  line += '\t' + Number(read, static_cast<ULONG>(hardware));
 }
 
 // The default connection profile of the modem's SIM: IsDefault true (at most one per
@@ -637,7 +649,8 @@ std::string Snapshot(Api& api) {
         if (FAILED(modem.value->get_InterfaceID(&id.value)) || !id.value) continue;
         std::string line = "modem\t" + Hex(api, id.value);
         ULONG ready = 0;
-        line += '\t' + Number(modem.value->GetReadyState(&ready), ready);
+        HRESULT read = modem.value->GetReadyState(&ready);
+        line += '\t' + Number(read, ready);
         AppendCaps(api, modem.value, line);
         Sim sim;
         AppendSubscriber(api, modem.value, line, &sim.imsi, &sim.iccid);
