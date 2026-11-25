@@ -308,18 +308,23 @@ Key-backed authentication also uses the plain verifier's owner-window watch, so 
 the foreground or destroying the owner's window cancels both the initial key creation
 and signature prompts, including the signature required to finish enrollment. A missing
 owner prevents creation from starting. If the following enrollment signature fails,
-enrollment deletes the unbound key.
+enrollment rejects the still-owned creation for cleanup of its unbound key.
 Cancellation ends the authorization even if Windows subsequently returns a successful
 signature: the request drops those bytes and the authorization session does not unlock
 timed keys or release an operation's key. An AuthService callback filter alone would be
 too late, because those authorizations are committed before its callback runs.
 
 Creation reserves one native enrollment slot before calling Windows. Its native owner
-keeps the operation and the exact newly requested name until accepted public-key delivery
-or completed cleanup. Cancellation and delivery choose one disposition under the Java
-request lock; failed JNI byte-array delivery rejects the creation too. The native create
-wait returns UserCanceled with no bytes after a five-second cancellation grace period,
-while the retained owner continues observing Windows. A blocked Windows `Cancel` call
+keeps the operation and the exact newly requested name until the first enrollment
+signature succeeds and its binding record is stored, or until cleanup completes.
+Successful public-key delivery ends the creation prompt's cancellation phase under the
+Java request lock; it does not yet accept the native creation. A `Creation` transaction
+holds that disposition until enrollment commits. Every earlier return or exception closes
+it as rejected, including an interrupted signature wait or failed binding write. The first
+signature captures and watches its own current owner. Failed JNI byte-array delivery
+rejects the creation too. This adds no power-loss guarantee to the binding-file writer.
+The native create wait returns UserCanceled with no bytes after a five-second cancellation grace period,
+while the retained owner continues observing Windows. A blocked create `Cancel` call
 runs outside locks required by that caller and cannot stop its return or disposition.
 Only an observed creation Success permits cleanup of that exact key; AlreadyExists and
 unknown results never authorize deletion. A late Success after cancellation, or a Success
@@ -327,6 +332,11 @@ whose public-key extraction or delivery failed, is deleted before another create
 admitted. Cleanup retains an already started `DeleteAsync` until terminal completion;
 it does not launch additional deletions behind an unobserved action. A failed terminal
 deletion is retried while the same enrollment slot remains occupied.
+
+If starting a signature's waiter fails, cancellation is requested and its already-started
+request is awaited and released before the original failure propagates. An owner-watch startup or native
+handoff failure on a running signature waiter completes once with failure, without
+escaping that system-server thread or awaiting an already-released handle again.
 
 A failed COM status/interface observation returns failure to the caller and retains the
 operation while observation is retried. Once its result was obtained, that same result
@@ -424,7 +434,12 @@ decides both:
 
 ## Not verified
 
-- Everything on Windows: whether the signature is PKCS #1 v1.5 (if it is PSS, no key
+The production native create lifecycle [passed 206 checks on Windows Server 2022 and
+2025](https://github.com/gesher-runtime/gesher/actions/runs/45629889109) with scripted COM
+boundaries, including the focused old-fail/new-pass late-creation control. This is native
+ownership and error-path evidence, not a real Hello ceremony.
+
+- Interactive Windows Hello: whether the signature is PKCS #1 v1.5 (if it is PSS, no key
   that requires user authentication can be made, and this design must be revisited);
   whether `RequestCreateAsync` and each `RequestSignAsync` prompt; that a Hello reset
   gives NotFound; the key's namespace for an unpackaged process; TPM backing; the
