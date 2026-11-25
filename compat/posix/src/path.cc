@@ -367,12 +367,12 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
   if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
   BY_HANDLE_FILE_INFORMATION info;
   if (!GetFileInformationByHandle(h, &info)) return errno = ENOTDIR, false;
-  bool proc_directory;
+  unsigned proc_type;
   std::string proc_path;
   if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 &&
-      procfs::DescribeHandle(h, &proc_directory, &proc_path)) {
+      procfs::DescribeHandle(h, &proc_type, &proc_path)) {
     // A directory fd under /proc: names relative to its path.
-    if (!proc_directory) return errno = ENOTDIR, false;
+    if (proc_type != S_IFDIR) return errno = ENOTDIR, false;
     *out = proc_path + "/" + path;
     return true;
   }

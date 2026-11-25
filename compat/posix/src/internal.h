@@ -132,18 +132,36 @@ int FdOfLink(const std::wstring& name);
 std::string LinuxName(const std::wstring& name);
 // The inode number stat and fstat report for that Linux path.
 unsigned long long Inode(const std::string& linux_path);
-// What following a link fails with (Linux refuses /proc/<pid>/map_files/*
-// to a process without CAP_CHECKPOINT_RESTORE: EPERM), or 0 when it may be
-// followed. Links only.
-int FollowError(const std::wstring& name);
-// A link's permission bits, as lstat reports them.
-unsigned LinkMode(const std::wstring& name);
+// What stat and lstat need of a name, from one lookup: its type (as Type()),
+// its permission bits, and for a link what following it fails with (Linux
+// refuses /proc/<pid>/map_files/* to a process without
+// CAP_CHECKPOINT_RESTORE: EPERM; else 0) and n for /proc/self/fd/<n> (else
+// -1).
+struct NameStatus {
+  unsigned type = 0;
+  unsigned mode = 0;
+  int follow_error = 0;
+  int fd = -1;
+};
+NameStatus Describe(const std::wstring& name);
+// The permission bits of the Linux path, of that type, for fstat of an fd
+// open on it (map_files directories are 0500).
+unsigned Mode(const std::string& linux_path, unsigned type);
+// The times (100 ns units since 1601, FILETIME's) stat and fstat report for
+// that Linux path: the process's start for /proc/<pid>/..., boot otherwise.
+long long Time(const std::string& linux_path);
 // Whether the file behind `file` (a handle of an fd) is one that open() made
-// for a name here: its Linux path, and whether it is a directory. Such an fd
-// stays a /proc file for fstat, fstatfs, getdents64, readlink of
-// /proc/self/fd/<n> and the *at calls, as Linux's does.
-bool DescribeHandle(HANDLE file, bool* directory, std::string* linux_path);
+// for a name here: its Linux path, and its type: S_IFREG, S_IFDIR, or
+// S_IFLNK for a link itself (O_PATH | O_NOFOLLOW). Such an fd stays a /proc
+// file for fstat, fstatfs, getdents64, readlink of /proc/self/fd/<n> and
+// the *at calls, as Linux's does.
+bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path);
 }  // namespace procfs
+
+// Whether the file view mmap made at `address` maps a file mmap was given
+// open for writing (O_RDWR): Linux's f_mode of a mapping's file, which
+// /proc/<pid>/map_files shows (mman.cc).
+bool MappedFileWritable(const void* address);
 
 // Symbolic links on disk (links.cc): whether a handle opened with
 // FILE_FLAG_OPEN_REPARSE_POINT is a symbolic link or junction, and its target

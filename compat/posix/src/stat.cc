@@ -44,6 +44,19 @@ void Clear(struct stat* buf) {
   buf->st_blksize = 4096;
 }
 
+// A /proc or /sys name: size 0, like Linux's; procfs's device, the name's
+// inode, and its times (procfs.cc), the same for stat of the name and fstat
+// of an fd open on it.
+void ProcName(const std::string& linux_path, unsigned type, unsigned mode, struct stat* buf) {
+  Clear(buf);
+  buf->st_mode = type | mode;
+  buf->st_dev = kProcDevice;
+  buf->st_ino = gesher::procfs::Inode(linux_path);
+  LARGE_INTEGER time;
+  time.QuadPart = gesher::procfs::Time(linux_path);
+  buf->st_atim = buf->st_mtim = buf->st_ctim = ToTimespec(time);
+}
+
 // A file or directory on disk.
 int FromHandle(HANDLE h, struct stat* buf) {
   BY_HANDLE_FILE_INFORMATION info;
@@ -55,17 +68,13 @@ int FromHandle(HANDLE h, struct stat* buf) {
     return gesher::FailWithLastError();
   }
   Clear(buf);
-  bool proc_directory;
+  unsigned proc_type;
   std::string proc_path;
   if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 &&
-      gesher::procfs::DescribeHandle(h, &proc_directory, &proc_path)) {
-    // An fd open on a /proc (or /sys) name: what stat of the name reports.
-    buf->st_mode = proc_directory ? S_IFDIR | 0555 : S_IFREG | 0444;
-    buf->st_dev = kProcDevice;
-    buf->st_ino = gesher::procfs::Inode(proc_path);
-    buf->st_atim = ToTimespec(basic.LastAccessTime);
-    buf->st_mtim = ToTimespec(basic.LastWriteTime);
-    buf->st_ctim = ToTimespec(basic.ChangeTime);
+      gesher::procfs::DescribeHandle(h, &proc_type, &proc_path)) {
+    // An fd open on a /proc (or /sys) name: what stat of the name reports
+    // (lstat for a link opened O_PATH | O_NOFOLLOW), not the snapshot file.
+    ProcName(proc_path, proc_type, gesher::procfs::Mode(proc_path, proc_type), buf);
     return 0;
   }
   buf->st_dev = info.dwVolumeSerialNumber;
@@ -128,28 +137,24 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
       return result;
     }
     case gesher::PathKind::kVirtual: {
-      unsigned type = gesher::procfs::Type(windows);
-      if (type == 0) break;
-      if (type == S_IFDIR && !follow && windows == L"proc/self") {
-        type = S_IFLNK;
+      // One lookup for the name (a map_files entry's costs a VirtualQuery).
+      const gesher::procfs::NameStatus name = gesher::procfs::Describe(windows);
+      if (name.type == 0) break;
+      if (name.type == S_IFDIR && !follow && windows == L"proc/self") {
+        // The link itself, as an fd opened on it O_PATH | O_NOFOLLOW is.
+        ProcName("/proc/self", S_IFLNK, 0777, buf);
+        return 0;
       }
-      if (type == S_IFLNK && follow) {
-        if (int error = gesher::procfs::FollowError(windows)) return errno = error, -1;
+      if (name.type == S_IFLNK && follow) {
+        if (name.follow_error != 0) return errno = name.follow_error, -1;
         // /proc/self/fd/<n> is the file open as fd n, a pipe or socket too.
-        int fd = gesher::procfs::FdOfLink(windows);
-        if (fd >= 0) return fstat(fd, buf);
+        if (name.fd >= 0) return fstat(name.fd, buf);
         std::string target;
         if (depth > 8) return errno = ELOOP, -1;
         if (!gesher::procfs::ReadLink(windows, &target)) return -1;
         return StatPath(target.c_str(), buf, true, depth + 1);
       }
-      // Size 0, like Linux's /proc files.
-      Clear(buf);
-      buf->st_mode = type | (type == S_IFDIR   ? 0555
-                             : type == S_IFLNK ? gesher::procfs::LinkMode(windows)
-                                               : 0444);
-      buf->st_dev = kProcDevice;
-      buf->st_ino = gesher::procfs::Inode(gesher::procfs::LinuxName(windows));
+      ProcName(gesher::procfs::LinuxName(windows), name.type, name.mode, buf);
       return 0;
     }
     case gesher::PathKind::kNull:

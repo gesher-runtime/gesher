@@ -211,12 +211,21 @@ struct Entry {
   std::string name;
   unsigned char type;
 };
+struct NameStatus {
+  unsigned type = 0;
+  unsigned mode = 0;
+  int follow_error = 0;
+  int fd = -1;
+};
 }  // namespace procfs
 
 // ptrace_state.cc is not part of this fixture: no tracer.
 namespace ptrace {
 static inline int TracerPid() { return 0; }
 }  // namespace ptrace
+
+// mman.cc is not part of this fixture: no view records its file's open mode.
+static inline bool MappedFileWritable(const void*) { return false; }
 
 // system_linker.cc is not part of this fixture: no file, nothing mapped.
 namespace system_linker {
@@ -573,6 +582,51 @@ int main() {
           "NOFOLLOW rejection does not call the revocable boundary");
     gesher::revocable_boundary = {};
     _close(backing);
+  }
+
+  // 9. /proc/self/map_files: an entry is looked up directly (one
+  // VirtualQuery run), and finds exactly the file mappings the full scan
+  // lists, by the same "start-end" names.
+  {
+    const std::string self = "proc/" + std::to_string(GetCurrentProcessId()) + "/map_files/";
+    size_t files = 0, found = 0;
+    for (const Vma& v : Vmas(false)) {
+      Vma direct;
+      const bool at = FileMappingAt(v.start, v.end, &direct);
+      if (!v.file) {
+        if (at) Check(false, "FileMappingAt finds no file at a mapping that is not one");
+        continue;
+      }
+      ++files;
+      if (at && direct.name == v.name && std::memcmp(direct.perms, v.perms, 4) == 0) ++found;
+      const NameStatus name = Describe(Widen((self + MapFileName(v)).c_str()));
+      if (name.type != S_IFLNK || name.follow_error != EPERM || (name.mode & 0400) == 0) {
+        Check(false, "a map_files entry is a link, 0400 or 0600, that EPERM refuses to follow");
+      }
+      // A run's start alone, or a range across two runs, is no entry.
+      Vma none;
+      Check(!FileMappingAt(v.start, v.end + 4096, &none) &&
+                (v.end - v.start <= 4096 || !FileMappingAt(v.start + 4096, v.end, &none)),
+            "FileMappingAt matches whole runs only");
+    }
+    Check(files > 0 && found == files, "FileMappingAt finds every file mapping Vmas() lists");
+    unsigned long long start = 0, end = 0;
+    Check(ParseRange("7FF6A000-7ff6b000", &start, &end) && start == 0x7ff6a000ULL && end == 0x7ff6b000ULL,
+          "ParseRange takes either case, as the kernel's _parse_integer");
+    Check(!ParseRange("07ff6a000-7ff6b000", &start, &end) && !ParseRange("7ff6a000-07ff6b000", &start, &end),
+          "ParseRange refuses leading zeros");
+    Check(!ParseRange("10000000000000000-1", &start, &end), "ParseRange refuses more than 64 bits");
+    Check(Describe(Widen(("proc/" + std::to_string(GetCurrentProcessId()) + "/map_files").c_str())).mode == 0500,
+          "map_files is dr-x------");
+    Check(Mode("/proc/" + std::to_string(GetCurrentProcessId()) + "/map_files", S_IFDIR) == 0500 &&
+              Mode("/proc/1/map_files", S_IFDIR) == 0500 && Mode("/proc/self/maps", S_IFREG) == 0444 &&
+              Mode("/proc", S_IFDIR) == 0555,
+          "Mode() of a Linux path: fstat's permission bits");
+    const long long started = Time("/proc/self/maps");
+    Check(started != 0 && Time("/proc/" + std::to_string(GetCurrentProcessId()) + "/status") == started,
+          "a process's /proc files carry its start time");
+    Check(Time("/proc/meminfo") == Time("/sys/devices/system/cpu/online") && Time("/proc/meminfo") <= started,
+          "the other names carry the boot time");
   }
 
   if (g_failed == 0) {

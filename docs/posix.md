@@ -222,17 +222,43 @@ closed three of this layer's leftovers:
 - An fd open on a `/proc` (or `/sys`) name is a snapshot in an anonymous file
   that carries the name's Linux path (the extended attribute
   `GESHER.PROCFS`): `fstat` reports what `stat` of the name does (size 0,
-  procfs's device, the same inode), `fstatfs`/`statfs` report procfs
+  procfs's device, the same inode, mode and times: the process's start for
+  `/proc/<pid>/...`, boot for the rest), `fstatfs`/`statfs` report procfs
   (`0x9fa0`) or sysfs, and `readlink` of `/proc/self/fd/<n>` gives
-  `/proc/<pid>/maps`. A `/proc` directory opens as a directory fd that serves
-  `getdents64` and the `*at` calls; `read` of it returns 0 bytes rather than
-  `EISDIR`. `/proc/self/map_files` lists a link per file-backed line of
-  `maps` (named `%lx-%lx`, as Linux names them); `readlink` and `lstat` work,
-  and following one (`open`, `stat`) fails with `EPERM`, as Linux refuses it
-  to a process without `CAP_CHECKPOINT_RESTORE`.
-- `getdents64` on a directory on disk lists it again from the start on each
-  call and skips the entries already returned (the fd's file position is the
-  index of the next one); its `d_ino` is the entry's position, as `readdir`'s.
+  `/proc/<pid>/maps`. `statfs` follows a link at the end of the path as
+  Linux does: `/proc/self/exe` reports the executable's volume,
+  `/proc/self/fd/<n>` fd n's. A `/proc` directory opens as a directory fd
+  that serves `getdents64` and the `*at` calls; `read` of it returns 0 bytes
+  rather than `EISDIR`, and `fchdir` to it fails with `ENOTDIR` (the current
+  directory is a Windows one; `chdir("/proc")` fails the same way).
+  `O_PATH | O_NOFOLLOW` on a `/proc` link (`exe`, `fd/<n>`, `map_files/*`,
+  `/proc/self`) opens the link itself: `fstat` reports the link. When the
+  temp volume keeps no extended attributes (FAT), a `/proc` directory or
+  link cannot be opened (`EOPNOTSUPP`), and a `/proc` file opens as a plain
+  snapshot of its content.
+- An fd keeps the `/proc/<pid>` it was opened on, as Linux's does: after
+  `fork` or `exec` it names the parent's process. Gesher serves
+  `/proc/<pid>` only for the process itself, so in the child the `*at`
+  calls on such a directory fd fail with `ENOENT`, as `/proc/<parent
+  pid>/...` by name does (on Linux, only once the parent has exited), and so
+  does `getdents64`, except where a forked child continues a listing the
+  parent began (it reads on from the parent's listing). `fstat`, `readlink`
+  and the shared position still work.
+- `/proc/self/map_files` (`dr-x------`) lists a link per file-backed line of
+  `maps` (named `%lx-%lx`, as Linux names them; a name in uppercase hex is the
+  same link, as the kernel parses it). `readlink` and `lstat` look the one
+  mapping up directly (`VirtualQuery`), whatever the number of mappings. A
+  link's mode is its file's open mode: `0600` when `mmap` was given an fd open
+  for writing, `0400` otherwise. Following one (`open`, `stat`, `access`,
+  `realpath`, `statfs`) fails with `EPERM`, as Linux refuses it to a process
+  without `CAP_CHECKPOINT_RESTORE`.
+- `getdents64` keeps the listing of a directory per open file description:
+  calls that continue where the last one stopped read on from it, and one at
+  position 0, or at a position the listing did not stop at (`lseek`, a
+  process sharing the description after `fork`), lists the directory afresh.
+  Calls are serialized, as Linux's `f_pos_lock` does, so threads reading one
+  fd share its entries out between them. The fd's file position is the index
+  of the next entry; `d_ino` is the entry's position, as `readdir`'s.
 - Permissions are the read-only attribute only: regular files show
   `0755` (`0555` read-only) and `access(X_OK)` holds for every file (native2,
   ADR 0057), as on an NTFS volume mounted on Linux; `chmod` changes only the
