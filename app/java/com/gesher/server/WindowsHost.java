@@ -290,6 +290,16 @@ public final class WindowsHost {
         return available() ? nativeTimeZoneKeyName() : null;
     }
 
+    /**
+     * Windows' computer name as Settings > System > About shows it (the physical DNS host
+     * name, case kept), or null: Settings.Global.DEVICE_NAME (docs/device-identity.md).
+     */
+    public static String computerName() {
+        if (!available()) return null;
+        try { return nativeComputerName(); }
+        catch (UnsatisfiedLinkError unavailable) { return null; }
+    }
+
     // --- toasts ---------------------------------------------------------------------------
 
     /** Shows a toast; returns its HRESULT (0: shown). */
@@ -479,6 +489,7 @@ public final class WindowsHost {
     private static native int nativeSessionDisplayState();
     private static native int nativeNetworkState();
     private static native String nativeTimeZoneKeyName();
+    private static native String nativeComputerName();
     private static native int nativeShowToast(String appId, String tag, String group,
             String xml, boolean suppressPopup, boolean high);
     private static native int nativeRemoveToast(String appId, String tag, String group);

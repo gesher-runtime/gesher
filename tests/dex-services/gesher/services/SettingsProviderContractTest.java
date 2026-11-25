@@ -165,6 +165,50 @@ public final class SettingsProviderContractTest {
         rejects(IllegalStateException.class, () -> broken.call("DELETE_system", "font_scale", null));
         check(old.equals(read(broken, "font_scale")), "Failed persistence rolls back deletion");
         checkerSubtypeGeneration(file, loaded);
+        deviceName(new File(file.getParentFile(), "device-name.bin"));
+    }
+    private static String global(ContentProvider p, String name) {
+        return p.call("GET_global", name, null).getString("value");
+    }
+    /** DEVICE_NAME is Windows' computer name; a stale derived or legacy name follows it, the user's stays. */
+    private static void deviceName(File file) throws Exception {
+        Class<?> type = Class.forName("com.gesher.server.SettingsProvider");
+        java.lang.reflect.Method defaultName = type.getDeclaredMethod("defaultDeviceName");
+        defaultName.setAccessible(true);
+        String expected = (String) defaultName.invoke(null);
+        check(expected != null && !expected.isEmpty(), "Device name default");
+        String computer = (String) Class.forName("com.gesher.server.WindowsHost")
+                .getMethod("computerName").invoke(null);
+        String netbios = System.getenv("COMPUTERNAME");
+        if (computer != null) {
+            check(computer.equals(expected), "Device name is the computer name: " + expected);
+            // NetBIOS is the host name's first 15 characters, upper case.
+            if (netbios != null) {
+                check(expected.toUpperCase(java.util.Locale.ROOT).startsWith(netbios.toUpperCase(java.util.Locale.ROOT)),
+                        "Physical DNS host name " + expected + " matches COMPUTERNAME " + netbios);
+            }
+        }
+        ContentProvider p = provider(file);
+        check(expected.equals(global(p, "device_name")), "Fresh profile device name");
+        p.call("PUT_global", "device_name", value("Gesher"));
+        check(expected.equals(global(provider(file), "device_name")), "Legacy fixed default follows the computer name");
+        // As if Gesher derived OLD-PC-NAME before the PC was renamed.
+        provider(file).call("PUT_global", "device_name", value("OLD-PC-NAME"));
+        boolean properties;
+        try {
+            android.os.SystemProperties.set("persist.gesher.device_name", "OLD-PC-NAME");
+            properties = "OLD-PC-NAME".equals(android.os.SystemProperties.get("persist.gesher.device_name"));
+        } catch (RuntimeException | LinkageError hostJvm) {
+            properties = false;
+        }
+        if (properties) {
+            check(expected.equals(global(provider(file), "device_name")), "Renamed PC renames a derived device name");
+            check(expected.equals(android.os.SystemProperties.get("persist.gesher.device_name")), "Derived name recorded");
+        }
+        provider(file).call("PUT_global", "device_name", value("Kitchen tablet"));
+        check("Kitchen tablet".equals(global(provider(file), "device_name")), "User's device name stays");
+        provider(file).call("DELETE_global", "device_name", null);
+        check(global(provider(file), "device_name") == null, "Deleted device name stays deleted");
     }
     private static void checkerSubtypeGeneration(File file, ContentProvider p) throws Exception {
         String checker = Settings.Secure.SELECTED_SPELL_CHECKER;

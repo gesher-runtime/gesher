@@ -91,4 +91,74 @@ if ($propOut -match 'fallback-value') {
   $failed++
 }
 
+# Device identity (docs/device-identity.md): a new property area (its own
+# session) takes ro.product.manufacturer/model from the PC's SMBIOS, which
+# Windows' Win32_ComputerSystem also reports, and the rest of the identity from
+# build.prop, the same with ANDROID_ROOT drive-relative and as /mnt/<drive>/.
+$identityBinder = $env:GESHER_BINDER
+$identitySession = $env:GESHER_PROPERTY_SESSION
+$identityRoot = $env:ANDROID_ROOT
+$identityPlaceholder = '^(|to be filled by o\.?e\.?m\.?|system manufacturer|system product name|default string|not applicable|not specified|none|n/a|unknown|o\.?e\.?m\.?)$'
+$computer = Get-CimInstance Win32_ComputerSystem
+$computerProduct = Get-CimInstance Win32_ComputerSystemProduct
+$expectedManufacturer = "$($computer.Manufacturer)".Trim() -replace '\s+', ' '
+$expectedModel = "$($computer.Model)".Trim() -replace '\s+', ' '
+$lenovoVersion = "$($computerProduct.Version)".Trim() -replace '\s+', ' '
+if ($expectedManufacturer -eq 'LENOVO' -and $lenovoVersion -notmatch $identityPlaceholder -and $lenovoVersion -ne 'LENOVO') {
+  $expectedModel = $lenovoVersion
+}
+$systemRoot = (Resolve-Path (Join-Path $root 'system')).Path
+$identityForms = [ordered]@{
+  'drive-relative' = NoDrive $systemRoot
+  'mnt' = '/mnt/' + $systemRoot.Substring(0, 1).ToLowerInvariant() + ($systemRoot.Substring(2) -replace '\\', '/')
+}
+$identities = @{}
+try {
+  Remove-Item Env:GESHER_BINDER -ErrorAction SilentlyContinue
+  foreach ($form in $identityForms.Keys) {
+    $env:ANDROID_ROOT = $identityForms[$form]
+    $env:GESHER_PROPERTY_SESSION = "device-identity-$form-$PID-$([DateTime]::UtcNow.Ticks)"
+    $listing = & "$Dir/gesher-exec.exe" --sh -c 'getprop' 2>&1 | Out-String
+    $props = @{}
+    foreach ($m in [regex]::Matches($listing, '(?m)^\[([^\]]+)\]: \[(.*)\]\r?$')) { $props[$m.Groups[1].Value] = $m.Groups[2].Value }
+    $identities[$form] = $props
+    $problems = @()
+    $fingerprint = '{0}/{1}/{2}:{3}/{4}/{5}:{6}/{7}' -f $props['ro.product.brand'], $props['ro.product.name'],
+      $props['ro.product.device'], $props['ro.build.version.release'], $props['ro.build.id'],
+      $props['ro.build.version.incremental'], $props['ro.build.type'], $props['ro.build.tags']
+    if (-not $props['ro.build.fingerprint']) { $problems += "no build.prop values (ANDROID_ROOT $env:ANDROID_ROOT)" }
+    elseif ($props['ro.build.fingerprint'] -cne $fingerprint) { $problems += "fingerprint $($props['ro.build.fingerprint']) is not $fingerprint" }
+    foreach ($name in 'ro.product.brand', 'ro.product.name', 'ro.product.device', 'ro.product.board', 'ro.hardware', 'ro.bootloader') {
+      if ($props[$name] -cne 'gesher') { $problems += "$name=$($props[$name])" }
+    }
+    if ($props['ro.build.flavor'] -ne 'gesher-user') { $problems += "ro.build.flavor=$($props['ro.build.flavor'])" }
+    if (-not $props['ro.product.manufacturer'] -or -not $props['ro.product.model']) { $problems += 'manufacturer or model unset' }
+    if ($expectedManufacturer -notmatch $identityPlaceholder -and $props['ro.product.manufacturer'] -cne $expectedManufacturer) {
+      $problems += "manufacturer $($props['ro.product.manufacturer']) is not SMBIOS's $expectedManufacturer"
+    }
+    if ($expectedModel -notmatch $identityPlaceholder -and $props['ro.product.model'] -cne $expectedModel) {
+      $problems += "model $($props['ro.product.model']) is not SMBIOS's $expectedModel"
+    }
+    if ($listing -match '(?i)shiba|pixel 8|\[google\]') { $problems += 'a Pixel 8 identity remains' }
+    if ($LASTEXITCODE -eq 0 -and -not $problems) {
+      Write-Host "PASS  exec2: device identity is the PC's ($($props['ro.product.manufacturer']) / $($props['ro.product.model'])) and Gesher's fingerprint, ANDROID_ROOT $form"
+    } else {
+      Write-Host "FAIL  exec2: device identity, ANDROID_ROOT $form (exit $LASTEXITCODE): $($problems -join '; ')"
+      Write-Host $listing
+      $failed++
+    }
+  }
+  $same = $true
+  foreach ($name in 'ro.product.manufacturer', 'ro.product.model', 'ro.build.fingerprint') {
+    if ($identities['drive-relative'][$name] -cne $identities['mnt'][$name]) { $same = $false }
+  }
+  if ($same) { Write-Host 'PASS  exec2: one device identity whatever form ANDROID_ROOT takes' }
+  else { Write-Host 'FAIL  exec2: the device identity differs between drive-relative and /mnt ANDROID_ROOT'; $failed++ }
+} finally {
+  $env:ANDROID_ROOT = $identityRoot
+  if ($null -eq $identitySession) { Remove-Item Env:GESHER_PROPERTY_SESSION -ErrorAction SilentlyContinue }
+  else { $env:GESHER_PROPERTY_SESSION = $identitySession }
+  if ($null -ne $identityBinder) { $env:GESHER_BINDER = $identityBinder }
+}
+
 Remove-Item Env:LD_LIBRARY_PATH
