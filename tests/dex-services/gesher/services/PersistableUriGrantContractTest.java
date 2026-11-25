@@ -174,6 +174,9 @@ public final class PersistableUriGrantContractTest {
             Constructor<?> policyConstructor = policy.getDeclaredConstructor(PackageManagerService.class);
             policyConstructor.setAccessible(true);
             set(pm, "mPermissions", policyConstructor.newInstance(pm));
+            var publishRegistry = PackageManagerService.class.getDeclaredMethod("publishPackages", Map.class);
+            publishRegistry.setAccessible(true);
+            synchronized (pm) { publishRegistry.invoke(pm, new LinkedHashMap<>(records)); }
 
             atm = (ActivityTaskManagerService) unsafe.allocateInstance(ActivityTaskManagerService.class);
             set(atm, "mPm", pm);

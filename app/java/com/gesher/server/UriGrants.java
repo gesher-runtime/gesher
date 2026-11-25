@@ -66,7 +66,7 @@ public final class UriGrants {
 
     // These tables and modes are all guarded by this. No package/provider IO is
     // performed from an owner callback, a state transition, or a file snapshot.
-    private final Map<Integer, Map<GrantIdentity, Permission>> mGrants = new HashMap<>();
+    private final Map<Integer, GrantTable> mGrants = new HashMap<>();
     private final Map<IBinder, Set<Permission>> mOwned = new HashMap<>();
     private final Set<IBinder> mTrackedOwners = Collections.newSetFromMap(new WeakHashMap<>());
     private ScheduledFuture<?> mPendingWrite;
@@ -74,6 +74,15 @@ public final class UriGrants {
     private boolean mLoaded;
 
     private record GrantIdentity(Uri uri, boolean prefix) {}
+
+    /** The existing ordered per-UID table, with no separate permission index. */
+    private static final class GrantTable extends LinkedHashMap<GrantIdentity, Permission> {
+        Object retiredPackageGeneration;
+        // A hosted registration's ProviderInfo can be changed independently of the
+        // package registry. Keep the original retirement walk for any table that
+        // has admitted such a transient source, until the whole table is removed.
+        boolean hasHostedTransientSource;
+    }
 
     private static final class Source {
         final ProviderInfo info;
@@ -236,7 +245,7 @@ public final class UriGrants {
     /** Access and delegation match a resolved provider; state queries validate retained owners. */
     private boolean holdsLocked(int uid, Source source, Uri uri, int flags, boolean requirePrefix,
             boolean retained) {
-        Map<GrantIdentity, Permission> grants = mGrants.get(uid);
+        GrantTable grants = mGrants.get(uid);
         if (grants == null) return false;
         retireStaleTransientsLocked(grants);
         if (grants.isEmpty()) { mGrants.remove(uid); return false; }
@@ -254,7 +263,10 @@ public final class UriGrants {
     }
 
     /** Runtime object generations retire transient state; durable owner epochs survive updates. */
-    private void retireStaleTransientsLocked(Map<GrantIdentity, Permission> grants) {
+    private void retireStaleTransientsLocked(GrantTable grants) {
+        Object generation = mPm.packageGeneration();
+        if (generation != null && generation == grants.retiredPackageGeneration
+                && !grants.hasHostedTransientSource) return;
         for (Iterator<Permission> it = grants.values().iterator(); it.hasNext();) {
             Permission permission = it.next();
             Source source = permission.transientSource;
@@ -271,6 +283,7 @@ public final class UriGrants {
                 if (permission.modes.active() == 0) it.remove();
             }
         }
+        grants.retiredPackageGeneration = generation;
     }
 
     int check(Uri original, int pid, int uid, int modes, int userId) {
@@ -386,7 +399,7 @@ public final class UriGrants {
         synchronized (mPm) {
             if (!current(target)) return false;
             synchronized (this) {
-                Map<GrantIdentity, Permission> grants = mGrants.get(target.uid());
+                GrantTable grants = mGrants.get(target.uid());
                 if (grants == null) return false;
                 retireStaleTransientsLocked(grants);
                 if (grants.isEmpty()) { mGrants.remove(target.uid()); return false; }
@@ -405,14 +418,14 @@ public final class UriGrants {
         List<android.content.UriPermission> result = new ArrayList<>();
         synchronized (mPm) {
             synchronized (this) {
-                Iterable<Map<GrantIdentity, Permission>> tables = mGrants.values();
+                Iterable<GrantTable> tables = mGrants.values();
                 if (incoming) {
                     ApkPackage target = mPm.get(packageName);
-                    Map<GrantIdentity, Permission> grants = target == null ? null : mGrants.get(target.uid());
+                    GrantTable grants = target == null ? null : mGrants.get(target.uid());
                     if (grants == null) return result;
                     tables = List.of(grants);
                 }
-                for (Map<GrantIdentity, Permission> grants : tables) {
+                for (GrantTable grants : tables) {
                     retireStaleTransientsLocked(grants);
                     for (Permission permission : grants.values()) {
                         if (packageName.equals(incoming ? permission.targetPackage : permission.sourcePackage)
@@ -432,7 +445,7 @@ public final class UriGrants {
         List<android.app.GrantedUriPermission> result = new ArrayList<>();
         synchronized (mPm) {
             synchronized (this) {
-                for (Map<GrantIdentity, Permission> grants : mGrants.values()) {
+                for (GrantTable grants : mGrants.values()) {
                     retireStaleTransientsLocked(grants);
                     for (Permission permission : grants.values()) {
                         if ((packageName == null || packageName.equals(permission.targetPackage))
@@ -454,7 +467,7 @@ public final class UriGrants {
 
     private synchronized void removePackage(String packageName, boolean persistable, boolean targetOnly) {
         boolean changed = false;
-        for (Map<GrantIdentity, Permission> grants : mGrants.values()) {
+        for (GrantTable grants : mGrants.values()) {
             for (Iterator<Permission> it = grants.values().iterator(); it.hasNext();) {
                 Permission permission = it.next();
                 if (packageName == null || packageName.equals(permission.targetPackage)
@@ -618,7 +631,7 @@ public final class UriGrants {
     private void revokePermissionsLocked(String targetPackage, String sourcePackage, int uid,
             Uri uri, int flags, boolean direct) {
         boolean changed = false;
-        for (Map.Entry<Integer, Map<GrantIdentity, Permission>> entry : mGrants.entrySet()) {
+        for (Map.Entry<Integer, GrantTable> entry : mGrants.entrySet()) {
             if (!direct && entry.getKey() != uid) continue;
             for (Iterator<Permission> it = entry.getValue().values().iterator(); it.hasNext();) {
                 Permission permission = it.next();
@@ -658,7 +671,7 @@ public final class UriGrants {
 
     private void removeLocked(Permission permission) {
         for (IBinder owner : permission.modes.owners()) unindexOwnerLocked(owner, permission);
-        Map<GrantIdentity, Permission> grants = mGrants.get(permission.targetUid);
+        GrantTable grants = mGrants.get(permission.targetUid);
         if (grants != null) {
             grants.remove(permission.identity, permission);
             if (grants.isEmpty()) mGrants.remove(permission.targetUid);
@@ -670,7 +683,7 @@ public final class UriGrants {
         Uri uri = checkedUri(original, userId);
         synchronized (mPm) {
             synchronized (this) {
-                Map<GrantIdentity, Permission> grants = mGrants.get(uid);
+                GrantTable grants = mGrants.get(uid);
                 if (grants != null) retireStaleTransientsLocked(grants);
                 Permission exact = grants == null ? null : grants.get(new GrantIdentity(uri, false));
                 Permission prefix = grants == null ? null : grants.get(new GrantIdentity(uri, true));
@@ -694,7 +707,7 @@ public final class UriGrants {
         Uri uri = checkedUri(original, userId);
         synchronized (mPm) {
             synchronized (this) {
-                Map<GrantIdentity, Permission> grants = mGrants.get(uid);
+                GrantTable grants = mGrants.get(uid);
                 if (grants != null) retireStaleTransientsLocked(grants);
                 Permission exact = grants == null ? null : grants.get(new GrantIdentity(uri, false));
                 Permission prefix = grants == null ? null : grants.get(new GrantIdentity(uri, true));
@@ -720,7 +733,7 @@ public final class UriGrants {
     }
 
     private boolean pruneLocked(int uid) {
-        Map<GrantIdentity, Permission> grants = mGrants.get(uid);
+        GrantTable grants = mGrants.get(uid);
         if (grants == null || grants.size() <= MAX_PERSISTED_URI_GRANTS) return false;
         List<Permission> persisted = new ArrayList<>();
         for (Permission permission : grants.values()) {
@@ -818,8 +831,8 @@ public final class UriGrants {
                 for (Grant grant : grants) {
                     GrantIdentity identity = new GrantIdentity(grant.uri,
                             (grant.flags & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0);
-                    Map<GrantIdentity, Permission> target = mGrants.computeIfAbsent(grant.target.uid(),
-                            unused -> new LinkedHashMap<>());
+                    GrantTable target = mGrants.computeIfAbsent(grant.target.uid(),
+                            unused -> new GrantTable());
                     retireStaleTransientsLocked(target);
                     Permission permission = target.get(identity);
                     if (permission != null && !current(permission, grant.source)) {
@@ -833,6 +846,7 @@ public final class UriGrants {
                         permission = new Permission(grant.source, grant.target, identity);
                         target.put(identity, permission);
                     }
+                    target.hasHostedTransientSource |= grant.source.registered != null;
                     permission.transientSource = grant.source;
                     permission.transientTarget = mPm.get(permission.targetPackage);
                     permission.modes.grant(grant.flags, owner);
@@ -875,7 +889,7 @@ public final class UriGrants {
         List<StoredGrant> snapshot = new ArrayList<>();
         synchronized (this) {
             if (generation == mWriteGeneration) mPendingWrite = null;
-            for (Map<GrantIdentity, Permission> grants : mGrants.values()) {
+            for (GrantTable grants : mGrants.values()) {
                 for (Permission permission : grants.values()) {
                     if (permission.modes.persisted != 0) {
                         snapshot.add(new StoredGrant(permission.sourcePackage, permission.targetPackage,
@@ -1012,8 +1026,8 @@ public final class UriGrants {
                             || (saved.targetOwner != null
                                     && !saved.targetOwner.equals(target.enabledStateOwner()))) continue;
                     GrantIdentity identity = new GrantIdentity(saved.uri, saved.prefix);
-                    Map<GrantIdentity, Permission> targetGrants = mGrants.computeIfAbsent(target.uid(),
-                            unused -> new LinkedHashMap<>());
+                    GrantTable targetGrants = mGrants.computeIfAbsent(target.uid(),
+                            unused -> new GrantTable());
                     Permission permission = targetGrants.get(identity);
                     if (permission == null) {
                         permission = new Permission(source, target, identity);
