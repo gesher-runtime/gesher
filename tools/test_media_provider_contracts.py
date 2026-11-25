@@ -2,7 +2,7 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 """Run the production MediaStore index on a host JVM against real SQLite and a real volume.
 
-MediaStoreIndex is compiled unchanged. AOSP's SQLiteQueryBuilder and SQLiteTokenizer
+MediaStoreIndex and SharedStorageOwnership are compiled unchanged. AOSP's SQLiteQueryBuilder and SQLiteTokenizer
 (android-16.0.0_r4, pinned by SHA-256) provide the strict query building the provider
 relies on; SQL runs in a real SQLite engine (sqlite-jdbc, pinned by SHA-256) behind a
 thin SQLiteDatabase stand-in, over a database file that is closed and reopened to model
@@ -27,7 +27,7 @@ import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION = ('MediaStoreIndex',)
+PRODUCTION = ('MediaStoreIndex', 'SharedStorageOwnership')
 INPUTS = {
     'sqlite-jdbc-3.46.1.3.jar': (
         'https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.46.1.3/sqlite-jdbc-3.46.1.3.jar',
@@ -103,6 +103,11 @@ def main() -> None:
     for name in PRODUCTION:
         source = production_source(args.source_ref, name)
         if source is None:
+            if name == 'SharedStorageOwnership':
+                print(f'FAIL {name}.java does not exist at {args.source_ref}: '
+                      'no internal MediaStore ownership check', flush=True)
+                failed = True
+                continue
             print(f'FAIL {name}.java does not exist at {args.source_ref}: no content://media provider, '
                   'so ContentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, ...) fails '
                   'with IllegalArgumentException "Unknown URL content://media/external/images/media"',
@@ -130,11 +135,14 @@ def main() -> None:
         files += [str(p) for p in (ROOT / 'tests/mediastore/standins').rglob('*.java')]
         files.append(str(ROOT / 'tests/mediastore/MediaStoreHost.java'))
         files.append(str(ROOT / 'tests/mediastore/MediaStoreCrashChild.java'))
+        files.append(str(ROOT / 'tests/storage-ownership/SharedStorageOwnershipTest.java'))
         classes = work / 'classes'
         subprocess.run([executable('javac'), '-nowarn', '-encoding', 'UTF-8', '-proc:none',
                         '-d', str(classes), '-cp', str(jar), *files], check=True, timeout=180)
         subprocess.run([executable('java'), '-cp', os.pathsep.join((str(classes), str(jar))),
                         'com.gesher.server.MediaStoreHost'], check=True, timeout=180)
+        subprocess.run([executable('java'), '-cp', str(classes),
+                        'com.gesher.server.SharedStorageOwnershipTest'], check=True, timeout=30)
 
 
 if __name__ == '__main__':
