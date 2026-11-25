@@ -793,10 +793,20 @@ void FillVirtualStatfs(const std::string& linux_path, BionicStatfs* out) {
   out->f_flags = kStValid | kStRelatime;
 }
 
+int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out);
+
 int BIONIC_SYSV Statfs(const char* path, BionicStatfs* out) {
   if (path == nullptr || out == nullptr) return errno = kEFAULT, -1;
-  std::string virtual_path;
-  if (::gesher::ProcfsName(path, &virtual_path)) {
+  // statfs follows a link at the end of the path, /proc's too: the file
+  // system of /proc/self/exe's file, of fd n's for /proc/self/fd/<n>; EPERM
+  // for a map_files link, which Linux lets no ordinary process follow.
+  std::string virtual_path, target;
+  int link_fd = -1;
+  const int proc = ::gesher::ProcfsFollow(path, &virtual_path, &link_fd, &target);
+  if (proc < 0) return -1;
+  if (proc > 0) {
+    if (link_fd >= 0) return Fstatfs(link_fd, out);
+    if (!target.empty()) return Statfs(target.c_str(), out);
     FillVirtualStatfs(virtual_path, out);
     return 0;
   }

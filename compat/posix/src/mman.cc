@@ -42,6 +42,7 @@
 #include <sys/resource.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <io.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -162,6 +163,9 @@ struct Region {
   size_t physical_extent = 0;
   size_t view_padding = 0;
   bool shared = false;        // views: MAP_SHARED
+  // Views: mapped from an fd open for writing (O_RDWR), the file's f_mode
+  // that /proc/<pid>/map_files shows (procfs.cc).
+  bool file_writable = false;
   // A shared view of a memfd mapped after a write seal: mprotect may never make
   // it writable (Linux clears its VM_MAYWRITE; memfd_seals.cc).
   bool deny_write = false;
@@ -1604,6 +1608,11 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
   // extra CRT fd slot or looking up the caller's possibly recycled fd again.
   gesher::FileOperationLease operation(snapshot);
   if (snapshot && operation.Error()) { errno = operation.Error(); return MAP_FAILED; }
+  bool file_writable = false;
+  if (snapshot) {
+    const int status = gesher::FileDescriptionFlags(snapshot);
+    file_writable = status >= 0 && (status & O_ACCMODE) == O_RDWR;
+  }
   // An ordinary address is only a hint, and need not be page aligned.
   if (!fixed) addr = reinterpret_cast<void*>(begin - begin % s.page_size);
   std::lock_guard<std::mutex> guard(s.lock);
@@ -1635,11 +1644,14 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
       }
     }
     result = MapFile(s, addr, length, prot, flags, snapshot->handle, offset);
-    if (result != MAP_FAILED && (deny_write || write_lease)) {
+    if (result != MAP_FAILED) {
       const uintptr_t begin_view = reinterpret_cast<uintptr_t>(result);
       for (auto it = FindRegion(s, begin_view); it != s.regions.end() && it->first < begin_view + length; ++it) {
         if (deny_write) it->second.deny_write = true;
-        if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;
+        if (it->second.kind == Kind::kView) {
+          if (write_lease) it->second.write_lease = write_lease;
+          it->second.file_writable = file_writable;
+        }
       }
     }
   }
@@ -1653,6 +1665,17 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
 }
 
 }  // extern "C"
+
+namespace gesher {
+
+bool MappedFileWritable(const void* address) {
+  State& s = state();
+  std::lock_guard<std::mutex> guard(s.lock);
+  auto it = FindRegion(s, reinterpret_cast<uintptr_t>(address));
+  return it != s.regions.end() && it->second.kind == Kind::kView && it->second.file_writable;
+}
+
+}  // namespace gesher
 
 namespace {
 

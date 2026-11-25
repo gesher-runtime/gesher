@@ -16,14 +16,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <windows.h>
 
+#include <chrono>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include <gesher/procfs_fd.h>
 #include <gesher/process_name.h>
 
 static int g_failed = 0;
@@ -615,6 +621,205 @@ static void TestProcfsDescriptors() {
   CHECK(lstat("/proc/self/map_files/1-2", &st) < 0 && errno == ENOENT);
 }
 
+// The first file mapping /proc/self/maps lists: its map_files name and path.
+static bool FirstFileMapping(std::string* name, std::string* path) {
+  const std::string maps = ReadAll("/proc/self/maps");
+  for (size_t at = 0; at < maps.size();) {
+    size_t end = maps.find('\n', at);
+    if (end == std::string::npos) end = maps.size();
+    const std::string line = maps.substr(at, end - at);
+    at = end + 1;
+    unsigned long long lo = 0, hi = 0;
+    char file[1024] = {};
+    if (sscanf(line.c_str(), "%llx-%llx %*s %*s %*s %*s %1023[^\n]", &lo, &hi, file) == 3 &&
+        file[0] == '/') {
+      char text[64];
+      snprintf(text, sizeof(text), "%llx-%llx", lo, hi);
+      *name = text;
+      *path = file;
+      return true;
+    }
+  }
+  return false;
+}
+
+static std::string TempName(const char* stem) {
+  wchar_t temp[MAX_PATH];
+  GetTempPathW(MAX_PATH, temp);
+  std::wstring w = std::wstring(temp) + L"gesher-" + std::wstring(stem, stem + strlen(stem)) + L"-" +
+                   std::to_wstring(GetCurrentProcessId());
+  char narrow[MAX_PATH * 3];
+  WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, narrow, sizeof(narrow), nullptr, nullptr);
+  return narrow;
+}
+
+// map_files links: what following one does everywhere (access, realpath,
+// statfs's lookup, O_PATH | O_NOFOLLOW), names in either case, permissions,
+// and a lookup that does not scan the address space.
+static void TestMapFilesLinks() {
+  printf("Testing /proc/self/map_files links (follow rule, modes, lookup cost)...\n");
+  std::string name, file;
+  CHECK(FirstFileMapping(&name, &file));
+  const std::string entry = "/proc/self/map_files/" + name;
+  struct stat st = {};
+
+  // Following one is EPERM wherever a call follows it.
+  errno = 0;
+  CHECK_MSG(access(entry.c_str(), F_OK) < 0 && errno == EPERM, "access(F_OK) follows: EPERM");
+  errno = 0;
+  CHECK_MSG(access(entry.c_str(), R_OK) < 0 && errno == EPERM, "access(R_OK) follows: EPERM");
+  CHECK_MSG(faccessat(AT_FDCWD, entry.c_str(), F_OK, AT_SYMLINK_NOFOLLOW) == 0,
+            "faccessat AT_SYMLINK_NOFOLLOW checks the link itself");
+  errno = 0;
+  char* real = realpath(entry.c_str(), nullptr);
+  CHECK_MSG(real == nullptr && errno == EPERM, "realpath follows: EPERM");
+  free(real);
+  std::string linux_path, target;
+  int link_fd = 0;
+  errno = 0;
+  CHECK_MSG(gesher::ProcfsFollow(entry.c_str(), &linux_path, &link_fd, &target) < 0 && errno == EPERM,
+            "statfs follows: EPERM");
+
+  // O_PATH | O_NOFOLLOW opens the link itself; O_NOFOLLOW alone is ELOOP.
+  errno = 0;
+  CHECK(open(entry.c_str(), O_RDONLY | O_NOFOLLOW) < 0 && errno == ELOOP);
+  int fd = open(entry.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
+  CHECK_MSG(fd >= 0, "O_PATH | O_NOFOLLOW opens a map_files link");
+  if (fd >= 0) {
+    struct stat by_name = {};
+    CHECK(fstat(fd, &st) == 0 && lstat(entry.c_str(), &by_name) == 0);
+    CHECK_MSG(S_ISLNK(st.st_mode) && st.st_mode == by_name.st_mode && st.st_ino == by_name.st_ino &&
+                  st.st_dev == by_name.st_dev,
+              "fstat of the O_PATH fd is lstat of the link");
+    char link[512];
+    const ssize_t n = readlink(("/proc/self/fd/" + std::to_string(fd)).c_str(), link, sizeof(link));
+    CHECK_MSG(n > 0 && std::string(link, n) ==
+                           "/proc/" + std::to_string(GetCurrentProcessId()) + "/map_files/" + name,
+              "readlink of its /proc/self/fd entry names the link");
+    errno = 0;
+    CHECK_MSG(openat(fd, "x", O_RDONLY) < 0 && errno == ENOTDIR, "a link fd is no directory");
+    close(fd);
+  }
+  errno = 0;
+  CHECK(open(entry.c_str(), O_PATH | O_NOFOLLOW | O_DIRECTORY) < 0 && errno == ENOTDIR);
+  fd = open("/proc/self/exe", O_PATH | O_NOFOLLOW);
+  CHECK(fd >= 0 && fstat(fd, &st) == 0 && S_ISLNK(st.st_mode) && (st.st_mode & 0777) == 0777);
+  if (fd >= 0) close(fd);
+  fd = open("/proc/self", O_PATH | O_NOFOLLOW);
+  CHECK_MSG(fd >= 0 && fstat(fd, &st) == 0 && S_ISLNK(st.st_mode), "/proc/self itself is a link");
+  if (fd >= 0) close(fd);
+  errno = 0;
+  CHECK(open("/proc/self", O_RDONLY | O_NOFOLLOW) < 0 && errno == ELOOP);
+  fd = open("/proc/self/exe", O_PATH);
+  CHECK_MSG(fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode), "O_PATH alone follows the link");
+  if (fd >= 0) close(fd);
+
+  // The kernel parses the name with _parse_integer: either case.
+  std::string upper = name;
+  for (char& c : upper) {
+    if (c >= 'a' && c <= 'f') c = static_cast<char>(c - 'a' + 'A');
+  }
+  char link[512];
+  ssize_t n = readlink(("/proc/self/map_files/" + upper).c_str(), link, sizeof(link));
+  CHECK_MSG(n > 0 && std::string(link, n) == file, "an uppercase map_files name is the same link");
+
+  // dr-x------, by name and by fd.
+  CHECK(stat("/proc/self/map_files", &st) == 0 && st.st_mode == (S_IFDIR | 0500));
+  fd = open("/proc/self/map_files", O_RDONLY | O_DIRECTORY);
+  CHECK_MSG(fd >= 0 && fstat(fd, &st) == 0 && st.st_mode == (S_IFDIR | 0500), "map_files is dr-x------");
+  if (fd >= 0) close(fd);
+
+  // A link's permissions are its file's open mode: 0400 read-only, 0600 for
+  // a file open for writing.
+  const std::string data = TempName("map-files-mode");
+  int rw = open(data.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+  CHECK(rw >= 0 && ftruncate(rw, 65536) == 0);
+  int ro = open(data.c_str(), O_RDONLY);
+  CHECK(ro >= 0);
+  void* by_rw = mmap(nullptr, 4096, PROT_READ, MAP_PRIVATE, rw, 0);
+  void* by_ro = mmap(nullptr, 4096, PROT_READ, MAP_PRIVATE, ro, 0);
+  CHECK(by_rw != MAP_FAILED && by_ro != MAP_FAILED);
+  auto link_mode = [](void* at) -> unsigned {
+    MEMORY_BASIC_INFORMATION info;
+    if (VirtualQuery(at, &info, sizeof(info)) != sizeof(info)) return 0;
+    char text[96];
+    snprintf(text, sizeof(text), "/proc/self/map_files/%llx-%llx",
+             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(info.BaseAddress)),
+             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize));
+    struct stat l = {};
+    return lstat(text, &l) == 0 && S_ISLNK(l.st_mode) ? (l.st_mode & 0777) : 0;
+  };
+  if (by_rw != MAP_FAILED) {
+    CHECK_MSG(link_mode(by_rw) == 0600, "a file mapped from an O_RDWR fd: 0600");
+    munmap(by_rw, 4096);
+  }
+  if (by_ro != MAP_FAILED) {
+    CHECK_MSG(link_mode(by_ro) == 0400, "a file mapped from an O_RDONLY fd: 0400");
+    munmap(by_ro, 4096);
+  }
+
+  // The lookup's cost does not grow with the number of mappings: readlink
+  // of each of ~1500 entries (Linux: microseconds) once took 70 ms each.
+  std::vector<void*> views;
+  for (int i = 0; i < 1500 && ro >= 0; ++i) {
+    void* v = mmap(nullptr, 4096, PROT_READ, MAP_PRIVATE, ro, 0);
+    if (v == MAP_FAILED) break;
+    views.push_back(v);
+  }
+  CHECK(views.size() == 1500);
+  const auto t0 = std::chrono::steady_clock::now();
+  size_t resolved = 0;
+  for (void* v : views) {
+    char text[96];
+    snprintf(text, sizeof(text), "/proc/self/map_files/%llx-%llx",
+             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(v)),
+             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(v) + 4096));
+    struct stat l = {};
+    if (readlink(text, link, sizeof(link)) > 0 && lstat(text, &l) == 0) ++resolved;
+  }
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  printf("  readlink+lstat of %zu map_files entries: %.3f s\n", views.size(), seconds);
+  CHECK(resolved == views.size());
+  CHECK_MSG(seconds < 5.0, "map_files lookups do not scan the address space");
+  for (void* v : views) munmap(v, 4096);
+  if (rw >= 0) close(rw);
+  if (ro >= 0) close(ro);
+  unlink(data.c_str());
+
+  // statfs follows the other links: /proc/self/exe to its file, an fd link
+  // to the fd; a name that is no link is procfs's.
+  CHECK(gesher::ProcfsFollow("/proc/self/exe", &linux_path, &link_fd, &target) == 1 &&
+        link_fd == -1 && !target.empty() && target.rfind("/proc", 0) != 0);
+  fd = open(".", O_RDONLY | O_DIRECTORY);
+  CHECK(gesher::ProcfsFollow(("/proc/self/fd/" + std::to_string(fd)).c_str(), &linux_path, &link_fd,
+                             &target) == 1 &&
+        link_fd == fd);
+  close(fd);
+  CHECK(gesher::ProcfsFollow("/proc/self/maps", &linux_path, &link_fd, &target) == 1 && link_fd == -1 &&
+        target.empty() && linux_path == "/proc/" + std::to_string(GetCurrentProcessId()) + "/maps");
+  CHECK(gesher::ProcfsFollow("/proc/self", &linux_path, &link_fd, &target) == 1 && target.empty());
+  CHECK(gesher::ProcfsFollow("/data", &linux_path, &link_fd, &target) == 0);
+}
+
+// fstat of an fd open on a /proc name gives the times stat of the name does.
+static void TestProcfsTimes() {
+  printf("Testing /proc times (stat of a name, fstat of an fd on it)...\n");
+  for (const char* name : {"/proc/self/maps", "/proc/self", "/proc/self/task", "/proc/meminfo",
+                           "/sys/devices/system/cpu/online"}) {
+    struct stat by_name = {}, by_fd = {};
+    const int fd = open(name, O_RDONLY | O_CLOEXEC);
+    CHECK_MSG(fd >= 0, name);
+    if (fd < 0) continue;
+    CHECK(stat(name, &by_name) == 0 && fstat(fd, &by_fd) == 0);
+    CHECK_MSG(by_name.st_mtim.tv_sec == by_fd.st_mtim.tv_sec && by_name.st_mtim.tv_nsec == by_fd.st_mtim.tv_nsec &&
+                  by_name.st_atim.tv_sec == by_fd.st_atim.tv_sec && by_name.st_ctim.tv_sec == by_fd.st_ctim.tv_sec,
+              name);
+    CHECK_MSG(by_name.st_mtim.tv_sec > 0 && by_name.st_mtim.tv_sec <= time(nullptr), name);
+    close(fd);
+  }
+}
+
 // getdents64 on a directory on disk.
 static void TestDiskGetdents() {
   printf("Testing getdents64 on a directory on disk...\n");
@@ -635,9 +840,66 @@ static void TestDiskGetdents() {
   CHECK(names.size() == 6 && Has(names, ".") && Has(names, "..") && Has(names, "alpha") &&
         Has(names, "beta") && Has(names, "gamma") && Has(names, "sub"));
   CHECK(lseek(dir, 0, SEEK_SET) == 0 && Dents(dir, 4096) == names);
+  // A dup shares the position, as Linux's open file description does.
+  CHECK(lseek(dir, 0, SEEK_SET) == 0);
+  char record[24];  // "." alone
+  CHECK(getdents64(dir, record, sizeof(record)) > 0);
+  const int copy = dup(dir);
+  std::vector<std::string> rest = Dents(copy, 4096);
+  CHECK_MSG(rest.size() + 1 == names.size() && rest.back() == names.back(), "dup shares the position");
+  close(copy);
   close(dir);
   for (const wchar_t* f : {L"\\alpha", L"\\beta", L"\\gamma"}) DeleteFileW((root + f).c_str());
   RemoveDirectoryW((root + L"\\sub").c_str());
+  CHECK_MSG(RemoveDirectoryW(root.c_str()), "a closed listing holds no handle on the directory");
+
+  // Many entries: one enumeration serves the calls that continue it, and
+  // two threads reading one fd share the entries out (Linux serializes
+  // them on the description's f_pos_lock), each entry once.
+  root += L"-big";
+  CreateDirectoryW(root.c_str(), nullptr);
+  constexpr int kFiles = 3000;
+  for (int i = 0; i < kFiles; ++i) {
+    HANDLE h = CreateFileW((root + L"\\file-with-a-longer-name-" + std::to_wstring(i)).c_str(), GENERIC_WRITE,
+                           0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+  }
+  WideCharToMultiByte(CP_UTF8, 0, root.c_str(), -1, narrow, sizeof(narrow), nullptr, nullptr);
+  dir = open(narrow, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  CHECK(dir >= 0);
+  const auto t0 = std::chrono::steady_clock::now();
+  std::vector<std::string> all = Dents(dir, 4096);
+  const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+  printf("  getdents64 of %d entries with a 4 KiB buffer: %.3f s\n", kFiles, seconds);
+  CHECK(all.size() == kFiles + 2);
+  CHECK_MSG(std::set<std::string>(all.begin(), all.end()).size() == all.size(), "each entry once");
+  CHECK(lseek(dir, 0, SEEK_SET) == 0);
+  std::mutex lock;
+  std::vector<std::string> shared;
+  auto reader = [&]() {
+    std::vector<char> buffer(256);
+    for (;;) {
+      ssize_t got = getdents64(dir, buffer.data(), buffer.size());
+      if (got <= 0) break;
+      std::lock_guard<std::mutex> guard(lock);
+      for (ssize_t at = 0; at < got;) {
+        unsigned short reclen;
+        memcpy(&reclen, buffer.data() + at + 16, 2);
+        shared.push_back(buffer.data() + at + 19);
+        at += reclen;
+      }
+    }
+  };
+  std::thread a(reader), b(reader);
+  a.join();
+  b.join();
+  CHECK_MSG(shared.size() == all.size() &&
+                std::set<std::string>(shared.begin(), shared.end()).size() == shared.size(),
+            "two threads on one fd read each entry once between them");
+  close(dir);
+  for (int i = 0; i < kFiles; ++i) {
+    DeleteFileW((root + L"\\file-with-a-longer-name-" + std::to_wstring(i)).c_str());
+  }
   RemoveDirectoryW(root.c_str());
 }
 
@@ -657,6 +919,8 @@ int main(int argc, char** argv) {
   TestSelfLink();
   TestRandom();
   TestProcfsDescriptors();
+  TestMapFilesLinks();
+  TestProcfsTimes();
   TestDiskGetdents();
 
   if (g_failed == 0) {

@@ -16,9 +16,10 @@
 //   /proc/self/{auxv,cmdline,comm,environ,status,stat,statm,maps,mounts}
 //   /proc/self/fd/<n>            links to the file open as fd n
 //   /proc/self/map_files/<start>-<end>  links to the file mapped there, one
-//                                per file-backed line of maps; readlink and
-//                                lstat work, following one is EPERM (Linux
-//                                lets only CAP_CHECKPOINT_RESTORE follow them)
+//                                per file-backed line of maps, each looked up
+//                                directly; readlink and lstat work, following
+//                                one is EPERM (Linux lets only
+//                                CAP_CHECKPOINT_RESTORE follow them)
 //   /proc/self/exe, cwd          links to the executable, the current directory
 //   /proc/self/task/<tid>/{comm,stat,status}
 //   /proc/{meminfo,cpuinfo,uptime,mounts}
@@ -67,7 +68,7 @@ namespace gesher {
 namespace procfs {
 
 // (internal.h; declared here too for the host fixture, which compiles this file alone.)
-bool DescribeHandle(HANDLE file, bool* directory, std::string* linux_path);
+bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path);
 std::string LinuxName(const std::wstring& name);
 
 namespace {
@@ -504,7 +505,27 @@ struct Vma {
   bool file = false;
 };
 
-std::vector<Vma> Vmas() {
+// A run's permissions, as maps shows them.
+void Perms(const MEMORY_BASIC_INFORMATION& info, char perms[5]) {
+  memcpy(perms, "---p", 5);
+  if (info.State == MEM_COMMIT && (info.Protect & PAGE_GUARD) == 0) {
+    DWORD p = info.Protect & 0xff;
+    bool r = p == PAGE_READONLY || p == PAGE_READWRITE || p == PAGE_WRITECOPY ||
+             p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY;
+    bool w = p == PAGE_READWRITE || p == PAGE_WRITECOPY || p == PAGE_EXECUTE_READWRITE ||
+             p == PAGE_EXECUTE_WRITECOPY;
+    bool x = p == PAGE_EXECUTE || p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE_READWRITE ||
+             p == PAGE_EXECUTE_WRITECOPY;
+    perms[0] = r ? 'r' : '-';
+    perms[1] = w ? 'w' : '-';
+    perms[2] = x ? 'x' : '-';
+  }
+  if (info.Type == MEM_MAPPED && (info.Protect & 0xff) != PAGE_WRITECOPY) perms[3] = 's';
+}
+
+// Every run of the address space. `inodes`: each file's device and inode
+// (a stat per file mapping), which only maps shows.
+std::vector<Vma> Vmas(bool inodes) {
   system_linker::EnsureMapped();
   std::vector<Vma> vmas;
   SYSTEM_INFO si;
@@ -523,20 +544,8 @@ std::vector<Vma> Vmas() {
     char* base = static_cast<char*>(info.BaseAddress);
     address = base + info.RegionSize;
     if (info.State == MEM_FREE) continue;
-    char perms[5] = "---p";
-    if (info.State == MEM_COMMIT && (info.Protect & PAGE_GUARD) == 0) {
-      DWORD p = info.Protect & 0xff;
-      bool r = p == PAGE_READONLY || p == PAGE_READWRITE || p == PAGE_WRITECOPY ||
-               p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY;
-      bool w = p == PAGE_READWRITE || p == PAGE_WRITECOPY || p == PAGE_EXECUTE_READWRITE ||
-               p == PAGE_EXECUTE_WRITECOPY;
-      bool x = p == PAGE_EXECUTE || p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE_READWRITE ||
-               p == PAGE_EXECUTE_WRITECOPY;
-      perms[0] = r ? 'r' : '-';
-      perms[1] = w ? 'w' : '-';
-      perms[2] = x ? 'x' : '-';
-    }
-    if (info.Type == MEM_MAPPED && (info.Protect & 0xff) != PAGE_WRITECOPY) perms[3] = 's';
+    char perms[5];
+    Perms(info, perms);
     std::string name;
     unsigned long long offset = 0;
     unsigned major = 0, minor = 0;
@@ -544,7 +553,7 @@ std::vector<Vma> Vmas() {
     if (info.Type == MEM_IMAGE || info.Type == MEM_MAPPED) {
       name = MappedFile(base);
       offset = static_cast<unsigned long long>(base - static_cast<char*>(info.AllocationBase));
-      if (!name.empty() && name[0] == '/') {
+      if (inodes && !name.empty() && name[0] == '/') {
         struct stat st;
         if (stat(name.c_str(), &st) == 0) {
           major = static_cast<unsigned>((st.st_dev >> 8) & 0xff);
@@ -574,9 +583,43 @@ std::vector<Vma> Vmas() {
   return vmas;
 }
 
+// The file mapping Vmas() would list as exactly start-end, found directly:
+// the run VirtualQuery gives at `start` must begin there (the run before it
+// ends there) and end at `end`. Only this run's file name is looked up, so a
+// map_files entry costs the same however many mappings there are.
+bool FileMappingAt(unsigned long long start, unsigned long long end, Vma* out) {
+  system_linker::EnsureMapped();
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  const auto minimum = reinterpret_cast<unsigned long long>(si.lpMinimumApplicationAddress);
+  const auto maximum = reinterpret_cast<unsigned long long>(si.lpMaximumApplicationAddress);
+  if (start >= end || start < minimum || start >= maximum) return false;
+  MEMORY_BASIC_INFORMATION info;
+  if (start > minimum) {
+    if (VirtualQuery(reinterpret_cast<void*>(start - 1), &info, sizeof(info)) != sizeof(info) ||
+        reinterpret_cast<unsigned long long>(info.BaseAddress) + info.RegionSize != start) {
+      return false;  // inside a run
+    }
+  }
+  if (VirtualQuery(reinterpret_cast<void*>(start), &info, sizeof(info)) != sizeof(info) ||
+      reinterpret_cast<unsigned long long>(info.BaseAddress) != start ||
+      start + info.RegionSize != end || info.State == MEM_FREE ||
+      (info.Type != MEM_IMAGE && info.Type != MEM_MAPPED)) {
+    return false;
+  }
+  std::string name = MappedFile(info.BaseAddress);
+  if (name.empty() || name[0] != '/') return false;
+  out->start = start;
+  out->end = end;
+  Perms(info, out->perms);
+  out->name = std::move(name);
+  out->file = true;
+  return true;
+}
+
 std::string Maps() {
   std::string s;
-  for (const Vma& v : Vmas()) {
+  for (const Vma& v : Vmas(true)) {
     s += Format("%08llx-%08llx %s %08llx %02x:%02x %llu", v.start, v.end, v.perms, v.offset,
                 v.major, v.minor, v.inode);
     if (!v.name.empty()) s += "                          " + v.name;
@@ -856,18 +899,20 @@ struct Node {
   int fd = -1;
   std::string link;  // "exe", "cwd", "fd", "map_files"
   std::string target;  // map_files: the mapped file
-  unsigned link_mode = 0777;  // lstat's permission bits
+  unsigned mode = 0;  // stat's permission bits; 0: the type's (Mode())
   std::vector<procfs::Entry> entries;  // directories: filled by Lookup(.., true)
 };
 
-// "<start>-<end>" as Linux spells a map_files name (lowercase hex, no leading
-// zeros), or false.
+// "<start>-<end>", a map_files name, as the kernel parses one
+// (dname_to_vma_addr): hex digits of either case, no leading zeros, 64 bits
+// at most; or false. Linux lists them in lowercase.
 bool ParseRange(const std::string& s, unsigned long long* start, unsigned long long* end) {
   size_t dash = s.find('-');
   if (dash == std::string::npos || dash == 0 || dash + 1 >= s.size()) return false;
   const std::string a = s.substr(0, dash), b = s.substr(dash + 1);
   for (const std::string* part : {&a, &b}) {
-    if (part->size() > 16 || part->find_first_not_of("0123456789abcdef") != std::string::npos ||
+    if (part->size() > 16 ||
+        part->find_first_not_of("0123456789abcdefABCDEF") != std::string::npos ||
         ((*part)[0] == '0' && part->size() > 1)) {
       return false;
     }
@@ -983,9 +1028,11 @@ Node Lookup(const std::wstring& name, bool list) {
       return n;
     }
     if (p[2] == "map_files") {
+      // dr-x------, as Linux's: only its owner may list it.
       n.type = kDir;
+      n.mode = 0500;
       if (list) {
-        for (const Vma& v : Vmas()) {
+        for (const Vma& v : Vmas(false)) {
           if (v.file) Add(&n.entries, MapFileName(v), DT_LNK);
         }
       }
@@ -996,17 +1043,17 @@ Node Lookup(const std::wstring& name, bool list) {
   if (p[2] == "map_files" && p.size() == 4) {
     // A link for a file mapping that starts and ends exactly there.
     unsigned long long start, end;
-    if (!ParseRange(p[3], &start, &end)) return n;
-    for (const Vma& v : Vmas()) {
-      if (!v.file || v.start != start || v.end != end) continue;
-      n.type = kLink;
-      n.link = "map_files";
-      n.target = v.name;
-      // The mapped file's open mode, as Linux shows it: read, and write for a
-      // writable shared mapping.
-      n.link_mode = 0400 | (v.perms[1] == 'w' && v.perms[3] == 's' ? 0200 : 0);
-      return n;
-    }
+    Vma v;
+    if (!ParseRange(p[3], &start, &end) || !FileMappingAt(start, end, &v)) return n;
+    n.type = kLink;
+    n.link = "map_files";
+    n.target = v.name;
+    // The mapped file's open mode (f_mode), as Linux shows it: read, and
+    // write when the file was mapped from an fd open for writing (mmap
+    // records it) or the view is a writable shared one, which needs that.
+    const bool writable = MappedFileWritable(reinterpret_cast<const void*>(start)) ||
+                          (v.perms[1] == 'w' && v.perms[3] == 's');
+    n.mode = 0400 | (writable ? 0200 : 0);
     return n;
   }
   unsigned long number;
@@ -1063,7 +1110,8 @@ std::string Content(const Node& n) {
 
 // --- what an fd of a name here is ------------------------------------------------
 // The anonymous file behind such an fd carries an extended attribute,
-// GESHER.PROCFS: 'f' or 'd', then the Linux path. Every handle of the file
+// GESHER.PROCFS: 'f', 'd' or 'l' (a link itself, opened O_PATH | O_NOFOLLOW),
+// then the Linux path. Every handle of the file
 // reads it (dup, fork, exec and descriptor passing keep it), and nothing else
 // has it: memfd_create's files never get one.
 struct EaIoStatus {
@@ -1131,7 +1179,7 @@ bool ReadTag(HANDLE file, char* type, std::string* linux_path) {
     return false;  // no such attribute (an empty value)
   }
   const char* value = &buffer[8 + name_length + 1];
-  if (value[0] != 'f' && value[0] != 'd') return false;
+  if (value[0] != 'f' && value[0] != 'd' && value[0] != 'l') return false;
   *type = value[0];
   linux_path->assign(value + 1, value_length - 1);
   return true;
@@ -1143,8 +1191,8 @@ bool FdTarget(int fd, std::string* target) {
   if (h == INVALID_HANDLE_VALUE) return errno = ENOENT, false;
   switch (GetFileType(h)) {
     case FILE_TYPE_DISK: {
-      bool directory;
-      if (DescribeHandle(h, &directory, target)) return true;  // "/proc/<pid>/maps"
+      unsigned type;
+      if (DescribeHandle(h, &type, target)) return true;  // "/proc/<pid>/maps"
       wchar_t buf[32768];
       DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
       if (n == 0) return FailWithLastError(), false;
@@ -1179,21 +1227,89 @@ unsigned long long Inode(const std::string& linux_path) {
   return (hash & 0x7fffffffULL) | 1;
 }
 
-int FollowError(const std::wstring& name) {
-  return Lookup(name, false).link == "map_files" ? EPERM : 0;
+// A type's permission bits: r--r--r-- files, r-xr-xr-x directories,
+// rwxrwxrwx links, as Linux's procfs and sysfs show them.
+unsigned DefaultMode(unsigned type) {
+  return type == kDir ? 0555 : type == kLink ? 0777 : 0444;
 }
 
-unsigned LinkMode(const std::wstring& name) { return Lookup(name, false).link_mode; }
+NameStatus Describe(const std::wstring& name) {
+  Node n = Lookup(name, false);
+  NameStatus status;
+  status.type = n.type;
+  if (n.type == kNone) return status;
+  status.mode = n.mode != 0 ? n.mode : DefaultMode(n.type);
+  // Linux lets only a process with CAP_CHECKPOINT_RESTORE follow a
+  // /proc/<pid>/map_files link (proc_map_files_get_link): EPERM.
+  if (n.link == "map_files") status.follow_error = EPERM;
+  if (n.link == "fd") status.fd = n.fd;
+  return status;
+}
 
-bool DescribeHandle(HANDLE file, bool* directory, std::string* linux_path) {
+unsigned Mode(const std::string& linux_path, unsigned type) {
+  if (!linux_path.empty() && linux_path[0] == '/') {
+    Node n = Lookup(Widen(linux_path.c_str() + 1), false);
+    if (n.type == type && n.mode != 0) return n.mode;
+  }
+  // Another process's map_files directory (an fd a child inherited).
+  const size_t slash = linux_path.rfind('/');
+  if (type == kDir && linux_path.rfind("/proc/", 0) == 0 && slash != std::string::npos &&
+      linux_path.compare(slash, std::string::npos, "/map_files") == 0) {
+    return 0500;
+  }
+  return DefaultMode(type);
+}
+
+namespace {
+long long FiletimeValue(const FILETIME& t) {
+  return static_cast<long long>((static_cast<unsigned long long>(t.dwHighDateTime) << 32) |
+                                t.dwLowDateTime);
+}
+}  // namespace
+
+// procfs gives an inode its times when it makes it: for a process's files
+// that is about when the process started, for the rest about boot. Gesher
+// uses those two instants, so stat of a name and fstat of an fd open on it
+// always agree.
+long long Time(const std::string& linux_path) {
+  if (linux_path.rfind("/proc/", 0) == 0) {
+    const size_t end = linux_path.find('/', 6);
+    const std::string part =
+        linux_path.substr(6, end == std::string::npos ? std::string::npos : end - 6);
+    unsigned long pid;
+    FILETIME created, exited, kernel, user;
+    if (part == "self" || (ParseNumber(part, &pid) && pid == GetCurrentProcessId())) {
+      if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+        return FiletimeValue(created);
+      }
+    } else if (ParseNumber(part, &pid)) {
+      // An fd another process opened on its /proc/<pid> (a forked child's).
+      if (HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+        const bool ok = GetProcessTimes(process, &created, &exited, &kernel, &user) != 0;
+        CloseHandle(process);
+        if (ok) return FiletimeValue(created);
+      }
+    }
+  }
+  // Boot: now less the uptime, to the second, worked out once per process.
+  static const long long boot = [] {
+    FILETIME now;
+    GetSystemTimeAsFileTime(&now);
+    const long long booted = FiletimeValue(now) - static_cast<long long>(GetTickCount64()) * 10000;
+    return booted - booted % 10000000;
+  }();
+  return boot;
+}
+
+bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path) {
   FILE_BASIC_INFO basic;
   if (!GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic)) ||
       (basic.FileAttributes & FILE_ATTRIBUTE_TEMPORARY) == 0) {
     return false;  // not an anonymous file: no attribute to look for
   }
-  char type;
-  if (!ReadTag(file, &type, linux_path)) return false;
-  *directory = type == 'd';
+  char tag;
+  if (!ReadTag(file, &tag, linux_path)) return false;
+  *type = tag == 'd' ? kDir : tag == 'l' ? kLink : kFile;
   return true;
 }
 
@@ -1255,8 +1371,16 @@ int Open(const std::wstring& name, int flags) {
   if ((flags & O_PATH) != 0) flags &= O_PATH | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW;
   Node n = Lookup(name, false);
   if (n.type == kNone) return errno = (flags & O_CREAT) != 0 ? EACCES : ENOENT, -1;
-  if (n.type == kLink) {
-    if ((flags & O_NOFOLLOW) != 0 && (flags & O_PATH) == 0) return errno = ELOOP, -1;
+  // /proc/self is a link on Linux (to /proc/<pid>), though it is a directory
+  // here to everyone that follows it.
+  const std::vector<std::string> parts = Split(name);
+  const bool self_link = parts.size() == 2 && parts[1] == "self";
+  // O_PATH | O_NOFOLLOW opens a link itself (fstat reports the link); a
+  // plain O_NOFOLLOW open of one is ELOOP.
+  const bool link_itself = (n.type == kLink || self_link) && (flags & O_NOFOLLOW) != 0;
+  if (link_itself && (flags & O_PATH) == 0) return errno = ELOOP, -1;
+  if (link_itself && (flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
+  if (n.type == kLink && !link_itself) {
     if (n.link == "map_files") return errno = EPERM, -1;
     // A proc-fd open requests a new open description, with the requested
     // access, status and descriptor flags. Duplicating a pipe/device handle
@@ -1274,8 +1398,10 @@ int Open(const std::wstring& name, int flags) {
     if (!ReadLink(name, &target)) return -1;
     return open(target.c_str(), flags & ~(O_CREAT | O_EXCL), 0);
   }
-  const bool directory = n.type == kDir;
-  if (directory) {
+  const bool directory = n.type == kDir && !link_itself;
+  if (link_itself) {
+    // O_PATH: no access to check, nothing to read.
+  } else if (directory) {
     // A directory fd (getdents64, the *at calls), as Linux opens one.
     if ((flags & O_PATH) == 0 &&
         ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_TRUNC | O_CREAT)) != 0)) {
@@ -1290,7 +1416,7 @@ int Open(const std::wstring& name, int flags) {
     }
   }
   std::string content;
-  if ((flags & O_PATH) == 0 && !directory) {
+  if ((flags & O_PATH) == 0 && !directory && !link_itself) {
     content = Content(n);
     if (content.empty() && n.file == "boot_id") return errno = EIO, -1;
   }
@@ -1299,9 +1425,17 @@ int Open(const std::wstring& name, int flags) {
   if (fd < 0) return -1;
   // What the fd is open on (DescribeHandle): /proc and /sys names; not
   // /etc/timezone, which is an ordinary file on Linux.
-  const std::string linux_name = LinuxName(name);
-  if (linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0) {
-    SetTag(HandleFromFd(fd), directory ? 'd' : 'f', linux_name);
+  const std::string linux_name =
+      link_itself && self_link ? std::string("/proc/self") : LinuxName(name);
+  if ((linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0) &&
+      !SetTag(HandleFromFd(fd), link_itself ? 'l' : directory ? 'd' : 'f', linux_name) &&
+      (directory || link_itself)) {
+    // The temp volume keeps no extended attributes (FAT): the file cannot
+    // be marked as a /proc directory or link, so refuse the open rather
+    // than hand out a plain empty file in its place. A /proc file still
+    // opens as a snapshot of its content, as before fds carried their name.
+    close(fd);
+    return errno = EOPNOTSUPP, -1;
   }
   if (_write(fd, content.data(), static_cast<unsigned>(content.size())) !=
           static_cast<int>(content.size()) ||

@@ -318,9 +318,16 @@ int Access(const char* path, int mode, bool follow) {
     case PathKind::kBinder:
       return (mode & X_OK) != 0 ? (errno = EACCES, -1) : 0;
     case PathKind::kVirtual: {
-      unsigned type = gesher::procfs::Type(windows);
-      if (type == 0) return errno = ENOENT, -1;
-      if ((mode & W_OK) != 0 || ((mode & X_OK) != 0 && type != S_IFDIR)) return errno = EACCES, -1;
+      const gesher::procfs::NameStatus name = gesher::procfs::Describe(windows);
+      if (name.type == 0) return errno = ENOENT, -1;
+      // access follows a link at the end (faccessat AT_SYMLINK_NOFOLLOW
+      // does not): a map_files link refuses that, F_OK too (EPERM).
+      if (follow && name.type == S_IFLNK && name.follow_error != 0) {
+        return errno = name.follow_error, -1;
+      }
+      if ((mode & W_OK) != 0 || ((mode & X_OK) != 0 && name.type != S_IFDIR)) {
+        return errno = EACCES, -1;
+      }
       return 0;
     }
     case PathKind::kMissing:
