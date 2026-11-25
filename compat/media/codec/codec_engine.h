@@ -81,12 +81,14 @@ class InputFrameSource {
   virtual ANativeWindow* NativeWindow() = 0;
 };
 
-// Asynchronous notifications invoked without holding CodecEngine::mu_.
+// Asynchronous notifications invoked without holding CodecEngine::mu_. The
+// first argument identifies the execution epoch in which the event was made.
+// Dispatchers must discard delayed events after flush/stop before guest entry.
 struct CodecCallbacks {
-  std::function<void(int index)> on_input_available;
-  std::function<void(int index, const CodecBufferInfo& info)> on_output_available;
-  std::function<void(const Format& format)> on_output_format_changed;
-  std::function<void(int error, int action, const std::string& message)> on_error;
+  std::function<void(uint64_t generation, int index)> on_input_available;
+  std::function<void(uint64_t generation, int index, const CodecBufferInfo& info)> on_output_available;
+  std::function<void(uint64_t generation, const Format& format)> on_output_format_changed;
+  std::function<void(uint64_t generation, int error, int action, const std::string& message)> on_error;
   std::function<void(int64_t media_time_us, int64_t system_nano)> on_frame_rendered;
 };
 
@@ -97,6 +99,7 @@ struct CodecSlot {
   int64_t time_us = 0;
   uint32_t flags = 0;
   std::shared_ptr<VideoFrame> frame;        // video outputs
+  std::shared_ptr<Format> format;          // immutable format at publication
   std::unique_ptr<uint8_t[]> deferred_mem;  // CPU access after removing a Surface
 };
 
@@ -117,21 +120,26 @@ class CodecEngine : public std::enable_shared_from_this<CodecEngine> {
   bool Configure(Format format, ANativeWindow* window, SurfaceDeliverHook reader_hook,
                  std::string* error, int* status = nullptr);
   void SetSurface(ANativeWindow* window, SurfaceDeliverHook reader_hook, int* status = nullptr);
+  // NDK setOutputSurface only retargets a configured surface video decoder.
+  void SetOutputSurface(ANativeWindow* window, int* status);
   bool has_surface() const { return window_ != nullptr || static_cast<bool>(reader_hook_); }
 
   // Checks configured/idle encoder state before creating an InputFrameSource.
   bool PrepareInputSurface(int* width, int* height, std::string* error);
+  // Borrowed only while the caller holds lifecycle_mutex().
+  ANativeWindow* InputWindow();
   void AttachInputSource(std::unique_ptr<InputFrameSource> source,
                          std::function<void()> on_retire_old = nullptr);
   void OnSurfaceFrame(const uint32_t* rgba, int w, int h, int64_t ts_ns);
-  bool SignalEndOfInputStream(std::string* error);
+  bool SignalEndOfInputStream(std::string* error, int* status = nullptr);
 
   bool SetParameters(const Format& parameters);
   bool SetVideoScalingMode(int mode);
   bool GetMetrics(std::optional<CodecMetrics>* out_metrics);
   bool IsReleasedOrFatal();
+  bool IsCallbackCurrent(uint64_t generation);
 
-  void SetAsync(bool async, CodecCallbacks callbacks = {});
+  bool SetAsync(bool async, CodecCallbacks callbacks = {});
   void EnableFrameRendered(bool enable, std::function<void(int64_t, int64_t)> cb = {});
 
   bool Start(std::string* error);
@@ -147,6 +155,7 @@ class CodecEngine : public std::enable_shared_from_this<CodecEngine> {
                      std::string* error, int* release_status = nullptr);
 
   uint8_t* GetInputBuffer(int index, size_t* out_size, int* status = nullptr);
+  bool OwnsBuffer(int index, bool input);
   uint8_t* GetOutputBuffer(int index, size_t* out_size, bool* out_oom = nullptr,
                            int* status = nullptr, int* out_data_size = nullptr);
 
@@ -156,6 +165,7 @@ class CodecEngine : public std::enable_shared_from_this<CodecEngine> {
 
   bool GetInputFormat(Format* out, int* status = nullptr);
   bool GetOutputFormat(Format* out, int* status = nullptr);
+  bool GetBufferFormat(int index, Format* out);
 
   // Acquires lifecycle_mu_ for external input-surface swap synchronization.
   std::mutex& lifecycle_mutex() { return lifecycle_mu_; }
@@ -220,6 +230,7 @@ class CodecEngine : public std::enable_shared_from_this<CodecEngine> {
   PcmInfo pcm_;
   bool out_float_ = false;
   bool output_known_ = false, format_pending_ = false;
+  std::shared_ptr<Format> output_format_;
   int out_width_ = 0, out_height_ = 0;
   VideoEncoderParams enc_params_;
   AudioEncoderParams audio_params_;

@@ -9,13 +9,17 @@
 #include <utils/Errors.h>
 
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <string>
 #include <utility>
+#include <unordered_map>
 
+#include "../codec/callback_queue.h"
 #include "../codec/codec_engine.h"
 #include "../surface/queue_surface.h"
 
@@ -24,11 +28,24 @@ void ANativeWindow_acquire(ANativeWindow* window);
 void ANativeWindow_release(ANativeWindow* window);
 }
 
+struct NativeCodecNotifications {
+  std::shared_ptr<gesher::media::CodecCallbackQueue> queue =
+      gesher::media::CodecCallbackQueue::Create(gesher::bionic::EnterLoadedCode);
+  AMediaCodec* codec = nullptr;
+  std::weak_ptr<gesher::media::CodecEngine> engine;
+  gesher::media::codec_abi::OnAsyncNotifyCallback callback{};
+  void* userdata = nullptr;
+
+  bool IsCurrent(uint64_t generation) const {
+    const auto owner = engine.lock();
+    return owner && owner->IsCallbackCurrent(generation);
+  }
+};
+
 struct AMediaCodec {
   std::shared_ptr<gesher::media::CodecEngine> engine;
   std::mutex async_mu;
-  gesher::media::codec_abi::OnAsyncNotifyCallback callback{};
-  void* userdata = nullptr;
+  std::shared_ptr<NativeCodecNotifications> notifications;
 };
 
 namespace gesher::media {
@@ -44,25 +61,49 @@ struct Sysv<Fn> {
   static R GESHER_CODEC_GUEST_ABI Call(A... args) { return Fn(args...); }
 };
 
+struct NdkInputState {
+  std::recursive_mutex mu;
+  uint64_t owner = 0, next_owner = 1;
+  InputFrameSource::FrameCallback cb;
+};
+
+std::mutex gPersistentInputsMu;
+std::unordered_map<ANativeWindow*, std::weak_ptr<NdkInputState>> gPersistentInputs;
+
+// The registry contains only these producer objects, never an arbitrary
+// SurfaceTexture/SurfaceView. A consumer lease retains the producer and state.
+class NdkPersistentSurface final : public QueueSurface {
+ public:
+  NdkPersistentSurface() : QueueSurface(1, 1), state(std::make_shared<NdkInputState>()) {
+    std::lock_guard<std::mutex> lock(gPersistentInputsMu);
+    gPersistentInputs[this] = state;
+  }
+  ~NdkPersistentSurface() override {
+    std::lock_guard<std::mutex> lock(gPersistentInputsMu);
+    gPersistentInputs.erase(this);
+  }
+  std::shared_ptr<NdkInputState> state;
+};
+
 class NdkInputSource final : public InputFrameSource {
  public:
-  NdkInputSource(android::sp<QueueSurface> surface, bool persistent)
-      : surface_(std::move(surface)), persistent_(persistent) {}
+  NdkInputSource(android::sp<QueueSurface> surface, bool persistent,
+                 std::shared_ptr<NdkInputState> state, uint64_t owner)
+      : state_(std::move(state)), surface_(std::move(surface)),
+        owner_(owner), persistent_(persistent) {}
   ~NdkInputSource() override { Abandon(); }
 
   void SetCallback(FrameCallback cb) override {
-    std::lock_guard<std::mutex> lock(state_->mu);
-    if (state_->abandoned) return;
+    std::lock_guard<std::recursive_mutex> lock(state_->mu);
+    if (state_->owner != owner_) return;
     state_->cb = std::move(cb);
     QueueSurface* raw = surface_.get();
-    std::shared_ptr<State> s = state_;
-    surface_->SetListener([raw, s] {
-      FrameCallback fn;
-      {
-        std::lock_guard<std::mutex> lk(s->mu);
-        if (s->abandoned || !s->cb) return;
-        fn = s->cb;
-      }
+    std::shared_ptr<NdkInputState> s = state_;
+    const uint64_t owner = owner_;
+    surface_->SetListener([raw, s, owner] {
+      std::lock_guard<std::recursive_mutex> lock(s->mu);
+      if (s->owner != owner || !s->cb) return;
+      FrameCallback fn = s->cb;
       std::shared_ptr<const SurfaceFrame> f = raw->Latest();
       if (f != nullptr && !f->pixels.empty()) {
         fn(f->pixels.data(), f->width, f->height, f->timestamp_ns);
@@ -71,9 +112,9 @@ class NdkInputSource final : public InputFrameSource {
   }
 
   void Abandon() override {
-    std::lock_guard<std::mutex> lock(state_->mu);
-    if (state_->abandoned) return;
-    state_->abandoned = true;
+    std::lock_guard<std::recursive_mutex> lock(state_->mu);
+    if (state_->owner != owner_) return;
+    state_->owner = 0;
     state_->cb = nullptr;
     if (surface_ != nullptr) {
       if (persistent_) {
@@ -87,15 +128,16 @@ class NdkInputSource final : public InputFrameSource {
   ANativeWindow* NativeWindow() override { return surface_.get(); }
 
  private:
-  struct State {
-    std::mutex mu;
-    bool abandoned = false;
-    FrameCallback cb;
-  };
-  std::shared_ptr<State> state_ = std::make_shared<State>();
+  std::shared_ptr<NdkInputState> state_;
   android::sp<QueueSurface> surface_;
+  const uint64_t owner_;
   const bool persistent_;
 };
+
+std::shared_ptr<NativeCodecNotifications> Notifications(AMediaCodec* codec) {
+  std::lock_guard<std::mutex> lock(codec->async_mu);
+  return codec->notifications;
+}
 
 media_status_t ToMediaStatus(int status) {
   if (status == android::OK) return AMEDIA_OK;
@@ -129,7 +171,10 @@ AMediaCodec* CreateEncoderByType(const char* mime_type) {
 
 media_status_t Delete(AMediaCodec* codec) {
   if (codec == nullptr) return AMEDIA_OK;
-  if (codec->engine != nullptr) codec->engine->Release();
+  const auto engine = codec->engine;
+  const auto notifications = Notifications(codec);
+  if (notifications) notifications->queue->Close();
+  if (engine != nullptr) engine->Release();
   delete codec;
   return AMEDIA_OK;
 }
@@ -156,33 +201,48 @@ media_status_t Configure(AMediaCodec* codec, const AMediaFormat* format, ANative
 
 media_status_t Start(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  // A native callback may release its codec before Start returns. Keep only
+  // independent owners after notifications become runnable.
+  const auto engine = codec->engine;
+  const auto notifications = Notifications(codec);
+  if (notifications) notifications->queue->Resume();
   std::string error;
-  return codec->engine->Start(&error) ? AMEDIA_OK : AMEDIA_ERROR_INVALID_OPERATION;
+  return engine->Start(&error) ? AMEDIA_OK : AMEDIA_ERROR_INVALID_OPERATION;
 }
 
 media_status_t Stop(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  const auto engine = codec->engine;
+  const auto notifications = Notifications(codec);
+  if (notifications) notifications->queue->Pause();
   int status = android::OK;
-  codec->engine->Stop(&status);
+  engine->Stop(&status);
   return ToMediaStatus(status);
 }
 
 media_status_t Flush(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  const auto engine = codec->engine;
+  const auto notifications = Notifications(codec);
+  if (notifications) notifications->queue->Pause();
   int status = android::OK;
-  codec->engine->Flush(&status);
+  engine->Flush(&status);
   return ToMediaStatus(status);
 }
 
 uint8_t* GetInputBuffer(AMediaCodec* codec, size_t idx, size_t* out_size) {
   if (out_size != nullptr) *out_size = 0;
   if (codec == nullptr || codec->engine == nullptr) return nullptr;
+  if (idx >= kCodecSlots) return nullptr;
+  if (!codec->engine->OwnsBuffer(static_cast<int>(idx), true)) return nullptr;
   return codec->engine->GetInputBuffer(static_cast<int>(idx), out_size);
 }
 
 uint8_t* GetOutputBuffer(AMediaCodec* codec, size_t idx, size_t* out_size) {
   if (out_size != nullptr) *out_size = 0;
   if (codec == nullptr || codec->engine == nullptr) return nullptr;
+  if (idx >= kCodecSlots) return nullptr;
+  if (!codec->engine->OwnsBuffer(static_cast<int>(idx), false)) return nullptr;
   return codec->engine->GetOutputBuffer(static_cast<int>(idx), out_size);
 }
 
@@ -197,6 +257,9 @@ abi::guest_ssize_t DequeueInputBuffer(AMediaCodec* codec, int64_t timeout_us) {
 media_status_t QueueInputBuffer(AMediaCodec* codec, size_t idx, abi::guest_off_t offset,
                                 size_t size, uint64_t time, uint32_t flags) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (idx >= kCodecSlots || size > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  }
   std::string error;
   int status = android::OK;
   if (!codec->engine->QueueInput(static_cast<int>(idx), offset, static_cast<int64_t>(size),
@@ -243,12 +306,15 @@ AMediaFormat* GetInputFormat(AMediaCodec* codec) {
   return f.Release();
 }
 
-AMediaFormat* GetBufferFormat(AMediaCodec* codec, size_t) {
-  return GetOutputFormat(codec);
+AMediaFormat* GetBufferFormat(AMediaCodec* codec, size_t idx) {
+  if (codec == nullptr || codec->engine == nullptr || idx >= kCodecSlots) return nullptr;
+  Format format;
+  return codec->engine->GetBufferFormat(static_cast<int>(idx), &format) ? format.Release() : nullptr;
 }
 
 media_status_t ReleaseOutputBuffer(AMediaCodec* codec, size_t idx, bool render) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (idx >= kCodecSlots) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::string error;
   int status = android::OK;
   if (!codec->engine->ReleaseOutput(static_cast<int>(idx), render, false, 0, &error, &status)) {
@@ -259,6 +325,7 @@ media_status_t ReleaseOutputBuffer(AMediaCodec* codec, size_t idx, bool render) 
 
 media_status_t ReleaseOutputBufferAtTime(AMediaCodec* codec, size_t idx, int64_t timestamp_ns) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (idx >= kCodecSlots) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::string error;
   int status = android::OK;
   if (!codec->engine->ReleaseOutput(static_cast<int>(idx), true, true, timestamp_ns, &error,
@@ -271,7 +338,7 @@ media_status_t ReleaseOutputBufferAtTime(AMediaCodec* codec, size_t idx, int64_t
 media_status_t SetOutputSurface(AMediaCodec* codec, ANativeWindow* surface) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   int status = android::OK;
-  codec->engine->SetSurface(surface, nullptr, &status);
+  codec->engine->SetOutputSurface(surface, &status);
   return ToMediaStatus(status);
 }
 
@@ -285,8 +352,15 @@ media_status_t CreateInputSurface(AMediaCodec* codec, ANativeWindow** surface) {
   if (!codec->engine->PrepareInputSurface(&width, &height, &error)) {
     return AMEDIA_ERROR_INVALID_OPERATION;
   }
+  if (ANativeWindow* current = codec->engine->InputWindow()) {
+    ANativeWindow_acquire(current);
+    *surface = current;
+    return AMEDIA_OK;
+  }
   android::sp<QueueSurface> qs(new QueueSurface(width, height));
-  auto source = std::make_unique<NdkInputSource>(qs, false);
+  auto state = std::make_shared<NdkInputState>();
+  state->owner = state->next_owner++;
+  auto source = std::make_unique<NdkInputSource>(qs, false, state, state->owner);
   ANativeWindow* window = source->NativeWindow();
   ANativeWindow_acquire(window);
   codec->engine->AttachInputSource(std::move(source));
@@ -296,7 +370,7 @@ media_status_t CreateInputSurface(AMediaCodec* codec, ANativeWindow** surface) {
 
 media_status_t CreatePersistentInputSurface(ANativeWindow** surface) {
   if (surface == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
-  android::sp<QueueSurface> qs(new QueueSurface(1, 1));
+  android::sp<QueueSurface> qs(new NdkPersistentSurface);
   ANativeWindow* window = qs.get();
   ANativeWindow_acquire(window);
   *surface = window;
@@ -308,14 +382,28 @@ media_status_t SetInputSurface(AMediaCodec* codec, ANativeWindow* surface) {
   if (surface == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   QueueSurface* qs = QueueSurface::From(surface);
   if (qs == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  std::shared_ptr<NdkInputState> state;
+  {
+    std::lock_guard<std::mutex> lock(gPersistentInputsMu);
+    const auto found = gPersistentInputs.find(surface);
+    if (found != gPersistentInputs.end()) state = found->second.lock();
+  }
+  if (!state) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::lock_guard<std::mutex> lifecycle(codec->engine->lifecycle_mutex());
   int width = 0, height = 0;
   std::string error;
   if (!codec->engine->PrepareInputSurface(&width, &height, &error)) {
     return AMEDIA_ERROR_INVALID_OPERATION;
   }
-  qs->SetDefaultSize(width, height);
-  auto source = std::make_unique<NdkInputSource>(android::sp<QueueSurface>(qs), true);
+  if (codec->engine->InputWindow() == surface) return AMEDIA_OK;
+  uint64_t owner;
+  {
+    std::lock_guard<std::recursive_mutex> lock(state->mu);
+    if (state->owner != 0 || state->next_owner == 0) return AMEDIA_ERROR_INVALID_OPERATION;
+    owner = state->owner = state->next_owner++;
+    qs->SetDefaultSize(width, height);
+  }
+  auto source = std::make_unique<NdkInputSource>(android::sp<QueueSurface>(qs), true, state, owner);
   codec->engine->AttachInputSource(std::move(source));
   return AMEDIA_OK;
 }
@@ -323,8 +411,9 @@ media_status_t SetInputSurface(AMediaCodec* codec, ANativeWindow* surface) {
 media_status_t SignalEndOfInputStream(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   std::string error;
-  return codec->engine->SignalEndOfInputStream(&error) ? AMEDIA_OK
-                                                       : AMEDIA_ERROR_INVALID_OPERATION;
+  int status = android::OK;
+  codec->engine->SignalEndOfInputStream(&error, &status);
+  return ToMediaStatus(status);
 }
 
 media_status_t SetParameters(AMediaCodec* codec, const AMediaFormat* params) {
@@ -353,71 +442,84 @@ void ReleaseName(AMediaCodec*, char* name) { std::free(name); }
 media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCallback callback,
                                       void* userdata) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  const auto engine = codec->engine;
   const bool enable = callback.onAsyncInputAvailable != nullptr ||
                       callback.onAsyncOutputAvailable != nullptr ||
                       callback.onAsyncFormatChanged != nullptr ||
                       callback.onAsyncError != nullptr;
-  {
-    std::lock_guard<std::mutex> lock(codec->async_mu);
-    codec->callback = callback;
-    codec->userdata = userdata;
+  std::shared_ptr<NativeCodecNotifications> state;
+  if (enable) {
+    state = std::make_shared<NativeCodecNotifications>();
+    state->codec = codec;
+    state->engine = engine;
+    state->callback = callback;
+    state->userdata = userdata;
   }
   if (!enable) {
-    codec->engine->SetAsync(false);
+    if (!engine->SetAsync(false)) return AMEDIA_ERROR_INVALID_OPERATION;
+    std::shared_ptr<NativeCodecNotifications> retired;
+    {
+      std::lock_guard<std::mutex> lock(codec->async_mu);
+      retired = std::move(codec->notifications);
+    }
+    if (retired) retired->queue->Close();
     return AMEDIA_OK;
   }
   CodecCallbacks cbs;
-  cbs.on_input_available = [codec](int index) {
-    abi::OnAsyncInputAvailable fn = nullptr;
-    void* ud = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(codec->async_mu);
-      fn = codec->callback.onAsyncInputAvailable;
-      ud = codec->userdata;
-    }
-    if (fn != nullptr) fn(codec, ud, index);
+  cbs.on_input_available = [state](uint64_t generation, int index) {
+    state->queue->Post([state, generation, index] {
+      if (!state->IsCurrent(generation)) return;
+      if (auto fn = state->callback.onAsyncInputAvailable) fn(state->codec, state->userdata, index);
+    });
   };
-  cbs.on_output_available = [codec](int index, const CodecBufferInfo& info) {
-    abi::OnAsyncOutputAvailable fn = nullptr;
-    void* ud = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(codec->async_mu);
-      fn = codec->callback.onAsyncOutputAvailable;
-      ud = codec->userdata;
-    }
-    if (fn != nullptr) {
+  cbs.on_output_available = [state](uint64_t generation, int index, const CodecBufferInfo& info) {
+    state->queue->Post([state, generation, index, info] {
+      if (!state->IsCurrent(generation)) return;
       abi::BufferInfo binfo{info.offset, info.size, info.time_us, info.flags};
-      fn(codec, ud, index, &binfo);
-    }
+      if (auto fn = state->callback.onAsyncOutputAvailable) {
+        fn(state->codec, state->userdata, index, &binfo);
+      }
+    });
   };
-  cbs.on_output_format_changed = [codec](const Format& format) {
-    abi::OnAsyncFormatChanged fn = nullptr;
-    void* ud = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(codec->async_mu);
-      fn = codec->callback.onAsyncFormatChanged;
-      ud = codec->userdata;
-    }
-    if (fn != nullptr) {
-      Format copy;
-      if (format.get() != nullptr) AMediaFormat_copy(copy.get(), format.get());
-      fn(codec, ud, copy.get());
-    }
+  cbs.on_output_format_changed = [state](uint64_t generation, const Format& format) {
+    if (!state->callback.onAsyncFormatChanged) return;
+    auto copy = std::make_shared<Format>();
+    if (format.get() != nullptr) AMediaFormat_copy(copy->get(), format.get());
+    state->queue->Post([state, generation, copy] {
+      if (!state->IsCurrent(generation)) return;
+      // As in NdkMediaCodec.cpp, ownership belongs to the NDK callback. A
+      // cancelled notification retains its Format owner and frees it here.
+      state->callback.onAsyncFormatChanged(state->codec, state->userdata, copy->Release());
+    });
   };
-  cbs.on_error = [codec](int error, int action, const std::string& msg) {
-    abi::OnAsyncError fn = nullptr;
-    void* ud = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(codec->async_mu);
-      fn = codec->callback.onAsyncError;
-      ud = codec->userdata;
-    }
-    if (fn != nullptr) {
-      fn(codec, ud, ToMediaStatus(error), action, msg.c_str());
-    }
+  cbs.on_error = [state](uint64_t generation, int error, int action, const std::string& msg) {
+    state->queue->Post([state, generation, error, action, msg] {
+      if (!state->IsCurrent(generation)) return;
+      if (auto fn = state->callback.onAsyncError) {
+        fn(state->codec, state->userdata, ToMediaStatus(error), action, msg.c_str());
+      }
+    });
   };
-  codec->engine->SetAsync(true, std::move(cbs));
+  if (!engine->SetAsync(true, std::move(cbs))) {
+    state->queue->Close();
+    return AMEDIA_ERROR_INVALID_OPERATION;
+  }
+  std::shared_ptr<NativeCodecNotifications> retired;
+  {
+    std::lock_guard<std::mutex> lock(codec->async_mu);
+    retired = std::exchange(codec->notifications, std::move(state));
+  }
+  if (retired) retired->queue->Close();
   return AMEDIA_OK;
+}
+
+// AAPCS64 passes this 32-byte by-value aggregate through a pointer, whereas
+// x86-64 System V passes it on the stack. The translator selects this entry.
+media_status_t SetAsyncNotifyCallbackIndirect(AMediaCodec* codec,
+                                              const abi::OnAsyncNotifyCallback* callback,
+                                              void* userdata) {
+  if (callback == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  return SetAsyncNotifyCallback(codec, *callback, userdata);
 }
 
 media_status_t ReleaseCrypto(AMediaCodec* codec) {
@@ -464,6 +566,7 @@ void Register() {
   CODEC_ENTRY(AMediaCodec_getName, GetName);
   CODEC_ENTRY(AMediaCodec_releaseName, ReleaseName);
   CODEC_ENTRY(AMediaCodec_setAsyncNotifyCallback, SetAsyncNotifyCallback);
+  CODEC_ENTRY(__gesher_AMediaCodec_setAsyncNotifyCallback, SetAsyncNotifyCallbackIndirect);
   CODEC_ENTRY(AMediaCodec_releaseCrypto, ReleaseCrypto);
   CODEC_ENTRY(AMediaCodecActionCode_isRecoverable, ActionCodeIsRecoverable);
   CODEC_ENTRY(AMediaCodecActionCode_isTransient, ActionCodeIsTransient);

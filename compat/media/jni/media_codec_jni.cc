@@ -310,6 +310,10 @@ class Codec {
   }
 
   void SetSurface(JNIEnv* env, jobject surface, int* status) {
+    if (engine_->IsReleasedOrFatal()) {
+      if (status) *status = android::INVALID_OPERATION;
+      return;
+    }
     ANativeWindow* window = surface != nullptr ? ANativeWindow_fromSurface(env, surface) : nullptr;
     SurfaceDeliverHook hook = MakeReaderHook(env, surface, window);
     engine_->SetSurface(window, std::move(hook), status);
@@ -371,15 +375,14 @@ class Codec {
     return true;
   }
 
-  void SetAsync(bool async) {
+  bool SetAsync(bool async) {
     if (!async) {
-      engine_->SetAsync(false);
-      return;
+      return engine_->SetAsync(false);
     }
     std::shared_ptr<WeakRef> self = self_;
     CodecCallbacks cbs;
-    cbs.on_input_available = [self](int index) { PostEvent(self, kCbInputAvailable, index, nullptr); };
-    cbs.on_output_available = [self](int index, const CodecBufferInfo& info) {
+    cbs.on_input_available = [self](uint64_t, int index) { PostEvent(self, kCbInputAvailable, index, nullptr); };
+    cbs.on_output_available = [self](uint64_t, int index, const CodecBufferInfo& info) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       env->PushLocalFrame(16);
@@ -389,7 +392,7 @@ class Codec {
       PostEvent(self, kCbOutputAvailable, index, jinfo);
       env->PopLocalFrame(nullptr);
     };
-    cbs.on_output_format_changed = [self](const Format& format) {
+    cbs.on_output_format_changed = [self](uint64_t, const Format& format) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       env->PushLocalFrame(64);
@@ -397,7 +400,7 @@ class Codec {
       PostEvent(self, kCbOutputFormatChange, 0, map);
       env->PopLocalFrame(nullptr);
     };
-    cbs.on_error = [self](int error, int action, const std::string& msg) {
+    cbs.on_error = [self](uint64_t, int error, int action, const std::string& msg) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       jstring m = env->NewStringUTF(msg.c_str());
@@ -411,7 +414,7 @@ class Codec {
       env->DeleteLocalRef(e);
       env->DeleteLocalRef(m);
     };
-    engine_->SetAsync(true, std::move(cbs));
+    return engine_->SetAsync(true, std::move(cbs));
   }
 
   void EnableFrameRendered(bool enable) {
@@ -718,7 +721,9 @@ void JNICALL MC_reset(JNIEnv* env, jobject thiz) {
 }
 
 void JNICALL MC_setCallback(JNIEnv* env, jobject thiz, jobject cb) {
-  if (auto c = GetCodec(env, thiz)) c->SetAsync(cb != nullptr);
+  if (auto c = GetCodec(env, thiz); c && !c->SetAsync(cb != nullptr)) {
+    jniThrow(env, "java/lang/IllegalStateException", "setCallback() requires an idle codec");
+  }
 }
 
 void JNICALL MC_configure(JNIEnv* env, jobject thiz, jobjectArray keys, jobjectArray values,

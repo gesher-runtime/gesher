@@ -12,6 +12,8 @@
 #include <chrono>
 #include <cstring>
 #include <map>
+#include <limits>
+#include <cmath>
 #include <new>
 #include <utility>
 
@@ -90,6 +92,30 @@ uint8_t* CpuOutputBytes(CodecSlot& slot, bool* out_oom) {
     CopyOutputFramePixels(*slot.frame, slot.deferred_mem.get());
   }
   return slot.deferred_mem.get();
+}
+
+bool InputCapacity(const Format& format, bool video, bool encoder, int width, int height,
+                   size_t* capacity, std::string* error) {
+  int32_t requested = 0;
+  if (format.GetInt32("max-input-size", &requested) && requested > 0) {
+    *capacity = static_cast<size_t>(requested);
+    return true;
+  }
+  int64_t bytes = 1 << 16;
+  if (video) {
+    bytes = 1 << 20;
+    if (width > 0 && height > 0) {
+      const int64_t w = width, h = height;
+      const int64_t yuv = w * h + 2 * ((w + 1) / 2) * ((h + 1) / 2);
+      bytes = encoder ? yuv + 64 : std::max<int64_t>(yuv, 1 << 20);
+    }
+  }
+  if (bytes > std::numeric_limits<int32_t>::max()) {
+    if (error) *error = "codec input buffer dimensions exceed the Android buffer range";
+    return false;
+  }
+  *capacity = static_cast<size_t>(bytes);
+  return true;
 }
 
 }  // namespace
@@ -189,15 +215,13 @@ bool CodecEngine::Configure(Format format, ANativeWindow* window, SurfaceDeliver
     return true;
   }
   SetSurfaceLocked(window, std::move(reader_hook));
-  int32_t max_input = 0;
-  if (!input_format_.GetInt32("max-input-size", &max_input) || max_input <= 0) {
-    int32_t w = 0, h = 0;
-    input_format_.GetInt32("width", &w);
-    input_format_.GetInt32("height", &h);
-    max_input = entry_.video ? std::max(w * h * 3 / 2, 1 << 20) : 1 << 16;
-  }
+  int32_t w = 0, h = 0;
+  input_format_.GetInt32("width", &w);
+  input_format_.GetInt32("height", &h);
+  size_t max_input = 0;
+  if (!InputCapacity(input_format_, entry_.video, false, w, h, &max_input, error)) return false;
   for (CodecSlot& s : inputs_) {
-    s.mem.assign(static_cast<size_t>(max_input), 0);
+    s.mem.assign(max_input, 0);
     s.client = false;
   }
   for (CodecSlot& s : outputs_) s = CodecSlot();
@@ -241,6 +265,26 @@ bool CodecEngine::PrepareInputSurface(int* width, int* height, std::string* erro
   return true;
 }
 
+void CodecEngine::SetOutputSurface(ANativeWindow* window, int* status) {
+  std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
+  std::lock_guard<std::mutex> lock(mu_);
+  if (window == nullptr) {
+    *status = android::BAD_VALUE;
+    return;
+  }
+  if (released_ || fatal_ || !configured_ || !entry_.video || entry_.encoder || !has_surface()) {
+    *status = android::INVALID_OPERATION;
+    return;
+  }
+  SetSurfaceLocked(window, {});
+  *status = android::OK;
+}
+
+ANativeWindow* CodecEngine::InputWindow() {
+  std::lock_guard<std::mutex> lock(mu_);
+  return input_source_ != nullptr ? input_source_->NativeWindow() : nullptr;
+}
+
 void CodecEngine::AttachInputSource(std::unique_ptr<InputFrameSource> source,
                                     std::function<void()> on_retire_old) {
   if (source != nullptr) {
@@ -259,14 +303,21 @@ void CodecEngine::AttachInputSource(std::unique_ptr<InputFrameSource> source,
   if (on_retire_old) on_retire_old();
 }
 
-bool CodecEngine::SignalEndOfInputStream(std::string* error) {
+bool CodecEngine::SignalEndOfInputStream(std::string* error, int* status) {
   std::lock_guard<std::mutex> lock(mu_);
-  if (released_ || input_source_ == nullptr) {
-    if (error != nullptr) *error = "signalEndOfInputStream() without an input surface";
+  if (status != nullptr) *status = android::INVALID_OPERATION;
+  if (released_ || fatal_ || !started_ || flushed_ || flush_requested_ || input_source_ == nullptr) {
+    if (error != nullptr) *error = "signalEndOfInputStream() requires an executing surface encoder";
+    return false;
+  }
+  if (failed_) {
+    if (status != nullptr) *status = android::UNKNOWN_ERROR;
+    if (error != nullptr) *error = "signalEndOfInputStream() after codec failure";
     return false;
   }
   surface_eos_ = true;
   cv_.notify_all();
+  if (status != nullptr) *status = android::OK;
   return true;
 }
 
@@ -275,7 +326,7 @@ bool CodecEngine::SetParameters(const Format& parameters) {
   parameters.GetInt32("video-bitrate", &bitrate);
   const bool request_sync = parameters.GetInt32("request-sync", &sync);
   std::lock_guard<std::mutex> lock(mu_);
-  if (released_ || fatal_) return false;
+  if (released_ || fatal_ || !started_ || flushed_ || flush_requested_ || failed_) return false;
   if (configured_ && entry_.video && entry_.encoder && !enc_eos_sent_) {
     if (request_sync) force_key_ = true;
     if (bitrate > 0) pending_bitrate_ = bitrate;
@@ -302,11 +353,18 @@ bool CodecEngine::IsReleasedOrFatal() {
   return released_ || fatal_;
 }
 
-void CodecEngine::SetAsync(bool async, CodecCallbacks callbacks) {
+bool CodecEngine::IsCallbackCurrent(uint64_t generation) {
   std::lock_guard<std::mutex> lock(mu_);
-  if (released_) return;
+  // A fatal error still has to reach the application in its current epoch.
+  return !released_ && generation == wait_generation_;
+}
+
+bool CodecEngine::SetAsync(bool async, CodecCallbacks callbacks) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (released_ || fatal_ || started_) return false;
   async_ = async;
   callbacks_ = async ? std::move(callbacks) : CodecCallbacks{};
+  return true;
 }
 
 void CodecEngine::EnableFrameRendered(bool enable, std::function<void(int64_t, int64_t)> cb) {
@@ -318,7 +376,8 @@ void CodecEngine::EnableFrameRendered(bool enable, std::function<void(int64_t, i
 bool CodecEngine::Start(std::string* error) {
   std::unique_lock<std::mutex> lifecycle(lifecycle_mu_);
   std::vector<int> notify_inputs;
-  std::function<void(int)> input_cb;
+  std::function<void(uint64_t, int)> input_cb;
+  uint64_t callback_generation = 0;
   {
     std::unique_lock<std::mutex> lock(mu_);
     if (released_ || fatal_ || !configured_) {
@@ -336,6 +395,7 @@ bool CodecEngine::Start(std::string* error) {
     }
     if (async_ && input_source_ == nullptr) {
       input_cb = callbacks_.on_input_available;
+      callback_generation = wait_generation_;
       for (int i = 0; i < kCodecSlots; i++) {
         if (!inputs_[i].client) {
           inputs_[i].client = true;
@@ -347,7 +407,7 @@ bool CodecEngine::Start(std::string* error) {
   }
   lifecycle.unlock();
   if (input_cb) {
-    for (int i : notify_inputs) input_cb(i);
+    for (int i : notify_inputs) input_cb(callback_generation, i);
   }
   return true;
 }
@@ -392,10 +452,12 @@ void CodecEngine::StopLocked() {
   for (CodecSlot& s : outputs_) {
     s.client = false;
     s.frame.reset();
+    s.format.reset();
   }
   audio_.reset();
   video_.reset();
   output_known_ = false;
+  output_format_.reset();
   format_pending_ = false;
   config_.clear();
   pending_config_.clear();
@@ -449,6 +511,10 @@ int CodecEngine::DequeueInput(int64_t timeout_us, int* status) {
   if (status != nullptr) *status = android::OK;
   std::unique_lock<std::mutex> lock(mu_);
   const uint64_t generation = wait_generation_;
+  if (failed_) {
+    if (status != nullptr) *status = android::UNKNOWN_ERROR;
+    return kCodecInfoTryAgainLater;
+  }
   if (released_ || !started_ || async_ || input_source_ != nullptr) {
     if (status != nullptr) *status = android::INVALID_OPERATION;
     return kCodecInfoTryAgainLater;
@@ -461,7 +527,7 @@ int CodecEngine::DequeueInput(int64_t timeout_us, int* status) {
   };
   int i = -1;
   auto ready = [&] {
-    return generation != wait_generation_ || quit_ || !started_ || (i = free_slot()) >= 0;
+    return generation != wait_generation_ || quit_ || !started_ || failed_ || (i = free_slot()) >= 0;
   };
   if (timeout_us < 0) {
     cv_.wait(lock, ready);
@@ -472,6 +538,10 @@ int CodecEngine::DequeueInput(int64_t timeout_us, int* status) {
     if (status != nullptr) *status = android::INVALID_OPERATION;
     return kCodecInfoTryAgainLater;
   }
+  if (failed_) {
+    if (status != nullptr) *status = android::UNKNOWN_ERROR;
+    return kCodecInfoTryAgainLater;
+  }
   if (i < 0) return kCodecInfoTryAgainLater;
   inputs_[i].client = true;
   return i;
@@ -480,6 +550,11 @@ int CodecEngine::DequeueInput(int64_t timeout_us, int* status) {
 bool CodecEngine::QueueInput(int index, int64_t offset, int64_t size, int64_t time_us,
                              uint32_t flags, std::string* error, int* status) {
   std::lock_guard<std::mutex> lock(mu_);
+  if (failed_) {
+    if (error) *error = "codec failed; stop and configure it before queuing more input";
+    if (status) *status = android::UNKNOWN_ERROR;
+    return false;
+  }
   if (released_ || !started_ || index < 0 || index >= kCodecSlots || !inputs_[index].client) {
     if (error != nullptr) *error = "invalid input buffer index " + std::to_string(index);
     if (status != nullptr) *status = android::INVALID_OPERATION;
@@ -528,7 +603,10 @@ int CodecEngine::DequeueOutput(CodecBufferInfo* info, int64_t timeout_us, int* s
     format_pending_ = false;
     return kCodecInfoOutputFormatChanged;
   }
-  if (ready_.empty()) return kCodecInfoTryAgainLater;
+  if (ready_.empty()) {
+    if (failed_ && status != nullptr) *status = android::UNKNOWN_ERROR;
+    return kCodecInfoTryAgainLater;
+  }
   int i = ready_.front();
   ready_.pop_front();
   CodecSlot& s = outputs_[i];
@@ -614,7 +692,8 @@ bool CodecEngine::ReleaseOutput(int index, bool render, bool has_timestamp, int6
 void CodecEngine::RetireSurfaceFailure(uint64_t execution_generation, const std::string& error) {
   std::unique_lock<std::mutex> lifecycle(lifecycle_mu_);
   bool notify_error = false;
-  std::function<void(int, int, const std::string&)> error_cb;
+  std::function<void(uint64_t, int, int, const std::string&)> error_cb;
+  uint64_t callback_generation = 0;
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (released_ || fatal_ || execution_generation != execution_generation_) return;
@@ -637,10 +716,11 @@ void CodecEngine::RetireSurfaceFailure(uint64_t execution_generation, const std:
     window = window_;
     window_ = nullptr;
     reader_hook_ = nullptr;
+    callback_generation = wait_generation_;
   }
   lifecycle.unlock();
   if (window != nullptr) ANativeWindow_release(window);
-  if (notify_error && error_cb) error_cb(android::UNKNOWN_ERROR, 0, error);
+  if (notify_error && error_cb) error_cb(callback_generation, android::UNKNOWN_ERROR, 0, error);
 }
 
 uint8_t* CodecEngine::GetInputBuffer(int index, size_t* out_size, int* status) {
@@ -662,6 +742,12 @@ uint8_t* CodecEngine::GetInputBuffer(int index, size_t* out_size, int* status) {
   if (out_size != nullptr) *out_size = s.mem.size();
   if (status != nullptr) *status = android::OK;
   return s.mem.data();
+}
+
+bool CodecEngine::OwnsBuffer(int index, bool input) {
+  std::lock_guard<std::mutex> lock(mu_);
+  return !released_ && !fatal_ && started_ && index >= 0 && index < kCodecSlots &&
+         (input ? inputs_[index].client : outputs_[index].client);
 }
 
 uint8_t* CodecEngine::GetOutputBuffer(int index, size_t* out_size, bool* out_oom, int* status,
@@ -759,6 +845,13 @@ bool CodecEngine::GetOutputFormat(Format* out, int* status) {
   return true;
 }
 
+bool CodecEngine::GetBufferFormat(int index, Format* out) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (released_ || fatal_ || !started_ || index < 0 || index >= kCodecSlots ||
+      !outputs_[index].client || !outputs_[index].format) return false;
+  return AMediaFormat_copy(out->get(), outputs_[index].format->get()) == AMEDIA_OK;
+}
+
 bool CodecEngine::InWork(int index) const {
   return std::find(work_.begin(), work_.end(), index) != work_.end();
 }
@@ -824,13 +917,9 @@ void CodecEngine::StopWorker() {
     cv_.notify_all();
     done_cv_.notify_all();
   }
-  if (worker_.joinable()) {
-    if (worker_.get_id() == std::this_thread::get_id()) {
-      worker_.detach();
-    } else {
-      worker_.join();
-    }
-  }
+  // JNI posts to Java's event queue; native callbacks use CodecCallbackQueue.
+  // Neither adapter executes application code on this worker.
+  if (worker_.joinable()) worker_.join();
   std::lock_guard<std::mutex> lock(mu_);
   worker_running_ = false;
   flush_requested_ = false;
@@ -867,12 +956,13 @@ void CodecEngine::Run() {
   std::unique_lock<std::mutex> lock(mu_);
   for (;;) {
     cv_.wait(lock, [this] {
-      return quit_ || flush_requested_ || (started_ && !flushed_ && !work_.empty());
+      return quit_ || flush_requested_ || (started_ && !flushed_ && !failed_ && !work_.empty());
     });
     if (quit_) return;
     if (flush_requested_) {
       if (audio_ != nullptr) audio_->Flush(0);
       if (video_ != nullptr) video_->Flush();
+      failed_ = false;
       flush_requested_ = false;
       done_cv_.notify_all();
       continue;
@@ -884,7 +974,8 @@ void CodecEngine::Run() {
     sample.data.assign(in.mem.begin() + in.offset, in.mem.begin() + in.offset + in.size);
     sample.time_us = in.time_us;
     uint32_t flags = in.flags;
-    std::function<void(int)> input_cb;
+    std::function<void(uint64_t, int)> input_cb;
+    const uint64_t callback_generation = wait_generation_;
     if (async_ && !flushed_) {
       in.client = true;
       input_cb = callbacks_.on_input_available;
@@ -892,7 +983,7 @@ void CodecEngine::Run() {
     cv_.notify_all();
     if (input_cb) {
       lock.unlock();
-      input_cb(index);
+      input_cb(callback_generation, index);
       lock.lock();
       if (quit_ || flush_requested_) continue;
     }
@@ -945,7 +1036,7 @@ void CodecEngine::Run() {
     } else if (!pcm.empty()) {
       EmitPcm(lock, pcm, sample.time_us);
     }
-    if (eos) EmitEos(lock, sample.time_us);
+    if (eos && !failed_) EmitEos(lock, sample.time_us);
   }
 }
 
@@ -954,10 +1045,11 @@ void CodecEngine::Fail(std::unique_lock<std::mutex>& lock, const std::string& er
   failed_ = true;
   const bool async = async_;
   auto cb = callbacks_.on_error;
+  const uint64_t callback_generation = wait_generation_;
   cv_.notify_all();
   if (async && cb) {
     lock.unlock();
-    cb(-1, 2, error);
+    cb(callback_generation, -1, 2, error);
     lock.lock();
   }
 }
@@ -1007,13 +1099,15 @@ void CodecEngine::OutputFormatIs(std::unique_lock<std::mutex>& lock, int width, 
   output_known_ = true;
   out_width_ = width;
   out_height_ = height;
+  output_format_ = std::make_shared<Format>(DecoderOutputFormatLocked());
   if (async_) {
     auto cb = callbacks_.on_output_format_changed;
+    const uint64_t callback_generation = wait_generation_;
     Format fmt = DecoderOutputFormatLocked();
     cv_.notify_all();
     if (cb) {
       lock.unlock();
-      cb(fmt);
+      cb(callback_generation, fmt);
       lock.lock();
     }
   } else {
@@ -1023,15 +1117,17 @@ void CodecEngine::OutputFormatIs(std::unique_lock<std::mutex>& lock, int width, 
 }
 
 void CodecEngine::Publish(std::unique_lock<std::mutex>& lock, int index) {
+  outputs_[index].format = output_format_;
   if (async_) {
     CodecSlot& s = outputs_[index];
     s.client = true;
     CodecBufferInfo info{0, s.size, s.time_us, s.flags};
     auto cb = callbacks_.on_output_available;
+    const uint64_t callback_generation = wait_generation_;
     cv_.notify_all();
     if (cb) {
       lock.unlock();
-      cb(index, info);
+      cb(callback_generation, index, info);
       lock.lock();
     }
   } else {
@@ -1080,12 +1176,16 @@ void CodecEngine::EmitPcm(std::unique_lock<std::mutex>& lock, const std::vector<
     const float* src = reinterpret_cast<const float*>(pcm.data());
     int16_t* dst = reinterpret_cast<int16_t*>(converted.data());
     for (size_t k = 0; k < n; k++) {
-      float v = std::clamp(src[k], -1.0f, 1.0f);
+      float v = std::isfinite(src[k]) ? std::clamp(src[k], -1.0f, 1.0f) : 0.0f;
       dst[k] = static_cast<int16_t>(v * 32767.0f);
     }
     data = &converted;
   }
-  const size_t frame_bytes = std::max<size_t>(1, (out_float_ ? 4 : 2) * pcm_.channels);
+  const size_t frame_bytes = (out_float_ ? size_t{4} : size_t{2}) * pcm_.channels;
+  if (frame_bytes == 0 || frame_bytes > 64 * 1024) {
+    Fail(lock, "invalid decoded PCM channel count");
+    return;
+  }
   const size_t chunk = (64 * 1024 / frame_bytes) * frame_bytes;
   size_t done = 0;
   while (done < data->size()) {
@@ -1167,12 +1267,11 @@ bool CodecEngine::ConfigureEncoder(const Format& format, std::string* error) {
     in_float_ = encoding == 4;
     audio_params_ = p;
   }
-  int32_t max_input = 0;
-  if (!format.GetInt32("max-input-size", &max_input) || max_input <= 0) {
-    max_input = entry_.video ? enc_params_.width * enc_params_.height * 3 / 2 + 64 : 1 << 16;
-  }
+  size_t max_input = 0;
+  if (!InputCapacity(format, entry_.video, true, enc_params_.width, enc_params_.height,
+                     &max_input, error)) return false;
   for (CodecSlot& s : inputs_) {
-    s.mem.assign(static_cast<size_t>(max_input), 0);
+    s.mem.assign(max_input, 0);
     s.client = false;
   }
   for (CodecSlot& s : outputs_) s = CodecSlot();
@@ -1232,13 +1331,15 @@ void CodecEngine::EncoderFormatIs(std::unique_lock<std::mutex>& lock, const Enco
     csd_.push_back(config.data);
   }
   output_known_ = true;
+  output_format_ = std::make_shared<Format>(EncoderOutputFormatLocked());
   if (async_) {
     auto cb = callbacks_.on_output_format_changed;
+    const uint64_t callback_generation = wait_generation_;
     Format fmt = EncoderOutputFormatLocked();
     cv_.notify_all();
     if (cb) {
       lock.unlock();
-      cb(fmt);
+      cb(callback_generation, fmt);
       lock.lock();
     }
   } else {
@@ -1301,7 +1402,7 @@ void CodecEngine::RunEncoder() {
   for (;;) {
     cv_.wait(lock, [this] {
       return quit_ || flush_requested_ ||
-             (started_ && !flushed_ && !enc_eos_sent_ &&
+             (started_ && !flushed_ && !failed_ && !enc_eos_sent_ &&
               (!work_.empty() || !surface_frames_.empty() || surface_eos_));
     });
     if (quit_) return;
@@ -1311,6 +1412,7 @@ void CodecEngine::RunEncoder() {
       surface_frames_.clear();
       pending_bitrate_.reset();
       force_key_ = false;
+      failed_ = false;
       flush_requested_ = false;
       done_cv_.notify_all();
       continue;
@@ -1352,7 +1454,8 @@ void CodecEngine::RunEncoder() {
       std::vector<uint8_t> bytes(in.mem.begin() + in.offset, in.mem.begin() + in.offset + in.size);
       const int64_t time_us = in.time_us;
       const uint32_t flags = in.flags;
-      std::function<void(int)> input_cb;
+      std::function<void(uint64_t, int)> input_cb;
+      const uint64_t callback_generation = wait_generation_;
       if (async_ && !flushed_) {
         in.client = true;
         input_cb = callbacks_.on_input_available;
@@ -1360,7 +1463,7 @@ void CodecEngine::RunEncoder() {
       cv_.notify_all();
       if (input_cb) {
         lock.unlock();
-        input_cb(index);
+        input_cb(callback_generation, index);
         lock.lock();
         if (quit_ || flush_requested_) continue;
       }
@@ -1381,7 +1484,8 @@ void CodecEngine::RunEncoder() {
             pcm.resize(count);
             const float* fp = reinterpret_cast<const float*>(bytes.data());
             for (size_t k = 0; k < count; k++) {
-              pcm[k] = static_cast<int16_t>(std::clamp(fp[k], -1.0f, 1.0f) * 32767.0f);
+              const float value = std::isfinite(fp[k]) ? std::clamp(fp[k], -1.0f, 1.0f) : 0.0f;
+              pcm[k] = static_cast<int16_t>(value * 32767.0f);
             }
           } else {
             pcm.resize(bytes.size() / 2);

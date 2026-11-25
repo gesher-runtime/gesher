@@ -110,6 +110,69 @@ std::string ReadAll(const std::wstring& path) {
   return text;
 }
 
+bool WriteAll(const std::wstring& path, const char* text) {
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                            nullptr, CREATE_ALWAYS, 0, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  DWORD size = static_cast<DWORD>(std::strlen(text)), written = 0;
+  bool ok = WriteFile(file, text, size, &written, nullptr) && written == size;
+  CloseHandle(file);
+  return ok;
+}
+
+void StorageOpen(const std::wstring& base, const wchar_t* relative, const char* name, bool write) {
+  std::wstring path = base + L"\\" + relative;
+  HANDLE file = CreateFileW(path.c_str(), write ? GENERIC_WRITE : GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            nullptr, OPEN_EXISTING, 0, nullptr);
+  DWORD error = file == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+  if (file != INVALID_HANDLE_VALUE) {
+    char byte = 'x';
+    DWORD count = 0;
+    BOOL ok = write ? WriteFile(file, &byte, 1, &count, nullptr)
+                    : ReadFile(file, &byte, 1, &count, nullptr);
+    if (!ok) error = GetLastError();
+    CloseHandle(file);
+  }
+  std::printf("%s %s %lu\n", name, write ? "write" : "read", error);
+}
+
+// Stay in the same AppContainer process while the broker downgrades/revokes
+// the ACL and replaces the policy file. Each phase opens fresh handles: ACL
+// changes do not revoke handles that the kernel has already granted.
+int StorageChild(const std::wstring& base, const std::wstring& control) {
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
+  int previous = 0;
+  for (int attempt = 0; attempt < 2400; ++attempt) {
+    int phase = std::atoi(ReadAll(control).c_str());
+    if (phase > previous && phase <= 4) {
+      std::printf("storage-phase %d\n", phase);
+      const struct { const wchar_t* path; const char* name; } cases[] = {
+          {L"media\\existing.txt", "existing"},
+          {L"media\\new-top.txt", "new-top"},
+          {L"media\\new-dir\\new-nested.txt", "new-nested"},
+          {L"media\\Android\\data\\other\\secret.txt", "other-data"},
+          {L"media\\Android\\obb\\other\\secret.txt", "other-obb"},
+          {L"media\\Android\\data\\owner\\private.txt", "own-data"},
+          {L"media\\Android\\obb\\owner\\private.txt", "own-obb"},
+          {L"media\\Android\\media\\owner\\private.txt", "own-media"},
+          {L"policy.txt", "policy"},
+      };
+      std::printf("policy-content %s\n", ReadAll(base + L"\\policy.txt").c_str());
+      for (const auto& test : cases) {
+        StorageOpen(base, test.path, test.name, false);
+        StorageOpen(base, test.path, test.name, true);
+      }
+      std::printf("storage-done %d\n", phase);
+      previous = phase;
+      if (phase == 4) return 0;
+    }
+    Sleep(50);
+  }
+  std::printf("storage-child timed out\n");
+  return 1;
+}
+
 // Starts this program in the container with `capabilities`; returns its output.
 std::string RunContained(const std::wstring& exe, const std::wstring& container,
                          const std::vector<std::u16string>& capabilities,
@@ -200,9 +263,159 @@ bool Expect(const std::string& output, const char* line, const char* what) {
   return ok;
 }
 
+int StorageProbe(const std::wstring& exe, const std::wstring& container,
+                  const std::wstring& runtime, const std::wstring& base,
+                  const std::wstring& log) {
+  int failures = 0;
+  auto check = [&](bool ok, const char* what) {
+    std::printf("%s  %s\n", ok ? "PASS" : "FAIL", what);
+    if (!ok) ++failures;
+    return ok;
+  };
+  auto acl = [&](DWORD error, const char* what) {
+    if (error != ERROR_SUCCESS) std::printf("Win32 error %lu\n", error);
+    return check(error == ERROR_SUCCESS, what);
+  };
+  const DWORD read = 0x001200A9, modify = 0x001301BF;
+  const std::wstring root = base + L"\\media";
+  const std::wstring control = runtime + L"\\storage-phase.txt";
+  const std::vector<std::wstring> directories{
+      base, root, root + L"\\Android", root + L"\\Android\\data", root + L"\\Android\\obb",
+      root + L"\\Android\\media", root + L"\\Android\\data\\other",
+      root + L"\\Android\\obb\\other", root + L"\\Android\\data\\owner",
+      root + L"\\Android\\obb\\owner", root + L"\\Android\\media\\owner"};
+  for (const auto& dir : directories) {
+    check(CreateDirectoryW(dir.c_str(), nullptr) != FALSE, "create isolated storage fixture directory");
+  }
+  const std::vector<std::wstring> files{
+      root + L"\\existing.txt", root + L"\\Android\\data\\other\\secret.txt",
+      root + L"\\Android\\obb\\other\\secret.txt", root + L"\\Android\\data\\owner\\private.txt",
+      root + L"\\Android\\obb\\owner\\private.txt", root + L"\\Android\\media\\owner\\private.txt"};
+  for (const auto& path : files) check(WriteAll(path, "data"), "create isolated storage fixture file");
+  auto set = [&](const std::wstring& path, DWORD access, bool inherit) {
+    return gesher::zygote::SetAppContainerStorageAccess(U16(path), U16(container), access, inherit);
+  };
+  // Seed a pre-existing inheritable shared grant to verify that protecting the
+  // private roots removes it there while retaining the Windows owner's access.
+  acl(set(root, modify, true), "seed shared Modify grant");
+  for (const auto* sub : {L"data", L"obb"}) {
+    acl(gesher::zygote::ProtectPrivateStorage(U16(root + L"\\Android\\" + sub)),
+        "protect private storage from shared inheritance");
+  }
+  for (const auto* sub : {L"data", L"obb", L"media"}) {
+    acl(set(root + L"\\Android\\" + sub + L"\\owner", modify, true), "grant own app directory");
+  }
+  acl(set(root, modify, true), "inheritable manager grant preserves protected private roots");
+  // Model the original implementation's explicit child grant, which must be
+  // cleaned up as well as downgrading the root.
+  acl(gesher::zygote::GrantToAppContainer(U16(files[0]), U16(container), modify, false),
+      "seed legacy explicit shared-child grant");
+  check(WriteAll(root + L"\\new-top.txt", "new"), "host creates top-level file after manager grant");
+  check(CreateDirectoryW((root + L"\\new-dir").c_str(), nullptr) != FALSE,
+        "host creates top-level directory after manager grant");
+  check(WriteAll(root + L"\\new-dir\\new-nested.txt", "new"),
+        "host creates nested file after manager grant");
+  auto publish = [&](const char* content) {
+    std::wstring staged = base + L"\\policy.tmp", target = base + L"\\policy.txt";
+    if (!check(WriteAll(staged, content), "write replacement policy inode")) return;
+    if (!acl(set(staged, read, false), "prepare replacement policy inode ACL")) return;
+    check(MoveFileExW(staged.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+              != FALSE, "atomically replace readable policy file");
+  };
+  publish("manager");
+  DeleteFileW(log.c_str());
+  gesher::zygote::AppContainerSpec spec{U16(container), U16(container), {u"gesherRuntimeFiles"}};
+  std::wstring command = L"\"" + exe + L"\" --storage-child \"" + base + L"\" \"" + control + L"\"";
+  int pid = failures == 0
+                ? gesher::zygote::SpawnInAppContainer(U16(command), {}, {}, U16(log), spec) : -1;
+  int child_exit = STILL_ACTIVE;
+  int64_t child_identity = pid > 0 ? gesher::zygote::ChildStartTime(pid) : 0;
+  if (pid <= 0) std::printf("storage child spawn/setup error %d\n", pid);
+  check(pid > 0, "start storage access child with real AppContainer token");
+  for (int phase = 1; phase <= 4 && pid > 0; ++phase) {
+    if (phase == 2) {
+      acl(set(root, read, true), "downgrade shared Modify to exactly Read");
+      acl(set(files[0], 0, false), "remove legacy explicit child grant");
+      publish("read-only");
+    } else if (phase == 3) {
+      acl(set(root, 0, false), "revoke shared grant from running app");
+      publish("scoped");
+    } else if (phase == 4) {
+      for (const auto* sub : {L"data", L"obb", L"media"}) {
+        acl(set(root + L"\\Android\\" + sub + L"\\owner", 0, false), "revoke uninstalled app's own grant");
+      }
+      publish("removed");
+    }
+    check(WriteAll(control, std::to_string(phase).c_str()), "signal access phase to the running process");
+    std::string output, done = "storage-done " + std::to_string(phase) + "\n";
+    for (int attempt = 0; attempt < 1200; ++attempt) {
+      output = ReadAll(log);
+      if (output.find(done) != std::string::npos) break;
+      child_exit = gesher::zygote::ExitCode(pid);
+      if (child_exit != STILL_ACTIVE) {
+        output = ReadAll(log);
+        break;
+      }
+      Sleep(50);
+    }
+    bool completed = check(output.find(done) != std::string::npos, "running child completes access phase");
+    size_t start = output.find("storage-phase " + std::to_string(phase) + "\n");
+    output = start == std::string::npos ? output : output.substr(start);
+    std::printf("-- storage phase %d:\n%s", phase, output.c_str());
+    if (!completed) break;
+    auto expect_access = [&](const char* name, bool readable, bool writable) {
+      for (int write = 0; write <= 1; ++write) {
+        bool allowed = write ? writable : readable;
+        std::string line = std::string(name) + (write ? " write " : " read ") +
+                           (allowed ? "0\n" : "5\n");
+        failures += !Expect(output, line.c_str(), line.substr(0, line.size() - 1).c_str());
+      }
+    };
+    for (const auto* name : {"existing", "new-top", "new-nested"}) {
+      expect_access(name, phase <= 2, phase == 1);
+    }
+    expect_access("other-data", false, false);
+    expect_access("other-obb", false, false);
+    for (const auto* name : {"own-data", "own-obb", "own-media"}) {
+      expect_access(name, phase < 4, phase < 4);
+    }
+    expect_access("policy", true, false);
+    const char* content[] = {"manager", "read-only", "scoped", "removed"};
+    std::string line = std::string("policy-content ") + content[phase - 1] + "\n";
+    failures += !Expect(output, line.c_str(), "running app reads the current replacement policy inode");
+  }
+  if (pid > 0) {
+    // ExitCode consumes the retained handle once the process exits. Keep that
+    // result instead of querying a second time and mistaking -1 for its status.
+    for (int attempt = 0; attempt < 100 && child_exit == STILL_ACTIVE; ++attempt) {
+      child_exit = gesher::zygote::ExitCode(pid);
+      if (child_exit == STILL_ACTIVE) Sleep(10);
+    }
+    if (child_exit == STILL_ACTIVE) {
+      gesher::zygote::KillChild(pid, child_identity);
+      check(false, "storage child exits successfully");
+    } else {
+      check(child_exit == 0, "storage child exits successfully");
+    }
+  }
+  // The Windows owner must still be able to clean up protected private roots.
+  for (const auto& path : files) check(DeleteFileW(path.c_str()) != FALSE, "Windows owner retains fixture cleanup access");
+  DeleteFileW((root + L"\\new-top.txt").c_str());
+  DeleteFileW((root + L"\\new-dir\\new-nested.txt").c_str());
+  RemoveDirectoryW((root + L"\\new-dir").c_str());
+  DeleteFileW((base + L"\\policy.txt").c_str());
+  DeleteFileW((base + L"\\policy.tmp").c_str());
+  DeleteFileW(control.c_str());
+  for (auto it = directories.rbegin(); it != directories.rend(); ++it) RemoveDirectoryW(it->c_str());
+  return failures;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc == 4 && !std::strcmp(argv[1], "--storage-child")) {
+    return StorageChild(Wide(argv[2]), Wide(argv[3]));
+  }
   if (argc == 5 && !std::strcmp(argv[1], "--child")) {
     return Child(Wide(argv[2]), Wide(argv[3]), static_cast<DWORD>(std::strtoul(argv[4], nullptr, 10)));
   }
@@ -267,6 +480,9 @@ int main(int argc, char** argv) {
   std::string broker = "hello-system " + Hello(device, GetCurrentProcessId(), 1000) + "\n";
   std::printf("-- the user's own token:\n%s", broker.c_str());
   failures += !Expect(broker, "hello-system status 0", "binderd admits an uncontained Medium process with SYSTEM_UID");
+
+  failures += StorageProbe(exe, container, dir,
+                            std::wstring(temp) + L"gesher-storage-probe-" + stamp, log);
 
   DeleteFileW(exe.c_str());
   RemoveDirectoryW(dir.c_str());

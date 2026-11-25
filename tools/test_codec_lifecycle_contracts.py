@@ -15,6 +15,8 @@ import shlex
 import subprocess
 import tempfile
 
+from codec_contract_source import member, adapter, shared, read, ENGINE
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "compat/media/jni/media_codec_jni.cc"
 
@@ -42,8 +44,10 @@ def generate(component: str, ref: str | None) -> str:
                                 capture_output=True, text=True, check=True).stdout
     else:
         source = (ROOT / SOURCE).read_text()
-    has_release = "  void Release() {" in source
-    definitions = {"HAS_RELEASE": has_release}
+    is_shared = shared(ref)
+    engine = read(ENGINE, ref) if is_shared else ""
+    has_release = is_shared or "  void Release() {" in source
+    definitions = {"HAS_RELEASE": has_release, "SHARED_CODEC_ENGINE": is_shared}
     if component == "receiver":
         replacements = {
             "GET_CODEC": method(source, "CodecOwner GetCodec(" if "CodecOwner GetCodec(" in source else "Codec* GetCodec("),
@@ -51,6 +55,16 @@ def generate(component: str, ref: str | None) -> str:
             "RELEASE": method(source, "void JNICALL MC_release("),
         }
         definitions["HAS_OPTIONAL_LOOKUP"] = "throw_if_null" in replacements["GET_CODEC"]
+    elif is_shared:
+        names = {"DESTRUCTOR": "~CodecEngine", "START": "Start", "STOP": "Stop",
+                 "RESET": "Reset", "FLUSH": "Flush", "DEQUEUE_INPUT": "DequeueInput",
+                 "DEQUEUE_OUTPUT": "DequeueOutput", "STOP_WORKER": "StopWorker",
+                 "RELEASE": "Release", "STOP_LOCKED": "StopLocked",
+                 "RETIRE_SURFACE": "RetireSurfaceFailure"}
+        replacements = {key: member(engine, value) for key, value in names.items()}
+        replacements["DEQUEUE_OUTPUT"] += "\n" + adapter(source, "  int DequeueOutput(JNIEnv*")
+        replacements["POST_FATAL"] = ""
+        definitions["STOP_REQUIRES_CONFIGURE"] = True
     else:
         markers = {
             "DESTRUCTOR": "  ~Codec()",
@@ -75,10 +89,12 @@ def generate(component: str, ref: str | None) -> str:
         if template.count(marker) != 1:
             raise ValueError("fixture boundary changed: " + marker)
         template = template.replace(marker, body)
-    digest = hashlib.sha256(source.encode()).hexdigest()
+    digest = hashlib.sha256((source + engine).encode()).hexdigest()
     print(component + " production SHA256 " + digest, flush=True)
-    definitions["HAS_FATAL_RETIREMENT"] = "  void RetireSurfaceFailure(" in source
-    return "".join(f"#define {key} {int(value)}\n" for key, value in definitions.items()) + template
+    definitions["HAS_FATAL_RETIREMENT"] = is_shared or "  void RetireSurfaceFailure(" in source
+    epoch = "uint64_t," if "IsCallbackCurrent(" in engine else ""
+    return (f"#define CODEC_CALLBACK_EPOCH_ARGS {epoch}\n"
+            + "".join(f"#define {key} {int(value)}\n" for key, value in definitions.items()) + template)
 
 
 def main() -> int:

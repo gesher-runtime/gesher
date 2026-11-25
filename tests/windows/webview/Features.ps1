@@ -4,8 +4,8 @@
 # $dvmWebView, GesherWebViewWin32, Check-style counters).
 #
 # The test's server (TestServer.ps1: Basic auth, POST echo, TLS with a client
-# certificate request) runs in this process; real mouse input (SendInput, the
-# cursor moved and clicked on the screen) clicks the page's file inputs, the
+# certificate request, intent fallback pages) runs in this process; real mouse
+# input (SendInput, the cursor moved and clicked on the screen) clicks the page's file inputs, the
 # round button over the WebView and the page next to its circle; the Windows
 # file dialog is answered by typing into it (WM_SETTEXT, IDOK); the window is
 # read back (PW_RENDERFULLCONTENT) for the round cut-out, and UI Automation
@@ -130,7 +130,7 @@ function WebViewUia([IntPtr] $Container, [string] $Name) {
 }
 
 function FeaturesCheck {
-  $name = 'webapp.apk''s FeaturesActivity on WebView2: WebMessagePorts both ways, find in page, capturePicture, geolocation and camera/microphone permissions (granted and denied), window.open into the WebView onCreateWindow gave and window.close, onShowFileChooser and the Windows file dialog (clicked with INPUTKIND), text zoom (text only), Basic authentication, postUrl with a body, a certificate error and a client certificate request, the back/forward list, an MHTML web archive, a round button cut out of the WebView2 window by its outline and clicks (INPUTKIND) inside and outside its circle'
+  $name = 'webapp.apk''s FeaturesActivity on WebView2: WebMessagePorts both ways, find in page, capturePicture, geolocation and camera/microphone permissions (granted and denied), window.open into the WebView onCreateWindow gave and window.close, onShowFileChooser and the Windows file dialog (clicked with INPUTKIND), text zoom (text only), Basic authentication, postUrl with a body, a certificate error and a client certificate request, the back/forward list, an MHTML web archive, page-driven intent fallbacks with default, accepting and target-vetoing clients, a round button cut out of the WebView2 window by its outline and clicks (INPUTKIND) inside and outside its circle'
   if (-not (Test-Path "$Dir/webapp.apk")) {
     Write-Host "FAIL  gesher-app: $name (webapp.apk is missing)"; $script:failed++; return
   }
@@ -305,6 +305,16 @@ function FeaturesCheck {
     'Features onReceivedClientCertRequest: 127.0.0.1:',
     'Features tls title: "tls client certificate: none"',
     'Features canGoBackOrForward(-2): true',
+    'Features intent default source onPageFinished',
+    'Features intent default target onPageStarted',
+    'Features intent default destination verified callbacks 0 started 1 finished 1',
+    'Features intent explicit callback 1 original allowed',
+    'Features intent explicit callback 2 target veto false',
+    'Features intent explicit target onPageStarted',
+    'Features intent explicit destination verified callbacks 2 started 1 finished 1',
+    'Features intent veto callback 1 original allowed',
+    'Features intent veto callback 2 target veto true',
+    'Features intent veto retained source callbacks 2 started 0 finished 0',
     'Features done')
   foreach ($want in $expect) { if (-not "$text".Contains($want)) { $problems += "missing '$want'" } }
   if ($text -notmatch "Features app location permission uid $featuresUid pid [0-9]+ fine 0 coarse 0") {
@@ -333,7 +343,17 @@ function FeaturesCheck {
   if ("$text" -match 'page mousedown at 3[23]\d,3[23]\d') {
     $problems += 'the page got the click on the button'
   }
-  Write-Host "INFO  features: the server saw: $(([GesherWebTestServer]::Log -split "`n" | Where-Object { $_ }) -join '; ')"
+  $serverLog = [GesherWebTestServer]::Log
+  foreach ($path in '/intent-source/default', '/intent-target/default',
+                    '/intent-source/explicit', '/intent-target/explicit', '/intent-source/veto') {
+    if ($serverLog -notmatch ("(?m)^http GET " + [regex]::Escape($path) + "(?: |\r?$)")) {
+      $problems += "the actual HTTP server did not receive $path"
+    }
+  }
+  if ($serverLog -match '(?m)^http [A-Z]+ /intent-target/veto(?: |\r?$)') {
+    $problems += 'the vetoed intent destination reached the HTTP server'
+  }
+  Write-Host "INFO  features: the server saw: $(($serverLog -split "`n" | Where-Object { $_ }) -join '; ')"
   $kind = if ($clicks.Count -gt 0 -and -not ($clicks | Where-Object { $_ -notmatch ': SendInput$' })) { 'real mouse input (SendInput)' } else { 'mouse messages posted to the window WindowFromPoint hit-tests (SendInput unavailable)' }
   $name = $name.Replace('INPUTKIND', $kind)
   if (-not $problems) {

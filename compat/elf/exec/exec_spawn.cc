@@ -7,6 +7,7 @@
 
 #include <gesher/reserved_names.h>
 #include <gesher/environment.h>
+#include <gesher/storage_policy.h>
 #include <gesher/environment_utf16.h>
 
 #include <algorithm>
@@ -559,6 +560,8 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
     if (inherited_environment.empty()) return ERROR_NO_UNICODE_TRANSLATION;
     environment = inherited_environment.c_str();
   }
+  std::wstring storage_environment = gesher::ExternalStorageChildEnvironment(environment);
+  if (!storage_environment.empty()) environment = storage_environment.c_str();
   struct ImagePin {
     HANDLE value = nullptr;
     ~ImagePin() { if (value) CloseHandle(value); }

@@ -65,6 +65,17 @@ if(GESHER_WEBVIEW_BRIDGE_TESTS)
     target_sources(webview_bridge_test PRIVATE ${_wv}/msvc_shims.cc)
     target_compile_definitions(webview_bridge_test PRIVATE GESHER_WEBVIEW2_STATIC)
   endif()
+
+  add_executable(webview_document_script_test EXCLUDE_FROM_ALL
+    ${CMAKE_SOURCE_DIR}/tests/native/webview_document_script_test.cc ${_wv}/webview2_loader.cc)
+  target_include_directories(webview_document_script_test PRIVATE ${_wv})
+  target_include_directories(webview_document_script_test SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIRS})
+  target_compile_options(webview_document_script_test PRIVATE -Wall -Werror -Wno-unused-parameter -UNDEBUG)
+  target_link_libraries(webview_document_script_test PRIVATE ${_wv_libs})
+  if(GESHER_WEBVIEW2_LOADER STREQUAL "static")
+    target_sources(webview_document_script_test PRIVATE ${_wv}/msvc_shims.cc)
+    target_compile_definitions(webview_document_script_test PRIVATE GESHER_WEBVIEW2_STATIC)
+  endif()
 endif()
 
 # web3 track (ADR 0058): accessibility over UI Automation (libgesher_a11y.so:

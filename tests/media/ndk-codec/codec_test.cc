@@ -3,12 +3,15 @@
 // standalone ELF executable and a JNI shared library.
 
 #include <dlfcn.h>
+#include <jni.h>
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaError.h>
 #include <media/NdkMediaFormat.h>
 
 #include <condition_variable>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <mutex>
@@ -67,9 +70,117 @@ struct Packet {
   uint32_t flags = 0;
 };
 
+// Accessing this guest ELF TLS from a host-created notification thread also
+// exercises EnterLoadedCode and the translated ARM64 callback return path.
+thread_local uint32_t callback_entries = 0;
+
+struct LifetimeState {
+  std::mutex mu;
+  std::condition_variable cv;
+  bool done = false, delete_initial = false, flushed = false, sent = false;
+  int errors = 0, formats = 0, outputs = 0;
+};
+
+void Complete(LifetimeState* state) {
+  std::lock_guard<std::mutex> lock(state->mu);
+  state->done = true;
+  state->cv.notify_all();
+}
+
+void CheckNativeLifetime(Checker& check, bool delete_initial) {
+  LifetimeState state;
+  state.delete_initial = delete_initial;
+  AMediaCodec* codec = AMediaCodec_createDecoderByType("audio/raw");
+  check.Check(codec != nullptr, "raw lifetime decoder");
+  if (codec == nullptr) return;
+  AMediaFormat* format = AMediaFormat_new();
+  AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, "audio/raw");
+  AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_SAMPLE_RATE, 48000);
+  AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_CHANNEL_COUNT, 2);
+  check.Check(AMediaCodec_configure(codec, format, nullptr, nullptr, 0) == AMEDIA_OK,
+              "raw lifetime configure");
+  AMediaFormat_delete(format);
+  AMediaCodecOnAsyncNotifyCallback callbacks{};
+  callbacks.onAsyncInputAvailable = [](AMediaCodec* owner, void* opaque, int32_t index) {
+    auto* s = static_cast<LifetimeState*>(opaque);
+    ++callback_entries;
+    if (s->delete_initial) {
+      if (AMediaCodec_delete(owner) != AMEDIA_OK) ++s->errors;
+      Complete(s);
+      return;
+    }
+    if (!s->flushed) {
+      s->flushed = true;
+      if (AMediaCodec_flush(owner) != AMEDIA_OK) ++s->errors;
+      if (AMediaCodec_start(owner) != AMEDIA_OK) ++s->errors;
+      return;
+    }
+    if (s->sent) return;
+    s->sent = true;
+    size_t size = 0;
+    auto* data = AMediaCodec_getInputBuffer(owner, static_cast<size_t>(index), &size);
+    if (data == nullptr || size < 4) { ++s->errors; return; }
+    std::memcpy(data, "abcd", 4);
+    if (AMediaCodec_queueInputBuffer(owner, static_cast<size_t>(index), 0, 4, 1234,
+                                    AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != AMEDIA_OK) ++s->errors;
+  };
+  callbacks.onAsyncFormatChanged = [](AMediaCodec*, void* opaque, AMediaFormat* output) {
+    auto* s = static_cast<LifetimeState*>(opaque);
+    ++s->formats;
+    int32_t rate = 0;
+    if (output == nullptr || !AMediaFormat_getInt32(output, AMEDIAFORMAT_KEY_SAMPLE_RATE, &rate) ||
+        rate != 48000 || callback_entries == 0) ++s->errors;
+    // The public NDK callback transfers this format to its recipient.
+    if (output != nullptr) AMediaFormat_delete(output);
+  };
+  callbacks.onAsyncOutputAvailable = [](AMediaCodec* owner, void* opaque, int32_t index,
+                                        AMediaCodecBufferInfo* info) {
+    auto* s = static_cast<LifetimeState*>(opaque);
+    ++s->outputs;
+    if (callback_entries == 0 || info == nullptr) ++s->errors;
+    if (info != nullptr && info->size > 0) {
+      size_t size = 0;
+      auto* data = AMediaCodec_getOutputBuffer(owner, static_cast<size_t>(index), &size);
+      if (info->size != 4 || size < 4 || data == nullptr || std::memcmp(data, "abcd", 4) != 0 ||
+          info->presentationTimeUs != 1234) ++s->errors;
+    }
+    const bool eos = info != nullptr && (info->flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
+    if (AMediaCodec_releaseOutputBuffer(owner, static_cast<size_t>(index), false) != AMEDIA_OK) ++s->errors;
+    if (eos) {
+      if (AMediaCodec_stop(owner) != AMEDIA_OK) ++s->errors;
+      if (AMediaCodec_delete(owner) != AMEDIA_OK) ++s->errors;
+      Complete(s);
+    }
+  };
+  callbacks.onAsyncError = [](AMediaCodec* owner, void* opaque, media_status_t, int32_t, const char*) {
+    auto* s = static_cast<LifetimeState*>(opaque);
+    ++s->errors;
+    AMediaCodec_delete(owner);
+    Complete(s);
+  };
+  check.Check(AMediaCodec_setAsyncNotifyCallback(codec, callbacks, &state) == AMEDIA_OK,
+              "lifetime callback aggregate and userdata");
+  check.Check(AMediaCodec_start(codec) == AMEDIA_OK, "lifetime start survives callback deletion");
+  std::unique_lock<std::mutex> lock(state.mu);
+  if (!state.cv.wait_for(lock, std::chrono::seconds(10), [&] { return state.done; })) {
+    std::cerr << "FAIL: callback lifetime operation timed out\n";
+    std::_Exit(1);  // Do not let a deadlocked callback outlive its stack userdata.
+  }
+  check.Check(state.errors == 0, "native callbacks permit flush/restart/stop/delete with guest TLS");
+  if (!delete_initial) check.Check(state.flushed && state.formats == 1 && state.outputs == 2,
+                                    "restarted callback epoch delivers PCM and EOS exactly once");
+}
+
 }  // namespace
 
 int RunCodecTests() {
+#if defined(__aarch64__)
+  std::cout << "ndk-codec ABI: arm64-v8a\n";
+#elif defined(__x86_64__)
+  std::cout << "ndk-codec ABI: x86_64\n";
+#else
+#error Unsupported NDK test ABI
+#endif
   Checker c;
   void* library = dlopen("libmediandk.so", RTLD_NOW);
   c.Check(library != nullptr, "dlopen libmediandk.so");
@@ -122,6 +233,13 @@ int RunCodecTests() {
       if (idx >= 0) {
         size_t cap = 0;
         uint8_t* buf = AMediaCodec_getInputBuffer(enc, static_cast<size_t>(idx), &cap);
+        const size_t huge = (size_t{1} << 32) + static_cast<size_t>(idx);
+        size_t rejected_capacity = 99;
+        c.Check(AMediaCodec_getInputBuffer(enc, huge, &rejected_capacity) == nullptr &&
+                    rejected_capacity == 0,
+                "LP64 input index does not alias an owned slot");
+        c.Check(AMediaCodec_queueInputBuffer(enc, huge, 0, 0, 0, 0) == AMEDIA_ERROR_INVALID_PARAMETER,
+                "LP64 queue index is rejected before narrowing");
         const size_t yuv_size = 64 * 64 * 3 / 2;
         c.Check(buf != nullptr && cap >= yuv_size, "encoder getInputBuffer");
         if (buf != nullptr && cap >= yuv_size) {
@@ -185,6 +303,7 @@ int RunCodecTests() {
         size_t cap = 0;
         uint8_t* buf = AMediaCodec_getInputBuffer(dec, static_cast<size_t>(idx), &cap);
         c.Check(buf != nullptr && cap >= encoded[i].data.size(), "decoder getInputBuffer");
+        if (buf == nullptr || cap < encoded[i].data.size()) break;
         std::memcpy(buf, encoded[i].data.data(), encoded[i].data.size());
         uint32_t flags = encoded[i].flags;
         if (i + 1 == encoded.size()) flags |= AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM;
@@ -212,7 +331,17 @@ int RunCodecTests() {
           }
           c.Check(w == 64 && h == 64, "decoder output format 64x64");
         } else if (out_idx >= 0) {
-          if (info.size > 0) saw_frame = true;
+          if (info.size > 0) {
+            saw_frame = true;
+            AMediaFormat* buffer_format = AMediaCodec_getBufferFormat(dec, static_cast<size_t>(out_idx));
+            int32_t width = 0;
+            c.Check(buffer_format != nullptr &&
+                        AMediaFormat_getInt32(buffer_format, AMEDIAFORMAT_KEY_WIDTH, &width) && width == 64,
+                    "owned output has its publication format");
+            if (buffer_format != nullptr) AMediaFormat_delete(buffer_format);
+            c.Check(AMediaCodec_getBufferFormat(dec, (size_t{1} << 32) + out_idx) == nullptr,
+                    "buffer format rejects LP64 alias");
+          }
           if (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) saw_eos = true;
           c.Check(AMediaCodec_releaseOutputBuffer(dec, static_cast<size_t>(out_idx), false) ==
                       AMEDIA_OK,
@@ -279,6 +408,7 @@ int RunCodecTests() {
         auto* st = static_cast<AsyncState*>(ud);
         std::lock_guard<std::mutex> lk(st->mu);
         if (fmt != nullptr) st->got_format = true;
+        if (fmt != nullptr) AMediaFormat_delete(fmt);
         st->cv.notify_all();
       };
       cb.onAsyncError = [](AMediaCodec*, void*, media_status_t, int32_t, const char*) {};
@@ -306,11 +436,23 @@ int RunCodecTests() {
     }
   }
 
+  CheckNativeLifetime(c, false);
+  for (int repeat = 0; repeat < 8; ++repeat) CheckNativeLifetime(c, true);
+  if (library != nullptr) dlclose(library);
+
   return c.failures;
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_gesher_MediaCodecNdkTest_run(JNIEnv*, jclass) {
+  std::cout << "ndk-codec caller: JNI\n";
+  const int failures = RunCodecTests();
+  std::cout << "ndk-codec: " << (failures == 0 ? "PASS" : "FAIL") << " (" << failures << " failures)\n";
+  return failures;
 }
 
 #ifdef MEDIA_CODEC_EXECUTABLE
 int main() {
+  std::cout << "ndk-codec caller: executable\n";
   const int failures = RunCodecTests();
   std::cout << "ndk-codec: " << (failures == 0 ? "PASS" : "FAIL") << " (" << failures
             << " failures)\n";

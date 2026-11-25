@@ -58,6 +58,11 @@ void RgbaToI420(const uint32_t* rgba, int width, int height, VideoFrame* frame) 
   ProductionRgbaToI420(rgba, width, height, frame);
 }
 
+@SOURCE_TYPES@
+class Codec;
+#if SHARED_CODEC_ENGINE
+using CodecEngine = Codec;
+#endif
 class Codec {
  public:
   struct { bool encoder = true, video = true; } entry_;
@@ -67,10 +72,31 @@ class Codec {
   bool released_ = false, fatal_ = false, configured_ = true, started_ = false;
   bool surface_eos_ = false, flushed_ = false, flush_requested_ = false;
   uint64_t execution_generation_ = 1, wait_generation_ = 1;
+#if SHARED_CODEC_ENGINE
+  Codec* engine_ = this;
+  std::mutex jni_mu_;
+  std::shared_ptr<InputSurface> java_input_;
+  std::shared_ptr<InputSurface>& input_surface_ = java_input_;
+  std::unique_ptr<InputFrameSource> input_source_;
+  // Fixtures use stack receivers and join all calls before destruction. The
+  // actual weak callback body runs with this explicit receiver-lifetime seam.
+  std::shared_ptr<Codec> fixture_owner_{this, [](Codec*) {}};
+  std::weak_ptr<Codec> weak_from_this() { return fixture_owner_; }
+  std::mutex& lifecycle_mutex() { return lifecycle_mu_; }
+#else
   std::unique_ptr<InputSurface> input_surface_;
+#endif
   std::shared_ptr<PersistentInputSurface> persistent_input_;
   std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
-  ~Codec() { if (input_surface_) input_surface_->Abandon(); }
+  ~Codec() {
+#if SHARED_CODEC_ENGINE
+    fixture_owner_.reset();
+    if (input_source_) input_source_->Abandon();
+#else
+    if (input_surface_) input_surface_->Abandon();
+#endif
+  }
+@ENGINE_INPUT@
 @CREATE_INPUT@
 @SET_INPUT@
 @ON_FRAME@
