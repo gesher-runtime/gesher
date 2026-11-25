@@ -670,7 +670,9 @@ final class BroadcastController {
     /** Hands an implicit, package-less broadcast to the system receivers of its action. */
     private void deliverToSystemReceivers(Intent intent) {
         if (intent.getComponent() != null || intent.getPackage() != null) return;
-        List<java.util.function.Consumer<Intent>> receivers = mSystemReceivers.get(intent.getAction());
+        String action = intent.getAction();
+        if (action == null) return;
+        List<java.util.function.Consumer<Intent>> receivers = mSystemReceivers.get(action);
         if (receivers == null) return;
         for (java.util.function.Consumer<Intent> receiver : receivers) {
             try {
