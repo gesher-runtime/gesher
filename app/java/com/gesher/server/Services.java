@@ -214,6 +214,17 @@ public final class Services {
             // Without it the authority stays unknown, as before; nothing pretends to index.
             SystemServer.log("media: provider unavailable: " + e);
         }
+        // print (docs/print.md): FEATURE_PRINTING means the runtime has the Windows
+        // print bridge, even with no default printer. Without the native bridge,
+        // PrintManager never asks for the service.
+        if (PrintManagerService.supported()) {
+            PrintManagerService print = new PrintManagerService(am,
+                    new java.io.File(android.os.Environment.getDataDirectory(), "system/print"),
+                    new WindowsPrint());
+            atm.attachPrint(print);
+            services.put(Context.PRINT_SERVICE, StandIn.of(android.print.IPrintManager.class,
+                    print).asBinder());
+        }
         // Construct the network provider before jobs subscribe to its changes.
         ConnectivityService connectivity = new ConnectivityService(pm, atm);
         services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
