@@ -21,14 +21,18 @@
 #include "shim_internal.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/elf_loader.h>
 #include <gesher/environment.h>
+#include <gesher/fork.h>
 #include <gesher/environment_utf16.h>
+#include <gesher/logging.h>
 
 #include <windows.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <psapi.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -55,48 +59,120 @@ namespace {
 
 constexpr int kSigchld = 17;
 constexpr int kCldExited = 1;  // siginfo si_code for a normal child exit
+constexpr int kCldKilled = 2;  // ... for a child a signal ended
 
 // --- the shim's children -------------------------------------------------------
 
 struct Child {
   HANDLE process = nullptr;
   bool exited = false;
-  int status = 0;  // Linux waitpid status word, once reaped by the watcher
+  bool notified = false;  // its exit signal was sent (or it has none)
+  int status = 0;  // Linux waitpid status word, once it exited
   HANDLE wait = nullptr;
-
+  // The signal its exit sends the parent: SIGCHLD for spawned and forked
+  // children; clone(2)'s CSIGNAL for a raw clone (0: none). A child whose
+  // exit signal is not SIGCHLD is a "clone" child for wait's __WCLONE/__WALL.
+  int exit_signal = kSigchld;
+  bool forked = false;  // a fork's child: its exit code encodes a signal death distinctly
 };
 
 std::mutex g_children_mutex;
 std::map<int, Child> g_children;  // pid -> child
 
-void CALLBACK OnChildExit(void* param, BOOLEAN) {
-  int pid = static_cast<int>(reinterpret_cast<intptr_t>(param));
-  int sig_status = 0;
-  bool deliver = false;
+// Under g_children_mutex: records the exit of a child whose process ended.
+// Returns the signal to send for it (0 if none or already sent).
+// A forked child's exit code: gesher::ForkSignalExitCode for a death by a
+// signal, else its exit status (0..255), or a Windows exception code.
+int ForkedWaitStatus(DWORD code) { return gesher::ForkedWaitStatusOf(code, &ex::WaitStatus); }
+
+int RecordExitLocked(Child& child) {
+  if (!child.exited) {
+    DWORD code = 0;
+    GetExitCodeProcess(child.process, &code);
+    // A process that uses the forked child's exit codes decodes every child's
+    // status with them: its children use them too (gesher/fork.h).
+    child.status = child.forked || gesher::UsesForkExitCodes() ? ForkedWaitStatus(code) : ex::WaitStatus(code);
+    child.exited = true;
+  }
+  if (child.notified) return 0;
+  child.notified = true;
+  return child.exit_signal;
+}
+
+void SendExitSignal(int pid, int sig, int status) {
+  if (sig == 0) return;
+  const bool killed = (status & 0x7f) != 0;
+  DeliverExternalSignal(sig, pid, killed ? kCldKilled : kCldExited,
+                        killed ? (status & 0x7f) : ((status >> 8) & 0xff), false);
+}
+
+// Under g_children_mutex: forgets a child that has been reaped.
+void ReleaseChildLocked(int pid, Child& child) {
+  if (child.wait != nullptr) UnregisterWaitEx(child.wait, nullptr);
+  if (child.process != nullptr) CloseHandle(child.process);
+  if (child.forked) gesher::ForgetChildMailbox(static_cast<DWORD>(pid));
+}
+
+void ChildExited(int pid) {
+  int sig = 0, status = 0;
   {
     std::lock_guard<std::mutex> lock(g_children_mutex);
     auto it = g_children.find(pid);
-    if (it != g_children.end() && !it->second.exited) {
-      DWORD code = 0;
-      GetExitCodeProcess(it->second.process, &code);
-      it->second.status = ex::WaitStatus(code);
-      it->second.exited = true;
-      sig_status = it->second.status;
-      deliver = true;
+    if (it == g_children.end()) return;
+    sig = RecordExitLocked(it->second);
+    status = it->second.status;
+    // SIGCHLD ignored or SA_NOCLDWAIT: Linux reaps the child at once (no
+    // zombie for wait to report).
+    if (ChildrenAutoReaped()) {
+      ReleaseChildLocked(it->first, it->second);
+      g_children.erase(it);
     }
   }
-  if (deliver) DeliverExternalSignal(kSigchld, 0, kCldExited, sig_status, false);
+  SendExitSignal(pid, sig, status);
 }
 
-void Track(int pid, HANDLE process) {
+void CALLBACK OnChildExit(void* param, BOOLEAN) {
+  ChildExited(static_cast<int>(reinterpret_cast<intptr_t>(param)));
+}
+
+// A forked child has no thread pool (gesher/fork.h): a thread of its own
+// waits for each of its children, on a handle of its own.
+struct Watch {
+  int pid;
+  HANDLE process;
+};
+DWORD WINAPI WatchChild(void* raw) {
+  Watch watch = *static_cast<Watch*>(raw);
+  delete static_cast<Watch*>(raw);
+  WaitForSingleObject(watch.process, INFINITE);
+  std::lock_guard<std::mutex> helper(gesher::ForkHelperLock());  // not while a fork clones
+  CloseHandle(watch.process);
+  ChildExited(watch.pid);
+  return 0;
+}
+
+void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = false) {
   std::lock_guard<std::mutex> lock(g_children_mutex);
   Child& c = g_children[pid];
+  c = Child{};
   c.process = process;
-  c.exited = false;
-  c.status = 0;
-  RegisterWaitForSingleObject(&c.wait, process, OnChildExit,
-                              reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
-                              WT_EXECUTEONLYONCE);
+  c.exit_signal = exit_signal;
+  c.forked = forked;
+  if (!gesher::InForkedChild()) {
+    RegisterWaitForSingleObject(&c.wait, process, OnChildExit,
+                                reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
+                                WT_EXECUTEONLYONCE);
+    return;
+  }
+  HANDLE own = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &own, SYNCHRONIZE, FALSE, 0)) {
+    return;  // wait still sees its exit; only its exit signal is not sent
+  }
+  auto* watch = new (std::nothrow) Watch{pid, own};
+  if (watch == nullptr || !gesher::StartHelperThread(WatchChild, watch, 64 * 1024)) {
+    delete watch;
+    CloseHandle(own);
+  }
 }
 
 // --- the environment and working directory as UTF-8 ----------------------------
@@ -137,13 +213,24 @@ FcntlFn g_fcntl = nullptr;
 // pid. `search`: look argv[0] up in PATH (execvp/posix_spawnp). Returns the
 // pid, or -1 with errno set.
 int SpawnPrepared(const ex::Launch& launch, const std::vector<std::string>& env,
-                   const std::string& dir, const std::vector<ex::ChildFd>& fds) {
+                   const std::string& dir, const std::vector<ex::ChildFd>& fds, HANDLE job = nullptr) {
   std::wstring environment = ex::EnvironmentBlock(env);
   if (environment.empty()) return -1;
   std::wstring cwd = dir.empty() ? L"" : ex::WindowsPath(dir);
   PROCESS_INFORMATION pi = {};
-  DWORD werr = ex::SpawnWithFds(launch, environment.c_str(), cwd, fds, &pi);
+  DWORD werr = ex::SpawnWithFds(launch, environment.c_str(), cwd, fds, &pi, job != nullptr ? CREATE_SUSPENDED : 0);
   if (werr != 0) return errno = ex::ErrnoFromWin32(werr), -1;
+  if (job != nullptr) {
+    // In `job` before it runs: anything it starts is in the job too.
+    if (!AssignProcessToJobObject(job, pi.hProcess)) {
+      const DWORD error = GetLastError();
+      TerminateProcess(pi.hProcess, 1);
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+      return errno = ex::ErrnoFromWin32(error), -1;
+    }
+    ResumeThread(pi.hThread);
+  }
   CloseHandle(pi.hThread);
   int pid = static_cast<int>(pi.dwProcessId);
   Track(pid, pi.hProcess);
@@ -152,11 +239,11 @@ int SpawnPrepared(const ex::Launch& launch, const std::vector<std::string>& env,
 
 int SpawnProgram(const std::string& program, const std::vector<std::string>& argv,
                  const std::vector<std::string>& env, const std::string& dir, bool search,
-                 const std::vector<ex::ChildFd>& fds) {
+                 const std::vector<ex::ChildFd>& fds, HANDLE job = nullptr) {
   ex::Launch launch;
   int e = ex::PrepareLaunchProgram(program, argv, dir, search, &launch);
   if (e != 0) return errno = e, -1;
-  return SpawnPrepared(launch, env, dir, fds);
+  return SpawnPrepared(launch, env, dir, fds, job);
 }
 
 // Pin descriptors and their shared status before releasing the descriptor
@@ -182,9 +269,36 @@ void ExecReplace(const std::string& program, const std::vector<std::string>& arg
                  const std::vector<std::string>& env, bool search) {
   std::vector<ex::ChildFd> fds;
   if (!InheritedFds(&fds)) return;
-  int pid = SpawnProgram(program, argv, env, CurrentDir(), search, fds);
+  // A forked child's program replaces it (its signal deaths use the forked
+  // child's exit codes: it learns that from this process's mailbox). It runs
+  // in a job that ends with this process, so a SIGKILL of this pid ends the
+  // program too; other signals sent here are forwarded to it.
+  HANDLE job = nullptr;
+  if (gesher::UsesForkExitCodes()) {
+    job = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    // Only the program itself is in the job: what it starts breaks away
+    // silently, so it outlives a SIGKILL of this pid, as on Linux.
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+    if (job == nullptr ||
+        !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof limits)) {
+      if (job != nullptr) CloseHandle(job);
+      fds.clear();
+      errno = EAGAIN;
+      return;
+    }
+  }
+  int pid = SpawnProgram(program, argv, env, CurrentDir(), search, fds, job);
   fds.clear();  // snapshots must not keep child pipe endpoints open while waiting
-  if (pid < 0) return;
+  if (pid < 0) {
+    if (job != nullptr) {
+      const int error = errno;
+      CloseHandle(job);
+      errno = error;
+    }
+    return;
+  }
+  if (job != nullptr) gesher::SetExecForward(static_cast<DWORD>(pid));
   HANDLE h = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_children_mutex);
@@ -195,9 +309,20 @@ void ExecReplace(const std::string& program, const std::vector<std::string>& arg
     WaitForSingleObject(h, INFINITE);
     DWORD code = 0;
     GetExitCodeProcess(h, &code);
+    if (gesher::UsesForkExitCodes()) {
+      // The forked child "became" the program: its parent sees the program's
+      // status, a death by a signal included (gesher/fork.h's exit codes).
+      const int status = ForkedWaitStatus(code);
+      const UINT exit_code = (status & 0x7f) != 0 ? gesher::ForkSignalExitCode(status & 0x7f)
+                                                  : static_cast<UINT>((status >> 8) & 0xff);
+      if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), exit_code);
+      std::fflush(nullptr);
+      ExitProcess(exit_code);
+    }
     std::fflush(nullptr);
     ExitProcess(static_cast<UINT>(ex::ExitStatus(code)) & 0xff);
   }
+  if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), 1);
   ExitProcess(1);
 }
 
@@ -271,50 +396,156 @@ asm(GESHER_VA_TRAMPOLINE("gesher_bionic_execle", "gesher_bionic_vexecle", "16", 
 // --- waitpid / wait / wait4 ----------------------------------------------------
 
 constexpr int kWNOHANG = 1;
+constexpr int kWUNTRACED = 2;
+constexpr int kWCONTINUED = 8;
+constexpr int kWNOTHREAD = 0x20000000;
+constexpr int kWALL = 0x40000000;
+constexpr int kWCLONE = static_cast<int>(0x80000000u);
+constexpr int kWaitOptions = kWNOHANG | kWUNTRACED | kWCONTINUED | kWNOTHREAD | kWALL | kWCLONE;
+
+// bionic's LP64 struct rusage (the same on x86-64 and arm64).
+struct BionicRusage {
+  int64_t utime_sec, utime_usec, stime_sec, stime_usec;
+  int64_t maxrss, ixrss, idrss, isrss, minflt, majflt, nswap, inblock, oublock, msgsnd, msgrcv,
+      nsignals, nvcsw, nivcsw;
+};
+static_assert(sizeof(BionicRusage) == 144);
+
+void FillRusage(HANDLE process, BionicRusage* usage) {
+  std::memset(usage, 0, sizeof(*usage));
+  FILETIME created, exited, kernel, user;
+  if (GetProcessTimes(process, &created, &exited, &kernel, &user)) {
+    auto split = [](FILETIME ft, int64_t* sec, int64_t* usec) {
+      const uint64_t t = (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+      *sec = static_cast<int64_t>(t / 10'000'000);
+      *usec = static_cast<int64_t>((t % 10'000'000) / 10);
+    };
+    split(user, &usage->utime_sec, &usage->utime_usec);
+    split(kernel, &usage->stime_sec, &usage->stime_usec);
+  }
+  PROCESS_MEMORY_COUNTERS counters = {};
+  counters.cb = sizeof(counters);
+  if (K32GetProcessMemoryInfo(process, &counters, sizeof(counters))) {
+    usage->maxrss = static_cast<int64_t>(counters.PeakWorkingSetSize / 1024);
+    usage->minflt = counters.PageFaultCount;
+  }
+}
+
+// Whether wait with `options` takes this child (Linux's eligible_child): a
+// child whose exit signal is not SIGCHLD only with __WCLONE, the others only
+// without it, and every child with __WALL.
+bool Eligible(const Child& child, int options) {
+  if ((options & kWALL) != 0) return true;
+  return (child.exit_signal != kSigchld) == ((options & kWCLONE) != 0);
+}
 
 bool IsChild(int pid) {
   std::lock_guard<std::mutex> lock(g_children_mutex);
   return g_children.count(pid) != 0;
 }
 
-int CollectOne(int pid, int* status, int options) {
+// The children of this process are its spawned and forked ones; process
+// groups are not modelled (0 and < -1 take any child, as -1).
+int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr) {
+  if ((options & ~kWaitOptions) != 0) return errno = EINVAL, -1;
+  unsigned waited_slices = 0;
+  bool interrupted = false;  // a handler without SA_RESTART ran during the wait
   for (;;) {
-    // A tracer's tracees report their stops and exits too (ADR 0093).
+    // A tracer's tracees report their stops and exits too (ADR 0093); a
+    // tracee that is also a child reports its exit as a child, below.
     bool traced = false;
     if (int got = PtraceWaitPoll(pid, options, status, &traced, &IsChild); got != 0) return got;
+    int sig = 0, got = 0, word = 0;
+    std::vector<HANDLE> running;  // duplicates: another thread may reap meanwhile
     {
       std::lock_guard<std::mutex> lock(g_children_mutex);
-      if (g_children.empty() && !traced) return errno = 10 /*ECHILD*/, -1;
-      // A specific pid, or any (-1/0).
       bool found = false;
-      for (auto& kv : g_children) {
-        if (pid > 0 && kv.first != pid) continue;
-        found = true;
-        if (kv.second.exited) {
-          if (status != nullptr) *status = kv.second.status;
-          int got = kv.first;
-          if (kv.second.wait != nullptr) UnregisterWaitEx(kv.second.wait, nullptr);
-          if (kv.second.process != nullptr) CloseHandle(kv.second.process);
-          g_children.erase(kv.first);
-          return got;
+      for (auto it = g_children.begin(); it != g_children.end();) {
+        if ((pid > 0 && it->first != pid) || !Eligible(it->second, options)) {
+          ++it;
+          continue;
         }
-        if (pid > 0) break;
+        Child& child = it->second;
+        if (!child.exited && WaitForSingleObject(child.process, 0) != WAIT_OBJECT_0) {
+          found = true;
+          HANDLE own = nullptr;
+          if (running.size() < MAXIMUM_WAIT_OBJECTS &&
+              DuplicateHandle(GetCurrentProcess(), child.process, GetCurrentProcess(), &own,
+                              SYNCHRONIZE, FALSE, 0)) {
+            running.push_back(own);
+          }
+          ++it;
+          continue;
+        }
+        // Exited: reported once its process ended, whether or not its
+        // watcher has run yet; the watcher's exit signal is sent here then.
+        sig = RecordExitLocked(child);
+        if (ChildrenAutoReaped()) {
+          // Reaped at its exit (SIGCHLD ignored, SA_NOCLDWAIT): never reported.
+          SendExitSignal(it->first, sig, child.status);
+          sig = 0;
+          ReleaseChildLocked(it->first, child);
+          it = g_children.erase(it);
+          continue;
+        }
+        found = true;
+        got = it->first;
+        word = child.status;
+        if (usage != nullptr) FillRusage(child.process, usage);
+        ReleaseChildLocked(it->first, child);
+        g_children.erase(it);
+        break;
       }
-      // None exited: wait below with the lock released.
-      if (!found && !traced) return errno = 10 /*ECHILD*/, -1;  // no such child
+      if (got == 0 && !found && !traced) {
+        for (HANDLE h : running) CloseHandle(h);
+        return errno = 10 /*ECHILD*/, -1;
+      }
     }
-    if ((options & kWNOHANG) != 0) return 0;
-    // Block until a child exits (the watcher sets `exited`), then re-scan.
-    int error = 0;
-    InterruptibleSleep(20, nullptr, &error);
-    if (error != 0) return errno = error, -1;
+    if (got != 0) {
+      for (HANDLE h : running) CloseHandle(h);
+      if (status != nullptr) *status = word;
+      SendExitSignal(got, sig, word);
+      // A child's exit signal its watcher had not sent yet is handled here,
+      // as Linux runs it on the wait's return: left pending, it would
+      // interrupt this thread's next wait (for another child) with EINTR.
+      DeliverPendingSignals();
+      return got;
+    }
+    if ((options & kWNOHANG) != 0) {
+      for (HANDLE h : running) CloseHandle(h);
+      return 0;
+    }
+    if (interrupted) {
+      // A handler interrupted the wait, and the rescan found no child that
+      // ended (Linux's do_wait finds an exited child before it returns EINTR).
+      for (HANDLE h : running) CloseHandle(h);
+      return errno = kEINTR, -1;
+    }
+    // Wait for one of them to end. The thread waits as a signal waiter
+    // (signals sent to the process are delivered to it, and a handler that
+    // runs ends the wait with EINTR, or with SA_RESTART lets it go on), in
+    // short slices between which the children's handles are looked at.
+    bool ended = false;
+    if (!running.empty()) {
+      ended = WaitForMultipleObjects(static_cast<DWORD>(running.size()), running.data(), FALSE, 0) <
+              WAIT_OBJECT_0 + running.size();
+      for (HANDLE h : running) CloseHandle(h);
+    }
+    if (!ended) {
+      const int error = InterruptibleWaitPoint(waited_slices++ < 50 ? 2 : 20);
+      if (error == kEINTR) {
+        interrupted = true;  // look at the children once more first
+      } else if (error != 0) {
+        return errno = error, -1;
+      }
+    }
   }
 }
 
 int BIONIC_SYSV Waitpid(int pid, int* status, int options) { return CollectOne(pid, status, options); }
 int BIONIC_SYSV Wait(int* status) { return CollectOne(-1, status, 0); }
-int BIONIC_SYSV Wait4(int pid, int* status, int options, void* /*rusage*/) {
-  return CollectOne(pid, status, options);
+int BIONIC_SYSV Wait4(int pid, int* status, int options, void* rusage) {
+  return CollectOne(pid, status, options, static_cast<BionicRusage*>(rusage));
 }
 
 // --- system / popen ------------------------------------------------------------
@@ -330,7 +561,9 @@ int BIONIC_SYSV System(const char* command) {
   fds.clear();
   if (pid < 0) return -1;
   int status = 0;
-  if (CollectOne(pid, &status, 0) < 0) return -1;
+  int collected;
+  do collected = CollectOne(pid, &status, 0); while (collected < 0 && errno == EINTR);
+  if (collected < 0) return -1;
   return status;
 }
 
@@ -429,7 +662,9 @@ int BIONIC_SYSV Pclose(void* stream) {
     if (it != g_popen.end() && it->second == pid) g_popen.erase(it);
   }
   int status = 0;
-  if (CollectOne(pid, &status, 0) < 0) return -1;
+  int collected;
+  do collected = CollectOne(pid, &status, 0); while (collected < 0 && errno == EINTR);
+  if (collected < 0) return -1;
   return status;
 }
 
@@ -639,6 +874,246 @@ void BIONIC_SYSV Closefrom(int lowest) {
   CloseRange(static_cast<unsigned>(lowest), ~0u, 0);
 }
 
+// --- fork (translated arm64 code; ADR 0092) ----------------------------------------
+//
+// A real child process: gesher::CloneProcess (RtlCloneUserProcess) copies
+// this address space copy-on-write, with only the calling thread, and both
+// processes return here. Every lock a system call can take is in gesher-base's
+// fork set (gesher/fork.h): AcquireForkLocks takes ntdll's loader lock, then
+// all of them, then the translator's (the caller's hooks), trying each and
+// starting again when one is busy, so no thread is inside any of them at the
+// clone and none can be left waiting for this one. The child's copies are
+// then consistent; each is made anew in the child.
+
+struct ForkHooks {
+  int (BIONIC_SYSV* try_prepare)();  // 1 with every translator lock held
+  void (BIONIC_SYSV* parent)();
+  void (BIONIC_SYSV* child)();
+  // The translator's guest mapping lock: 0 tries it at the start of a round
+  // (before the fork set; 1 when taken), 1 gives it back (a failed round, or
+  // the parent after the clone), 2 makes it anew in the child.
+  int (BIONIC_SYSV* mapping)(int op);
+};
+
+std::mutex g_fork_mutex;  // one fork at a time (not in the fork set: the forker's)
+const ForkHooks* g_fork_hooks = nullptr;
+bool TryTranslatorLocks() {
+  return g_fork_hooks == nullptr || g_fork_hooks->try_prepare == nullptr ||
+         g_fork_hooks->try_prepare() != 0;
+}
+void ReleaseTranslatorLocks() {
+  if (g_fork_hooks != nullptr && g_fork_hooks->parent != nullptr) g_fork_hooks->parent();
+}
+bool TranslatorMapping(int op) {
+  return g_fork_hooks == nullptr || g_fork_hooks->mapping == nullptr || g_fork_hooks->mapping(op) != 0;
+}
+// The guest mapping lock, tried for a short slice (mapping calls hold it only
+// briefly; a fork under a stream of them would rarely find it free with one
+// try). Not taken: the round fails like any other, and the fork set's
+// deadline bounds the whole wait (gesher/fork.h).
+constexpr ULONGLONG kMappingSliceMs = 50;
+bool TranslatorRoundBegin() {
+  const ULONGLONG start = GetTickCount64();
+  for (unsigned i = 0;; ++i) {
+    if (TranslatorMapping(0)) return true;
+    if (GetTickCount64() - start >= kMappingSliceMs) return false;
+    if (i < 64) SwitchToThread();
+    else Sleep(1);
+  }
+}
+void TranslatorRoundEnd() { TranslatorMapping(1); }
+
+// How long a fork waits for every lock to be free at once before failing
+// with EAGAIN (each is only tried; a busy one restarts the round).
+constexpr unsigned kForkLockTimeoutMs = 10000;
+// How long the parent waits, holding the fork set, for the child to take the
+// memfd write leases it inherited (it only renews byte-range locks there).
+constexpr DWORD kLeaseWaitMs = 2000;
+// How long the parent waits, without the fork set, for the child to have
+// started its signal mailbox thread and ptrace guard (each start is bounded
+// at 5 s, gesher/fork.h).
+constexpr DWORD kChildReadyMs = 15000;
+
+// The child: none of the parent's children are its children, and none of its
+// popen streams has a child of its own.
+void ForkChildProcessState() {
+  for (auto& kv : g_children) {
+    if (kv.second.process != nullptr) CloseHandle(kv.second.process);
+  }
+  g_children.clear();
+  g_popen.clear();
+}
+
+// Returns the child's pid in the parent, 0 in the child, -1 with errno set.
+// `exit_signal`: what the child's exit sends the parent (SIGCHLD for fork).
+// `run_atfork`: pthread_atfork handlers run around it (fork, vfork; not a raw
+// clone system call, as on Linux).
+int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hooks) {
+  if (run_atfork) RunAtforkPrepare();
+  // Forked children create processes through this one (gesher/fork.h).
+  gesher::StartSpawnBroker();
+  gesher::PrepareFork();
+  std::unique_lock<std::mutex> serial(g_fork_mutex);
+  PthreadForkPrepare();
+  g_fork_hooks = hooks;
+  if (gesher::AcquireForkLocks(&TryTranslatorLocks, &ReleaseTranslatorLocks, kForkLockTimeoutMs,
+                               &TranslatorRoundBegin, &TranslatorRoundEnd) != 0) {
+    const int error = errno;
+    serial.unlock();
+    if (run_atfork) RunAtforkParent();
+    return errno = error, -1;
+  }
+  // The child takes its own lease for each memfd write lease it inherits; the
+  // parent waits for that before any of its threads can unmap and seal, so a
+  // seal right after fork sees the child's mapping (EBUSY), as on Linux. The
+  // child then waits for the parent's word: go on (`leases_go`), or be ended
+  // (a parent that gave up waiting); it also goes on if the parent ends. The
+  // events and the parent's handle, made before the clone, are the child's
+  // too (at the same values).
+  const bool leases = gesher::ForkHasMemfdWriteLeases();
+  HANDLE leases_renewed = leases ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
+  HANDLE leases_go = leases ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
+  HANDLE parent_self = nullptr;
+  if (leases) {
+    DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &parent_self, SYNCHRONIZE,
+                    FALSE, 0);
+  }
+  // Set by the child once its signal mailbox, its ptrace state and their
+  // threads run: until then fork has not succeeded (ReinitializeAfterFork).
+  HANDLE child_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (child_ready == nullptr || (leases && (leases_renewed == nullptr || leases_go == nullptr || parent_self == nullptr))) {
+    for (HANDLE h : {child_ready, leases_renewed, leases_go, parent_self}) {
+      if (h != nullptr) CloseHandle(h);
+    }
+    gesher::ReleaseForkLocks(false);
+    TranslatorMapping(1);
+    serial.unlock();
+    if (run_atfork) RunAtforkParent();
+    return errno = EAGAIN, -1;
+  }
+  HANDLE process = nullptr;
+  DWORD pid = 0;
+  const int cloned = gesher::CloneProcess(&process, &pid);
+  const int error = errno;
+  if (cloned == 0) {
+    // The child. Its copies of the locks are consistent (no thread was in
+    // them) and its only thread holds them: drop the parent's other threads'
+    // state, then make the locks anew.
+    if (hooks != nullptr && hooks->child != nullptr) hooks->child();
+    TranslatorMapping(2);
+    PthreadForkChild();
+    SignalForkChild();
+    ForkChildProcessState();
+    PtraceForkChild();
+    gesher::ReleaseForkLocks(true);  // renews the inherited memfd leases
+    if (leases) {
+      SetEvent(leases_renewed);
+      // No guest code runs before the parent decided: a parent that gave up
+      // waiting ends this process instead of saying go.
+      HANDLE waits[2] = {leases_go, parent_self};
+      WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+      for (HANDLE h : {leases_renewed, leases_go, parent_self}) CloseHandle(h);
+    }
+    serial.release();
+    new (&g_fork_mutex) std::mutex();
+    if (!gesher::ReinitializeAfterFork()) {
+      // It could not watch its own signals (or be traced): not a child the
+      // parent may return. The parent sees it end without being ready.
+      TerminateProcess(GetCurrentProcess(), 0x7f);
+    }
+    SetEvent(child_ready);
+    CloseHandle(child_ready);
+    if (run_atfork) RunAtforkChild();
+    return 0;
+  }
+  // Whether the child took its leases. The wait is bounded and short (this
+  // thread holds the whole fork set meanwhile, so every other thread that
+  // makes a system call waits too): the child only renews locks there.
+  DWORD lease_wait = WAIT_OBJECT_0;
+  if (leases) {
+    if (cloned > 0) {
+      HANDLE waits[2] = {leases_renewed, process};
+      lease_wait = WaitForMultipleObjects(2, waits, FALSE, kLeaseWaitMs);
+      // Only a child that took them goes on: one that did not is ended below
+      // (it waits for this word, so it has run no guest code either way).
+      if (lease_wait == WAIT_OBJECT_0) SetEvent(leases_go);
+    }
+    for (HANDLE h : {leases_renewed, leases_go, parent_self}) CloseHandle(h);
+  }
+  const bool leases_failed = cloned > 0 && lease_wait != WAIT_OBJECT_0;
+  if (leases_failed) {
+    // The child did not take its leases in time (or ended first): returning
+    // its pid would let a seal succeed while the child maps the memfd, which
+    // Linux never allows. It has run no guest code (it waits for the word
+    // above), so it is ended and fork fails as fork(2) may.
+    TerminateProcess(process, 0);
+    WaitForSingleObject(process, kLeaseWaitMs);
+    CloseHandle(process);
+  }
+  gesher::ReleaseForkLocks(false);
+  TranslatorMapping(1);
+  serial.unlock();
+  // The child's start: its mailbox thread and ptrace guard (outside the fork
+  // set: they start threads). Not ready in time, or ended first: it has run
+  // no guest code (it signals before fork returns in it), so it is ended and
+  // fork fails, rather than return a child that loses signals.
+  DWORD ready_wait = WAIT_OBJECT_0;
+  if (cloned > 0 && !leases_failed) {
+    HANDLE waits[2] = {child_ready, process};
+    ready_wait = WaitForMultipleObjects(2, waits, FALSE, kChildReadyMs);
+    if (ready_wait != WAIT_OBJECT_0) {
+      TerminateProcess(process, 0);
+      WaitForSingleObject(process, kLeaseWaitMs);
+      CloseHandle(process);
+    }
+  }
+  CloseHandle(child_ready);
+  if (cloned > 0 && !leases_failed && ready_wait != WAIT_OBJECT_0) {
+    gesher::ForgetChildMailbox(pid);
+    gesher::logging::Record(0 /*LOG_ID_MAIN*/, 5 /*ANDROID_LOG_WARN*/, "gesher-fork",
+                            "fork: the child could not start its signal and ptrace threads; EAGAIN");
+    if (run_atfork) RunAtforkParent();
+    return errno = EAGAIN, -1;
+  }
+  if (leases_failed) {
+    // Its mailbox and broker registration (their locks are in the fork set).
+    gesher::ForgetChildMailbox(pid);
+    // Logged only now: the log's locks are in the fork set.
+    gesher::logging::Record(0 /*LOG_ID_MAIN*/, 5 /*ANDROID_LOG_WARN*/, "gesher-fork",
+                            lease_wait == WAIT_TIMEOUT
+                                ? "fork: the child did not take its memfd write leases in time; EAGAIN"
+                                : "fork: the child ended before it took its memfd write leases; EAGAIN");
+    if (run_atfork) RunAtforkParent();
+    return errno = EAGAIN, -1;
+  }
+  if (cloned > 0) Track(static_cast<int>(pid), process, exit_signal, true);
+  if (run_atfork) RunAtforkParent();
+  if (cloned < 0) return errno = error, -1;
+  return static_cast<int>(pid);
+}
+
+unsigned BIONIC_SYSV SignalExitCodeForTranslator(int sig) { return gesher::SignalExitCode(sig); }
+
+// The raw exit system call (arm64's 93): it ends the calling thread, and
+// with the last thread the process, with that status. The program's threads
+// are those it made; a forked child and gesher-exec's program have no others
+// (gesher-base's own helper threads are not the program's). Elsewhere (ART's
+// process) the process ends only when Windows reports the last thread. As on
+// Linux, nothing is flushed.
+[[noreturn]] void BIONIC_SYSV ExitThreadRaw(int code) {
+  ULONG last = 0;
+  using QueryThreadFn = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  static auto query = reinterpret_cast<QueryThreadFn>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread")));
+  // ThreadAmILastThread (12).
+  if (query != nullptr) query(GetCurrentThread(), 12, &last, sizeof(last), nullptr);
+  if (last != 0 || ((gesher::InForkedChild() || SignalsAuthoritative()) && OnlyProgramThread())) {
+    if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code) & 0xff);
+    ExitProcess(static_cast<UINT>(code) & 0xff);
+  }
+  ExitThread(static_cast<DWORD>(code) & 0xff);
+}
+
 }  // namespace
 
 int KillOtherProcess(int pid, int sig) {
@@ -650,7 +1125,10 @@ int KillOtherProcess(int pid, int sig) {
   {
     std::lock_guard<std::mutex> lock(g_children_mutex);
     auto it = g_children.find(pid);
-    if (it != g_children.end() && it->second.exited) return 0;
+    if (it != g_children.end() &&
+        (it->second.exited || WaitForSingleObject(it->second.process, 0) == WAIT_OBJECT_0)) {
+      return 0;
+    }
   }
   return gesher_kill_other(pid, sig);
 }
@@ -666,6 +1144,11 @@ void RegisterProcess(SymbolTable& t) {
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   E("fork", ForkUnsupported);
   E("vfork", ForkUnsupported);
+  // For gesher_arm64.dll's guest fork/vfork/clone (ADR 0092); x86-64 code's
+  // fork stays unsupported (ADR 0055).
+  E("__gesher_fork", GuestFork);
+  E("__gesher_exit_thread", ExitThreadRaw);
+  E("__gesher_signal_exit_code", SignalExitCodeForTranslator);
   E("execve", Execve);
   E("execv", Execv);
   E("execvp", Execvp);
@@ -711,3 +1194,7 @@ void RegisterProcess(SymbolTable& t) {
 }
 
 }  // namespace gesher::bionic
+
+// fork (gesher/fork.h): the children and popen tables in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::g_children_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::g_popen_mutex);

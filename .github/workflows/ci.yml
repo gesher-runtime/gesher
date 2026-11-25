@@ -180,6 +180,21 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/clipboard/Publication.ps1
+      - name: Print jobs and the PrintDocumentAdapter lifecycle (host harness)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_print_spooler_contracts.py --java-home "$JAVA_HOME"
+      - name: Build actual Windows printer enumeration, capabilities and PDF printing
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /Icompat\devices compat\print\print_win32.cc compat\devices\winrt.cc tests\print\print_windows_test.cc /Fe:print-windows-test.exe winspool.lib comdlg32.lib gdi32.lib user32.lib ole32.lib
+      - name: Print a generated PDF to Microsoft Print to PDF without UI
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          & .\print-windows-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows print host contracts failed' }
       - name: Build actual Windows Hello verifier contracts (ADR 0091)
         if: ${{ !cancelled() }}
         shell: cmd
@@ -222,6 +237,27 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
+      - name: Build actual Windows caption style reader (ClosedCaptionProperties)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc compat\devices\winrt.cc tests\captioning\caption_windows_test.cc /Fe:caption-test.exe ole32.lib uuid.lib
+      - name: Caption style values and PropertiesChanged watch lifetime against real Windows
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\caption-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows caption style checks failed' }
+      - name: Build production caption reader with scripted Windows SDK properties
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc tests\captioning\caption_read_test.cc /Fe:caption-read-test.exe ole32.lib uuid.lib
+      - name: Caption defaults, required computed colors and failure lifetime contracts
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\caption-read-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Caption Read boundary contracts failed' }
+
       - name: Build actual Windows Country or region lookup
         if: ${{ !cancelled() }}
         shell: cmd
@@ -636,6 +672,9 @@ jobs:
 
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
+
+      - name: Caption style contracts (AOSP android-16 Settings.Secure and CaptionStyle)
+        run: python3 tools/test_captioning_contracts.py --java-home "$JAVA_HOME"
 
       - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
         run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
