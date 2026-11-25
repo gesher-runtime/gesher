@@ -30,6 +30,7 @@
 #include <thread>
 #include <vector>
 
+#include <gesher/fork.h>
 #include <gesher/procfs_fd.h>
 #include <gesher/process_name.h>
 
@@ -875,6 +876,45 @@ static void TestProcfsTimes() {
   }
 }
 
+// The fork set never waits for a getdents64: threads reading /proc
+// directories (whose snapshots take the mman and fd-table locks) do not keep
+// a fork from taking every lock of its set promptly.
+static void TestForkWhileProcReaders() {
+  printf("Testing the fork set while threads read /proc directories...\n");
+  std::atomic<bool> stop{false};
+  std::vector<std::thread> readers;
+  for (const char* name : {"/proc/self/map_files", "/proc/self/fd", "/proc/self/task",
+                           "/proc/self/map_files", "/proc/self/fd", "/proc/self/task"}) {
+    readers.emplace_back([&stop, name]() {
+      const int fd = open(name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      char part[512];
+      while (fd >= 0 && !stop.load()) {
+        if (getdents64(fd, part, sizeof(part)) <= 0) lseek(fd, 0, SEEK_SET);
+      }
+      if (fd >= 0) close(fd);
+    });
+  }
+  Sleep(50);
+  int taken = 0;
+  double worst = 0;
+  for (int i = 0; i < 20; ++i) {
+    const auto t0 = std::chrono::steady_clock::now();
+    if (gesher::AcquireForkLocks(nullptr, nullptr, 5000) == 0) {
+      ++taken;
+      gesher::ReleaseForkLocks(false);
+    }
+    const double ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (ms > worst) worst = ms;
+    Sleep(5);
+  }
+  stop = true;
+  for (std::thread& t : readers) t.join();
+  printf("  fork set taken %d/20 with 6 /proc readers, worst %.1f ms\n", taken, worst);
+  CHECK_MSG(taken == 20, "the fork set is taken while threads read /proc directories");
+  CHECK_MSG(worst < 1000.0, "and promptly");
+}
+
 // getdents64 on a directory on disk.
 static void TestDiskGetdents() {
   printf("Testing getdents64 on a directory on disk...\n");
@@ -895,6 +935,26 @@ static void TestDiskGetdents() {
   CHECK(names.size() == 6 && Has(names, ".") && Has(names, "..") && Has(names, "alpha") &&
         Has(names, "beta") && Has(names, "gamma") && Has(names, "sub"));
   CHECK(lseek(dir, 0, SEEK_SET) == 0 && Dents(dir, 4096) == names);
+  {
+    // d_ino is the inode stat reports.
+    CHECK(lseek(dir, 0, SEEK_SET) == 0);
+    char all[4096];
+    const ssize_t got = getdents64(dir, all, sizeof(all));
+    struct stat st = {};
+    bool matched = false;
+    for (ssize_t at = 0; at < got;) {
+      unsigned short reclen;
+      unsigned long long ino;
+      memcpy(&reclen, all + at + 16, 2);
+      memcpy(&ino, all + at, 8);
+      if (strcmp(all + at + 19, "alpha") == 0) {
+        matched = stat((std::string(narrow) + "/alpha").c_str(), &st) == 0 &&
+                  static_cast<unsigned long long>(st.st_ino) == ino;
+      }
+      at += reclen;
+    }
+    CHECK_MSG(matched, "getdents64's d_ino is stat's st_ino");
+  }
   // A dup shares the position, as Linux's open file description does.
   CHECK(lseek(dir, 0, SEEK_SET) == 0);
   char record[24];  // "." alone
@@ -907,6 +967,19 @@ static void TestDiskGetdents() {
   for (const wchar_t* f : {L"\\alpha", L"\\beta", L"\\gamma"}) DeleteFileW((root + f).c_str());
   RemoveDirectoryW((root + L"\\sub").c_str());
   CHECK_MSG(RemoveDirectoryW(root.c_str()), "a closed listing holds no handle on the directory");
+  {
+    // A directory removed while an fd is open on it lists as empty, as
+    // Linux's does (getdents64 returns 0).
+    CreateDirectoryW(root.c_str(), nullptr);
+    const int gone = open(narrow, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    CHECK(gone >= 0 && RemoveDirectoryW(root.c_str()));
+    char part[256];
+    errno = 0;
+    const ssize_t got = gone >= 0 ? getdents64(gone, part, sizeof(part)) : -1;
+    CHECK_MSG(got == 0, "getdents64 of a removed directory: 0 (end of listing)");
+    if (got != 0) printf("  removed directory: getdents64 %zd errno %d\n", got, errno);
+    if (gone >= 0) close(gone);
+  }
 
   // Many entries: one enumeration serves the calls that continue it, and
   // two threads reading one fd share the entries out (Linux serializes
@@ -1033,6 +1106,7 @@ int main(int argc, char** argv) {
   TestMapFilesLinks();
   TestProcfsTimes();
   TestDiskGetdents();
+  TestForkWhileProcReaders();
 
   if (g_failed == 0) {
     printf("procfs & sysfs contracts: all passed (%d checks)\n", g_checks);
