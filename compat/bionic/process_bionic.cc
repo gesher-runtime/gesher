@@ -25,6 +25,7 @@
 #include <gesher/environment.h>
 #include <gesher/fork.h>
 #include <gesher/environment_utf16.h>
+#include <gesher/logging.h>
 
 #include <windows.h>
 
@@ -888,10 +889,10 @@ struct ForkHooks {
   int (BIONIC_SYSV* try_prepare)();  // 1 with every translator lock held
   void (BIONIC_SYSV* parent)();
   void (BIONIC_SYSV* child)();
-  // The translator's guest mapping lock: 0 waits for it at the start of a
-  // round (before the fork set), 1 gives it back (a failed round, or the
-  // parent after the clone), 2 makes it anew in the child.
-  void (BIONIC_SYSV* mapping)(int op);
+  // The translator's guest mapping lock: 0 tries it at the start of a round
+  // (before the fork set; 1 when taken), 1 gives it back (a failed round, or
+  // the parent after the clone), 2 makes it anew in the child.
+  int (BIONIC_SYSV* mapping)(int op);
 };
 
 std::mutex g_fork_mutex;  // one fork at a time (not in the fork set: the forker's)
@@ -903,15 +904,31 @@ bool TryTranslatorLocks() {
 void ReleaseTranslatorLocks() {
   if (g_fork_hooks != nullptr && g_fork_hooks->parent != nullptr) g_fork_hooks->parent();
 }
-void TranslatorMapping(int op) {
-  if (g_fork_hooks != nullptr && g_fork_hooks->mapping != nullptr) g_fork_hooks->mapping(op);
+bool TranslatorMapping(int op) {
+  return g_fork_hooks == nullptr || g_fork_hooks->mapping == nullptr || g_fork_hooks->mapping(op) != 0;
 }
-void TranslatorRoundBegin() { TranslatorMapping(0); }
+// The guest mapping lock, tried for a short slice (mapping calls hold it only
+// briefly; a fork under a stream of them would rarely find it free with one
+// try). Not taken: the round fails like any other, and the fork set's
+// deadline bounds the whole wait (gesher/fork.h).
+constexpr ULONGLONG kMappingSliceMs = 50;
+bool TranslatorRoundBegin() {
+  const ULONGLONG start = GetTickCount64();
+  for (unsigned i = 0;; ++i) {
+    if (TranslatorMapping(0)) return true;
+    if (GetTickCount64() - start >= kMappingSliceMs) return false;
+    if (i < 64) SwitchToThread();
+    else Sleep(1);
+  }
+}
 void TranslatorRoundEnd() { TranslatorMapping(1); }
 
 // How long a fork waits for every lock to be free at once before failing
 // with EAGAIN (each is only tried; a busy one restarts the round).
 constexpr unsigned kForkLockTimeoutMs = 10000;
+// How long the parent waits, holding the fork set, for the child to take the
+// memfd write leases it inherited (it only renews byte-range locks there).
+constexpr DWORD kLeaseWaitMs = 2000;
 
 // The child: none of the parent's children are its children, and none of its
 // popen streams has a child of its own.
@@ -960,6 +977,7 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
     PthreadForkChild();
     SignalForkChild();
     ForkChildProcessState();
+    PtraceForkChild();
     gesher::ReleaseForkLocks(true);  // renews the inherited memfd leases
     if (leases_renewed != nullptr) {
       SetEvent(leases_renewed);
@@ -971,17 +989,41 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
     if (run_atfork) RunAtforkChild();
     return 0;
   }
+  // Whether the child took its leases. The wait is bounded and short (this
+  // thread holds the whole fork set meanwhile, so every other thread that
+  // makes a system call waits too): the child only renews locks there.
+  DWORD lease_wait = WAIT_OBJECT_0;
   if (leases_renewed != nullptr) {
-    // Bounded: a child that never gets there (it died) must not stop this one.
     if (cloned > 0) {
       HANDLE waits[2] = {leases_renewed, process};
-      WaitForMultipleObjects(2, waits, FALSE, 5000);
+      lease_wait = WaitForMultipleObjects(2, waits, FALSE, kLeaseWaitMs);
     }
     CloseHandle(leases_renewed);
+  }
+  const bool leases_failed = cloned > 0 && lease_wait != WAIT_OBJECT_0;
+  if (leases_failed) {
+    // The child did not take its leases in time (or ended first): returning
+    // its pid would let a seal succeed while the child maps the memfd, which
+    // Linux never allows. It has run no guest code yet (it signals before
+    // fork returns in it), so it is ended and fork fails as fork(2) may.
+    TerminateProcess(process, 0);
+    WaitForSingleObject(process, kLeaseWaitMs);
+    CloseHandle(process);
   }
   gesher::ReleaseForkLocks(false);
   TranslatorMapping(1);
   serial.unlock();
+  if (leases_failed) {
+    // Its mailbox and broker registration (their locks are in the fork set).
+    gesher::ForgetChildMailbox(pid);
+    // Logged only now: the log's locks are in the fork set.
+    gesher::logging::Record(0 /*LOG_ID_MAIN*/, 5 /*ANDROID_LOG_WARN*/, "gesher-fork",
+                            lease_wait == WAIT_TIMEOUT
+                                ? "fork: the child did not take its memfd write leases in time; EAGAIN"
+                                : "fork: the child ended before it took its memfd write leases; EAGAIN");
+    if (run_atfork) RunAtforkParent();
+    return errno = EAGAIN, -1;
+  }
   if (cloned > 0) Track(static_cast<int>(pid), process, exit_signal, true);
   if (run_atfork) RunAtforkParent();
   if (cloned < 0) return errno = error, -1;

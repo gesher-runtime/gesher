@@ -25,12 +25,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include <gesher/fork.h>
+#include <gesher/ptrace_state.h>
 
 #include "internal.h"
 
@@ -443,6 +445,92 @@ void* Ntdll(const char* name) {
   return reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), name));
 }
 
+// --- the clone's address-wait table ----------------------------------------------
+//
+// ntdll's WaitOnAddress keeps its waiters in a hash table in the PEB,
+// PEB.WaitOnAddressHashTable: 128 buckets, indexed by (address >> 5) & 0x7f,
+// each the head of a list of wait blocks on the waiting threads' stacks, with
+// two flag bits in its low bits. Every wait of a thread that goes through it
+// uses it: WaitOnAddress itself, so Gesher's futexes and the guest's mutexes
+// and condition variables, and ntdll's CRITICAL_SECTION waits.
+// RtlCloneUserProcess copies the PEB with the rest of the address space, so
+// the child's table still lists the parent's threads that were waiting at the
+// clone, threads the child does not have. A wake in the child can go to one
+// of those stale blocks and be lost: the child's real waiter then sleeps for
+// ever. ntdll locks every heap for the clone, so a parent's thread that
+// allocates is exactly one that waits then. The child's only thread waits for
+// nothing at that point, so its table must be empty: it is emptied first
+// thing, before any other thread exists in it.
+//
+// The field is in the public PEB symbols, at 0x3A0 in the 64-bit PEB (x64 and
+// ARM64 use the same layout) since Windows 8; RtlpWaitOnAddress was checked
+// to index it so on x64 build 26100. An offset that had moved would make the
+// clear write over other fields, so it is used only when the layout checks
+// out: Windows 8 or later (the real version, which compatibility modes do not
+// change), and every non-empty bucket in the parent, just before the clone,
+// pointing at committed private read-write memory (a thread's stack) on an
+// 8-byte boundary. Otherwise fork fails with EAGAIN rather than make a child
+// whose wakes may be lost. In the child only buckets that pass the same check
+// are cleared. 32-bit builds have another layout: fork fails there.
+//
+// SRW locks and condition variables keep their waiters in the lock word
+// itself (blocks on the waiters' stacks). The fork set makes the child's copy
+// of each of its own locks anew; one outside it (a Windows DLL's, the app's)
+// that a parent's thread waited on at the clone keeps that stale waiter in
+// the child (ADR 0092).
+#if defined(_WIN64)
+struct PebLayout {
+  BYTE before_wait_table[0x3A0];
+  void* volatile wait_on_address_hash_table[128];  // PEB.WaitOnAddressHashTable
+};
+static_assert(offsetof(PebLayout, wait_on_address_hash_table) == 0x3A0,
+              "PEB.WaitOnAddressHashTable is at 0x3A0 in the 64-bit PEB");
+static_assert(sizeof(PebLayout) == 0x7A0, "128 pointer-sized buckets");
+
+PebLayout* CurrentPeb() {
+  return reinterpret_cast<PebLayout*>(NtCurrentTeb()->ProcessEnvironmentBlock);
+}
+
+// A bucket that holds nothing, or a wait block where one can be.
+bool PlausibleBucket(void* entry) {
+  const uintptr_t block = reinterpret_cast<uintptr_t>(entry) & ~uintptr_t{3};  // the flag bits
+  if (block == 0) return true;
+  if ((block & 7) != 0) return false;
+  MEMORY_BASIC_INFORMATION info;
+  if (VirtualQuery(reinterpret_cast<void*>(block), &info, sizeof(info)) != sizeof(info)) return false;
+  return info.State == MEM_COMMIT && info.Type == MEM_PRIVATE && info.Protect == PAGE_READWRITE;
+}
+#endif
+
+// In the parent, with the fork set held: whether the child's table can be
+// emptied (above).
+bool WaitTableUsable() {
+#if defined(_WIN64)
+  using VersionFn = void(NTAPI*)(ULONG*, ULONG*, ULONG*);
+  static auto version = reinterpret_cast<VersionFn>(Ntdll("RtlGetNtVersionNumbers"));
+  if (version == nullptr) return false;
+  ULONG major = 0, minor = 0, build = 0;
+  version(&major, &minor, &build);
+  if (major < 6 || (major == 6 && minor < 2)) return false;
+  for (void* entry : CurrentPeb()->wait_on_address_hash_table) {
+    if (!PlausibleBucket(entry)) return false;
+  }
+  return true;
+#else
+  return false;
+#endif
+}
+
+// In the child, before anything else runs in it.
+void EmptyWaitTable() {
+#if defined(_WIN64)
+  for (void* volatile& entry : CurrentPeb()->wait_on_address_hash_table) {
+    void* value = entry;
+    if (value != nullptr && PlausibleBucket(value)) entry = nullptr;
+  }
+#endif
+}
+
 // Object types a clone must not share with this process: the thread pool's
 // worker factory and its completion ports and wait packets (which would run
 // the child's work on this process's threads), ALPC ports (this process's
@@ -622,6 +710,9 @@ void ForgetChildMailbox(DWORD pid) {
 int CloneProcess(HANDLE* process, DWORD* pid) {
   static auto clone = reinterpret_cast<CloneFn>(Ntdll("RtlCloneUserProcess"));
   if (clone == nullptr) return errno = ENOSYS, -1;
+  // The child's address-wait table must be emptied, and can be only when its
+  // layout checks out (above).
+  if (!WaitTableUsable()) return errno = EAGAIN, -1;
   std::vector<Changed> changed;
   changed.reserve(1024);
   AcquireSRWLockExclusive(&g_spawn_lock);
@@ -635,6 +726,8 @@ int CloneProcess(HANDLE* process, DWORD* pid) {
   info.length = sizeof(info);
   LONG status = clone(kCloneInheritHandles, nullptr, nullptr, nullptr, &info);
   if (status == kStatusProcessCloned) {
+    // First: no wake in the child may go to a parent's waiter (above).
+    EmptyWaitTable();
     g_forked_child.store(true, std::memory_order_release);
     // The child's copies: their own flags again, at the same values.
     RestoreHandles(changed);
@@ -676,8 +769,12 @@ void ReinitializeAfterFork() {
   // parent's signals. Its own mailbox is named by its own pid.
   g_mailbox = nullptr;
   OpenMailbox(false);
-  // MERGE(0093): gesher::ptrace::Self() here, so the child's ptrace state
-  // and guard follow its pid (ADR 0093; this lands when both branches meet).
+  // The child's own ptrace state (ADR 0093): its section, named by its pid,
+  // with the dumpable flag the parent had at the clone and no tracer or
+  // ptracer exception, and its own guard, so that a tracer can stop it from
+  // the moment fork returns in it. This is the executable's copy of
+  // gesher-base, the one that owns the guard.
+  gesher::ptrace::Self();
 }
 
 }  // namespace gesher

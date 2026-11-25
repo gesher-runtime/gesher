@@ -223,7 +223,7 @@ void ThreadLeaving() {
 }
 
 int AcquireForkLocks(bool (*extra_try)(), void (*extra_release)(), unsigned timeout_ms,
-                     void (*round_begin)(), void (*round_end)()) {
+                     bool (*round_begin)(), void (*round_end)()) {
   AcquireSRWLockExclusive(&g_exit_gate);
   if (!WaitForLeavingThreads()) {
     // A leaving thread is stuck in its exit callbacks: no fork now.
@@ -234,13 +234,14 @@ int AcquireForkLocks(bool (*extra_try)(), void (*extra_release)(), unsigned time
   g_extra_release = extra_release;
   const ULONGLONG deadline = GetTickCount64() + timeout_ms;
   for (unsigned round = 0;; ++round) {
-    if (round_begin != nullptr) round_begin();
-    if (TryRound(extra_try)) {
-      g_fork_set_held.store(1, std::memory_order_seq_cst);
-      return 0;
+    if (round_begin == nullptr || round_begin()) {
+      if (TryRound(extra_try)) {
+        g_fork_set_held.store(1, std::memory_order_seq_cst);
+        return 0;
+      }
+      ReleaseTaken();
+      if (round_end != nullptr) round_end();
     }
-    ReleaseTaken();
-    if (round_end != nullptr) round_end();
     if (GetTickCount64() >= deadline) {
       ReleaseSRWLockShared(&g_registry_lock);
       ReleaseSRWLockExclusive(&g_exit_gate);

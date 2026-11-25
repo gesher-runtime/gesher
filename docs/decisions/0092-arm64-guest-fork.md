@@ -101,14 +101,20 @@ resume it, and nothing has asked for it.
      invalidation still reaches them, harmlessly), with their page records'
      locks made anew.
 
-  At the start of each round, before any lock of the set, the fork waits for
+  At the start of each round, before any lock of the set, the fork takes
   the translator's guest mapping lock, which a guest mmap/mprotect/munmap/
   mremap holds across the host call and the translator's record of it: it is
   the outermost lock of such a call, and those calls keep it while they wait
-  for gesher-base's mapping lock, so a fork that only tried it would seldom
-  find it free. A round that fails gives it back before the fork yields, so a
-  library constructor that maps memory under the ELF loader's lock (which the
-  fork only tries) goes on between rounds. It is taken after the
+  for gesher-base's mapping lock, so a fork that tried it only once would
+  seldom find it free. It is tried for a slice of up to 50 ms (yields, then
+  1 ms sleeps); a round that does not get it fails like one that found a lock
+  of the set busy, and the fork set's 10 s deadline bounds the whole wait
+  (`EAGAIN`), so a thread that holds it while waiting for something the
+  forking thread holds (a fork from a `dl_iterate_phdr` callback while
+  another thread unmaps that object) is never waited for without bound. A
+  round that fails gives it back before the fork yields, so a library
+  constructor that maps memory under the ELF loader's lock (which the fork
+  only tries) goes on between rounds. It is taken after the
   `pthread_atfork` prepare handlers (which may map memory under their own
   locks: on Linux they run before any kernel lock), and given back before the
   parent and child handlers.
@@ -282,18 +288,57 @@ resume it, and nothing has asked for it.
     creation time: a sender skips a mailbox whose owner is not the process
     now using that pid, and a new owner of a reused pid resets what was left
     in it;
-  - the ptrace state of gesher-runtime/gesher#461 (ADR 0093) lands when both
-    branches meet: the child must call `gesher::ptrace::Self()` in
-    `ReinitializeAfterFork` (marked `MERGE(0093)`), its `g_lock` must join the
-    fork set, and its `SelfTracerId`, which caches the parent's start time in
-    a static, must be refreshed in the child;
+  - ntdll's address-wait table: `WaitOnAddress` keeps its waiters in the
+    PEB (`PEB.WaitOnAddressHashTable`, 128 buckets, each a list of wait
+    blocks on the waiting threads' stacks), and every wait that goes through
+    it uses it: Gesher's futexes, the guest's mutexes and condition
+    variables, ntdll's `CRITICAL_SECTION` waits. The clone copies the PEB, so
+    the child's table still lists the parent's threads that were waiting
+    then, threads the child does not have, and a wake in the child could go
+    to one of them and be lost: the child's own waiter would sleep for ever
+    (ntdll locks every heap for the clone, so a parent's thread that
+    allocates is exactly one that waits then). The child's only thread waits
+    for nothing at that point, so the table is emptied first thing in the
+    child, before any other thread exists. The field is in the public PEB
+    symbols, at 0x3A0 in the 64-bit PEB (x64 and ARM64 share the layout)
+    since Windows 8; `RtlpWaitOnAddress` indexes it so on x64 build 26100.
+    So that an offset that moved never makes the clear write over other
+    fields, it is used only when the layout checks out: Windows 8 or later
+    (`RtlGetNtVersionNumbers`, which compatibility modes do not change), and
+    every non-empty bucket in the parent, just before the clone, points to
+    committed private read-write memory (a stack) on an 8-byte boundary;
+    otherwise fork fails with `EAGAIN` rather than make a child whose wakes
+    may be lost. In the child only buckets that pass the same check are
+    cleared. A 32-bit build has another layout and fails fork the same way;
+  - the ptrace state (ADR 0093): `ReinitializeAfterFork` calls the
+    executable's copy of gesher-base's `gesher::ptrace::Self()`, so before
+    fork returns in the child it publishes its own `Local\gesher-ptrace-<pid>`
+    section and runs its own guard: a tracer can stop it at once. The section
+    keeps the dumpable flag the parent had at the clone (recorded while the
+    fork holds `ptrace_state`'s `g_lock`, which is in the fork set and which
+    `PR_SET_DUMPABLE` takes, so the parent cannot change it in between), as a
+    Linux child keeps its `mm`'s, and has no tracer, no Yama ptracer
+    exception, no stop request and no parked threads (the parent's are the
+    parent's threads'). The child's view of the parent's section and its
+    inherited copies of the parent's handles (section, guard events, the
+    tracer it watched, threads the guard had suspended) are closed, never
+    written. The cached `SelfTracerId` is cleared, so the child's is its own
+    pid and creation time. The shim's tracee table (its lock is in the fork
+    set too) is emptied in the child, closing the inherited handles and views
+    of the parent's tracees without touching their state: a forked child
+    traces nothing, as on Linux;
   - memfd write leases: a writable shared mapping of a memfd the child
     inherited gets its own lease in the child (the parent's byte-range lock
     is the parent's), so `F_SEAL_WRITE` stays `EBUSY` while the child maps
-    the file, as on Linux. When there are such mappings, the parent waits
-    (up to 5 s, or until the child ends) for the child to have taken them
-    before it releases the fork set, so a seal right after `fork` returns is
-    already `EBUSY`;
+    the file, as on Linux. When there are such mappings, the parent waits for
+    the child to have taken them before it releases the fork set, so a seal
+    right after `fork` returns is already `EBUSY`. The wait is short (up to
+    2 s; the child only renews byte-range locks there, and every other
+    thread of the parent that makes a system call waits meanwhile). A child
+    that has not taken them by then, or that ended first, has run no guest
+    code yet: it is ended, `fork` fails with `EAGAIN` (as fork(2) may), and
+    a warning is logged (`gesher-fork`), rather than return a child that a
+    seal could miss;
   - the translator: the same Env (guest stack, TLS block, Jits and their
     translated code) goes on; the parent's other threads' TLS blocks and
     profiler entries are dropped; the exclusive monitor is cleared (a
@@ -386,7 +431,13 @@ resume it, and nothing has asked for it.
 - **Other locks.** Per-object locks, guest-level locks and locks of code
   outside Gesher (ART's in dalvikvm, a stdio stream of the CRT's own) that
   another of the parent's threads held at the fork stay held in the child,
-  as POSIX allows for a multithreaded fork.
+  as POSIX allows for a multithreaded fork. Windows SRW locks and condition
+  variables keep their waiters in the lock word itself (wait blocks on the
+  waiters' stacks), not in the address-wait table: the fork set makes the
+  child's copy of each of its own locks anew, but one outside it (a Windows
+  DLL's, the app's own host code's) that a parent's thread waited on at the
+  clone keeps that stale waiter in the child, and a release there may wake
+  no one.
 - **ART.** A fork in dalvikvm copies ART's process with one thread; the
   child can run guest code and make system calls, not Java.
 - **Orphans.** As on Linux, a forked child is not ended with its parent: a
@@ -419,8 +470,12 @@ checks.
 
 ## Consequences
 
-- PairIP's clone and wait (with 0093's ptrace, when both branches meet) and
-  Ijiami's checks run as on a device, in real child processes.
+- PairIP's sequence (dumpable, `PR_SET_PTRACER_ANY`, raw `clone`, the
+  child's `ATTACH` to its parent, `wait4(__WALL)`, `PEEKDATA`/`POKEDATA`,
+  `DETACH`, `exit`) and Ijiami's checks run as on a device, in real child
+  processes; `arm64_fork_exec` runs PairIP's sequence, a parent tracing its
+  forked child, and the waits and heap of a parent's busy threads across the
+  clone.
 - Cost: none until a guest forks. A fork copies the process copy-on-write and
   holds the fork set briefly (a few milliseconds for gesher-exec: 120 forks
   with four busy threads take 3 to 8 s); making every handle inheritable for

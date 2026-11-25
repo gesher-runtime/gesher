@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '3a8ba7e0f222aae2dbae88e7077e149e8a477a0cceb2e0ff720e0844c1c6d7d5'
+OFD_QUALIFICATION_SHA256 = '96e826ae6719912a674795e5bbfaffa940d743d49fbb904b986bf59c1fe64a4a'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -273,7 +273,7 @@ OFD_QUALIFICATION_SHA256 = '3a8ba7e0f222aae2dbae88e7077e149e8a477a0cceb2e0ff720e
 # qualifies Windows execution nor replaces review of the production delta.
 SHARED_STDIO_BASE = '6d7638b789e21cba6270c1dbfabe5091680c4100'
 SHARED_STDIO_FEATURE_HEAD = 'de1e43c391275137c7b7b25dc170892684d55b5e'
-SHARED_STDIO_TRANSITION_SHA256 = '93519e62b0ffbb4306a7460cc9c7283680355b6e98b5652fb71dcd3ad5da4a49'
+SHARED_STDIO_TRANSITION_SHA256 = '8e28669c6d0d077f330d00191846c9b73e40afa12bde0da6ad0bbabd6203f013'
 SHARED_STDIO_PATHS = (
  'compat/bionic/stdio_bionic.cc',
  'compat/posix/include/gesher/stdio.h',
@@ -328,7 +328,7 @@ def preceding_shared_stdio_sources(qualification):
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
 # the original OFD receipt and every one of its hashes remain unchanged below.
 # This source qualification grants no supplier, controller or runtime approval.
-PROPERTY_REVISION_SHA256 = '585710b140ba0236108dd859575bf45665b8ff4204cef5e77503427b93b7178b'
+PROPERTY_REVISION_SHA256 = '7269bcfaac962033938beedc6a7747f8969984dba475b5bdaff98a0651bc83ab'
 PROPERTY_REVISION_HEADER_SHA256 = '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3'
 PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27'
 # #421 makes the property area's build.prop loader keep ro.opengles.version only
@@ -380,7 +380,7 @@ def preceding_logging_property_source():
 # This source qualification grants no supplier, controller or runtime approval.
 MEMFD_LEASE_QUALIFICATION='tools/net-tcp-priority/qualified/memfd-lease-source.json'
 MEMFD_LEASE_PATCH='tools/net-tcp-priority/qualified/memfd-lease-source.patch'
-MEMFD_LEASE_QUALIFICATION_SHA256 = '09c88c795011c19d83962f9c6f9e216a61fd296af84c737ee806486434a226ff'
+MEMFD_LEASE_QUALIFICATION_SHA256 = 'f80baede63b053f6b4a7d845a94f83b31a6e45c8129746ca1a5b85cd902f9443'
 MEMFD_LEASE_BASELINE='e074b67b2f83ce9128c11713171329e9fbbf6739'
 MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
 def preceding_memfd_lease_sources():

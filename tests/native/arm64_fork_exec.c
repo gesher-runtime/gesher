@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/prctl.h>
+#include <sys/ptrace.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -842,6 +844,242 @@ static void test_memfd_lease_at_once(void) {
   close(fd);
 }
 
+// --- waits and the heap across the clone (ADR 0092) ---------------------------
+//
+// Waits for `pid` for at most `ms`; a child still running then is killed and
+// -2 returned (a hang must fail the check, not the run).
+static int reap_within(pid_t pid, int ms) {
+  for (int waited = 0; waited < ms; waited += 5) {
+    int status = 0;
+    pid_t got = waitpid(pid, &status, WNOHANG);
+    if (got == pid) return status;
+    if (got < 0 && errno != EINTR) return -1;
+    usleep(5000);
+  }
+  kill(pid, SIGKILL);
+  reap(pid, 0);
+  return -2;
+}
+
+// Threads of the parent wait on a condition variable (as a thread pool's
+// workers do) when it forks. In the child a new thread waits on its copy and
+// the only other thread signals it: the parent's waiters do not exist in the
+// child, so the wake reaches the child's waiter, as on Linux.
+static pthread_mutex_t g_cond_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_cond = PTHREAD_COND_INITIALIZER;
+static atomic_int g_cond_ready, g_cond_go, g_cond_done, g_cond_stop;
+
+static void* parent_cond_waiter(void* arg) {
+  (void)arg;
+  pthread_mutex_lock(&g_cond_mutex);
+  while (!atomic_load(&g_cond_stop)) pthread_cond_wait(&g_cond, &g_cond_mutex);
+  pthread_mutex_unlock(&g_cond_mutex);
+  return NULL;
+}
+
+static void* child_cond_waiter(void* arg) {
+  (void)arg;
+  pthread_mutex_lock(&g_cond_mutex);
+  atomic_store(&g_cond_ready, 1);
+  while (!atomic_load(&g_cond_go)) pthread_cond_wait(&g_cond, &g_cond_mutex);
+  pthread_mutex_unlock(&g_cond_mutex);
+  atomic_store(&g_cond_done, 1);
+  return NULL;
+}
+
+static void test_condvar_waiters_at_fork(void) {
+  enum { kWaiters = 4, kRounds = 20 };
+  pthread_t waiters[kWaiters];
+  for (int i = 0; i < kWaiters; ++i) pthread_create(&waiters[i], NULL, parent_cond_waiter, NULL);
+  usleep(100000);  // they are waiting
+  long woke = 0, lost = 0;
+  for (int i = 0; i < kRounds; ++i) {
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+      pthread_t t;
+      if (pthread_create(&t, NULL, child_cond_waiter, NULL) != 0) _exit(11);
+      for (int k = 0; k < 1000 && !atomic_load(&g_cond_ready); ++k) usleep(1000);
+      usleep(20000);
+      pthread_mutex_lock(&g_cond_mutex);
+      atomic_store(&g_cond_go, 1);
+      pthread_cond_signal(&g_cond);
+      pthread_mutex_unlock(&g_cond_mutex);
+      for (int k = 0; k < 3000 && !atomic_load(&g_cond_done); ++k) usleep(1000);
+      _exit(atomic_load(&g_cond_done) ? 0 : 20);
+    }
+    const int status = pid > 0 ? reap_within(pid, 10000) : -1;
+    if (status == 0) ++woke;
+    else if (status != -1 && status != -2 && WIFEXITED(status) && WEXITSTATUS(status) == 20) ++lost;
+  }
+  atomic_store(&g_cond_stop, 1);
+  pthread_mutex_lock(&g_cond_mutex);
+  pthread_cond_broadcast(&g_cond);
+  pthread_mutex_unlock(&g_cond_mutex);
+  for (int i = 0; i < kWaiters; ++i) pthread_join(waiters[i], NULL);
+  checkf(woke == kRounds,
+         "a forked child's condition variable wakes its own waiter while the parent's threads waited on it",
+         "woke=%ld lost=%ld", woke, lost);
+}
+
+// Threads of the parent allocate and free all the time while it forks (ntdll
+// locks every heap for the clone, so they are waiting for the heap then); the
+// child allocates on several threads of its own. No child may hang.
+static atomic_int g_heap_stop;
+
+static void* heap_churn(void* arg) {
+  uint32_t seed = (uint32_t)(uintptr_t)arg * 2654435761u;
+  void* slots[64] = {0};
+  while (!atomic_load(&g_heap_stop)) {
+    seed = seed * 1103515245u + 12345u;
+    const unsigned i = (seed >> 8) % 64;
+    free(slots[i]);
+    slots[i] = malloc(16 + (seed >> 16) % 4096);
+  }
+  for (int i = 0; i < 64; ++i) free(slots[i]);
+  return NULL;
+}
+
+static void* child_heap_work(void* arg) {
+  uint32_t seed = (uint32_t)(uintptr_t)arg;
+  for (int i = 0; i < 2000; ++i) {
+    seed = seed * 1103515245u + 12345u;
+    void* p = malloc(16 + (seed >> 16) % 4096);
+    if (p == NULL) return (void*)1;
+    memset(p, 1, 16);
+    free(p);
+  }
+  return NULL;
+}
+
+static void test_heap_under_fork(void) {
+  enum { kChurners = 4, kRounds = 20, kChildThreads = 4 };
+  pthread_t churners[kChurners];
+  atomic_store(&g_heap_stop, 0);
+  for (int i = 0; i < kChurners; ++i) {
+    pthread_create(&churners[i], NULL, heap_churn, (void*)(uintptr_t)(i + 1));
+  }
+  long ok = 0, hung = 0;
+  for (int i = 0; i < kRounds; ++i) {
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+      pthread_t t[kChildThreads];
+      for (int k = 0; k < kChildThreads; ++k) {
+        if (pthread_create(&t[k], NULL, child_heap_work, (void*)(uintptr_t)(k + 7)) != 0) _exit(11);
+      }
+      void* r = child_heap_work((void*)(uintptr_t)3);
+      for (int k = 0; k < kChildThreads; ++k) {
+        void* tr = NULL;
+        if (pthread_join(t[k], &tr) != 0 || tr != NULL) _exit(12);
+      }
+      _exit(r == NULL ? 0 : 13);
+    }
+    const int status = pid > 0 ? reap_within(pid, 15000) : -1;
+    if (status == 0) ++ok;
+    else if (status == -2) ++hung;
+  }
+  atomic_store(&g_heap_stop, 1);
+  for (int i = 0; i < kChurners; ++i) pthread_join(churners[i], NULL);
+  checkf(ok == kRounds, "children allocate on several threads while the parent's threads churned the heap at the fork",
+         "ok=%ld hung=%ld", ok, hung);
+}
+
+// --- ptrace across fork (ADR 0092, 0093) --------------------------------------
+
+#ifndef PR_SET_PTRACER
+#define PR_SET_PTRACER 0x59616d61
+#endif
+#ifndef PR_SET_PTRACER_ANY
+#define PR_SET_PTRACER_ANY ((unsigned long)-1)
+#endif
+
+static long svc4(long nr, long a, long b, long c, long d) {
+  register long x8 __asm__("x8") = nr;
+  register long x0 __asm__("x0") = a;
+  register long x1 __asm__("x1") = b;
+  register long x2 __asm__("x2") = c;
+  register long x3 __asm__("x3") = d;
+  register long x4 __asm__("x4") = 0;
+  __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4) : "memory");
+  return x0;
+}
+
+// PairIP's sequence: the parent allows any tracer and clones itself with the
+// raw system call (220); the child attaches to the parent, waits for the
+// stop with wait4(__WALL), reads one of the parent's stack slots and writes
+// the word into another, detaches and exits; the parent waits for the child.
+static int pairip_child(pid_t parent, uintptr_t src, uintptr_t dst, uint64_t value) {
+  if (ptrace(PTRACE_ATTACH, parent, 0, 0) != 0) return 2;
+  int status = 0;
+  if (svc4(__NR_wait4, parent, (long)&status, __WALL, 0) != parent) return 3;
+  if (status != 0x137f) return 4;
+  errno = 0;
+  long word = ptrace(PTRACE_PEEKDATA, parent, (void*)src, 0);
+  if (errno != 0 || (uint64_t)word != value) return 5;
+  if (ptrace(PTRACE_POKEDATA, parent, (void*)dst, (void*)word) != 0) return 6;
+  if (ptrace(PTRACE_DETACH, parent, 0, 0) != 0) return 7;
+  return 0;
+}
+
+static void test_pairip_sequence(void) {
+  check(prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) == 0, "PairIP: PR_SET_DUMPABLE 1");
+  check(prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0) == 0, "PairIP: PR_SET_PTRACER_ANY");
+  volatile uint64_t slots[2] = {0x5eed0f0e12345678ULL, 0};
+  const pid_t parent = getpid();
+  fflush(stdout);
+  long pid = svc4(__NR_clone, SIGCHLD, 0, 0, 0);
+  if (pid == 0) exit(pairip_child(parent, (uintptr_t)&slots[0], (uintptr_t)&slots[1], slots[0]));
+  checkf(pid > 0, "PairIP: raw clone(220) makes the child", "r=%ld errno=%ld", pid, -pid);
+  if (pid <= 0) return;
+  const int status = reap_within((pid_t)pid, 30000);
+  checkf(status == 0, "PairIP: the child attached, waited, peeked, poked, detached and exited 0",
+         "status=0x%lx (child step %ld)", status, status > 0 && WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+  checkf(slots[1] == slots[0], "PairIP: the child's POKEDATA reached the parent's stack slot",
+         "slot=0x%lx want=0x%lx", (long)slots[1], (long)slots[0]);
+  prctl(PR_SET_PTRACER, 0, 0, 0, 0);
+}
+
+// A forked child keeps the dumpable flag (its mm's), and a tracer can stop
+// it from the moment fork returns in it (its own ptrace state and guard).
+static volatile uint64_t g_trace_marker;
+
+static void test_trace_forked_child(void) {
+  prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+  fflush(stdout);
+  pid_t pid = fork();
+  if (pid == 0) _exit(prctl(PR_GET_DUMPABLE, 0, 0, 0, 0));
+  int status = pid > 0 ? reap_within(pid, 10000) : -1;
+  prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+  checkf(status >= 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+         "a forked child keeps the parent's dumpable flag (0)", "status=0x%lx (%ld)", status, 0);
+
+  g_trace_marker = 1;
+  fflush(stdout);
+  pid = fork();
+  if (pid == 0) {
+    // Runs (with no Gesher wait of its own most of the time) until the parent
+    // has written the marker.
+    for (int i = 0; i < 20000 && g_trace_marker == 1; ++i) usleep(500);
+    _exit(g_trace_marker == 0x7e57 ? 0 : 1);
+  }
+  if (pid <= 0) {
+    check(0, "fork for the tracing check");
+    return;
+  }
+  const long attach = ptrace(PTRACE_ATTACH, pid, 0, 0);
+  int stop = 0;
+  const pid_t got = attach == 0 ? waitpid(pid, &stop, __WALL) : -1;
+  checkf(attach == 0 && got == pid && stop == 0x137f, "the parent attaches to its forked child and it stops",
+         "attach=%ld stop=0x%lx", attach, stop);
+  const long poke = ptrace(PTRACE_POKEDATA, pid, (void*)&g_trace_marker, (void*)0x7e57);
+  const long detach = ptrace(PTRACE_DETACH, pid, 0, 0);
+  status = reap_within(pid, 15000);
+  checkf(poke == 0 && detach == 0 && status == 0,
+         "POKEDATA into the stopped forked child, DETACH, and the child sees it", "poke=%ld status=0x%lx", poke,
+         status);
+}
+
 static int run_all(void) {
   test_exit_code();
   test_copy_on_write();
@@ -859,6 +1097,10 @@ static int run_all(void) {
   test_spawn_after_root_ends();
   test_memfd_lease_in_child();
   test_memfd_lease_at_once();
+  test_condvar_waiters_at_fork();
+  test_heap_under_fork();
+  test_pairip_sequence();
+  test_trace_forked_child();
   test_threads_stress();
   return failures;
 }

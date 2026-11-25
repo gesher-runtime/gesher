@@ -134,11 +134,13 @@ constexpr int kForkOrderLeaf = 500;        // leaf locks, condition variables
 // translator's, taken last) is tried the same way and `extra_release` undoes
 // it. Returns 0, or -1 with errno EAGAIN when some lock stayed busy for the
 // whole of `timeout_ms`. `round_begin`, when given, runs at the start of each
-// round, before any lock of the set is tried (it may wait for a lock outside
-// the set that is taken before the set's locks); `round_end` undoes it after
-// a round that failed. After a successful round the caller undoes it.
+// round, before any lock of the set is tried: it may take a lock outside the
+// set that is taken before the set's locks, waiting for it only briefly, and
+// returns false without it (the round then fails like one that found a lock
+// of the set busy). `round_end` undoes it after a round that failed past it.
+// After a successful round the caller undoes it.
 int AcquireForkLocks(bool (*extra_try)(), void (*extra_release)(), unsigned timeout_ms,
-                     void (*round_begin)() = nullptr, void (*round_end)() = nullptr);
+                     bool (*round_begin)() = nullptr, void (*round_end)() = nullptr);
 // After the clone: the parent releases them, the child makes them anew.
 void ReleaseForkLocks(bool child);
 

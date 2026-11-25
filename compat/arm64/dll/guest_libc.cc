@@ -103,10 +103,10 @@ struct ForkHooks {
   int (GESHER_SYSV* try_prepare)();
   void (GESHER_SYSV* parent)();
   void (GESHER_SYSV* child)();
-  void (GESHER_SYSV* mapping)(int op);  // the guest mapping lock: 0 lock, 1 unlock, 2 child
+  int (GESHER_SYSV* mapping)(int op);  // the guest mapping lock: 0 try, 1 unlock, 2 child
 };
 // The guest mapping lock (below) for the shim's fork rounds.
-void GESHER_SYSV GuestMappingForFork(int op);
+int GESHER_SYSV GuestMappingForFork(int op);
 const ForkHooks kForkHooks = {&TryForkPrepare, &ForkParent, &ForkChild, &GuestMappingForFork};
 using ShimFork = int(GESHER_SYSV*)(int, int, const ForkHooks*);
 ShimFork g_shim_fork = nullptr;
@@ -570,21 +570,26 @@ std::mutex g_guest_mapping_mutex;
 // a host mapping change and the record of it. The shim's fork takes it at the
 // start of each round, after the pthread_atfork prepare handlers (which may
 // map memory under their own locks, as on Linux, where they run before any
-// kernel lock) and before the fork set, and waits for it rather than trying
-// it: it is the outermost lock of a guest mapping call, and the threads of
-// such a call keep it while they wait for gesher-base's mapping lock, which
-// the fork set tries. A round that fails gives it back before the fork yields,
-// so a library constructor that maps under the ELF loader's lock (which the
-// fork only tries) goes on between rounds. The parent and child handlers run
-// after it is given back.
-void GESHER_SYSV GuestMappingForFork(int op) {
-  if (op == 0) {
-    g_guest_mapping_mutex.lock();
-  } else if (op == 1) {
+// kernel lock) and before the fork set. It is the outermost lock of a guest
+// mapping call, and the threads of such a call keep it while they wait for
+// gesher-base's mapping lock, which the fork set tries; so the shim tries it
+// for a short slice at the start of a round (op 0, 1 when taken) rather than
+// only once, and a round that does not get it, like one that fails, gives
+// everything back and yields: a thread that holds it while it waits for
+// something the forking thread holds (a dl_iterate_phdr callback's fork while
+// another thread unmaps that object) is never waited for without bound, and
+// the fork fails with EAGAIN at the fork set's deadline instead. A library
+// constructor that maps under the ELF loader's lock (which the fork only
+// tries) goes on between rounds. The parent and child handlers run after it
+// is given back.
+int GESHER_SYSV GuestMappingForFork(int op) {
+  if (op == 0) return g_guest_mapping_mutex.try_lock() ? 1 : 0;
+  if (op == 1) {
     g_guest_mapping_mutex.unlock();
   } else {
     new (&g_guest_mapping_mutex) std::mutex();  // the parent's waiters are not the child's
   }
+  return 1;
 }
 
 using GuestMappingLock = std::lock_guard<std::mutex>;

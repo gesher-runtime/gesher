@@ -156,6 +156,9 @@ void RegisterPtrace(SymbolTable& table);  // ptrace_bionic.cc
 // tracee. An exit of a tracee that is also this process's child is left to the
 // child's own wait (`is_child`).
 int PtraceWaitPoll(int pid, int options, int* status, bool* matched, bool (*is_child)(int));
+// In a forked child, with the fork set held: it traces none of the parent's
+// tracees (ADR 0092, 0093).
+void PtraceForkChild();
 // A raw x86-64 Linux system call, as the kernel takes it: the shim function
 // that does the same, and the kernel's result or -errno. The ELF loader's
 // handler for `syscall` instructions in loaded code (ADR 0084), and
