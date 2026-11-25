@@ -151,6 +151,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     void revokePackageCapabilities(String name) {
+        ExternalStorageAccess.removePackage(this, name);
         List<Consumer<String>> cleanup;
         synchronized (this) { cleanup = new ArrayList<>(mPackageRemoval); }
         for (Consumer<String> action : cleanup) action.accept(name);
@@ -184,6 +185,16 @@ public final class PackageManagerService extends IPackageManager.Default {
     public AutoCloseable onPackageChange(Consumer<ApkPackage> listener) {
         mPackageChanges.add(java.util.Objects.requireNonNull(listener));
         return () -> mPackageChanges.remove(listener);
+    }
+
+    /** Failure retirement must not inherit the caller's installer or PM monitor. */
+    void storagePublicationFailed(ApkPackage pkg, java.util.function.BooleanSupplier stillFailed) {
+        mPackageEventExecutor.execute(() -> {
+            Services.Created services = Services.sLast;
+            if (services != null && services.pm == this) {
+                services.atm.killUidForPermissionChange(pkg, stillFailed);
+            }
+        });
     }
 
 
@@ -325,6 +336,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (p != null) {
             p.clearComponentStates();
             PackageManager.invalidatePackageInfoCache();
+            ExternalStorageAccess.removePackage(this, packageName);
         }
         return p;
     }

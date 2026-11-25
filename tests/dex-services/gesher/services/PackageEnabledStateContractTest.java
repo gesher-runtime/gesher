@@ -147,7 +147,8 @@ public final class PackageEnabledStateContractTest {
                 check(!Thread.holdsLock(service), "Event callback held the package monitor");
                 events.add(intent);
             });
-            // Unsafe allocation skips the listener list's field initializer.
+            // Unsafe allocation skips normal lifecycle collections. Storage policy
+            // synchronization may construct AppOpsService, which registers here.
             if (persistent) {
                 // The manifest-only fixture has no Windows URI associations. Reflect the
                 // field type so the public-API negative control still compiles before it existed.
@@ -157,6 +158,8 @@ public final class PackageEnabledStateContractTest {
                             .getDeclaredConstructor(java.util.function.Predicate.class)
                             .newInstance(new Object[] { null }));
                 } catch (NoSuchFieldException beforeUriHandlers) { }
+                set(service, "mPackageRemoval", new ArrayList<Consumer<String>>());
+                set(service, "mPackageChanges", new CopyOnWriteArrayList<Consumer<ApkPackage>>());
                 try {
                     set(service, "mPackageEventListeners", new CopyOnWriteArrayList<Consumer<Intent>>());
                 } catch (NoSuchFieldException oldImplementation) { }

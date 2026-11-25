@@ -9,6 +9,7 @@
 #include "fifo_internal.h"
 #include "internal.h"
 #include "revocable_internal.h"
+#include "storage_policy.h"
 
 extern "C" int gesher_is_socket(int fd);
 
@@ -90,13 +91,15 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
   std::wstring windows;
   switch (gesher::MapPath(path, &windows)) {
     case gesher::PathKind::kFile: {
+      if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kStat)) return -1;
       // Directories need backup semantics to be opened; no access right is
       // needed to read attributes.
       HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                              FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-      int result = FromHandle(h, buf);
+      int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)
+                       ? FromHandle(h, buf) : -1;
       if (result == 0 && !follow && gesher::IsSymlinkHandle(h)) {
         // A symbolic link (or a junction): Linux reports the link, its size
         // the length of its target.

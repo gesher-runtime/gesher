@@ -140,7 +140,9 @@ cannot see (`isApplicableForOwnerPackageNameFiltering`).
 **Placement** (`MediaProvider.ensureFileColumns`): images only under `DCIM`/`Pictures`,
 video under `DCIM`/`Movies`/`Pictures`, audio under the music directories, downloads
 under `Download`, files under `Download`/`Documents`, an app's own `Android/media/<pkg>`,
-anything for `MANAGE_EXTERNAL_STORAGE`:
+and other shared locations for `MANAGE_EXTERNAL_STORAGE`. Other packages'
+`Android/data/<pkg>` and `Android/obb/<pkg>` remain excluded, including for managers
+and legacy writers:
 
 ```java
 // line 5053
@@ -239,6 +241,13 @@ The volume is the real directory `%ANDROID_DATA%/media/0`; `_data` is the path a
 computed against that directory rather than AOSP's `/storage/emulated/<user>/` pattern.
 Path containment is checked on the normalized absolute path and then on the canonical
 path, so `..` segments and links cannot place a row outside the volume.
+Before an application request creates a directory, opens a file, moves an item or
+deletes it, the index also checks the private-directory boundary on both paths.
+Only the caller's own package or another installed package sharing its authenticated
+UID can access that package's `Android/data` and `Android/obb`; neither global media
+permission nor a row's recorded owner overrides this boundary. Ordinary scoped
+owners keep their MediaStore access to their public files. The trusted provider's
+own maintenance operations retain their system identity.
 
 ## Validation
 
@@ -319,8 +328,10 @@ stubs for the Gesher server classes they call. That checks the API use only.
 - FUSE: files an app creates with `java.io` are not indexed until scanned, and a scanned
   file has no owner (on Android, FUSE records the creating app as owner). Such an app
   needs `READ_MEDIA_*` to see the row, or should insert through `MediaStore`. Gesher's
-  file system also does not apply scoped-storage restrictions to direct file access;
-  this provider enforces them only for `content://media`.
+  direct guest-file access has its own external-storage policy checks; this provider
+  enforces the corresponding boundary for brokered `content://media` operations.
+  The Windows isolation experiment and its limits remain documented in
+  [sandbox.md](sandbox.md).
 - Trash and favorite as user features: `IS_TRASHED`/`IS_FAVORITE` are stored and an
   owner's trashed item is renamed `.trashed-<expires>-<name>` like a pending one, but
   there is no trash UI.
