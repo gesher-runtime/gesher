@@ -217,7 +217,28 @@ final class ContentProviders {
 
     PackageManagerService packageManager() { return mPm; }
     UriGrants uriGrants() { return mUriGrants; }
+
+    /** The system server's {@code downloads} provider, once it is registered. */
+    private volatile DownloadProvider mDownloads;
+
+    void setDownloads(DownloadProvider downloads) {
+        RegisteredProvider registration = registeredProvider(DownloadProvider.AUTHORITY);
+        if (downloads == null || registration != downloads.registration) {
+            throw new IllegalArgumentException("Downloads provider is not registered");
+        }
+        mDownloads = downloads;
+    }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
+
+    /** The system server's {@code media} provider (MediaStore), once it is registered. */
+    private volatile MediaStoreProvider mMedia;
+
+    void setMedia(MediaStoreProvider media) {
+        if (media == null || registeredProvider(MediaStoreProvider.AUTHORITY) != media.registration) {
+            throw new IllegalArgumentException("Media provider is not registered");
+        }
+        mMedia = media;
+    }
     CallLogProvider callLog() { return mCallLog; }
     ContactsProvider contacts() { return mContacts; }
     CallerIdentity callers() { return mCallers; }
@@ -379,6 +400,26 @@ final class ContentProviders {
             }
             enforceAccess(actualPackage, registration.info);
             return mDocumentsStorage.holder();
+        }
+        DownloadProvider downloads = mDownloads;
+        if (downloads != null && DownloadProvider.AUTHORITY.equals(name)) {
+            // As Android's DownloadProvider, the system's provider owns the authority;
+            // ContentProvider.Transport enforces its path permissions and URI grants.
+            if (registeredProvider(name) != downloads.registration || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Downloads authority is not uniquely registered");
+            }
+            return downloads.holder();
+        }
+        MediaStoreProvider media = mMedia;
+        if (media != null && MediaStoreProvider.AUTHORITY.equals(name)) {
+            // As Android's MediaProvider, the system's provider owns the authority; it
+            // applies scoped-storage ownership and permissions to every request itself.
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration != media.registration || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Media authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return media.holder();
         }
         if (ContactsProviderSupport.CONTACTS_AUTHORITY.equals(name)) {
             RegisteredProvider registration = registeredProvider(name);
@@ -606,6 +647,7 @@ final class ContentProviders {
             }
             for (String authority : declared.authority.split(";")) {
                 if (authority.isEmpty() || SettingsProvider.AUTHORITY.equals(authority)
+                        || (mDownloads != null && DownloadProvider.AUTHORITY.equals(authority))
                         || registeredProvider(authority) != null
                         || ContactsProviderSupport.isSystemAuthority(authority)
                         || !batch.add(authority)) throw new SecurityException("Invalid published authority");

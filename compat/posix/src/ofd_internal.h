@@ -12,6 +12,7 @@
 namespace gesher {
 
 struct RevocableFileGroup;
+struct FifoEndpoint;
 struct OpenFileDescription {
   struct Shared {
     uint64_t magic;
@@ -40,6 +41,9 @@ struct OpenFileDescription {
   HANDLE pipe_mutex = nullptr;
   std::mutex mutex;
   std::shared_ptr<RevocableFileGroup> revocation;
+  // A FIFO description's process-local view of its ring (fifo.cc), created
+  // on first use and destroyed after the shared section above is released.
+  std::shared_ptr<FifoEndpoint> fifo;
   ~OpenFileDescription();
   int Flags() const;
   void SetFlags(int flags);
