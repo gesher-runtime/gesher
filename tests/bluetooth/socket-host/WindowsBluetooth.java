@@ -11,6 +11,7 @@ public final class WindowsBluetooth {
     public static final CountDownLatch connecting=new CountDownLatch(1);
     public static final CountDownLatch closed=new CountDownLatch(1);
     public static volatile Runnable acceptHook;
+    public static volatile Runnable closeHook;
     public static volatile int acceptedClosed;
     public static String hresult(int hr){return Integer.toHexString(hr);}
     public static String address(long address){return "00:11:22:33:44:55";}
@@ -25,9 +26,16 @@ public final class WindowsBluetooth {
     public static void nativeRfcommClose(long socket){
         if(socket==99)acceptedClosed++;
         closed.countDown();
+        Runnable hook=closeHook;if(hook!=null)hook.run();
     }
-    public static int nativeRfcommRead(long socket,byte[] b,int off,int len){return -1;}
-    public static int nativeRfcommWrite(long socket,byte[] b,int off,int len){return len;}
+    /** Scripted native read for connected sockets (default: a native error). */
+    public interface Read{int read(long socket,byte[] b,int off,int len);}
+    public static volatile Read readHook;
+    public static volatile Read writeHook;
+    public static final java.io.ByteArrayOutputStream written=new java.io.ByteArrayOutputStream();
+    public static final java.util.Set<byte[]> writeBuffers=java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    public static int nativeRfcommRead(long socket,byte[] b,int off,int len){Read hook=readHook;return hook==null?-1:hook.read(socket,b,off,len);}
+    public static int nativeRfcommWrite(long socket,byte[] b,int off,int len){Read hook=writeHook;if(hook!=null)return hook.read(socket,b,off,len);synchronized(written){writeBuffers.add(b);written.write(b,off,len);}return len;}
     public static int nativeRfcommAvailable(long socket){return 0;}
     public static long nativeRfcommListen(String name,String uuid,boolean secure,int[] out){out[1]=3;return 7;}
     public static long nativeRfcommAccept(long server,int timeout,long[] out){
