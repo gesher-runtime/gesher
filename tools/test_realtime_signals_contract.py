@@ -25,7 +25,7 @@ def main():
                '-pthread', str(source), '-o', str(binary)]
     subprocess.run(command, check=True, timeout=60)
     cases = ['fifo', 'ignore', 'quota', 'priority', 'timeout', 'thread', 'handler',
-             'cross', 'stop', 'status']
+             'cross', 'stop', 'status', 'interval-timer']
     results = []
     for case in cases:
         started = time.monotonic()
