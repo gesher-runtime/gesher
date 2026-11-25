@@ -2,6 +2,7 @@
 """Run actual PMS/static visibility/APM Java with constructed manifests and host JNI boundaries."""
 from __future__ import annotations
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -17,7 +18,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("framework-classes", "core-classes", "app-classes", "apksig", "java-home"):
         parser.add_argument("--" + name, required=True, type=Path)
-    parser.add_argument("--source-ref", help="Use a prior PMS as a public-wrapper negative control")
+    parser.add_argument("--source-ref", help="Compile prior complete PMS and visibility sources")
+    parser.add_argument("--work", choices=("selective", "hidden", "bulk", "groups", "cold"),
+                        help="Measure complete public queries; no metadata counters are used")
+    parser.add_argument("--work-packages", type=int, default=4096)
+    parser.add_argument("--work-iterations", type=int, default=1000)
+    parser.add_argument("--work-check", action="store_true", help="Enforce the production metadata-read budget")
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:
@@ -30,19 +36,31 @@ def main() -> None:
         subprocess.run([cc, "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-shared", "-fPIC",
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
                         str(ROOT / "tests/uri/framework_host.c"), "-o", str(library)], check=True)
-        relative = "app/java/com/gesher/server/PackageManagerService.java"
-        service = ROOT / relative
-        if args.source_ref:
-            service = work / "PackageManagerService.java"
-            old = subprocess.run(["git", "show", args.source_ref + ":" + relative],
-                                 cwd=ROOT, check=True, capture_output=True)
-            service.write_bytes(old.stdout)
-        sources = [str(service), str(ROOT / "app/java/com/gesher/server/PackageVisibility.java"),
-                   str(ROOT / "tests/dex-services/gesher/services/PackageVisibilityContractTest.java"),
-                   str(ROOT / "tests/package/PackageVisibilityHost.java")]
+        sources = []
+        for name in ("PackageManagerService", "PackageVisibility"):
+            relative = "app/java/com/gesher/server/" + name + ".java"
+            source = ROOT / relative
+            if args.source_ref:
+                source = work / (name + ".java")
+                source.write_bytes(subprocess.run(["git", "show", args.source_ref + ":" + relative],
+                                                  cwd=ROOT, check=True, capture_output=True).stdout)
+            print(name + " SHA256 " + hashlib.sha256(source.read_bytes()).hexdigest(), flush=True)
+            sources.append(str(source))
+        sources += [str(ROOT / "tests/dex-services/gesher/services/PackageVisibilityContractTest.java"),
+                    str(ROOT / "tests/package/PackageVisibilityHost.java"),
+                    str(ROOT / "tests/java-performance/PackageVisibilityWorkHost.java")]
         subprocess.run([str(args.java_home / "bin/javac"), "-J-Djava.io.tmpdir=" + str(work),
                         "-encoding", "UTF-8", "-cp", classpath, "-d", str(classes), *sources], check=True)
         env = os.environ.copy()
+        if args.work or args.work_check:
+            env["ANDROID_DATA"] = str(work / "data-work"); env["GESHER_MICROG_SPOOF"] = "1"
+            workload = (["--verify-work"] if args.work_check else
+                        [str(args.work_packages), args.work, str(args.work_iterations)])
+            subprocess.run([str(args.java_home / "bin/java"), "-Xbatch", "-Xmx256m",
+                            "-Djava.io.tmpdir=" + str(work), "-cp", str(classes) + os.pathsep + classpath,
+                            "PackageVisibilityWorkHost", str(library), *workload],
+                           env=env, check=True, timeout=180)
+            return
         command = [str(args.java_home / "bin/java"), "-Djava.io.tmpdir=" + str(work),
                    "-cp", str(classes) + os.pathsep + classpath, "PackageVisibilityHost", str(library)]
         for mode in ("1", "0"):

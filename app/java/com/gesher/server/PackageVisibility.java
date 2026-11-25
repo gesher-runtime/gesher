@@ -15,7 +15,7 @@ import com.android.internal.pm.pkg.component.ParsedMainComponent;
 import com.android.internal.pm.pkg.component.ParsedPermission;
 import com.android.internal.pm.pkg.component.ParsedProvider;
 
-import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +35,7 @@ final class PackageVisibility {
         final int uid;
         final ApkPackage apk;
         final int targetSdk;
+        Entry nextAppId; // linked only during construction, immutable after publication
 
         Entry(String name, int uid, ApkPackage apk, int targetSdk) {
             this.name = name;
@@ -44,13 +45,15 @@ final class PackageVisibility {
         }
     }
 
-    private final Map<String, Entry> mPackages = new LinkedHashMap<>();
+    private final Map<String, Entry> mPackages;
+    private final Map<Integer, Entry> mPackagesByAppId;
     private final Set<String> mProtectedBroadcasts = new HashSet<>();
     private final Predicate<String> mPlatformProtectedBroadcast;
 
     PackageVisibility(Map<String, ApkPackage> installed, boolean browser,
             boolean gms, boolean vending, Predicate<String> protectedBroadcast) {
         mPlatformProtectedBroadcast = protectedBroadcast;
+        mPackages = new LinkedHashMap<>(installed.size() + 4);
         mPackages.put("android", new Entry("android", Process.SYSTEM_UID, null, 36));
         for (ApkPackage apk : installed.values()) {
             mPackages.put(apk.packageName, new Entry(apk.packageName, apk.uid(), apk,
@@ -64,6 +67,22 @@ final class PackageVisibility {
                 GmsPackageSupport.PACKAGE_GMS, 0));
         if (vending) addHost(GmsPackageSupport.createSyntheticApplicationInfo(
                 GmsPackageSupport.PACKAGE_VENDING, 0));
+        mPackagesByAppId = new HashMap<>(mPackages.size());
+        for (Entry entry : mPackages.values()) {
+            entry.nextAppId = mPackagesByAppId.put(UserHandle.getAppId(entry.uid), entry);
+        }
+        // Reverse each group once to retain installed-package order, without a
+        // separate list object/backing array for every isolated application UID.
+        for (Map.Entry<Integer, Entry> group : mPackagesByAppId.entrySet()) {
+            Entry reversed = null;
+            for (Entry entry = group.getValue(); entry != null;) {
+                Entry next = entry.nextAppId;
+                entry.nextAppId = reversed;
+                reversed = entry;
+                entry = next;
+            }
+            group.setValue(reversed);
+        }
     }
 
     private void addHost(ApplicationInfo info) {
@@ -99,24 +118,24 @@ final class PackageVisibility {
                 || targetAppId < Process.FIRST_APPLICATION_UID
                 || callingAppId == targetAppId) return true;
 
-        List<Entry> sources = new ArrayList<>();
-        for (Entry entry : mPackages.values()) {
-            if (UserHandle.getAppId(entry.uid) != callingAppId) continue;
-            sources.add(entry);
+        Entry sources = mPackagesByAppId.get(callingAppId);
+        if (sources == null) return false;
+        for (Entry entry = sources; entry != null; entry = entry.nextAppId) {
             if (queriesAll(entry)) return true;
         }
-        if (sources.isEmpty()) return false;
         if (isStaticSharedLibrary(target)) return true;
         // Force-queryable is shared by all packages with the target app ID, as in
         // AppsFilter's app-ID set. Only real system addons can opt in via metadata.
-        for (Entry entry : mPackages.values()) {
-            if (UserHandle.getAppId(entry.uid) == targetAppId && forceQueryable(entry)) return true;
+        Entry targets = mPackagesByAppId.get(targetAppId);
+        for (Entry entry = targets; entry != null; entry = entry.nextAppId) {
+            if (forceQueryable(entry)) return true;
         }
         // Manifest edges are app-ID pairs too: declaring or matching one installed
         // sibling exposes every package that actually shares that UID.
-        for (Entry sibling : mPackages.values()) {
-            if (UserHandle.getAppId(sibling.uid) != targetAppId) continue;
-            for (Entry source : sources) if (declaresVisibility(source, sibling)) return true;
+        for (Entry sibling = targets; sibling != null; sibling = sibling.nextAppId) {
+            for (Entry source = sources; source != null; source = source.nextAppId) {
+                if (declaresVisibility(source, sibling)) return true;
+            }
         }
         return false;
     }

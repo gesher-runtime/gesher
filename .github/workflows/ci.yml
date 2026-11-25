@@ -2440,6 +2440,8 @@ jobs:
           path: |
             results.txt
             ci-owners.json
+            ${{ runner.temp }}/gesher-surface-evidence/*.json
+            ${{ runner.temp }}/gesher-surface-evidence/*.log
             dist/realtime-signals-evidence/**/*.json
             ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
             ${{ runner.temp }}/gesher-root/logs/system_server.log
