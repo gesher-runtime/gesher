@@ -301,18 +301,13 @@ try {
     # viewport must let the actual application buttons scroll into view.
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
-        $xamlAssignment = @($panelAst.FindAll({
-            param($node)
-            $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '[xml]$xaml'
-        }, $false))
-        Assert-Update ($xamlAssignment.Count -eq 1) 'Could not locate production XAML'
+        . (Join-Path $packageDirectory 'gesher-panel-view.ps1')
         foreach ($language in 'en', 'he') {
             foreach ($size in @(@(920, 820), @(800, 600))) {
                 Reset-PanelUpdateFixture
                 $script:GesherUiLanguage = $language
                 $flowDirection = if ($language -eq 'he') { 'RightToLeft' } else { 'LeftToRight' }
-                . ([scriptblock]::Create($xamlAssignment[0].Extent.Text))
-                $script:window = [Windows.Markup.XamlReader]::Load([Xml.XmlNodeReader]::new($xaml))
+                $script:window = New-PanelView 'dashboard' @{ PanelFlowDirection = [Windows.FlowDirection]$flowDirection }
                 try {
                     $window.ShowInTaskbar = $false; $window.WindowStartupLocation = 'Manual'; $window.Left = -12000
                     $window.Width = $size[0]

@@ -223,6 +223,11 @@ public final class ProviderSecurityTest {
 
         ContentProviderHolder local = (ContentProviderHolder) get.invoke(providers, ownerProcess, ownerName, authority);
         require(local.mLocal && local.provider == null, "same-package unpublished provider deadlocks instead of installing locally");
+        // ActivityThread installs a local holder without publishing it. Use the
+        // bindApplication admission for the publication and forgery checks below.
+        ApplicationInfo bindInfo = new ApplicationInfo(provider.applicationInfo);
+        bindInfo.processName = provider.processName;
+        method(cpType, "providersFor", processType, ApplicationInfo.class).invoke(providers, ownerProcess, bindInfo);
         denied(() -> get.invoke(providers, senderProcess, senderName, authority));
         ProviderInfo guarded = new ProviderInfo(provider);
         guarded.exported = true;

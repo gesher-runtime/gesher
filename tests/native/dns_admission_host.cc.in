@@ -387,6 +387,153 @@ extern "C" void gesher_res_cancel(int);
 #define BOUNDED @BOUNDED@
 namespace fixture {
 enum class Mode { Reply, Drop, Truncated, Full, BadTcpId, Trickle };
+
+struct PeerSockets {
+  NativeSocket udp = kInvalid, tcp = kInvalid;
+  uint16_t port = 0;
+  unsigned tcp_collisions = 0;
+  int first_tcp_collision = 0;
+};
+void ClosePeerSockets(PeerSockets* peer_sockets) {
+  if (peer_sockets->udp != kInvalid) NativeClose(peer_sockets->udp);
+  if (peer_sockets->tcp != kInvalid) NativeClose(peer_sockets->tcp);
+  peer_sockets->udp = peer_sockets->tcp = kInvalid;
+}
+int PeerSocketError() {
+#ifdef _WIN32
+  return WSAGetLastError();
+#else
+  return errno;
+#endif
+}
+bool PeerAddressInUse(int error) {
+#ifdef _WIN32
+  return error == WSAEADDRINUSE;
+#else
+  return error == EADDRINUSE;
+#endif
+}
+[[noreturn]] void PeerSetupFailure(PeerSockets* peer_sockets, const char* operation, int error) {
+  ClosePeerSockets(peer_sockets);
+  std::fprintf(stderr, "FAIL DNS admission: %s (native socket error %d)\n", operation, error);
+  std::exit(1);
+}
+
+// UDP and TCP have separate port namespaces. An ephemeral UDP port can already
+// have a TCP listener, so retain both sockets only after both binds succeed.
+// The optional already-bound UDP socket is consumed by the collision control.
+PeerSockets BindPeerSockets(NativeSocket initial_udp = kInvalid) {
+  PeerSockets peer_sockets;
+  int last_error = 0;
+  for (unsigned attempt = 0; attempt < 64; ++attempt) {
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    peer_sockets.udp = initial_udp;
+    initial_udp = kInvalid;
+    if (peer_sockets.udp == kInvalid) {
+      peer_sockets.udp = ::socket(AF_INET, SOCK_DGRAM, 0);
+      if (peer_sockets.udp == kInvalid)
+        PeerSetupFailure(&peer_sockets, "peer UDP socket", PeerSocketError());
+      if (::bind(peer_sockets.udp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+        last_error = PeerSocketError();
+        ClosePeerSockets(&peer_sockets);
+        if (PeerAddressInUse(last_error)) continue;
+        PeerSetupFailure(&peer_sockets, "peer UDP bind", last_error);
+      }
+    }
+    socklen_t size = sizeof(address);
+    if (::getsockname(peer_sockets.udp, reinterpret_cast<sockaddr*>(&address), &size) != 0)
+      PeerSetupFailure(&peer_sockets, "peer UDP port", PeerSocketError());
+    peer_sockets.tcp = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (peer_sockets.tcp == kInvalid)
+      PeerSetupFailure(&peer_sockets, "peer TCP socket", PeerSocketError());
+    if (::bind(peer_sockets.tcp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+      last_error = PeerSocketError();
+      ClosePeerSockets(&peer_sockets);
+      bool retry = PeerAddressInUse(last_error);
+#ifdef _WIN32
+      // An exclusive wildcard TCP listener can reject this fixed-loopback
+      // candidate with WSAEACCES. This exception applies only to this bind;
+      // UDP, socket creation, getsockname and listen errors remain fatal.
+      retry = retry || last_error == WSAEACCES;
+#endif
+      if (!retry) PeerSetupFailure(&peer_sockets, "peer TCP bind", last_error);
+      if (peer_sockets.tcp_collisions == 0) peer_sockets.first_tcp_collision = last_error;
+      ++peer_sockets.tcp_collisions;
+      continue;
+    }
+    if (::listen(peer_sockets.tcp, 64) != 0)
+      PeerSetupFailure(&peer_sockets, "peer TCP listen", PeerSocketError());
+    peer_sockets.port = ntohs(address.sin_port);
+    return peer_sockets;
+  }
+  PeerSetupFailure(&peer_sockets, "peer UDP/TCP port allocation exhausted 64 attempts", last_error);
+}
+
+#ifdef _WIN32
+PeerSockets BindExclusivePeerSockets() {
+  PeerSockets peer_sockets;
+  int last_error = 0;
+  for (unsigned attempt = 0; attempt < 64; ++attempt) {
+    peer_sockets.tcp = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (peer_sockets.tcp == kInvalid)
+      PeerSetupFailure(&peer_sockets, "exclusive peer TCP socket", PeerSocketError());
+    int exclusive = 1;
+    if (::setsockopt(peer_sockets.tcp, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                     reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0)
+      PeerSetupFailure(&peer_sockets, "exclusive peer TCP option", PeerSocketError());
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    // Allocate the wildcard TCP port first, so the control itself does not
+    // assume that an ephemeral UDP port is available for exclusive TCP use.
+    if (::bind(peer_sockets.tcp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0)
+      PeerSetupFailure(&peer_sockets, "exclusive peer TCP bind", PeerSocketError());
+    socklen_t size = sizeof(address);
+    if (::getsockname(peer_sockets.tcp, reinterpret_cast<sockaddr*>(&address), &size) != 0)
+      PeerSetupFailure(&peer_sockets, "exclusive peer TCP port", PeerSocketError());
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    peer_sockets.udp = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (peer_sockets.udp == kInvalid)
+      PeerSetupFailure(&peer_sockets, "exclusive peer UDP socket", PeerSocketError());
+    if (::bind(peer_sockets.udp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
+      last_error = PeerSocketError();
+      ClosePeerSockets(&peer_sockets);
+      if (PeerAddressInUse(last_error)) continue;
+      PeerSetupFailure(&peer_sockets, "exclusive peer UDP bind", last_error);
+    }
+    if (::listen(peer_sockets.tcp, 64) != 0)
+      PeerSetupFailure(&peer_sockets, "exclusive peer TCP listen", PeerSocketError());
+    peer_sockets.port = ntohs(address.sin_port);
+    return peer_sockets;
+  }
+  PeerSetupFailure(&peer_sockets, "exclusive peer port allocation exhausted 64 attempts", last_error);
+}
+#endif
+
+void PeerPortCollision(PeerSockets occupied, const char* kind) {
+  // Transfer the already-bound UDP socket while retaining its TCP listener.
+  // The next TCP bind must collide; there is no close/rebind race in setup.
+  PeerSockets recovered = BindPeerSockets(occupied.udp);
+  occupied.udp = kInvalid;
+  Check(recovered.tcp_collisions >= 1 && recovered.port != occupied.port,
+        "peer retries a real occupied TCP port and selects a different shared port");
+  sockaddr_in udp{}, tcp{}, held_address{};
+  socklen_t udp_size = sizeof(udp), tcp_size = sizeof(tcp), held_size = sizeof(held_address);
+  Check(::getsockname(recovered.udp, reinterpret_cast<sockaddr*>(&udp), &udp_size) == 0 &&
+        ::getsockname(recovered.tcp, reinterpret_cast<sockaddr*>(&tcp), &tcp_size) == 0 &&
+        udp.sin_port == tcp.sin_port && ntohs(udp.sin_port) == recovered.port,
+        "recovered DNS peer owns the same loopback port for UDP and TCP");
+  Check(::getsockname(occupied.tcp, reinterpret_cast<sockaddr*>(&held_address), &held_size) == 0 &&
+        ntohs(held_address.sin_port) == occupied.port,
+        "collision retry preserves the original TCP listener");
+  std::printf("DNS_PEER_PORT kind=%s occupied_tcp_retries=%u first_error=%d shared_port_ready=1\n",
+              kind, recovered.tcp_collisions, recovered.first_tcp_collision);
+  ClosePeerSockets(&recovered);
+  ClosePeerSockets(&occupied);
+}
+
 struct Peer {
   NativeSocket udp, tcp;
   std::atomic<Mode> mode{Mode::Reply};
@@ -394,14 +541,8 @@ struct Peer {
   std::atomic<int> packets{0}, tcp_queries{0};
   std::thread datagrams, streams;
   Peer() {
-    udp = ::socket(AF_INET, SOCK_DGRAM, 0); tcp = ::socket(AF_INET, SOCK_STREAM, 0);
-    sockaddr_in address{}; address.sin_family = AF_INET; address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    Check(::bind(udp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0, "peer UDP bind");
-    socklen_t size = sizeof(address);
-    Check(::getsockname(udp, reinterpret_cast<sockaddr*>(&address), &size) == 0, "peer port");
-    server_port = ntohs(address.sin_port);
-    Check(::bind(tcp, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0 && ::listen(tcp, 64) == 0,
-          "peer TCP bind/listen");
+    PeerSockets peer_sockets = BindPeerSockets();
+    udp = peer_sockets.udp; tcp = peer_sockets.tcp; server_port = peer_sockets.port;
     datagrams = std::thread([this] { Udp(); }); streams = std::thread([this] { Tcp(); });
   }
   ~Peer() {
@@ -719,6 +860,10 @@ void ServerFallback(Peer& peer) {
 int main() {
 #ifdef _WIN32
   WSADATA data{}; fixture::Check(WSAStartup(MAKEWORD(2, 2), &data) == 0, "Winsock startup");
+#endif
+  fixture::PeerPortCollision(fixture::BindPeerSockets(), "specific");
+#ifdef _WIN32
+  fixture::PeerPortCollision(fixture::BindExclusivePeerSockets(), "exclusive-wildcard");
 #endif
   fixture::Peer peer;
   fixture::Failures(); fixture::Wire(peer);

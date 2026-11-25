@@ -236,9 +236,11 @@ EGLBoolean EGLAPIENTRY eglGetConfigAttrib(EGLDisplay dpy, EGLConfig config, EGLi
 
 // --- contexts and surfaces -------------------------------------------------------------------------
 
+// No context version above what the default display gives (ES 3.1 where it
+// gives 3.0; compat/bionic/egl_gles_version.h), for hwui and the Java bindings.
 EGLContext EGLAPIENTRY eglCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share,
                                         const EGLint* attribs) {
-  return ANGLE(eglCreateContext)(dpy, config, share, attribs);
+  return gesher_egl_create_context(dpy, config, share, attribs);
 }
 
 EGLBoolean EGLAPIENTRY eglDestroyContext(EGLDisplay dpy, EGLContext ctx) {

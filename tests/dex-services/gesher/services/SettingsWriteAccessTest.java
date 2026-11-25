@@ -62,6 +62,19 @@ public final class SettingsWriteAccessTest {
         try { Binder.restoreCallingIdentity(((long)pkg.uid() << 32) | pid); work.run(); }
         finally { Binder.restoreCallingIdentity(identity); }
     }
+    /** An attached, ready process of this installation, as ActivityTaskManagerService records it. */
+    @SuppressWarnings("unchecked") private static void attach(Object atm, ApkPackage app, int pid) throws Exception {
+        as(app, pid, () -> {
+            IApplicationThread thread = new IApplicationThread.Default() {
+                final Binder token = new Binder(); @Override public android.os.IBinder asBinder() { return token; }
+            };
+            Object process = make(type("ActivityTaskManagerService$ProcessRecord"),
+                    new Class<?>[]{atm.getClass(), int.class, IApplicationThread.class}, atm, pid, thread);
+            set(process, "packageName", app.packageName); set(process, "processName", app.packageName);
+            set(process, "packageCode", app); set(process, "ready", true);
+            ((List<Object>)get(atm, "mProcesses")).add(process);
+        });
+    }
     public static int run(boolean nativeFramework) throws Exception {
         int remote = run(nativeFramework, false);
         return remote + run(nativeFramework, true);
@@ -95,19 +108,7 @@ public final class SettingsWriteAccessTest {
         // Run the same permission/AppOp/CRUD cases for an attached remote app and
         // for an ordinary app sharing the provider's process, as standalone does.
         int basePid = inProcess ? android.os.Process.myPid() : 887810;
-        for (int i = 0; i < apps.size(); i++) {
-            ApkPackage app = apps.get(i); int pid = basePid + i;
-            as(app, pid, () -> {
-                IApplicationThread thread = new IApplicationThread.Default() {
-                    final Binder token = new Binder(); @Override public android.os.IBinder asBinder() { return token; }
-                };
-                Object process = make(type("ActivityTaskManagerService$ProcessRecord"),
-                        new Class<?>[]{atm.getClass(), int.class, IApplicationThread.class}, atm, pid, thread);
-                set(process, "packageName", app.packageName); set(process, "processName", app.packageName);
-                set(process, "packageCode", app); set(process, "ready", true);
-                ((List<Object>)get(atm, "mProcesses")).add(process);
-            });
-        }
+        for (int i = 0; i < apps.size(); i++) attach(atm, apps.get(i), basePid + i);
         Object previous = field(type("SettingsProvider"), "sInstance").get(null);
         File file = File.createTempFile("settings-write-access-", ".bin"); file.delete();
         ContentProvider provider = (ContentProvider)make(type("SettingsProvider"),
@@ -159,6 +160,35 @@ public final class SettingsWriteAccessTest {
                 provider.call("PUT_global", "privileged", value("global"));
             });
             for (String name : new String[]{"system", "secure", "global"}) check(name.equals(provider.call("GET_" + name, "privileged", null).getString("value")), "Secure permission authority " + name);
+
+            // Package UIDs survive reinstallation. A process retained from the earlier
+            // installation must not write with the replacement's AppOp or privileged permission.
+            ApkPackage ordinaryAgain = pkg(ordinary.packageName, ordinary.uid(), (byte)7, Manifest.permission.WRITE_SETTINGS);
+            ApkPackage secureAgain = pkg(secure.packageName, secure.uid(), (byte)42, Manifest.permission.WRITE_SECURE_SETTINGS);
+            Map<String, ApkPackage> installed = new java.util.LinkedHashMap<>((Map<String, ApkPackage>)get(pm, "mPackages"));
+            installed.put(ordinary.packageName, ordinaryAgain); installed.put(secure.packageName, secureAgain);
+            set(pm, "mPackages", installed);
+            ops.setMode(AppOpsManager.OP_WRITE_SETTINGS, ordinaryAgain.uid(), ordinaryAgain.packageName, AppOpsManager.MODE_ALLOWED);
+            check(pm.permissions().checkPermission(secureAgain.packageName, Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED,
+                    "Replacement holds the privileged permission");
+            int notified = context.notifications;
+            as(ordinary, basePid, () -> denied(() -> provider.call("PUT_system", "retained", value("forbidden"))));
+            as(ordinary, basePid, () -> denied(() -> provider.call("DELETE_system", "signature", null)));
+            as(secure, basePid + 3, () -> {
+                denied(() -> provider.call("PUT_secure", "retained", value("forbidden")));
+                denied(() -> provider.call("PUT_system", "retained", value("forbidden")));
+            });
+            check(provider.call("GET_system", "retained", null).getString("value") == null
+                    && provider.call("GET_secure", "retained", null).getString("value") == null
+                    && "default".equals(provider.call("GET_system", "signature", null).getString("value"))
+                    && context.notifications == notified, "Retained-installation writes must not change settings");
+            // The replacement's own processes use the grants made to it.
+            attach(atm, ordinaryAgain, basePid + 10); attach(atm, secureAgain, basePid + 11);
+            as(ordinaryAgain, basePid + 10, () -> provider.call("PUT_system", "reinstalled", value("system")));
+            as(secureAgain, basePid + 11, () -> provider.call("PUT_secure", "reinstalled", value("secure")));
+            check("system".equals(provider.call("GET_system", "reinstalled", null).getString("value"))
+                    && "secure".equals(provider.call("GET_secure", "reinstalled", null).getString("value")),
+                    "Current installation writes with its own grants");
         } finally {
             field(type("SettingsProvider"), "sInstance").set(null, previous);
             ScheduledThreadPoolExecutor events = (ScheduledThreadPoolExecutor)get(ops, "mEvents"); events.shutdownNow();
