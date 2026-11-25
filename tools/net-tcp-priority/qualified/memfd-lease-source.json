@@ -5,14 +5,14 @@
     "compat/posix/src/memfd_seals.cc",
     "compat/posix/src/mman.cc"
   ],
-  "patch_sha256": "ed36ba2ee49987d876baf7f6c35eee799c41bde87c6dca9e8f88cda6ffd22732",
+  "patch_sha256": "a364409e886630bc05d33b821823a7a4d75458dab6ad1e84e3a81bbd8bb16f02",
   "previous_sha256": {
     "compat/posix/src/internal.h": "0d32c3de7e103e2070e8f120cadb9b4aa77f15e3cd3c31a89d372015d950b7ef",
     "compat/posix/src/memfd_seals.cc": "058cb8d0cef69da7f7c17952873e234b6ccaec97821dfee32f4770beaf45b831",
     "compat/posix/src/mman.cc": "31a5cac2af159fede9ab71853466da95bfb1d4245c01ecba1359761e798cd726"
   },
   "source_sha256": {
-    "compat/posix/src/internal.h": "9bdecf23a56355dee397f399b5c5c9302ac531daa5b82b4da10f029f5f9b33b0",
+    "compat/posix/src/internal.h": "41a5cf4277dde42d576cc40a10fc79fdbc5dde243d576d27d9baeaec3bee1d04",
     "compat/posix/src/memfd_seals.cc": "00f0b1427bad39e321b54b410cf4506f20f1f4eb516d276b67b584f9359e4d7c",
     "compat/posix/src/mman.cc": "89148dadc0273d636ccd83a1299e1d4499177457905be9ca7968d3183df2dd49"
   },
