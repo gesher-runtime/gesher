@@ -46,7 +46,9 @@ struct OriginStorageDelete : std::enable_shared_from_this<OriginStorageDelete> {
   std::wstring navigation_url;
   std::function<void()> navigation_then;
   ULONGLONG deadline = 0, step_deadline = 0;
-  bool finished = false, timer = false;
+  bool finished = false, finalized = false, timer = false;
+  HRESULT terminal_result = S_OK;
+  std::wstring terminal_where;
   size_t inventory_total = 0;
   std::vector<Key> keys;
   std::set<std::wstring> seen_keys;
@@ -120,13 +122,40 @@ struct OriginStorageDelete : std::enable_shared_from_this<OriginStorageDelete> {
     if (finished) return;
     auto self = shared_from_this();
     finished = true;
-    if (timer) { KillTimer(g_task_window, kTimer); timer = false; }
+    terminal_result = hr;
+    terminal_where = where;
     if (pending) pending->then = {};
     pending.reset();
     // An in-flight SDK creation retains its separate lease until its callback
     // can close a late controller. A merely queued creation has no such lease.
     if (creation) creation->then = {};
     creation.reset();
+
+    // WebView2 still updates its response bookkeeping after a DevTools callback
+    // returns. Keep both controllers and the admitted lease until a later owner
+    // task closes them, reports completion and advances the operation queue.
+    if (!timer) {
+      // Begin failed to create its timer, before requesting any environment or
+      // controller. It already runs as an owner task, so there is no SDK frame.
+      Finalize();
+      return;
+    }
+    auto task = std::make_unique<std::function<void()>>([self] { self->Finalize(); });
+    {
+      std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+      // Completing admitted work is permitted during ShutdownIdle's drain.
+      if (g_thread_phase != ThreadPhase::kJoined && QueueTaskLocked(task.get())) task.release();
+    }
+    // If posting fails, the existing timer finalizes on its next dispatch. Never
+    // fall back to closing a controller inside the SDK completion callback.
+  }
+
+  void Finalize() {
+    if (!finished || finalized) return;
+    auto self = shared_from_this();
+    finalized = true;
+    if (timer) { KillTimer(g_task_window, kTimer); timer = false; }
+    HRESULT hr = terminal_result;
     HRESULT navigation_closed = DetachNavigation();
     HRESULT private_closed = Close(&resolver);
     HRESULT ordinary_closed = Close(&inventory);
@@ -136,7 +165,7 @@ struct OriginStorageDelete : std::enable_shared_from_this<OriginStorageDelete> {
     if (SUCCEEDED(hr) && FAILED(ordinary_closed)) hr = ordinary_closed;
     GlobalWork work = std::move(operation);
     ReportGlobal(kGlobalDone, callback_id, static_cast<int32_t>(hr),
-                 SUCCEEDED(hr) ? L"" : L"WebStorage origin deletion: " + where);
+                 SUCCEEDED(hr) ? L"" : L"WebStorage origin deletion: " + terminal_where);
     if (g_origin_delete.get() == this) g_origin_delete.reset();
     NextOriginStorageDelete();
   }
@@ -645,8 +674,10 @@ void NextOriginStorageDelete() {
 
 void CALLBACK OriginStorageDeleteTimer(HWND, UINT, UINT_PTR, DWORD) {
   auto operation = g_origin_delete;
-  if (operation && !operation->finished &&
-      (GetTickCount64() >= operation->deadline || GetTickCount64() >= operation->step_deadline)) {
+  if (!operation) return;
+  if (operation->finished) {
+    operation->Finalize();
+  } else if (GetTickCount64() >= operation->deadline || GetTickCount64() >= operation->step_deadline) {
     operation->Finish(HRESULT_FROM_WIN32(ERROR_TIMEOUT), L"operation deadline");
   }
 }

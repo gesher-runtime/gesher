@@ -103,20 +103,50 @@ network-isolation or shutdown acceptance was reached.
 The separate pre-COM fault control produced the intended `0xe0470001` exception,
 exit `-532217855`, real DLL fault location and unwound probe caller frames.
 Its wrapper incorrectly required flags exactly `0x1`; both actual runs supplied
-`0x81`. The wrapper now requires the documented `EXCEPTION_NONCONTINUABLE` bit
+`0x81`. The wrapper now requires the documented
+[`EXCEPTION_NONCONTINUABLE` bit](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-exception_record)
 while allowing reserved system bits, retaining all code, parameter, exit and
 caller-frame requirements. Independent adapter checks accepted the actual
 records from both jobs and rejected missing, duplicate or changed controls.
 The actual storage process still runs with its original 690-second wrapper
 deadline and every acceptance check.
 
-The next standalone diagnostic records the loaded faulting module's path and
-PE identity, plus its CodeView identity when available. On a failed actual
-storage process, the Windows wrapper copies only that observed
-`EmbeddedBrowserWebView.dll` and records its bytes, SHA-256 and file versions;
-the diagnostic workflow retains those files. Matching that copy to the loaded
-image is still required before using it to name an SDK function. No production
-cleanup change follows merely from finding a fault inside the SDK.
+## Matched runtime image and callback ordering at 6ff0bd78
+
+[Run 45609391658](https://github.com/gesher-runtime/gesher/actions/runs/45609391658)
+tested `6ff0bd78325e5bb2086a9f02c18d7bb091381eef`, tree
+`a4bbccc863326b05b730b98bf8a86213b194e901`. On Windows 2022, the corrected
+native fault self-test passed, all fourteen storage keys were seeded, and the
+actual Host operation again crashed at runtime 131 RVA `0x353752`. The wrapper
+retained the observed `EmbeddedBrowserWebView.dll`; its digest, PE timestamp,
+image size, architecture and CodeView identity match the actual loaded image.
+The exact probe artifact independently maps its own return RVA `0x5392b` to
+`ThreadMain` after `DispatchMessageW`.
+
+Windows 2025 stopped at the preceding DLL browser-session controller deadline.
+Its late controller callback was closed and the static-loader startup probe
+passed, but no storage or fault-control subprocess ran on that runner. This
+run supplies no new runtime 157 storage result.
+
+The [focused report and receipt](webview-storage-crash-6ff0bd78.md) retain the
+actual identities, log anchors and limits. Independent inspection of the
+matched DLL finds an integer response-ID lookup, a callback taken from that
+entry, the callback invocation, and then removal of the same entry after the
+callback returns. The observed stack return RVA `0x3296d4` follows that removal
+call; the fault occurs while traversing a child link. The mapped `id`, `method`
+and `Fetch.requestPaused` literals support identifying this response-dispatch
+path. No PDB was obtained, and nearby exported symbol labels are not treated
+as internal function names.
+
+The existing terminal CDP callback can call `Finish`, which closes/releases its
+controllers before returning to that dispatcher. This concrete ordering
+supports testing a narrow change: mark the operation terminal immediately,
+then post checked controller/event cleanup, completion reporting and queue
+advancement to the existing owner STA. Keep the admitted work lease and active
+operation until cleanup; already accepted work must still drain during shutdown.
+This is a candidate, not an established fix. The original terminal HRESULT is
+not visible before this crash, so moving cleanup may also expose an underlying
+operation error. Full actual-Host acceptance on both runtimes remains required.
 
 ## State and operations
 

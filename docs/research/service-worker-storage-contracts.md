@@ -55,6 +55,13 @@ fault stacks locate an asynchronous `EmbeddedBrowserWebView.dll` dispatch;
 the actual probe executable frame returns from `DispatchMessageW`. They do not
 yet establish the responsible lifetime defect. Successful completion callbacks
 before the crash do not establish deletion/preservation acceptance.
+At `6ff0bd78`, the runtime 131 faulting DLL was retained and matched to its loaded
+PE/CodeView identity. Its response dispatcher performs entry removal after
+invoking the callback; the current terminal callback can close that controller
+before returning. A narrow owner-STA deferred-cleanup candidate addresses this
+observed ordering boundary and still requires full actual-Host acceptance.
+The [focused crash report](webview-storage-crash-6ff0bd78.md) records the evidence
+and separates runtime 157's earlier startup-only failure in that run.
 Full origin enumeration still needs effective quotas for arbitrary full storage
 keys.
 
