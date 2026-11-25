@@ -121,7 +121,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         info.reqKeyboardType = config.keyboard;
         info.reqNavigation = config.navigation;
         info.reqInputFeatures = 0;
-        info.reqGlEsVersion = android.os.SystemProperties.getInt("ro.opengles.version", 0x20000);
+        // ro.opengles.version, the same value getSystemAvailableFeatures gives.
+        info.reqGlEsVersion = PackageManagerService.glEsVersion();
         return info;
     }
 
@@ -3073,6 +3074,40 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 SettingsIntents.Target settings;
                 synchronized (mPm) {
                     settings = SettingsIntents.resolve(intent, pkg -> mPm.get(pkg) != null);
+                }
+                if (settings != null && settings.controlCenter && settings.packageName != null
+                        && android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS.equals(action)
+                        && !internalCreator && resultToToken != null) {
+                    // An app's own App info while one of its background permissions awaits
+                    // the user's choice (microG asks this way): on Android that page offers
+                    // the choice; here the background dialog does, and the result follows it.
+                    final ActivityRecord source = forToken(resultToToken);
+                    final ProcessRecord process;
+                    final boolean callerOwnsSource;
+                    synchronized (this) {
+                        // source.app and its thread change while a process attaches or dies.
+                        process = source == null ? null : source.app;
+                        IApplicationThread thread = process == null ? null : process.thread;
+                        callerOwnsSource = thread != null && caller != null && process.pid == originalPid
+                                && caller.asBinder().equals(thread.asBinder());
+                    }
+                    final ApkPackage captured = mPm.get(settings.packageName);
+                    if (callerOwnsSource && settings.packageName.equals(source.info.packageName)
+                            && captured != null && captured.uid() == originalUid
+                            && mPermissionRequests.backgroundSettings(captured, () -> {
+                                synchronized (ActivityTaskManagerService.this) {
+                                    if (requestCode < 0 || source.app != process || source.finishing
+                                            || source.state == State.DESTROYED || !mActivities.contains(source)
+                                            || mPm.get(settings.packageName) != captured) return;
+                                }
+                                // deliverResult rechecks the process under its own lock.
+                                deliverResult(source, resultWho, requestCode,
+                                        android.app.Activity.RESULT_CANCELED, null, process);
+                            })) {
+                        SystemServer.log("startActivity: " + action + ": background permission choice for "
+                                + settings.packageName);
+                        return ActivityManager.START_SUCCESS;
+                    }
                 }
                 if (settings != null) {
                     // Settings answers a startActivityForResult when the user leaves it.
