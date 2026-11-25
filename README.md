@@ -154,16 +154,19 @@ See [updating Gesher](docs/updates.md) for behavior, release packaging and tests
 
 ## License
 
-Gesher is a paid commercial product. Use of its proprietary portions requires
+Gesher is commercially licensed. Use of its proprietary portions requires
 acceptance of the [Commercial End-User License Agreement](LICENSE) and a valid
-License Entitlement from the licensor or an authorized reseller. The entitlement
-sets the price, permitted usage and license duration; any trial or complimentary
-license requires express written authorization.
+License Entitlement from the licensor or an authorized reseller. Licenses may
+be paid, discounted through coupons or promotions, supplied at no charge, or
+granted under a separate agreement. The entitlement or applicable agreement
+sets any fees, eligibility, permitted usage and license duration; an authorized
+published offer may cover a group of eligible users.
 
-The commercial license permits installation and operation within the purchased
-scope. Modification, forks and redistribution of proprietary portions require
-separate permission. Components and materials governed by separate licenses
-remain subject to those licenses, and mandatory legal rights are preserved.
+The commercial license permits installation and operation within the granted
+scope. A free license or coupon does not by itself permit modification, forks
+or redistribution of proprietary portions; those rights require separate
+permission. Components and materials governed by separate licenses remain
+subject to those licenses, and mandatory legal rights are preserved.
 
 ---
 

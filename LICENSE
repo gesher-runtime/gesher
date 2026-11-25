@@ -16,14 +16,17 @@ means only those portions of the Software that Licensor is authorized to
 license under this Agreement, excluding materials governed by separate
 licenses as described in section 7.
 
-"License Entitlement" means an order, license certificate or other written
-license confirmation issued or expressly approved by Licensor. It identifies
-Licensor and the licensee, the licensed product or edition, the permitted
-users, devices or other usage limits, the license duration (including whether
-it is perpetual or time-limited), and the agreed fees and payment terms. An
+"License Entitlement" means an order, license certificate, redemption
+confirmation, published license offer or other written or electronic
+authorization issued or expressly approved by Licensor. It identifies Licensor,
+the licensee or eligible recipient group, the licensed product or edition, the
+permitted users, devices or other usage limits, the license duration (including
+whether it is perpetual or time-limited), and the fees, if any, and applicable
+payment terms. A published offer may grant the stated license to all eligible
+recipients who accept it, without an individually issued certificate. An
 authorized reseller may supply a License Entitlement on Licensor's behalf.
 
-2. Acceptance and payment
+2. Acceptance, offers and payment
 
 To exercise rights under this Agreement, you must first receive and accept
 these terms and obtain a valid License Entitlement. Acceptance must be through
@@ -31,11 +34,24 @@ an affirmative acceptance process or a signed agreement incorporating these
 terms. Merely accessing a repository or downloading files does not establish
 acceptance or grant a commercial license under this Agreement.
 
-Gesher is licensed commercially for a fee. You must pay the fees when due under
-your License Entitlement. A trial, evaluation or complimentary license exists
-only if Licensor expressly grants it in writing, and is limited to its stated
-purpose, scope and duration. Possession of source code, an installer or a
-license key alone does not establish a valid License Entitlement.
+Licensor may offer licenses for a fee, at a discount, at no charge, through
+coupons or promotional offers, or under a separate agreement. Your License
+Entitlement and any applicable agreement determine the fees, discounts or fee
+waivers, eligibility and scope. You must pay only the fees agreed there, when
+due; no payment is required for a valid no-charge license.
+
+Trials, evaluation licenses, complimentary licenses, coupons and promotional
+offers must be issued or expressly approved by Licensor. Their eligibility,
+redemption conditions, purpose and duration are those stated in the offer or
+License Entitlement. A coupon, discount or fee waiver does not by itself expand
+the permitted use, modification or distribution rights. Those rights change
+only if expressly granted in the License Entitlement or a separate agreement,
+subject to section 7.
+
+Possession of source code, an installer, a coupon or a license key alone does
+not establish a valid License Entitlement; any required acceptance, eligibility
+and redemption conditions must also be met. Receiving the Software at no charge
+does not by itself authorize its modification, forking or redistribution.
 
 3. License grant
 
@@ -160,8 +176,11 @@ consumer rights, statutory warranties, cancellation rights, refunds or remedies.
 
 11. Relationship with other terms
 
-Your License Entitlement specifies the commercial scope of this Agreement.
-Any term that varies this Agreement must be expressly agreed by Licensor and
-you. Section 7 controls the treatment of separate licenses and mandatory rights.
-If a provision is unenforceable, it applies only to the extent permitted by
-law; the remaining provisions continue to apply to the extent legally possible.
+Your License Entitlement, including any applicable offer or coupon terms,
+specifies the commercial scope of this Agreement. A separate written or
+electronic agreement expressly agreed by Licensor and you may establish
+different commercial or license terms and controls to the extent it expressly
+varies this Agreement. Section 7 controls the treatment of separate licenses
+and mandatory rights. If a provision is unenforceable, it applies only to the
+extent permitted by law; the remaining provisions continue to apply to the
+extent legally possible.

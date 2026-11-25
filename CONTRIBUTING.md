@@ -97,11 +97,12 @@ it is removed or redesigned.
   code generated with AI. Generated explanations and passing tests are not
   substitutes for reviewing its behavior.
 
-Gesher is a paid commercial product governed by the
-[Commercial End-User License Agreement](LICENSE). A purchased end-user license
+Gesher is commercially licensed under the
+[Commercial End-User License Agreement](LICENSE). An end-user license, whether
+paid, discounted, complimentary or granted under a separate agreement,
 permits installation and operation within its License Entitlement; it does not
-grant permission to develop or redistribute proprietary portions. Obtain
-separate written authorization from the licensor before working on those
+by itself grant permission to develop or redistribute proprietary portions.
+Obtain separate written authorization from the licensor before working on those
 portions. Materials governed by separate licenses remain subject to those
 licenses, and mandatory legal rights are preserved. Signing the CLA alone does
 not grant development or distribution rights to proprietary portions.
