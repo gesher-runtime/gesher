@@ -225,7 +225,7 @@ Check 'arm64: guest fork, vfork and raw clone make real children; wait4 reports 
 # Forks while other threads hold each system call path's locks (and threads
 # start and leave, holding ntdll's loader lock), signals sent at once, a fork
 # from a library constructor, forks from four threads and nested forks.
-foreach ($forkCase in 'malloc', 'mmap', 'stdio', 'thread', 'env', 'prop', 'dlopen', 'exit', 'epoll') {
+foreach ($forkCase in 'malloc', 'mmap', 'stdio', 'thread', 'env', 'prop', 'dlopen', 'exit', 'epoll', 'fifo') {
   Check "arm64: fork while three threads use $forkCase (no child or parent hangs)" {
     A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
       'contend', '40', $forkCase) 300
