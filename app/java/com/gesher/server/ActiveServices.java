@@ -1156,11 +1156,14 @@ final class ActiveServices {
         String message = "Context.startForegroundService() did not then call Service.startForeground(): " + r;
         SystemServer.log(message);
         if (app.pid == android.os.Process.myPid()) return;
+        long identity = Binder.clearCallingIdentity();
         try {
             app.thread.scheduleCrash(message, ForegroundServiceDidNotStartInTimeException.TYPE_ID,
                     ForegroundServiceDidNotStartInTimeException.createExtrasForService(r.name));
         } catch (RemoteException | RuntimeException e) {
             SystemServer.log("Unable to report foreground service start failure for " + r + ": " + e);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
         }
     }
 
