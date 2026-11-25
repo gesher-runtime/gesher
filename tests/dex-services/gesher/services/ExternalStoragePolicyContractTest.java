@@ -283,12 +283,7 @@ public final class ExternalStoragePolicyContractTest {
             h.mode(AppOpsManager.MODE_IGNORED);
             // A pre-Q app needs the installer's ordinary restricted-permission
             // allowlist as well as the user's grant, including on Windows/ART.
-            for (String permission : List.of(READ, WRITE)) {
-                h.pm.permissions().updatePermissionFlags(NAME, permission,
-                        PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION
-                                | PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT,
-                        PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT, true, "default:0", 0);
-            }
+            ExternalStorageAccessTest.admitPackages(h.pm, List.of(h.owner));
             h.pm.permissions().grantRuntimePermission(NAME, READ, "default:0", 0);
             check(mediaCollection(h, "FILES", false),
                     "MediaStore did not preserve granted legacy collection access");
@@ -305,6 +300,52 @@ public final class ExternalStoragePolicyContractTest {
                     "MediaStore legacy write fallback ignored WRITE_EXTERNAL_STORAGE AppOps denial");
             h.pm.permissions().revokeRuntimePermission(NAME, READ, "default:0", 0, "test cleanup");
             h.pm.permissions().revokeRuntimePermission(NAME, WRITE, "default:0", 0, "test cleanup");
+
+            // Fresh install after boot migration: an explicit installer opt-out
+            // must remain restricted, irrespective of the fixture's earlier UIDs.
+            ApkPackage restricted = pkg("fixture.storage.restricted28", 13081, 28);
+            call(restricted, "setRestrictedPermissionAllowlist", new Class<?>[] {Collection.class}, List.of());
+            call(h.pm, "add", new Class<?>[] {ApkPackage.class}, restricted);
+            h.drain();
+            int uid = restricted.uid();
+            String name = restricted.packageName;
+            int flags = h.pm.permissions().getPermissionFlags(name, WRITE, "default:0", 0);
+            check((flags & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) != 0
+                            && (flags & PackageManager.FLAGS_PERMISSION_RESTRICTION_ANY_EXEMPT) == 0,
+                    "installer opt-out did not preserve the storage restriction");
+            h.pm.permissions().grantRuntimePermission(name, WRITE, "default:0", 0);
+            check(h.pm.permissions().checkUidPermission(uid, WRITE, 0) == PackageManager.PERMISSION_DENIED,
+                    "restricted legacy package received a runtime storage grant");
+            check(h.pm.appOps().checkRawMode(AppOpsManager.OP_WRITE_EXTERNAL_STORAGE, uid, name)
+                            == AppOpsManager.MODE_IGNORED,
+                    "restricted legacy package received the storage AppOp");
+            check(ExternalStorageAccess.computePolicy(h.pm, restricted).mode() == ExternalStorageAccess.Mode.SCOPED,
+                    "restricted legacy package escaped scoped storage");
+
+            // The original mode fixture uses this same real admission helper.
+            // Exemption alone is not consent; the explicit runtime grant is still required.
+            ExternalStorageAccessTest.admitPackages(h.pm, List.of(restricted));
+            flags = h.pm.permissions().getPermissionFlags(name, WRITE, "default:0", 0);
+            check((flags & PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT) != 0
+                            && (flags & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) == 0,
+                    "ordinary installer admission did not reconcile the restricted permission");
+            check(h.pm.permissions().checkUidPermission(uid, WRITE, 0) == PackageManager.PERMISSION_DENIED,
+                    "installer allowlisting invented runtime consent");
+            h.pm.permissions().grantRuntimePermission(name, WRITE, "default:0", 0);
+            check(h.pm.permissions().checkUidPermission(uid, WRITE, 0) == PackageManager.PERMISSION_GRANTED,
+                    "allowlisted legacy package did not receive the explicit runtime grant");
+            check(h.pm.appOps().checkRawMode(AppOpsManager.OP_WRITE_EXTERNAL_STORAGE, uid, name)
+                            == AppOpsManager.MODE_ALLOWED,
+                    "allowlisted legacy runtime grant did not enable its AppOp");
+            check(ExternalStorageAccess.computePolicy(h.pm, restricted).mode() == ExternalStorageAccess.Mode.LEGACY_RW,
+                    "effective legacy write grant did not enable the storage policy");
+            File policyFile = ExternalStorageAccess.policyFile(name);
+            check(Files.readString(policyFile.toPath()).contains("mode=LEGACY_RW\n"),
+                    "effective legacy grant was not published to the native policy file");
+            h.pm.permissions().revokeRuntimePermission(name, WRITE, "default:0", 0, "test cleanup");
+            check(ExternalStorageAccess.computePolicy(h.pm, restricted).mode() == ExternalStorageAccess.Mode.SCOPED
+                            && Files.readString(policyFile.toPath()).contains("mode=SCOPED\n"),
+                    "legacy storage access survived revocation");
         }
     }
     private static void grantThenRevoke(Harness h) throws Exception {

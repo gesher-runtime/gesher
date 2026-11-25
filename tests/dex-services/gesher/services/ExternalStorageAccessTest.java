@@ -22,9 +22,12 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import sun.misc.Unsafe;
 
 /**
@@ -59,7 +62,24 @@ public final class ExternalStorageAccessTest {
         Object last = sLast.get(null);
         Field pmField = last.getClass().getDeclaredField("pm");
         pmField.setAccessible(true);
-        return (PackageManagerService) pmField.get(last);
+        PackageManagerService pm = (PackageManagerService) pmField.get(last);
+        admitPackages(pm, packages);
+        return pm;
+    }
+
+    /** Record the ordinary installer allowlist and publish through the real PM lifecycle. */
+    static void admitPackages(PackageManagerService pm, Collection<ApkPackage> packages) throws Exception {
+        Method allowlist = ApkPackage.class.getDeclaredMethod("setRestrictedPermissionAllowlist", Collection.class);
+        Method admit = PackageManagerService.class.getDeclaredMethod("add", ApkPackage.class);
+        allowlist.setAccessible(true);
+        admit.setAccessible(true);
+        for (ApkPackage pkg : packages) {
+            allowlist.invoke(pkg, (Object) null);
+            admit.invoke(pm, pkg);
+        }
+        Field events = PackageManagerService.class.getDeclaredField("mPackageEventExecutor");
+        events.setAccessible(true);
+        ((ExecutorService) events.get(pm)).submit(() -> { }).get(5, TimeUnit.SECONDS);
     }
 
     private static ApkPackage makePackage(Unsafe unsafe, String name, int uid, int targetSdk,
@@ -136,6 +156,12 @@ public final class ExternalStorageAccessTest {
         // Legacy 28 with WRITE_EXTERNAL_STORAGE -> LEGACY_RW
         pm.permissions().grantRuntimePermission(legacy28.packageName,
                 Manifest.permission.WRITE_EXTERNAL_STORAGE, "default:0", 0);
+        check(pm.permissions().checkUidPermission(legacy28.uid(), Manifest.permission.WRITE_EXTERNAL_STORAGE, 0)
+                        == PackageManager.PERMISSION_GRANTED,
+                "admitted legacy28 should receive the requested runtime grant");
+        check(pm.appOps().checkRawMode(AppOpsManager.OP_WRITE_EXTERNAL_STORAGE, legacy28.uid(), legacy28.packageName)
+                        == AppOpsManager.MODE_ALLOWED,
+                "admitted legacy28 should receive the effective storage AppOp");
         ExternalStorageAccess.Policy l28Policy = ExternalStorageAccess.computePolicy(pm, legacy28);
         check(l28Policy.mode() == ExternalStorageAccess.Mode.LEGACY_RW && l28Policy.mediaMask() == 7,
                 "legacy28 should be LEGACY_RW/7, got " + l28Policy);
