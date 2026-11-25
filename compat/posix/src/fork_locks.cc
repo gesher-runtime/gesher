@@ -1,5 +1,6 @@
 // gesher-base: the fork-lock registry (gesher/fork.h, ADR 0092).
 #include <gesher/fork.h>
+#include <gesher/logging.h>
 
 #include <errno.h>
 #include <windows.h>
@@ -7,6 +8,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <new>
 
 namespace gesher {
 namespace {
@@ -173,28 +175,60 @@ std::mutex& ForkHelperLock() {
 }
 
 namespace {
+// How long a helper thread may take to reach its own code (its loader
+// initialisation: DLL thread attach) before it is given up.
+constexpr DWORD kHelperStartMs = 5000;
+
+// Shared by the starting thread and the helper. `state`: 0 not decided, 1 the
+// helper runs its routine, 2 the starter gave it up (the routine never runs:
+// its argument may be gone). Freed by whichever of the two lets go last.
 struct HelperStart {
   LPTHREAD_START_ROUTINE routine;
   void* argument;
   HANDLE started;
+  volatile LONG state;
+  volatile LONG refs;
 };
+void Unref(HelperStart* start) {
+  if (InterlockedDecrement(&start->refs) != 0) return;
+  CloseHandle(start->started);
+  delete start;
+}
 DWORD WINAPI RunHelper(void* raw) {
-  HelperStart start = *static_cast<HelperStart*>(raw);
-  SetEvent(start.started);
-  return start.routine(start.argument);
+  auto* start = static_cast<HelperStart*>(raw);
+  const LPTHREAD_START_ROUTINE routine = start->routine;
+  void* const argument = start->argument;
+  const bool run = InterlockedCompareExchange(&start->state, 1, 0) == 0;
+  SetEvent(start->started);
+  Unref(start);
+  return run ? routine(argument) : 0;
 }
 }  // namespace
 
 bool StartHelperThread(LPTHREAD_START_ROUTINE routine, void* argument, SIZE_T stack) {
-  HelperStart start{routine, argument, CreateEventW(nullptr, TRUE, FALSE, nullptr)};
-  if (start.started == nullptr) return false;
-  HANDLE thread = CreateThread(nullptr, stack, RunHelper, &start, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
-  if (thread != nullptr) {
-    WaitForSingleObject(start.started, INFINITE);
-    CloseHandle(thread);
+  auto* start = new (std::nothrow) HelperStart{routine, argument, CreateEventW(nullptr, TRUE, FALSE, nullptr), 0, 2};
+  if (start == nullptr) return false;
+  if (start->started == nullptr) {
+    delete start;
+    return false;
   }
-  CloseHandle(start.started);
-  return thread != nullptr;
+  HANDLE thread = CreateThread(nullptr, stack, RunHelper, start, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+  if (thread == nullptr) {
+    CloseHandle(start->started);
+    delete start;
+    return false;
+  }
+  CloseHandle(thread);
+  // Bounded: a thread whose start hangs (a DLL's thread attach in a clone)
+  // must not hang its starter. Given up, it never runs the routine.
+  const bool started = WaitForSingleObject(start->started, kHelperStartMs) == WAIT_OBJECT_0 ||
+                       InterlockedCompareExchange(&start->state, 2, 0) != 0;
+  Unref(start);
+  if (!started) {
+    logging::Record(0 /*LOG_ID_MAIN*/, 6 /*ANDROID_LOG_ERROR*/, "gesher-fork",
+                    "a helper thread did not start within 5 s; given up");
+  }
+  return started;
 }
 
 // Whether this thread has passed the gate (ThreadLeaving runs once a thread).

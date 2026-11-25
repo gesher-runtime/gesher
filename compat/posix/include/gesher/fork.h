@@ -81,11 +81,17 @@ bool ForkHasMemfdWriteLeases();
 // True in a process CloneProcess made. The ntdll thread pool of the parent
 // does not exist there: code that would use it takes another path or fails.
 bool InForkedChild();
+// In a forked child: whether `handle` is one it inherited at the clone (the
+// value was open in it when the clone returned). A handle value the parent
+// stored but opened after its handles were made inheritable is not, and may
+// name another of the child's handles later: such a value is never closed.
+bool InheritedAtFork(HANDLE handle);
 
 // In the child, after CloneProcess: gesher-base's per-process state named by
 // the pid (the signal mailbox other processes' kill() reaches) is opened for
-// the child's pid and watched by a thread of its own.
-void ReinitializeAfterFork();
+// the child's pid and watched by a thread of its own. False when that could
+// not be done (the child would lose signals): the fork must not go on.
+bool ReinitializeAfterFork();
 
 // A forked child's death by a signal, as its Windows exit code. Ordinary exit
 // statuses of a forked child are 0..255, so this cannot be confused with
@@ -161,7 +167,8 @@ void ThreadLeaving();
 // one in the middle of its work (inside the heap, say): it is in the fork set.
 std::mutex& ForkHelperLock();
 // Starts a helper thread and returns once it runs its own code (its loader
-// initialisation, which allocates, is over). false if it could not start.
+// initialisation, which allocates, is over). false if it could not start, or
+// did not get there within 5 s (logged; it then never runs `routine`).
 bool StartHelperThread(LPTHREAD_START_ROUTINE routine, void* argument, SIZE_T stack);
 
 // For code that runs as a thread leaves: takes `lock`, or returns false

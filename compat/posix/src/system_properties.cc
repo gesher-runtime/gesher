@@ -20,10 +20,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
-#if __has_include(<gesher/fork.h>)
-#include <gesher/fork.h>
-#endif
 
 #include <gesher/device_identity.h>
 
@@ -567,6 +563,13 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
 }
 
 } // namespace gesher::properties
+
+// The fork set (gesher/fork.h); absent where a host test compiles this file
+// alone. Included here, after the code, so that this file's source
+// transitions above keep their line numbers.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 #ifdef GESHER_FORK_LOCK
 // fork (gesher/fork.h): property reads in a forked child.

@@ -1080,6 +1080,45 @@ static void test_trace_forked_child(void) {
          status);
 }
 
+// A forked tracee whose tracer seized it with PTRACE_O_EXITKILL dies by
+// SIGKILL when the tracer exits (WIFSIGNALED, SIGKILL), as on Linux.
+static void test_exitkill_forked_tracee(void) {
+  int ready[2];
+  if (pipe(ready) != 0) {
+    check(0, "pipe for the EXITKILL check");
+    return;
+  }
+  fflush(stdout);
+  pid_t tracee = fork();
+  if (tracee == 0) {
+    close(ready[0]);
+    prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+    char c = 1;
+    write(ready[1], &c, 1);
+    for (int i = 0; i < 1000; ++i) usleep(10000);
+    _exit(3);  // not killed: the check fails
+  }
+  close(ready[1]);
+  char c = 0;
+  const int got_ready = tracee > 0 && read(ready[0], &c, 1) == 1;
+  close(ready[0]);
+  if (!got_ready) {
+    check(0, "the EXITKILL tracee started");
+    if (tracee > 0) reap_within(tracee, 15000);
+    return;
+  }
+  pid_t tracer = fork();
+  if (tracer == 0) {
+    // Seize it with EXITKILL and exit without detaching.
+    _exit(ptrace(PTRACE_SEIZE, tracee, 0, (void*)(uintptr_t)PTRACE_O_EXITKILL) == 0 ? 0 : 1);
+  }
+  const int tracer_status = tracer > 0 ? reap_within(tracer, 15000) : -1;
+  const int status = reap_within(tracee, 15000);
+  checkf(tracer_status == 0 && status >= 0 && WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL,
+         "a forked tracee dies by SIGKILL when its EXITKILL tracer exits", "tracer=0x%lx tracee=0x%lx",
+         tracer_status, status);
+}
+
 static int run_all(void) {
   test_exit_code();
   test_copy_on_write();
@@ -1101,6 +1140,7 @@ static int run_all(void) {
   test_heap_under_fork();
   test_pairip_sequence();
   test_trace_forked_child();
+  test_exitkill_forked_tracee();
   test_threads_stress();
   return failures;
 }

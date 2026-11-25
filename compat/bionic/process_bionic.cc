@@ -929,6 +929,10 @@ constexpr unsigned kForkLockTimeoutMs = 10000;
 // How long the parent waits, holding the fork set, for the child to take the
 // memfd write leases it inherited (it only renews byte-range locks there).
 constexpr DWORD kLeaseWaitMs = 2000;
+// How long the parent waits, without the fork set, for the child to have
+// started its signal mailbox thread and ptrace guard (each start is bounded
+// at 5 s, gesher/fork.h).
+constexpr DWORD kChildReadyMs = 15000;
 
 // The child: none of the parent's children are its children, and none of its
 // popen streams has a child of its own.
@@ -961,9 +965,31 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
   // The child takes its own lease for each memfd write lease it inherits; the
   // parent waits for that before any of its threads can unmap and seal, so a
   // seal right after fork sees the child's mapping (EBUSY), as on Linux. The
-  // event, made before the clone, is the child's too (at the same value).
-  HANDLE leases_renewed =
-      gesher::ForkHasMemfdWriteLeases() ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
+  // child then waits for the parent's word: go on (`leases_go`), or be ended
+  // (a parent that gave up waiting); it also goes on if the parent ends. The
+  // events and the parent's handle, made before the clone, are the child's
+  // too (at the same values).
+  const bool leases = gesher::ForkHasMemfdWriteLeases();
+  HANDLE leases_renewed = leases ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
+  HANDLE leases_go = leases ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
+  HANDLE parent_self = nullptr;
+  if (leases) {
+    DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &parent_self, SYNCHRONIZE,
+                    FALSE, 0);
+  }
+  // Set by the child once its signal mailbox, its ptrace state and their
+  // threads run: until then fork has not succeeded (ReinitializeAfterFork).
+  HANDLE child_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (child_ready == nullptr || (leases && (leases_renewed == nullptr || leases_go == nullptr || parent_self == nullptr))) {
+    for (HANDLE h : {child_ready, leases_renewed, leases_go, parent_self}) {
+      if (h != nullptr) CloseHandle(h);
+    }
+    gesher::ReleaseForkLocks(false);
+    TranslatorMapping(1);
+    serial.unlock();
+    if (run_atfork) RunAtforkParent();
+    return errno = EAGAIN, -1;
+  }
   HANDLE process = nullptr;
   DWORD pid = 0;
   const int cloned = gesher::CloneProcess(&process, &pid);
@@ -979,13 +1005,23 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
     ForkChildProcessState();
     PtraceForkChild();
     gesher::ReleaseForkLocks(true);  // renews the inherited memfd leases
-    if (leases_renewed != nullptr) {
+    if (leases) {
       SetEvent(leases_renewed);
-      CloseHandle(leases_renewed);
+      // No guest code runs before the parent decided: a parent that gave up
+      // waiting ends this process instead of saying go.
+      HANDLE waits[2] = {leases_go, parent_self};
+      WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+      for (HANDLE h : {leases_renewed, leases_go, parent_self}) CloseHandle(h);
     }
     serial.release();
     new (&g_fork_mutex) std::mutex();
-    gesher::ReinitializeAfterFork();
+    if (!gesher::ReinitializeAfterFork()) {
+      // It could not watch its own signals (or be traced): not a child the
+      // parent may return. The parent sees it end without being ready.
+      TerminateProcess(GetCurrentProcess(), 0x7f);
+    }
+    SetEvent(child_ready);
+    CloseHandle(child_ready);
     if (run_atfork) RunAtforkChild();
     return 0;
   }
@@ -993,19 +1029,22 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
   // thread holds the whole fork set meanwhile, so every other thread that
   // makes a system call waits too): the child only renews locks there.
   DWORD lease_wait = WAIT_OBJECT_0;
-  if (leases_renewed != nullptr) {
+  if (leases) {
     if (cloned > 0) {
       HANDLE waits[2] = {leases_renewed, process};
       lease_wait = WaitForMultipleObjects(2, waits, FALSE, kLeaseWaitMs);
+      // Only a child that took them goes on: one that did not is ended below
+      // (it waits for this word, so it has run no guest code either way).
+      if (lease_wait == WAIT_OBJECT_0) SetEvent(leases_go);
     }
-    CloseHandle(leases_renewed);
+    for (HANDLE h : {leases_renewed, leases_go, parent_self}) CloseHandle(h);
   }
   const bool leases_failed = cloned > 0 && lease_wait != WAIT_OBJECT_0;
   if (leases_failed) {
     // The child did not take its leases in time (or ended first): returning
     // its pid would let a seal succeed while the child maps the memfd, which
-    // Linux never allows. It has run no guest code yet (it signals before
-    // fork returns in it), so it is ended and fork fails as fork(2) may.
+    // Linux never allows. It has run no guest code (it waits for the word
+    // above), so it is ended and fork fails as fork(2) may.
     TerminateProcess(process, 0);
     WaitForSingleObject(process, kLeaseWaitMs);
     CloseHandle(process);
@@ -1013,6 +1052,28 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
   gesher::ReleaseForkLocks(false);
   TranslatorMapping(1);
   serial.unlock();
+  // The child's start: its mailbox thread and ptrace guard (outside the fork
+  // set: they start threads). Not ready in time, or ended first: it has run
+  // no guest code (it signals before fork returns in it), so it is ended and
+  // fork fails, rather than return a child that loses signals.
+  DWORD ready_wait = WAIT_OBJECT_0;
+  if (cloned > 0 && !leases_failed) {
+    HANDLE waits[2] = {child_ready, process};
+    ready_wait = WaitForMultipleObjects(2, waits, FALSE, kChildReadyMs);
+    if (ready_wait != WAIT_OBJECT_0) {
+      TerminateProcess(process, 0);
+      WaitForSingleObject(process, kLeaseWaitMs);
+      CloseHandle(process);
+    }
+  }
+  CloseHandle(child_ready);
+  if (cloned > 0 && !leases_failed && ready_wait != WAIT_OBJECT_0) {
+    gesher::ForgetChildMailbox(pid);
+    gesher::logging::Record(0 /*LOG_ID_MAIN*/, 5 /*ANDROID_LOG_WARN*/, "gesher-fork",
+                            "fork: the child could not start its signal and ptrace threads; EAGAIN");
+    if (run_atfork) RunAtforkParent();
+    return errno = EAGAIN, -1;
+  }
   if (leases_failed) {
     // Its mailbox and broker registration (their locks are in the fork set).
     gesher::ForgetChildMailbox(pid);

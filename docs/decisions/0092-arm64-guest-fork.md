@@ -288,6 +288,42 @@ resume it, and nothing has asked for it.
     creation time: a sender skips a mailbox whose owner is not the process
     now using that pid, and a new owner of a reused pid resets what was left
     in it;
+  - ntdll's own clone locks: `RtlCloneUserProcess` takes some of ntdll's
+    SRW locks around the clone (the protected-policies lock, the `.mrdata`
+    lock that `LdrForkMrdata` takes, the TLS and fork locks) and gives them
+    back in both processes, but not on every Windows build: on Windows
+    Server 2022 (build 20348) the child keeps `RtlpProtectedPoliciesSRWLock`
+    and `LdrpMrdataLock` held (each reads 1 in the child), so the child's
+    first `RtlAddFunctionTable` (the translator's unwind data for new code:
+    a signal handler's first run, a new thread's code) and any fork of its
+    own wait for ever. That was every Server 2022 failure: signals sent
+    right after fork were never handled, nested forks, `contend
+    thread`/`exit` and `fork` in dalvikvm hung (found with a clone probe and
+    debugger stacks on the CI's windows-2022 runner). When the clone returns
+    in the child its only thread is outside those functions, so each of
+    these locks must be free; one still held (or recording waiters) is
+    stale and is made free, first thing in the child, before any other
+    thread exists. The locks are found in ntdll's code: in
+    `RtlCloneUserProcess` and the functions it calls directly, each `lea
+    rcx,[rip+X]` followed at once by a call or jump to the exported
+    `RtlAcquireSRWLockExclusive`/`Shared`, with X inside ntdll's image on an
+    8-byte boundary. Whether that is enough is checked once per process
+    (and again in each forked child before its first fork) with a
+    throwaway clone, before the first real one: that child resets the locks,
+    adds and removes a function table and makes a clone of its own, all
+    bounded. If it cannot, fork fails with `EAGAIN` on that system (said
+    once on standard error), rather than make children that hang. The
+    probe confirmed it on 20348 (without the reset the child's
+    `RtlAddFunctionTable` and nested clone hang every time; with it, both
+    work) and that build 26100 leaves the locks free;
+  - the child's start: the child opens its signal mailbox and starts its
+    watcher thread and its ptrace guard before `fork` returns in it, and
+    tells the parent so; the parent, after it releases the fork set, waits
+    for that (up to 15 s; each helper thread's start is bounded at 5 s and
+    logged if it does not come, and such a thread never runs its work). A
+    child that cannot start them, or that ends first, has run no guest code
+    yet: it is ended and `fork` fails with `EAGAIN`, rather than return a
+    child that loses signals or cannot be traced;
   - ntdll's address-wait table: `WaitOnAddress` keeps its waiters in the
     PEB (`PEB.WaitOnAddressHashTable`, 128 buckets, each a list of wait
     blocks on the waiting threads' stacks), and every wait that goes through
@@ -319,10 +355,14 @@ resume it, and nothing has asked for it.
     `PR_SET_DUMPABLE` takes, so the parent cannot change it in between), as a
     Linux child keeps its `mm`'s, and has no tracer, no Yama ptracer
     exception, no stop request and no parked threads (the parent's are the
-    parent's threads'). The child's view of the parent's section and its
-    inherited copies of the parent's handles (section, guard events, the
-    tracer it watched, threads the guard had suspended) are closed, never
-    written. The cached `SelfTracerId` is cleared, so the child's is its own
+    parent's threads'). The child's view of the parent's section is
+    unmapped, never written, and its inherited copies of the parent's
+    handles (section, guard events, the tracer it watched, threads the
+    guard had suspended) are closed: only values the clone really brought
+    (the child records its handle values when the clone returns, before it
+    opens any; the guard may have opened one after the parent made its
+    handles inheritable, and that value may later name another handle of
+    the child's). The cached `SelfTracerId` is cleared, so the child's is its own
     pid and creation time. The shim's tracee table (its lock is in the fork
     set too) is emptied in the child, closing the inherited handles and views
     of the parent's tracees without touching their state: a forked child
@@ -334,11 +374,12 @@ resume it, and nothing has asked for it.
     the child to have taken them before it releases the fork set, so a seal
     right after `fork` returns is already `EBUSY`. The wait is short (up to
     2 s; the child only renews byte-range locks there, and every other
-    thread of the parent that makes a system call waits meanwhile). A child
-    that has not taken them by then, or that ended first, has run no guest
-    code yet: it is ended, `fork` fails with `EAGAIN` (as fork(2) may), and
-    a warning is logged (`gesher-fork`), rather than return a child that a
-    seal could miss;
+    thread of the parent that makes a system call waits meanwhile). The
+    child then waits for the parent's word before it goes on (or for the
+    parent's end): a child that has not taken them by then, or that ended
+    first, has run no guest code: it is ended, `fork` fails with `EAGAIN`
+    (as fork(2) may), and a warning is logged (`gesher-fork`), rather than
+    return a child that a seal could miss;
   - the translator: the same Env (guest stack, TLS block, Jits and their
     translated code) goes on; the parent's other threads' TLS blocks and
     profiler entries are dropped; the exclusive monitor is cleared (a
@@ -437,7 +478,10 @@ resume it, and nothing has asked for it.
   child's copy of each of its own locks anew, but one outside it (a Windows
   DLL's, the app's own host code's) that a parent's thread waited on at the
   clone keeps that stale waiter in the child, and a release there may wake
-  no one.
+  no one. A `CRITICAL_SECTION` outside the fork set (the UCRT's own locks,
+  say) can likewise carry a stale "waiter woken" bit in its `LockCount`
+  into the child: ntdll repairs only its heap and loader critical sections
+  in a clone.
 - **ART.** A fork in dalvikvm copies ART's process with one thread; the
   child can run guest code and make system calls, not Java.
 - **Orphans.** As on Linux, a forked child is not ended with its parent: a

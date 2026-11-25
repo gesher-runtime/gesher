@@ -321,7 +321,9 @@ void Watch(int64_t tracer) {
 // The tracer exited without detaching: Linux detaches its tracees, and kills
 // them first if it asked for PTRACE_O_EXITKILL.
 void TracerGone(SharedState* state, int64_t tracer) {
-  if ((state->options & kOptExitkill) != 0) TerminateProcess(GetCurrentProcess(), 128 + 9);
+  // As a death by SIGKILL: the exit code this process's parent decodes as one
+  // (a forked child's differs from 128 + 9, gesher/fork.h).
+  if ((state->options & kOptExitkill) != 0) TerminateProcess(GetCurrentProcess(), gesher::SignalExitCode(9));
   if (InterlockedCompareExchange64(&state->tracer, 0, tracer) == tracer) {
     InterlockedExchange(&state->options, 0);
     InterlockedExchange(&state->want_stop, 0);
@@ -507,13 +509,17 @@ void CreateLocked(DWORD pid) {
     g_fork_dumpable = -1;
     UnmapViewOfFile(g_state);
     InterlockedExchange64(&g_self_tracer_id, 0);
-    // A fork's clone inherits every handle at the same value (CloneProcess):
-    // this process's copies of the parent's are closed. The guard's thread
-    // handles name the parent's threads (none of them is here).
+    // A fork's clone inherits the handles open when it made them inheritable
+    // (CloneProcess), at the same values: this process's copies of the
+    // parent's are closed. The guard's (the tracer it watches, threads it
+    // suspended: the parent's) may have been opened after that, so only a
+    // value the clone really brought is closed (InheritedAtFork).
     for (HANDLE h : {g_section, g_request, g_done, g_probe_mutex, g_watched_process}) {
-      if (h != nullptr) CloseHandle(h);
+      if (gesher::InheritedAtFork(h)) CloseHandle(h);
     }
-    for (int i = 0; i < g_suspended_count; ++i) CloseHandle(g_suspended[i]);
+    for (int i = 0; i < g_suspended_count; ++i) {
+      if (gesher::InheritedAtFork(g_suspended[i])) CloseHandle(g_suspended[i]);
+    }
     g_state = nullptr;
     g_section = nullptr;
     g_request = nullptr;
