@@ -35,6 +35,7 @@ public final class LogRedaction {
     private static final boolean[] PREFIX_BOUNDARY = {false, false, false, true};
     private static final String[] KEY_SUFFIXES = {"token", "secret", "password", "passwd", "cookie"};
     private static final String[] KEY_NAMES = {"authorization", "auth", "apikey", "api_key"};
+    private static final String[] STATES = {"true", "false", "null"};
     /** Bytes at which {@link #secret} can match: a prefix's first letter, Bearer's, '=', ':'. */
     private static final boolean[] START = new boolean[256];
     static {
@@ -152,13 +153,16 @@ public final class LogRedaction {
         if (c != '=' && c != ':') return false;
         int k = at;
         while (k > start && blank(s[k - 1])) --k;
-        if (k > start && (s[k - 1] == '"' || s[k - 1] == '\'')) {
+        boolean quotedKey = k > start && (s[k - 1] == '"' || s[k - 1] == '\'');
+        if (quotedKey) {
             --k;
             if (k > start && s[k - 1] == '\\') --k;
         }
         int keyEnd = k;
         while (k > start && keyEnd - k < 64 && keyChar(s[k - 1] & 0xff)) --k;
         if (!credentialKey(s, k, keyEnd - k)) return false;
+        // "auth: ..." is a common message prefix; auth=... and "auth": "..." hold a value.
+        if (c == ':' && !quotedKey && sameWord(s, k, keyEnd - k, "auth")) return false;
         int v = at + 1;
         while (v < n && blank(s[v])) ++v;
         int j = v;
@@ -184,6 +188,8 @@ public final class LogRedaction {
             while (j < n && !valueEnd(s[j])) ++j;
         }
         if (j == v || (j - v == REDACTED.length && regionEquals(s, v, REDACTED))) return false;
+        // A state, not a credential (setCookie: true, hasToken=false, password=null).
+        for (String word : STATES) if (sameWord(s, v, j - v, word)) return false;
         span[0] = v;
         span[1] = j;
         return true;

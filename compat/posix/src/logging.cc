@@ -324,13 +324,16 @@ bool Secret(const char* s, size_t n, size_t at, size_t* begin, size_t* end) {
   // inside an escaped JSON string (\"key\":\"value\").
   size_t k = at;
   while (k > 0 && Blank(s[k - 1])) --k;
-  if (k > 0 && (s[k - 1] == '"' || s[k - 1] == '\'')) {
+  bool quoted_key = k > 0 && (s[k - 1] == '"' || s[k - 1] == '\'');
+  if (quoted_key) {
     --k;
     if (k > 0 && s[k - 1] == '\\') --k;
   }
   size_t key_end = k;
   while (k > 0 && key_end - k < 64 && KeyChar(static_cast<unsigned char>(s[k - 1]))) --k;
   if (!CredentialKey(s + k, key_end - k)) return false;
+  // "auth: ..." is a common message prefix; auth=... and "auth": "..." hold a value.
+  if (c == ':' && !quoted_key && SameWord(s + k, key_end - k, "auth")) return false;
   size_t v = at + 1;
   while (v < n && Blank(s[v])) ++v;
   size_t j = v;
@@ -357,6 +360,10 @@ bool Secret(const char* s, size_t n, size_t at, size_t* begin, size_t* end) {
   }
   // Already redacted (an earlier sink, or a scrubbed file): unchanged.
   if (j == v || (j - v == kRedactedSize && std::memcmp(s + v, kRedacted, kRedactedSize) == 0)) return false;
+  // A state, not a credential (setCookie: true, hasToken=false, password=null).
+  for (const char* word : {"true", "false", "null"}) {
+    if (SameWord(s + v, j - v, word)) return false;
+  }
   *begin = v;
   *end = j;
   return true;

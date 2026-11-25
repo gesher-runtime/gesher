@@ -44,7 +44,10 @@ Values are replaced and the surrounding text is kept, so the log stays useful:
   `, ; & ) } ] " '`. A quoted value ends at its closing quote, not at an
   escaped one (`\"`). The same forms inside an escaped JSON string
   (`{\"access_token\":\"…\"}`, a JSON body logged as a string) are
-  recognized too. `Authorization`
+  recognized too. A value of `true`, `false` or `null` is a state, not a
+  credential, and is kept (`setCookie: true`). A bare `auth:` is a common
+  message prefix, so `auth` is a credential key only with `=` or as a quoted
+  key (`auth=…`, `"auth": "…"`). `Authorization`
   and `…cookie` header values run to the end of the line (`Bearer x`,
   `a=1; b=2`).
 

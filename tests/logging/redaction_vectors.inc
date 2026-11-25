@@ -25,4 +25,6 @@ REDACTION_VECTOR("auth_token=<redacted> ya29.<redacted> Bearer <redacted> Author
 REDACTION_VECTOR("tokens=5 tokenizer: ok, monkey=banana, std::string token_count", "tokens=5 tokenizer: ok, monkey=banana, std::string token_count")
 REDACTION_VECTOR("log {\\\"access_token\\\":\\\"abcSYNTHETIC\\\",\\\"password\\\": \\\"pw \\\\\\\"q SYNTHETIC\\\",\\\"n\\\":1}", "log {\\\"access_token\\\":\\\"<redacted>\\\",\\\"password\\\": \\\"<redacted>\\\",\\\"n\\\":1}")
 REDACTION_VECTOR("password=\"abc\\\"SYNTHETIC\" next", "password=\"<redacted>\" next")
+REDACTION_VECTOR("hasToken=FALSE password=null token=nullSYNTHETIC setCookie: true", "hasToken=FALSE password=null token=<redacted> setCookie: true")
+REDACTION_VECTOR("auth: client gone before its success; Auth=DQAAASYNTHETIC {\"auth\": \"xSYNTHETIC\"}", "auth: client gone before its success; Auth=<redacted> {\"auth\": \"<redacted>\"}")
 REDACTION_VECTOR("", "")

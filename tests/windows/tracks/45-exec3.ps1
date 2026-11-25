@@ -165,8 +165,11 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
       'Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device')
     $exec3Missing = @($exec3Wanted | Where-Object { -not $exec3App.Text.Contains($_) })
     # The device's persisted logs (package .log/.logcat, system_server.log) hold no credential.
+    # The device is still running: its processes hold their logs open for writing.
     $exec3Leaks = @(Get-ChildItem -LiteralPath $exec3Logs -File -Recurse | Where-Object {
-      [IO.File]::ReadAllText($_.FullName).Contains('SYNTHETIC') } | ForEach-Object { $_.Name })
+      $exec3Stream = [IO.File]::Open($_.FullName, 'Open', 'Read', 'ReadWrite, Delete')
+      try { (New-Object IO.StreamReader($exec3Stream)).ReadToEnd().Contains('SYNTHETIC') }
+      finally { $exec3Stream.Dispose() } } | ForEach-Object { $_.Name })
     if ($exec3App.Text.Contains('SYNTHETIC')) { $exec3Leaks += 'launcher output' }
     if ($exec3Leaks) { $exec3Missing += "no credential in the device logs (found in: $($exec3Leaks -join ', '))" }
     if ($exec3App.Code -eq 0 -and -not $exec3Missing -and -not $exec3App.Text.Contains('Exec3DeviceTest FAIL')) {
