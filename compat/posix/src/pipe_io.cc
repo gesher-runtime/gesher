@@ -169,8 +169,10 @@ int NativePipeTransfer(HANDLE file, void* bytes, unsigned count, bool writing,
 bool Signaled(HANDLE event) { return event && WaitForSingleObject(event, 0) == WAIT_OBJECT_0; }
 
 // Waits a moment for a pipe's reader to free room, with nothing pending in
-// the kernel: a few yields, then high-resolution timer waits of 50 us, growing
-// to 1 ms while the wait goes on. (Sleep(1) lasts a whole timer tick, about
+// the kernel: yields for the first tries (with the caller's checks of the
+// pipe in between, a few hundred microseconds: a reader that keeps up frees
+// room within that), then high-resolution timer waits of 50 us, growing to
+// 1 ms while the wait goes on. (Sleep(1) lasts a whole timer tick, about
 // 16 ms, which would bound a writer that waits for room to a few hundred
 // kilobytes a second.)
 class RoomWait {
@@ -184,11 +186,12 @@ class RoomWait {
   void Reset() { waits_ = 0; }
   void Pause() {
     const unsigned n = waits_++;
-    if (n < 4) {
+    constexpr unsigned kYields = 64;
+    if (n < kYields) {
       Sleep(0);
       return;
     }
-    const unsigned step = n - 4;
+    const unsigned step = n - kYields;
     const unsigned micros = step < 10 ? 50 : std::min(1000u, 50u << std::min(step - 9, 5u));
     if (timer_ == nullptr && !tried_) {
       tried_ = true;
