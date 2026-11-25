@@ -118,6 +118,8 @@ public final class Services {
                 StandIn.of(IActivityManager.class, am).asBinder());
         services.put(Context.ACTIVITY_TASK_SERVICE,
                 StandIn.of(IActivityTaskManager.class, atm).asBinder());
+        AlertWindowPolicy alerts = new AlertWindowPolicy(pm, atm);
+        services.put(AlertWindowPolicy.NAME, alerts);
         WindowManagerService wm = new WindowManagerService();
         services.put(Context.WINDOW_SERVICE,
                 StandIn.of(IWindowManager.class, wm).asBinder());
@@ -172,7 +174,7 @@ public final class Services {
         // What real apps fetch as they start (docs/e2e.md): without these getSystemService
         // answers null.
         services.put(Context.POWER_SERVICE, StandIn.of(android.os.IPowerManager.class,
-                new PowerManagerService()).asBinder());
+                new PowerManagerService(am)).asBinder());
         // DeviceIdleManager is also PowerExemptionManager's constructor dependency.
         // Register the real Binder stub in both in-process and system-server modes.
         services.put(Context.DEVICE_IDLE_CONTROLLER, StandIn.of(android.os.IDeviceIdleController.class,
@@ -193,14 +195,48 @@ public final class Services {
         services.put(Context.APPWIDGET_SERVICE, StandIn.of(
                 com.android.internal.appwidget.IAppWidgetService.class,
                 new DeviceServices.AppWidgetService()).asBinder());
+        // webviewupdate: the built-in WebView provider's package (WebView2, docs/webview.md).
+        services.put(WebViewUpdateService.NAME, StandIn.of(android.webkit.IWebViewUpdateService.class,
+                new WebViewUpdateService(pm)).asBinder());
         services.put(Context.SEARCH_SERVICE, StandIn.of(android.app.ISearchManager.class,
                 new SearchManagerService(pm, am.callers())).asBinder());
         services.put(Context.SPEECH_RECOGNITION_SERVICE, new SpeechRecognitionManagerService(am, atm, pm));
+        // The camera image-picker setting's question and file picker (docs/devices.md).
+        services.put(CameraSourceService.NAME, new CameraSourceService(am));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 clipboard).asBinder());
+        // content://media: MediaStore over the shared volume (docs/media-provider.md).
+        try {
+            MediaStoreProvider.create(am, pm, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/media")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to index.
+            SystemServer.log("media: provider unavailable: " + e);
+        }
+        // print (docs/print.md): FEATURE_PRINTING means the runtime has the Windows
+        // print bridge, even with no default printer. Without the native bridge,
+        // PrintManager never asks for the service.
+        if (PrintManagerService.supported()) {
+            PrintManagerService print = new PrintManagerService(am,
+                    new java.io.File(android.os.Environment.getDataDirectory(), "system/print"),
+                    new WindowsPrint());
+            atm.attachPrint(print);
+            services.put(Context.PRINT_SERVICE, StandIn.of(android.print.IPrintManager.class,
+                    print).asBinder());
+        }
         // Construct the network provider before jobs subscribe to its changes.
         ConnectivityService connectivity = new ConnectivityService(pm, atm);
         services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
+        // content://downloads: DownloadManager's provider and downloader (docs/downloads.md).
+        try {
+            DownloadProvider.create(am, pm, connectivity, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/downloads")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to download.
+            SystemServer.log("downloads: provider unavailable: " + e);
+        }
         // Device state from Windows (devsvc track, ADR 0038): jobs, the battery.
         services.put(Context.JOB_SCHEDULER_SERVICE, StandIn.of(android.app.job.IJobScheduler.class,
                 new JobSchedulerService(am, atm, pm, connectivity)).asBinder());
@@ -221,6 +257,10 @@ public final class Services {
         LocationManagerService location = new LocationManagerService(pm, am);
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 location).asBinder());
+        // CountryDetector: Windows' "Country or region" as the locale source
+        // (CountryDetectorService); no network, SIM or location-based country.
+        services.put(Context.COUNTRY_DETECTOR, StandIn.of(android.location.ICountryDetector.class,
+                new CountryDetectorService(WindowsCountry.create())).asBinder());
         services.put(com.gesher.net.IWindowsWifi.NAME,
                 new WifiService(am, atm, pm, () -> location.isLocationEnabledForUser(0)));
         // Bluetooth (docs/bluetooth.md): Windows' radio, its broadcasts and discovery. The
@@ -282,28 +322,36 @@ public final class Services {
         // StorageStatsManager: app and volume sizes for file managers and cleaners.
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,
-                new StorageStatsService(pm)).asBinder());
+                new StorageStatsService(pm, atm::authenticatedPackageCodeForPid)).asBinder());
         services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
                 android.app.admin.IDevicePolicyManager.class,
                 new DeviceServices.DevicePolicyService()).asBinder());
+        // Telephony over the host's cellular modem, if Windows reported one at boot
+        // (docs/telephony.md); without one, AOSP's no-phone answers.
+        TelephonyService.Endpoints telephony = TelephonyService.create(pm, am,
+                () -> location.isLocationEnabledForUser(0));
         services.put(Context.TELEPHONY_SERVICE, StandIn.of(
-                com.android.internal.telephony.ITelephony.class,
-                new DeviceServices.TelephonyService()).asBinder());
+                com.android.internal.telephony.ITelephony.class, telephony.phone).asBinder());
         services.put("iphonesubinfo", StandIn.of(
-                com.android.internal.telephony.IPhoneSubInfo.class,
-                new DeviceServices.PhoneSubInfoService()).asBinder());
+                com.android.internal.telephony.IPhoneSubInfo.class, telephony.phoneSubInfo).asBinder());
         services.put("device_identifiers", StandIn.of(
                 android.os.IDeviceIdentifiersPolicyService.class,
                 new DeviceServices.DeviceIdentifiersPolicyService()).asBinder());
         services.put("isub", StandIn.of(
-                com.android.internal.telephony.ISub.class,
-                new DeviceServices.SubscriptionService()).asBinder());
+                com.android.internal.telephony.ISub.class, telephony.subscriptions).asBinder());
         // The binder service's name, which TelephonyRegistryManager looks up, not
         // Context.TELEPHONY_REGISTRY_SERVICE ("telephony_registry", the manager's): under
         // that name registerTelephonyCallback / listen threw NullPointerException (Waze).
         services.put("telephony.registry", StandIn.of(
-                com.android.internal.telephony.ITelephonyRegistry.class,
-                new DeviceServices.TelephonyRegistryService()).asBinder());
+                com.android.internal.telephony.ITelephonyRegistry.class, telephony.registry).asBinder());
+        // credential: CredentialManager for passkeys (docs/passkeys.md, ADR 0093). The system
+        // server is the one credential provider, over Windows' WebAuthn API (WindowsWebAuthn,
+        // null without its natives). Without that API, and for other credential types, the
+        // answers are AOSP's for a device without a provider.
+        services.put(Context.CREDENTIAL_SERVICE, StandIn.of(
+                android.credentials.ICredentialManager.class,
+                new CredentialManagerService(new CredentialManagerHost(am, pm),
+                        WindowsWebAuthn.create(), new AssetLinks.Https())).asBinder());
         // The device credential (ADR 0091): Windows Hello, where Gesher can confirm it.
         // trust, the window manager's isKeyguardSecure, auth, the confirm-credential
         // activity and FEATURE_SECURE_LOCK_SCREEN all read this one decision.

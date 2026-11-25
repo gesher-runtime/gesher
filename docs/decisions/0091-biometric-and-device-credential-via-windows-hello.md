@@ -362,7 +362,8 @@ Phase 2b turns it on. Sources as above (`android-16.0.0_r4` GitHub mirrors;
      (`AuthService.unavailable`: `DeviceCredential.state()` is the live answer), with no
      Windows prompt; a confirm-credential intent ends `RESULT_CANCELED`.
    - At start, a busy or failed first answer is asked again 3 times, 250 ms apart, before
-     decision 8 reads it.
+     decision 8 reads it. Each retry bypasses the ordinary five-second availability
+     cache and stores Windows' fresh answer for subsequent normal reads.
 8. **`FEATURE_SECURE_LOCK_SCREEN` is decided once, when the system server starts**, as
    Android fixes features at boot: declared when Windows then answers `Available` or
    `NotConfiguredForUser` (Windows has a verifier; the user has or has not set it up, as

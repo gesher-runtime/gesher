@@ -12,6 +12,7 @@
 //   /proc/self/exe, cwd          links to the executable, the current directory
 //   /proc/self/task/<tid>/{comm,stat,status}
 //   /proc/{meminfo,cpuinfo,uptime,mounts}
+//   /proc/sys/kernel/random/boot_id   a random UUID for the device's boot
 //   /etc/timezone                the IANA id of Windows' time zone (libcore)
 #include <errno.h>
 #include <fcntl.h>
@@ -43,8 +44,14 @@
 #include "ofd_internal.h"
 #include "revocable_internal.h"
 #include "record_lock_descriptors.h"
+#include "system_linker.h"
 
 #include <gesher/process_name.h>
+#include <gesher/ptrace_state.h>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 namespace procfs {
@@ -280,9 +287,9 @@ std::string Status(DWORD tid) {
   s += "Umask:\t0022\n";
   s += Format("State:\t%c (%s)\n", process ? 'R' : ThreadState(tid),
               (process || ThreadState(tid) == 'R') ? "running" : "sleeping");
-  s += Format("Tgid:\t%lu\nNgid:\t0\nPid:\t%lu\nPPid:\t%d\nTracerPid:\t0\n",
+  s += Format("Tgid:\t%lu\nNgid:\t0\nPid:\t%lu\nPPid:\t%d\nTracerPid:\t%d\n",
               static_cast<unsigned long>(pid), static_cast<unsigned long>(process ? pid : tid),
-              static_cast<int>(getppid()));
+              static_cast<int>(getppid()), gesher::ptrace::TracerPid());
   s += Format("Uid:\t%u\t%u\t%u\t%u\nGid:\t%u\t%u\t%u\t%u\n", uid, uid, uid, uid, gid, gid, gid, gid);
   s += Format("FDSize:\t%llu\nGroups:\t\n",
               static_cast<unsigned long long>(std::max<size_t>(64, OpenFds().size())));
@@ -457,7 +464,10 @@ std::string MappedFile(void* address) {
   for (const auto& dm : drives) {
     size_t t = dm.target.size();
     if (path.size() > t && _wcsnicmp(path.c_str(), dm.target.c_str(), t) == 0 && path[t] == L'\\') {
-      return LinuxPath((dm.drive + path.substr(t)).c_str());
+      const std::wstring windows = dm.drive + path.substr(t);
+      // Gesher's ELF loader, by its Android name (system_linker.h).
+      if (system_linker::IsFile(windows)) return system_linker::kPath;
+      return LinuxPath(windows.c_str());
     }
   }
   return Narrow(path.c_str());
@@ -465,8 +475,11 @@ std::string MappedFile(void* address) {
 
 // /proc/self/maps: one line per run of pages with the same state, as
 // VirtualQuery reports them; reserved address space is "---p", as Linux shows
-// a PROT_NONE mapping.
+// a PROT_NONE mapping. Gesher's ELF loader is mapped as /system/bin/linker64
+// first, as the dynamic linker is in every Android process: this is the only
+// place its mapping can be seen, so it is made the first time it is asked for.
 std::string Maps() {
+  system_linker::EnsureMapped();
   std::string s;
   SYSTEM_INFO si;
   GetSystemInfo(&si);
@@ -655,6 +668,138 @@ std::string Uptime() {
   return Format("%llu.%02llu 0.00\n", ms / 1000, (ms % 1000) / 10);
 }
 
+// A lowercase version 4 UUID, or empty when the system RNG fails.
+std::string RandomUuid() {
+  unsigned char b[16];
+  if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, b, sizeof(b), BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+    return "";
+  }
+  b[6] = static_cast<unsigned char>((b[6] & 0x0f) | 0x40);
+  b[8] = static_cast<unsigned char>((b[8] & 0x3f) | 0x80);
+  return Format("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", b[0], b[1],
+                b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14],
+                b[15]);
+}
+
+// Heap-allocated: procfs reads run on app threads with small stacks too.
+std::wstring EnvironmentValue(const wchar_t* name) {
+  DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
+  if (size == 0) return std::wstring();
+  std::wstring value(size, L'\0');
+  DWORD n = GetEnvironmentVariableW(name, value.data(), size);
+  if (n == 0 || n >= size) return std::wstring();
+  value.resize(n);
+  return value;
+}
+
+bool IsUuid(const std::string& s) {
+  if (s.size() != 36) return false;
+  for (size_t i = 0; i < s.size(); ++i) {
+    bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+    if (dash ? s[i] != '-' : !((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Session names are opaque. Hash the whole name into a safe fixed-width
+// path and keep the original name in the record to detect collisions.
+std::wstring BootKey(const std::wstring& session) {
+  uint64_t hash = 14695981039346656037ULL;
+  for (wchar_t ch : session) {
+    hash = (hash ^ static_cast<uint16_t>(ch)) * 1099511628211ULL;
+  }
+  wchar_t key[17] = {};
+  swprintf(key, 17, L"%016llx", static_cast<unsigned long long>(hash));
+  return key;
+}
+
+std::string ReadOrCreateBootId(const std::wstring& data, const std::wstring& key,
+                               const std::string& expected) {
+  const std::wstring dir = data + L"\\system";
+  const std::wstring path = dir + L"\\gesher-boot-id-" + key;
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h != INVALID_HANDLE_VALUE) {
+    char buffer[512];
+    DWORD n = 0;
+    LARGE_INTEGER size{};
+    const bool read = GetFileSizeEx(h, &size) &&
+        size.QuadPart == static_cast<LONGLONG>(expected.size() + 37) &&
+        ::ReadFile(h, buffer, sizeof(buffer), &n, nullptr);
+    CloseHandle(h);
+    if (!read || n != expected.size() + 37) return "";
+    std::string text(buffer, n);
+    if (text.compare(0, expected.size(), expected) != 0 || text.back() != '\n') return "";
+    std::string id = text.substr(expected.size(), 36);
+    return IsUuid(id) ? id : "";
+  }
+  const DWORD read_error = GetLastError();
+  if (read_error != ERROR_FILE_NOT_FOUND && read_error != ERROR_PATH_NOT_FOUND) return "";
+  std::string id = RandomUuid();
+  if (id.empty()) return "";
+  const std::string text = expected + id + "\n";
+  const std::wstring tmp = path + L".tmp-" + std::to_wstring(GetCurrentProcessId());
+  CreateDirectoryW(data.c_str(), nullptr);
+  CreateDirectoryW(dir.c_str(), nullptr);
+  h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                  FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return "";
+  DWORD n = 0;
+  const bool written = ::WriteFile(h, text.data(), static_cast<DWORD>(text.size()), &n, nullptr) &&
+      n == text.size();
+  CloseHandle(h);
+  if (written && MoveFileExW(tmp.c_str(), path.c_str(), 0)) return id;
+  DeleteFileW(tmp.c_str());
+  return "";
+}
+
+// Each device boot has an independently persisted ID. A process outside a
+// device has its own ID. Never return a private ID for an admitted device.
+std::mutex g_boot_id_lock;
+std::string BootId() {
+  std::mutex& lock = g_boot_id_lock;
+  static std::string standalone_id, device_id;
+  static std::wstring device_session;
+  const std::wstring binder = EnvironmentValue(L"GESHER_BINDER");
+  std::lock_guard<std::mutex> guard(lock);
+  if (binder.empty()) {
+    if (standalone_id.empty()) standalone_id = RandomUuid();
+    return standalone_id;
+  }
+  const std::wstring session = L"device-" + binder;
+  if (device_session == session) return device_id;
+  const std::string expected = Narrow(session.c_str()) + "\n";
+  if (expected.size() <= 1 || expected.size() + 37 > 512) return "";
+  // Use the property area's original data root even when ART uses a scratch one.
+  std::wstring data = EnvironmentValue(L"GESHER_PROPERTY_ROOT_SESSION") == session
+                          ? EnvironmentValue(L"GESHER_PROPERTY_ROOT") : std::wstring();
+  if (data.empty()) data = EnvironmentValue(L"ANDROID_DATA");
+  if (data.empty()) {
+    data = EnvironmentValue(L"LOCALAPPDATA");
+    if (!data.empty()) data += L"\\Gesher\\data";
+  }
+  if (data.empty()) return "";
+  std::replace(data.begin(), data.end(), L'/', L'\\');
+  const std::wstring key = BootKey(session);
+  HANDLE mutex = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-boot-id-" + key).c_str());
+  if (mutex == nullptr) return "";
+  const DWORD waited = WaitForSingleObject(mutex, 10000);
+  if (waited != WAIT_OBJECT_0 && waited != WAIT_ABANDONED) {
+    CloseHandle(mutex);
+    return "";
+  }
+  std::string id = ReadOrCreateBootId(data, key, expected);
+  ReleaseMutex(mutex);
+  CloseHandle(mutex);
+  if (!id.empty()) {
+    device_session = session;
+    device_id = id;
+  }
+  return id;
+}
+
 // What a name is. `file` names a generated file's content, `tid` a task
 // directory's thread, `fd` a /proc/self/fd link's fd.
 struct Node {
@@ -696,6 +841,7 @@ Node Lookup(const std::wstring& name, bool list) {
       Add(&n.entries, "self", DT_LNK);
       Add(&n.entries, std::to_string(GetCurrentProcessId()), DT_DIR);
       for (const char* f : {"cpuinfo", "meminfo", "mounts", "uptime"}) Add(&n.entries, f, DT_REG);
+      Add(&n.entries, "sys", DT_DIR);
     }
     return n;
   }
@@ -703,6 +849,24 @@ Node Lookup(const std::wstring& name, bool list) {
                         p[1] == "mounts")) {
     n.type = kFile;
     n.file = p[1];
+    return n;
+  }
+  // /proc/sys/kernel/random/boot_id.
+  if (p[1] == "sys") {
+    static const char* const kSysPath[] = {"sys", "kernel", "random"};
+    for (size_t i = 1; i < p.size() && i <= 3; ++i) {
+      if (p[i] != kSysPath[i - 1]) return n;
+    }
+    if (p.size() <= 4) {
+      n.type = kDir;
+      if (list && p.size() < 4) Add(&n.entries, kSysPath[p.size() - 1], DT_DIR);
+      if (list && p.size() == 4) Add(&n.entries, "boot_id", DT_REG);
+      return n;
+    }
+    if (p.size() == 5 && p[4] == "boot_id") {
+      n.type = kFile;
+      n.file = p[4];
+    }
     return n;
   }
   if (p.size() == 2 && p[1] == "self") {
@@ -798,6 +962,10 @@ std::string Content(const Node& n) {
     return cpus > 1 ? Format("0-%lu\n", cpus - 1) : std::string("0\n");
   }
   if (f == "uptime") return Uptime();
+  if (f == "boot_id") {
+    std::string id = BootId();
+    return id.empty() ? id : id + "\n";
+  }
   return "";  // mounts: no mount table (misc.cc's setmntent agrees)
 }
 
@@ -811,7 +979,7 @@ bool FdTarget(int fd, std::string* target) {
       DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
       if (n == 0) return FailWithLastError(), false;
       if (n >= 32768) return errno = ENAMETOOLONG, false;
-      *target = LinuxPath(buf);
+      *target = system_linker::IsFile(buf) ? std::string(system_linker::kPath) : LinuxPath(buf);
       return true;
     }
     case FILE_TYPE_PIPE:
@@ -905,7 +1073,11 @@ int Open(const std::wstring& name, int flags) {
   if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_TRUNC | O_CREAT)) != 0) {
     return errno = EACCES, -1;
   }
-  std::string content = Content(n);
+  std::string content;
+  if ((flags & O_PATH) == 0) {
+    content = Content(n);
+    if (content.empty() && n.file == "boot_id") return errno = EIO, -1;
+  }
   record_locks::DescriptorGuard descriptors;
   int fd = memfd_create("procfs", (flags & O_CLOEXEC) != 0 ? MFD_CLOEXEC : 0);
   if (fd < 0) return -1;
@@ -956,3 +1128,9 @@ extern "C" void gesher_set_process_argv0(const char* name) {
   std::lock_guard<std::mutex> lock(gesher::procfs::g_argv0_mutex);
   gesher::procfs::g_argv0 = name != nullptr ? name : "";
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::procfs::g_argv0_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::procfs::g_boot_id_lock);
+#endif

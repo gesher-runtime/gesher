@@ -157,10 +157,21 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         return fuller != null && permissionState(pkg.uid(), fuller, members).granted;
     }
 
-    /** Android 16 PermissionFlags distinguishes the permission grant from its AppOps grant. */
-    private record PermissionState(boolean granted, int flags, boolean restricted) {
+    /**
+     * Android 16 PermissionFlags distinguishes the permission grant from its AppOps grant.
+     * {@code reviewPending}: a restricted permission's legacy grant still carries
+     * REVIEW_REQUIRED. AOSP keeps that grant (checkPermission); its PermissionPolicyService
+     * leaves the AppOp of a permission under review untouched and gates the app through the
+     * permission review screen instead. Gesher has no review screen, so it withholds the
+     * AppOp as the stand-in for that gate until the review flag is cleared, whatever the
+     * exemptions.
+     */
+    private record PermissionState(boolean granted, int flags, boolean restricted, boolean reviewPending) {
+        PermissionState(boolean granted, int flags, boolean restricted) { this(granted, flags, restricted, false); }
+
         boolean appOpGranted() {
-            return granted && !restricted && (flags & PackageManager.FLAG_PERMISSION_REVOKED_COMPAT) == 0;
+            return granted && !restricted && !reviewPending
+                    && (flags & PackageManager.FLAG_PERMISSION_REVOKED_COMPAT) == 0;
         }
     }
 
@@ -176,16 +187,11 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         String decision = runtimeDecisionForUid(uid, name, members);
         boolean legacy = storedLegacyGrant(uid, name, info, targetSdk);
         int flags = permissionFlags(uid, name, info, legacy, decision);
-        boolean restricted = (flags & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) != 0
-                && info.isRestricted();
+        boolean restricted = restricted(info, flags, members);
         int protection = info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE;
         if (protection == PermissionInfo.PROTECTION_NORMAL) return new PermissionState(true, flags, restricted);
         if (protection == PermissionInfo.PROTECTION_DANGEROUS) {
-            // LEGACY_GRANTED stays a permission grant. Its revocation is represented by
-            // REVOKED_COMPAT, so PermissionChecker can distinguish hard and soft denial.
-            boolean granted = legacy || "granted".equals(decision)
-                    && !(restricted && info.isHardRestricted());
-            return new PermissionState(granted, flags, restricted);
+            return dangerousState(info, flags, legacy, "granted".equals(decision), restricted);
         }
         if ((info.protectionLevel & (PermissionInfo.PROTECTION_FLAG_ROLE
                 | PermissionInfo.PROTECTION_FLAG_DEVELOPMENT)) != 0 && "granted".equals(decision)) {
@@ -201,6 +207,40 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                     && privilegedAllowlist(member.packageName, name)) return new PermissionState(true, flags, restricted);
         }
         return new PermissionState(false, flags, restricted);
+    }
+
+    /**
+     * A dangerous permission's state. LEGACY_GRANTED stays a permission grant, also for a
+     * restricted permission (AOSP restorePermissionState always grants a legacy app's
+     * permissions); its revocation is represented by REVOKED_COMPAT, so PermissionChecker can
+     * distinguish hard and soft denial. A restriction withholds only the AppOp (AOSP
+     * PermissionPolicyService); so does a restricted permission's pending review, Gesher's
+     * stand-in for AOSP's review gate (see PermissionState).
+     */
+    private static PermissionState dangerousState(PermissionInfo info, int flags, boolean legacy, boolean explicit,
+            boolean restricted) {
+        boolean granted = legacy || explicit && !(restricted && info.isHardRestricted());
+        boolean reviewPending = legacy && info.isRestricted()
+                && (flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) != 0;
+        return new PermissionState(granted, flags, restricted, reviewPending);
+    }
+
+    /**
+     * Whether APPLY_RESTRICTION withholds this permission. A hard restriction withholds the
+     * grant itself. Like AOSP SoftRestrictedPermissionPolicy (READ/WRITE_EXTERNAL_STORAGE),
+     * a soft restriction withholds only an app whose UID's minimum target is below Q; for
+     * newer targets it concerns only OP_LEGACY_STORAGE, which this policy does not derive.
+     */
+    private static boolean restricted(PermissionInfo info, int flags, List<ApkPackage> members) {
+        if ((flags & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) == 0 || !info.isRestricted()) return false;
+        return info.isHardRestricted() || minimumTargetSdk(members) < android.os.Build.VERSION_CODES.Q;
+    }
+
+    /** AOSP SoftRestrictedPermissionPolicy.getMinimumTargetSDK: every package of the UID. */
+    private static int minimumTargetSdk(List<ApkPackage> members) {
+        int target = Integer.MAX_VALUE;
+        for (ApkPackage member : members) target = Math.min(target, member.parsed.getTargetSdkVersion());
+        return target == Integer.MAX_VALUE ? 0 : target;
     }
 
     /** AOSP evaluates legacy eligibility from requestingPackageStates for each permission. */
@@ -415,8 +455,13 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         });
     }
 
-    /** Reconcile the runtime grant flags, once, when the requesting APK is published. */
-    private void reconcileRuntimeState(int uid, PermissionInfo info, RuntimeState old, List<ApkPackage> members) {
+    /**
+     * Reconcile the runtime grant flags when the requesting APK is published or admitted at
+     * boot. {@code exemptions} are restriction-exemption flags the install adds (AOSP
+     * onPackageInstalled's installer allowlist, or a system package's exemption).
+     */
+    private void reconcileRuntimeState(int uid, PermissionInfo info, RuntimeState old, List<ApkPackage> members,
+            int exemptions) {
         if (info == null || !info.isRuntime()) return;
         String permission = info.name;
         int target = requestingTargetSdk(permission, members);
@@ -425,19 +470,21 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         int implicit = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED | PackageManager.FLAG_PERMISSION_REVOKE_WHEN_REQUESTED;
         int flags = old.access.flags;
         boolean legacy = legacyGranted(info, target), granted = old.explicitGrant;
-        if (!old.hasState() && info.isRestricted()) flags |= PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
         if (target < 23 && !legacy) {
             // Runtime-only permissions keep restriction exemptions, never a compatibility
             // grant or old user/runtime grant bits, during legacy package evaluation.
-            int exempt = PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT
-                    | PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT
-                    | PackageManager.FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT;
-            flags &= exempt;
-            if (info.isRestricted() && flags == 0) flags |= PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
+            flags &= RESTRICTION_EXEMPT;
             granted = false;
         } else if (legacy) {
             if (old.hasState() && !old.access.granted) flags |= PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
             if (!old.hasState()) flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+            // AOSP restorePermissionState: dropping the restriction of a legacy app's
+            // permission implies a review, so the exemption this admission adds never makes
+            // its AppOp effective without one.
+            if ((flags & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) != 0
+                    && (applyRestriction(info, flags | exemptions) & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) == 0) {
+                flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+            }
         } else {
             boolean wasImplicit = (flags & implicit) != 0;
             if (old.legacy && !wasImplicit) granted = true;
@@ -454,7 +501,34 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                 }
             }
         }
-        storeRuntimeState(uid, permission, legacy, granted, flags);
+        storeRuntimeState(uid, permission, legacy, granted, applyRestriction(info, flags | exemptions));
+    }
+
+    /**
+     * AOSP restorePermissionState: a restricted permission without an exemption carries
+     * APPLY_RESTRICTION, and an exemption clears it. Unrestricted permissions keep neither.
+     */
+    private static int applyRestriction(PermissionInfo info, int flags) {
+        if (!info.isRestricted() || (flags & RESTRICTION_EXEMPT) != 0) {
+            return flags & ~PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
+        }
+        return flags | PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
+    }
+
+    /** Exemptions a package's own admission supplies for {@code permission}. */
+    private static int admissionExemptions(PermissionInfo info, ApkPackage pkg, boolean newState) {
+        if (info == null || !info.isRestricted() || !pkg.parsed.getRequestedPermissions().contains(info.name)) return 0;
+        int exemptions = 0;
+        // A verified system addon (microG) is a preinstalled system package: AOSP exempts
+        // those through the system allowlist, never by package name.
+        if (pkg.isSystemAddon()) exemptions |= PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT;
+        java.util.Set<String> allowlist = pkg.restrictedPermissionAllowlist();
+        // AOSP SessionParams and pm install default to INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS.
+        // An unrecorded request (an internal republication) adds no exemption to existing state.
+        if (allowlist == null ? newState : allowlist.contains(info.name)) {
+            exemptions |= PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
+        }
+        return exemptions;
     }
 
     /** Boot admission re-evaluates saved flags against the installed requesting packages. */
@@ -463,6 +537,11 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         // Definitions do not change while the initial admitted set is reconciled.
         // Rebuilding the entire catalogue for each UID multiplies package scans.
         Map<String, PermissionInfo> permissions = mCatalog.permissions();
+        // One-time migration (issue #485): Gesher used to record no restriction exemption,
+        // so restricted permissions could never be granted. Every package admitted before
+        // this version came through a path that now defaults to AOSP's installer allowlist
+        // of all requested restricted permissions. User decisions and flags stay as they are.
+        boolean migrate = !EXEMPTION_VERSION.equals(mDecisions.getProperty(EXEMPTION_VERSION_KEY));
         java.util.Set<Integer> seen = new java.util.HashSet<>();
         for (ApkPackage pkg : mPm.packages()) {
             if (!seen.add(pkg.uid())) continue;
@@ -486,12 +565,26 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                     boolean legacy = storedLegacy == null ? (flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) != 0
                             : Boolean.parseBoolean(storedLegacy);
                     boolean granted = "granted".equals(decision);
-                    boolean restricted = info.isRestricted() && (flags & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) != 0;
+                    boolean restricted = restricted(info, flags, members);
                     old = new RuntimeState(new PermissionState(legacy || granted && !(restricted && info.isHardRestricted()),
                             flags, restricted), legacy, granted);
                 }
-                reconcileRuntimeState(pkg.uid(), info, old, members);
+                // Only the one-time migration supplies the default installer exemption. Outside
+                // it, a permission without recorded state (a publication whose ledger write was
+                // lost, or a permission the catalogue gained later) stays restricted: an install
+                // that opted out must never become exempt, and installs write their state
+                // synchronously (Installer, flushDecisions).
+                int exemptions = info.isRestricted() && migrate
+                        ? PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT : 0;
+                for (ApkPackage member : members) exemptions |= admissionExemptions(info, member, false)
+                        & PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT;
+                reconcileRuntimeState(pkg.uid(), info, old, members, exemptions);
             }
+        }
+        // Without restriction metadata (framework assets unavailable) nothing was migrated:
+        // leave the version unrecorded so a boot with the real catalogue performs it.
+        if (permissions.values().stream().anyMatch(PermissionInfo::isRestricted)) {
+            mDecisions.setProperty(EXEMPTION_VERSION_KEY, EXEMPTION_VERSION);
         }
         if (!saved.equals(mDecisions)) scheduleWrite();
     }
@@ -515,7 +608,9 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             List<ApkPackage> members = uidMembers(snapshot.uid);
             trimUidState(snapshot.uid, members);
             if (snapshot.uid == pkg.uid()) for (String permission : pkg.parsed.getRequestedPermissions()) {
-                reconcileRuntimeState(snapshot.uid, mCatalog.get(permission), snapshot.permissions.get(permission), members);
+                PermissionInfo info = mCatalog.get(permission);
+                RuntimeState old = snapshot.permissions.get(permission);
+                reconcileRuntimeState(snapshot.uid, info, old, members, admissionExemptions(info, pkg, old == null));
             }
             List<String> revoked = new ArrayList<>();
             for (var entry : snapshot.permissions.entrySet()) {
@@ -658,22 +753,232 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     @Override public int getPermissionRequestState(String pkg, String permission, int deviceId) {
+        if (deviceId != Context.DEVICE_ID_DEFAULT) return Context.PERMISSION_REQUEST_STATE_UNREQUESTABLE;
+        if (!mCallers.isSystem()) {
+            try {
+                // Android answers the calling UID's existing grant before looking
+                // at the named package's requestability. A claimed name is not an
+                // authority to inspect another UID's permission history.
+                String caller = mCallers.callerPackage();
+                if (granted(permission, caller)) return Context.PERMISSION_REQUEST_STATE_GRANTED;
+                mCallers.requirePackage(pkg);
+            } catch (SecurityException e) { return Context.PERMISSION_REQUEST_STATE_UNREQUESTABLE; }
+        }
         if (granted(permission, pkg)) return Context.PERMISSION_REQUEST_STATE_GRANTED;
-        return canRequest(pkg, permission) ? Context.PERMISSION_REQUEST_STATE_REQUESTABLE
+        return requestable(pkg, permission) ? Context.PERMISSION_REQUEST_STATE_REQUESTABLE
                 : Context.PERMISSION_REQUEST_STATE_UNREQUESTABLE;
     }
 
-    public boolean canRequest(String pkg, String permission) {
+    private static final int RESTRICTION_EXEMPT = PackageManager.FLAGS_PERMISSION_RESTRICTION_ANY_EXEMPT;
+    // Versioned one-time state migrations of the runtime-permissions ledger.
+    private static final String EXEMPTION_VERSION_KEY = "restriction-exemptions", EXEMPTION_VERSION = "1";
+    private static final int FIXED_PERMISSION_FLAGS = PackageManager.FLAG_PERMISSION_USER_FIXED
+            | PackageManager.FLAG_PERMISSION_POLICY_FIXED | PackageManager.FLAG_PERMISSION_SYSTEM_FIXED;
+
+    private static boolean unrequestable(PermissionInfo info, PermissionState state) {
+        // APPLY_RESTRICTION also describes soft restrictions. Only AOSP's hard
+        // RESTRICTION_REVOKED flag belongs in its UNREQUESTABLE_MASK.
+        return (state.flags & FIXED_PERMISSION_FLAGS) != 0 || state.restricted && info.isHardRestricted();
+    }
+
+    private synchronized boolean requestable(String pkg, String permission) {
+        if (pkg == null || permission == null) return false;
         ApkPackage installed = mPm.get(pkg);
         PermissionInfo info = mCatalog.get(permission);
-        return installed != null && installed.parsed.getRequestedPermissions().contains(permission)
-                && info != null && (info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE)
-                        == PermissionInfo.PROTECTION_DANGEROUS;
+        return installed != null && !mPm.isRemovalPending(pkg)
+                && installed.parsed.getRequestedPermissions().contains(permission)
+                && info != null && info.isRuntime()
+                && !unrequestable(info, permissionState(installed.uid(), permission, uidMembers(installed.uid())));
     }
+
+    /**
+     * Controller eligibility is narrower than Android's public request-state query. Like
+     * PermissionController, a grant the policy would refuse (a hard restriction, or a soft
+     * restriction of a pre-Q UID) is never offered to the user.
+     */
+    public synchronized boolean canRequest(String pkg, String permission) {
+        ApkPackage installed = mPm.get(pkg);
+        return installed != null && installed.parsed.getTargetSdkVersion() >= 23 && requestable(pkg, permission)
+                && !permissionState(installed.uid(), permission, uidMembers(installed.uid())).restricted;
+    }
+
+    /**
+     * Whether the user can change this permission on the app's Settings page (AOSP
+     * AppPermissionFragment). Unlike a request, Settings still offers a USER_FIXED
+     * permission; policy and system fixed permissions and restrictions stay unchangeable.
+     */
+    private synchronized boolean changeableInSettings(String pkg, String permission) {
+        ApkPackage installed = mPm.get(pkg);
+        PermissionInfo info = mCatalog.get(permission);
+        if (installed == null || mPm.isRemovalPending(pkg) || installed.parsed.getTargetSdkVersion() < 23
+                || !installed.parsed.getRequestedPermissions().contains(permission)
+                || info == null || !info.isRuntime()) return false;
+        PermissionState state = permissionState(installed.uid(), permission, uidMembers(installed.uid()));
+        return !state.restricted && (state.flags & (PackageManager.FLAG_PERMISSION_POLICY_FIXED
+                | PackageManager.FLAG_PERMISSION_SYSTEM_FIXED)) == 0;
+    }
+
+    private boolean changeable(String pkg, String permission, boolean settings) {
+        return settings ? changeableInSettings(pkg, permission) : canRequest(pkg, permission);
+    }
+
+    /** Android R: the release from which a split background permission is requested alone. */
+    private static final int BACKGROUND_SPLIT_SDK = android.os.Build.VERSION_CODES.R;
+
+    /** What one requestPermissions call asks the user, per PermissionController's grant behaviors. */
+    record RequestPlan(List<String> foreground, List<String> background, java.util.Set<String> foregroundAlreadyGranted) {
+        static final RequestPlan NONE = new RequestPlan(List.of(), List.of(), java.util.Set.of());
+    }
+
+    /** The requested runtime permissions whose background permission is {@code background}. */
+    private List<String> foregroundsOf(ApkPackage pkg, String background) {
+        List<String> foregrounds = new ArrayList<>();
+        PermissionInfo bg = mCatalog.get(background);
+        for (String requested : pkg.parsed.getRequestedPermissions()) {
+            PermissionInfo info = mCatalog.get(requested);
+            if (info != null && bg != null && info.isRuntime() && background.equals(info.backgroundPermission)
+                    && java.util.Objects.equals(info.packageName, bg.packageName)) foregrounds.add(requested);
+        }
+        return foregrounds;
+    }
+
+    private boolean anyGranted(ApkPackage pkg, List<String> permissions) {
+        for (String permission : permissions) if (granted(permission, pkg.packageName)) return true;
+        return false;
+    }
+
+    /**
+     * Android 16 BackgroundGrantBehavior: a background permission is never granted by the
+     * foreground Allow. A background request without its foreground (requested now or
+     * granted) is rejected without UI. From Android R targets, foreground and background
+     * requested together reject the whole request without UI, and a background request
+     * alone goes to its separate choice (Settings on a phone); older targets get the
+     * foreground dialog and then the background choice (SETTINGS_LINK_FOR_BG,
+     * UPGRADE_SETTINGS_LINK).
+     */
+    synchronized RequestPlan planRequest(ApkPackage expected, String[] names) {
+        java.util.Set<String> backgrounds = RuntimePermissionGroups.backgroundPermissions(mCatalog.permissions());
+        List<String> foreground = new ArrayList<>(), background = new ArrayList<>();
+        java.util.Set<String> foregroundGranted = new java.util.HashSet<>();
+        List<String> requested = new ArrayList<>();
+        for (String name : names) if (name != null) requested.add(name);
+        for (String name : requested) {
+            if (!canRequest(expected.packageName, name) || granted(name, expected.packageName)) continue;
+            if (!backgrounds.contains(name)) {
+                if (!foreground.contains(name)) foreground.add(name);
+                continue;
+            }
+            if (background.contains(name)) continue;
+            List<String> foregrounds = foregroundsOf(expected, name);
+            boolean requestsForeground = requested.stream().anyMatch(foregrounds::contains);
+            boolean grantedForeground = anyGranted(expected, foregrounds);
+            if (!requestsForeground && !grantedForeground) continue; // NO_UI_REJECT_THIS_GROUP
+            if (expected.parsed.getTargetSdkVersion() >= BACKGROUND_SPLIT_SDK && requestsForeground) {
+                return RequestPlan.NONE; // NO_UI_REJECT_ALL_GROUPS
+            }
+            background.add(name);
+            if (grantedForeground) foregroundGranted.add(name);
+        }
+        return new RequestPlan(List.copyOf(foreground), List.copyOf(background), java.util.Set.copyOf(foregroundGranted));
+    }
+
+    /**
+     * The background choice is offered only while its foreground is granted. {@code settings}:
+     * the choice is the app's Settings page (App info, or a target R+ request sent there),
+     * which still offers a USER_FIXED background permission; otherwise it is the request
+     * dialog of a pre-R target, which does not.
+     */
+    synchronized boolean backgroundChoiceAvailable(ApkPackage expected, String background, boolean settings) {
+        return mPm.get(expected.packageName) == expected && !mPm.isRemovalPending(expected.packageName)
+                && changeable(expected.packageName, background, settings) && !granted(background, expected.packageName)
+                && anyGranted(expected, foregroundsOf(expected, background));
+    }
+
+    /**
+     * The background permission an app's own Settings page would let the user choose now
+     * (AOSP AppPermissionFragment): requested, not policy or system fixed (a user's fixed
+     * refusal can still be changed there), not granted, foreground granted.
+     */
+    synchronized String pendingBackgroundChoice(ApkPackage expected) {
+        java.util.Set<String> backgrounds = RuntimePermissionGroups.backgroundPermissions(mCatalog.permissions());
+        for (String requested : expected.parsed.getRequestedPermissions()) {
+            if (backgrounds.contains(requested) && backgroundChoiceAvailable(expected, requested, true)) return requested;
+        }
+        return null;
+    }
+
+    /**
+     * Commit the background dialog's explicit choice (PermissionRequests.ALWAYS,
+     * FOREGROUND_ONLY or DENIED). "Don't allow" also denies the foreground, and revoking a
+     * grant that existed before this request stops the app as Android does.
+     * <p>The request dialog of a pre-R target follows PermissionController's upgrade
+     * dialog: each subgroup's repeated denial is fixed. On the Settings page
+     * ({@code settings}, AOSP AppPermissionViewModel.requestChange) "Allow only while using
+     * the app" leaves the ungranted background permission as it is unless the user had fixed
+     * it, in which case it is revoked again with USER_SET only (userFixed=false), clearing
+     * USER_FIXED; "Don't allow" revokes the same way.
+     */
+    void recordBackgroundChoice(ApkPackage expected, String background, int choice, boolean killOnRevoke,
+            boolean settings) {
+        requireSystem();
+        if (choice != PermissionRequests.ALWAYS && choice != PermissionRequests.FOREGROUND_ONLY
+                && choice != PermissionRequests.DENIED) return;
+        List<String> revoked = new ArrayList<>();
+        boolean changed;
+        // One commit: the foreground cannot change between this check and the grant.
+        synchronized (mPm) { synchronized (this) {
+            if (!backgroundChoiceAvailable(expected, background, settings)) return;
+            if (settings && choice == PermissionRequests.FOREGROUND_ONLY
+                    && (permissionState(expected.uid(), background, uidMembers(expected.uid())).flags
+                            & PackageManager.FLAG_PERMISSION_USER_FIXED) == 0) return;
+            changed = commitUserDecision(expected, List.of(background), choice == PermissionRequests.ALWAYS,
+                    false, settings, revoked);
+            if (choice == PermissionRequests.DENIED) {
+                changed |= commitUserDecision(expected, foregroundsOf(expected, background), false, true,
+                        settings, revoked);
+            }
+        } }
+        // Process retirement and notifications run outside the PM and policy monitors.
+        if (changed) permissionsChanged(expected, () -> killOnRevoke && revoked.stream()
+                .anyMatch(name -> !granted(name, expected.packageName)));
+    }
+
+    /**
+     * A target R+ background request sent to the Settings page returned without a choice.
+     * Like AOSP GrantPermissionsViewModel.sendDirectlyToSettings, that counts against the
+     * app: the background permission becomes USER_SET, or USER_FIXED when it already was,
+     * so an app cannot keep reopening the choice.
+     */
+    void recordBackgroundDismissal(ApkPackage expected, String background) {
+        requireSystem();
+        synchronized (mPm) { synchronized (this) {
+            if (!backgroundChoiceAvailable(expected, background, false)) return;
+            List<ApkPackage> members = uidMembers(expected.uid());
+            PermissionInfo info = mCatalog.get(background);
+            int flags = permissionState(expected.uid(), background, members, info).flags;
+            flags |= (flags & PackageManager.FLAG_PERMISSION_USER_SET) != 0
+                    ? PackageManager.FLAG_PERMISSION_USER_FIXED : PackageManager.FLAG_PERMISSION_USER_SET;
+            Map<Integer, Integer> before = runtimeModes(expected.uid());
+            // The background permission is not granted here (backgroundChoiceAvailable).
+            storeRuntimeDecision(expected, background, info, members, flags, "denied");
+            scheduleWrite();
+            publishRuntimeModes(expected.uid(), before);
+        } }
+        permissionsChanged(expected, () -> false);
+    }
+
+    /**
+     * Explicit durability boundary for an install: the admission's restriction exemptions
+     * (or their absence) reach the ledger before the install reports success. Never call
+     * while holding a package or operation monitor.
+     */
+    boolean flushDecisions() { return mWriter.flush(); }
 
     public boolean isProtectedBroadcast(String action) { return mCatalog.isProtectedBroadcast(action); }
 
     boolean isKnownProtectedBroadcast(String action) { return mCatalog.isKnownProtectedBroadcast(action); }
+
+    boolean isDeclaredProtectedBroadcast(String action) { return mCatalog.isDeclaredProtectedBroadcast(action); }
 
     public int checkPermission(String pkg, String permission) {
         return checkPermission(pkg, permission, "default:0", 0);
@@ -681,6 +986,85 @@ public final class PermissionPolicy extends IPermissionManager.Default {
 
     public void grantRuntime(String pkg, String permission, int userId) {
         grantRuntimePermission(pkg, permission, "default:0", userId);
+    }
+
+    /** Commit an explicit host-dialog choice, never a dismissal or an unavailable dialog. */
+    void recordUserDecision(ApkPackage expected, List<String> permissions, boolean allowed) {
+        requireSystem();
+        if (!commitUserDecision(expected, permissions, allowed, false, false, new ArrayList<>())) return;
+        // Every changed permission was still denied at commit time. In particular,
+        // an old dialog cannot revoke a grant that another controller just made.
+        permissionsChanged(expected, () -> false);
+    }
+
+    /**
+     * Store an explicit user choice; false when nothing changed. {@code revokeGranted}: a
+     * denial also revokes the listed permissions' existing grants, added to {@code revoked}.
+     * {@code settings}: a Settings page change, which may change a USER_FIXED permission and
+     * whose denial never fixes one (AOSP revokes there with userFixed=false).
+     */
+    private boolean commitUserDecision(ApkPackage expected, List<String> permissions, boolean allowed,
+            boolean revokeGranted, boolean settings, List<String> revoked) {
+        synchronized (mPm) { synchronized (this) {
+            if (mPm.get(expected.packageName) != expected || mPm.isRemovalPending(expected.packageName)) return false;
+            List<ApkPackage> members = uidMembers(expected.uid());
+            Map<String, PermissionState> pending = new LinkedHashMap<>();
+            Map<String, Boolean> previouslySet = new LinkedHashMap<>();
+            java.util.Set<String> background = allowed ? java.util.Set.of()
+                    : RuntimePermissionGroups.backgroundPermissions(mCatalog.permissions());
+            for (String name : permissions) {
+                if (!changeable(expected.packageName, name, settings)) continue;
+                if (granted(name, expected.packageName)) {
+                    if (allowed || !revokeGranted) continue;
+                    if (permissionState(expected.uid(), name, members).granted) revoked.add(name);
+                }
+                PermissionInfo info = mCatalog.get(name);
+                pending.put(name, permissionState(expected.uid(), name, members));
+                if (allowed) continue;
+                // Revoking access the user already has is the Settings page's change,
+                // which AOSP records as USER_SET without USER_FIXED.
+                if (revokeGranted || settings) { previouslySet.put(name, false); continue; }
+                // Snapshot this foreground/background subgroup's history before mutating it.
+                // Two names in a first request must not count as two user denials.
+                boolean userSet = false;
+                String group = RuntimePermissionGroups.group(info);
+                for (String requested : expected.parsed.getRequestedPermissions()) {
+                    PermissionInfo other = mCatalog.get(requested);
+                    boolean sameGroup = other != null && other.isRuntime() && (name.equals(requested)
+                            || group != null && group.equals(RuntimePermissionGroups.group(other))
+                            && java.util.Objects.equals(info.packageName, other.packageName)
+                            && background.contains(name) == background.contains(requested));
+                    if (sameGroup && (permissionState(expected.uid(), requested, members).flags
+                            & PackageManager.FLAG_PERMISSION_USER_SET) != 0) userSet = true;
+                }
+                previouslySet.put(name, userSet);
+            }
+            if (pending.isEmpty()) return false;
+            Map<Integer, Integer> before = runtimeModes(expected.uid());
+            for (Map.Entry<String, PermissionState> entry : pending.entrySet()) {
+                String name = entry.getKey();
+                PermissionInfo info = mCatalog.get(name);
+                int flags = (entry.getValue().flags | PackageManager.FLAG_PERMISSION_USER_SET)
+                        & ~(PackageManager.FLAG_PERMISSION_USER_FIXED | PackageManager.FLAG_PERMISSION_ONE_TIME
+                            | PackageManager.FLAG_PERMISSION_AUTO_REVOKED | PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED);
+                if (allowed) flags &= ~(PackageManager.FLAG_PERMISSION_REVOKED_COMPAT
+                        | PackageManager.FLAG_PERMISSION_REVOKE_WHEN_REQUESTED);
+                else if (previouslySet.get(name)) flags |= PackageManager.FLAG_PERMISSION_USER_FIXED;
+                storeRuntimeDecision(expected, name, info, members, flags, allowed ? "granted" : "denied");
+            }
+            scheduleWrite();
+            publishRuntimeModes(expected.uid(), before);
+            return true;
+        } }
+    }
+
+    private void storeRuntimeDecision(ApkPackage installed, String permission, PermissionInfo info,
+            List<ApkPackage> members, int flags, String decision) {
+        mDecisions.setProperty(legacyGrantKey(installed.uid(), permission), Boolean.toString(
+                storedLegacyGrant(installed.uid(), permission, info, requestingTargetSdk(permission, members))));
+        mDecisions.setProperty(uidKey(installed.uid(), permission), decision);
+        mDecisions.setProperty(flagsKey(installed.uid(), permission), Integer.toString(flags));
+        for (ApkPackage member : members) mDecisions.remove(legacyKey(member, permission));
     }
 
     private void runtimeDecision(String pkg, String permission, int userId, String decision) {
@@ -709,11 +1093,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             wasGranted = granted(permission, pkg);
             Map<Integer, Integer> before = runtimeModes(installed.uid());
             List<ApkPackage> members = uidMembers(installed.uid());
-            mDecisions.setProperty(legacyGrantKey(installed.uid(), permission), Boolean.toString(
-                    storedLegacyGrant(installed.uid(), permission, info, requestingTargetSdk(permission, members))));
-            mDecisions.setProperty(uidKey(installed.uid(), permission), decision);
-            mDecisions.setProperty(flagsKey(installed.uid(), permission), Integer.toString(old.flags));
-            for (ApkPackage member : members) mDecisions.remove(legacyKey(member, permission));
+            storeRuntimeDecision(installed, permission, info, members, old.flags, decision);
             scheduleWrite();
             publishRuntimeModes(installed.uid(), before);
         } }
@@ -764,7 +1144,27 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         requireSystem();
         runtimeDecision(pkg, Manifest.permission.POST_NOTIFICATIONS, userId, "denied", false);
     }
-    @Override public boolean shouldShowRequestPermissionRationale(String pkg, String permission, int deviceId, int userId) { return false; }
+    @Override public boolean shouldShowRequestPermissionRationale(String pkg, String permission,
+            int deviceId, int userId) {
+        if (pkg == null || permission == null || userId != 0 || deviceId != Context.DEVICE_ID_DEFAULT) return false;
+        ApkPackage installed = mPm.get(pkg);
+        if (installed == null || mPm.isRemovalPending(pkg) || mCallers.callerUid() != installed.uid()) return false;
+        try { mCallers.requirePackage(pkg); }
+        catch (SecurityException e) { return false; }
+        // Caller authentication can acquire ATM's monitor; do it before the policy
+        // monitor, whose existing readers also run from ATM lifecycle operations.
+        synchronized (this) {
+            if (mPm.get(pkg) != installed || mPm.isRemovalPending(pkg)) return false;
+            PermissionInfo info = mCatalog.get(permission);
+            if (info == null || !info.isRuntime() || granted(permission, pkg)) return false;
+            PermissionState state = permissionState(installed.uid(), permission, uidMembers(installed.uid()));
+            if (unrequestable(info, state)) return false;
+            // AOSP BACKGROUND_RATIONALE_CHANGE_ID (147316723), enabled after target Q.
+            if (Manifest.permission.ACCESS_BACKGROUND_LOCATION.equals(permission)
+                    && installed.parsed.getTargetSdkVersion() >= 30) return true;
+            return (state.flags & PackageManager.FLAG_PERMISSION_USER_SET) != 0;
+        }
+    }
     @Override public synchronized int getPermissionFlags(String pkg, String permission, String deviceId, int userId) {
         ApkPackage installed = mPm.get(pkg);
         if (installed == null || userId != 0 || !"default:0".equals(deviceId)) return 0;
@@ -868,7 +1268,212 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         }
         return result;
     }
-    @Override public List<String> getAllowlistedRestrictedPermissions(String pkg, int flags, int userId) { return Collections.emptyList(); }
+    private static final int ALLOWLIST_FLAGS = PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM
+            | PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER | PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE;
+
+    /** The exemption flag each AOSP allowlist records. */
+    private static int exemptionFlags(int allowlists) {
+        int exemptions = 0;
+        if ((allowlists & PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) != 0) {
+            exemptions |= PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT;
+        }
+        if ((allowlists & PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER) != 0) {
+            exemptions |= PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
+        }
+        if ((allowlists & PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE) != 0) {
+            exemptions |= PackageManager.FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT;
+        }
+        return exemptions;
+    }
+
+    private record AllowlistIdentity(boolean system, ApkPackage code, int uid) { }
+    private record AllowlistCaller(boolean privileged, boolean installer) { }
+
+    /** ATM can enter PM; authenticate attached code before acquiring either state monitor. */
+    private AllowlistIdentity allowlistIdentity() {
+        CallerIdentity callers = mCallers;
+        if (callers == null) throw new SecurityException("Unrecognized allowlist caller");
+        int uid = callers.callerUid();
+        boolean system = callers.isSystem();
+        ApkPackage code = system ? null : callers.requireCurrentPackage(callers.callerPackage());
+        return new AllowlistIdentity(system, code, uid);
+    }
+
+    /** PM and policy are locked: revalidate installation, attribution and permission together. */
+    private AllowlistCaller allowlistCaller(ApkPackage target, AllowlistIdentity identity) {
+        if (identity.system) return new AllowlistCaller(true, false);
+        ApkPackage code = identity.code;
+        if (code == null || mPm.get(code.packageName) != code || code.uid() != identity.uid
+                || mPm.isRemovalPending(code.packageName)) {
+            throw new SecurityException("Unknown or retired allowlist caller");
+        }
+        boolean privileged = granted(Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS, code.packageName);
+        PackageInstallSource source = target.installSource();
+        ApkPackage recorded = mPm.get(source.installer());
+        boolean installer = source.isInstaller(recorded) && !mPm.isRemovalPending(recorded.packageName)
+                && PackageManagerService.sameInstallSourceIdentity(code, recorded);
+        // The current installer (including its admitted shared UID) can see its installation.
+        // Other invisible packages answer as absent, before category-specific authorization.
+        if (!privileged && !installer && !code.packageName.equals(target.packageName)
+                && !mPm.canSeeInstalledPackage(code.packageName, target.packageName)) return null;
+        return new AllowlistCaller(privileged, installer);
+    }
+
+    private static void checkAllowlistFlags(int flags) {
+        if ((flags & ~ALLOWLIST_FLAGS) != 0) throw new IllegalArgumentException("Invalid allowlist flags: " + flags);
+    }
+
+    private static void requireAllowlistAuthority(AllowlistCaller caller, int flags) {
+        if ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) != 0 && !caller.privileged) {
+            throw new SecurityException("System allowlist requires " + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
+        }
+        if ((flags & (PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE | PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER)) != 0
+                && !caller.privileged && !caller.installer) {
+            throw new SecurityException("Upgrade or installer allowlist requires being installer on record or "
+                    + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
+        }
+    }
+
+    /** AOSP PermissionManagerServiceImpl.getAllowlistedRestrictedPermissions, including its caller checks. */
+    @Override public List<String> getAllowlistedRestrictedPermissions(String pkg, int flags, int userId) {
+        java.util.Objects.requireNonNull(pkg);
+        checkAllowlistFlags(flags);
+        if (userId < 0) throw new IllegalArgumentException("Invalid user " + userId);
+        if (userId != 0) return null;
+        AllowlistIdentity identity = allowlistIdentity();
+        synchronized (mPm) { synchronized (this) {
+            ApkPackage target = mPm.get(pkg);
+            if (target == null || mPm.isRemovalPending(pkg)) return null;
+            AllowlistCaller caller = allowlistCaller(target, identity);
+            if (caller == null) return null;
+            requireAllowlistAuthority(caller, flags);
+            return allowlisted(target, flags);
+        } }
+    }
+
+    /** Called with PM and policy locked. */
+    private List<String> allowlisted(ApkPackage target, int allowlists) {
+        int query = exemptionFlags(allowlists);
+        List<ApkPackage> members = uidMembers(target.uid());
+        List<String> result = new ArrayList<>();
+        for (String permission : target.parsed.getRequestedPermissions()) {
+            PermissionInfo info = mCatalog.get(permission);
+            if (info != null && (permissionState(target.uid(), permission, members, info).flags & query) != 0) {
+                result.add(permission);
+            }
+        }
+        return result.isEmpty() ? null : result;
+    }
+
+    @Override public boolean addAllowlistedRestrictedPermission(String pkg, String permission, int flags, int userId) {
+        return updateAllowlistedRestrictedPermission(pkg, permission, flags, userId, true);
+    }
+
+    @Override public boolean removeAllowlistedRestrictedPermission(String pkg, String permission, int flags, int userId) {
+        return updateAllowlistedRestrictedPermission(pkg, permission, flags, userId, false);
+    }
+
+    /** Authorize and change one entry against one current installation and state snapshot. */
+    private boolean updateAllowlistedRestrictedPermission(String pkg, String permission, int flags, int userId,
+            boolean add) {
+        java.util.Objects.requireNonNull(pkg);
+        java.util.Objects.requireNonNull(permission);
+        checkAllowlistFlags(flags);
+        if (Integer.bitCount(flags) != 1) throw new IllegalArgumentException("Exactly one allowlist is changed");
+        if (userId < 0) throw new IllegalArgumentException("Invalid user " + userId);
+        if (userId != 0) return false;
+        AllowlistIdentity identity = allowlistIdentity();
+        ApkPackage target;
+        List<String> lostGrants;
+        synchronized (mPm) { synchronized (this) {
+            target = mPm.get(pkg);
+            if (target == null || mPm.isRemovalPending(pkg)) return false;
+            AllowlistCaller caller = allowlistCaller(target, identity);
+            if (caller == null) return false;
+            requireAllowlistAuthority(caller, flags);
+            PermissionInfo info = mCatalog.get(permission);
+            if (info == null) return false;
+            if (info.isRestricted() && (info.flags & PermissionInfo.FLAG_IMMUTABLY_RESTRICTED) != 0
+                    && !caller.privileged) {
+                throw new SecurityException("Cannot modify allowlisting of an immutably restricted permission: " + permission);
+            }
+            List<String> current = allowlisted(target, flags);
+            List<String> permissions = current == null ? new ArrayList<>() : new ArrayList<>(current);
+            if (add) {
+                if (permissions.contains(permission)) return false;
+                if (flags == PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE && !caller.privileged) {
+                    throw new SecurityException("Adding to upgrade allowlist requires "
+                            + Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS);
+                }
+                permissions.add(permission);
+            } else if (!permissions.remove(permission)) return false;
+            // Both the read and write stay under the same locks. Independent add/remove
+            // operations cannot overwrite each other's changes or adopt a replacement APK.
+            lostGrants = setAllowlistLocked(target, permissions, flags, false);
+        } }
+        if (lostGrants == null) return false;
+        notifyAllowlistChanged(target, lostGrants);
+        return true;
+    }
+
+    /** AOSP onPackageInstalled: an install request adds its installer allowlist to existing state. */
+    void addInstallerAllowlist(ApkPackage target, java.util.Collection<String> permissions) {
+        List<String> added = new ArrayList<>(permissions == null ? target.parsed.getRequestedPermissions() : permissions);
+        setAllowlist(target, added, PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER, true);
+    }
+
+    /** AOSP setAllowlistedRestrictedPermissionsInternal followed by restorePermissionState. */
+    private void setAllowlist(ApkPackage target, java.util.Collection<String> permissions, int allowlist, boolean addOnly) {
+        List<String> lostGrants;
+        synchronized (mPm) { synchronized (this) {
+            if (mPm.get(target.packageName) != target || mPm.isRemovalPending(target.packageName)) return;
+            lostGrants = setAllowlistLocked(target, permissions, allowlist, addOnly);
+        } }
+        if (lostGrants != null) notifyAllowlistChanged(target, lostGrants);
+    }
+
+    /** Called with PM then policy locked; null means no state changed. */
+    private List<String> setAllowlistLocked(ApkPackage target, java.util.Collection<String> permissions,
+            int allowlist, boolean addOnly) {
+        int exemption = exemptionFlags(allowlist);
+        List<String> lostGrants = new ArrayList<>();
+        List<ApkPackage> members = uidMembers(target.uid());
+        Map<Integer, Integer> before = runtimeModes(target.uid());
+        boolean changed = false;
+        for (String permission : target.parsed.getRequestedPermissions()) {
+            PermissionInfo info = mCatalog.get(permission);
+            if (info == null || !info.isRestricted()) continue;
+            PermissionState old = permissionState(target.uid(), permission, members, info);
+            int flags = old.flags;
+            if (permissions.contains(permission)) flags |= exemption;
+            else if (!addOnly) flags &= ~exemption;
+            boolean wasAllowlisted = (old.flags & RESTRICTION_EXEMPT) != 0;
+            boolean isAllowlisted = (flags & RESTRICTION_EXEMPT) != 0;
+            // Allowlisting trumps policy: a policy-fixed grant that loses every allowlist
+            // is no longer fixed.
+            if ((flags & PackageManager.FLAG_PERMISSION_POLICY_FIXED) != 0 && !isAllowlisted && old.granted) {
+                flags &= ~PackageManager.FLAG_PERMISSION_POLICY_FIXED;
+            }
+            int target23 = requestingTargetSdk(permission, members);
+            if (target23 < 23 && !wasAllowlisted && isAllowlisted) flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+            boolean legacy = storedLegacyGrant(target.uid(), permission, info, target23);
+            flags = implicitPermissionFlags(applyRestriction(info, flags), legacy);
+            if (flags == old.flags) continue;
+            changed = true;
+            mDecisions.setProperty(legacyGrantKey(target.uid(), permission), Boolean.toString(legacy));
+            mDecisions.setProperty(flagsKey(target.uid(), permission), Integer.toString(flags));
+            if (old.granted && !permissionState(target.uid(), permission, members, info).granted) lostGrants.add(permission);
+        }
+        if (!changed) return null;
+        scheduleWrite();
+        publishRuntimeModes(target.uid(), before);
+        return lostGrants;
+    }
+
+    private void notifyAllowlistChanged(ApkPackage target, List<String> lostGrants) {
+        // Cache invalidation and application callbacks run after both state monitors are released.
+        permissionsChanged(target, () -> lostGrants.stream().anyMatch(name -> !granted(name, target.packageName)));
+    }
     @Override public List<android.content.pm.permission.SplitPermissionInfoParcelable> getSplitPermissions() { return Collections.emptyList(); }
 
     @Override public IBinder registerAttributionSource(AttributionSourceState source) {

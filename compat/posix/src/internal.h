@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <windows.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -200,13 +201,23 @@ int MemfdResizeError(int fd, uint64_t new_size);
 int MemfdGrowError(int fd, uint64_t end);
 // A MAP_SHARED mapping of fd: EPERM when writable and write-sealed; sets
 // *deny_write when a write seal must keep the mapping from becoming writable.
-int MemfdSharedMapError(int fd, bool writable, bool* deny_write);
+// A writable mapping of a memfd also yields a lease in *write_lease (which the
+// caller must supply for a writable request): F_SEAL_WRITE answers EBUSY for as
+// long as any lease of the file lives, in any process. The mapping's owner holds
+// the lease until the last page of the mapping is unmapped (or the process
+// dies, when the OS releases it); an error returns no lease.
+int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
+                        std::shared_ptr<void>* write_lease);
 // Snapshot I/O must check the pinned object, never a recycled descriptor.
 bool FileHasMemfdSeals(HANDLE file);
 int MemfdWriteHandleError(HANDLE file, bool at_position, uint64_t offset,
                           uint64_t length, bool append);
 int MemfdResizeHandleError(HANDLE file, uint64_t new_size);
 int MemfdGrowHandleError(HANDLE file, uint64_t end);
-int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write);
+int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
+                               std::shared_ptr<void>* write_lease);
+// In a forked child (ADR 0092): a write lease the child inherited with its
+// mapping becomes the child's own (its byte-range lock was the parent's).
+void RenewMemfdWriteLeaseInChild(void* write_lease);
 
 }  // namespace gesher

@@ -266,7 +266,11 @@ void Window::ApplyExStyle() {
 void Window::SetDim(float amount) {
   int d = static_cast<int>(amount * 255.0f + 0.5f);
   d = d < 0 ? 0 : (d > 255 ? 255 : d);
-  if (dim_.exchange(d) == d) return;
+  {
+    std::lock_guard<std::mutex> lock(buffer_mutex_);
+    if (dim_.exchange(d) == d) return;
+    layered_full_dirty_ = true;
+  }
   if (layered_) {
     PostMessageW(static_cast<HWND>(hwnd_), kMsgPresentLayered, 0, 0);
   } else {
@@ -274,17 +278,23 @@ void Window::SetDim(float amount) {
   }
 }
 
-const uint8_t* Window::DimmedPixels() {
+const uint8_t* Window::DimmedPixels(const PixelRect* dirty) {
   const int d = dim_;
   if (d == 0) return pixels_.data();
   // Android's dim layer: black at the dim amount over what is behind.
+  const bool retained = dimmed_.size() == pixels_.size();
   dimmed_.resize(pixels_.size());
+  PixelRect copy = retained && dirty != nullptr ? dirty->Clip(buffer_width_, buffer_height_) : PixelRect{};
+  if (copy.empty()) copy = PixelRect::Full(buffer_width_, buffer_height_);
   const unsigned keep = 255u - static_cast<unsigned>(d);
-  for (size_t i = 0; i < pixels_.size(); i += 4) {
-    dimmed_[i] = static_cast<uint8_t>((pixels_[i] * keep + 127u) / 255u);
-    dimmed_[i + 1] = static_cast<uint8_t>((pixels_[i + 1] * keep + 127u) / 255u);
-    dimmed_[i + 2] = static_cast<uint8_t>((pixels_[i + 2] * keep + 127u) / 255u);
-    dimmed_[i + 3] = pixels_[i + 3];
+  for (int y = copy.top; y < copy.bottom; ++y) {
+    for (int x = copy.left; x < copy.right; ++x) {
+      const size_t i = (static_cast<size_t>(y) * buffer_width_ + x) * 4;
+      dimmed_[i] = static_cast<uint8_t>((pixels_[i] * keep + 127u) / 255u);
+      dimmed_[i + 1] = static_cast<uint8_t>((pixels_[i + 1] * keep + 127u) / 255u);
+      dimmed_[i + 2] = static_cast<uint8_t>((pixels_[i + 2] * keep + 127u) / 255u);
+      dimmed_[i + 3] = pixels_[i + 3];
+    }
   }
   return dimmed_.data();
 }
@@ -342,14 +352,44 @@ void Window::PresentLayered() {
   const int w = buffer_width_, h = buffer_height_;
   if (w < 1 || h < 1) return;
   if (layered_bitmap_ == nullptr) layered_bitmap_ = std::make_unique<LayeredBitmap>();
-  // The buffer is premultiplied BGRA, what UpdateLayeredWindow takes.
-  if (!layered_bitmap_->Copy(DimmedPixels(), w, h)) return;
+  const int dim = dim_;
+  PixelRect dirty = layered_dirty_.Clip(w, h);
+  // A producer can enqueue another message after HandlePopupMessage drains
+  // the queue but before this method locks and publishes that producer's
+  // frame. The later message has no remaining work. Mode/style/size changes
+  // still rebuild through the cache/dim/full-damage conditions below.
+  if (!layered_full_dirty_ && dirty.empty() && layered_dim_ == dim &&
+      layered_bitmap_->Matches(w, h)) return;
+  const bool full = layered_full_dirty_ || dirty.empty() || layered_dim_ != dim ||
+                    !layered_bitmap_->Matches(w, h);
+  const PixelRect* damage = full ? nullptr : &dirty;
+  // Keep a complete premultiplied BGRA DIB. The size/source origin still
+  // describe the whole window; prcDirty alone limits an incremental update.
+  if (!layered_bitmap_->Copy(DimmedPixels(damage), w, h, damage)) return;
   HDC screen = GetDC(nullptr);
   SIZE size = {w, h};
   POINT src = {0, 0};
   BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-  UpdateLayeredWindow(hwnd, screen, nullptr, &size, layered_bitmap_->dc(), &src, 0, &blend, ULW_ALPHA);
+  RECT rect = {dirty.left, dirty.top, dirty.right, dirty.bottom};
+  UPDATELAYEREDWINDOWINFO update = {};
+  update.cbSize = sizeof(update);
+  update.hdcDst = screen;
+  update.psize = &size;
+  update.hdcSrc = layered_bitmap_->dc();
+  update.pptSrc = &src;
+  update.pblend = &blend;
+  update.dwFlags = ULW_ALPHA;
+  update.prcDirty = full ? nullptr : &rect;
+  const bool posted = UpdateLayeredWindowIndirect(hwnd, &update) != FALSE;
   ReleaseDC(nullptr, screen);
+  if (posted) {
+    layered_dirty_ = {};
+    layered_full_dirty_ = false;
+    layered_dim_ = dim;
+  } else {
+    // Windows may not have a retained image after a failed update.
+    layered_full_dirty_ = true;
+  }
 }
 
 bool Window::HandlePopupMessage(unsigned msg, uintptr_t wparam, intptr_t lparam,

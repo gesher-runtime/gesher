@@ -343,7 +343,141 @@ static void TestSelfLink() {
   CHECK(std::string(target, n) == expected_pid);
 }
 
-int main() {
+// A random (version 4, RFC 4122 variant) UUID, lowercase, then a newline.
+static bool IsUuidLine(const std::string& s) {
+  if (s.size() != 37 || s.back() != '\n') return false;
+  for (size_t i = 0; i < 36; ++i) {
+    bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+    if (dash ? s[i] != '-' : !((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) {
+      return false;
+    }
+  }
+  return s[14] == '4' && (s[19] == '8' || s[19] == '9' || s[19] == 'a' || s[19] == 'b');
+}
+
+// This executable run with --boot-id: the boot_id another process of the same
+// device reads.
+static std::string ChildBootId() {
+  wchar_t exe[MAX_PATH];
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  std::wstring command = L"\"" + std::wstring(exe) + L"\" --boot-id";
+  SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
+  HANDLE read_end = nullptr, write_end = nullptr;
+  if (!CreatePipe(&read_end, &write_end, &sa, 0)) return "";
+  SetHandleInformation(read_end, HANDLE_FLAG_INHERIT, 0);
+  STARTUPINFOW si = {};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdOutput = write_end;
+  si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  PROCESS_INFORMATION pi = {};
+  std::string out;
+  if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)) {
+    CloseHandle(write_end);
+    write_end = nullptr;
+    char buf[256];
+    DWORD n = 0;
+    while (ReadFile(read_end, buf, sizeof(buf), &n, nullptr) && n > 0) out.append(buf, n);
+    WaitForSingleObject(pi.hProcess, 30000);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+  }
+  if (write_end != nullptr) CloseHandle(write_end);
+  CloseHandle(read_end);
+  return out;
+}
+
+static void TestRandom() {
+  printf("Testing /proc/sys/kernel/random/boot_id...\n");
+  CHECK(open("/proc/sys/kernel/random/uuid", O_RDONLY) == -1 && errno == ENOENT);
+
+  struct stat st;
+  CHECK(stat("/proc/sys/kernel/random/boot_id", &st) == 0 && S_ISREG(st.st_mode));
+  CHECK(stat("/proc/sys/kernel/random", &st) == 0 && S_ISDIR(st.st_mode));
+  CHECK(stat("/proc/sys/kernel", &st) == 0 && S_ISDIR(st.st_mode));
+  CHECK(stat("/proc/sys", &st) == 0 && S_ISDIR(st.st_mode));
+  CHECK(open("/proc/sys/kernel/random/entropy_avail", O_RDONLY) == -1 && errno == ENOENT);
+  CHECK(open("/proc/sys/kernel/osrelease", O_RDONLY) == -1 && errno == ENOENT);
+  CHECK(open("/proc/sys/kernel/random/boot_id", O_WRONLY) == -1 && errno == EACCES);
+
+  // Outside a device: one id for this process.
+  SetEnvironmentVariableW(L"GESHER_BINDER", nullptr);
+  std::string own = ReadAll("/proc/sys/kernel/random/boot_id");
+  CHECK_MSG(IsUuidLine(own), own.c_str());
+  CHECK(ReadAll("/proc/sys/kernel/random/boot_id") == own);
+
+  // A device: every process of it reads the same id, kept in its data directory;
+  // a device restart (a new $GESHER_BINDER) is a new boot with a new id.
+  wchar_t temp[MAX_PATH];
+  GetTempPathW(MAX_PATH, temp);
+  std::wstring data = std::wstring(temp) + L"gesher-boot-id-" + std::to_wstring(GetCurrentProcessId());
+  CreateDirectoryW(data.c_str(), nullptr);
+  SetEnvironmentVariableW(L"ANDROID_DATA", data.c_str());
+  SetEnvironmentVariableW(L"GESHER_PROPERTY_ROOT_SESSION", nullptr);
+  std::wstring first = L"gesher-boot-test-a-" + std::to_wstring(GetCurrentProcessId());
+  SetEnvironmentVariableW(L"GESHER_BINDER", first.c_str());
+  std::string boot1 = ReadAll("/proc/sys/kernel/random/boot_id");
+  CHECK_MSG(IsUuidLine(boot1), boot1.c_str());
+  CHECK(boot1 != own);
+  CHECK(ReadAll("/proc/sys/kernel/random/boot_id") == boot1);
+  std::string child = ChildBootId();
+  CHECK_MSG(child == boot1, child.c_str());
+
+  std::wstring second = L"gesher-boot-test-b-" + std::to_wstring(GetCurrentProcessId());
+  SetEnvironmentVariableW(L"GESHER_BINDER", second.c_str());
+  std::string boot2 = ReadAll("/proc/sys/kernel/random/boot_id");
+  CHECK_MSG(IsUuidLine(boot2), boot2.c_str());
+  CHECK(boot2 != boot1);
+  CHECK(ChildBootId() == boot2);
+  SetEnvironmentVariableW(L"GESHER_BINDER", first.c_str());
+  CHECK(ChildBootId() == boot1);
+  CHECK(ReadAll("/proc/sys/kernel/random/boot_id") == boot1);
+
+  // A device cannot claim boot identity from an unwriteable data root. An
+  // ordinary file obstructs its system directory even on an elevated runner.
+  std::wstring blocked = data + L"\\blocked";
+  HANDLE obstruction = CreateFileW(blocked.c_str(), GENERIC_WRITE, 0, nullptr,
+                                  CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  CHECK(obstruction != INVALID_HANDLE_VALUE);
+  if (obstruction != INVALID_HANDLE_VALUE) {
+    CloseHandle(obstruction);
+    SetEnvironmentVariableW(L"ANDROID_DATA", blocked.c_str());
+    std::wstring third = L"gesher-boot-test-c-" + std::to_wstring(GetCurrentProcessId());
+    SetEnvironmentVariableW(L"GESHER_BINDER", third.c_str());
+    errno = 0;
+    int unreadable = open("/proc/sys/kernel/random/boot_id", O_RDONLY);
+    CHECK(unreadable == -1 && errno == EIO);
+    if (unreadable >= 0) close(unreadable);
+    SetEnvironmentVariableW(L"ANDROID_DATA", data.c_str());
+    std::string boot3 = ReadAll("/proc/sys/kernel/random/boot_id");
+    CHECK_MSG(IsUuidLine(boot3), boot3.c_str());
+    CHECK(ChildBootId() == boot3);
+    DeleteFileW(blocked.c_str());
+  }
+
+  SetEnvironmentVariableW(L"GESHER_BINDER", nullptr);
+  CHECK(ReadAll("/proc/sys/kernel/random/boot_id") == own);
+  std::wstring system = data + L"\\system";
+  WIN32_FIND_DATAW entry;
+  HANDLE find = FindFirstFileW((system + L"\\gesher-boot-id-*").c_str(), &entry);
+  if (find != INVALID_HANDLE_VALUE) {
+    do {
+      DeleteFileW((system + L"\\" + entry.cFileName).c_str());
+    } while (FindNextFileW(find, &entry));
+    FindClose(find);
+  }
+  RemoveDirectoryW(system.c_str());
+  RemoveDirectoryW(data.c_str());
+}
+
+int main(int argc, char** argv) {
+  if (argc == 2 && strcmp(argv[1], "--boot-id") == 0) {
+    std::string id = ReadAll("/proc/sys/kernel/random/boot_id");
+    DWORD written = 0;
+    WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), id.data(), static_cast<DWORD>(id.size()), &written, nullptr);
+    return id.empty() ? 1 : 0;
+  }
   TestAuxv();
   TestMaps();
   TestCmdline();
@@ -351,6 +485,7 @@ int main() {
   TestMeminfo();
   TestSysfs();
   TestSelfLink();
+  TestRandom();
 
   if (g_failed == 0) {
     printf("procfs & sysfs contracts: all passed (%d checks)\n", g_checks);

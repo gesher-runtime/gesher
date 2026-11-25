@@ -70,6 +70,10 @@ import javax.net.ssl.SSLSocketFactory;
  *   NetTest echo TCP [UDP]        TCP/UDP echo servers on 127.0.0.1 (UDP defaults to TCP port)
  *   NetTest internet              DNS, HTTPS (TLS 1.3, SNI) and bad certificates rejected
  *   NetTest https URL ok|reject   one HTTPS GET, expected to pass or to fail on the certificate
+ *   NetTest cas SHA1 user|system|absent ...
+ *                                 how AndroidCAStore lists each certificate (by its SHA-1):
+ *                                 a user-added CA ("user:" alias, and still "system:"), a
+ *                                 system CA only, or not at all
  * </pre>
  * Prints "OK <check>" per check and "NetTest all passed" at the end.
  */
@@ -109,6 +113,9 @@ public final class NetTest {
                 break;
             case "https":
                 https(args[1], args[2].equals("ok"));
+                break;
+            case "cas":
+                cas(java.util.Arrays.copyOfRange(args, 1, args.length));
                 break;
             default:
                 throw new IllegalArgumentException(mode);
@@ -659,6 +666,60 @@ public final class NetTest {
     private static Throwable rootCause(Throwable t) {
         while (t.getCause() != null && t.getCause() != t) t = t.getCause();
         return t;
+    }
+
+    /**
+     * The CA certificates as an app sees them through Conscrypt's AndroidCAStore KeyStore
+     * (what Chrome's X509Util.getUserAddedRoots reads): "system:" and "user:" aliases. An
+     * app process's TrustedCertificateStore looks for the user's CAs in
+     * $ANDROID_DATA/misc/user/0, as ActivityThread.main sets it (gesher-app's
+     * GesherAppProcess.useUserCaCertificates); this process is not an app process, so it
+     * sets the same directory.
+     */
+    private static void cas(String[] expected) throws Exception {
+        Class<?> store = Class.forName("com.android.org.conscrypt.TrustedCertificateStore");
+        store.getMethod("setDefaultUserDirectory", java.io.File.class).invoke(null,
+                new java.io.File(System.getenv("ANDROID_DATA") + "/misc/user/0"));
+        java.security.KeyStore ks = java.security.KeyStore.getInstance("AndroidCAStore");
+        ks.load(null, null);
+        java.util.Map<String, java.util.Set<String>> kinds = new java.util.HashMap<>();
+        int users = 0;
+        for (String alias : java.util.Collections.list(ks.aliases())) {
+            java.security.cert.Certificate cert = ks.getCertificate(alias);
+            if (cert == null) continue;
+            String sha1 = hex(java.security.MessageDigest.getInstance("SHA-1").digest(cert.getEncoded()));
+            String kind = alias.substring(0, alias.indexOf(':'));
+            kinds.computeIfAbsent(sha1, k -> new java.util.TreeSet<>()).add(kind);
+            if (kind.equals("user")) users++;
+        }
+        System.out.println("INFO  AndroidCAStore: " + ks.size() + " aliases, " + users + " user:");
+        for (int i = 0; i + 1 < expected.length; i += 2) {
+            String sha1 = expected[i].toLowerCase(java.util.Locale.ROOT);
+            String want = expected[i + 1];
+            java.util.Set<String> got = kinds.getOrDefault(sha1, java.util.Collections.emptySet());
+            check("AndroidCAStore lists " + sha1 + " as " + want, () -> {
+                switch (want) {
+                    case "user":
+                        require(got.contains("user") && got.contains("system"), "kinds " + got);
+                        break;
+                    case "system":
+                        require(got.equals(java.util.Collections.singleton("system")), "kinds " + got);
+                        break;
+                    case "absent":
+                        require(got.isEmpty(), "kinds " + got);
+                        break;
+                    default:
+                        throw new IllegalArgumentException(want);
+                }
+                return "aliases " + got;
+            });
+        }
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) sb.append(String.format("%02x", b & 0xff));
+        return sb.toString();
     }
 
     private static void https(String url, boolean ok) throws Exception {

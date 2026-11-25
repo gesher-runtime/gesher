@@ -4,6 +4,9 @@
  */
 package com.gesher.server;
 
+import java.util.function.IntSupplier;
+import java.util.function.LongSupplier;
+
 /**
  * {@link WindowsHelloBackend} over Windows' UserConsentVerifier (ADR 0091, phase 2;
  * compat/devices/hello_jni.cc and hello_win.cc, docs/research/windows-hello-native-spec.md).
@@ -26,19 +29,28 @@ final class WindowsHello implements WindowsHelloBackend {
     /** After this long without seeing the prompt as an owned window, say so once. */
     private static final long PROMPT_SEEN_MS = 3000;
 
-    private final Object mLock = new Object();
+    private final IntSupplier mAvailabilityProbe;
+    private final LongSupplier mClockMs;
+    private final Object mAvailabilityLock = new Object();
     private long mAvailabilityAt;
     private int mAvailability = FAILED;
+    private boolean mHasAvailability;
+    private final Object mLock = new Object();
     private int mNextId;
 
-    private WindowsHello() {
+    WindowsHello(IntSupplier availabilityProbe, LongSupplier clockMs) {
+        mAvailabilityProbe = availabilityProbe;
+        mClockMs = clockMs;
     }
 
     /** The backend, or null when the natives are not in this runtime (host tests, old builds). */
     static WindowsHello create() {
         try {
-            nativeAvailability(new int[1]);
-            return new WindowsHello();
+            int initial = probeAvailability();
+            WindowsHello hello = new WindowsHello(WindowsHello::probeAvailability,
+                    () -> System.nanoTime() / 1_000_000);
+            hello.cacheAvailability(initial);
+            return hello;
         } catch (UnsatisfiedLinkError unavailable) {
             return null;
         }
@@ -55,20 +67,31 @@ final class WindowsHello implements WindowsHelloBackend {
 
     @Override
     public int availability() {
-        long now = System.nanoTime() / 1_000_000;
-        synchronized (mLock) {
-            if (mAvailabilityAt != 0 && now - mAvailabilityAt < AVAILABILITY_CACHE_MS) {
+        synchronized (mAvailabilityLock) {
+            if (mHasAvailability && mClockMs.getAsLong() - mAvailabilityAt < AVAILABILITY_CACHE_MS) {
                 return mAvailability;
             }
+            return cacheAvailability(mAvailabilityProbe.getAsInt());
         }
-        int[] hr = new int[1];
-        int value = nativeAvailability(hr);
-        if (value < AVAILABLE || value > DEVICE_BUSY) value = FAILED;
-        synchronized (mLock) {
-            mAvailability = value;
-            mAvailabilityAt = now == 0 ? 1 : now;
+    }
+
+    @Override
+    public int refreshAvailability() {
+        synchronized (mAvailabilityLock) {
+            return cacheAvailability(mAvailabilityProbe.getAsInt());
         }
-        return value;
+    }
+
+    /** Called under mAvailabilityLock, or before the backend is published. */
+    private int cacheAvailability(int value) {
+        mAvailability = value >= AVAILABLE && value <= DEVICE_BUSY ? value : FAILED;
+        mAvailabilityAt = mClockMs.getAsLong();
+        mHasAvailability = true;
+        return mAvailability;
+    }
+
+    private static int probeAvailability() {
+        return nativeAvailability(new int[1]);
     }
 
     @Override

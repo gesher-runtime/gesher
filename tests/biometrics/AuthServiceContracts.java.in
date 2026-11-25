@@ -1,6 +1,6 @@
 /* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
 // Host contracts for com.gesher.server.AuthService (ADR 0091). The production
-// AuthService, WindowsHelloBackend and StandIn are inserted unchanged apart from
+// AuthService, WindowsHello, WindowsHelloBackend and StandIn are inserted unchanged apart from
 // their package, imports and public class visibility; everything else here is a
 // boundary stand-in with android-16.0.0_r4's constant values. FakeBackend is an
 // isolated test double: production's only backend is WindowsHello. DeviceCredential (the
@@ -446,6 +446,26 @@ public final class AuthServiceContracts {
         credential = new DeviceCredential(backend, WINDOWS_11, () -> now, millis -> now += millis);
         host.trust = credential;
         service = new AuthService(host, credential);
+    }
+
+    static void windowsAvailabilityCache() {
+        for (int transientState : new int[] {WindowsHelloBackend.DEVICE_BUSY,
+                WindowsHelloBackend.FAILED}) {
+            ArrayDeque<Integer> replies = new ArrayDeque<>(List.of(transientState,
+                    WindowsHelloBackend.AVAILABLE, WindowsHelloBackend.DEVICE_NOT_PRESENT));
+            long[] clockMs = {0};
+            WindowsHello hello = new WindowsHello(replies::removeFirst, () -> clockMs[0]);
+            DeviceCredential device = new DeviceCredential(hello, WINDOWS_11, () -> clockMs[0],
+                    millis -> clockMs[0] += millis);
+            check(device.supported() && device.available() && replies.size() == 1,
+                    "startup retries bypass the production Hello availability cache after "
+                            + transientState);
+            check(hello.availability() == WindowsHelloBackend.AVAILABLE && replies.size() == 1,
+                    "a fresh startup reply updates the normal availability cache");
+            clockMs[0] += 5000;
+            check(hello.availability() == WindowsHelloBackend.DEVICE_NOT_PRESENT && replies.isEmpty(),
+                    "regular availability still refreshes when the cache expires");
+        }
     }
 
     static void busy() {
@@ -915,6 +935,7 @@ public final class AuthServiceContracts {
         unavailable();
         available();
         availability();
+        windowsAvailabilityCache();
         busy();
         confirmCredential();
         ownerWatch();
@@ -994,7 +1015,12 @@ class RemoteException extends Exception {
     private static final long serialVersionUID = 1L;
 }
 
+// StandIn's extension signatures mention Parcel; auth has no extension transactions.
+final class Parcel {
+}
+
 interface IBinder {
+    int FIRST_CALL_TRANSACTION = 1;
     interface DeathRecipient { void binderDied(); }
     void linkToDeath(DeathRecipient recipient, int flags) throws RemoteException;
     boolean unlinkToDeath(DeathRecipient recipient, int flags);
@@ -1141,13 +1167,7 @@ final class Intent {
     int getIntExtra(String name, int fallback) { return extra(name) instanceof Integer i ? i : fallback; }
 }
 
-/** Never reached here: DeviceCredential.system() is the system server's own wiring. */
-final class WindowsHello implements WindowsHelloBackend {
-    static WindowsHello create() { return null; }
-    static int windowsBuild() { return 0; }
-    public int availability() { return FAILED; }
-    public Verification verify(Request request, Completion completion) { throw new IllegalStateException(); }
-}
+// PRODUCTION_WINDOWS_HELLO
 
 // PRODUCTION_BACKEND
 
