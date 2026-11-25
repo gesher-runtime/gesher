@@ -154,8 +154,9 @@ See [updating Gesher](docs/updates.md) for behavior, release packaging and tests
 
 ## License
 
-[Apache License 2.0](LICENSE), the same license as AOSP. See
-[decision 0001](docs/decisions/0001-license.md).
+Proprietary — All Rights Reserved. See [LICENSE](LICENSE). Public redistribution
+with or without modifications is prohibited without prior written permission.
+Third-party components remain under their respective licenses.
 
 ---
 

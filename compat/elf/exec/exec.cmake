@@ -30,6 +30,12 @@ target_compile_options(pipe_native_process_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pipe_native_process_test PRIVATE gesher_exec_spawn)
 add_dependencies(pipe_native_process_test ofd_native_child)
 
+# POSIX FIFOs across real processes (tests/native/fifo_windows_test.cc).
+add_executable(fifo_windows_test ${CMAKE_SOURCE_DIR}/tests/native/fifo_windows_test.cc)
+target_compile_options(fifo_windows_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(fifo_windows_test PRIVATE gesher_exec_spawn)
+add_dependencies(fifo_windows_test ofd_native_child)
+
 add_executable(gesher-exec
   ${CMAKE_CURRENT_LIST_DIR}/gesher_exec.cc
   ${CMAKE_CURRENT_LIST_DIR}/spawn_actions.cc
