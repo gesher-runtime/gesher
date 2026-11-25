@@ -2039,12 +2039,37 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         try {
             boolean cancel = ask.get(WAIT_FOR_UI_MS, TimeUnit.MILLISECONDS);
             if (cancel) GesherWebView.log("shouldOverrideUrlLoading took " + appUrl);
+            if (!cancel && appUrl != null && appUrl.startsWith("intent:")) {
+                String fallback = intentFallbackUrl(appUrl);
+                if (fallback != null) {
+                    GesherWebView.log("intent: fallback -> " + fallback);
+                    mUi.post(() -> mView.loadUrl(fallback));
+                    return true;
+                }
+            }
             return cancel;
         } catch (Exception e) {
             GesherWebView.log("shouldOverrideUrlLoading(" + appUrl + "): no answer (" + e
                     + "); loading it");
             return false;
         }
+    }
+
+    private static String intentFallbackUrl(String url) {
+        try {
+            android.content.Intent parsed = android.content.Intent.parseUri(
+                    url, android.content.Intent.URI_INTENT_SCHEME);
+            String fallback = parsed.getStringExtra("browser_fallback_url");
+            if (fallback != null && (fallback.startsWith("https://") || fallback.startsWith("http://"))) {
+                return fallback;
+            }
+            String data = parsed.getDataString();
+            if (data != null && (data.startsWith("https://") || data.startsWith("http://"))) {
+                return data;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 
     @Override
