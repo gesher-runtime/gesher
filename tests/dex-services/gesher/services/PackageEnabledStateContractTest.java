@@ -149,6 +149,14 @@ public final class PackageEnabledStateContractTest {
             });
             // Unsafe allocation skips the listener list's field initializer.
             if (persistent) {
+                // The manifest-only fixture has no Windows URI associations. Reflect the
+                // field type so the public-API negative control still compiles before it existed.
+                try {
+                    Field handlers = field(PackageManagerService.class, "mUriHandlers");
+                    handlers.set(service, handlers.getType()
+                            .getDeclaredConstructor(java.util.function.Predicate.class)
+                            .newInstance(new Object[] { null }));
+                } catch (NoSuchFieldException beforeUriHandlers) { }
                 try {
                     set(service, "mPackageEventListeners", new CopyOnWriteArrayList<Consumer<Intent>>());
                 } catch (NoSuchFieldException oldImplementation) { }
