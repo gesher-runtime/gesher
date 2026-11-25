@@ -70,6 +70,8 @@ int64_t BoottimeNanos() { return readonly_clock; }
 ResumeSubscription::~ResumeSubscription() = default;
 int ResumeSubscription::Start(void (*)(void*), void*) { return ENOSYS; }
 void ResumeSubscription::Reset() {}
+// This host is never a forked child (gesher/fork.h).
+bool InForkedChild() { return false; }
 }
 
 @TIMER_SOURCE@

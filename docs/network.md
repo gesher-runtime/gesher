@@ -313,8 +313,30 @@ List Manager whether it reaches the internet, is metered (fixed or variable
 cost), roaming or congested. The active network is the one Windows routes
 8.8.8.8 (or 2001:4860:4860::8888) through, a VPN's when one is up.
 `NotifyIpInterfaceChange`, `NotifyUnicastIpAddressChange` and
-`NotifyRouteChange2` wake its watcher (and every 15 s it looks again, for the
-Network List Manager's verdicts); each new snapshot goes to its listeners. Its
+`NotifyRouteChange2` wake its watcher, and so does the Network List Manager's
+`INetworkConnectionCostEvents` (`compat/net/cost_events_win.cc`: a connection's
+cost or data plan changed, which moves no interface, address or route, e.g. the
+"Metered connection" setting of a network that stays connected). Every 15 s it
+also looks again (the fallback where the Network List Manager has no cost event
+connection point). Each new snapshot goes to its listeners; a callback then hears
+`onCapabilitiesChanged` for NET_CAPABILITY_NOT_METERED, and a polling
+`isActiveNetworkMetered` sees the new cost (the watcher owns the shared snapshot while
+there are listeners).
+
+Unknown cost does not establish that a network is free of usage limits. A missing
+Network List Manager, unmatched adapter, failed cost query, or `UNKNOWN` cost keeps
+the snapshot's metering bit set. Only a successful, explicitly `UNRESTRICTED` result
+without `FIXED` or `VARIABLE` grants `NET_CAPABILITY_NOT_METERED`. This conservative
+classification keeps unmetered-only jobs and downloads waiting when Windows cannot
+confirm the cost; it does not invent a tariff or change the network's transport,
+reachability, or the user's settings. A later confirmed unrestricted result restores
+the capability through the ordinary snapshot update.
+
+`getRestrictBackgroundStatus` is RESTRICT_BACKGROUND_STATUS_DISABLED, as on a device
+without Data Saver: Android's ENABLED means the app is blocked from background data on
+metered networks, which Gesher does not do, so Windows' "Background data" limit
+(`ConnectionCost.BackgroundDataUsageRestricted`) is not reported as it. It should be
+reported only together with that enforcement. Its
 binder interface is `com.gesher.net.IConnectivity` (written as AIDL would
 generate it).
 
@@ -372,17 +394,36 @@ processes of packages without it; gesher-app applies it in its own process
   every process serves itself with `WinHttpGetProxyForUrl` (Windows fetches and runs the
   script, in process). `ConnectivityManager.getDefaultProxy()` and `getProxyForNetwork`
   return it.
+- **Static SOCKS5**: Windows' `socks=host:port` / `socks5=host:port` entries and
+  Gesher's `socks5://host:port` setting configure Java's `socksProxyHost`,
+  `socksProxyPort`, and version 5. `socks://`, `socks=` and `socks5=` are accepted
+  aliases for Gesher's setting; a missing port defaults to 1080. IPv6 endpoints
+  use brackets, for example `socks5://[::1]:1080`. Explicit ports must be decimal
+  numbers from 1 to 65535; credentials and malformed endpoints are rejected.
+  HTTP clients that consult `ProxySelector`, including HttpURLConnection and
+  OkHttp, use SOCKS when no HTTP proxy is selected. An explicit HTTP proxy and a
+  PAC script retain precedence. Windows' explicit hostname/wildcard exclusions
+  are retained for HTTP and HTTPS, including the framework's repeated proxy
+  setup when an app binds; libcore's normal loopback exclusions remain enabled.
+  The existing `<local>` limitation above also applies here. Changing to HTTP,
+  PAC or direct clears the previous SOCKS properties. Android's ordinary
+  `new Socket()` does not consult the default selector; apps that use an explicit
+  SOCKS `Proxy` can still do so. This is not system-wide native-socket tunneling.
+  `ProxyInfo` describes HTTP/PAC only, so a SOCKS-only setting has no HTTP proxy
+  descriptor.
 - **Gesher's own proxy**, over Windows' settings (`com.gesher.net.ProxySetting`): for every
   app or for one package, saved in `<data>/system/proxy.properties` by
-  `gesher-app proxy [PACKAGE] host:port|direct|windows` or in the control panel ("Proxy for
+  `gesher-app proxy [PACKAGE] host:port|socks5://host:port|direct|windows` or in the control panel ("Proxy for
   every app" above the app list, and each app's "Proxy" button, where "Same as every app"
   removes the package's own setting) (no argument shows them; `direct`
   is no proxy; `windows` for a package is Windows' settings over every app's setting), or for
   one launch (`gesher-app launch PACKAGE --proxy host:port`). The system server gives an app
   process its setting (the launch's, else the package's, else every app's) as
-  `$GESHER_PROXY` when it starts it, with `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for HTTP
-  clients that read those (Dart's HttpClient: Flutter apps); `WindowsProxy` then takes it
-  instead of Windows' settings (an HTTP proxy server, with localhost, 127.0.0.1 and [::1] left out) and does not
+  `$GESHER_PROXY` when it starts it, with `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` for
+  clients that read those. SOCKS settings keep their `socks5://` scheme and also
+  set `ALL_PROXY`; native-client support for that scheme varies. HTTP/direct
+  settings clear an inherited `ALL_PROXY`. `WindowsProxy` takes the explicit
+  setting instead of Windows' settings (with localhost, 127.0.0.1 and [::1] left out) and does not
   follow Windows' changes. A running app keeps its proxy until its process ends: reopening
   its window or an Activity can reuse that process, so a changed setting needs the app
   closed completely (or the device stopped) and started again, as the control panel says.
@@ -400,6 +441,11 @@ processes of packages without it; gesher-app applies it in its own process
   `releaseNetworkRequest`/`unregisterNetworkCallback(PendingIntent)` end them.
 - Tests: tests/windows/tracks/54-web3.ps1 (web3app.apk's NetActivity on the Gesher device,
   with Windows' settings set to the test's proxy, then to a PAC script, and restored).
+  Track `56-net.ps1` runs ProxySettingsRuntimeTest's production SOCKS configuration
+  and real loopback SOCKS5/HTTP exchange on ART. `tests/host-net-proxy/run.py` runs the
+  same wire/lifecycle corpus plus parser, environment and persistence checks on
+  a host JVM with the actual patched Android Proxy setter. Host checks do not
+  establish Windows/ART or WinHTTP/PAC execution.
 
 ## Tests
 

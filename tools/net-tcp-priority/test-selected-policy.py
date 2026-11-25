@@ -265,7 +265,7 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # then EVERY earlier preservation assertion below still runs on its result.
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
-OFD_QUALIFICATION_SHA256 = '3a8ba7e0f222aae2dbae88e7077e149e8a477a0cceb2e0ff720e0844c1c6d7d5'
+OFD_QUALIFICATION_SHA256 = 'b009b50f04a8e076bd89527a7237da02f2f547d8e41ab88e2841aea2b9e61d15'
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -273,7 +273,7 @@ OFD_QUALIFICATION_SHA256 = '3a8ba7e0f222aae2dbae88e7077e149e8a477a0cceb2e0ff720e
 # qualifies Windows execution nor replaces review of the production delta.
 SHARED_STDIO_BASE = '6d7638b789e21cba6270c1dbfabe5091680c4100'
 SHARED_STDIO_FEATURE_HEAD = 'de1e43c391275137c7b7b25dc170892684d55b5e'
-SHARED_STDIO_TRANSITION_SHA256 = '93519e62b0ffbb4306a7460cc9c7283680355b6e98b5652fb71dcd3ad5da4a49'
+SHARED_STDIO_TRANSITION_SHA256 = '8e28669c6d0d077f330d00191846c9b73e40afa12bde0da6ad0bbabd6203f013'
 SHARED_STDIO_PATHS = (
  'compat/bionic/stdio_bionic.cc',
  'compat/posix/include/gesher/stdio.h',
@@ -328,7 +328,7 @@ def preceding_shared_stdio_sources(qualification):
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
 # the original OFD receipt and every one of its hashes remain unchanged below.
 # This source qualification grants no supplier, controller or runtime approval.
-PROPERTY_REVISION_SHA256 = '585710b140ba0236108dd859575bf45665b8ff4204cef5e77503427b93b7178b'
+PROPERTY_REVISION_SHA256 = '2a4fd531e6609b7705710c212d7772e1e94c41d3618323f5641852fb62fe4c24'
 PROPERTY_REVISION_HEADER_SHA256 = '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3'
 PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27'
 # #421 makes the property area's build.prop loader keep ro.opengles.version only
@@ -336,7 +336,7 @@ PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf
 # one filter line in Initial(). Reverse only that exact transition to the bytes
 # PROPERTY_REVISION_SHA256 pins, then the NATIVE-13 transition below as before.
 # This source qualification grants no supplier, controller or runtime approval.
-GLES_PROPERTY_SHA256 = 'a48210e7a649d4485db01d9cddfa31af62c01cfbc206d57acb6483f177c323eb'
+GLES_PROPERTY_SHA256 = '4d7926dd316851b91bd45620a967da119b54e2408c44e351303ab937866f440c'
 GLES_PROPERTY_PATCH = 'tools/net-tcp-priority/qualified/gles-property-source.patch'
 GLES_PROPERTY_PATCH_SHA256 = '72a6c1c9ba827072ba13c9aac32774e4dcda74260d54f8853e25ae7971be06f6'
 def preceding_gles_property_source():
@@ -380,7 +380,7 @@ def preceding_logging_property_source():
 # This source qualification grants no supplier, controller or runtime approval.
 MEMFD_LEASE_QUALIFICATION='tools/net-tcp-priority/qualified/memfd-lease-source.json'
 MEMFD_LEASE_PATCH='tools/net-tcp-priority/qualified/memfd-lease-source.patch'
-MEMFD_LEASE_QUALIFICATION_SHA256 = '09c88c795011c19d83962f9c6f9e216a61fd296af84c737ee806486434a226ff'
+MEMFD_LEASE_QUALIFICATION_SHA256 = 'f80baede63b053f6b4a7d845a94f83b31a6e45c8129746ca1a5b85cd902f9443'
 MEMFD_LEASE_BASELINE='e074b67b2f83ce9128c11713171329e9fbbf6739'
 MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
 def preceding_memfd_lease_sources():
@@ -509,6 +509,32 @@ def preceding_ofd_sources():
      actual=actual.replace(after,before,1)
    assert actual==expected,(path,marker)
  return previous
+# Guest fork (ADR 0092) registers two fd.cc locks and one winsock.cc lock in
+# its fork set. Each file's one exact addition at its end, and nothing else, is
+# removed before the reviewed hunks and every byte check below run on the result.
+FORK_LOCK_ADDITIONS={
+ 'compat/posix/src/fd.cc':(b'''
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the socket table and descriptor waiters.
+GESHER_FORK_LOCK(gesher::kForkOrderDescriptors, std::mutex, gesher::table_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, waiters_mutex);
+#endif
+''',),
+ 'compat/posix/src/winsock.cc':(b'''
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the local IPv4 address cache recvmsg's IP_PKTINFO reads.
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::ws::LocalAddressCache().mutex);
+#endif
+''',),
+}
 # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
 # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
 # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
@@ -517,7 +543,7 @@ def preceding_ofd_sources():
 # checkpoint's bytes. Any other change fails here as before.
 REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
 REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
-REVIEWED_PATCH_SHA256='2a768b3c11112a2fd6d7bd378953aa44efc77984941b3e498b4aa4bd2694bf4e'
+REVIEWED_PATCH_SHA256='ee4583db58b83515430b5a4333cb95d3ef037ddc5731f5ad0f7958ba858a8e55'
 def reviewed(path,actual):
  raw=(ROOT/REVIEWED_PATCH).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
@@ -558,6 +584,9 @@ def check():
          CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
   expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
   actual=preceding.get(path,(ROOT/path).read_bytes())
+  for addition in FORK_LOCK_ADDITIONS.get(path,()):
+   assert actual.count(addition)==1 and actual.endswith(addition),path
+   actual=actual[:-len(addition)]
   if path=='compat/posix/src/winsock.cc':
    assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
    actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
