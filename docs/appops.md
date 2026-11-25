@@ -79,10 +79,12 @@ runtime-only protection, and compatibility flags control that grant's AppOps
 access. As in AOSP `restorePermissionState`, that grant also covers restricted
 permissions, exempt or not, so `checkPermission` reports it; the restriction and
 the review withhold only its AppOp. A restricted permission's legacy grant gets
-no AppOp while the restriction applies or while it carries `REVIEW_REQUIRED`
-(AOSP `PermissionPolicyService` leaves the AppOp of a permission under review
-ungranted, and PermissionChecker then soft-denies). Gesher has no review screen,
-so an exemption never makes such a grant effective until the system clears
+no AppOp while the restriction applies or while it carries `REVIEW_REQUIRED`.
+AOSP `PermissionPolicyService` leaves the AppOp of a permission under review
+untouched and instead gates the app through the permission review screen before
+it runs. Gesher has no review screen, so it withholds the AppOp as the stand-in
+for that gate (PermissionChecker then soft-denies), and an exemption never makes
+such a grant effective until the system clears
 `REVIEW_REQUIRED`, and dropping the restriction of a legacy app's permission at
 admission or republication requires that review again. The minimum target SDK is computed separately for each permission from
 its actual requesters. A legacy shared-UID member that does not request a

@@ -454,21 +454,25 @@ final class Installer {
      * version code.
      */
     synchronized String[] install(String apk) throws Exception {
-        return install(apk, null, null, null);
+        return install(apk, null, null);
     }
 
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
             PackageInstallSource installSource) throws Exception {
-        return install(apk, sessionMetadata, installSource, null);
+        return install(apk, sessionMetadata, installSource, null, null);
     }
 
     /**
      * Server-owned immutable session metadata, copied before package publication.
      * {@code restrictedAllowlist} is the request's restricted-permission allowlist; null is
      * AOSP's default INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS (as {@code pm install}).
+     * {@code authorize}, when present, rechecks the app installer's source access before
+     * the commit (see {@link #commitAuthorized}).
      */
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
-            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist) throws Exception {
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize) throws Exception {
+        if (authorize != null) authorize.run();
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
         recoverRemovals();
@@ -479,7 +483,8 @@ final class Installer {
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             ContactsProviderSupport.checkPackageAdmission(parsed);
-            return unchanged(apk, recorded.packageName, parsed, recorded, null, restrictedAllowlist);
+            return unchanged(apk, recorded.packageName, parsed, recorded, null, restrictedAllowlist,
+                    authorize);
         }
         File tempDir = null;
         File pendingCode = null;
@@ -566,7 +571,7 @@ final class Installer {
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
                 return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
-                        installSource, restrictedAllowlist);
+                        installSource, restrictedAllowlist, authorize);
             }
             int n = 1;
             if (old != null) {
@@ -655,18 +660,20 @@ final class Installer {
                 }
                 installed.setSystemAddon(true);
             }
-            // The incoming manifest cannot authorize moving an older app's data.
-            // Boot preparation used the committed manifest before any update;
-            // changing defaultToDeviceProtectedStorage later does not migrate CE.
-            installed.prepareInstallDataDirectories(old != null || previous != null);
-            // Keep the running generation until parsing and native extraction succeed.
-            if (old != null || previous != null) mAtm.forceStopPackage(pkg);
-            if (previous != null && !previous.hasVerifiedSigningIdentity()) {
-                mPm.permissions().forgetPackage(pkg);
-                NotificationManagerService notifications = NotificationManagerService.sLast;
-                if (notifications != null) notifications.packageRemoved(pkg);
-            }
-            publishInstalled(entry, installed);
+            commitAuthorized(authorize, () -> {
+                // The incoming manifest cannot authorize moving an older app's data.
+                // Boot preparation used the committed manifest before any update.
+                installed.prepareInstallDataDirectories(old != null || previous != null);
+                // Keep the running generation until parsing and native extraction succeed.
+                if (old != null || previous != null) mAtm.forceStopPackage(pkg);
+                if (previous != null && !previous.hasVerifiedSigningIdentity()) {
+                    mPm.permissions().forgetPackage(pkg);
+                    NotificationManagerService notifications = NotificationManagerService.sLast;
+                    if (notifications != null) notifications.packageRemoved(pkg);
+                }
+                publishInstalled(entry, installed);
+                return null;
+            });
             if (old != null && !old.codePath.equals(entry.codePath)) {
                 delete(new File(old.codePath));
             }
@@ -687,6 +694,20 @@ final class Installer {
             }
             if (tempDir != null) deleteTree(tempDir);
         }
+    }
+
+    /**
+     * App installers enter the commit only after checking source access. Mode changes wait
+     * until that commit finishes so an access denial cannot stop the existing target.
+     * Host installs use the original publication path.
+     */
+    private <T> T commitAuthorized(Runnable authorize,
+            java.util.concurrent.Callable<T> publication) throws Exception {
+        if (authorize == null) return publication.call();
+        return mPm.appOps().withInstallSourceMode(() -> {
+            synchronized (mPm) { authorize.run(); }
+            return publication.call();
+        });
     }
 
     /** Owner creation can fail; finish it before committing the installed registry. */
@@ -731,53 +752,59 @@ final class Installer {
 
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
     private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
-            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist) throws Exception {
-        Entry entry = old.withInstallSource(installSource);
-        SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
-                + old.codePath + ")");
-        // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
-        boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
-        boolean recompile = libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile();
-        if (recompile) {
-            if (libraryChange) {
-                mAtm.forceStopPackage(pkg);
-                SystemServer.log("install " + pkg + ": shared-library context/content changed");
-            }
-            Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-        }
-        // A cache-only rebuild leaves attached processes and session handles valid.
-        // Replacing the PM object would retire their identity without changing code.
-        if (recompile && (libraryChange || mPm.get(pkg) == null)) {
-            ApkPackage installed = open(entry);
-            // Only an explicit session reinstall is an install request (see below).
-            if (installSource != null) installed.setRestrictedPermissionAllowlist(restrictedAllowlist);
-            ApkPackage previous = mPm.get(pkg);
-            if (previous != null && previous.isSystemAddon()) {
-                if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
-                    throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize) throws Exception {
+        String[] result = commitAuthorized(authorize, () -> {
+            Entry entry = old.withInstallSource(installSource);
+            SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
+                    + old.codePath + ")");
+            // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
+            boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
+            boolean recompile = libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile();
+            if (recompile) {
+                if (libraryChange) {
+                    mAtm.forceStopPackage(pkg);
+                    SystemServer.log("install " + pkg + ": shared-library context/content changed");
                 }
-                installed.setSystemAddon(true);
+                Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
             }
-            installed.prepareInstalledDataDirectories();
-            if (entry != old) publishInstalled(entry, installed);
-            else mPm.add(installed, this);
-        } else {
-            if (entry != old) {
-                // An explicit session reinstall can change attribution even when code bytes
-                // are unchanged. A direct host launch of the same file keeps the old record.
-                synchronized (mPm) {
-                    persistInstallSource(mPm.get(pkg), entry.installSource);
+            // A cache-only rebuild leaves attached processes and session handles valid.
+            // Replacing the PM object would retire their identity without changing code.
+            if (recompile && (libraryChange || mPm.get(pkg) == null)) {
+                ApkPackage installed = open(entry);
+                // Only an explicit session reinstall is an install request (see below).
+                if (installSource != null) installed.setRestrictedPermissionAllowlist(restrictedAllowlist);
+                ApkPackage previous = mPm.get(pkg);
+                if (previous != null && previous.isSystemAddon()) {
+                    if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
+                        throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+                    }
+                    installed.setSystemAddon(true);
                 }
+                installed.prepareInstalledDataDirectories();
+                if (entry != old) publishInstalled(entry, installed);
+                else mPm.add(installed, this);
+            } else {
+                if (entry != old) {
+                    // An explicit session reinstall can change attribution even when code bytes
+                    // are unchanged. A direct host launch of the same file keeps the old record.
+                    synchronized (mPm) {
+                        persistInstallSource(mPm.get(pkg), entry.installSource);
+                    }
+                }
+                // AOSP reinstalls even identical code; an explicit session reinstall still adds
+                // its restricted-permission allowlist (onPackageInstalled) to the existing state.
+                // Launching an installed APK file again is not a new install request.
+                ApkPackage current = installSource == null ? null : mPm.get(pkg);
+                if (current != null) mPm.permissions().addInstallerAllowlist(current, restrictedAllowlist);
             }
-            // AOSP reinstalls even identical code; an explicit session reinstall still adds
-            // its restricted-permission allowlist (onPackageInstalled) to the existing state.
-            // Launching an installed APK file again is not a new install request.
-            ApkPackage current = installSource == null ? null : mPm.get(pkg);
-            if (current != null) mPm.permissions().addInstallerAllowlist(current, restrictedAllowlist);
-        }
+            return new String[] {pkg, "unchanged", old.codePath,
+                    String.valueOf(parsed.versionCode())};
+        });
+        // After the authorized commit releases the AppOps mode lock (a policy write is
+        // never flushed under an operation monitor), still before the result is reported.
         persistPermissionAdmission();
-        return new String[] {pkg, "unchanged", old.codePath,
-                String.valueOf(parsed.versionCode())};
+        return result;
     }
 
     /** {@code file}'s line in install-sources.list: path, size, time, .dm size and time. */

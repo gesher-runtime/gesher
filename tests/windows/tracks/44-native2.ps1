@@ -208,6 +208,15 @@ foreach ($a in $abis) {
   Check "native2 ($tag): libc++ (iostreams, locale, regex, threads, futures, shared_mutex, exceptions, chrono, std::filesystem)" {
     Elf 'libcxx2_test' @((NoDrive $work))
   } @('libcxx2_test: all passed')
+
+  Check "native2 ($tag): libstdc++.so's failed operator new and pure virtual call raise SIGABRT to the app's handler" {
+    $o = (Elf 'libstdcxx_fatal_test' @('new-fails') | Out-String)
+    $c1 = $LASTEXITCODE
+    $o += (Elf 'libstdcxx_fatal_test' @('pure-virtual') | Out-String)
+    if ($c1 -ne 0) { $global:LASTEXITCODE = $c1 }
+    $o
+  } @('new failed to allocate', 'libstdcxx_fatal_test: SIGABRT handler ran (new-fails)',
+      'Pure virtual function called', 'libstdcxx_fatal_test: SIGABRT handler ran (pure-virtual)')
 }
 
 # --- 3. Through gesher-app: the test APKs, single process and on the device --------

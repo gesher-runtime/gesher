@@ -160,9 +160,11 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     /**
      * Android 16 PermissionFlags distinguishes the permission grant from its AppOps grant.
      * {@code reviewPending}: a restricted permission's legacy grant still carries
-     * REVIEW_REQUIRED. AOSP keeps that grant (checkPermission) but PermissionPolicyService
-     * leaves its AppOp ungranted until the user reviews the app; Gesher has no review screen,
-     * so the AppOp stays withheld until the review flag is cleared, whatever the exemptions.
+     * REVIEW_REQUIRED. AOSP keeps that grant (checkPermission); its PermissionPolicyService
+     * leaves the AppOp of a permission under review untouched and gates the app through the
+     * permission review screen instead. Gesher has no review screen, so it withholds the
+     * AppOp as the stand-in for that gate until the review flag is cleared, whatever the
+     * exemptions.
      */
     private record PermissionState(boolean granted, int flags, boolean restricted, boolean reviewPending) {
         PermissionState(boolean granted, int flags, boolean restricted) { this(granted, flags, restricted, false); }
@@ -211,8 +213,9 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      * A dangerous permission's state. LEGACY_GRANTED stays a permission grant, also for a
      * restricted permission (AOSP restorePermissionState always grants a legacy app's
      * permissions); its revocation is represented by REVOKED_COMPAT, so PermissionChecker can
-     * distinguish hard and soft denial. A restriction, and for a restricted permission a
-     * pending review, withhold only the AppOp (AOSP PermissionPolicyService).
+     * distinguish hard and soft denial. A restriction withholds only the AppOp (AOSP
+     * PermissionPolicyService); so does a restricted permission's pending review, Gesher's
+     * stand-in for AOSP's review gate (see PermissionState).
      */
     private static PermissionState dangerousState(PermissionInfo info, int flags, boolean legacy, boolean explicit,
             boolean restricted) {

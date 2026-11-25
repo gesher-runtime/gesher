@@ -668,9 +668,10 @@ public final class RuntimePermissionStateTest {
     /**
      * A legacy (target < 23) requester: AOSP restorePermissionState always grants its
      * permissions, restricted ones included, and expresses the restriction through the
-     * AppOp; PermissionPolicyService leaves a REVIEW_REQUIRED permission's AppOp ungranted
-     * until the user reviews the app. Gesher has no review, so an exemption must never make
-     * a legacy restricted permission effective (AppOp allowed) without the review cleared.
+     * AppOp; PermissionPolicyService leaves a REVIEW_REQUIRED permission's AppOp untouched and
+     * gates the app through the review screen instead. Gesher has no review screen and
+     * withholds the AppOp as the stand-in for that gate, so an exemption must never make a
+     * legacy restricted permission effective (AppOp allowed) without the review cleared.
      */
     private static void legacyRestricted(Harness h) throws Exception {
         final int review = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
@@ -974,6 +975,19 @@ public final class RuntimePermissionStateTest {
         Object previousCenter = center.get(null);
         List<String> centers = new ArrayList<>();
         center.set(null, (java.util.function.Predicate<String>)pkg -> centers.add(String.valueOf(pkg)));
+        // App info for a result opens the Control Center with a SettingsResults token and
+        // answers when the details close (the special app access switches live there).
+        Field centerForResult = field(type("ControlCenter"), "sOpenForResult");
+        Object previousCenterForResult = centerForResult.get(null);
+        List<String> tokens = new ArrayList<>();
+        centerForResult.set(null, java.lang.reflect.Proxy.newProxyInstance(centerForResult.getType().getClassLoader(),
+                new Class<?>[]{centerForResult.getType()}, (proxy, called, args) -> {
+                    if (called.getDeclaringClass() == Object.class) {
+                        return called.getName().equals("equals") ? (Object)(proxy == args[0])
+                                : called.getName().equals("hashCode") ? (Object)System.identityHashCode(proxy) : "opener";
+                    }
+                    centers.add(String.valueOf(args[0])); tokens.add((String)args[1]); return true;
+                }));
         Method start = null;
         for (Method method : h.atm.getClass().getDeclaredMethods()) {
             if (method.getName().equals("start") && method.getParameterCount() == 8) start = method;
@@ -995,10 +1009,15 @@ public final class RuntimePermissionStateTest {
             check(prompts.background.size() == 1 && h.policy.checkPermission(NAME, BACKGROUND) == GRANTED
                     && pending.size() == 1, "App info did not return its result after the background choice");
             h.asApp(() -> status[0] = starter.invoke(h.atm, thread, details, null, NAME, token, null, 122, null));
-            check(centers.equals(List.of(NAME)) && queue.isEmpty() && pending.size() == 2,
+            check(Integer.valueOf(android.app.ActivityManager.START_SUCCESS).equals(status[0])
+                    && centers.equals(List.of(NAME)) && tokens.size() == 1 && queue.isEmpty() && pending.size() == 1,
                     "App info without a pending choice did not keep opening the Control Center");
+            check(h.atm.getClass().getMethod("settingsScreensClosed", String[].class)
+                        .invoke(h.atm, (Object)tokens.toArray(new String[0])).equals(1) && pending.size() == 2,
+                    "App info in the Control Center did not return its result when the details closed");
         } finally {
             center.set(null, previousCenter);
+            centerForResult.set(null, previousCenterForResult);
             requestsField.set(h.atm, previousRequests);
             ((List<Object>)get(h.atm, "mActivities")).remove(activity);
             ((List<Object>)get(h.process, "activities")).remove(activity);

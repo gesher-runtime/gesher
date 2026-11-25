@@ -213,11 +213,13 @@ AOSP:
 An exemption only makes the permission requestable; it never grants it, and the
 user consents to every grant through the dialogs below. Legacy apps (target SDK
 below 23) are the case where Android grants without a request: AOSP gives an
-exempt legacy app its restricted permissions with `REVIEW_REQUIRED`, withholds
-their AppOps and makes the user review the app's permissions before it runs.
-Gesher keeps those legacy grants (`checkPermission` reports them, as on Android)
-but has no such review screen, so their AppOps stay withheld whatever the
-exemptions (also after the migration): the framework soft-denies the access,
+exempt legacy app its restricted permissions with `REVIEW_REQUIRED` and makes
+the user review the app's permissions before it runs (its
+`PermissionPolicyService` leaves their AppOps untouched meanwhile). Gesher keeps
+those legacy grants (`checkPermission` reports them, as on Android) but has no
+such review screen, so it withholds their AppOps as the stand-in for that review
+gate, whatever the exemptions (also after the migration): the framework
+soft-denies the access,
 for example an empty call log. Its unrestricted permissions keep their legacy
 grants and AppOps as before.
 `PackageManager.get/add/removeWhitelistedRestrictedPermission`

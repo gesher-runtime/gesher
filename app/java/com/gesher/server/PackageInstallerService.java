@@ -4,8 +4,13 @@
  */
 package com.gesher.server;
 
+import android.app.ActivityManager;
+import android.app.AppOpsManager;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.IntentSender;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageInstaller;
 import android.content.pm.IPackageInstallerCallback;
 import android.content.pm.IPackageInstallerSession;
@@ -19,6 +24,8 @@ import android.content.pm.parsing.ApkLiteParseUtils;
 import android.content.pm.parsing.result.ParseResult;
 import android.content.pm.parsing.result.ParseTypeImpl;
 import android.graphics.Bitmap;
+import android.os.Binder;
+import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.os.IBinder;
@@ -34,6 +41,9 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
@@ -46,6 +56,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     private static final AtomicInteger TRACE_REMOVALS = new AtomicInteger();
     private static final String REMOVED_SUFFIX = ".removed";
     private static final int MAX_SESSIONS = 16, MAX_OWNER_SESSIONS = 4, MAX_FILES = 64;
+    static final ComponentName CONFIRM_ACTIVITY =
+            new ComponentName("android", "com.gesher.server.InstallConfirmation");
+    private static final String CONFIRMATION_TOKEN = "com.gesher.extra.INSTALL_CONFIRMATION_TOKEN";
     interface Consent { boolean allow(String installer, String target, long version); }
     interface UninstallConsent { boolean allow(String requester, String target, long version); }
     /**
@@ -82,6 +95,14 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
     /** Server-local test injection (tests/dex-services); never exposed through Binder. */
     private volatile DesktopShell mShell = WINDOWS_SHELL;
     private final AtomicInteger mIds = new AtomicInteger(1);
+    private final ScheduledThreadPoolExecutor mConfirmationTimer = confirmationTimer();
+    private static ScheduledThreadPoolExecutor confirmationTimer() {
+        ScheduledThreadPoolExecutor timer = new ScheduledThreadPoolExecutor(1, r -> {
+            Thread t = new Thread(r, "package-install-confirmation"); t.setDaemon(true); return t;
+        });
+        timer.setRemoveOnCancelPolicy(true);
+        return timer;
+    }
     private final Map<Integer, Session> mSessions = new LinkedHashMap<>();
     private final Map<IBinder, CallbackOwner> mCallbacks = new HashMap<>();
     private final Map<String, String> mPendingRemovals = new HashMap<>();
@@ -167,6 +188,64 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         return name;
     }
+    static boolean isConfirmationIntent(Intent intent) {
+        return intent != null && PackageInstaller.ACTION_CONFIRM_INSTALL.equals(intent.getAction())
+                && CONFIRM_ACTIVITY.equals(intent.getComponent());
+    }
+
+    ActivityInfo confirmationInfo() {
+        ActivityInfo info = new ActivityInfo();
+        info.packageName = CONFIRM_ACTIVITY.getPackageName();
+        info.name = CONFIRM_ACTIVITY.getClassName();
+        info.enabled = true;
+        info.exported = true;
+        info.applicationInfo = new ApplicationInfo();
+        info.applicationInfo.packageName = info.packageName;
+        info.applicationInfo.uid = android.os.Process.SYSTEM_UID;
+        info.applicationInfo.enabled = true;
+        return info;
+    }
+
+    int openConfirmation(Intent intent, ActivityTaskManagerService.InstallConfirmationVisit visit,
+            boolean newTask, ApkPackage verifiedCreator, boolean verifiedSystemCreator) {
+        int sessionId = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1);
+        Bundle extras = intent.getExtras();
+        IBinder token = extras == null ? null : extras.getBinder(CONFIRMATION_TOKEN);
+        Session session;
+        synchronized (mSessions) { session = mSessions.get(sessionId); }
+        if (session == null || token == null) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        return session.openConfirmation(intent, token, visit, newTask, verifiedCreator, verifiedSystemCreator);
+    }
+
+    boolean hasSourceConfirmation(ApkPackage source) {
+        synchronized (mSessions) {
+            for (Session session : mSessions.values()) {
+                if (session.ownerCode == source && session.confirmation != null) return true;
+            }
+            return false;
+        }
+    }
+
+    private record PreparedInstall(File frozen, File canonical, String pkg, ApkPackage target,
+            InstalledSplitSet inherited, Set<String> stagedNames, Set<String> stagedSplits, Set<String> removals, long version,
+            // The session's restricted-permission allowlist (null: all), carried unchanged
+            // through a parked confirmation so an opt-out never becomes "allow all".
+            List<String> restrictedAllowlist) {}
+
+    private static final class Confirmation {
+        final IBinder token = new Binder();
+        final IntentSender receiver;
+        final PreparedInstall prepared;
+        ScheduledFuture<?> timeout;
+        boolean opened;
+        ActivityTaskManagerService.InstallConfirmationVisit visit;
+
+        Confirmation(IntentSender receiver, PreparedInstall prepared) {
+            this.receiver = receiver;
+            this.prepared = prepared;
+        }
+    }
+
     boolean isCallingPackage(String packageName) {
         CallerIdentity callers = mCallers;
         if (callers == null || callers.isSystem()) return false;
@@ -248,7 +327,8 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 File stage = Files.createTempDirectory(root.toPath(), "session-").toFile();
                 int id = mIds.getAndIncrement();
                 created = new Session(id, owner, ownerCode, p.appPackageName, p.mode, p.sizeBytes,
-                        PackageInstallSource.category(p.packageSource), !"android".equals(actual), stage,
+                        PackageInstallSource.category(p.packageSource), !"android".equals(actual),
+                        p.requireUserAction == PackageInstaller.SessionParams.USER_ACTION_REQUIRED, stage,
                         restrictedAllowlist(p));
                 mSessions.put(id, created);
             } catch (IOException e) { throw io(); }
@@ -535,11 +615,17 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         });
     }
     private static void result(IntentSender receiver, int id, String pkg, int status, String message) {
+        result(receiver, id, pkg, status, message, null);
+    }
+
+    private static void result(IntentSender receiver, int id, String pkg, int status, String message,
+            Intent continuation) {
         if (receiver == null) return;
         Intent intent = new Intent().putExtra(PackageInstaller.EXTRA_SESSION_ID, id)
                 .putExtra(PackageInstaller.EXTRA_STATUS, status)
                 .putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE, message);
         if (pkg != null) intent.putExtra(PackageInstaller.EXTRA_PACKAGE_NAME, pkg);
+        if (continuation != null) intent.putExtra(Intent.EXTRA_INTENT, continuation);
         try { receiver.getTarget().send(0, intent, null, null, null, null, null); }
         catch (RemoteException | RuntimeException e) {
             SystemServer.log("package install result unavailable: " + e.getClass().getSimpleName());
@@ -579,22 +665,27 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         final long expectedSize, created = System.currentTimeMillis();
         final int packageSource;
         final boolean hasApplicationInitiator;
+        final boolean requestedUserAction;
         final File stage;
         final List<String> restrictedAllowlist; // null: all requested restricted permissions
         final IPackageInstallerSession binder;
         final Map<String, InstallFileBridge> writes = new HashMap<>();
         final Map<String, InstallSessionMetadata.Digests> checksums = new HashMap<>();
         int tracedWrites;
-        boolean sealed, committing, destroyed, writeFailed;
+        boolean sealed, committing, writeFailed;
+        volatile boolean destroyed;
+        private volatile Confirmation confirmation;
         float progress;
         long bytes;
         Session(int id, String owner, ApkPackage code, String pkg, int mode, long size, int packageSource,
-                boolean hasApplicationInitiator, File stage, List<String> restrictedAllowlist) {
+                boolean hasApplicationInitiator, boolean requestedUserAction, File stage,
+                List<String> restrictedAllowlist) {
             this.id = id; this.owner = owner; ownerCode = code; expectedPackage = pkg;
             this.restrictedAllowlist = restrictedAllowlist;
             this.mode = mode; expectedSize = size;
             this.packageSource = packageSource;
             this.hasApplicationInitiator = hasApplicationInitiator;
+            this.requestedUserAction = requestedUserAction;
             this.stage = stage;
             binder = StandIn.of(IPackageInstallerSession.class, this).asInterface();
         }
@@ -721,6 +812,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             int status = PackageInstaller.STATUS_FAILURE_INVALID;
             String pkg = expectedPackage, message = "Invalid APK set";
             File frozen = null;
+            boolean handedOff = false;
             try {
                 frozen = Files.createTempDirectory(stage.toPath().getParent(), "commit-").toFile();
                 File snapshots = new File(frozen, "snapshots");
@@ -833,26 +925,21 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                     }
                     version = first == null ? targetCode.versionCode() : first.getLongVersionCode();
                 }
-                status = PackageInstaller.STATUS_FAILURE_ABORTED; message = "Installation not approved";
-                if (!mConsent.allow(owner, pkg, version)) return;
-                // Resolve inherited paths and publish under the same lock used by
-                // ordinary installs and uninstall. An approval cannot follow a newer code generation.
-                String[] installed;
-                synchronized (mInstaller) {
-                    if (!ownerCurrent() || mPm.get(pkg) != targetCode) throw new SecurityException("Package code changed");
-                    if (inheritsExisting()) {
-                        installedSplits.materialize(canonical, canonicalNames, stagedSplits.keySet(), removals);
-                    }
-                    installed = mInstaller.install(new File(canonical, "base.apk").getPath(),
-                            new InstallSessionMetadata(canonical), PackageInstallSource.fromSession(
-                                    hasApplicationInitiator ? ownerCode : null, packageSource),
-                            restrictedAllowlist);
-                    if (!pkg.equals(installed[0]) || mPm.get(pkg) == null) throw new IllegalStateException("Not published");
+                PreparedInstall prepared = new PreparedInstall(frozen, canonical, pkg, targetCode,
+                        installedSplits, canonicalNames, stagedSplits.keySet(), removals, version,
+                        restrictedAllowlist);
+                int source = installSourceMode();
+                if (source != AppOpsManager.MODE_ALLOWED && source != AppOpsManager.MODE_DEFAULT
+                        && source != AppOpsManager.MODE_ERRORED) {
+                    throw new SecurityException("This package is not an eligible install source");
                 }
-                String[] published = installed;
-                shellStep(published[0], () -> mShell.installed(published[0], published[2],
-                        !"unchanged".equals(published[1])));
-                status = PackageInstaller.STATUS_SUCCESS; message = "Installed";
+                if (source == AppOpsManager.MODE_ALLOWED && trustedInstallSource() && !requestedUserAction) {
+                    handedOff = true;
+                    publish(prepared, receiver, null);
+                } else {
+                    parkConfirmation(prepared, receiver);
+                    handedOff = true;
+                }
             } catch (SecurityException e) {
                 status = PackageInstaller.STATUS_FAILURE_BLOCKED; message = "Package identity or consent changed";
             } catch (PackageParserException e) {
@@ -865,13 +952,180 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             } catch (Exception e) {
                 status = PackageInstaller.STATUS_FAILURE_INVALID; message = "Installation failed: " + e.getClass().getSimpleName();
             } finally {
-                boolean success = status == PackageInstaller.STATUS_SUCCESS;
-                result(receiver, id, pkg, status, message);
-                PackageInstallerService.this.notify(this, c -> c.onSessionFinished(id, success));
-                if (frozen != null) clean(frozen);
-                destroy();
+                if (!handedOff) complete(receiver, pkg, status, message, frozen);
             }
         }
+
+        /** A host or a genuine installer permission is separate from unknown-source access. */
+        private boolean trustedInstallSource() {
+            return "android".equals(owner) || mPm.permissions().checkPermission(owner,
+                    android.Manifest.permission.INSTALL_PACKAGES) == PackageManager.PERMISSION_GRANTED;
+        }
+
+        private int installSourceMode() {
+            if (destroyed || mPm.get(owner) != ownerCode || mPm.isRemovalPending(owner)) {
+                return AppOpsManager.MODE_IGNORED;
+            }
+            if (trustedInstallSource()) return AppOpsManager.MODE_ALLOWED;
+            if (ownerCode == null || !SpecialAccess.installSourceEligible(ownerCode)) {
+                return AppOpsManager.MODE_IGNORED;
+            }
+            return mPm.appOps().checkRawMode(AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
+                    ownerCode.uid(), owner);
+        }
+
+        private void parkConfirmation(PreparedInstall prepared, IntentSender receiver) {
+            Confirmation pending = new Confirmation(receiver, prepared);
+            Bundle extras = new Bundle();
+            extras.putBinder(CONFIRMATION_TOKEN, pending.token);
+            Intent action = new Intent(PackageInstaller.ACTION_CONFIRM_INSTALL)
+                    .setComponent(CONFIRM_ACTIVITY)
+                    .putExtra(PackageInstaller.EXTRA_SESSION_ID, id)
+                    .putExtras(extras);
+            synchronized (this) {
+                if (!ownerCurrent()) throw new SecurityException("Installer changed");
+                confirmation = pending;
+                pending.timeout = mConfirmationTimer.schedule(
+                        () -> finishConfirmation(pending, false, true),
+                        SettingsResults.TIMEOUT_MS, TimeUnit.MILLISECONDS);
+                // Publish before any terminal status on the same callback queue, including
+                // removal of the installer immediately after it committed this session.
+                mCallbackExecutor.execute(() -> result(receiver, id, prepared.pkg,
+                        PackageInstaller.STATUS_PENDING_USER_ACTION,
+                        "The user must confirm this installation", action));
+            }
+        }
+
+        private int openConfirmation(Intent intent, IBinder token,
+                ActivityTaskManagerService.InstallConfirmationVisit visit, boolean newTask,
+                ApkPackage verifiedCreator, boolean verifiedSystemCreator) {
+            // A verified Activity PendingIntent acts as its installed creator, not the
+            // process that triggered it. A direct start authenticates its Binder caller.
+            boolean ownsAction = verifiedSystemCreator ? "android".equals(owner)
+                    : verifiedCreator != null ? ownerCode == verifiedCreator : owner.equals(caller());
+            if (!ownsAction) throw new SecurityException("Foreign install confirmation");
+            Confirmation pending;
+            synchronized (this) {
+                pending = confirmation;
+                if (!ownerCurrent() || pending == null || !pending.token.equals(token)) {
+                    return ActivityManager.START_INTENT_NOT_RESOLVED;
+                }
+                if (pending.opened) return ActivityManager.START_CANCELED;
+                pending.visit = visit;
+                pending.opened = true;
+                pending.timeout.cancel(false);
+            }
+            boolean open = false;
+            try {
+                if (newTask) visit.detachResult();
+                int mode = installSourceMode();
+                if (mode == AppOpsManager.MODE_ALLOWED) {
+                    pending.visit.cover(intent);
+                    finishConfirmation(pending, true, false);
+                    return ActivityManager.START_SUCCESS;
+                }
+                open = (mode == AppOpsManager.MODE_DEFAULT || mode == AppOpsManager.MODE_ERRORED)
+                        && mAtm.openInstallSourceSettings(owner, intent, pending.visit,
+                            closed -> finishConfirmation(pending,
+                                    closed && installSourceMode() == AppOpsManager.MODE_ALLOWED,
+                                    false));
+                // A genuine action started even if its host UI could not continue. Finish
+                // its Activity and the install separately, both as cancelled.
+                return ActivityManager.START_SUCCESS;
+            } finally {
+                if (!open) finishConfirmation(pending, false, false);
+            }
+        }
+
+        private void finishConfirmation(Confirmation pending, boolean allowed, boolean onlyUnopened) {
+            synchronized (this) {
+                if (confirmation != pending || (onlyUnopened && pending.opened)) return;
+                confirmation = null;
+                pending.timeout.cancel(false);
+            }
+            mCallbackExecutor.execute(() -> {
+                if (!allowed) {
+                    if (pending.visit != null) pending.visit.finish(false);
+                    complete(pending.receiver, pending.prepared.pkg,
+                            PackageInstaller.STATUS_FAILURE_ABORTED,
+                            "Install source access was not approved", pending.prepared.frozen);
+                    return;
+                }
+                try {
+                    mExecutor.execute(() -> publish(pending.prepared, pending.receiver, pending.visit));
+                } catch (RuntimeException rejected) {
+                    if (pending.visit != null) pending.visit.finish(false);
+                    complete(pending.receiver, pending.prepared.pkg,
+                            PackageInstaller.STATUS_FAILURE_ABORTED,
+                            "Install confirmation could not continue", pending.prepared.frozen);
+                }
+            });
+        }
+
+        private void publish(PreparedInstall prepared, IntentSender receiver,
+                ActivityTaskManagerService.InstallConfirmationVisit visit) {
+            int status = PackageInstaller.STATUS_FAILURE_ABORTED;
+            String message = "Installation not approved";
+            try {
+                verifyInstallSource();
+                if (!mConsent.allow(owner, prepared.pkg, prepared.version)) return;
+                verifyInstallSource();
+                // Confirming the user's Activity is distinct from the later install status.
+                if (visit != null) visit.finish(true);
+                String[] installed;
+                synchronized (mInstaller) {
+                    verifyInstallSource();
+                    if (!ownerCurrent() || mPm.get(prepared.pkg) != prepared.target) {
+                        throw new SecurityException("Package code changed");
+                    }
+                    if (inheritsExisting()) {
+                        prepared.inherited.materialize(prepared.canonical, prepared.stagedNames,
+                                prepared.stagedSplits, prepared.removals);
+                    }
+                    installed = mInstaller.install(new File(prepared.canonical, "base.apk").getPath(),
+                            new InstallSessionMetadata(prepared.canonical), PackageInstallSource.fromSession(
+                                    hasApplicationInitiator ? ownerCode : null, packageSource),
+                            prepared.restrictedAllowlist, this::verifyInstallSource);
+                    if (!prepared.pkg.equals(installed[0]) || mPm.get(prepared.pkg) == null) {
+                        throw new IllegalStateException("Not published");
+                    }
+                }
+                shellStep(installed[0], () -> mShell.installed(installed[0], installed[2],
+                        !"unchanged".equals(installed[1])));
+                status = PackageInstaller.STATUS_SUCCESS;
+                message = "Installed";
+            } catch (SecurityException e) {
+                status = PackageInstaller.STATUS_FAILURE_BLOCKED;
+                message = "Package identity or consent changed";
+            } catch (PackageParserException e) {
+                status = android.content.pm.PackageManager.installStatusToPublicStatus(e.error);
+                message = e.getMessage();
+            } catch (IOException e) {
+                status = PackageInstaller.STATUS_FAILURE_STORAGE;
+                message = "Installation storage failure";
+            } catch (Exception e) {
+                status = PackageInstaller.STATUS_FAILURE_INVALID;
+                message = "Installation failed: " + e.getClass().getSimpleName();
+            } finally {
+                if (visit != null) visit.finish(false);
+                complete(receiver, prepared.pkg, status, message, prepared.frozen);
+            }
+        }
+
+        private void verifyInstallSource() {
+            if (installSourceMode() != AppOpsManager.MODE_ALLOWED) {
+                throw new SecurityException("Install source is no longer authorized");
+            }
+        }
+
+        private void complete(IntentSender receiver, String pkg, int status, String message, File frozen) {
+            boolean success = status == PackageInstaller.STATUS_SUCCESS;
+            result(receiver, id, pkg, status, message);
+            PackageInstallerService.this.notify(this, c -> c.onSessionFinished(id, success));
+            if (frozen != null) clean(frozen);
+            destroy();
+        }
+
         synchronized boolean ownerCurrent() { return !destroyed && mPm.get(owner) == ownerCode; }
         @Override public synchronized void abandon() {
             checkOwner(); if (committing) throw new IllegalStateException("Commit active");
@@ -879,6 +1133,17 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         synchronized void destroy() {
             destroyed = true;
+            Confirmation retired = confirmation;
+            confirmation = null;
+            if (retired != null) {
+                retired.timeout.cancel(false);
+                mCallbackExecutor.execute(() -> {
+                    if (retired.visit != null) retired.visit.finish(false);
+                    complete(retired.receiver, retired.prepared.pkg,
+                            PackageInstaller.STATUS_FAILURE_BLOCKED,
+                            "Install source retired", retired.prepared.frozen);
+                });
+            }
             for (InstallFileBridge bridge : new ArrayList<>(writes.values())) bridge.forceClose();
             synchronized (mSessions) { mSessions.remove(id); }
             clean(stage);
