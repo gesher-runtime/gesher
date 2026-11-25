@@ -323,6 +323,15 @@ connection point). Each new snapshot goes to its listeners; a callback then hear
 `isActiveNetworkMetered` sees the new cost (the watcher owns the shared snapshot while
 there are listeners).
 
+Unknown cost does not establish that a network is free of usage limits. A missing
+Network List Manager, unmatched adapter, failed cost query, or `UNKNOWN` cost keeps
+the snapshot's metering bit set. Only a successful, explicitly `UNRESTRICTED` result
+without `FIXED` or `VARIABLE` grants `NET_CAPABILITY_NOT_METERED`. This conservative
+classification keeps unmetered-only jobs and downloads waiting when Windows cannot
+confirm the cost; it does not invent a tariff or change the network's transport,
+reachability, or the user's settings. A later confirmed unrestricted result restores
+the capability through the ordinary snapshot update.
+
 `getRestrictBackgroundStatus` is RESTRICT_BACKGROUND_STATUS_DISABLED, as on a device
 without Data Saver: Android's ENABLED means the app is blocked from background data on
 metered networks, which Gesher does not do, so Windows' "Background data" limit
