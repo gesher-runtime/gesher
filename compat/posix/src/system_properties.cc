@@ -5,6 +5,7 @@
 
 #include <gesher/system_properties.h>
 #include <gesher/environment.h>
+#include <gesher/gles_version_property.h>
 
 #include <windows.h>
 
@@ -19,6 +20,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include <gesher/device_identity.h>
 
 namespace gesher::properties {
 namespace {
@@ -236,12 +239,28 @@ Snapshot Initial() {
          std::pair{"ro.build.version.sdk", "36"}, {"ro.build.version.release", "16"},
          {"ro.build.version.codename", "REL"}, {"ro.product.cpu.abi", "x86_64"},
          {"ro.product.cpu.abilist", "x86_64,arm64-v8a"}, {"ro.product.cpu.abilist64", "x86_64,arm64-v8a"},
-         {"ro.product.manufacturer", "gesher"}, {"ro.product.model", "Gesher"},
          {"ro.product.brand", "gesher"}, {"ro.hardware", "gesher"}, {"ro.debuggable", "0"}}) {
     values[pair.first] = {pair.second, 1};
   }
+  // The PC's manufacturer and model (SMBIOS), whatever build.prop says and
+  // wherever ANDROID_ROOT is: the one source of Build.MANUFACTURER/MODEL
+  // (docs/device-identity.md). Applied first and again after build.prop.
+  const auto identity = device_identity::Properties(device_identity::Read());
+  auto pc_identity = [&] {
+    for (const auto& [name, value] : identity) {
+      if (Valid(name, value)) values[name] = {value, 1};
+    }
+  };
+  pc_identity();
   std::wstring root = Environment(L"ANDROID_ROOT");
   if (root.empty()) return values;
+  // /mnt/<drive>/... is that drive (ADR 0045), as POSIX open() reads the same
+  // build.prop for dalvikvm and gesher-app.
+  if (root.size() >= 6 && root.compare(0, 5, L"/mnt/") == 0 &&
+      ((root[5] >= L'a' && root[5] <= L'z') || (root[5] >= L'A' && root[5] <= L'Z')) &&
+      (root.size() == 6 || root[6] == L'/')) {
+    root = std::wstring(1, static_cast<wchar_t>(root[5] & ~0x20)) + L":" + root.substr(6);
+  }
   std::string data;
   if (!Read(FullPath(root + L"/build.prop"), &data, true)) return values;
   size_t at = 0;
@@ -256,8 +275,12 @@ Snapshot Initial() {
     bool optional = !key.empty() && key.back() == '?';
     if (optional) key = Trim(key.substr(0, key.size() - 1));
     std::string value = Trim(line.substr(equal + 1));
+    // The rule every build.prop loader shares: ro.opengles.version only as a
+    // version Gesher serves, else unset so the probe declares it.
+    if (!ServedBuildProperty(key, value)) continue;
     if (Valid(key, value) && (!optional || !values.count(key))) values[key] = {std::move(value), 1};
   }
+  pc_identity();
   return values;
 }
 bool Refresh(Area* area) {
