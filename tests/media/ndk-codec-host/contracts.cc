@@ -185,7 +185,8 @@ void VideoFrame::Allocate(int w, int h) {
 }
 void RgbaToI420(const uint32_t*, int, int, VideoFrame*) {}
 void Nv12ToI420(const uint8_t*, int, int, VideoFrame*) {}
-int RenderFrame(ANativeWindow*, const VideoFrame&, int64_t, int) { return 0; }
+// Match video_decoder.h exactly, so a mismatched engine overload fails to link.
+int RenderFrame(ANativeWindow*, const VideoFrame&, std::optional<int64_t>, int) { return 0; }
 }  // namespace gesher::media
 extern "C" void ANativeWindow_acquire(ANativeWindow* w) {
   w->incStrong(nullptr);

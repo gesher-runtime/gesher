@@ -29,10 +29,6 @@ void ANativeWindow_release(ANativeWindow* window);
 
 namespace gesher::media {
 
-// Implemented in compat/media/video/render.cc.
-int RenderFrame(ANativeWindow* window, const VideoFrame& frame, int64_t timestamp_ns,
-                int video_scaling_mode);
-
 namespace {
 
 std::string ShortName(const std::string& mime) {
