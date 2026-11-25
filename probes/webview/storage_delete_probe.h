@@ -37,6 +37,13 @@ inline std::string Page(const std::wstring& origin) {
   if (end == std::string::npos) return {};
   page.insert(end, R"JS(
 const underlyingOperation = operate;
+const fixtureTrace = [];
+window.__gesherStorageTrace = fixtureTrace;
+const trace = (step, detail = '') => {
+  if (fixtureTrace.length < 32) fixtureTrace.push({step, detail:String(detail).slice(0, 512), url:location.href});
+};
+window.addEventListener('error', event => trace('script-error', event.message));
+window.addEventListener('unhandledrejection', event => trace('unhandled-rejection', event.reason));
 async function fileSystem(mode, label) {
   if (!['A-first-party', 'B-first-party'].includes(label)) return {state:'not-tested', bytes:0};
   if (typeof navigator.storage?.getDirectory !== 'function') throw Error('real OPFS interface unavailable');
@@ -67,6 +74,7 @@ async function fileSystem(mode, label) {
   return {state:mode === 'write' ? 'written' : 'preserved', bytes:data.length};
 }
 operate = async (mode, label) => {
+  trace('operate-start', mode + ':' + label);
   const key = 'gesher-preserve-' + label;
   const firstParty = self === top;
   if (mode === 'write') {
@@ -75,6 +83,7 @@ operate = async (mode, label) => {
         (location.protocol === 'https:' ? '; Secure' : '');
   }
   const value = await underlyingOperation(mode, label);
+  trace('indexeddb-closed', mode + ':' + label);
   if (localStorage.getItem(key) !== label) throw Error('localStorage sentinel was removed: ' + label);
   if (firstParty && !document.cookie.split(';').some(part => part.trim() === key + '=' + label))
     throw Error('persistent cookie sentinel was removed: ' + label);
@@ -82,16 +91,22 @@ operate = async (mode, label) => {
 };
 window.operate = operate;
 window.withNested = (middle, origin, mode, label) => new Promise((resolve, reject) => {
+  trace('nested-start', mode + ':' + label);
   document.getElementById('quota-child')?.remove();
   const frame = document.createElement('iframe'); frame.id = 'quota-child';
   const nonce = crypto.randomUUID();
   const listener = event => {
     if (event.source !== frame.contentWindow || event.origin !== middle || event.data?.nonce !== nonce) return;
+    if (event.data.kind === 'quota-nested-progress') { trace(event.data.step, event.data.url); return; }
+    trace('nested-reply', event.data.error || 'value');
     window.removeEventListener('message', listener);
     if (event.data.error) reject(Error(event.data.error)); else resolve(event.data.value);
   };
   window.addEventListener('message', listener);
-  frame.onload = () => frame.contentWindow.postMessage({kind:'quota-nested-fixture', nonce, origin, mode, label}, middle);
+  frame.onload = () => {
+    trace('middle-load', frame.src);
+    frame.contentWindow.postMessage({kind:'quota-nested-fixture', nonce, origin, mode, label}, middle);
+  };
   frame.onerror = () => { window.removeEventListener('message', listener); reject(Error('nested iframe load failed')); };
   frame.src = middle + '/storage.html'; document.body.appendChild(frame);
 });
@@ -99,7 +114,13 @@ window.addEventListener('message', event => {
   if (event.source !== parent || !event.data || event.data.kind !== 'quota-nested-fixture') return;
   const {nonce, origin, mode, label} = event.data;
   if (!['write', 'read', 'absent'].includes(mode) || typeof label !== 'string' || typeof origin !== 'string') return;
-  window.withFrame(origin, mode, label).then(
+  const progress = step => event.source.postMessage({kind:'quota-nested-progress', nonce, step, url:location.href}, event.origin);
+  progress('middle-received');
+  const pending = window.withFrame(origin, mode, label);
+  const inner = document.getElementById('quota-child');
+  progress(inner ? 'inner-created' : 'inner-missing');
+  inner?.addEventListener('load', () => progress('inner-load'), {once:true});
+  pending.then(
     value => event.source.postMessage({nonce, value}, event.origin),
     error => event.source.postMessage({nonce, error:String(error)}, event.origin));
 });
@@ -124,11 +145,22 @@ inline bool StartOrdinary(const std::shared_ptr<quota::State>& state, HWND paren
   }
   // The actual default profile has a valid empty name. Keep it unchanged.
   Log(L"INFO", L"ordinary-profile=\"" + name.str() + L"\" path=" + state->profile_path);
+  Com<ICoreWebView2_22> filters;
+  if (!origins.empty() && !state->core.As(IID_ICoreWebView2_22, &filters))
+    return state->Fail(L"source-aware document fixture filters unavailable");
   for (const auto& origin : origins) {
+    const std::wstring filter = origin + L"/*";
+    // Legacy filters omit requests initiated by cross-origin iframes. Switch
+    // before navigation so the actual B -> A load receives its owned response.
+    if (!state->Check(state->core->RemoveWebResourceRequestedFilter(filter.c_str(),
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL), L"remove legacy fixture filter") ||
+        !state->Check(filters->AddWebResourceRequestedFilterWithRequestSourceKinds(filter.c_str(),
+            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT),
+            L"add source-aware document fixture filter")) return false;
     std::string page = Page(origin);
     if (page.empty()) return state->Fail(L"storage fixture page construction failed");
-    // Give outer A a distinct document URL in A -> B -> A. An iframe must not
-    // request an ancestor-identical URL; the origin and its storage key stay A.
+    // Keep distinct outer/inner document identities in A -> B -> A without
+    // changing their origin. This path choice is not a proven timeout fix.
     state->pages[origin + L"/storage-nested-top.html"] = page;
     state->pages[origin + L"/storage.html"] = std::move(page);
   }
@@ -143,6 +175,58 @@ inline bool Visit(const std::shared_ptr<quota::State>& state, const Case& item) 
   return source.str() == url || quota::Navigate(state, url);
 }
 
+inline bool EvaluateNested(const std::shared_ptr<quota::State>& state,
+                           const std::wstring& expression, Json* value) {
+  EventRegistrationToken token{};
+  std::weak_ptr<quota::State> weak = state;
+  HRESULT hr = state->core->add_WebResourceRequested(
+      GESHER_CALLBACK(ICoreWebView2WebResourceRequestedEventHandler,
+        [weak](ICoreWebView2*, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+          auto state = weak.lock(); if (!state || state->closed) return S_OK;
+          Com<ICoreWebView2WebResourceRequest> request;
+          Com<ICoreWebView2WebResourceRequestedEventArgs2> source;
+          CoString uri, method;
+          COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS kind{};
+          if (!args || FAILED(args->get_Request(request.Put())) || !request ||
+              FAILED(request->get_Uri(uri.Put())) || FAILED(request->get_Method(method.Put())) ||
+              FAILED(args->QueryInterface(IID_ICoreWebView2WebResourceRequestedEventArgs2,
+                  reinterpret_cast<void**>(source.Put()))) || FAILED(source->get_RequestedSourceKind(&kind))) {
+            state->Fail(L"nested resource observation unavailable"); return S_OK;
+          }
+          Log(L"INFO", L"nested-resource method=" + method.str() + L" uri=" + uri.str() +
+              L" source=" + std::to_wstring(static_cast<unsigned>(kind)) +
+              L" owned=" + (state->pages.contains(uri.str()) ? L"true" : L"false"));
+          return S_OK;
+        }).get(), &token);
+  if (!state->Check(hr, L"subscribe nested resource observation")) return false;
+  const bool observed = quota::Evaluate(state, expression, value);
+  // This synchronous snapshot also runs after a failed awaited promise. It
+  // records actual message hops and the inner A document where same-origin
+  // access permits it; it never supplies an operation result or storage key.
+  Json trace;
+  const bool traced = quota::Evaluate(state, LR"JS((() => {
+    const value = {top:location.href, trace:window.__gesherStorageTrace || null};
+    try {
+      const middle = document.getElementById('quota-child');
+      value.middleSrc = middle?.src || null;
+      value.middleChildren = middle?.contentWindow.length || 0;
+      if (value.middleChildren) {
+        const inner = middle.contentWindow[0];
+        value.inner = {url:inner.location.href, ready:inner.document.readyState,
+                       trace:inner.__gesherStorageTrace || null};
+      }
+    } catch (error) { value.inspectError = String(error); }
+    return value;
+  })())JS", &trace);
+  if (!observed) {
+    Json frames;
+    quota::Call(state, L"Page.getFrameTree", L"{}", &frames);
+  }
+  const bool removed = state->Check(state->core->remove_WebResourceRequested(token),
+                                   L"remove nested resource observation");
+  return observed && traced && removed && !state->failed;
+}
+
 inline bool Content(const std::shared_ptr<quota::State>& state, const Case& item,
                     const wchar_t* mode) {
   if (!Visit(state, item)) return false;
@@ -153,7 +237,8 @@ inline bool Content(const std::shared_ptr<quota::State>& state, const Case& item
       : first_party ? L"window.operate(" + arguments + L")"
       : L"window.withFrame(" + Quote(item.observed.origin) + L"," + arguments + L")";
   Json value;
-  if (!quota::Evaluate(state, expression, &value)) return false;
+  if (!(item.middle.empty() ? quota::Evaluate(state, expression, &value) :
+                             EvaluateNested(state, expression, &value))) return false;
   const Json* origin = value.Get(L"origin", L'"');
   const Json* label = value.Get(L"label", L'"');
   const Json* bytes = value.Get(L"bytes", L'#');
@@ -296,14 +381,18 @@ inline bool NetworkControl(const std::shared_ptr<quota::State>& state,
                            worker_response_probe::LoopbackServer& server, unsigned expected,
                            const wchar_t* phase) {
   const std::wstring filter = server.Origin() + L"/*";
-  if (!state->Check(state->core->RemoveWebResourceRequestedFilter(filter.c_str(),
-      COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL), L"open loopback positive control")) return false;
+  Com<ICoreWebView2_22> filters;
+  if (!state->core.As(IID_ICoreWebView2_22, &filters)) return state->Fail(L"source-aware network control filter unavailable");
+  if (!state->Check(filters->RemoveWebResourceRequestedFilterWithRequestSourceKinds(filter.c_str(),
+      COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT),
+      L"open loopback positive control")) return false;
   const std::wstring url = server.Origin() + L"/network/storage-delete-control";
   Json value;
   const bool observed = quota::Navigate(state, url) &&
       quota::Evaluate(state, L"({body: document.body.innerText.trim()})", &value);
-  const bool restored = state->Check(state->core->AddWebResourceRequestedFilter(filter.c_str(),
-      COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL), L"restore owned loopback fixture responses");
+  const bool restored = state->Check(filters->AddWebResourceRequestedFilterWithRequestSourceKinds(filter.c_str(),
+      COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT),
+      L"restore owned loopback fixture responses");
   const Json* body = value.Get(L"body", L'"');
   if (!observed || !restored || !body || body->text != L"origin:storage-delete-control" ||
       server.Count("/network/storage-delete-control") != expected || server.Connections() < expected || !server.Healthy()) {
@@ -577,9 +666,14 @@ inline int Run(HWND parent) {
   ReleaseOrdinaryNetwork(ordinary_network);
   inspect->Close(end);
   ordinary_network->Close(end);
-  if (!server.Healthy()) inspect->Fail(L"loopback sentinel failed before browser exit");
-  if (!server.Stop()) inspect->Fail(L"loopback sentinel did not stop");
-  if (!ordinary_server.Stop()) ordinary_network->Fail(L"ordinary network origin did not stop");
+  const bool sentinel_stopped = server.Stop(), ordinary_stopped = ordinary_server.Stop();
+  Log(L"INFO", L"sentinel-final connections=" + std::to_wstring(server.Connections()) +
+      L" requests=" + std::to_wstring(server.TotalCount()) +
+      L" received-bytes=" + std::to_wstring(server.ReceivedBytes()) +
+      L" unattributed-bytes=" + std::to_wstring(server.UnattributedBytes()) +
+      L" healthy=" + (server.Healthy() ? L"true" : L"false"));
+  if (!sentinel_stopped || !server.Healthy()) inspect->Fail(L"loopback sentinel failed or did not stop cleanly");
+  if (!ordinary_stopped || !ordinary_server.Healthy()) ordinary_network->Fail(L"ordinary network origin failed or did not stop cleanly");
   if (!complete || seed->failed || expanded->failed || inspect->failed ||
       ordinary_network->failed || seed->unavailable || expanded->unavailable || inspect->unavailable ||
       ordinary_network->unavailable) {

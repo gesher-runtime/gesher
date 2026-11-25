@@ -130,7 +130,15 @@ gap in source; only a new Windows run can establish the stronger observation.
 The earlier recorded `TypeError`, JavaScript identity and resource-timing values
 remain the actual outcomes of that older run.
 
-## Scope matrix extension: awaiting actual Windows outcomes
+## Scope matrix extension: measured at 7a41155f
+
+The [exact-head results](webview-worker-denial-7a41155f.md) and
+[machine-readable receipt](webview-worker-denial-7a41155f.json) now record both
+actual Windows runtimes. POST, final redirect target and concurrent denial
+produced initial `TypeError` with zero requests at their denied targets. The
+POST-only CORS case leaked its deliberately allowed OPTIONS request. Closing
+the owner before completing its deferral leaked the full original POST. Both
+negative results remain `not-qualified`; no production capability is enabled.
 
 The same command continues into a fresh profile with two ephemeral loopback
 origins and two controllers, within its existing 120-second native budget.
@@ -199,10 +207,9 @@ Local validation of this extension:
   fixtures, including escaped preflights, incomplete headers/uploads, missing redirect
   callbacks, contradictory counters, lost identities and attempted late
   restoration. Fixture logs are suppressed so they cannot be mistaken for real
-  native observations in CI. Actual Windows outcomes remain unmeasured until
-  attached to a new tested commit and runtime receipt.
+  native observations in CI. The receipt above records the subsequent actual
+  execution at the exact tested commit.
 
-The new socket accounting controls compile locally but require the actual
-Windows run; their presence is not a claim that they already ran in this Linux
-workspace. The Windows sparse checkout includes both the gate and its fixture
-script.
+The new socket accounting controls passed in both actual Windows jobs recorded
+above. They were compiled, but not executed, in this Linux workspace. The
+Windows sparse checkout includes both the gate and its fixture script.

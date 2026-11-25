@@ -1,0 +1,1468 @@
+{
+  "schema": 1,
+  "recorded_utc_date": "2026-11-25",
+  "source_commit": "7a41155fc31285b803a9bf4d422c89622f9ad4d0",
+  "source_tree": "ec678bb390c04b340becd99b17b2574ab699161e",
+  "workflow_run": 45593812298,
+  "workflow_url": "https://github.com/gesher-runtime/gesher/actions/runs/45593812298",
+  "build": {
+    "job_id": 139134534716,
+    "job_url": "https://github.com/gesher-runtime/gesher/actions/runs/45593812298/job/139134534716",
+    "artifact_id": 15012481782,
+    "artifact_url": "https://github.com/gesher-runtime/gesher/actions/runs/45593812298/artifacts/15012481782",
+    "zip_sha256_from_upload_log": "b1fd161972f999b157032807674057b1d65bb1bbc49b63070c7a0f5ef2cf1233"
+  },
+  "meaning": "Actual Windows diagnostic observations; valid negative outcomes are preserved. No production capability enabled. Separate storage qualification failed in these jobs.",
+  "ordering_basis": "Native log line order; GitHub flush timestamps are not elapsed-operation measurements.",
+  "limitations": [
+    "Two observed WebView2 runtimes, test-only isolated loopback fixtures, static loader.",
+    "Redirect result concerns the denied final target; initial redirect origin was deliberately reached once.",
+    "CORS POST-only denial deliberately passed OPTIONS; this is not a test of denying OPTIONS.",
+    "Close-before-Complete leaked the full original POST despite URI readback and content scrub.",
+    "Full Android permission/error parity, cache modes, streaming and production lifecycle are not qualified."
+  ],
+  "jobs": [
+    {
+      "os": "windows-2022",
+      "job_id": 139136048419,
+      "job_url": "https://github.com/gesher-runtime/gesher/actions/runs/45593812298/job/139136048419",
+      "cached_log": "storage-delete-45593812298-windows-2022-139136048419.log",
+      "log_sha256": "b93ed9237ee3e725ab43a707cd5d4be02558375f15a149395e026800b20beba6",
+      "runtime": "131.0.2903.86",
+      "sdk": "1.0.4258.31",
+      "loader": "static (WebView2LoaderStatic.lib)",
+      "http_byte_controls": {
+        "log_line": 1567,
+        "evidence": "PASS  worker-response: independent HTTP byte accounting controls verified"
+      },
+      "scope_result": {
+        "log_line": 1965,
+        "evidence": "PASS  worker-denial: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled"
+      },
+      "source_events": [
+        {
+          "log_line": 1775,
+          "uri": "http://127.0.0.1:57923/denial/network/post-pass",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1779,
+          "uri": "http://127.0.0.1:57923/denial/network/post-deny",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1791,
+          "uri": "http://127.0.0.1:57924/denial/network/cors-pass",
+          "method": "OPTIONS",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1793,
+          "uri": "http://127.0.0.1:57924/denial/network/cors-pass",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1797,
+          "uri": "http://127.0.0.1:57924/denial/network/cors-deny",
+          "method": "OPTIONS",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1799,
+          "uri": "http://127.0.0.1:57924/denial/network/cors-deny",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1811,
+          "uri": "http://127.0.0.1:57923/denial/network/redirect-pass",
+          "method": "GET",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1813,
+          "uri": "http://127.0.0.1:57924/denial/network/redirect-pass-target",
+          "method": "GET",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1817,
+          "uri": "http://127.0.0.1:57923/denial/network/redirect-deny",
+          "method": "GET",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1819,
+          "uri": "http://127.0.0.1:57924/denial/network/redirect-deny-target",
+          "method": "GET",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1831,
+          "uri": "http://127.0.0.1:57923/denial/network/concurrent",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1835,
+          "uri": "http://127.0.0.1:57923/denial/network/concurrent",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1855,
+          "uri": "http://127.0.0.1:57923/denial/network/concurrent",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1865,
+          "uri": "http://127.0.0.1:57923/denial/network/teardown-deny",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        }
+      ],
+      "teardown_native_order": [
+        {
+          "log_line": 1865,
+          "operation": "request uri=http://127.0.0.1:57923/denial/network/teardown-deny method=POST source=SERVICE_WORKER"
+        },
+        {
+          "log_line": 1867,
+          "operation": "GetDeferral hr=0x00000000"
+        },
+        {
+          "log_line": 1869,
+          "operation": "terminal put_Uri hr=0x00000000"
+        },
+        {
+          "log_line": 1871,
+          "operation": "terminal-denial case=teardown-deny original=http://127.0.0.1:57923/denial/network/teardown-deny rewritten=gesher-denial-ac8063fbb83f4a3d9f15f801e80d7024:blocked"
+        },
+        {
+          "log_line": 1873,
+          "operation": "clear upload before owner closure hr=0x00000000"
+        },
+        {
+          "log_line": 1875,
+          "operation": "remove source filter hr=0x00000000"
+        },
+        {
+          "log_line": 1877,
+          "operation": "remove source filter hr=0x00000000"
+        },
+        {
+          "log_line": 1879,
+          "operation": "remove request callback hr=0x00000000"
+        },
+        {
+          "log_line": 1881,
+          "operation": "remove message callback hr=0x00000000"
+        },
+        {
+          "log_line": 1883,
+          "operation": "controller.Close hr=0x00000000"
+        },
+        {
+          "log_line": 1885,
+          "operation": "remove external guard hr=0x8007139f"
+        },
+        {
+          "log_line": 1887,
+          "operation": "Complete after owner closure hr=0x00000000"
+        },
+        {
+          "log_line": 1889,
+          "operation": "late-allow rejected case=teardown-deny terminal=denied original-restores=0"
+        }
+      ],
+      "origin_requests": [
+        {
+          "log_line": 1903,
+          "origin": "A",
+          "method": "POST",
+          "path": "/denial/network/post-pass",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1905,
+          "origin": "A",
+          "method": "GET",
+          "path": "/denial/network/redirect-pass",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1907,
+          "origin": "A",
+          "method": "GET",
+          "path": "/denial/network/redirect-deny",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1909,
+          "origin": "A",
+          "method": "POST",
+          "path": "/denial/network/concurrent",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1911,
+          "origin": "A",
+          "method": "POST",
+          "path": "/denial/network/concurrent",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1913,
+          "origin": "A",
+          "method": "POST",
+          "path": "/denial/network/teardown-deny",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1915,
+          "origin": "A",
+          "method": "GET",
+          "path": "/denial/network/teardown-followup",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1917,
+          "origin": "B",
+          "method": "OPTIONS",
+          "path": "/denial/network/cors-pass",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1919,
+          "origin": "B",
+          "method": "POST",
+          "path": "/denial/network/cors-pass",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1921,
+          "origin": "B",
+          "method": "OPTIONS",
+          "path": "/denial/network/cors-deny",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1923,
+          "origin": "B",
+          "method": "GET",
+          "path": "/denial/network/redirect-pass-target",
+          "body-bytes": 0,
+          "complete": true
+        }
+      ],
+      "counters": [
+        {
+          "log_line": 1925,
+          "evidence": "unknown-origin-requests=0 origin-a-connections=11 origin-b-connections=4"
+        },
+        {
+          "log_line": 1927,
+          "evidence": "received-http-bytes-a=137353 received-http-bytes-b=34897 unattributed-http-bytes=0"
+        },
+        {
+          "log_line": 1929,
+          "evidence": "case=post-pass intercepted=1"
+        },
+        {
+          "log_line": 1933,
+          "evidence": "case=cors-pass intercepted=1"
+        },
+        {
+          "log_line": 1961,
+          "evidence": "parallel-reverse-completions=2 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0"
+        },
+        {
+          "log_line": 1963,
+          "evidence": "redirect-start-network=1 redirect-target-callback=yes; observed WebView2 routing only; Android redirect parity unqualified"
+        }
+      ],
+      "outcomes": [
+        {
+          "log_line": 1951,
+          "case": "post-deny",
+          "initial-typeerror": true,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 0,
+          "preflight-network": 0,
+          "outcome": "network-rejection-observed"
+        },
+        {
+          "log_line": 1953,
+          "case": "cors-deny",
+          "initial-typeerror": true,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 0,
+          "preflight-network": 1,
+          "outcome": "not-qualified"
+        },
+        {
+          "log_line": 1955,
+          "case": "redirect-deny",
+          "initial-typeerror": true,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 0,
+          "preflight-network": 0,
+          "outcome": "network-rejection-observed"
+        },
+        {
+          "log_line": 1957,
+          "case": "parallel-deny",
+          "initial-typeerror": true,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 0,
+          "preflight-network": 0,
+          "outcome": "network-rejection-observed"
+        },
+        {
+          "log_line": 1959,
+          "case": "teardown-deny",
+          "initial-typeerror": false,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 1,
+          "preflight-network": 0,
+          "outcome": "not-qualified"
+        }
+      ],
+      "observations": [
+        {
+          "log_line": 1777,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "post-pass",
+            "name": "post-pass",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/post-pass",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/post-pass",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 16,
+            "text": "origin:post-pass",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:57923/denial/network/post-pass",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/post-pass",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1789,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "post-deny",
+            "name": "post-deny",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/post-deny",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/post-deny",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "rejected",
+            "body": "none",
+            "status": 0,
+            "bytes": 0,
+            "text": "",
+            "errorName": "TypeError",
+            "error": "TypeError: Failed to fetch",
+            "responseUrl": "",
+            "responseType": "",
+            "redirected": false,
+            "originHeader": "",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/post-deny",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1795,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "cors-pass",
+            "name": "cors-pass",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57924/denial/network/cors-pass",
+            "finalRequestUrl": "http://127.0.0.1:57924/denial/network/cors-pass",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 16,
+            "text": "origin:cors-pass",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:57924/denial/network/cors-pass",
+            "responseType": "cors",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57924/denial/network/cors-pass",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1809,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "cors-deny",
+            "name": "cors-deny",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57924/denial/network/cors-deny",
+            "finalRequestUrl": "http://127.0.0.1:57924/denial/network/cors-deny",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "rejected",
+            "body": "none",
+            "status": 0,
+            "bytes": 0,
+            "text": "",
+            "errorName": "TypeError",
+            "error": "TypeError: Failed to fetch",
+            "responseUrl": "",
+            "responseType": "",
+            "redirected": false,
+            "originHeader": "",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57924/denial/network/cors-deny",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1815,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "redirect-pass",
+            "name": "redirect-pass",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/redirect-pass",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/redirect-pass",
+            "method": "GET",
+            "finalMethod": "GET",
+            "uploadBytes": 0,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 27,
+            "text": "origin:redirect-pass-target",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:57924/denial/network/redirect-pass-target",
+            "responseType": "cors",
+            "redirected": true,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/redirect-pass",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1829,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "redirect-deny",
+            "name": "redirect-deny",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/redirect-deny",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/redirect-deny",
+            "method": "GET",
+            "finalMethod": "GET",
+            "uploadBytes": 0,
+            "fetch": "rejected",
+            "body": "none",
+            "status": 0,
+            "bytes": 0,
+            "text": "",
+            "errorName": "TypeError",
+            "error": "TypeError: Failed to fetch",
+            "responseUrl": "",
+            "responseType": "",
+            "redirected": false,
+            "originHeader": "",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/redirect-deny",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1851,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "parallel",
+            "name": "parallel-allow",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/concurrent",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/concurrent",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 17,
+            "text": "origin:concurrent",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:57923/denial/network/concurrent",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/concurrent",
+                "type": "fetch"
+              },
+              {
+                "name": "http://127.0.0.1:57923/denial/network/concurrent",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1853,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "parallel",
+            "name": "parallel-deny",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/concurrent",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/concurrent",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "rejected",
+            "body": "none",
+            "status": 0,
+            "bytes": 0,
+            "text": "",
+            "errorName": "TypeError",
+            "error": "TypeError: Failed to fetch",
+            "responseUrl": "",
+            "responseType": "",
+            "redirected": false,
+            "originHeader": "",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/concurrent",
+                "type": "fetch"
+              },
+              {
+                "name": "http://127.0.0.1:57923/denial/network/concurrent",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1857,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "sequential-pass",
+            "name": "sequential-pass",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/concurrent",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/concurrent",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 17,
+            "text": "origin:concurrent",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:57923/denial/network/concurrent",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/concurrent",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1891,
+          "observer": true,
+          "observation": {
+            "event": "matrix-case",
+            "action": "teardown-deny",
+            "name": "teardown-deny",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/teardown-deny",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/teardown-deny",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 20,
+            "text": "origin:teardown-deny",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:57923/denial/network/teardown-deny",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/teardown-deny",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1893,
+          "observer": true,
+          "observation": {
+            "event": "matrix-case",
+            "action": "teardown-followup",
+            "name": "teardown-followup",
+            "workerIdentity": "3f9beeba-63ca-45aa-8a97-e9312371738d",
+            "workerScript": "http://127.0.0.1:57923/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:57923/denial/network/teardown-followup",
+            "finalRequestUrl": "http://127.0.0.1:57923/denial/network/teardown-followup",
+            "method": "GET",
+            "finalMethod": "GET",
+            "uploadBytes": 0,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 24,
+            "text": "origin:teardown-followup",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:57923/denial/network/teardown-followup",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:57923/denial/network/teardown-followup",
+                "type": "fetch"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "os": "windows-2025",
+      "job_id": 139136048551,
+      "job_url": "https://github.com/gesher-runtime/gesher/actions/runs/45593812298/job/139136048551",
+      "cached_log": "storage-delete-45593812298-windows-2025-139136048551.log",
+      "log_sha256": "7d7b22a9c409bbac917fb57fb3138d37efa0a7e5918f07dabe2eec3f71d59d39",
+      "runtime": "157.0.4341.46",
+      "sdk": "1.0.4258.31",
+      "loader": "static (WebView2LoaderStatic.lib)",
+      "http_byte_controls": {
+        "log_line": 1567,
+        "evidence": "PASS  worker-response: independent HTTP byte accounting controls verified"
+      },
+      "scope_result": {
+        "log_line": 1965,
+        "evidence": "PASS  worker-denial: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled"
+      },
+      "source_events": [
+        {
+          "log_line": 1775,
+          "uri": "http://127.0.0.1:58725/denial/network/post-pass",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1779,
+          "uri": "http://127.0.0.1:58725/denial/network/post-deny",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1791,
+          "uri": "http://127.0.0.1:58726/denial/network/cors-pass",
+          "method": "OPTIONS",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1793,
+          "uri": "http://127.0.0.1:58726/denial/network/cors-pass",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1797,
+          "uri": "http://127.0.0.1:58726/denial/network/cors-deny",
+          "method": "OPTIONS",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1799,
+          "uri": "http://127.0.0.1:58726/denial/network/cors-deny",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1811,
+          "uri": "http://127.0.0.1:58725/denial/network/redirect-pass",
+          "method": "GET",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1813,
+          "uri": "http://127.0.0.1:58726/denial/network/redirect-pass-target",
+          "method": "GET",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1817,
+          "uri": "http://127.0.0.1:58725/denial/network/redirect-deny",
+          "method": "GET",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1819,
+          "uri": "http://127.0.0.1:58726/denial/network/redirect-deny-target",
+          "method": "GET",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1831,
+          "uri": "http://127.0.0.1:58725/denial/network/concurrent",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1835,
+          "uri": "http://127.0.0.1:58725/denial/network/concurrent",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1855,
+          "uri": "http://127.0.0.1:58725/denial/network/concurrent",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        },
+        {
+          "log_line": 1865,
+          "uri": "http://127.0.0.1:58725/denial/network/teardown-deny",
+          "method": "POST",
+          "source": "SERVICE_WORKER"
+        }
+      ],
+      "teardown_native_order": [
+        {
+          "log_line": 1865,
+          "operation": "request uri=http://127.0.0.1:58725/denial/network/teardown-deny method=POST source=SERVICE_WORKER"
+        },
+        {
+          "log_line": 1867,
+          "operation": "GetDeferral hr=0x00000000"
+        },
+        {
+          "log_line": 1869,
+          "operation": "terminal put_Uri hr=0x00000000"
+        },
+        {
+          "log_line": 1871,
+          "operation": "terminal-denial case=teardown-deny original=http://127.0.0.1:58725/denial/network/teardown-deny rewritten=gesher-denial-ed3a7c5626784c16a2fa1d11135f755d:blocked"
+        },
+        {
+          "log_line": 1873,
+          "operation": "clear upload before owner closure hr=0x00000000"
+        },
+        {
+          "log_line": 1875,
+          "operation": "remove source filter hr=0x00000000"
+        },
+        {
+          "log_line": 1877,
+          "operation": "remove source filter hr=0x00000000"
+        },
+        {
+          "log_line": 1879,
+          "operation": "remove request callback hr=0x00000000"
+        },
+        {
+          "log_line": 1881,
+          "operation": "remove message callback hr=0x00000000"
+        },
+        {
+          "log_line": 1883,
+          "operation": "controller.Close hr=0x00000000"
+        },
+        {
+          "log_line": 1885,
+          "operation": "remove external guard hr=0x8007139f"
+        },
+        {
+          "log_line": 1887,
+          "operation": "Complete after owner closure hr=0x00000000"
+        },
+        {
+          "log_line": 1889,
+          "operation": "late-allow rejected case=teardown-deny terminal=denied original-restores=0"
+        }
+      ],
+      "origin_requests": [
+        {
+          "log_line": 1903,
+          "origin": "A",
+          "method": "POST",
+          "path": "/denial/network/post-pass",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1905,
+          "origin": "A",
+          "method": "GET",
+          "path": "/denial/network/redirect-pass",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1907,
+          "origin": "A",
+          "method": "GET",
+          "path": "/denial/network/redirect-deny",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1909,
+          "origin": "A",
+          "method": "POST",
+          "path": "/denial/network/concurrent",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1911,
+          "origin": "A",
+          "method": "POST",
+          "path": "/denial/network/concurrent",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1913,
+          "origin": "A",
+          "method": "POST",
+          "path": "/denial/network/teardown-deny",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1915,
+          "origin": "A",
+          "method": "GET",
+          "path": "/denial/network/teardown-followup",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1917,
+          "origin": "B",
+          "method": "OPTIONS",
+          "path": "/denial/network/cors-pass",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1919,
+          "origin": "B",
+          "method": "POST",
+          "path": "/denial/network/cors-pass",
+          "body-bytes": 32768,
+          "complete": true
+        },
+        {
+          "log_line": 1921,
+          "origin": "B",
+          "method": "OPTIONS",
+          "path": "/denial/network/cors-deny",
+          "body-bytes": 0,
+          "complete": true
+        },
+        {
+          "log_line": 1923,
+          "origin": "B",
+          "method": "GET",
+          "path": "/denial/network/redirect-pass-target",
+          "body-bytes": 0,
+          "complete": true
+        }
+      ],
+      "counters": [
+        {
+          "log_line": 1925,
+          "evidence": "unknown-origin-requests=0 origin-a-connections=11 origin-b-connections=4"
+        },
+        {
+          "log_line": 1927,
+          "evidence": "received-http-bytes-a=137654 received-http-bytes-b=35069 unattributed-http-bytes=0"
+        },
+        {
+          "log_line": 1929,
+          "evidence": "case=post-pass intercepted=1"
+        },
+        {
+          "log_line": 1933,
+          "evidence": "case=cors-pass intercepted=1"
+        },
+        {
+          "log_line": 1961,
+          "evidence": "parallel-reverse-completions=2 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0"
+        },
+        {
+          "log_line": 1963,
+          "evidence": "redirect-start-network=1 redirect-target-callback=yes; observed WebView2 routing only; Android redirect parity unqualified"
+        }
+      ],
+      "outcomes": [
+        {
+          "log_line": 1951,
+          "case": "post-deny",
+          "initial-typeerror": true,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 0,
+          "preflight-network": 0,
+          "outcome": "network-rejection-observed"
+        },
+        {
+          "log_line": 1953,
+          "case": "cors-deny",
+          "initial-typeerror": true,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 0,
+          "preflight-network": 1,
+          "outcome": "not-qualified"
+        },
+        {
+          "log_line": 1955,
+          "case": "redirect-deny",
+          "initial-typeerror": true,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 0,
+          "preflight-network": 0,
+          "outcome": "network-rejection-observed"
+        },
+        {
+          "log_line": 1957,
+          "case": "parallel-deny",
+          "initial-typeerror": true,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 0,
+          "preflight-network": 0,
+          "outcome": "network-rejection-observed"
+        },
+        {
+          "log_line": 1959,
+          "case": "teardown-deny",
+          "initial-typeerror": false,
+          "request-identity": true,
+          "timing-identity": true,
+          "target-network": 1,
+          "preflight-network": 0,
+          "outcome": "not-qualified"
+        }
+      ],
+      "observations": [
+        {
+          "log_line": 1777,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "post-pass",
+            "name": "post-pass",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/post-pass",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/post-pass",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 16,
+            "text": "origin:post-pass",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:58725/denial/network/post-pass",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/post-pass",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1789,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "post-deny",
+            "name": "post-deny",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/post-deny",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/post-deny",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "rejected",
+            "body": "none",
+            "status": 0,
+            "bytes": 0,
+            "text": "",
+            "errorName": "TypeError",
+            "error": "TypeError: Failed to fetch",
+            "responseUrl": "",
+            "responseType": "",
+            "redirected": false,
+            "originHeader": "",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/post-deny",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1795,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "cors-pass",
+            "name": "cors-pass",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58726/denial/network/cors-pass",
+            "finalRequestUrl": "http://127.0.0.1:58726/denial/network/cors-pass",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 16,
+            "text": "origin:cors-pass",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:58726/denial/network/cors-pass",
+            "responseType": "cors",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58726/denial/network/cors-pass",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1809,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "cors-deny",
+            "name": "cors-deny",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58726/denial/network/cors-deny",
+            "finalRequestUrl": "http://127.0.0.1:58726/denial/network/cors-deny",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "rejected",
+            "body": "none",
+            "status": 0,
+            "bytes": 0,
+            "text": "",
+            "errorName": "TypeError",
+            "error": "TypeError: Failed to fetch",
+            "responseUrl": "",
+            "responseType": "",
+            "redirected": false,
+            "originHeader": "",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58726/denial/network/cors-deny",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1815,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "redirect-pass",
+            "name": "redirect-pass",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/redirect-pass",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/redirect-pass",
+            "method": "GET",
+            "finalMethod": "GET",
+            "uploadBytes": 0,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 27,
+            "text": "origin:redirect-pass-target",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:58726/denial/network/redirect-pass-target",
+            "responseType": "cors",
+            "redirected": true,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/redirect-pass",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1829,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "redirect-deny",
+            "name": "redirect-deny",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/redirect-deny",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/redirect-deny",
+            "method": "GET",
+            "finalMethod": "GET",
+            "uploadBytes": 0,
+            "fetch": "rejected",
+            "body": "none",
+            "status": 0,
+            "bytes": 0,
+            "text": "",
+            "errorName": "TypeError",
+            "error": "TypeError: Failed to fetch",
+            "responseUrl": "",
+            "responseType": "",
+            "redirected": false,
+            "originHeader": "",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/redirect-deny",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1851,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "parallel",
+            "name": "parallel-allow",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/concurrent",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/concurrent",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 17,
+            "text": "origin:concurrent",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:58725/denial/network/concurrent",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/concurrent",
+                "type": "fetch"
+              },
+              {
+                "name": "http://127.0.0.1:58725/denial/network/concurrent",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1853,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "parallel",
+            "name": "parallel-deny",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/concurrent",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/concurrent",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "rejected",
+            "body": "none",
+            "status": 0,
+            "bytes": 0,
+            "text": "",
+            "errorName": "TypeError",
+            "error": "TypeError: Failed to fetch",
+            "responseUrl": "",
+            "responseType": "",
+            "redirected": false,
+            "originHeader": "",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/concurrent",
+                "type": "fetch"
+              },
+              {
+                "name": "http://127.0.0.1:58725/denial/network/concurrent",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1857,
+          "observer": false,
+          "observation": {
+            "event": "matrix-case",
+            "action": "sequential-pass",
+            "name": "sequential-pass",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/concurrent",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/concurrent",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 17,
+            "text": "origin:concurrent",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:58725/denial/network/concurrent",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/concurrent",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1891,
+          "observer": true,
+          "observation": {
+            "event": "matrix-case",
+            "action": "teardown-deny",
+            "name": "teardown-deny",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/teardown-deny",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/teardown-deny",
+            "method": "POST",
+            "finalMethod": "POST",
+            "uploadBytes": 32768,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 20,
+            "text": "origin:teardown-deny",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:58725/denial/network/teardown-deny",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/teardown-deny",
+                "type": "fetch"
+              }
+            ]
+          }
+        },
+        {
+          "log_line": 1893,
+          "observer": true,
+          "observation": {
+            "event": "matrix-case",
+            "action": "teardown-followup",
+            "name": "teardown-followup",
+            "workerIdentity": "08c83005-ad78-44ab-aeb1-207a5d59d3a6",
+            "workerScript": "http://127.0.0.1:58725/denial/sw.js",
+            "requestUrl": "http://127.0.0.1:58725/denial/network/teardown-followup",
+            "finalRequestUrl": "http://127.0.0.1:58725/denial/network/teardown-followup",
+            "method": "GET",
+            "finalMethod": "GET",
+            "uploadBytes": 0,
+            "fetch": "resolved",
+            "body": "complete",
+            "status": 200,
+            "bytes": 24,
+            "text": "origin:teardown-followup",
+            "errorName": "",
+            "error": "",
+            "responseUrl": "http://127.0.0.1:58725/denial/network/teardown-followup",
+            "responseType": "basic",
+            "redirected": false,
+            "originHeader": "origin",
+            "timedOut": false,
+            "aborted": false,
+            "timings": [
+              {
+                "name": "http://127.0.0.1:58725/denial/network/teardown-followup",
+                "type": "fetch"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

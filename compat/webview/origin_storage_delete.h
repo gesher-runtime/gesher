@@ -457,6 +457,10 @@ struct OriginStorageDelete : std::enable_shared_from_this<OriginStorageDelete> {
   }
 
   void ConfigureResolver() {
+    Com<ICoreWebView2_22> document_requests;
+    if (!Check(resolver.core->QueryInterface(IID_ICoreWebView2_22,
+        reinterpret_cast<void**>(document_requests.Put())), L"private document request interface")) return;
+    if (!document_requests) { Finish(E_FAIL, L"missing private document request interface"); return; }
     std::weak_ptr<OriginStorageDelete> weak = shared_from_this();
     HRESULT hr = resolver.core->add_WebResourceRequested(
         GESHER_CALLBACK(ICoreWebView2WebResourceRequestedEventHandler,
@@ -467,7 +471,9 @@ struct OriginStorageDelete : std::enable_shared_from_this<OriginStorageDelete> {
             }).get(), &resolver.resources);
     resolver.resource_handler = SUCCEEDED(hr);
     if (!Check(hr, L"private resource responder") ||
-        !Check(resolver.core->AddWebResourceRequestedFilter(L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL),
+        !Check(document_requests->AddWebResourceRequestedFilterWithRequestSourceKinds(
+                   L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+                   COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_DOCUMENT),
                L"private resource filter")) return;
     ConfigureResolverStep(0);
   }

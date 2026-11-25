@@ -106,11 +106,26 @@ Full inventory validation rejects collapsed, missing or unexpected keys.
 For the nested case, outer A uses the separately supplied document
 `/storage-nested-top.html`, while middle B and inner A use `/storage.html`.
 Both paths are exact owned fixture responses with the same page code and real
-origin. This avoids requesting an ancestor-identical document URL, which the
-[HTML iframe attribute rules](https://html.spec.whatwg.org/multipage/iframe-embed-object.html#shared-attribute-processing-steps-for-iframe-and-frame-elements)
-reject even when only the fragment differs. The browser must still perform the
-nested write and report the distinct positive `^31` registry entry; changing the
-fixture path supplies neither storage data nor a key.
+origin. This URL distinction is not an established fix: both Windows runtimes
+still stalled at the nested seed in
+[run 45593812298](https://github.com/gesher-runtime/gesher/actions/runs/45593812298),
+before any production Host admission. A separate Linux Chrome `151.0.7922.34`
+execution of the exact embedded scripts and native-style awaited CDP expression
+completed with both outer paths, a real 262,144-byte write, closed database and
+an observed `https://storage-a-nested.invalid/^31` key. That is browser fixture
+evidence, not WebView2 production acceptance. The Windows gate still requires
+the real nested write and its distinct positive registry entry.
+
+The fixture replaces its legacy resource filters with
+[`ICoreWebView2_22` document-source filters](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_22?view=webview2-1.0.4258.31)
+before navigating. Microsoft documents that the
+[legacy filter](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2?view=webview2-1.0.4258.31#addwebresourcerequestedfilter)
+omits requests initiated by cross-origin iframes; the B-initiated inner-A load
+must receive the owned response too. Positive network controls remove and
+restore the same document-source filter. Bounded trace records preserve real
+message hops, resource callbacks and inner-document state; a timeout additionally
+records the actual frame tree. None of these diagnostics supplies a storage
+result, key or successful completion.
 
 Every one of the fourteen contexts has a localStorage sentinel. Each of the six
 first-party contexts also has a persistent host-only cookie. Final database
@@ -161,6 +176,11 @@ control-path request count. This catches an offline setting that affects an
 ordinary application controller during deletion, even if networking recovers
 when the resolver closes. Control traffic and resolver-escape traffic use
 different listening ports and counters.
+
+Cleanup checks each server's health after its final socket drain, and records
+the sentinel's accepted connections, request count, received bytes and
+unattributed bytes. An unclassified nonempty request cannot become a successful
+storage qualification merely because it was discovered during `Stop`.
 
 The production implementation must separately verify the resolver controller's
 actual InPrivate flag and profile name before origin navigation, install its
