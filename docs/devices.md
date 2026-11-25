@@ -79,7 +79,36 @@ Tests: `tools/test_country_detector_contracts.py` (host, AOSP classes from andro
   TYPE_ACCELEROMETER (m/s^2, Android's sign), TYPE_GYROSCOPE (rad/s),
   TYPE_MAGNETIC_FIELD, TYPE_LIGHT and TYPE_ROTATION_VECTOR (the quaternion).
   Readings are polled at the rate asked for; on-change sensors report changes
-  only. The CI runners have none.
+  only. The CI runners have no Windows sensor (their list is Gesher's
+  stationary accelerometer, below, unless `GESHER_SENSOR_FALLBACK=0`).
+- The package manager's system features follow the same list
+  (`PackageManagerService.addSensorFeatures`, through `WindowsSensors`):
+  `android.hardware.sensor.accelerometer`, `.gyroscope`, `.compass` (the
+  magnetometer) and `.light` when SensorManager lists that type, so
+  `hasSystemFeature` and Google Play's filtering agree with `getDefaultSensor`.
+  The rotation vector has no feature of its own. Without a sensor no feature
+  is claimed. Gesher's stationary accelerometer (below) declares no feature:
+  it is a desktop default, not hardware, and the native list marks where each
+  sensor comes from (`Origin` in `compat/devices/sensors.h`), so
+  `WindowsSensors.types()` gives only Windows' sensors and, under the test
+  switch, `GESHER_SENSOR_TEST`'s. On a PC without
+  an accelerometer, `hasSystemFeature` and feature filtering (an app's required
+  `<uses-feature>`) answer that there is none, while an app that asks
+  SensorManager gets the gravity-only reading. The features are the system server's list at boot, like every
+  system feature (docs/system-features.md): a sensor attached later appears in
+  SensorManager in newly started app processes, and in the features after
+  Gesher restarts. The feature says the sensor exists, as on Android; how closely
+  a real PC sensor meets the CDD (section 7.3: rates, ranges, magnetometer
+  calibration) is not established, as no real sensor has been checked (below).
+  Checked by `PackageServiceQueriesTest` in the framework-fixes track. Through
+  `ServiceFixtureRunner` (which registers the runtime natives): with
+  `GESHER_SENSOR_TEST=1`, the test accelerometer and light sensor are
+  `hasSystemFeature` and `getSystemAvailableFeatures` answers; with the
+  defaults, SensorManager's native list holds the stationary accelerometer and
+  no sensor feature is declared; with `GESHER_SENSOR_FALLBACK=0`, the list has
+  no stationary accelerometer and still no feature. Its plain run has no
+  natives, so it checks only the mapping and that nothing is claimed without a
+  sensor.
 - `GESHER_SENSOR_TEST=1` adds a test accelerometer (gravity on Z) and a test
   light sensor (250 lux), below the framework's natives, so the whole path is
   checked where there is no hardware.
@@ -94,7 +123,8 @@ Tests: `tools/test_country_detector_contracts.py` (host, AOSP classes from andro
   processes; the native sensor list decides, nothing is set per package), and
   any real motion sensor replaces it. A motion sensor class Windows fails to
   activate (rather than reporting none) keeps it out, so it never stands in for
-  hardware that is present. `GESHER_SENSOR_FALLBACK=0` turns it off:
+  hardware that is present. It declares no system feature (above).
+  `GESHER_SENSOR_FALLBACK=0` turns it off:
   the list is then empty on the runners and `registerListener` answers false.
   Both are checked in the single-process mode.
 - Each event queue is an eventfd watched by the queue's Looper, as Android's

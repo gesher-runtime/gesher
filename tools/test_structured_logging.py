@@ -71,6 +71,11 @@ def main() -> int:
         # #118 routes property-session publication through the shared POSIX
         # owner. Stage that real dependency only when the selected source uses
         # it, retaining historical --source-ref builds without a new shim.
+        # The build.prop loader shares ro.opengles.version's parser (#421).
+        # Stage the real header only when the selected source includes it.
+        if "#include <gesher/gles_version_property.h>" in (work / "system_properties.cc").read_text():
+            (work / "include/gesher/gles_version_property.h").write_text(
+                read("compat/posix/include/gesher/gles_version_property.h"), encoding="utf-8")
         environment_owner = windows and "#include <gesher/environment.h>" in (work / "system_properties.cc").read_text()
         environment_sources = []
         if environment_owner:

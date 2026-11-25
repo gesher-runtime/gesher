@@ -121,7 +121,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         info.reqKeyboardType = config.keyboard;
         info.reqNavigation = config.navigation;
         info.reqInputFeatures = 0;
-        info.reqGlEsVersion = android.os.SystemProperties.getInt("ro.opengles.version", 0x20000);
+        // ro.opengles.version, the same value getSystemAvailableFeatures gives.
+        info.reqGlEsVersion = PackageManagerService.glEsVersion();
         return info;
     }
 

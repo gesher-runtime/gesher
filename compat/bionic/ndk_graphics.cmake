@@ -13,6 +13,8 @@ set(_gl_gen ${CMAKE_BINARY_DIR}/gen/bionic)
 set(_gl_handwritten eglGetDisplay eglGetPlatformDisplay eglGetPlatformDisplayEXT
   eglCreateWindowSurface eglCreatePlatformWindowSurface eglCreatePlatformWindowSurfaceEXT
   eglDestroySurface eglChooseConfig eglGetConfigAttrib eglGetProcAddress
+  # The context version the default display gives at most (egl_gles_version.h).
+  eglCreateContext
   eglDebugMessageControlKHR eglSetBlobCacheFuncsANDROID glDebugMessageCallback
   glDebugMessageCallbackKHR
   # surfaces track (egl_child_surface.cc): a child surface's frame is posted before the swap.

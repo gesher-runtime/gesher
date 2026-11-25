@@ -26,6 +26,7 @@ import com.gesher.app.window.WindowMode;
 import com.gesher.net.ProxySetting;
 import com.gesher.server.Device;
 import com.gesher.server.GesherService;
+import com.gesher.server.MobileDataCommands;
 import com.gesher.server.SpellCheckerCommands;
 import com.gesher.server.SystemServer;
 import com.gesher.server.Zygote;
@@ -271,6 +272,9 @@ public final class Launcher {
             case "spell-checker":
                 ensureDevice(true);
                 return SpellCheckerCommands.run(rest);
+            case "mobile-data":
+                ensureDevice(true);
+                return MobileDataCommands.run(rest);
             case "windows": return windows(rest);
             case "special-access": return specialAccess(rest);
             case "settings-closed": return settingsClosed(rest, false);
@@ -469,7 +473,8 @@ public final class Launcher {
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
                 + " | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared"
                 + " | special-access PACKAGE [OP allow|deny] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
-                + " | shutdown | apk-icon APK | spell-checker list|use COMPONENT|automatic|enable|disable|language ID");
+                + " | shutdown | apk-icon APK | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
+                + " | " + MobileDataCommands.USAGE);
         return 2;
     }
 

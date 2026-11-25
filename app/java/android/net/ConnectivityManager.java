@@ -611,6 +611,9 @@ public class ConnectivityManager {
 
     public void unregisterNetworkCallback(NetworkCallback networkCallback) {
         if (networkCallback == null) throw new IllegalArgumentException("null NetworkCallback");
+        LocalWifiRequest local;
+        synchronized (sLock) { local = sLocalWifi.remove(networkCallback); }
+        if (local != null) { local.release(true); return; }
         Listener retiredListener;
         synchronized (sLock) {
             CallbackRecord r = sCallbacks.get(networkCallback);
@@ -647,6 +650,147 @@ public class ConnectivityManager {
 
     private enum Kind { LISTEN, DEFAULT, BEST }
 
+    // --- Wi-Fi network specifier requests (docs/wifi.md) ------------------------------
+
+    /** Callbacks of requests served by the Wi-Fi service's user-approved connections. */
+    private static final Map<NetworkCallback, LocalWifiRequest> sLocalWifi = new IdentityHashMap<>();
+
+    /**
+     * A request with a WifiNetworkSpecifier, as WifiNetworkFactory serves it: the user
+     * approves a matching network, the system joins it, and the app gets a local-only
+     * Network (no INTERNET) bound to that Wi-Fi interface. Releasing the request ends
+     * the connection and returns the interface to its previous network.
+     */
+    private void requestLocalWifi(NetworkRequest request, NetworkCallback cb, Handler handler, int timeoutMs) {
+        android.net.wifi.WifiNetworkSpecifier specifier =
+                (android.net.wifi.WifiNetworkSpecifier) request.getNetworkSpecifier();
+        LocalWifiRequest local = new LocalWifiRequest(request, specifier, cb, handler, mContext);
+        synchronized (sLock) {
+            if (sCallbacks.containsKey(cb) || sLocalWifi.containsKey(cb)) {
+                throw new IllegalArgumentException("NetworkCallback was already registered");
+            }
+            sLocalWifi.put(cb, local);
+            cb.mWasRegistered = true;
+        }
+        // A specifier network never has INTERNET: such a request is unfulfillable.
+        IWindowsWifi wifi = IWindowsWifi.Stub.asInterface(ServiceManager.getService(IWindowsWifi.NAME));
+        if (request.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) || wifi == null) {
+            handler.post(() -> local.deliver(IWindowsWifi.NETWORK_UNAVAILABLE, null));
+            return;
+        }
+        try {
+            wifi.requestLocalNetwork(mContext.getOpPackageName(), mContext.getAttributionTag(), specifier, local);
+        } catch (RemoteException e) {
+            synchronized (sLock) { sLocalWifi.remove(cb); }
+            throw e.rethrowFromSystemServer();
+        } catch (RuntimeException e) {
+            synchronized (sLock) { sLocalWifi.remove(cb); }
+            throw e;
+        }
+        if (timeoutMs > 0) {
+            local.timeout = () -> {
+                if (local.network != null) return;
+                synchronized (sLock) { if (sLocalWifi.get(cb) == local) sLocalWifi.remove(cb); else return; }
+                local.release(true);
+                cb.onUnavailable();
+            };
+            handler.postDelayed(local.timeout, timeoutMs);
+        }
+    }
+
+    private static final class LocalWifiRequest extends IWindowsWifi.Callback {
+        final NetworkRequest request;
+        final android.net.wifi.WifiNetworkSpecifier specifier;
+        final NetworkCallback callback;
+        final Handler handler;
+        final Context context;
+        volatile boolean active = true;
+        Network network; // handler thread only
+        Runnable timeout;
+
+        LocalWifiRequest(NetworkRequest request, android.net.wifi.WifiNetworkSpecifier specifier,
+                NetworkCallback callback, Handler handler, Context context) {
+            this.request = request; this.specifier = specifier; this.callback = callback;
+            this.handler = handler; this.context = context;
+        }
+
+        @Override protected void onEvent(int kind, int value, android.os.Bundle extras) {
+            if (kind == IWindowsWifi.CALLBACK_NETWORK_REQUEST) handler.post(() -> deliver(value, extras));
+        }
+
+        void release(boolean remote) {
+            if (!active) return;
+            active = false;
+            if (timeout != null) handler.removeCallbacks(timeout);
+            if (!remote) return;
+            IWindowsWifi wifi = IWindowsWifi.Stub.asInterface(ServiceManager.getService(IWindowsWifi.NAME));
+            if (wifi == null) return;
+            try {
+                wifi.releaseLocalNetwork(context.getOpPackageName(), this);
+            } catch (RemoteException e) {
+                // The service is gone, and its connection with it.
+            }
+        }
+
+        void deliver(int event, android.os.Bundle extras) {
+            if (!active) return;
+            if (event == IWindowsWifi.NETWORK_AVAILABLE && extras != null && network == null) {
+                if (timeout != null) handler.removeCallbacks(timeout);
+                int ifIndex = extras.getInt(IWindowsWifi.EXTRA_INTERFACE);
+                network = new Network(100 + ifIndex);
+                callback.onAvailable(network, capabilities(ifIndex, extras), linkProperties(ifIndex), false);
+                return;
+            }
+            if (event != IWindowsWifi.NETWORK_UNAVAILABLE && event != IWindowsWifi.NETWORK_LOST) return;
+            synchronized (sLock) { if (sLocalWifi.get(callback) == this) sLocalWifi.remove(callback); }
+            release(false);
+            if (event == IWindowsWifi.NETWORK_LOST && network != null) callback.onLost(network);
+            else if (network == null) callback.onUnavailable();
+        }
+
+        private NetworkCapabilities capabilities(int ifIndex, android.os.Bundle extras) {
+            NetworkCapabilities nc = new NetworkCapabilities();
+            nc.clearAll();
+            nc.addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+            // Local-only: no INTERNET, as WifiNetworkFactory's network agent.
+            nc.addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_FOREGROUND)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VCN_MANAGED)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_BANDWIDTH_CONSTRAINED);
+            WindowsNetworks.Net net = net(ifIndex);
+            nc.setCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED, net == null || !net.metered);
+            // No network specifier: ConnectivityService hands apps the agent's
+            // WifiNetworkAgentSpecifier redacted, and its redact() is null. The joined
+            // SSID/BSSID reach the app only through the location-checked transport info.
+            if (net != null) {
+                nc.setTransportInfo(wifiInfo(net, context,
+                        (callback.mFlags & NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) != 0));
+            }
+            return nc;
+        }
+
+        private static WindowsNetworks.Net net(int ifIndex) {
+            try {
+                return snapshot().byNetId(100 + ifIndex);
+            } catch (RuntimeException unavailable) {
+                return null; // e.g. no ACCESS_NETWORK_STATE: addressing details stay unknown.
+            }
+        }
+
+        private static LinkProperties linkProperties(int ifIndex) {
+            WindowsNetworks.Net net = net(ifIndex);
+            if (net != null) return linkPropertiesOf(net);
+            LinkProperties lp = new LinkProperties();
+            lp.setInterfaceName("if" + ifIndex);
+            return lp;
+        }
+    }
+
     private void register(NetworkRequest request, NetworkCallback cb, Handler handler, Kind kind,
             int timeoutMs) {
         register(request, cb, handler, kind, timeoutMs, null);
@@ -657,6 +801,11 @@ public class ConnectivityManager {
         if (cb == null) throw new IllegalArgumentException("null NetworkCallback");
         if (kind != Kind.DEFAULT && request == null) {
             throw new IllegalArgumentException("null NetworkRequest");
+        }
+        if (kind == Kind.BEST && operation == null
+                && request.getNetworkSpecifier() instanceof android.net.wifi.WifiNetworkSpecifier) {
+            requestLocalWifi(request, cb, handler != null ? handler : connectivityHandler(), timeoutMs);
+            return;
         }
         IConnectivity service = service();
         WindowsNetworks.Snapshot first;
