@@ -41,5 +41,16 @@ foreach(_variant static dll)
   endif()
 endforeach()
 
+# Opt-in diagnostic: real WebView2 event ordering for overlapping own loads.
+# It uses the complete unmodified Host and the existing DLL loader; it is not
+# an ordinary build target or a substitute for the application's ART checks.
+add_executable(webview2_navigation_overlap_probe EXCLUDE_FROM_ALL
+  ${CMAKE_CURRENT_LIST_DIR}/webview2_navigation_overlap_probe.cc
+  ${_wv}/webview_host.cc ${_wv}/webview2_loader.cc)
+target_include_directories(webview2_navigation_overlap_probe PRIVATE ${_wv})
+target_include_directories(webview2_navigation_overlap_probe SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIRS})
+target_compile_options(webview2_navigation_overlap_probe PRIVATE -Wall -Werror -Wno-unused-parameter)
+target_link_libraries(webview2_navigation_overlap_probe PRIVATE ${_libs})
+
 # What the probe job ships next to the dll variant.
 configure_file(${WEBVIEW2_LOADER_DLL} ${CMAKE_BINARY_DIR}/WebView2Loader.dll COPYONLY)

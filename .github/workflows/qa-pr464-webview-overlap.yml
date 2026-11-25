@@ -1,0 +1,165 @@
+name: QA 464 real WebView2 overlap diagnostic
+
+on:
+  push:
+    branches: ['palmoni5/qa-pr464-webview-overlap-20261125']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: qa-pr464-webview-overlap-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BASE_SOURCE_SHA: c0fe29ebb8c199f4a848ed0dbcb3e2a0bcc905dc
+  HOST_SHA256: d524a825639bd7ada47c78696f9f687936dbb07431587e6b29ed148123db435e
+  LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+  LLVM_MINGW_SHA256: 5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4
+
+jobs:
+  build:
+    if: github.repository == 'gesher-runtime/gesher' && github.ref == 'refs/heads/palmoni5/qa-pr464-webview-overlap-20261125'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify exact diagnostic source and unchanged production
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags --depth=1 origin "$BASE_SOURCE_SHA"
+          git diff --exit-code "$BASE_SOURCE_SHA" HEAD -- compat/webview
+          printf '%s  %s\n' "$HOST_SHA256" compat/webview/webview_host.cc | sha256sum -c -
+          python3 - <<'PY'
+          import os, subprocess
+          allowed = {'.github/workflows/qa-pr464-webview-overlap.yml',
+                     'probes/webview/CMakeLists.txt',
+                     'probes/webview/webview2_navigation_overlap_probe.cc'}
+          changed = set(subprocess.check_output(
+              ['git', 'diff', '--name-only', os.environ['BASE_SOURCE_SHA'], 'HEAD'],
+              text=True).splitlines())
+          assert changed == allowed, changed
+          PY
+
+      - name: Fetch exact existing compiler and build only the diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v cmake >/dev/null || ! command -v ninja >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends cmake ninja-build
+          fi
+          toolchain_dir="$RUNNER_TEMP/qa464-toolchain"
+          mkdir -p "$toolchain_dir"
+          curl -fsSL --retry 3 --max-time 180 \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/$LLVM_MINGW_NAME.tar.xz" \
+            -o "$toolchain_dir/compiler.tar.xz"
+          printf '%s  %s\n' "$LLVM_MINGW_SHA256" "$toolchain_dir/compiler.tar.xz" | sha256sum -c -
+          tar -xJf "$toolchain_dir/compiler.tar.xz" -C "$toolchain_dir"
+          cmake -S probes/webview -B out-overlap -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/toolchain-llvm-mingw.cmake" \
+            -DLLVM_MINGW="$toolchain_dir/$LLVM_MINGW_NAME" -DCMAKE_BUILD_TYPE=Release
+          cmake --build out-overlap --target webview2_navigation_overlap_probe
+          mkdir -p dist-overlap
+          cp out-overlap/webview2_navigation_overlap_probe.exe out-overlap/WebView2Loader.dll dist-overlap/
+          cp tests/windows/webview/Runtime.ps1 dist-overlap/
+          printf 'DIAGNOSTIC_SOURCE_SHA=%s\nBASE_SOURCE_SHA=%s\nHOST_SHA256=%s\n' \
+            "$GITHUB_SHA" "$BASE_SOURCE_SHA" "$HOST_SHA256" > dist-overlap/source-identity.txt
+          sha256sum probes/webview/webview2_navigation_overlap_probe.cc >> dist-overlap/source-identity.txt
+          (
+            cd dist-overlap
+            sha256sum webview2_navigation_overlap_probe.exe WebView2Loader.dll Runtime.ps1 > artifact-sha256.txt
+          )
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qa464-native-overlap
+          path: dist-overlap/
+          retention-days: 7
+          if-no-files-found: error
+
+  observe:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: qa464-native-overlap
+          path: dist-overlap
+
+      - name: Verify source identity and binary transfer
+        shell: pwsh
+        env:
+          EXPECTED_DIAGNOSTIC_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $identity = Get-Content -LiteralPath dist-overlap/source-identity.txt -Raw
+          $identity | Write-Host
+          foreach ($item in @("DIAGNOSTIC_SOURCE_SHA=$env:EXPECTED_DIAGNOSTIC_SHA", "BASE_SOURCE_SHA=$env:BASE_SOURCE_SHA", "HOST_SHA256=$env:HOST_SHA256")) {
+            if ($identity -notmatch "(?m)^$([regex]::Escape($item))\r?$") { throw 'Unexpected source identity' }
+          }
+          $expected = @('webview2_navigation_overlap_probe.exe', 'WebView2Loader.dll', 'Runtime.ps1')
+          $seen = @()
+          foreach ($line in Get-Content -LiteralPath dist-overlap/artifact-sha256.txt) {
+            if ($line -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9_.-]+)$') { throw 'Invalid artifact hash manifest' }
+            $hash = $Matches[1]; $name = $Matches[2]
+            if ($name -notin $expected -or $name -in $seen) { throw 'Unexpected artifact entry' }
+            if ((Get-FileHash -LiteralPath (Join-Path dist-overlap $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) { throw "Artifact hash mismatch: $name" }
+            $seen += $name
+          }
+          if ($seen.Count -ne $expected.Count) { throw 'Incomplete artifact hash manifest' }
+
+      - name: Require installed real WebView2 runtime
+        shell: pwsh
+        run: |
+          & dist-overlap/Runtime.ps1
+          # The executable independently requires RuntimeVersion and fails if
+          # the real runtime cannot be initialized. No missing-runtime skip.
+
+      - name: Capture actual overlap event order with a 300-second watchdog
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path evidence -Force | Out-Null
+          Copy-Item dist-overlap/source-identity.txt, dist-overlap/artifact-sha256.txt evidence/
+          $exe = (Resolve-Path dist-overlap/webview2_navigation_overlap_probe.exe).Path
+          $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -RedirectStandardOutput evidence/probe.stdout.log -RedirectStandardError evidence/probe.stderr.log
+          $timedOut = -not $p.WaitForExit(300000)
+          if ($timedOut) {
+            $p.Kill($true)
+            if (-not $p.WaitForExit(10000)) { throw 'Diagnostic process could not be terminated' }
+          }
+          Get-Content evidence/probe.stdout.log, evidence/probe.stderr.log -ErrorAction SilentlyContinue | Out-Host
+          if ($timedOut) { throw 'Native overlap diagnostic exceeded 300 seconds' }
+          if ($p.ExitCode -ne 0) { throw "Native overlap diagnostic failed: $($p.ExitCode)" }
+          $log = Get-Content evidence/probe.stderr.log -Raw
+          foreach ($case in @('before-ready-pair', 'ready-pair', 'held-first-resource')) {
+            if ($log -notmatch "(?m)^OVERLAP case=$case .* event=end .* arg=1(?: |$)") { throw "Missing completed case: $case" }
+          }
+          if ($log -notmatch '(?m)^OVERLAP case=all .* event=shutdown id=1 ' -or
+              $log -notmatch '(?m)^OVERLAP case=all .* event=diagnostic-complete .* arg=1(?: |$)') { throw 'Native lifecycle did not complete' }
+          @('Diagnostic capture completed on actual WebView2.',
+            'Whether either modeled order occurred must be determined from the actual navigation-ID trace.',
+            'A completed capture does not establish repair of the prior Notes/ART HTTP404 failure.') | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: qa464-overlap-evidence-${{ matrix.os }}
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: warn
