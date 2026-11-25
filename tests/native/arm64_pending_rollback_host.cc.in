@@ -91,6 +91,7 @@ enum class HaltReason : uint32_t {
   UserDefined1 = 0x01000000,
   UserDefined2 = 0x02000000,
   UserDefined3 = 0x04000000,
+  UserDefined4 = 0x08000000,
 };
 constexpr HaltReason operator|(HaltReason a, HaltReason b) {
   return static_cast<HaltReason>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
@@ -243,6 +244,7 @@ class Env final : public A64::UserCallbacks {
   std::vector<std::unique_ptr<JitCode>> code_;  // registered, as in production
   uint64_t icache_line_ = 64;
   uintptr_t icache_start_ = 0, icache_end_ = 0;
+  std::vector<int64_t> code_epochs_;  // a ptrace tracer's writes seen (ADR 0093)
   std::atomic<A64::Jit*> running_jit_{nullptr};
   std::atomic<bool> signal_interrupt_{false};
   std::atomic<uint64_t> last_syscall_{0};
@@ -269,6 +271,7 @@ class Env final : public A64::UserCallbacks {
       // Production MemoryReadCode marks the page before it reads guest code.
       JitCode* code = code_.back().get();
       jits_.back()->read_code = [code](uintptr_t page) { code->MarkTranslated(page); };
+      code_epochs_.push_back(ExternalEpoch());
     }
     return jits_[depth].get();
   }

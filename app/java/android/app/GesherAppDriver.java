@@ -122,6 +122,9 @@ public final class GesherAppDriver {
         // As handleBindApplication: /proc/self/cmdline names the app's process, which
         // libraries compare with the package name to tell its main process.
         android.os.Process.setArgV0(data.processName);
+        // The zygote's specialisation: not dumpable unless debuggable (ADR 0093).
+        com.gesher.app.ProcessSpecialization.apply(
+                com.gesher.app.ProcessSpecialization.runtimeFlagsFor(appInfo), "gesher-app");
         data.config = config;
         data.compatInfo = compat;
         data.disabledCompatChanges = disabledChanges;
