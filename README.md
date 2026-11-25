@@ -154,9 +154,16 @@ See [updating Gesher](docs/updates.md) for behavior, release packaging and tests
 
 ## License
 
-Proprietary — All Rights Reserved. See [LICENSE](LICENSE). Public redistribution
-with or without modifications is prohibited without prior written permission.
-Third-party components remain under their respective licenses.
+Gesher is a paid commercial product. Use of its proprietary portions requires
+acceptance of the [Commercial End-User License Agreement](LICENSE) and a valid
+License Entitlement from the licensor or an authorized reseller. The entitlement
+sets the price, permitted usage and license duration; any trial or complimentary
+license requires express written authorization.
+
+The commercial license permits installation and operation within the purchased
+scope. Modification, forks and redistribution of proprietary portions require
+separate permission. Components and materials governed by separate licenses
+remain subject to those licenses, and mandatory legal rights are preserved.
 
 ---
 
