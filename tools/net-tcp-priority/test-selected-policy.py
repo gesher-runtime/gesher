@@ -471,7 +471,7 @@ USB_BLOCK_PATH_BASES.update(dict.fromkeys((
 # Preserve main's memfd lease declarations before their separately pinned
 # reverse transition is checked against the original OFD receipt.
 USB_BLOCK_PATH_BASES['compat/posix/src/internal.h'] = 'dcc29a49143c4bd33e0e60a81b25e0e1f2cfc12a'
-USB_BLOCK_TRANSITION_SHA256 = '8ac7ac79f5e8b55fd2fcbe142d8cfed7b136012d1c6f10c4523f1e7f8881f9b4'
+USB_BLOCK_TRANSITION_SHA256 = '64eaa41add6ebac878adf2e48504a952fcecfd0627b57b8fb7f7773fa7bd2274'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',

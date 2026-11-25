@@ -12,6 +12,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_winusb.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/usb_storage_observation.cc
   ${CMAKE_SOURCE_DIR}/compat/usb_storage/protected_usb_observation.cc
+  ${CMAKE_SOURCE_DIR}/compat/devsvc/home_region_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/clipboard_access.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_toast.c
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_activator.c)

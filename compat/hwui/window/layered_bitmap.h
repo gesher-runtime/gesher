@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "surface_damage.h"
+
 namespace gesher {
 
 class LayeredBitmap {
@@ -15,16 +17,32 @@ class LayeredBitmap {
   LayeredBitmap(const LayeredBitmap&) = delete;
   LayeredBitmap& operator=(const LayeredBitmap&) = delete;
 
-  bool Copy(const uint8_t* source, int width, int height) {
+  bool Copy(const uint8_t* source, int width, int height, const PixelRect* dirty = nullptr) {
     if (source == nullptr || width <= 0 || height <= 0) return false;
     // Finish any GDI use before modifying or replacing the selected DIB.
     GdiFlush();
-    if ((width != width_ || height != height_) && !Resize(width, height)) return false;
-    std::memcpy(bits_, source, static_cast<size_t>(width_) * height_ * 4);
+    const bool retained = Matches(width, height);
+    if (!retained && !Resize(width, height)) return false;
+    PixelRect copy = retained && dirty != nullptr ? dirty->Clip(width, height) : PixelRect{};
+    if (copy.empty()) copy = PixelRect::Full(width, height);
+    if (copy.left == 0 && copy.right == width_) {
+      const size_t offset = static_cast<size_t>(copy.top) * width_ * 4;
+      std::memcpy(static_cast<uint8_t*>(bits_) + offset, source + offset,
+                  static_cast<size_t>(copy.bottom - copy.top) * width_ * 4);
+      return true;
+    }
+    for (int y = copy.top; y < copy.bottom; ++y) {
+      const size_t offset = (static_cast<size_t>(y) * width_ + copy.left) * 4;
+      std::memcpy(static_cast<uint8_t*>(bits_) + offset, source + offset,
+                  static_cast<size_t>(copy.right - copy.left) * 4);
+    }
     return true;
   }
 
   HDC dc() const { return dc_; }
+  bool Matches(int width, int height) const {
+    return bits_ != nullptr && width == width_ && height == height_;
+  }
 
   void Reset() {
     if (dc_ != nullptr) {

@@ -277,6 +277,151 @@ DWORD VerifyObject(HANDLE object, PACL expected) {
   return ERROR_SUCCESS;
 }
 
+// An explicit SACL requires SeSecurityPrivilege at object creation. Enable it
+// only on a private SYSTEM impersonation token; never adjust the process token
+// shared with other authority threads. The package wrapper runs after cleanup.
+class PackageSaclPrivilege {
+ public:
+  explicit PackageSaclPrivilege(AuthorityNamespaceCreateResult* observed) : observed_(observed) {}
+  ~PackageSaclPrivilege() { Restore(); }
+  DWORD Enable() {
+    if (!LocalSystemWorker()) return ERROR_ACCESS_DENIED;
+    HANDLE raw = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw)) return GetLastError();
+    const Handle process(raw);
+    Identity source;
+    if (!source.Read(raw) || source.stats.TokenType != TokenPrimary || source.contained ||
+        !IsWellKnownSid(source.User(), WinLocalSystemSid)) return ERROR_ACCESS_DENIED;
+    LocalMemory descriptor;
+    // Like the private query context, let duplication choose the trusted
+    // default owner. Specifying an owner here would require SeRestorePrivilege
+    // on the shared process token. OWNER RIGHTS suppresses implicit mutation.
+    static_assert(TOKEN_ALL_ACCESS == 0x000f01ff);
+    DWORD status = MakeDescriptor(L"D:P(D;;WDWO;;;OW)(A;;0x000f01ff;;;SY)", &descriptor);
+    if (status != ERROR_SUCCESS) return status;
+    PACL expected_acl = GetAcl(descriptor.get());
+    if (!expected_acl) return ERROR_INVALID_ACL;
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor.get(), FALSE};
+    raw = nullptr;
+    if (!DuplicateTokenEx(process.get(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES | TOKEN_IMPERSONATE | READ_CONTROL,
+        &attributes, SecurityImpersonation, TokenImpersonation, &raw)) return GetLastError();
+    token_.reset(raw);
+    DWORD flags = 0;
+    if (!GetHandleInformation(raw, &flags)) return GetLastError();
+    if (flags & HANDLE_FLAG_INHERIT) return ERROR_ACCESS_DENIED;
+    PSID owner = nullptr;
+    PACL actual_acl = nullptr;
+    PSECURITY_DESCRIPTOR actual_descriptor = nullptr;
+    status = GetSecurityInfo(raw, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+        &owner, nullptr, &actual_acl, nullptr, &actual_descriptor);
+    const LocalMemory actual_owner(actual_descriptor);
+    if (status != ERROR_SUCCESS) return status;
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    if (!owner || (!IsWellKnownSid(owner, WinLocalSystemSid) && !IsWellKnownSid(owner, WinBuiltinAdministratorsSid)) ||
+        !SameAcl(expected_acl, actual_acl) || !GetSecurityDescriptorControl(actual_descriptor, &control, &revision) ||
+        !(control & SE_DACL_PROTECTED)) return ERROR_ACCESS_DENIED;
+    Identity duplicate;
+    if (!duplicate.Read(raw) || duplicate.stats.TokenType != TokenImpersonation || duplicate.contained ||
+        duplicate.stats.ImpersonationLevel != SecurityImpersonation || !IsWellKnownSid(duplicate.User(), WinLocalSystemSid) ||
+        duplicate.session != source.session || !SameLuid(duplicate.stats.AuthenticationId, source.stats.AuthenticationId) ||
+        SameLuid(duplicate.stats.TokenId, source.stats.TokenId)) return ERROR_ACCESS_DENIED;
+    token_id_ = duplicate.stats.TokenId;
+    if (!LookupPrivilegeValueW(nullptr, L"SeSecurityPrivilege", &security_)) return GetLastError();
+    status = ReadPrivilege(&before_);
+    if (status != ERROR_SUCCESS) return status;
+    observed_->privilege_before = before_;
+    TOKEN_PRIVILEGES requested{};
+    requested.PrivilegeCount = 1;
+    requested.Privileges[0] = {security_, SE_PRIVILEGE_ENABLED};
+    DWORD bytes = 0;
+    SetLastError(ERROR_SUCCESS);
+    const BOOL adjusted = AdjustTokenPrivileges(raw, FALSE, &requested, sizeof(previous_), &previous_, &bytes);
+    const DWORD error = GetLastError();
+    if (!adjusted) return error ? error : ERROR_GEN_FAILURE;
+    adjusted_ = true;
+    observed_->privilege_changes = previous_.PrivilegeCount;
+    // TRUE alone does not establish assignment. Restore even on partial error.
+    if (error != ERROR_SUCCESS) return error;
+    if (bytes > sizeof(previous_) || previous_.PrivilegeCount > 1) return ERROR_INVALID_DATA;
+    DWORD enabled = 0;
+    status = ReadPrivilege(&enabled);
+    observed_->privilege_enabled = enabled;
+    if (status != ERROR_SUCCESS) return status;
+    return (enabled & SE_PRIVILEGE_ENABLED) ? ERROR_SUCCESS : ERROR_PRIVILEGE_NOT_HELD;
+  }
+  DWORD Bind() {
+    if (!SetThreadToken(nullptr, token_.get())) return GetLastError();
+    bound_ = true;
+    HANDLE raw = nullptr;
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &raw)) return GetLastError();
+    const Handle current(raw);
+    TOKEN_STATISTICS statistics{};
+    if (!Query(raw, TokenStatistics, &statistics)) return GetLastError();
+    return statistics.TokenType == TokenImpersonation && statistics.ImpersonationLevel == SecurityImpersonation &&
+        SameLuid(statistics.TokenId, token_id_) ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
+  }
+  DWORD Restore() {
+    if (restored_) return restore_status_;
+    restored_ = true;
+    DWORD privilege_status = ERROR_SUCCESS;
+    if (adjusted_) {
+      adjusted_ = false;
+      SetLastError(ERROR_SUCCESS);
+      const BOOL restored = AdjustTokenPrivileges(token_.get(), FALSE, &previous_, 0, nullptr, nullptr);
+      privilege_status = GetLastError();
+      if (!restored && !privilege_status) privilege_status = ERROR_GEN_FAILURE;
+      DWORD actual = 0;
+      const DWORD queried = ReadPrivilege(&actual);
+      observed_->privilege_restored = actual;
+      if (privilege_status == ERROR_SUCCESS) {
+        privilege_status = queried ? queried : (actual == before_ ? ERROR_SUCCESS : ERROR_ACCESS_DENIED);
+      }
+    }
+    observed_->privilege_restore_status = privilege_status;
+    if (bound_) {
+      if (!RevertToSelf()) {
+        observed_->context_restore_status = GetLastError();
+        std::abort();  // Never return to the service under a suspect context.
+      }
+      bound_ = false;
+    }
+    HANDLE raw = nullptr;
+    const BOOL opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &raw);
+    const DWORD error = GetLastError();
+    const Handle unexpected(raw);
+    observed_->context_restore_status = !opened && error == ERROR_NO_TOKEN ? ERROR_SUCCESS :
+        (opened ? ERROR_ACCESS_DENIED : (error ? error : ERROR_GEN_FAILURE));
+    if (observed_->context_restore_status != ERROR_SUCCESS) std::abort();
+    restore_status_ = privilege_status;
+    return restore_status_;
+  }
+ private:
+  static bool SameLuid(const LUID& left, const LUID& right) {
+    return left.LowPart == right.LowPart && left.HighPart == right.HighPart;
+  }
+  DWORD ReadPrivilege(DWORD* attributes) const {
+    struct Privileges { DWORD count; LUID_AND_ATTRIBUTES entries[128]; } info{};
+    DWORD bytes = 0;
+    if (!GetTokenInformation(token_.get(), TokenPrivileges, &info, sizeof(info), &bytes)) return GetLastError();
+    if (bytes < offsetof(Privileges, entries) || bytes > sizeof(info) || info.count > std::size(info.entries) ||
+        info.count > (bytes - offsetof(Privileges, entries)) / sizeof(LUID_AND_ATTRIBUTES)) return ERROR_INVALID_DATA;
+    for (DWORD i = 0; i < info.count; ++i) {
+      if (SameLuid(info.entries[i].Luid, security_)) {
+        *attributes = info.entries[i].Attributes;
+        return ERROR_SUCCESS;
+      }
+    }
+    return ERROR_NOT_ALL_ASSIGNED;
+  }
+  AuthorityNamespaceCreateResult* observed_;
+  Handle token_;
+  LUID security_{}, token_id_{};
+  TOKEN_PRIVILEGES previous_{};
+  DWORD before_ = 0, restore_status_ = ERROR_SUCCESS;
+  bool adjusted_ = false, bound_ = false, restored_ = false;
+};
+
 // A protected package root is authority-created and immutable to lowboxes.
 // The private non-lowbox wrapper needs DIRECTORY_ALL_ACCESS on this leaf, but
 // the package only needs to query/traverse and create objects/subdirectories.
@@ -325,6 +470,11 @@ class PackageNamespace {
 
   DWORD Prepare(const AuthorityLaunchSpec& spec, HANDLE root, Handle* retained, const char** startup_stage) {
     const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
+    struct Result {
+      AuthorityNamespaceCreateResult value;
+      AuthorityNamespaceCreateResult* output;
+      ~Result() { if (output) *output = value; }
+    } observed{{}, spec.namespace_create_result};
     stage("lowbox.verify-package-namespace");
     NTSTATUS native = 0;
     DWORD status = OpenLeaf(root, retained, &native);
@@ -334,19 +484,40 @@ class PackageNamespace {
       // A temporary SYSTEM-only create-subdirectory handle is independently
       // compared to the same root. The authority's retained roots stay read-only;
       // no parent ACL is changed to create this one canonical SID child.
-      stage("lowbox.create-package-namespace");
+      stage("lowbox.open-package-create-root");
       Handle create_root;
       status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &create_root, kRead | 0x0008);
+      observed.value.root_open_status = status;
       if (status != ERROR_SUCCESS) return status;
       UNICODE_STRING name = Name();
       OBJECT_ATTRIBUTES attributes = Attributes(create_root.get(), &name);
       attributes.SecurityDescriptor = policy_.get();
       HANDLE raw = nullptr;
+      PackageSaclPrivilege privilege(&observed.value);
+      stage("lowbox.enable-package-sacl-privilege");
+      status = privilege.Enable();
+      observed.value.privilege_status = status;
+      if (status != ERROR_SUCCESS) return status;
+      stage("lowbox.bind-package-create-context");
+      status = privilege.Bind();
+      observed.value.bind_status = status;
+      if (status != ERROR_SUCCESS) return status;
       // The five-argument native ABI takes a QUERY|TRAVERSE shadow Directory.
       // Option 1 is the option observed on both supported Windows wrappers;
       // do not assign it an undocumented semantic name. No OPENIF is supplied.
+      stage("lowbox.create-package-namespace");
+      observed.value.native_called = 1;
       native = create_(&raw, kRead, &attributes, shadow_, 1);
+      observed.value.native_status = native;
       Handle created(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
+      stage("lowbox.restore-package-create-context");
+      const DWORD restored = privilege.Restore();
+      if (native < 0 && native != static_cast<NTSTATUS>(0xc0000035)) {
+        stage("lowbox.create-package-namespace");
+        return Error(native);  // Keep the original error; cleanup has its own result.
+      }
+      if (restored != ERROR_SUCCESS) return restored;
+      stage("lowbox.create-package-namespace");
       if (native == 0) {
         if (!created) return ERROR_INVALID_HANDLE;
         retained->reset(created.release());
@@ -694,6 +865,7 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
                               std::unique_ptr<AuthorityLaunch>* result, const char** startup_stage) try {
   const auto stage = [startup_stage](const char* value) { if (startup_stage) *startup_stage = value; };
   stage("launch.arguments");
+  if (spec.namespace_create_result) *spec.namespace_create_result = {};
   if (!desktop_token || desktop_token == INVALID_HANDLE_VALUE || !result || *result ||
       !ValidSpec(spec)) return ERROR_INVALID_PARAMETER;
   stage("launch.system-caller");

@@ -11,6 +11,19 @@
 
 namespace gesher::usb_storage {
 
+// Optional diagnostics for the authority's one package-directory creation.
+// Values are written to trusted caller memory only; they never select behavior.
+struct AuthorityNamespaceCreateResult {
+  DWORD root_open_status = ERROR_NOT_READY;
+  DWORD privilege_status = ERROR_NOT_READY;
+  DWORD privilege_before = 0, privilege_enabled = 0, privilege_restored = 0;
+  DWORD privilege_changes = 0, privilege_restore_status = ERROR_NOT_READY;
+  DWORD bind_status = ERROR_NOT_READY;
+  DWORD native_called = 0;
+  LONG native_status = 0;
+  DWORD context_restore_status = ERROR_NOT_READY;
+};
+
 struct AuthorityLaunchSpec {
   // Paths, arguments, complete Unicode environment and capabilities are supplied
   // by the trusted authority from its validated installation and session.
@@ -38,6 +51,8 @@ struct AuthorityLaunchSpec {
   // A null value still requires complete protected leaf admission. Only the
   // all-null namespace path above retains the legacy desktop behavior.
   HANDLE expected_package_objects = nullptr;
+  // Borrowed, optional output. Never a guest pointer, callback or policy input.
+  AuthorityNamespaceCreateResult* namespace_create_result = nullptr;
 };
 
 class AuthorityLaunch {

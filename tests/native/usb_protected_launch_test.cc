@@ -157,6 +157,9 @@ struct Evidence {
   DWORD target_token_access = ERROR_NOT_READY;
   DWORD private_caller_token_access = ERROR_NOT_READY;
   DWORD system_caller_token_access = ERROR_NOT_READY;
+  storage::AuthorityNamespaceCreateResult namespace_create;
+  DWORD namespace_process_privileges_unchanged = 0, namespace_no_thread_token = 0;
+  DWORD namespace_context_status = ERROR_NOT_READY;
   SessionObjectsEvidence session_objects;
   SessionObjectsEvidence app_container_objects;
   PackageLeafEvidence package_leaf;
@@ -256,6 +259,17 @@ std::vector<BYTE> User(HANDLE token) {
   PSID sid = reinterpret_cast<TOKEN_USER*>(buffer)->User.Sid;
   std::vector<BYTE> result(GetLengthSid(sid));
   Require(CopySid(static_cast<DWORD>(result.size()), result.data(), sid), "copy-token-user");
+  return result;
+}
+std::vector<BYTE> CaptureAuthorityPrivilegeBytes(HANDLE token) {
+  DWORD bytes = 0;
+  Require(!GetTokenInformation(token, TokenPrivileges, nullptr, 0, &bytes) &&
+      GetLastError() == ERROR_INSUFFICIENT_BUFFER && bytes >= sizeof(DWORD) && bytes <= 16384,
+      "authority-privilege-snapshot-size", ERROR_INVALID_DATA);
+  std::vector<BYTE> result(bytes);
+  DWORD returned = 0;
+  Require(GetTokenInformation(token, TokenPrivileges, result.data(), bytes, &returned) &&
+      returned == bytes, "authority-privilege-snapshot");
   return result;
 }
 std::vector<BYTE> RuntimeSid() {
@@ -1660,7 +1674,9 @@ Local CollisionSecurity(PSID desktop, PSID private_user, PSID package, bool chan
       L"D:P(A;;0x000f000f;;;SY)(A;;0x000f000f;;;" + owner +
       L")(A;;0x000f000f;;;" + SidText(private_user) + L")(A;;0x000f000f;;;" + SidText(package) + L")";
   if (changed) text += L"(A;;0x00020003;;;" + owner + L")";
-  text += L"S:(ML;;NW;;;LW)";
+  // These matched ordinary/private creation controls vary only Owner. Supplying
+  // an explicit SACL would itself require SeSecurityPrivilege and confound the
+  // owner-assignment result. Both variants use the same inherited/default label.
   PSECURITY_DESCRIPTOR descriptor = nullptr;
   Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(text.c_str(), SDDL_REVISION_1,
       &descriptor, nullptr), "collision-fixture-security");
@@ -2114,10 +2130,32 @@ Evidence RunSystem() {
     CopyNamespaceText(package_object_path, evidence.package_leaf.path);
     RequireAbsentPackage(package_object_path, &evidence.package_leaf.absent_before_launch);
     ObserveLaunchAccess(identity->token(), &evidence);
+    HANDLE authority_token_raw = nullptr;
+    Require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &authority_token_raw),
+        "authority-privilege-snapshot-open");
+    const Handle authority_token(authority_token_raw);
+    const auto process_privileges_before = CaptureAuthorityPrivilegeBytes(authority_token.get());
+    storage::AuthorityLaunchSpec observed_spec = spec;
+    observed_spec.namespace_create_result = &evidence.namespace_create;
     production_attempted = true;
     ScopedLowboxTrace observer(config.lowbox_iat_trace, config.session, &evidence);
-    const DWORD created = storage::AuthorityLaunch::Create(identity->token(), spec, &child, &stage);
+    const DWORD created = storage::AuthorityLaunch::Create(identity->token(), observed_spec, &child, &stage);
     const DWORD restored = observer.End();
+    // Read actual Windows state even when launch failed, and retain the launch
+    // failure as primary. This does not inject or change a production token.
+    try {
+      const auto process_privileges_after = CaptureAuthorityPrivilegeBytes(authority_token.get());
+      evidence.namespace_process_privileges_unchanged = process_privileges_before == process_privileges_after ? 1 : 0;
+      HANDLE remaining_raw = nullptr;
+      const BOOL remaining = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &remaining_raw);
+      const DWORD context_error = GetLastError();
+      const Handle remaining_token(remaining_raw);
+      evidence.namespace_no_thread_token = !remaining && context_error == ERROR_NO_TOKEN ? 1 : 0;
+      if (remaining && !RevertToSelf()) std::abort();
+      Require(evidence.namespace_process_privileges_unchanged && evidence.namespace_no_thread_token,
+          "authority-namespace-context-restored", ERROR_ACCESS_DENIED);
+      evidence.namespace_context_status = ERROR_SUCCESS;
+    } catch (const Failure& failure) { evidence.namespace_context_status = failure.status; }
     if (restored == ERROR_SUCCESS && created != ERROR_SUCCESS && std::strcmp(stage, "lowbox.create-token") == 0) {
       // The failed production object has already been destroyed. This is an
       // equivalently derived token, observed only after the real failure; no
@@ -2128,6 +2166,14 @@ Evidence RunSystem() {
     // A successfully created child remains suspended if observer teardown
     // failed. The normal cleanup path must stop it; never Resume under hooks.
     Check(restored, "restore-lowbox-iat-observer");
+    Check(evidence.namespace_context_status, "authority-namespace-context-restored");
+    const auto& creation = evidence.namespace_create;
+    Require(creation.root_open_status == ERROR_SUCCESS && creation.privilege_status == ERROR_SUCCESS &&
+        (creation.privilege_enabled & SE_PRIVILEGE_ENABLED) && creation.privilege_changes <= 1 &&
+        creation.privilege_restore_status == ERROR_SUCCESS && creation.privilege_restored == creation.privilege_before &&
+        creation.bind_status == ERROR_SUCCESS && creation.native_called == 1 && creation.native_status == 0 &&
+        creation.context_restore_status == ERROR_SUCCESS,
+        "authority-package-create-scoped-privilege-and-native-success", ERROR_INVALID_DATA);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
     BOOL contained = FALSE;
     Require(IsProcessInJob(child->process(), service_job.get(), &contained) && contained, "inherited-lowbox-job");
@@ -2437,6 +2483,17 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
     std::printf("Protected launch: profile-identity-created=%lu own-unload-attempted=%lu own-unload-win32=%lu privilege-restore-win32=%lu\n",
         static_cast<unsigned long>(evidence.profile_identity_created), static_cast<unsigned long>(evidence.profile_unload_attempted),
         static_cast<unsigned long>(evidence.profile_unload_status), static_cast<unsigned long>(evidence.profile_privilege_restore_status));
+    const auto& creation = evidence.namespace_create;
+    std::printf("Protected package creation: root-open-win32=%lu privilege-enable-win32=%lu private-token-privilege-before=0x%08lx enabled=0x%08lx restored=0x%08lx changed-count=%lu privilege-restore-win32=%lu bind-win32=%lu native-called=%lu native-ntstatus=0x%08lx context-restore-win32=%lu\n",
+        static_cast<unsigned long>(creation.root_open_status), static_cast<unsigned long>(creation.privilege_status),
+        static_cast<unsigned long>(creation.privilege_before), static_cast<unsigned long>(creation.privilege_enabled),
+        static_cast<unsigned long>(creation.privilege_restored), static_cast<unsigned long>(creation.privilege_changes),
+        static_cast<unsigned long>(creation.privilege_restore_status), static_cast<unsigned long>(creation.bind_status),
+        static_cast<unsigned long>(creation.native_called), static_cast<unsigned long>(creation.native_status),
+        static_cast<unsigned long>(creation.context_restore_status));
+    std::printf("Protected package creation: actual-process-privileges-unchanged=%lu actual-no-thread-token=%lu context-check-win32=%lu\n",
+        static_cast<unsigned long>(evidence.namespace_process_privileges_unchanged),
+        static_cast<unsigned long>(evidence.namespace_no_thread_token), static_cast<unsigned long>(evidence.namespace_context_status));
     worker_profile_release_verified = evidence.cleanup == ERROR_SUCCESS && evidence.profile_identity_created == 1 &&
         evidence.profile_unload_attempted == 1 && evidence.profile_unload_status == ERROR_SUCCESS &&
         evidence.profile_privilege_restore_status == ERROR_SUCCESS;
