@@ -40,7 +40,7 @@
 //  - Not done: synchronous signals from faults (SIGSEGV, SIGBUS, SIGFPE,
 //    SIGILL, SIGTRAP) are not delivered to the .so's handlers: Windows
 //    exceptions in loaded code go to ART's handling and the loader's
-//    diagnostics; alarm/setitimer timers. An active SA_ONSTACK delivery returns
+//    diagnostics. An active SA_ONSTACK delivery returns
 //    ENOSYS without consuming a pending record; synchronous sigwait remains
 //    available regardless of that unused flag. SA_SIGINFO handlers get the
 //    record's siginfo and a ucontext with the thread's actual registers at the
@@ -75,6 +75,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <new>
 #include <unordered_map>
@@ -98,7 +99,8 @@ constexpr uint32_t kSaResethand = 0x80000000u;
 constexpr int kSaRestart = 0x10000000;
 constexpr int kSigBlock = 0, kSigUnblock = 1, kSigSetmask = 2;
 constexpr int kSigkill = 9, kSigstop = 19, kSigabrt = 6;
-constexpr int kSiUser = 0, kSiQueue = -1, kSiTkill = -6;
+constexpr int kSigalrm = 14;
+constexpr int kSiUser = 0, kSiQueue = -1, kSiTkill = -6, kSiKernel = 128;
 
 // bionic's LP64 struct sigaction.
 struct BionicSigaction {
@@ -246,6 +248,11 @@ struct ThreadState {
 
 struct State {
   std::mutex mutex;
+  // ITIMER_REAL and the process-pending SIGALRM share this lock.
+  PTP_TIMER real_timer = nullptr;
+  int64_t real_deadline = 0;
+  int64_t real_interval = 0;
+  bool real_armed = false;
   std::condition_variable sent;
   BionicSigaction actions[kNsig] = {};
   gesher::signals::Pending<BionicSiginfo> process_pending;
@@ -548,6 +555,15 @@ int Run(ThreadState* self, int sig, const BionicSiginfo& info) {
   return 0;
 }
 
+void RearmRealTimerLocked();
+
+void PopProcessPending(int sig, BionicSiginfo* info) {
+  Pop(S().process_pending, sig, info);
+  // Linux forwards the next period at dequeue. While SIGALRM is blocked,
+  // one pending record represents any missed periods without extra wakes.
+  if (sig == kSigalrm) RearmRealTimerLocked();
+}
+
 // Takes one pending signal this thread does not block (its own first, then
 // the process's). Returns 0 if there is none.
 // A pending signal whose action this thread cannot run now stays pending (and
@@ -566,7 +582,7 @@ int TakeDeliverable(ThreadState* self, BionicSiginfo* info, BionicSigaction* act
     }
     if ((S().process_pending.Mask() & Bit(sig)) != 0) {
       if (!ClaimActionLocked(self, sig, act)) { unsupported = true; continue; }
-      Pop(S().process_pending, sig, info);
+      PopProcessPending(sig, info);
       return sig;
     }
   }
@@ -922,7 +938,7 @@ int TakeWaiting(ThreadState* self, uint64_t want, BionicSiginfo* info,
           self->waiting_for = 0;
           return -kENOSYS;
         }
-        Pop(S().process_pending, sig, info);
+        PopProcessPending(sig, info);
         self->waiting_for = 0;
         return sig;
       }
@@ -1042,7 +1058,172 @@ void BIONIC_SYSV Psignal(int sig, const char* s) {
   Terminate(kSigabrt);
 }
 
-unsigned BIONIC_SYSV Alarm(unsigned) { return 0; }
+// --- process interval timer ------------------------------------------------------
+
+struct AlarmTimeval {
+  int64_t sec;
+  int64_t usec;
+};
+struct AlarmItimerval {
+  AlarmTimeval interval;
+  AlarmTimeval value;
+};
+static_assert(sizeof(AlarmItimerval) == 32);  // Bionic LP64 itimerval, both ABIs
+
+constexpr int64_t kAlarmNanos = 1000000000;
+constexpr int64_t kAlarmMax = std::numeric_limits<int64_t>::max();
+
+bool ValidAlarmTime(AlarmTimeval value) {
+  return value.sec >= 0 && value.usec >= 0 && value.usec < 1000000;
+}
+
+int64_t AlarmNanos(AlarmTimeval value) {
+  const auto nanos = static_cast<__int128>(value.sec) * kAlarmNanos + value.usec * 1000;
+  return static_cast<int64_t>(std::min(nanos, static_cast<__int128>(kAlarmMax)));
+}
+
+AlarmTimeval AlarmTime(int64_t nanos) {
+  return {nanos / kAlarmNanos, nanos % kAlarmNanos / 1000};
+}
+
+AlarmItimerval SnapshotRealTimerLocked(int64_t now) {
+  const auto& state = S();
+  // Keep a positive remaining value until a due expiration actually commits.
+  const int64_t left = state.real_armed ? std::max<int64_t>(1000, state.real_deadline - now) : 0;
+  return {AlarmTime(state.real_interval), AlarmTime(left)};
+}
+
+void ArmRealTimerLocked(int64_t now) {
+  const int64_t left = std::max<int64_t>(1, S().real_deadline - now);
+  const int64_t ticks = left / 100 + (left % 100 != 0);
+  const uint64_t relative = static_cast<uint64_t>(-ticks);
+  FILETIME due{static_cast<DWORD>(relative), static_cast<DWORD>(relative >> 32)};
+  SetThreadpoolTimer(S().real_timer, &due, 0, 0);
+}
+
+void RearmRealTimerLocked() {
+  auto& state = S();
+  if (state.real_armed || state.real_interval == 0) return;
+  const auto now = gesher::MonotonicNanos();
+  // Skip missed periods while preserving the original phase. A delayed
+  // callback or signal consumer must never generate a burst of old alarms.
+  const int64_t elapsed = std::max<int64_t>(0, now - state.real_deadline);
+  const int64_t remaining = state.real_interval - elapsed % state.real_interval;
+  if (now == kAlarmMax) return;
+  state.real_deadline = now + std::min(remaining, kAlarmMax - now);
+  state.real_armed = true;
+  ArmRealTimerLocked(now);
+}
+
+enum class AlarmDelivery { Ignore, Pending, Worker };
+
+AlarmDelivery AlarmDeliveryLocked() {
+  bool have_thread = false, unblocked = false, waiter = false;
+  for (const auto& entry : S().threads) {
+    ThreadState* thread = entry.second;
+    if (thread->internal || WaitForSingleObject(thread->lifetime, 0) != WAIT_TIMEOUT) continue;
+    have_thread = true;
+    unblocked |= (thread->mask & Bit(kSigalrm)) == 0;
+    waiter |= (thread->waiting_for & Bit(kSigalrm)) != 0;
+  }
+  // An explicit waiter or a fully blocked signal must be able to collect the
+  // record, including when its default action would terminate the process.
+  if (have_thread && !unblocked) return AlarmDelivery::Pending;
+  const BionicSigaction& action = S().actions[kSigalrm];
+  if (action.handler == kSigIgn) return AlarmDelivery::Ignore;
+  if (waiter || (action.sa_flags & (kSaSiginfo | kSaOnstack)) != 0) {
+    return AlarmDelivery::Pending;
+  }
+  return AlarmDelivery::Worker;
+}
+
+void WakeAlarmWorker();
+
+void CALLBACK RealTimerExpired(PTP_CALLBACK_INSTANCE, PVOID, PTP_TIMER) {
+  bool wake_worker;
+  {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    auto& state = S();
+    if (!state.real_armed) return;
+    const auto now = gesher::MonotonicNanos();
+    // A callback queued just before replacement may see the new deadline.
+    if (now < state.real_deadline) {
+      ArmRealTimerLocked(now);
+      return;
+    }
+    state.real_armed = false;
+    const auto delivery = AlarmDeliveryLocked();
+    if (delivery == AlarmDelivery::Ignore) return;
+    BionicSiginfo info{};
+    info.signo = kSigalrm;
+    info.code = kSiKernel;
+    state.process_pending.Push(kSigalrm, info.code, info);
+    g_process_pending.store(true, std::memory_order_release);
+    state.sent.notify_all();
+    wake_worker = delivery == AlarmDelivery::Worker;
+  }
+  // The existing worker takes its queue lock before attempting signal-state
+  // recovery. Do not submit while holding the signal-state lock.
+  if (wake_worker) WakeAlarmWorker();
+}
+
+int BIONIC_SYSV Getitimer(int which, AlarmItimerval* value) {
+  if (which < 0 || which > 2) return errno = kEINVAL, -1;
+  if (value == nullptr) return errno = kEFAULT, -1;
+  if (which != 0) return errno = kENOSYS, -1;  // CPU-time timers
+  std::lock_guard<std::mutex> lock(S().mutex);
+  *value = SnapshotRealTimerLocked(gesher::MonotonicNanos());
+  return 0;
+}
+
+int BIONIC_SYSV Setitimer(int which, const AlarmItimerval* value, AlarmItimerval* old) {
+  if (which < 0 || which > 2) return errno = kEINVAL, -1;
+  // Linux accepts a null replacement as disarm. Read first for aliased
+  // arguments and do not write the previous value if validation fails.
+  const AlarmItimerval requested = value != nullptr ? *value : AlarmItimerval{};
+  if (!ValidAlarmTime(requested.value) || !ValidAlarmTime(requested.interval))
+    return errno = kEINVAL, -1;
+  if (which != 0) return errno = kENOSYS, -1;
+  const int64_t duration = AlarmNanos(requested.value);
+  if (duration != 0 && gesher::InForkedChild()) return errno = kENOSYS, -1;
+
+  std::lock_guard<std::mutex> lock(S().mutex);
+  auto& state = S();
+  if (duration != 0 && state.real_timer == nullptr) {
+    state.real_timer = CreateThreadpoolTimer(RealTimerExpired, nullptr, nullptr);
+    if (state.real_timer == nullptr) return errno = kEAGAIN, -1;
+    // The process-wide timer owner lives until process exit, like S().
+  }
+  const auto now = gesher::MonotonicNanos();
+  if (old != nullptr) *old = SnapshotRealTimerLocked(now);
+  state.real_armed = duration != 0;
+  if (!state.real_armed) {
+    state.real_deadline = 0;
+    state.real_interval = 0;
+    if (state.real_timer != nullptr) SetThreadpoolTimer(state.real_timer, nullptr, 0, 0);
+  } else {
+    state.real_deadline = now + std::min(duration, kAlarmMax - now);
+    state.real_interval = AlarmNanos(requested.interval);
+    ArmRealTimerLocked(now);
+  }
+  return 0;
+}
+
+int64_t BIONIC_SYSV AlarmSyscall(unsigned seconds) {
+  const AlarmItimerval requested{{}, {seconds, 0}};
+  AlarmItimerval old{};
+  if (Setitimer(0, &requested, &old) != 0) return -1;
+  // Linux rounds a positive subsecond timer up to one, otherwise to the
+  // nearest second. Saturation matters if setitimer armed a larger value.
+  const auto remaining = old.value.sec +
+      (old.value.usec >= 500000 || (old.value.sec == 0 && old.value.usec > 0));
+  return std::min<int64_t>(remaining, std::numeric_limits<unsigned>::max());
+}
+
+unsigned BIONIC_SYSV Alarm(unsigned seconds) {
+  const int64_t result = AlarmSyscall(seconds);
+  return result < 0 ? 0 : static_cast<unsigned>(result);
+}
 
 // sys_siglist / sys_signame (bionic exports both, 65 entries).
 const char* g_sys_siglist[kNsig];
@@ -1068,6 +1249,7 @@ struct Queued {
 };
 std::vector<Queued>* g_queue = nullptr;  // under g_queue_mutex
 bool g_signal_thread_started = false;
+bool g_alarm_worker_wake = false;
 
 // Under g_queue_mutex. If a native worker cannot be created/registered, its
 // already accepted ordinary external signals remain available at application
@@ -1078,6 +1260,7 @@ void RequeueExternalSignalsLocked() {
     S().process_pending.Push(queued.sig, queued.info.code, queued.info);
   g_queue->clear();
   g_signal_thread_started = false;
+  g_alarm_worker_wake = false;
   g_process_pending.store(S().process_pending.Mask() != 0, std::memory_order_release);
   S().sent.notify_all();
 }
@@ -1097,11 +1280,30 @@ DWORD WINAPI SignalThread(void*) {
     Queued q;
     {
       std::unique_lock<std::mutex> lock(g_queue_mutex);
-      g_queue_cv.wait(lock, [] { return !g_queue->empty(); });
-      q = g_queue->front();
-      g_queue->erase(g_queue->begin());
+      g_queue_cv.wait(lock, [] { return !g_queue->empty() || g_alarm_worker_wake; });
+      if (g_queue->empty()) {
+        g_alarm_worker_wake = false;
+        q = {};
+      } else {
+        q = g_queue->front();
+        g_queue->erase(g_queue->begin());
+      }
     }
     self->mask = 0;
+    if (q.sig == 0) {
+      BionicSiginfo info;
+      BionicSigaction action;
+      {
+        std::lock_guard<std::mutex> lock(S().mutex);
+        if ((S().process_pending.Mask() & Bit(kSigalrm)) == 0 ||
+            AlarmDeliveryLocked() != AlarmDelivery::Worker ||
+            !ClaimActionLocked(self, kSigalrm, &action)) continue;
+        PopProcessPending(kSigalrm, &info);
+        g_process_pending.store(S().process_pending.Mask() != 0, std::memory_order_release);
+      }
+      Dispatch(self, kSigalrm, info, action);
+      continue;
+    }
     if (Run(self, q.sig, q.info) != 0) {
       // A concurrent disposition change may now require an unsupported
       // frame. Preserve this external record for synchronous waiting.
@@ -1113,10 +1315,7 @@ DWORD WINAPI SignalThread(void*) {
   }
 }
 
-void RunOnSignalThread(int sig, const BionicSiginfo& info) {
-  std::lock_guard<std::mutex> lock(g_queue_mutex);
-  if (g_queue == nullptr) g_queue = new std::vector<Queued>();
-  g_queue->push_back({sig, info});
+void WakeSignalThreadLocked() {
   if (!g_signal_thread_started) {
     HANDLE t = CreateThread(nullptr, 1u << 20, SignalThread, nullptr, 0, nullptr);
     if (t == nullptr) {
@@ -1127,6 +1326,20 @@ void RunOnSignalThread(int sig, const BionicSiginfo& info) {
     g_signal_thread_started = true;
   }
   g_queue_cv.notify_all();
+}
+
+void RunOnSignalThread(int sig, const BionicSiginfo& info) {
+  std::lock_guard<std::mutex> lock(g_queue_mutex);
+  if (g_queue == nullptr) g_queue = new std::vector<Queued>();
+  g_queue->push_back({sig, info});
+  WakeSignalThreadLocked();
+}
+
+void WakeAlarmWorker() {
+  std::lock_guard<std::mutex> lock(g_queue_mutex);
+  if (g_queue == nullptr) g_queue = new std::vector<Queued>();
+  g_alarm_worker_wake = true;
+  WakeSignalThreadLocked();
 }
 
 [[noreturn]] void TerminateBySignal(int sig) {
@@ -1281,6 +1494,11 @@ void SignalForkChild() {
   g_process_pending.store(false, std::memory_order_relaxed);
   if (g_queue != nullptr) g_queue->clear();
   g_signal_thread_started = false;
+  g_alarm_worker_wake = false;
+  S().real_timer = nullptr;  // The parent's thread pool does not run in the child.
+  S().real_deadline = 0;
+  S().real_interval = 0;
+  S().real_armed = false;
 }
 
 bool SignalsAuthoritative() { return g_authoritative.load(); }
@@ -1357,7 +1575,7 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
             if ((self->pending.Mask() & Bit(sig)) != 0) {
               Pop(self->pending, sig, &interrupted_info);
             } else {
-              Pop(S().process_pending, sig, &interrupted_info);
+              PopProcessPending(sig, &interrupted_info);
             }
             self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
             g_process_pending.store(S().process_pending.Mask() != 0, std::memory_order_relaxed);
@@ -1505,6 +1723,9 @@ void RegisterSignal(SymbolTable& t) {
   E("psignal", Psignal);
   E("abort", Abort);
   E("alarm", Alarm);
+  E("__gesher_alarm_syscall", AlarmSyscall);
+  E("getitimer", Getitimer);
+  E("setitimer", Setitimer);
 #undef E
   for (int i = 1; i < kNsig; ++i) {
     g_sys_siglist[i] = i < 32 ? kDescriptions[i] : "Real-time signal";

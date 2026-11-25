@@ -98,7 +98,7 @@ if (-not $HostOnly) {
     $hash = (Get-FileHash -LiteralPath $program -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($manifest.artifacts.$programName -ne $hash) { throw "NDK signal fixture digest mismatch: $abi" }
     $guestPath = ($program -replace '\\', '/') -replace '^[A-Za-z]:', ''
-    foreach ($case in $within) {
+    foreach ($case in ($within + @('interval-timer'))) {
       Invoke-RealtimeCase "ndk-$abi" $case (Join-Path $Dir 'gesher-exec.exe') @(
         '--elf', $guestPath, 'realtime-signals', $case, $guestPath)
     }

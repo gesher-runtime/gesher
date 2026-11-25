@@ -58,6 +58,14 @@ def main() -> int:
         if len(matches) != 1:
             raise ValueError("missing or ambiguous constant: " + key)
         declarations.extend(matches)
+    timer = []
+    timer_hook = []
+    if "void RearmRealTimerLocked() {" in source:
+        declarations.extend(re.findall(r"^constexpr int kSigalrm[^\n]+", source, re.M))
+        timer_hook = [function(source, "void PopProcessPending(")]
+        start = source.index("struct AlarmTimeval {")
+        end = source.index("// sys_siglist", start)
+        timer = ["#define GESHER_TEST_INTERVAL_TIMER 1", source[start:end]]
     # The shared reserved-signal filter; a historical --source-ref inlines it.
     filters = ([function(source, "uint64_t FilterReservedSignals(")]
                if "uint64_t FilterReservedSignals(" in source else [])
@@ -88,7 +96,8 @@ def main() -> int:
     structs.append(function(shim, "struct LinuxTimespec {") + ";")
     replacements = {
         "@DECLARATIONS@": "\n".join(declarations + structs + bodies[:1 + len(filters)]),
-        "@ACTION_HELPERS@": "\n".join(guest + helpers[:5]),
+        "@ACTION_HELPERS@": "\n".join(guest + helpers[:4] + timer_hook + helpers[4:5]),
+        "@INTERVAL_TIMER@": "\n".join(timer),
         "@DELIVER_ALL@": helpers[5],
         "@ENTRY_POINTS@": "\n".join(bodies[1 + len(filters):]),
         "@SUSPEND@": "\n".join(suspend),
