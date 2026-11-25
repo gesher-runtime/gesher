@@ -21,14 +21,25 @@ and zero denied-target requests for a full same-origin POST, an observed final
 redirect target and concurrent requests. The redirect's initial request was
 intentionally allowed; Android redirect parity remains unqualified.
 
-Two measured failures remain: denying only the CORS POST allowed one OPTIONS
-request, and closing the owner before completing its deferral allowed the
-original complete 32 KiB POST to reach the server. The same five outcomes
-recurred at `107d7fa57c3daf66511d475ceeb09ec907c969cb` in attempt 2 of
+Two measured negative controls remain: denying only the CORS POST allowed one
+OPTIONS request, and closing the owner before completing its deferral allowed
+the original complete 32 KiB POST to reach the server. Those outcomes recurred
+at `107d7fa57c3daf66511d475ceeb09ec907c969cb` in attempt 2 of
 [run 45597266059](https://github.com/gesher-runtime/gesher/actions/runs/45597266059).
-Separate diagnostics now test denying the observed OPTIONS request and completing
-the deferral before immediately removing filters and closing its owner. Those
-new variants have not yet run on Windows. The original negative cases remain.
+
+The separate alternatives now have actual Windows evidence at
+`33fc2e50af97c95023e350ac4c8ba1e2d6d5e877` in
+[run 45602648001](https://github.com/gesher-runtime/gesher/actions/runs/45602648001).
+On both runtimes, denying the actual worker OPTIONS request produced initial
+`TypeError`, no later POST callback and zero OPTIONS/POST requests at the
+independently observed origin. A fresh-profile experiment completed the deferral
+while its owner was live, then immediately removed both filters and closed the
+owner on the same STA turn, without pumping or waiting for an acknowledgement.
+It likewise produced initial `TypeError`, zero original POST requests and a
+successful follow-up from the same worker. Both preserved the original request
+and timing identities. The [exact report and receipt](webview-worker-denial-33fc2e50.md)
+retain the full twelve-case matrix, separate three-case ordering experiment,
+original negative controls, actual message sequence and socket observations.
 
 These results supersede the older absence of runtime evidence below. They do
 not supply cache modes, unrestricted streaming or a complete production worker
@@ -37,12 +48,20 @@ implementation; the public gates remain unavailable.
 The separately qualified quota registry now backs a candidate production
 partition-aware origin deletion operation with owned ordinary/InPrivate
 controllers. Its [full-key contract record](webstorage-full-key-contract-2026-11-25.md)
-states the implementation and actual-Host acceptance requirement. At `107d7fa5`,
-both Windows runtimes seeded and discovered all fourteen actual keys, then the
-native process crashed during production deletion. Two successful completion
-callbacks on runtime 157 do not establish deletion/preservation acceptance.
+states the implementation and actual-Host acceptance requirement. At `107d7fa5`
+and `33fc2e50`, both Windows runtimes seeded and discovered all fourteen actual
+keys, then the native process crashed during production deletion. The later
+fault stacks locate an asynchronous `EmbeddedBrowserWebView.dll` dispatch;
+the actual probe executable frame returns from `DispatchMessageW`. They do not
+yet establish the responsible lifetime defect. Successful completion callbacks
+before the crash do not establish deletion/preservation acceptance.
 Full origin enumeration still needs effective quotas for arbitrary full storage
 keys.
+
+The continuation is limited to compatibility, stability and performance. Any
+security concerns already raised by a separate review remain unresolved review
+notes; this work neither implements security fixes nor asserts their clearance.
+PR391 remains a draft, with no merge or automatic-merge request.
 
 ## Delivered behavior and remaining scope
 

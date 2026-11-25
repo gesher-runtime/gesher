@@ -78,6 +78,46 @@ the native fault control nor the actual storage/worker qualification step ran.
 The fixture runner must restore its caller's native exit-status state while
 preserving assertion failures; this failed run supplies no new native evidence.
 
+## Located native fault at 33fc2e50
+
+After correcting that fixture-status propagation,
+[run 45602648001](https://github.com/gesher-runtime/gesher/actions/runs/45602648001)
+tested `33fc2e50af97c95023e350ac4c8ba1e2d6d5e877`, tree
+`3c5ac7bb2bc86631601340a8680c917a19b65dc0`. Both runtimes again seeded and
+discovered fourteen real keys and then crashed during actual Host deletion.
+The downloaded artifact `15016452291` matches the build's ZIP SHA-256
+`98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477`.
+
+| Runtime | Windows job | Actual fault location |
+| --- | --- | --- |
+| 131.0.2903.86 | `139166035087` | `EmbeddedBrowserWebView.dll+0x353752` |
+| 157.0.4341.46 | `139166035174` | `EmbeddedBrowserWebView.dll+0x44ce24` |
+
+Both faults are `0xC0000005` reads at `0xffffffffffffffff`. The sole probe
+executable caller, RVA `0x531ab`, resolves in the exact downloaded executable
+to `ThreadMain` returning from `DispatchMessageW`. This locates the crash in
+later asynchronous SDK message dispatch; it does not prove an SDK defect or a
+particular application lifetime error. No final deletion/preservation,
+network-isolation or shutdown acceptance was reached.
+
+The separate pre-COM fault control produced the intended `0xe0470001` exception,
+exit `-532217855`, real DLL fault location and unwound probe caller frames.
+Its wrapper incorrectly required flags exactly `0x1`; both actual runs supplied
+`0x81`. The wrapper now requires the documented `EXCEPTION_NONCONTINUABLE` bit
+while allowing reserved system bits, retaining all code, parameter, exit and
+caller-frame requirements. Independent adapter checks accepted the actual
+records from both jobs and rejected missing, duplicate or changed controls.
+The actual storage process still runs with its original 690-second wrapper
+deadline and every acceptance check.
+
+The next standalone diagnostic records the loaded faulting module's path and
+PE identity, plus its CodeView identity when available. On a failed actual
+storage process, the Windows wrapper copies only that observed
+`EmbeddedBrowserWebView.dll` and records its bytes, SHA-256 and file versions;
+the diagnostic workflow retains those files. Matching that copy to the loaded
+image is still required before using it to name an SDK function. No production
+cleanup change follows merely from finding a fault inside the SDK.
+
 ## State and operations
 
 The fixture first writes and closes all five baseline databases: A first-party,

@@ -1,0 +1,3214 @@
+{
+  "schemaVersion": 1,
+  "run": 45602648001,
+  "attempt": 1,
+  "url": "https://github.com/gesher-runtime/gesher/actions/runs/45602648001",
+  "actor": "palmoni5",
+  "createdAt": "2026-11-25T11:14:54Z",
+  "updatedAt": "2026-11-25T11:17:22Z",
+  "sourceCommit": "33fc2e50af97c95023e350ac4c8ba1e2d6d5e877",
+  "sourceTree": "3c5ac7bb2bc86631601340a8680c917a19b65dc0",
+  "overallWorkflowResult": "failure: the separate storage subprocess crashed; its native exception self-test was also rejected by an overly strict flags check",
+  "workerResult": "Both runtimes completed a valid 12-case scope matrix and a separate 3-case Complete-first scenario. New preflight and Complete-first denials were observed; both original negative controls remain.",
+  "evidenceMethod": "Only previously cached complete logs, saved tool results and the already retained artifact were read. Each saved log is byte-identical to the corresponding tool-result content. Anchors are one-based physical log lines including blank lines; anchor text omits the timestamp. Message objects preserve every parsed JSON field and value from the actual native log.",
+  "artifact": {
+    "id": 15016452291,
+    "name": "webview",
+    "url": "https://github.com/gesher-runtime/gesher/actions/runs/45602648001/artifacts/15016452291",
+    "zipBytes": 2856600,
+    "uploadedSha256": "98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477",
+    "locallyRetainedZipSha256": "98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477",
+    "probeExeBytes": 4253696,
+    "probeExeSha256": "6a3b251bbedacfc4e1b873da23d0c000be77f41c4a63b705c85bf0481ecdc457",
+    "buildJob": 139165250170,
+    "buildJobUrl": "https://github.com/gesher-runtime/gesher/actions/runs/45602648001/job/139165250170",
+    "buildLog": {
+      "file": "storage-delete-45602648001-build-139165250170.log",
+      "sha256": "79fa5f31ac5a65ddd4cd67fc2e54348012ce03489b6c453cf27588fe65776b84",
+      "bytes": 27498,
+      "lines": 345
+    },
+    "buildEvidence": [
+      {
+        "line": 112,
+        "text": "33fc2e50af97c95023e350ac4c8ba1e2d6d5e877"
+      },
+      {
+        "line": 321,
+        "text": "SHA256 digest of uploaded artifact zip is 98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477"
+      },
+      {
+        "line": 324,
+        "text": "Artifact webview has been successfully uploaded! Final size is 2856600 bytes. Artifact ID is 15016452291"
+      }
+    ]
+  },
+  "scopeLimits": [
+    "These are actual standalone diagnostic observations on the two named runtimes, not production worker activation or complete Android compatibility.",
+    "Preflight denial applies a decision already made before OPTIONS admission. It does not show that a later application POST callback can undo an earlier preflight.",
+    "Complete-first success requires the observed live-owner ordering. The Close-first control still sends the original full upload; an undecided deferral at owner closure remains unqualified.",
+    "The real application callback, callback cancellation and ownership, Android cache modes, cached responses, incremental upload streams, stream-read errors and broader worker/profile lifecycles were not qualified.",
+    "Redirect denial concerns the final target only. One initial redirect GET intentionally reaches its origin; Android redirect-callback parity is not inferred.",
+    "Independent server records include attributable partial requests, with nonempty unclassified bytes invalidating the harness. Aggregate accepted connections are not per-case attribution.",
+    "The separate storage crash and its self-test flags mismatch do not erase complete worker observations; worker success does not qualify storage deletion.",
+    "No faulting DLL symbol or production crash cause is inferred here from its module name or RVA."
+  ],
+  "jobs": [
+    {
+      "os": "windows-2022",
+      "job": 139166035087,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45602648001/job/139166035087",
+      "overallJobResult": "failure",
+      "runtime": "131.0.2903.86",
+      "sdk": "1.0.4258.31",
+      "loader": "static (WebView2LoaderStatic.lib)",
+      "log": {
+        "file": "storage-delete-45602648001-windows-2022-139166035087.log",
+        "sha256": "45922a7c75ee8d6dd221c0d6bebc8b21df9a63461984937bf6795a2cec6ad2dd",
+        "bytes": 278798,
+        "lines": 2594
+      },
+      "checkoutEvidence": {
+        "line": 203,
+        "text": "33fc2e50af97c95023e350ac4c8ba1e2d6d5e877"
+      },
+      "expectedArtifactSha256": "98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477",
+      "downloadedArtifactSha256": "98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477",
+      "artifactEvidence": [
+        {
+          "line": 219,
+          "text": "- webview (ID: 15016452291, Size: 2856600, Expected Digest: sha256:98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477)"
+        },
+        {
+          "line": 223,
+          "text": "SHA256 digest of downloaded artifact is 98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477"
+        }
+      ],
+      "prerequisiteEvidence": [
+        {
+          "line": 356,
+          "text": "Worker response PowerShell gate: 44 fixture scenarios passed; no native runtime exercised"
+        },
+        {
+          "line": 2064,
+          "text": "PASS  worker-response: independent HTTP byte accounting controls verified"
+        },
+        {
+          "line": 2252,
+          "text": "PASS  worker-response: controls and independent network counters verified; error outcomes recorded; no production worker capability enabled"
+        }
+      ],
+      "storageSeparateFailure": {
+        "all14SeededEvidence": {
+          "line": 1534,
+          "text": "PASS  storage-delete: all-written positive=14 removed=0"
+        },
+        "exitSigned": -1073741819,
+        "exitHex": "0xC0000005",
+        "failureEvidence": {
+          "line": 1600,
+          "text": "FAIL  storage-delete: production qualification failed (exit=-1073741819 qualified=0 missing=34 final-callback-checks=0)"
+        },
+        "exceptionEvidence": {
+          "line": 2028,
+          "text": "native-exception: code=0xc0000005 flags=0x00000000 thread=572 parameters=2 access=0x0 target=0xffffffffffffffff"
+        },
+        "faultModule": "EmbeddedBrowserWebView.dll",
+        "faultRva": "0x353752",
+        "faultEvidence": {
+          "line": 2029,
+          "text": "native-exception: fault[0] pc=0x00007ffb76963752 sp=0x0000000000000000 module=EmbeddedBrowserWebView.dll base=0x00007ffb76610000 rva=0x353752"
+        },
+        "productionCallbackSummaryObserved": false,
+        "storageQualified": false,
+        "finalPreservationObserved": false,
+        "crashCauseEstablished": false,
+        "intentionalSelfTest": {
+          "exitSigned": -532217855,
+          "code": "0xE0470001",
+          "flags": "0x00000081",
+          "exceptionEvidence": {
+            "line": 739,
+            "text": "native-exception: code=0xe0470001 flags=0x00000081 thread=6212 parameters=2 access=0x47534852 target=0x53544143"
+          },
+          "executedWrapperRejectedEvidence": {
+            "line": 738,
+            "text": "FAIL  storage-delete: native fault diagnostic control failed (exit=-532217855 code=0 address=1 probe-frames=2)"
+          },
+          "interpretation": "The exact noncontinuable software exception and executable caller frames were recorded; the executed wrapper incorrectly required flags exactly 0x1. This is distinct from the real storage access violation."
+        }
+      },
+      "scenarios": [
+        {
+          "tag": "worker-denial",
+          "caseCount": 12,
+          "profile": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{A24C11C5-A3B9-4D35-ADC5-3F95048AEE96}",
+          "origin": "http://127.0.0.1:60545",
+          "otherOrigin": "http://127.0.0.1:60546",
+          "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+          "identityEvidence": [
+            {
+              "line": 2254,
+              "text": "INFO  worker-denial: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{A24C11C5-A3B9-4D35-ADC5-3F95048AEE96} origin=http://127.0.0.1:60545 other=http://127.0.0.1:60546"
+            },
+            {
+              "line": 2258,
+              "text": "INFO  worker-denial: runtime=131.0.2903.86 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+            }
+          ],
+          "messages": [
+            {
+              "line": 2270,
+              "observer": false,
+              "message": {
+                "event": "matrix-ready",
+                "observer": false,
+                "completeFirst": false,
+                "secure": true,
+                "script": "http://127.0.0.1:60545/denial/sw.js",
+                "scope": "http://127.0.0.1:60545/denial/"
+              }
+            },
+            {
+              "line": 2274,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "post-pass",
+                "name": "post-pass",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/post-pass",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/post-pass",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 16,
+                "text": "origin:post-pass",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60545/denial/network/post-pass",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/post-pass",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2286,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "post-deny",
+                "name": "post-deny",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/post-deny",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/post-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/post-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2292,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "cors-pass",
+                "name": "cors-pass",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60546/denial/network/cors-pass",
+                "finalRequestUrl": "http://127.0.0.1:60546/denial/network/cors-pass",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 16,
+                "text": "origin:cors-pass",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60546/denial/network/cors-pass",
+                "responseType": "cors",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60546/denial/network/cors-pass",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2306,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "cors-deny",
+                "name": "cors-deny",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60546/denial/network/cors-deny",
+                "finalRequestUrl": "http://127.0.0.1:60546/denial/network/cors-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60546/denial/network/cors-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2312,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "redirect-pass",
+                "name": "redirect-pass",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/redirect-pass",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/redirect-pass",
+                "method": "GET",
+                "finalMethod": "GET",
+                "uploadBytes": 0,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 27,
+                "text": "origin:redirect-pass-target",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60546/denial/network/redirect-pass-target",
+                "responseType": "cors",
+                "redirected": true,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/redirect-pass",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2326,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "redirect-deny",
+                "name": "redirect-deny",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/redirect-deny",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/redirect-deny",
+                "method": "GET",
+                "finalMethod": "GET",
+                "uploadBytes": 0,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/redirect-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2348,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "parallel",
+                "name": "parallel-allow",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/concurrent",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/concurrent",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 17,
+                "text": "origin:concurrent",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60545/denial/network/concurrent",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/concurrent",
+                    "type": "fetch"
+                  },
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/concurrent",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2350,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "parallel",
+                "name": "parallel-deny",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/concurrent",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/concurrent",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/concurrent",
+                    "type": "fetch"
+                  },
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/concurrent",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2354,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "sequential-pass",
+                "name": "sequential-pass",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/concurrent",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/concurrent",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 17,
+                "text": "origin:concurrent",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60545/denial/network/concurrent",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/concurrent",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2368,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "cors-preflight-deny",
+                "name": "cors-preflight-deny",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60546/denial/network/cors-preflight-deny",
+                "finalRequestUrl": "http://127.0.0.1:60546/denial/network/cors-preflight-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60546/denial/network/cors-preflight-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2370,
+              "observer": false,
+              "message": {
+                "event": "matrix-main-complete"
+              }
+            },
+            {
+              "line": 2374,
+              "observer": true,
+              "message": {
+                "event": "matrix-ready",
+                "observer": true,
+                "completeFirst": false,
+                "secure": true,
+                "script": "http://127.0.0.1:60545/denial/sw.js",
+                "scope": "http://127.0.0.1:60545/denial/"
+              }
+            },
+            {
+              "line": 2402,
+              "observer": true,
+              "message": {
+                "event": "matrix-case",
+                "action": "teardown-deny",
+                "name": "teardown-deny",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/teardown-deny",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/teardown-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 20,
+                "text": "origin:teardown-deny",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60545/denial/network/teardown-deny",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/teardown-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2404,
+              "observer": true,
+              "message": {
+                "event": "matrix-case",
+                "action": "teardown-followup",
+                "name": "teardown-followup",
+                "workerIdentity": "eeb6907e-2380-4362-b139-dce092b2c66f",
+                "workerScript": "http://127.0.0.1:60545/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60545/denial/network/teardown-followup",
+                "finalRequestUrl": "http://127.0.0.1:60545/denial/network/teardown-followup",
+                "method": "GET",
+                "finalMethod": "GET",
+                "uploadBytes": 0,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 24,
+                "text": "origin:teardown-followup",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60545/denial/network/teardown-followup",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60545/denial/network/teardown-followup",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2406,
+              "observer": true,
+              "message": {
+                "event": "matrix-complete",
+                "unregistered": true
+              }
+            }
+          ],
+          "outcomes": [
+            {
+              "case": "post-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2286,
+              "summaryEvidence": {
+                "line": 2464,
+                "text": "INFO  worker-denial: result case=post-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            },
+            {
+              "case": "cors-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 1,
+              "outcome": "not-qualified",
+              "actualMessageLine": 2306,
+              "summaryEvidence": {
+                "line": 2466,
+                "text": "INFO  worker-denial: result case=cors-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=1 outcome=not-qualified"
+              }
+            },
+            {
+              "case": "redirect-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2326,
+              "summaryEvidence": {
+                "line": 2468,
+                "text": "INFO  worker-denial: result case=redirect-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            },
+            {
+              "case": "parallel-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2350,
+              "summaryEvidence": {
+                "line": 2470,
+                "text": "INFO  worker-denial: result case=parallel-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            },
+            {
+              "case": "cors-preflight-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2368,
+              "summaryEvidence": {
+                "line": 2472,
+                "text": "INFO  worker-denial: result case=cors-preflight-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            },
+            {
+              "case": "teardown-deny",
+              "initialTypeError": false,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 1,
+              "preflightRequests": 0,
+              "outcome": "not-qualified",
+              "actualMessageLine": 2402,
+              "summaryEvidence": {
+                "line": 2474,
+                "text": "INFO  worker-denial: result case=teardown-deny initial-typeerror=no request-identity=yes timing-identity=yes target-network=1 preflight-network=0 outcome=not-qualified"
+              }
+            }
+          ],
+          "originRequests": [
+            {
+              "line": 2414,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/post-pass",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2416,
+              "origin": "A",
+              "method": "GET",
+              "path": "/denial/network/redirect-pass",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2418,
+              "origin": "A",
+              "method": "GET",
+              "path": "/denial/network/redirect-deny",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2420,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/concurrent",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2422,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/concurrent",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2424,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/teardown-deny",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2426,
+              "origin": "A",
+              "method": "GET",
+              "path": "/denial/network/teardown-followup",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2428,
+              "origin": "B",
+              "method": "OPTIONS",
+              "path": "/denial/network/cors-pass",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2430,
+              "origin": "B",
+              "method": "POST",
+              "path": "/denial/network/cors-pass",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2432,
+              "origin": "B",
+              "method": "OPTIONS",
+              "path": "/denial/network/cors-deny",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2434,
+              "origin": "B",
+              "method": "GET",
+              "path": "/denial/network/redirect-pass-target",
+              "bodyBytes": 0,
+              "complete": true
+            }
+          ],
+          "network": {
+            "unknownRequests": 0,
+            "acceptedConnectionsA": 11,
+            "acceptedConnectionsB": 4,
+            "receivedHttpBytesA": 137353,
+            "receivedHttpBytesB": 34897,
+            "unattributedHttpBytes": 0,
+            "evidence": [
+              {
+                "line": 2436,
+                "text": "INFO  worker-denial: unknown-origin-requests=0 origin-a-connections=11 origin-b-connections=4"
+              },
+              {
+                "line": 2438,
+                "text": "INFO  worker-denial: received-http-bytes-a=137353 received-http-bytes-b=34897 unattributed-http-bytes=0"
+              }
+            ]
+          },
+          "nativeEvidence": [
+            {
+              "line": 2254,
+              "text": "INFO  worker-denial: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{A24C11C5-A3B9-4D35-ADC5-3F95048AEE96} origin=http://127.0.0.1:60545 other=http://127.0.0.1:60546"
+            },
+            {
+              "line": 2256,
+              "text": "INFO  worker-denial: CreateEnvironment completion hr=0x00000000"
+            },
+            {
+              "line": 2258,
+              "text": "INFO  worker-denial: runtime=131.0.2903.86 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+            },
+            {
+              "line": 2260,
+              "text": "INFO  worker-denial: CreateController immediate hr=0x00000000"
+            },
+            {
+              "line": 2262,
+              "text": "INFO  worker-denial: CreateController completion hr=0x00000000"
+            },
+            {
+              "line": 2264,
+              "text": "INFO  worker-denial: CreateController immediate hr=0x00000000"
+            },
+            {
+              "line": 2266,
+              "text": "INFO  worker-denial: CreateController completion hr=0x00000000"
+            },
+            {
+              "line": 2268,
+              "text": "INFO  worker-denial: owner Navigate hr=0x00000000"
+            },
+            {
+              "line": 2272,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60545/denial/network/post-pass method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2276,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60545/denial/network/post-deny method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2278,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2280,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2282,
+              "text": "INFO  worker-denial: terminal-denial case=post-deny original=http://127.0.0.1:60545/denial/network/post-deny rewritten=gesher-denial-a24c11c5a3b94d35adc53f95048aee96:blocked"
+            },
+            {
+              "line": 2284,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2288,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60546/denial/network/cors-pass method=OPTIONS source=SERVICE_WORKER"
+            },
+            {
+              "line": 2290,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60546/denial/network/cors-pass method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2294,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60546/denial/network/cors-deny method=OPTIONS source=SERVICE_WORKER"
+            },
+            {
+              "line": 2296,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60546/denial/network/cors-deny method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2298,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2300,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2302,
+              "text": "INFO  worker-denial: terminal-denial case=cors-deny original=http://127.0.0.1:60546/denial/network/cors-deny rewritten=gesher-denial-a24c11c5a3b94d35adc53f95048aee96:blocked"
+            },
+            {
+              "line": 2304,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2308,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60545/denial/network/redirect-pass method=GET source=SERVICE_WORKER"
+            },
+            {
+              "line": 2310,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60546/denial/network/redirect-pass-target method=GET source=SERVICE_WORKER"
+            },
+            {
+              "line": 2314,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60545/denial/network/redirect-deny method=GET source=SERVICE_WORKER"
+            },
+            {
+              "line": 2316,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60546/denial/network/redirect-deny-target method=GET source=SERVICE_WORKER"
+            },
+            {
+              "line": 2318,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2320,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2322,
+              "text": "INFO  worker-denial: terminal-denial case=redirect-deny original=http://127.0.0.1:60546/denial/network/redirect-deny-target rewritten=gesher-denial-a24c11c5a3b94d35adc53f95048aee96:blocked"
+            },
+            {
+              "line": 2324,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2328,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60545/denial/network/concurrent method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2330,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2332,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60545/denial/network/concurrent method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2334,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2336,
+              "text": "INFO  worker-denial: parallel reverse-complete case=parallel-deny"
+            },
+            {
+              "line": 2338,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2340,
+              "text": "INFO  worker-denial: terminal-denial case=parallel-deny original=http://127.0.0.1:60545/denial/network/concurrent rewritten=gesher-denial-a24c11c5a3b94d35adc53f95048aee96:blocked"
+            },
+            {
+              "line": 2342,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2344,
+              "text": "INFO  worker-denial: parallel reverse-complete case=parallel-allow"
+            },
+            {
+              "line": 2346,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2352,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60545/denial/network/concurrent method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2356,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60546/denial/network/cors-preflight-deny method=OPTIONS source=SERVICE_WORKER"
+            },
+            {
+              "line": 2358,
+              "text": "INFO  worker-denial: preflight case=cors-preflight-deny requested-method=POST requesting-origin=http://127.0.0.1:60545 source=SERVICE_WORKER"
+            },
+            {
+              "line": 2360,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2362,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2364,
+              "text": "INFO  worker-denial: terminal-denial case=cors-preflight-deny original=http://127.0.0.1:60546/denial/network/cors-preflight-deny rewritten=gesher-denial-a24c11c5a3b94d35adc53f95048aee96:blocked"
+            },
+            {
+              "line": 2366,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2372,
+              "text": "INFO  worker-denial: observer Navigate hr=0x00000000"
+            },
+            {
+              "line": 2376,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:60545/denial/network/teardown-deny method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2378,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2380,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2382,
+              "text": "INFO  worker-denial: terminal-denial case=teardown-deny original=http://127.0.0.1:60545/denial/network/teardown-deny rewritten=gesher-denial-a24c11c5a3b94d35adc53f95048aee96:blocked"
+            },
+            {
+              "line": 2384,
+              "text": "INFO  worker-denial: clear upload before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2386,
+              "text": "INFO  worker-denial: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2388,
+              "text": "INFO  worker-denial: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2390,
+              "text": "INFO  worker-denial: remove request callback hr=0x00000000"
+            },
+            {
+              "line": 2392,
+              "text": "INFO  worker-denial: remove message callback hr=0x00000000"
+            },
+            {
+              "line": 2394,
+              "text": "INFO  worker-denial: controller.Close hr=0x00000000"
+            },
+            {
+              "line": 2396,
+              "text": "INFO  worker-denial: remove external guard hr=0x8007139f"
+            },
+            {
+              "line": 2398,
+              "text": "INFO  worker-denial: Complete after owner closure hr=0x00000000"
+            },
+            {
+              "line": 2400,
+              "text": "INFO  worker-denial: late-allow rejected case=teardown-deny terminal=denied original-restores=0"
+            },
+            {
+              "line": 2408,
+              "text": "INFO  worker-denial: remove message callback hr=0x00000000"
+            },
+            {
+              "line": 2410,
+              "text": "INFO  worker-denial: controller.Close hr=0x00000000"
+            },
+            {
+              "line": 2412,
+              "text": "INFO  worker-denial: remove external guard hr=0x8007139f"
+            },
+            {
+              "line": 2414,
+              "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/post-pass body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2416,
+              "text": "INFO  worker-denial: origin=A method=GET path=/denial/network/redirect-pass body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2418,
+              "text": "INFO  worker-denial: origin=A method=GET path=/denial/network/redirect-deny body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2420,
+              "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/concurrent body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2422,
+              "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/concurrent body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2424,
+              "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/teardown-deny body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2426,
+              "text": "INFO  worker-denial: origin=A method=GET path=/denial/network/teardown-followup body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2428,
+              "text": "INFO  worker-denial: origin=B method=OPTIONS path=/denial/network/cors-pass body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2430,
+              "text": "INFO  worker-denial: origin=B method=POST path=/denial/network/cors-pass body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2432,
+              "text": "INFO  worker-denial: origin=B method=OPTIONS path=/denial/network/cors-deny body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2434,
+              "text": "INFO  worker-denial: origin=B method=GET path=/denial/network/redirect-pass-target body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2436,
+              "text": "INFO  worker-denial: unknown-origin-requests=0 origin-a-connections=11 origin-b-connections=4"
+            },
+            {
+              "line": 2438,
+              "text": "INFO  worker-denial: received-http-bytes-a=137353 received-http-bytes-b=34897 unattributed-http-bytes=0"
+            },
+            {
+              "line": 2440,
+              "text": "INFO  worker-denial: case=post-pass intercepted=1"
+            },
+            {
+              "line": 2442,
+              "text": "INFO  worker-denial: case=post-deny intercepted=1"
+            },
+            {
+              "line": 2444,
+              "text": "INFO  worker-denial: case=cors-pass intercepted=1"
+            },
+            {
+              "line": 2446,
+              "text": "INFO  worker-denial: case=cors-deny intercepted=1"
+            },
+            {
+              "line": 2448,
+              "text": "INFO  worker-denial: case=redirect-pass intercepted=2"
+            },
+            {
+              "line": 2450,
+              "text": "INFO  worker-denial: case=redirect-deny intercepted=2"
+            },
+            {
+              "line": 2452,
+              "text": "INFO  worker-denial: case=parallel-allow intercepted=1"
+            },
+            {
+              "line": 2454,
+              "text": "INFO  worker-denial: case=parallel-deny intercepted=1"
+            },
+            {
+              "line": 2456,
+              "text": "INFO  worker-denial: case=sequential-pass intercepted=1"
+            },
+            {
+              "line": 2458,
+              "text": "INFO  worker-denial: case=cors-preflight-deny intercepted=0"
+            },
+            {
+              "line": 2460,
+              "text": "INFO  worker-denial: case=teardown-deny intercepted=1"
+            },
+            {
+              "line": 2462,
+              "text": "INFO  worker-denial: case=teardown-followup intercepted=0"
+            },
+            {
+              "line": 2464,
+              "text": "INFO  worker-denial: result case=post-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2466,
+              "text": "INFO  worker-denial: result case=cors-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=1 outcome=not-qualified"
+            },
+            {
+              "line": 2468,
+              "text": "INFO  worker-denial: result case=redirect-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2470,
+              "text": "INFO  worker-denial: result case=parallel-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2472,
+              "text": "INFO  worker-denial: result case=cors-preflight-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2474,
+              "text": "INFO  worker-denial: result case=teardown-deny initial-typeerror=no request-identity=yes timing-identity=yes target-network=1 preflight-network=0 outcome=not-qualified"
+            },
+            {
+              "line": 2476,
+              "text": "INFO  worker-denial: parallel-reverse-completions=2 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0"
+            },
+            {
+              "line": 2478,
+              "text": "INFO  worker-denial: preflight-policy case=cors-preflight-deny options-intercepted=1 post-intercepted=0"
+            },
+            {
+              "line": 2480,
+              "text": "INFO  worker-denial: redirect-start-network=1 redirect-target-callback=yes; observed WebView2 routing only; Android redirect parity unqualified"
+            }
+          ],
+          "completionEvidence": {
+            "line": 2482,
+            "text": "PASS  worker-denial: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled"
+          },
+          "productionCapabilityEnabled": false,
+          "preflightEvidence": [
+            {
+              "line": 2358,
+              "text": "INFO  worker-denial: preflight case=cors-preflight-deny requested-method=POST requesting-origin=http://127.0.0.1:60545 source=SERVICE_WORKER"
+            },
+            {
+              "line": 2478,
+              "text": "INFO  worker-denial: preflight-policy case=cors-preflight-deny options-intercepted=1 post-intercepted=0"
+            }
+          ],
+          "preservedNegativeControls": [
+            "cors-deny",
+            "teardown-deny"
+          ]
+        },
+        {
+          "tag": "worker-ordering",
+          "caseCount": 3,
+          "profile": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{FE3B50A7-352A-4E4E-8AF4-4C09B25AC62F}",
+          "origin": "http://127.0.0.1:60564",
+          "otherOrigin": "http://127.0.0.1:60565",
+          "workerIdentity": "73e35cb5-af65-4398-985e-4b4aef602bfb",
+          "identityEvidence": [
+            {
+              "line": 2484,
+              "text": "INFO  worker-ordering: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{FE3B50A7-352A-4E4E-8AF4-4C09B25AC62F} origin=http://127.0.0.1:60564 other=http://127.0.0.1:60565"
+            },
+            {
+              "line": 2488,
+              "text": "INFO  worker-ordering: runtime=131.0.2903.86 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+            }
+          ],
+          "messages": [
+            {
+              "line": 2500,
+              "observer": false,
+              "message": {
+                "event": "matrix-ready",
+                "observer": false,
+                "completeFirst": true,
+                "secure": true,
+                "script": "http://127.0.0.1:60564/denial/sw.js",
+                "scope": "http://127.0.0.1:60564/denial/"
+              }
+            },
+            {
+              "line": 2504,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "post-pass",
+                "name": "post-pass",
+                "workerIdentity": "73e35cb5-af65-4398-985e-4b4aef602bfb",
+                "workerScript": "http://127.0.0.1:60564/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60564/denial/network/post-pass",
+                "finalRequestUrl": "http://127.0.0.1:60564/denial/network/post-pass",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 16,
+                "text": "origin:post-pass",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60564/denial/network/post-pass",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60564/denial/network/post-pass",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2506,
+              "observer": false,
+              "message": {
+                "event": "matrix-main-complete"
+              }
+            },
+            {
+              "line": 2510,
+              "observer": true,
+              "message": {
+                "event": "matrix-ready",
+                "observer": true,
+                "completeFirst": true,
+                "secure": true,
+                "script": "http://127.0.0.1:60564/denial/sw.js",
+                "scope": "http://127.0.0.1:60564/denial/"
+              }
+            },
+            {
+              "line": 2540,
+              "observer": true,
+              "message": {
+                "event": "matrix-case",
+                "action": "teardown-complete-deny",
+                "name": "teardown-complete-deny",
+                "workerIdentity": "73e35cb5-af65-4398-985e-4b4aef602bfb",
+                "workerScript": "http://127.0.0.1:60564/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60564/denial/network/teardown-complete-deny",
+                "finalRequestUrl": "http://127.0.0.1:60564/denial/network/teardown-complete-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60564/denial/network/teardown-complete-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2542,
+              "observer": true,
+              "message": {
+                "event": "matrix-case",
+                "action": "teardown-complete-followup",
+                "name": "teardown-complete-followup",
+                "workerIdentity": "73e35cb5-af65-4398-985e-4b4aef602bfb",
+                "workerScript": "http://127.0.0.1:60564/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:60564/denial/network/teardown-complete-followup",
+                "finalRequestUrl": "http://127.0.0.1:60564/denial/network/teardown-complete-followup",
+                "method": "GET",
+                "finalMethod": "GET",
+                "uploadBytes": 0,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 33,
+                "text": "origin:teardown-complete-followup",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:60564/denial/network/teardown-complete-followup",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:60564/denial/network/teardown-complete-followup",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2544,
+              "observer": true,
+              "message": {
+                "event": "matrix-complete",
+                "unregistered": true
+              }
+            }
+          ],
+          "outcomes": [
+            {
+              "case": "teardown-complete-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2540,
+              "summaryEvidence": {
+                "line": 2566,
+                "text": "INFO  worker-ordering: result case=teardown-complete-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            }
+          ],
+          "originRequests": [
+            {
+              "line": 2552,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/post-pass",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2554,
+              "origin": "A",
+              "method": "GET",
+              "path": "/denial/network/teardown-complete-followup",
+              "bodyBytes": 0,
+              "complete": true
+            }
+          ],
+          "network": {
+            "unknownRequests": 0,
+            "acceptedConnectionsA": 6,
+            "acceptedConnectionsB": 0,
+            "receivedHttpBytesA": 36591,
+            "receivedHttpBytesB": 0,
+            "unattributedHttpBytes": 0,
+            "evidence": [
+              {
+                "line": 2556,
+                "text": "INFO  worker-ordering: unknown-origin-requests=0 origin-a-connections=6 origin-b-connections=0"
+              },
+              {
+                "line": 2558,
+                "text": "INFO  worker-ordering: received-http-bytes-a=36591 received-http-bytes-b=0 unattributed-http-bytes=0"
+              }
+            ]
+          },
+          "nativeEvidence": [
+            {
+              "line": 2484,
+              "text": "INFO  worker-ordering: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{FE3B50A7-352A-4E4E-8AF4-4C09B25AC62F} origin=http://127.0.0.1:60564 other=http://127.0.0.1:60565"
+            },
+            {
+              "line": 2486,
+              "text": "INFO  worker-ordering: CreateEnvironment completion hr=0x00000000"
+            },
+            {
+              "line": 2488,
+              "text": "INFO  worker-ordering: runtime=131.0.2903.86 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+            },
+            {
+              "line": 2490,
+              "text": "INFO  worker-ordering: CreateController immediate hr=0x00000000"
+            },
+            {
+              "line": 2492,
+              "text": "INFO  worker-ordering: CreateController completion hr=0x00000000"
+            },
+            {
+              "line": 2494,
+              "text": "INFO  worker-ordering: CreateController immediate hr=0x00000000"
+            },
+            {
+              "line": 2496,
+              "text": "INFO  worker-ordering: CreateController completion hr=0x00000000"
+            },
+            {
+              "line": 2498,
+              "text": "INFO  worker-ordering: owner Navigate hr=0x00000000"
+            },
+            {
+              "line": 2502,
+              "text": "INFO  worker-ordering: request uri=http://127.0.0.1:60564/denial/network/post-pass method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2508,
+              "text": "INFO  worker-ordering: observer Navigate hr=0x00000000"
+            },
+            {
+              "line": 2512,
+              "text": "INFO  worker-ordering: request uri=http://127.0.0.1:60564/denial/network/teardown-complete-deny method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2514,
+              "text": "INFO  worker-ordering: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2516,
+              "text": "INFO  worker-ordering: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2518,
+              "text": "INFO  worker-ordering: terminal-denial case=teardown-complete-deny original=http://127.0.0.1:60564/denial/network/teardown-complete-deny rewritten=gesher-denial-fe3b50a7352a4e4e8af44c09b25ac62f:blocked"
+            },
+            {
+              "line": 2520,
+              "text": "INFO  worker-ordering: clear upload before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2522,
+              "text": "INFO  worker-ordering: Complete before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2524,
+              "text": "INFO  worker-ordering: completion-order case=teardown-complete-deny complete-before-filters-and-close=yes owner-live=yes filters=2"
+            },
+            {
+              "line": 2526,
+              "text": "INFO  worker-ordering: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2528,
+              "text": "INFO  worker-ordering: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2530,
+              "text": "INFO  worker-ordering: remove request callback hr=0x00000000"
+            },
+            {
+              "line": 2532,
+              "text": "INFO  worker-ordering: remove message callback hr=0x00000000"
+            },
+            {
+              "line": 2534,
+              "text": "INFO  worker-ordering: controller.Close hr=0x00000000"
+            },
+            {
+              "line": 2536,
+              "text": "INFO  worker-ordering: remove external guard hr=0x8007139f"
+            },
+            {
+              "line": 2538,
+              "text": "INFO  worker-ordering: late-allow rejected case=teardown-complete-deny terminal=denied original-restores=0"
+            },
+            {
+              "line": 2546,
+              "text": "INFO  worker-ordering: remove message callback hr=0x00000000"
+            },
+            {
+              "line": 2548,
+              "text": "INFO  worker-ordering: controller.Close hr=0x00000000"
+            },
+            {
+              "line": 2550,
+              "text": "INFO  worker-ordering: remove external guard hr=0x8007139f"
+            },
+            {
+              "line": 2552,
+              "text": "INFO  worker-ordering: origin=A method=POST path=/denial/network/post-pass body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2554,
+              "text": "INFO  worker-ordering: origin=A method=GET path=/denial/network/teardown-complete-followup body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2556,
+              "text": "INFO  worker-ordering: unknown-origin-requests=0 origin-a-connections=6 origin-b-connections=0"
+            },
+            {
+              "line": 2558,
+              "text": "INFO  worker-ordering: received-http-bytes-a=36591 received-http-bytes-b=0 unattributed-http-bytes=0"
+            },
+            {
+              "line": 2560,
+              "text": "INFO  worker-ordering: case=post-pass intercepted=1"
+            },
+            {
+              "line": 2562,
+              "text": "INFO  worker-ordering: case=teardown-complete-deny intercepted=1"
+            },
+            {
+              "line": 2564,
+              "text": "INFO  worker-ordering: case=teardown-complete-followup intercepted=0"
+            },
+            {
+              "line": 2566,
+              "text": "INFO  worker-ordering: result case=teardown-complete-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2568,
+              "text": "INFO  worker-ordering: parallel-reverse-completions=0 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0"
+            }
+          ],
+          "completionEvidence": {
+            "line": 2570,
+            "text": "PASS  worker-ordering: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled"
+          },
+          "productionCapabilityEnabled": false,
+          "actualCompletionOrder": [
+            {
+              "line": 2516,
+              "text": "INFO  worker-ordering: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2520,
+              "text": "INFO  worker-ordering: clear upload before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2522,
+              "text": "INFO  worker-ordering: Complete before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2526,
+              "text": "INFO  worker-ordering: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2528,
+              "text": "INFO  worker-ordering: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2534,
+              "text": "INFO  worker-ordering: controller.Close hr=0x00000000"
+            }
+          ],
+          "orderingClaimEvidence": {
+            "line": 2524,
+            "text": "INFO  worker-ordering: completion-order case=teardown-complete-deny complete-before-filters-and-close=yes owner-live=yes filters=2"
+          }
+        }
+      ]
+    },
+    {
+      "os": "windows-2025",
+      "job": 139166035174,
+      "url": "https://github.com/gesher-runtime/gesher/actions/runs/45602648001/job/139166035174",
+      "overallJobResult": "failure",
+      "runtime": "157.0.4341.46",
+      "sdk": "1.0.4258.31",
+      "loader": "static (WebView2LoaderStatic.lib)",
+      "log": {
+        "file": "storage-delete-45602648001-windows-2025-139166035174.log",
+        "sha256": "e85bf368a77041bface9120341bf78d2b211bdbe2b592e2d629bd1dfcb94bc84",
+        "bytes": 272546,
+        "lines": 2488
+      },
+      "checkoutEvidence": {
+        "line": 101,
+        "text": "33fc2e50af97c95023e350ac4c8ba1e2d6d5e877"
+      },
+      "expectedArtifactSha256": "98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477",
+      "downloadedArtifactSha256": "98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477",
+      "artifactEvidence": [
+        {
+          "line": 117,
+          "text": "- webview (ID: 15016452291, Size: 2856600, Expected Digest: sha256:98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477)"
+        },
+        {
+          "line": 121,
+          "text": "SHA256 digest of downloaded artifact is 98a96f6e41820131ab3f9f0a4d61fea7b46fefa3530ded2afc6d0b8754f7d477"
+        }
+      ],
+      "prerequisiteEvidence": [
+        {
+          "line": 254,
+          "text": "Worker response PowerShell gate: 44 fixture scenarios passed; no native runtime exercised"
+        },
+        {
+          "line": 1958,
+          "text": "PASS  worker-response: independent HTTP byte accounting controls verified"
+        },
+        {
+          "line": 2146,
+          "text": "PASS  worker-response: controls and independent network counters verified; error outcomes recorded; no production worker capability enabled"
+        }
+      ],
+      "storageSeparateFailure": {
+        "all14SeededEvidence": {
+          "line": 1432,
+          "text": "PASS  storage-delete: all-written positive=14 removed=0"
+        },
+        "exitSigned": -1073741819,
+        "exitHex": "0xC0000005",
+        "failureEvidence": {
+          "line": 1498,
+          "text": "FAIL  storage-delete: production qualification failed (exit=-1073741819 qualified=0 missing=34 final-callback-checks=0)"
+        },
+        "exceptionEvidence": {
+          "line": 1926,
+          "text": "native-exception: code=0xc0000005 flags=0x00000000 thread=7752 parameters=2 access=0x0 target=0xffffffffffffffff"
+        },
+        "faultModule": "EmbeddedBrowserWebView.dll",
+        "faultRva": "0x44ce24",
+        "faultEvidence": {
+          "line": 1927,
+          "text": "native-exception: fault[0] pc=0x00007ffaf255ce24 sp=0x0000000000000000 module=EmbeddedBrowserWebView.dll base=0x00007ffaf2110000 rva=0x44ce24"
+        },
+        "productionCallbackSummaryObserved": false,
+        "storageQualified": false,
+        "finalPreservationObserved": false,
+        "crashCauseEstablished": false,
+        "intentionalSelfTest": {
+          "exitSigned": -532217855,
+          "code": "0xE0470001",
+          "flags": "0x00000081",
+          "exceptionEvidence": {
+            "line": 637,
+            "text": "native-exception: code=0xe0470001 flags=0x00000081 thread=9812 parameters=2 access=0x47534852 target=0x53544143"
+          },
+          "executedWrapperRejectedEvidence": {
+            "line": 636,
+            "text": "FAIL  storage-delete: native fault diagnostic control failed (exit=-532217855 code=0 address=1 probe-frames=2)"
+          },
+          "interpretation": "The exact noncontinuable software exception and executable caller frames were recorded; the executed wrapper incorrectly required flags exactly 0x1. This is distinct from the real storage access violation."
+        }
+      },
+      "scenarios": [
+        {
+          "tag": "worker-denial",
+          "caseCount": 12,
+          "profile": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{221441DE-2B9E-468C-86A5-491168789D7C}",
+          "origin": "http://127.0.0.1:55308",
+          "otherOrigin": "http://127.0.0.1:55309",
+          "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+          "identityEvidence": [
+            {
+              "line": 2148,
+              "text": "INFO  worker-denial: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{221441DE-2B9E-468C-86A5-491168789D7C} origin=http://127.0.0.1:55308 other=http://127.0.0.1:55309"
+            },
+            {
+              "line": 2152,
+              "text": "INFO  worker-denial: runtime=157.0.4341.46 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+            }
+          ],
+          "messages": [
+            {
+              "line": 2164,
+              "observer": false,
+              "message": {
+                "event": "matrix-ready",
+                "observer": false,
+                "completeFirst": false,
+                "secure": true,
+                "script": "http://127.0.0.1:55308/denial/sw.js",
+                "scope": "http://127.0.0.1:55308/denial/"
+              }
+            },
+            {
+              "line": 2168,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "post-pass",
+                "name": "post-pass",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/post-pass",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/post-pass",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 16,
+                "text": "origin:post-pass",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55308/denial/network/post-pass",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/post-pass",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2180,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "post-deny",
+                "name": "post-deny",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/post-deny",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/post-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/post-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2186,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "cors-pass",
+                "name": "cors-pass",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55309/denial/network/cors-pass",
+                "finalRequestUrl": "http://127.0.0.1:55309/denial/network/cors-pass",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 16,
+                "text": "origin:cors-pass",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55309/denial/network/cors-pass",
+                "responseType": "cors",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55309/denial/network/cors-pass",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2200,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "cors-deny",
+                "name": "cors-deny",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55309/denial/network/cors-deny",
+                "finalRequestUrl": "http://127.0.0.1:55309/denial/network/cors-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55309/denial/network/cors-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2206,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "redirect-pass",
+                "name": "redirect-pass",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/redirect-pass",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/redirect-pass",
+                "method": "GET",
+                "finalMethod": "GET",
+                "uploadBytes": 0,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 27,
+                "text": "origin:redirect-pass-target",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55309/denial/network/redirect-pass-target",
+                "responseType": "cors",
+                "redirected": true,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/redirect-pass",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2220,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "redirect-deny",
+                "name": "redirect-deny",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/redirect-deny",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/redirect-deny",
+                "method": "GET",
+                "finalMethod": "GET",
+                "uploadBytes": 0,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/redirect-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2242,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "parallel",
+                "name": "parallel-allow",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/concurrent",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/concurrent",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 17,
+                "text": "origin:concurrent",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55308/denial/network/concurrent",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/concurrent",
+                    "type": "fetch"
+                  },
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/concurrent",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2244,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "parallel",
+                "name": "parallel-deny",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/concurrent",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/concurrent",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/concurrent",
+                    "type": "fetch"
+                  },
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/concurrent",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2248,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "sequential-pass",
+                "name": "sequential-pass",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/concurrent",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/concurrent",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 17,
+                "text": "origin:concurrent",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55308/denial/network/concurrent",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/concurrent",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2262,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "cors-preflight-deny",
+                "name": "cors-preflight-deny",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55309/denial/network/cors-preflight-deny",
+                "finalRequestUrl": "http://127.0.0.1:55309/denial/network/cors-preflight-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55309/denial/network/cors-preflight-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2264,
+              "observer": false,
+              "message": {
+                "event": "matrix-main-complete"
+              }
+            },
+            {
+              "line": 2268,
+              "observer": true,
+              "message": {
+                "event": "matrix-ready",
+                "observer": true,
+                "completeFirst": false,
+                "secure": true,
+                "script": "http://127.0.0.1:55308/denial/sw.js",
+                "scope": "http://127.0.0.1:55308/denial/"
+              }
+            },
+            {
+              "line": 2296,
+              "observer": true,
+              "message": {
+                "event": "matrix-case",
+                "action": "teardown-deny",
+                "name": "teardown-deny",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/teardown-deny",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/teardown-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 20,
+                "text": "origin:teardown-deny",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55308/denial/network/teardown-deny",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/teardown-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2298,
+              "observer": true,
+              "message": {
+                "event": "matrix-case",
+                "action": "teardown-followup",
+                "name": "teardown-followup",
+                "workerIdentity": "179ed6fa-c5cf-47ba-90e4-5b9b23a7f32a",
+                "workerScript": "http://127.0.0.1:55308/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55308/denial/network/teardown-followup",
+                "finalRequestUrl": "http://127.0.0.1:55308/denial/network/teardown-followup",
+                "method": "GET",
+                "finalMethod": "GET",
+                "uploadBytes": 0,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 24,
+                "text": "origin:teardown-followup",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55308/denial/network/teardown-followup",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55308/denial/network/teardown-followup",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2300,
+              "observer": true,
+              "message": {
+                "event": "matrix-complete",
+                "unregistered": true
+              }
+            }
+          ],
+          "outcomes": [
+            {
+              "case": "post-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2180,
+              "summaryEvidence": {
+                "line": 2358,
+                "text": "INFO  worker-denial: result case=post-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            },
+            {
+              "case": "cors-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 1,
+              "outcome": "not-qualified",
+              "actualMessageLine": 2200,
+              "summaryEvidence": {
+                "line": 2360,
+                "text": "INFO  worker-denial: result case=cors-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=1 outcome=not-qualified"
+              }
+            },
+            {
+              "case": "redirect-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2220,
+              "summaryEvidence": {
+                "line": 2362,
+                "text": "INFO  worker-denial: result case=redirect-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            },
+            {
+              "case": "parallel-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2244,
+              "summaryEvidence": {
+                "line": 2364,
+                "text": "INFO  worker-denial: result case=parallel-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            },
+            {
+              "case": "cors-preflight-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2262,
+              "summaryEvidence": {
+                "line": 2366,
+                "text": "INFO  worker-denial: result case=cors-preflight-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            },
+            {
+              "case": "teardown-deny",
+              "initialTypeError": false,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 1,
+              "preflightRequests": 0,
+              "outcome": "not-qualified",
+              "actualMessageLine": 2296,
+              "summaryEvidence": {
+                "line": 2368,
+                "text": "INFO  worker-denial: result case=teardown-deny initial-typeerror=no request-identity=yes timing-identity=yes target-network=1 preflight-network=0 outcome=not-qualified"
+              }
+            }
+          ],
+          "originRequests": [
+            {
+              "line": 2308,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/post-pass",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2310,
+              "origin": "A",
+              "method": "GET",
+              "path": "/denial/network/redirect-pass",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2312,
+              "origin": "A",
+              "method": "GET",
+              "path": "/denial/network/redirect-deny",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2314,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/concurrent",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2316,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/concurrent",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2318,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/teardown-deny",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2320,
+              "origin": "A",
+              "method": "GET",
+              "path": "/denial/network/teardown-followup",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2322,
+              "origin": "B",
+              "method": "OPTIONS",
+              "path": "/denial/network/cors-pass",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2324,
+              "origin": "B",
+              "method": "POST",
+              "path": "/denial/network/cors-pass",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2326,
+              "origin": "B",
+              "method": "OPTIONS",
+              "path": "/denial/network/cors-deny",
+              "bodyBytes": 0,
+              "complete": true
+            },
+            {
+              "line": 2328,
+              "origin": "B",
+              "method": "GET",
+              "path": "/denial/network/redirect-pass-target",
+              "bodyBytes": 0,
+              "complete": true
+            }
+          ],
+          "network": {
+            "unknownRequests": 0,
+            "acceptedConnectionsA": 13,
+            "acceptedConnectionsB": 4,
+            "receivedHttpBytesA": 137654,
+            "receivedHttpBytesB": 35069,
+            "unattributedHttpBytes": 0,
+            "evidence": [
+              {
+                "line": 2330,
+                "text": "INFO  worker-denial: unknown-origin-requests=0 origin-a-connections=13 origin-b-connections=4"
+              },
+              {
+                "line": 2332,
+                "text": "INFO  worker-denial: received-http-bytes-a=137654 received-http-bytes-b=35069 unattributed-http-bytes=0"
+              }
+            ]
+          },
+          "nativeEvidence": [
+            {
+              "line": 2148,
+              "text": "INFO  worker-denial: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{221441DE-2B9E-468C-86A5-491168789D7C} origin=http://127.0.0.1:55308 other=http://127.0.0.1:55309"
+            },
+            {
+              "line": 2150,
+              "text": "INFO  worker-denial: CreateEnvironment completion hr=0x00000000"
+            },
+            {
+              "line": 2152,
+              "text": "INFO  worker-denial: runtime=157.0.4341.46 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+            },
+            {
+              "line": 2154,
+              "text": "INFO  worker-denial: CreateController immediate hr=0x00000000"
+            },
+            {
+              "line": 2156,
+              "text": "INFO  worker-denial: CreateController completion hr=0x00000000"
+            },
+            {
+              "line": 2158,
+              "text": "INFO  worker-denial: CreateController immediate hr=0x00000000"
+            },
+            {
+              "line": 2160,
+              "text": "INFO  worker-denial: CreateController completion hr=0x00000000"
+            },
+            {
+              "line": 2162,
+              "text": "INFO  worker-denial: owner Navigate hr=0x00000000"
+            },
+            {
+              "line": 2166,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55308/denial/network/post-pass method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2170,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55308/denial/network/post-deny method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2172,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2174,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2176,
+              "text": "INFO  worker-denial: terminal-denial case=post-deny original=http://127.0.0.1:55308/denial/network/post-deny rewritten=gesher-denial-221441de2b9e468c86a5491168789d7c:blocked"
+            },
+            {
+              "line": 2178,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2182,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55309/denial/network/cors-pass method=OPTIONS source=SERVICE_WORKER"
+            },
+            {
+              "line": 2184,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55309/denial/network/cors-pass method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2188,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55309/denial/network/cors-deny method=OPTIONS source=SERVICE_WORKER"
+            },
+            {
+              "line": 2190,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55309/denial/network/cors-deny method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2192,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2194,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2196,
+              "text": "INFO  worker-denial: terminal-denial case=cors-deny original=http://127.0.0.1:55309/denial/network/cors-deny rewritten=gesher-denial-221441de2b9e468c86a5491168789d7c:blocked"
+            },
+            {
+              "line": 2198,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2202,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55308/denial/network/redirect-pass method=GET source=SERVICE_WORKER"
+            },
+            {
+              "line": 2204,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55309/denial/network/redirect-pass-target method=GET source=SERVICE_WORKER"
+            },
+            {
+              "line": 2208,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55308/denial/network/redirect-deny method=GET source=SERVICE_WORKER"
+            },
+            {
+              "line": 2210,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55309/denial/network/redirect-deny-target method=GET source=SERVICE_WORKER"
+            },
+            {
+              "line": 2212,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2214,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2216,
+              "text": "INFO  worker-denial: terminal-denial case=redirect-deny original=http://127.0.0.1:55309/denial/network/redirect-deny-target rewritten=gesher-denial-221441de2b9e468c86a5491168789d7c:blocked"
+            },
+            {
+              "line": 2218,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2222,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55308/denial/network/concurrent method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2224,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2226,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55308/denial/network/concurrent method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2228,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2230,
+              "text": "INFO  worker-denial: parallel reverse-complete case=parallel-deny"
+            },
+            {
+              "line": 2232,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2234,
+              "text": "INFO  worker-denial: terminal-denial case=parallel-deny original=http://127.0.0.1:55308/denial/network/concurrent rewritten=gesher-denial-221441de2b9e468c86a5491168789d7c:blocked"
+            },
+            {
+              "line": 2236,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2238,
+              "text": "INFO  worker-denial: parallel reverse-complete case=parallel-allow"
+            },
+            {
+              "line": 2240,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2246,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55308/denial/network/concurrent method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2250,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55309/denial/network/cors-preflight-deny method=OPTIONS source=SERVICE_WORKER"
+            },
+            {
+              "line": 2252,
+              "text": "INFO  worker-denial: preflight case=cors-preflight-deny requested-method=POST requesting-origin=http://127.0.0.1:55308 source=SERVICE_WORKER"
+            },
+            {
+              "line": 2254,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2256,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2258,
+              "text": "INFO  worker-denial: terminal-denial case=cors-preflight-deny original=http://127.0.0.1:55309/denial/network/cors-preflight-deny rewritten=gesher-denial-221441de2b9e468c86a5491168789d7c:blocked"
+            },
+            {
+              "line": 2260,
+              "text": "INFO  worker-denial: Complete hr=0x00000000"
+            },
+            {
+              "line": 2266,
+              "text": "INFO  worker-denial: observer Navigate hr=0x00000000"
+            },
+            {
+              "line": 2270,
+              "text": "INFO  worker-denial: request uri=http://127.0.0.1:55308/denial/network/teardown-deny method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2272,
+              "text": "INFO  worker-denial: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2274,
+              "text": "INFO  worker-denial: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2276,
+              "text": "INFO  worker-denial: terminal-denial case=teardown-deny original=http://127.0.0.1:55308/denial/network/teardown-deny rewritten=gesher-denial-221441de2b9e468c86a5491168789d7c:blocked"
+            },
+            {
+              "line": 2278,
+              "text": "INFO  worker-denial: clear upload before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2280,
+              "text": "INFO  worker-denial: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2282,
+              "text": "INFO  worker-denial: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2284,
+              "text": "INFO  worker-denial: remove request callback hr=0x00000000"
+            },
+            {
+              "line": 2286,
+              "text": "INFO  worker-denial: remove message callback hr=0x00000000"
+            },
+            {
+              "line": 2288,
+              "text": "INFO  worker-denial: controller.Close hr=0x00000000"
+            },
+            {
+              "line": 2290,
+              "text": "INFO  worker-denial: remove external guard hr=0x8007139f"
+            },
+            {
+              "line": 2292,
+              "text": "INFO  worker-denial: Complete after owner closure hr=0x00000000"
+            },
+            {
+              "line": 2294,
+              "text": "INFO  worker-denial: late-allow rejected case=teardown-deny terminal=denied original-restores=0"
+            },
+            {
+              "line": 2302,
+              "text": "INFO  worker-denial: remove message callback hr=0x00000000"
+            },
+            {
+              "line": 2304,
+              "text": "INFO  worker-denial: controller.Close hr=0x00000000"
+            },
+            {
+              "line": 2306,
+              "text": "INFO  worker-denial: remove external guard hr=0x8007139f"
+            },
+            {
+              "line": 2308,
+              "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/post-pass body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2310,
+              "text": "INFO  worker-denial: origin=A method=GET path=/denial/network/redirect-pass body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2312,
+              "text": "INFO  worker-denial: origin=A method=GET path=/denial/network/redirect-deny body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2314,
+              "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/concurrent body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2316,
+              "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/concurrent body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2318,
+              "text": "INFO  worker-denial: origin=A method=POST path=/denial/network/teardown-deny body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2320,
+              "text": "INFO  worker-denial: origin=A method=GET path=/denial/network/teardown-followup body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2322,
+              "text": "INFO  worker-denial: origin=B method=OPTIONS path=/denial/network/cors-pass body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2324,
+              "text": "INFO  worker-denial: origin=B method=POST path=/denial/network/cors-pass body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2326,
+              "text": "INFO  worker-denial: origin=B method=OPTIONS path=/denial/network/cors-deny body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2328,
+              "text": "INFO  worker-denial: origin=B method=GET path=/denial/network/redirect-pass-target body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2330,
+              "text": "INFO  worker-denial: unknown-origin-requests=0 origin-a-connections=13 origin-b-connections=4"
+            },
+            {
+              "line": 2332,
+              "text": "INFO  worker-denial: received-http-bytes-a=137654 received-http-bytes-b=35069 unattributed-http-bytes=0"
+            },
+            {
+              "line": 2334,
+              "text": "INFO  worker-denial: case=post-pass intercepted=1"
+            },
+            {
+              "line": 2336,
+              "text": "INFO  worker-denial: case=post-deny intercepted=1"
+            },
+            {
+              "line": 2338,
+              "text": "INFO  worker-denial: case=cors-pass intercepted=1"
+            },
+            {
+              "line": 2340,
+              "text": "INFO  worker-denial: case=cors-deny intercepted=1"
+            },
+            {
+              "line": 2342,
+              "text": "INFO  worker-denial: case=redirect-pass intercepted=2"
+            },
+            {
+              "line": 2344,
+              "text": "INFO  worker-denial: case=redirect-deny intercepted=2"
+            },
+            {
+              "line": 2346,
+              "text": "INFO  worker-denial: case=parallel-allow intercepted=1"
+            },
+            {
+              "line": 2348,
+              "text": "INFO  worker-denial: case=parallel-deny intercepted=1"
+            },
+            {
+              "line": 2350,
+              "text": "INFO  worker-denial: case=sequential-pass intercepted=1"
+            },
+            {
+              "line": 2352,
+              "text": "INFO  worker-denial: case=cors-preflight-deny intercepted=0"
+            },
+            {
+              "line": 2354,
+              "text": "INFO  worker-denial: case=teardown-deny intercepted=1"
+            },
+            {
+              "line": 2356,
+              "text": "INFO  worker-denial: case=teardown-followup intercepted=0"
+            },
+            {
+              "line": 2358,
+              "text": "INFO  worker-denial: result case=post-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2360,
+              "text": "INFO  worker-denial: result case=cors-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=1 outcome=not-qualified"
+            },
+            {
+              "line": 2362,
+              "text": "INFO  worker-denial: result case=redirect-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2364,
+              "text": "INFO  worker-denial: result case=parallel-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2366,
+              "text": "INFO  worker-denial: result case=cors-preflight-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2368,
+              "text": "INFO  worker-denial: result case=teardown-deny initial-typeerror=no request-identity=yes timing-identity=yes target-network=1 preflight-network=0 outcome=not-qualified"
+            },
+            {
+              "line": 2370,
+              "text": "INFO  worker-denial: parallel-reverse-completions=2 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0"
+            },
+            {
+              "line": 2372,
+              "text": "INFO  worker-denial: preflight-policy case=cors-preflight-deny options-intercepted=1 post-intercepted=0"
+            },
+            {
+              "line": 2374,
+              "text": "INFO  worker-denial: redirect-start-network=1 redirect-target-callback=yes; observed WebView2 routing only; Android redirect parity unqualified"
+            }
+          ],
+          "completionEvidence": {
+            "line": 2376,
+            "text": "PASS  worker-denial: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled"
+          },
+          "productionCapabilityEnabled": false,
+          "preflightEvidence": [
+            {
+              "line": 2252,
+              "text": "INFO  worker-denial: preflight case=cors-preflight-deny requested-method=POST requesting-origin=http://127.0.0.1:55308 source=SERVICE_WORKER"
+            },
+            {
+              "line": 2372,
+              "text": "INFO  worker-denial: preflight-policy case=cors-preflight-deny options-intercepted=1 post-intercepted=0"
+            }
+          ],
+          "preservedNegativeControls": [
+            "cors-deny",
+            "teardown-deny"
+          ]
+        },
+        {
+          "tag": "worker-ordering",
+          "caseCount": 3,
+          "profile": "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{25778C72-67BC-4ED4-960C-B06BA621D8A6}",
+          "origin": "http://127.0.0.1:55253",
+          "otherOrigin": "http://127.0.0.1:55254",
+          "workerIdentity": "02925498-474f-420a-9cdc-b3f39e182e70",
+          "identityEvidence": [
+            {
+              "line": 2378,
+              "text": "INFO  worker-ordering: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{25778C72-67BC-4ED4-960C-B06BA621D8A6} origin=http://127.0.0.1:55253 other=http://127.0.0.1:55254"
+            },
+            {
+              "line": 2382,
+              "text": "INFO  worker-ordering: runtime=157.0.4341.46 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+            }
+          ],
+          "messages": [
+            {
+              "line": 2394,
+              "observer": false,
+              "message": {
+                "event": "matrix-ready",
+                "observer": false,
+                "completeFirst": true,
+                "secure": true,
+                "script": "http://127.0.0.1:55253/denial/sw.js",
+                "scope": "http://127.0.0.1:55253/denial/"
+              }
+            },
+            {
+              "line": 2398,
+              "observer": false,
+              "message": {
+                "event": "matrix-case",
+                "action": "post-pass",
+                "name": "post-pass",
+                "workerIdentity": "02925498-474f-420a-9cdc-b3f39e182e70",
+                "workerScript": "http://127.0.0.1:55253/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55253/denial/network/post-pass",
+                "finalRequestUrl": "http://127.0.0.1:55253/denial/network/post-pass",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 16,
+                "text": "origin:post-pass",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55253/denial/network/post-pass",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55253/denial/network/post-pass",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2400,
+              "observer": false,
+              "message": {
+                "event": "matrix-main-complete"
+              }
+            },
+            {
+              "line": 2404,
+              "observer": true,
+              "message": {
+                "event": "matrix-ready",
+                "observer": true,
+                "completeFirst": true,
+                "secure": true,
+                "script": "http://127.0.0.1:55253/denial/sw.js",
+                "scope": "http://127.0.0.1:55253/denial/"
+              }
+            },
+            {
+              "line": 2432,
+              "observer": true,
+              "message": {
+                "event": "matrix-case",
+                "action": "teardown-complete-deny",
+                "name": "teardown-complete-deny",
+                "workerIdentity": "02925498-474f-420a-9cdc-b3f39e182e70",
+                "workerScript": "http://127.0.0.1:55253/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55253/denial/network/teardown-complete-deny",
+                "finalRequestUrl": "http://127.0.0.1:55253/denial/network/teardown-complete-deny",
+                "method": "POST",
+                "finalMethod": "POST",
+                "uploadBytes": 32768,
+                "fetch": "rejected",
+                "body": "none",
+                "status": 0,
+                "bytes": 0,
+                "text": "",
+                "errorName": "TypeError",
+                "error": "TypeError: Failed to fetch",
+                "responseUrl": "",
+                "responseType": "",
+                "redirected": false,
+                "originHeader": "",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55253/denial/network/teardown-complete-deny",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2436,
+              "observer": true,
+              "message": {
+                "event": "matrix-case",
+                "action": "teardown-complete-followup",
+                "name": "teardown-complete-followup",
+                "workerIdentity": "02925498-474f-420a-9cdc-b3f39e182e70",
+                "workerScript": "http://127.0.0.1:55253/denial/sw.js",
+                "requestUrl": "http://127.0.0.1:55253/denial/network/teardown-complete-followup",
+                "finalRequestUrl": "http://127.0.0.1:55253/denial/network/teardown-complete-followup",
+                "method": "GET",
+                "finalMethod": "GET",
+                "uploadBytes": 0,
+                "fetch": "resolved",
+                "body": "complete",
+                "status": 200,
+                "bytes": 33,
+                "text": "origin:teardown-complete-followup",
+                "errorName": "",
+                "error": "",
+                "responseUrl": "http://127.0.0.1:55253/denial/network/teardown-complete-followup",
+                "responseType": "basic",
+                "redirected": false,
+                "originHeader": "origin",
+                "timedOut": false,
+                "aborted": false,
+                "timings": [
+                  {
+                    "name": "http://127.0.0.1:55253/denial/network/teardown-complete-followup",
+                    "type": "fetch"
+                  }
+                ]
+              }
+            },
+            {
+              "line": 2438,
+              "observer": true,
+              "message": {
+                "event": "matrix-complete",
+                "unregistered": true
+              }
+            }
+          ],
+          "outcomes": [
+            {
+              "case": "teardown-complete-deny",
+              "initialTypeError": true,
+              "requestIdentity": true,
+              "timingIdentity": true,
+              "targetRequests": 0,
+              "preflightRequests": 0,
+              "outcome": "network-rejection-observed",
+              "actualMessageLine": 2432,
+              "summaryEvidence": {
+                "line": 2460,
+                "text": "INFO  worker-ordering: result case=teardown-complete-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+              }
+            }
+          ],
+          "originRequests": [
+            {
+              "line": 2446,
+              "origin": "A",
+              "method": "POST",
+              "path": "/denial/network/post-pass",
+              "bodyBytes": 32768,
+              "complete": true
+            },
+            {
+              "line": 2448,
+              "origin": "A",
+              "method": "GET",
+              "path": "/denial/network/teardown-complete-followup",
+              "bodyBytes": 0,
+              "complete": true
+            }
+          ],
+          "network": {
+            "unknownRequests": 0,
+            "acceptedConnectionsA": 6,
+            "acceptedConnectionsB": 0,
+            "receivedHttpBytesA": 36677,
+            "receivedHttpBytesB": 0,
+            "unattributedHttpBytes": 0,
+            "evidence": [
+              {
+                "line": 2450,
+                "text": "INFO  worker-ordering: unknown-origin-requests=0 origin-a-connections=6 origin-b-connections=0"
+              },
+              {
+                "line": 2452,
+                "text": "INFO  worker-ordering: received-http-bytes-a=36677 received-http-bytes-b=0 unattributed-http-bytes=0"
+              }
+            ]
+          },
+          "nativeEvidence": [
+            {
+              "line": 2378,
+              "text": "INFO  worker-ordering: fresh-profile=C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\gesher-worker-denial-scope-{25778C72-67BC-4ED4-960C-B06BA621D8A6} origin=http://127.0.0.1:55253 other=http://127.0.0.1:55254"
+            },
+            {
+              "line": 2380,
+              "text": "INFO  worker-ordering: CreateEnvironment completion hr=0x00000000"
+            },
+            {
+              "line": 2382,
+              "text": "INFO  worker-ordering: runtime=157.0.4341.46 sdk=1.0.4258.31 loader=static (WebView2LoaderStatic.lib)"
+            },
+            {
+              "line": 2384,
+              "text": "INFO  worker-ordering: CreateController immediate hr=0x00000000"
+            },
+            {
+              "line": 2386,
+              "text": "INFO  worker-ordering: CreateController completion hr=0x00000000"
+            },
+            {
+              "line": 2388,
+              "text": "INFO  worker-ordering: CreateController immediate hr=0x00000000"
+            },
+            {
+              "line": 2390,
+              "text": "INFO  worker-ordering: CreateController completion hr=0x00000000"
+            },
+            {
+              "line": 2392,
+              "text": "INFO  worker-ordering: owner Navigate hr=0x00000000"
+            },
+            {
+              "line": 2396,
+              "text": "INFO  worker-ordering: request uri=http://127.0.0.1:55253/denial/network/post-pass method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2402,
+              "text": "INFO  worker-ordering: observer Navigate hr=0x00000000"
+            },
+            {
+              "line": 2406,
+              "text": "INFO  worker-ordering: request uri=http://127.0.0.1:55253/denial/network/teardown-complete-deny method=POST source=SERVICE_WORKER"
+            },
+            {
+              "line": 2408,
+              "text": "INFO  worker-ordering: GetDeferral hr=0x00000000"
+            },
+            {
+              "line": 2410,
+              "text": "INFO  worker-ordering: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2412,
+              "text": "INFO  worker-ordering: terminal-denial case=teardown-complete-deny original=http://127.0.0.1:55253/denial/network/teardown-complete-deny rewritten=gesher-denial-25778c7267bc4ed4960cb06ba621d8a6:blocked"
+            },
+            {
+              "line": 2414,
+              "text": "INFO  worker-ordering: clear upload before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2416,
+              "text": "INFO  worker-ordering: Complete before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2418,
+              "text": "INFO  worker-ordering: completion-order case=teardown-complete-deny complete-before-filters-and-close=yes owner-live=yes filters=2"
+            },
+            {
+              "line": 2420,
+              "text": "INFO  worker-ordering: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2422,
+              "text": "INFO  worker-ordering: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2424,
+              "text": "INFO  worker-ordering: remove request callback hr=0x00000000"
+            },
+            {
+              "line": 2426,
+              "text": "INFO  worker-ordering: remove message callback hr=0x00000000"
+            },
+            {
+              "line": 2428,
+              "text": "INFO  worker-ordering: controller.Close hr=0x00000000"
+            },
+            {
+              "line": 2430,
+              "text": "INFO  worker-ordering: remove external guard hr=0x8007139f"
+            },
+            {
+              "line": 2434,
+              "text": "INFO  worker-ordering: late-allow rejected case=teardown-complete-deny terminal=denied original-restores=0"
+            },
+            {
+              "line": 2440,
+              "text": "INFO  worker-ordering: remove message callback hr=0x00000000"
+            },
+            {
+              "line": 2442,
+              "text": "INFO  worker-ordering: controller.Close hr=0x00000000"
+            },
+            {
+              "line": 2444,
+              "text": "INFO  worker-ordering: remove external guard hr=0x8007139f"
+            },
+            {
+              "line": 2446,
+              "text": "INFO  worker-ordering: origin=A method=POST path=/denial/network/post-pass body-bytes=32768 complete=yes"
+            },
+            {
+              "line": 2448,
+              "text": "INFO  worker-ordering: origin=A method=GET path=/denial/network/teardown-complete-followup body-bytes=0 complete=yes"
+            },
+            {
+              "line": 2450,
+              "text": "INFO  worker-ordering: unknown-origin-requests=0 origin-a-connections=6 origin-b-connections=0"
+            },
+            {
+              "line": 2452,
+              "text": "INFO  worker-ordering: received-http-bytes-a=36677 received-http-bytes-b=0 unattributed-http-bytes=0"
+            },
+            {
+              "line": 2454,
+              "text": "INFO  worker-ordering: case=post-pass intercepted=1"
+            },
+            {
+              "line": 2456,
+              "text": "INFO  worker-ordering: case=teardown-complete-deny intercepted=1"
+            },
+            {
+              "line": 2458,
+              "text": "INFO  worker-ordering: case=teardown-complete-followup intercepted=0"
+            },
+            {
+              "line": 2460,
+              "text": "INFO  worker-ordering: result case=teardown-complete-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed"
+            },
+            {
+              "line": 2462,
+              "text": "INFO  worker-ordering: parallel-reverse-completions=0 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0"
+            }
+          ],
+          "completionEvidence": {
+            "line": 2464,
+            "text": "PASS  worker-ordering: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled"
+          },
+          "productionCapabilityEnabled": false,
+          "actualCompletionOrder": [
+            {
+              "line": 2410,
+              "text": "INFO  worker-ordering: terminal put_Uri hr=0x00000000"
+            },
+            {
+              "line": 2414,
+              "text": "INFO  worker-ordering: clear upload before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2416,
+              "text": "INFO  worker-ordering: Complete before owner closure hr=0x00000000"
+            },
+            {
+              "line": 2420,
+              "text": "INFO  worker-ordering: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2422,
+              "text": "INFO  worker-ordering: remove source filter hr=0x00000000"
+            },
+            {
+              "line": 2428,
+              "text": "INFO  worker-ordering: controller.Close hr=0x00000000"
+            }
+          ],
+          "orderingClaimEvidence": {
+            "line": 2418,
+            "text": "INFO  worker-ordering: completion-order case=teardown-complete-deny complete-before-filters-and-close=yes owner-live=yes filters=2"
+          }
+        }
+      ]
+    }
+  ]
+}

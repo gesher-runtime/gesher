@@ -45,6 +45,87 @@ inline PVOID WINAPI FunctionTable(HANDLE, DWORD64 address) {
 #endif
 }
 
+inline bool ReadMemory(uintptr_t address, void* value, size_t size) {
+  SIZE_T read = 0;
+  return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
+                           value, size, &read) && read == size;
+}
+
+// Match the faulting loaded image to a retained diagnostic DLL and its public
+// PDB. ReadProcessMemory checks every read; corrupt/unavailable metadata never
+// becomes a reason to dereference an unchecked address in the fault handler.
+// https://learn.microsoft.com/en-us/windows/win32/debug/pe-format#debug-directory-image-only
+inline void ImageIdentity(DWORD64 address) {
+  const uintptr_t base = static_cast<uintptr_t>(ModuleBase(nullptr, address));
+  if (!base) return;
+  wchar_t path[1024]{};
+  const DWORD length = GetModuleFileNameW(reinterpret_cast<HMODULE>(base), path,
+      static_cast<DWORD>(sizeof(path) / sizeof(path[0])));
+  if (length && length < sizeof(path) / sizeof(path[0])) {
+    char line[1100] = "native-exception: module-path=";
+    size_t size = sizeof("native-exception: module-path=") - 1;
+    for (size_t i = 0; i < length; ++i) {
+      // The qualification runner's installed runtime path is ASCII. A path
+      // outside that domain is explicitly uncopyable rather than misidentified.
+      if (path[i] < 0x20 || path[i] >= 0x7f) { size = 0; break; }
+      line[size++] = static_cast<char>(path[i]);
+    }
+    if (size) { line[size++] = '\r'; line[size++] = '\n'; Write(line, size); }
+  }
+  IMAGE_DOS_HEADER dos{};
+  IMAGE_NT_HEADERS64 image{};
+  if (!ReadMemory(base, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE ||
+      dos.e_lfanew <= 0 || base > UINTPTR_MAX - static_cast<uintptr_t>(dos.e_lfanew) ||
+      !ReadMemory(base + static_cast<uintptr_t>(dos.e_lfanew), &image, sizeof(image)) ||
+      image.Signature != IMAGE_NT_SIGNATURE || image.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+      image.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64) ||
+      !image.OptionalHeader.SizeOfImage) return;
+  const DWORD image_size = image.OptionalHeader.SizeOfImage;
+  if (base > UINTPTR_MAX - image_size || image_size < sizeof(image) ||
+      static_cast<uintptr_t>(dos.e_lfanew) > image_size - sizeof(image)) return;
+  char line[512];
+  const int length_out = snprintf(line, sizeof(line),
+      "native-exception: image base=0x%llx timestamp=0x%08lx size=0x%lx machine=0x%04x\r\n",
+      static_cast<unsigned long long>(base), static_cast<unsigned long>(image.FileHeader.TimeDateStamp),
+      static_cast<unsigned long>(image_size), static_cast<unsigned>(image.FileHeader.Machine));
+  if (length_out > 0 && static_cast<size_t>(length_out) < sizeof(line)) Write(line, length_out);
+  if (image.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_DEBUG) return;
+  const auto& directory = image.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+  if (!directory.VirtualAddress || directory.Size % sizeof(IMAGE_DEBUG_DIRECTORY) != 0 ||
+      directory.VirtualAddress > image_size || directory.Size > image_size - directory.VirtualAddress ||
+      directory.Size / sizeof(IMAGE_DEBUG_DIRECTORY) > 32) return;
+  for (size_t offset = 0; offset < directory.Size; offset += sizeof(IMAGE_DEBUG_DIRECTORY)) {
+    IMAGE_DEBUG_DIRECTORY debug{};
+    if (!ReadMemory(base + directory.VirtualAddress + offset, &debug, sizeof(debug))) return;
+    struct CodeView { DWORD signature; GUID guid; DWORD age; };
+    CodeView codeview{};
+    if (debug.Type != IMAGE_DEBUG_TYPE_CODEVIEW || debug.SizeOfData <= sizeof(codeview) ||
+        debug.AddressOfRawData > image_size || debug.SizeOfData > image_size - debug.AddressOfRawData ||
+        !ReadMemory(base + debug.AddressOfRawData, &codeview, sizeof(codeview)) ||
+        codeview.signature != 0x53445352) continue;  // RSDS
+    char pdb[260]{};
+    size_t path_bytes = debug.SizeOfData - sizeof(codeview);
+    if (path_bytes > sizeof(pdb)) path_bytes = sizeof(pdb);
+    if (!ReadMemory(base + debug.AddressOfRawData + sizeof(codeview), pdb, path_bytes)) continue;
+    size_t end = 0, begin = 0;
+    for (; end < path_bytes && pdb[end]; ++end) {
+      if (pdb[end] < 0x20 || static_cast<unsigned char>(pdb[end]) >= 0x7f) break;
+      if (pdb[end] == '\\' || pdb[end] == '/') begin = end + 1;
+    }
+    if (end == path_bytes || pdb[end] || end == begin) continue;
+    const GUID& id = codeview.guid;
+    const int count = snprintf(line, sizeof(line),
+        "native-exception: codeview pdb=%s key=%08lX%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X%lX\r\n",
+        pdb + begin, static_cast<unsigned long>(id.Data1), static_cast<unsigned>(id.Data2),
+        static_cast<unsigned>(id.Data3), static_cast<unsigned>(id.Data4[0]), static_cast<unsigned>(id.Data4[1]),
+        static_cast<unsigned>(id.Data4[2]), static_cast<unsigned>(id.Data4[3]), static_cast<unsigned>(id.Data4[4]),
+        static_cast<unsigned>(id.Data4[5]), static_cast<unsigned>(id.Data4[6]), static_cast<unsigned>(id.Data4[7]),
+        static_cast<unsigned long>(codeview.age));
+    if (count > 0 && static_cast<size_t>(count) < sizeof(line)) Write(line, count);
+    return;
+  }
+}
+
 inline void Address(const char* label, unsigned index, DWORD64 address, DWORD64 stack = 0) {
   const DWORD64 base = ModuleBase(nullptr, address);
   wchar_t path[1024]{};
@@ -87,6 +168,7 @@ inline LONG WINAPI OnException(EXCEPTION_POINTERS* information) {
         static_cast<unsigned long long>(exception.NumberParameters > 1 ? exception.ExceptionInformation[1] : 0));
     if (length > 0 && static_cast<size_t>(length) < sizeof(line)) Write(line, static_cast<size_t>(length));
     Address("fault", 0, reinterpret_cast<uintptr_t>(exception.ExceptionAddress));
+    ImageIdentity(reinterpret_cast<uintptr_t>(exception.ExceptionAddress));
 
     // The exception's context is never modified. StackWalk64 reads the actual
     // faulting thread, with the OS runtime table and mapped image bases; no

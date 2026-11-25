@@ -240,3 +240,11 @@ jobs:
           . './tests/windows/webview/WorkerResponse.ps1'
           if ($script:failed -gt 0) { throw "WebView runtime qualification failures: $script:failed" }
           exit 0
+
+      - name: Retain the faulting WebView runtime image
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webview-native-exception-${{ matrix.os }}
+          path: dist/native-exception-diagnostics/
+          if-no-files-found: ignore

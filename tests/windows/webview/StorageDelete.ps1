@@ -1,5 +1,36 @@
 # Exercise the actual production Host, using a fresh owned ordinary profile.
 # There is no accepted UNAVAILABLE outcome for a production deletion gate.
+function SaveStorageFaultModule([string] $Output) {
+  $paths = [regex]::Matches($Output, '(?m)^native-exception: module-path=([^\r\n]+)\r?$')
+  if ($paths.Count -ne 1) { return }
+  $source = $paths[0].Groups[1].Value
+  if ([IO.Path]::GetFileName($source) -ine 'EmbeddedBrowserWebView.dll') { return }
+  try {
+    $directory = Join-Path $Dir 'native-exception-diagnostics'
+    $null = New-Item -ItemType Directory -Path $directory -Force
+    $destination = Join-Path $directory 'EmbeddedBrowserWebView.dll'
+    Copy-Item -LiteralPath $source -Destination $destination -Force -ErrorAction Stop
+    $file = Get-Item -LiteralPath $destination -ErrorAction Stop
+    $digest = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+    [ordered]@{
+      sourcePath = $source
+      file = $file.Name
+      bytes = $file.Length
+      sha256 = $digest
+      fileVersion = $file.VersionInfo.FileVersion
+      productVersion = $file.VersionInfo.ProductVersion
+      run = $env:GITHUB_RUN_ID
+      sourceCommit = $env:GITHUB_SHA
+      identityLines = @($Output -split "`n" | Where-Object { $_ -match '^native-exception: (image |codeview )' })
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $directory 'runtime-module.json') -Encoding utf8
+    Write-Host "INFO  storage-delete: retained faulting runtime module bytes=$($file.Length) sha256=$digest"
+  } catch {
+    # This is additional crash evidence; it cannot turn the failed storage
+    # process into a successful qualification or obscure its original output.
+    Write-Host "INFO  storage-delete: could not retain faulting runtime module: $_"
+  }
+}
+
 function StorageDeleteCheck {
   if (-not (Test-Path "$Dir/webview2_probe.exe")) {
     Write-Host 'FAIL  storage-delete: probe binary is missing'; $script:failed++; return
@@ -9,11 +40,16 @@ function StorageDeleteCheck {
   # This separate pre-COM control never substitutes for the storage operation.
   $faultControl = RunTimed "$Dir/webview2_probe.exe" @('--native-exception-self-test') 15
   $faultExit = $LASTEXITCODE
-  $faultCode = [regex]::Matches($faultControl, '(?m)^native-exception: code=0xe0470001 flags=0x00000001 thread=[1-9][0-9]* parameters=2 access=0x47534852 target=0x53544143\r?$').Count
+  $faultRows = [regex]::Matches($faultControl, '(?m)^native-exception: code=0xe0470001 flags=0x([0-9a-f]{8}) thread=[1-9][0-9]* parameters=2 access=0x47534852 target=0x53544143\r?$')
+  $faultCode = $faultRows.Count
+  # Windows may add reserved system flags (the actual runs report 0x81).
+  # Require EXCEPTION_NONCONTINUABLE without constraining those system bits.
+  $noncontinuable = $faultCode -eq 1 -and
+      (([Convert]::ToUInt32($faultRows[0].Groups[1].Value, 16) -band 1) -ne 0)
   $faultAddress = [regex]::Matches($faultControl, '(?im)^native-exception: fault\[0\] pc=0x[0-9a-f]+ sp=0x[0-9a-f]+ module=[^ <]+\.dll base=0x[0-9a-f]+ rva=0x[0-9a-f]+\r?$').Count
   $probeFrames = [regex]::Matches($faultControl, '(?im)^native-exception: frame\[[1-9][0-9]*\] pc=0x[0-9a-f]+ sp=0x[0-9a-f]+ module=webview2_probe\.exe base=0x[0-9a-f]+ rva=0x[0-9a-f]*[1-9a-f][0-9a-f]*\r?$').Count
-  if ($faultExit -ne -532217855 -or $faultCode -ne 1 -or $faultAddress -ne 1 -or $probeFrames -lt 1) {
-    Write-Host "FAIL  storage-delete: native fault diagnostic control failed (exit=$faultExit code=$faultCode address=$faultAddress probe-frames=$probeFrames)"
+  if ($faultExit -ne -532217855 -or -not $noncontinuable -or $faultAddress -ne 1 -or $probeFrames -lt 1) {
+    Write-Host "FAIL  storage-delete: native fault diagnostic control failed (exit=$faultExit code=$faultCode noncontinuable=$noncontinuable address=$faultAddress probe-frames=$probeFrames)"
     $script:failed++
   } else {
     Write-Host 'PASS  storage-delete: native fault diagnostic control preserved the failing exit and actual exception stack'
@@ -68,6 +104,7 @@ function StorageDeleteCheck {
       $output -match '(?m)^FAIL ' -or $output -match 'UNAVAILABLE') {
     Write-Host "FAIL  storage-delete: production qualification failed (exit=$exit qualified=$qualified missing=$($missing.Count) final-callback-checks=$finalCallbacks)"
     Write-Host $output
+    SaveStorageFaultModule $output
     $script:failed++
   }
 }
