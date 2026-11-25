@@ -1,10 +1,50 @@
 diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
-index 8ce837212..1b662913d 100644
+index 8ce837212..92fc0c24d 100644
 --- a/compat/posix/src/internal.h
 +++ b/compat/posix/src/internal.h
 @@ -7,0 +8 @@
 +#include <memory>
-@@ -203 +204,7 @@ int MemfdGrowError(int fd, uint64_t end);
+@@ -128,0 +130,33 @@ int FdOfLink(const std::wstring& name);
++// The name's Linux path, as an fd open on it reports it: "/proc/<pid>/maps"
++// for proc/self/maps.
++std::string LinuxName(const std::wstring& name);
++// The inode number stat and fstat report for that Linux path.
++unsigned long long Inode(const std::string& linux_path);
++// What stat and lstat need of a name, from one lookup: its type (as Type()),
++// its permission bits, and for a link what following it fails with (Linux
++// refuses /proc/<pid>/map_files/* to a process without
++// CAP_CHECKPOINT_RESTORE: EPERM; else 0) and n for /proc/self/fd/<n> (else
++// -1).
++struct NameStatus {
++  unsigned type = 0;
++  unsigned mode = 0;
++  int follow_error = 0;
++  int fd = -1;
++};
++NameStatus Describe(const std::wstring& name);
++// The times (100 ns units since 1601, FILETIME's) stat and fstat report for
++// that Linux path: the process's start for /proc/<pid>/..., boot otherwise.
++long long Time(const std::string& linux_path);
++// Whether the file behind `file` (a handle of an fd) is one that open() made
++// for a name here: its Linux path, its type (S_IFREG, S_IFDIR, or S_IFLNK
++// for a link itself, opened O_PATH | O_NOFOLLOW) and, if `mode` is given,
++// the permission bits stat gave the name when it was opened. Such an fd
++// stays a /proc file for fstat, fstatfs, getdents64, readlink of
++// /proc/self/fd/<n> and the *at calls, as Linux's does.
++bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path,
++                    unsigned* mode = nullptr);
++// As DescribeHandle, for a file the caller already knows is
++// FILE_ATTRIBUTE_TEMPORARY (only those can be one): one query, of the
++// attribute.
++bool DescribeTemporaryFile(HANDLE file, unsigned* type, std::string* linux_path,
++                           unsigned* mode = nullptr);
+@@ -130,0 +165,5 @@ int FdOfLink(const std::wstring& name);
++// Whether the file view mmap made at `address` maps a file mmap was given
++// open for writing (O_RDWR): Linux's f_mode of a mapping's file, which
++// /proc/<pid>/map_files shows (mman.cc).
++bool MappedFileWritable(const void* address);
++
+@@ -203 +242,7 @@ int MemfdGrowError(int fd, uint64_t end);
 -int MemfdSharedMapError(int fd, bool writable, bool* deny_write);
 +// A writable mapping of a memfd also yields a lease in *write_lease (which the
 +// caller must supply for a writable request): F_SEAL_WRITE answers EBUSY for as
@@ -13,7 +53,7 @@ index 8ce837212..1b662913d 100644
 +// dies, when the OS releases it); an error returns no lease.
 +int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
 +                        std::shared_ptr<void>* write_lease);
-@@ -210 +217,5 @@ int MemfdGrowHandleError(HANDLE file, uint64_t end);
+@@ -210 +255,5 @@ int MemfdGrowHandleError(HANDLE file, uint64_t end);
 -int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write);
 +int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
 +                               std::shared_ptr<void>* write_lease);
@@ -224,27 +264,33 @@ index 0697d4a22..fd49e2c74 100644
 +GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_seal_mutex);
 +#endif
 diff --git a/compat/posix/src/mman.cc b/compat/posix/src/mman.cc
-index 01eb82f81..a19efde1f 100644
+index 01eb82f81..41be9a0e7 100644
 --- a/compat/posix/src/mman.cc
 +++ b/compat/posix/src/mman.cc
-@@ -56,0 +57 @@
+@@ -44,0 +45 @@
++#include <fcntl.h>
+@@ -56,0 +58 @@
 +#include <memory>
-@@ -62,0 +64,4 @@
+@@ -62,0 +65,4 @@
 +// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
 +#if __has_include(<gesher/fork.h>)
 +#include <gesher/fork.h>
 +#endif
-@@ -162,0 +168,5 @@ struct Region {
+@@ -159,0 +166,3 @@ struct Region {
++  // Views: mapped from an fd open for writing (O_RDWR), the file's f_mode
++  // that /proc/<pid>/map_files shows (procfs.cc).
++  bool file_writable = false;
+@@ -162,0 +172,5 @@ struct Region {
 +  // A writable shared view of a memfd: the lease that keeps F_SEAL_WRITE from
 +  // being added while any such view lives (memfd_seals.cc). Pieces of a view
 +  // share it; the last piece to give up its pages (munmap, MAP_FIXED, mremap)
 +  // releases it, so every path that turns a view into a hole must reset it.
 +  std::shared_ptr<void> write_lease;
-@@ -313,0 +324 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
+@@ -313,0 +328 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
 +  alias.write_lease = from.write_lease;  // another view of the same writable mapping
-@@ -511,0 +523 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
+@@ -511,0 +527 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 +  it->second.write_lease.reset();  // the pieces that stay take it back from `view`
-@@ -522,0 +535,8 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
+@@ -522,0 +539,8 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 +    bool any_live = false;
 +    for (uintptr_t p = from; p < to; p += page) {
 +      if (saved[(p - start) / page].live) {
@@ -253,35 +299,54 @@ index 01eb82f81..a19efde1f 100644
 +      }
 +    }
 +    if (!any_live) return;  // already-unmapped pages stay a Kind::kHole placeholder without a view or lease
-@@ -541,0 +562 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
+@@ -541,0 +566 @@ std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Re
 +    r.write_lease = view.write_lease;
-@@ -627,0 +649 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
+@@ -627,0 +653 @@ std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t
 +          r.write_lease.reset();
-@@ -1565,0 +1588,6 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1565,0 +1592,6 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 +  // A binder fd a forked child inherited maps nothing there (Linux's binder
 +  // refuses an mmap from a process other than the one that opened it).
 +  if (binder_mapping && !gesher::BinderFdOwnedHere(fd)) {
 +    errno = EINVAL;
 +    return MAP_FAILED;
 +  }
-@@ -1598,0 +1627,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1578,0 +1611,5 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
++  bool file_writable = false;
++  if (snapshot) {
++    const int status = gesher::FileDescriptionFlags(snapshot);
++    file_writable = status >= 0 && (status & O_ACCMODE) == O_RDWR;
++  }
+@@ -1598,0 +1636,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 +    // A writable one holds a lease on the file until its pages are unmapped, and
 +    // releases it here if the mapping cannot be made.
-@@ -1599,0 +1630 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1599,0 +1639 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 +    std::shared_ptr<void> write_lease;
-@@ -1601 +1632 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1601 +1641 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write)) {
 +      if (const int sealed = gesher::MemfdSharedMapHandleError(snapshot->handle, (prot & PROT_WRITE) != 0, &deny_write, &write_lease)) {
-@@ -1607 +1638 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1607 +1647 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -    if (result != MAP_FAILED && deny_write) {
-+    if (result != MAP_FAILED && (deny_write || write_lease)) {
-@@ -1610 +1641,2 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
++    if (result != MAP_FAILED) {
+@@ -1610 +1650,3 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -        it->second.deny_write = true;
 +        if (deny_write) it->second.deny_write = true;
 +        if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;
-@@ -1693,0 +1726 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
++        if (it->second.kind == Kind::kView) it->second.file_writable = file_writable;
+@@ -1624,0 +1667,11 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
++namespace gesher {
++
++bool MappedFileWritable(const void* address) {
++  State& s = state();
++  std::lock_guard<std::mutex> guard(s.lock);
++  auto it = FindRegion(s, reinterpret_cast<uintptr_t>(address));
++  return it != s.regions.end() && it->second.kind == Kind::kView && it->second.file_writable;
++}
++
++}  // namespace gesher
++
+@@ -1693,0 +1747 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
 +      region.write_lease.reset();
-@@ -2174,0 +2208,33 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
+@@ -2174,0 +2229,33 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
 +
 +#ifdef GESHER_FORK_LOCK
 +// fork (gesher/fork.h): mmap/munmap/mprotect in a forked child.
