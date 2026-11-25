@@ -419,6 +419,20 @@ public final class WindowsHost {
         }
     }
 
+    /**
+     * The user's "Country or region" as an ISO 3166-1 alpha-2 code (GetUserDefaultGeoName,
+     * else GetUserGeoID and GetGeoInfoW GEO_ISO2), or null when Windows has none (an M.49
+     * area, a failure) or this runtime has no natives.
+     */
+    public static String homeRegion() {
+        if (!available()) return null;
+        try {
+            return nativeHomeRegion();
+        } catch (UnsatisfiedLinkError e) {
+            return null;
+        }
+    }
+
     /** Shows the native Windows folder picker dialog. Returns the selected folder path, or null. */
     public static String pickFolder(String title) {
         if (!available()) return null;
@@ -519,6 +533,7 @@ public final class WindowsHost {
     private static native int nativeUnregisterAppId(String appId);
     private static native String nativeFullPath(String path);
     private static native boolean nativeOpenUrl(String url);
+    private static native String nativeHomeRegion();
     private static native String nativePickFolder(String title);
     private static native String nativePickFile(String title);
     /** The IANA id of a Windows time zone key name (Windows' icu.dll), or null. */

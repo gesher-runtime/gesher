@@ -774,7 +774,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             noteShortcutForeground(record.app, ActivityManager.PROCESS_STATE_TOP);
         }
         if (mUsageStats != null) {
-            mUsageStats.transition(record.token, record.info.packageName, record.info.name, state);
+            ActivityRecord root = rootOf(record.taskId);
+            mUsageStats.transition(record.token, record.info.packageName, record.info.name,
+                    root == null ? record.info.packageName : root.info.packageName, state);
         }
     }
 
