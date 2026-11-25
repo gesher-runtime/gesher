@@ -127,10 +127,13 @@ public final class AppOpsContractTest {
         final IPermissionChecker checker;
         Harness() throws Exception { this(null); }
         @SuppressWarnings("unchecked") Harness(Integer ownerTarget, String... permissions) throws Exception {
-            // Metadata must be final before PM boot admission reconciles the UID's
-            // legacy/runtime grant basis. Mutating an admitted owner is not an install.
+            // Metadata must be final before the install reconciles the UID's
+            // legacy/runtime grant basis. Mutating an installed owner is not an install.
             if (ownerTarget != null) requested(owner, ownerTarget, permissions);
-            pm = (PackageManagerService)make(PackageManagerService.class, new Class<?>[]{Collection.class, boolean.class}, List.of(owner, peer), false);
+            // PM boots without the fixture packages; they are installed below. A boot never
+            // invents a restriction exemption once the ledger's one-time migration has run,
+            // and the data directory may hold a ledger a previous process already migrated.
+            pm = (PackageManagerService)make(PackageManagerService.class, new Class<?>[]{Collection.class, boolean.class}, List.of(), false);
             // This isolated PM has no remote broadcast transport; keep its production
             // publication executor and lifecycle listeners, replacing only that boundary.
             set(pm, "mPackageEventSender", (java.util.function.Consumer<Intent>)event -> { });
@@ -169,6 +172,14 @@ public final class AppOpsContractTest {
                 // boundary must perform that same production boot reconciliation now.
                 call(pm.permissions(), "initializePackages", new Class<?>[0]);
             }
+            // The Installer's path: AOSP's default restricted-permission allowlist
+            // (SessionParams, INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS) recorded on the
+            // installed APK, then its publication.
+            for (ApkPackage installed : List.of(owner, peer)) {
+                call(installed, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, (Object)null);
+                call(pm, "add", new Class<?>[]{ApkPackage.class}, installed);
+            }
+            ((java.util.concurrent.ExecutorService)get(pm, "mPackageEventExecutor")).submit(() -> { }).get(5, TimeUnit.SECONDS);
             service = pm.appOps();
             ops = binder ? IAppOpsService.Stub.asInterface(parcelTransport(StandIn.of(IAppOpsService.class, service).asBinder())) : service;
             IPermissionChecker real = (IPermissionChecker)make(type("AppOpsPermissionChecker"), new Class<?>[]{PackageManagerService.class}, pm);
@@ -332,7 +343,7 @@ public final class AppOpsContractTest {
         int exempt = PackageManager.FLAGS_PERMISSION_RESTRICTION_ANY_EXEMPT, apply = PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
         check((h.pm.permissions().getPermissionFlags(NAME, Manifest.permission.ACCESS_BACKGROUND_LOCATION, "default:0", 0)
                 & (exempt | apply)) == PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT,
-                "Admission records AOSP's default installer exemption instead of APPLY_RESTRICTION");
+                "An install records AOSP's default installer exemption instead of APPLY_RESTRICTION");
         // An install that opted out of the restricted-permission allowlist.
         flags(h, Manifest.permission.ACCESS_BACKGROUND_LOCATION, exempt | apply, apply);
         h.pm.permissions().grantRuntimePermission(NAME, Manifest.permission.ACCESS_BACKGROUND_LOCATION, "default:0", 0);

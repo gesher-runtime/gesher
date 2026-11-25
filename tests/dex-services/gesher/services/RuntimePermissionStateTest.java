@@ -141,8 +141,11 @@ public final class RuntimePermissionStateTest {
         final IPermissionManager query;
         final Object atm, am, process;
         @SuppressWarnings("unchecked") Harness() throws Exception {
+            // PM boots without the fixture packages; they are installed below. A boot never
+            // invents a restriction exemption once the ledger's one-time migration has run,
+            // and the data directory may hold a ledger a previous process already migrated.
             pm = (PackageManagerService)make(PackageManagerService.class,
-                    new Class<?>[]{Collection.class, boolean.class}, List.of(owner, peer), false);
+                    new Class<?>[]{Collection.class, boolean.class}, List.of(), false);
             set(pm, "mPackageEventSender", (Consumer<Intent>)event -> { });
             policy = pm.permissions();
             if (!binder) {
@@ -175,6 +178,14 @@ public final class RuntimePermissionStateTest {
                 set(catalog, "mLoaded", true);
                 call(policy, "initializePackages", new Class<?>[0]);
             }
+            // The Installer's path: AOSP's default restricted-permission allowlist
+            // (SessionParams, INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS) recorded on the
+            // installed APK, then its publication.
+            for (ApkPackage installed : List.of(owner, peer)) {
+                call(installed, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, (Object)null);
+                call(pm, "add", new Class<?>[]{ApkPackage.class}, installed);
+            }
+            ((java.util.concurrent.ExecutorService)get(pm, "mPackageEventExecutor")).submit(() -> { }).get(5, java.util.concurrent.TimeUnit.SECONDS);
             atm = make(type("ActivityTaskManagerService"), new Class<?>[]{PackageManagerService.class}, pm);
             am = make(type("ActivityManagerService"), new Class<?>[]{atm.getClass(), PackageManagerService.class,
                     type("NotificationManagerService")}, atm, pm, null);
@@ -549,11 +560,11 @@ public final class RuntimePermissionStateTest {
     }
     /** AOSP install-time restriction exemptions, the boot migration and the allowlist API. */
     private static void exemptions(Harness h) throws Exception {
-        // Boot admission of a package with no recorded state: the installer allowlist
-        // (AOSP's default) exempts every requested restricted permission.
+        // The Harness installed the owner with the installer allowlist (AOSP's default),
+        // which exempts every requested restricted permission.
         check((h.flags(BACKGROUND) & (INSTALLER_EXEMPT | APPLY)) == INSTALLER_EXEMPT
                 && (h.flags(STORAGE) & (INSTALLER_EXEMPT | APPLY)) == INSTALLER_EXEMPT,
-                "admitted package kept APPLY_RESTRICTION without an installer exemption");
+                "installed package kept APPLY_RESTRICTION without an installer exemption");
         check((h.flags(CAMERA) & (ANY_EXEMPT | APPLY)) == 0, "unrestricted permission received a restriction flag");
         check(allowlist(h, NAME, PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER) == 3
                 && allowlist(h, NAME, PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) == 0,
