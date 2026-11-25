@@ -223,6 +223,8 @@ final class SettingsProvider extends ContentProvider {
      * has none, as a default row (a value written to it later replaces it, and is kept).
      * Text-to-speech: {@code tts_default_synth} once Gesher's engine is installed
      * (TtsEngineApp, docs/tts.md).
+     * Speech recognition: {@code voice_recognition_service} once Gesher's recognition
+     * service is installed (SttEngineApp, docs/speech-recognition.md).
      */
     static void addSecureDefault(String name, String value) {
         SettingsProvider p = sInstance;

@@ -704,8 +704,8 @@ if ($codeA -eq 0 -and $codeB -eq 0 -and $started -eq 1 -and $connected -eq 1 -an
   $failed++
 }
 
-# Bundled packages depend on this PC's real capabilities (for example, TTS
-# voices). Record their inventory before adding our fixtures, then require
+# Bundled packages depend on this PC's real capabilities (for example, installed
+# speech engines). Record their inventory before adding our fixtures, then require
 # exactly two additional packages throughout the install/uninstall checks.
 $initialList = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
 $initialListCode = $LASTEXITCODE
@@ -1065,6 +1065,12 @@ try {
     '-Xint', '-Xusejit:false', 'gesher.services.WindowsWifiTest')
   CheckTimed 'services: native WLAN data and nonblocking live reads' "$Dir/dalvikvm.exe" `
     $wifiArgs @('WindowsWifiTest all passed: live nonblocking Windows API boundary') 30
+  # The host-install fixture also exercises package-private production methods;
+  # native Binder/Parcel run on ART, with only package publication recorded by the fixture.
+  $hostInstallArgs = @("-Xbootclasspath:$wifiBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', 'com.gesher.server.HostInstallIntentTest')
+  CheckTimed 'services: explicit host install intent, legacy compatibility and malformed Parcel refusal' "$Dir/dalvikvm.exe" `
+    $hostInstallArgs @('HostInstallIntentTest', 'checks passed') 30
 } finally {
   $env:ANDROID_DATA = $savedContractsData
   $env:GESHER_BINDER = $savedContractsBinder
