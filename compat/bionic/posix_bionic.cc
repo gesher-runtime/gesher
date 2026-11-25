@@ -468,6 +468,8 @@ int BIONIC_SYSV Ftruncate(int fd, int64_t length) {
   return gesher_ftruncate(fd, length);
 }
 int BIONIC_SYSV Truncate(const char* path, int64_t length) {
+  // Linux refuses a FIFO without opening it (an open would wait for a reader).
+  if (gesher_is_fifo_path(path)) return errno = kEINVAL, -1;
   int fd = open(path, O_WRONLY);
   if (fd < 0) return -1;
   int rc = Ftruncate(fd, length);

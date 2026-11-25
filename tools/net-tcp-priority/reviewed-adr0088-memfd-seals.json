@@ -887,7 +887,7 @@
      "int mkfifo(const char*, mode_t) { return errno = ENOSYS, -1; }\n"
     ],
     [
-     "// mkfifo is in fifo.cc, with the FIFO descriptors (ADR 0096).\n"
+     "// mkfifo is in fifo.cc, with the FIFO descriptors (ADR 0097).\n"
     ]
    ],
    [

@@ -576,6 +576,14 @@ int fchmod(int fd, mode_t mode) {
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   HANDLE h = snapshot->handle;
+  if (snapshot->kind == gesher::DescriptorKind::kFifo) {
+    // The mode belongs to the FIFO file, not its placeholder (fifo.cc).
+    HANDLE fifo = gesher::OpenFifoFile(snapshot, FILE_WRITE_ATTRIBUTES);
+    if (fifo == INVALID_HANDLE_VALUE) return -1;
+    const int result = SetMode(fifo, mode);
+    CloseHandle(fifo);
+    return result;
+  }
   if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
   HANDLE writable = ReOpenFile(h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,

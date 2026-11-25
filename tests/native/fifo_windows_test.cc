@@ -1,4 +1,4 @@
-// POSIX FIFOs on Windows (fifo.cc, ADR 0096), through the production
+// POSIX FIFOs on Windows (fifo.cc, ADR 0097), through the production
 // descriptor layer and with real separate processes: independent opens in
 // different processes rendezvous on one pipe, a descriptor inherited through
 // the importer keeps its endpoint open, a crashed peer is counted out, and
@@ -18,6 +18,7 @@
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <vector>
 
@@ -416,6 +417,100 @@ static void Crash(const char* path) {
   close(reader);
 }
 
+// The only remaining endpoint is inherited by a child that has not touched
+// it yet: the bytes already written and the child's endpoint must survive the
+// parent closing every copy (fifo.cc keeps the ring until the child maps it).
+static int ChildInheritedOnly() {
+  char byte = 0;
+  if (read(9, &byte, 1) != 1 || byte != 'x') return 60;   // written before the handoff
+  if (read(9, &byte, 1) != 1 || byte != 'z') return 61;   // from a later writer
+  return write(9, "y", 1) == 1 ? 0 : 62;                  // O_RDWR: still a writer
+}
+
+static void InheritedOnly(const char* path) {
+  Check("Handoff: mkfifo", mkfifo(path, 0600) == 0);
+  int fd = open(path, O_RDWR);
+  Check("Handoff: open O_RDWR and write before spawning", fd >= 0 && write(fd, "x", 1) == 1);
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) { Check("Handoff: capture", false); return; }
+  gesher::exec::Launch launch;
+  launch.application = Self();
+  gesher::exec::AppendQuoted(&launch.command_line, launch.application);
+  launch.command_line += L" --inherited-only";
+  launch.kind = "exe";
+  std::vector<gesher::exec::ChildFd> files{{9, snapshot->handle, snapshot}};
+  PROCESS_INFORMATION child{};
+  DWORD error = gesher::exec::SpawnWithFds(launch, nullptr, L"", files, &child);
+  Check("Handoff: start the child", error == 0);
+  // Drop every parent copy at once: nothing else in any process maps the ring.
+  files.clear();
+  snapshot.reset();
+  close(fd);
+  if (error) return;
+  Sleep(300);
+  int writer = open(path, O_WRONLY | O_NONBLOCK);
+  Check("Handoff: the child's inherited reader still counts (no ENXIO)", writer >= 0);
+  Check("Handoff: a later writer reaches the child", writer >= 0 && write(writer, "z", 1) == 1);
+  Check("Handoff: the child read the earlier and later bytes and wrote", Finish(&child) == 0);
+  close(writer);
+  unlink(path);
+}
+
+static void* RaceMkfifo(void* raw) {
+  auto* path = static_cast<const char*>(raw);
+  struct stat st{};
+  const int result = mkfifo(path, 0600);
+  if (result != 0 && errno != EEXIST) return reinterpret_cast<void*>(1);
+  // A creator that lost the race finds a FIFO, never a regular file.
+  if (stat(path, &st) != 0 || !S_ISFIFO(st.st_mode)) return reinterpret_cast<void*>(2);
+  return reinterpret_cast<void*>(result == 0 ? 3 : 4);
+}
+
+static void Paths(const char* path) {
+  const std::string race = std::string(path) + "-race";
+  pthread_t threads[8];
+  int created = 0, fine = 0;
+  for (auto& thread : threads) pthread_create(&thread, nullptr, RaceMkfifo, const_cast<char*>(race.c_str()));
+  for (auto& thread : threads) {
+    void* result = nullptr;
+    pthread_join(thread, &result);
+    created += result == reinterpret_cast<void*>(3);
+    fine += result == reinterpret_cast<void*>(3) || result == reinterpret_cast<void*>(4);
+  }
+  Check("racing mkfifo: one creator, every loser sees a FIFO", created == 1 && fine == 8);
+  unlink(race.c_str());
+  Check("mkfifo: gesher_is_fifo_path", mkfifo(path, 0644) == 0 && gesher_is_fifo_path(path) == 1);
+  int fd = open(path, O_RDWR | O_NONBLOCK);
+  struct stat st{};
+  Check("fchmod changes the FIFO file's mode", fd >= 0 && fchmod(fd, 0444) == 0 && stat(path, &st) == 0 &&
+                                                  (st.st_mode & 0222) == 0 && fchmod(fd, 0644) == 0);
+  close(fd);
+  const std::string link = std::string(path) + "-link";
+  if (symlink(path, link.c_str()) == 0) {
+    char resolved[4096];
+    fd = open(link.c_str(), O_RDWR | O_NONBLOCK);
+    Check("a symbolic link to a FIFO opens the FIFO", fd >= 0 && write(fd, "s", 1) == 1);
+    Check("stat follows the link to the FIFO", stat(link.c_str(), &st) == 0 && S_ISFIFO(st.st_mode));
+    Check("access follows the link", access(link.c_str(), F_OK) == 0);
+    Check("realpath resolves the link to the FIFO", realpath(link.c_str(), resolved) != nullptr &&
+                                                      std::strstr(resolved, path) != nullptr);
+    Check("utimes follows the link", utimes(link.c_str(), nullptr) == 0);
+    Check("truncate check follows the link", gesher_is_fifo_path(link.c_str()) == 1);
+    close(fd);
+    unlink(link.c_str());
+  } else {
+    std::printf("fifo: symbolic links unavailable here (errno=%d); link checks skipped\n", errno);
+  }
+  char resolved[4096];
+  Check("realpath of a FIFO", realpath(path, resolved) != nullptr);
+  Check("utimes on a FIFO", utimes(path, nullptr) == 0);
+  unlink(path);
+  int regular = open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+  Check("a regular file is no FIFO", regular >= 0 && gesher_is_fifo_path(path) == 0);
+  close(regular);
+  unlink(path);
+}
+
 static void Unlink(const char* path) {
   int fd = open(path, O_RDWR | O_NONBLOCK);
   Check("Unlink: open", fd >= 0);
@@ -433,6 +528,7 @@ int main(int argc, char** argv) {
   if (argc == 3 && std::strcmp(argv[1], "--realm") == 0) return ChildRealm(argv[2]);
   if (argc == 3 && std::strcmp(argv[1], "--crash") == 0) return ChildCrash(argv[2]);
   if (argc == 2 && std::strcmp(argv[1], "--inherited") == 0) return ChildInherited();
+  if (argc == 2 && std::strcmp(argv[1], "--inherited-only") == 0) return ChildInheritedOnly();
   char path[64];
   std::snprintf(path, sizeof(path), "gesher-fifo-test-%lu", GetCurrentProcessId());
   unlink(path);
@@ -445,6 +541,8 @@ int main(int argc, char** argv) {
   Inheritance(path);
   Crash(path);
   Unlink(path);
+  InheritedOnly((std::string(path) + "-handoff").c_str());
+  Paths(path);
   unlink(path);
   std::printf("fifo-windows: %d assertions, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;

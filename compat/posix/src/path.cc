@@ -207,10 +207,13 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   // Followed, Windows refuses its reparse tag (ERROR_CANT_ACCESS_FILE below);
   // O_NOFOLLOW would open the file itself, so look first.
   auto open_fifo = [&](int* fd) {
-    HANDLE probe = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                               (flags & O_PATH) != 0 ? &inherit : nullptr, OPEN_EXISTING,
-                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    constexpr DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    SECURITY_ATTRIBUTES* security = (flags & O_PATH) != 0 ? &inherit : nullptr;
+    // Followed, a symbolic link to a FIFO opens the FIFO.
+    HANDLE probe = (flags & O_NOFOLLOW) != 0
+        ? CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, share, security, OPEN_EXISTING,
+                      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)
+        : OpenFifoFollowing(path, 0, share, 0, security);
     if (probe == INVALID_HANDLE_VALUE) return false;
     if (!IsFifoHandle(probe)) { CloseHandle(probe); return false; }
     // Linux: EEXIST for O_CREAT|O_EXCL, and O_TRUNC is ignored for a FIFO.
@@ -711,11 +714,10 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
   std::wstring windows;
   switch (gesher::MapPath(resolved.c_str(), &windows)) {
     case PathKind::kFile: {
-      HANDLE h = CreateFileW(windows.c_str(), 0,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS |
-                                 ((flags & AT_SYMLINK_NOFOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0),
-                             nullptr);
+      HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), 0,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             FILE_FLAG_BACKUP_SEMANTICS |
+                                 ((flags & AT_SYMLINK_NOFOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0));
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
       const int result = SetHandleTimes(h, times);
       CloseTimeHandle(h);

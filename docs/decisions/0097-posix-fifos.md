@@ -1,4 +1,4 @@
-# 0096: POSIX FIFOs as WSL FIFO files with a shared ring per FIFO
+# 0097: POSIX FIFOs as WSL FIFO files with a shared ring per FIFO
 
 Status: proposed, 2026-11-25 (PR #256).
 
@@ -25,10 +25,15 @@ again once connected, so they cannot be that object.
    reparse tag, as WSL creates them. Setting the tag needs no privilege.
    Windows refuses to follow the tag (`ERROR_CANT_ACCESS_FILE`), so no
    ordinary or truncating open can turn it into a regular file; Gesher's
-   open classifies the path before any open that could change it. `stat`,
-   `lstat`, `fstat`, `access`, `chmod` and `readdir` (`DT_FIFO`) report it,
-   and unlink and rename work on it unchanged. A volume without reparse
-   points makes `mkfifo` fail with `EPERM`, as Linux's vfat does.
+   open classifies the path before any open that could change it, following
+   symbolic links of the last component itself. `stat`, `lstat`, `fstat`,
+   `access`, `chmod`, `fchmod`, `realpath`, `utimensat` and `readdir`
+   (`DT_FIFO`) report or act on it, unlink and rename work on it unchanged,
+   and bionic's `truncate` fails with `EINVAL` without opening it. `mkfifo`
+   tags a hidden file under a private name in the same directory and renames
+   it without replacing, so the name appears as a FIFO or not at all
+   (`EEXIST` for a racing creator). A volume without reparse points makes
+   `mkfifo` fail with `EPERM`, as Linux's vfat does.
 2. **The pipe** is a 64 KiB ring in a section named after the FIFO's
    identity (`Local\gesher-fifo-<volume serial><file ID>`), with a named
    mutex and a wake event. Every process of the same session, or of the same
@@ -42,7 +47,13 @@ again once connected, so they cannot be that object.
    to descriptors that are all closed or to processes that have exited, and
    is counted out: when a description is destroyed, and otherwise within
    100 ms by a sweep (immediately before a nonblocking read reports
-   `EAGAIN`).
+   `EAGAIN`). A named section ends with its last handle, so when the last
+   process that maps a ring closes its descriptors while other processes
+   still hold endpoints (a child that inherited one and has not imported it
+   yet), it keeps the ring until another process maps it, the endpoints are
+   gone, or 30 s pass. An importing process binds its inherited FIFO
+   descriptions while it starts, and an endpoint that finds its ring
+   recreated registers again.
 4. **The descriptor** is of kind `kFifo`: a pipe-type placeholder handle
    without data access, so the descriptor layer treats it as a stream
    (`lseek` and `pread` fail with `ESPIPE`, `fsync` and `ftruncate` with
@@ -64,6 +75,17 @@ again once connected, so they cannot be that object.
 - Permission bits are modelled as for other files (read-only attribute
   only), without execute bits.
 - `SIGPIPE` is not raised on `EPIPE`, as for Gesher's kernel pipes.
+- Waits for the ring's mutex end on cancellation, or are bounded (an open
+  fails with `EAGAIN` after 5 s, a poll slice reports nothing ready), so a
+  peer stopped while holding it cannot wedge other processes indefinitely.
+- An exporter that exits immediately after spawning a child, before the
+  child has started, takes the ring (and its buffered bytes) with it; the
+  child's endpoint registers again on a fresh ring.
+- Known gaps: `futimens` on a FIFO descriptor fails (the placeholder has no
+  times); `/proc/self/fd/<n>` of a FIFO reads `pipe:[...]` rather than the
+  path; bionic exports `mkfifo` but not `mknod`/`mknodat`/`mkfifoat`;
+  passing a FIFO descriptor over AF_UNIX `SCM_RIGHTS` or Binder fails with
+  `EINVAL`.
 
 ## Alternatives considered
 

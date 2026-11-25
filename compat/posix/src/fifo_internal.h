@@ -1,4 +1,4 @@
-// gesher-base internals for POSIX FIFOs (fifo.cc, ADR 0096).
+// gesher-base internals for POSIX FIFOs (fifo.cc, ADR 0097).
 //
 // A FIFO is a file with the IO_REPARSE_TAG_LX_FIFO reparse tag, as WSL
 // creates them. Opening one yields a descriptor of kind kFifo: a pipe-type
@@ -14,6 +14,7 @@
 #include <gesher/file_description.h>
 
 #include <cstdint>
+#include <string>
 
 namespace gesher {
 
@@ -30,6 +31,15 @@ bool IsFifoHandle(HANDLE file);
 // Other reparse points keep their original failure.
 HANDLE CreateFileFollowingFifo(const wchar_t* path, DWORD access, DWORD share,
                                DWORD flags_and_attributes);
+
+// Opens the FIFO at `path`, following symbolic links of its last component,
+// with FILE_FLAG_OPEN_REPARSE_POINT; ERROR_CANT_ACCESS_FILE if it is none.
+HANDLE OpenFifoFollowing(const std::wstring& path, DWORD access, DWORD share, DWORD flags_and_attributes,
+                         SECURITY_ATTRIBUTES* security);
+
+// The FIFO file of a FIFO descriptor, reopened by the path it was opened by
+// and checked against its identity; EOPNOTSUPP once renamed or removed.
+HANDLE OpenFifoFile(const DescriptorSnapshotPtr& snapshot, DWORD access);
 
 // Opens the FIFO named by `probe` (a FILE_READ_ATTRIBUTES handle to it, which
 // this consumes) with POSIX open `flags`, waiting for a peer as Linux does.

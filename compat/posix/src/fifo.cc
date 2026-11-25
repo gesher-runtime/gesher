@@ -1,5 +1,5 @@
 // POSIX FIFOs (mkfifo, fifo(7)) shared by every process that opens them
-// (ADR 0096).
+// (ADR 0097).
 //
 // On disk a FIFO is a file carrying WSL's IO_REPARSE_TAG_LX_FIFO tag. Its
 // pipe is a ring of kCapacity bytes in a section named after the FIFO's
@@ -20,6 +20,7 @@
 #include "internal.h"
 #include "ofd_internal.h"
 #include "record_lock_descriptors.h"
+#include "record_lock_liveness.h"
 #include "socket_user_copy.h"
 
 #include <bcrypt.h>
@@ -36,7 +37,10 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace gesher {
 
@@ -58,6 +62,9 @@ constexpr uint32_t kPipeBuf = 4096;    // PIPE_BUF: writes up to this are atomic
 constexpr uint32_t kSlots = 64;        // open descriptions per FIFO
 constexpr ULONGLONG kSweepMs = 100;    // how stale a dead endpoint may be
 constexpr DWORD kWaitSliceMs = 10;
+constexpr DWORD kRetireLockMs = 1000;  // a stopped lock holder never wedges a close
+constexpr DWORD kSetupLockMs = 5000;   // ... nor an open (EAGAIN)
+constexpr ULONGLONG kLingerMs = 30000;  // how long a ring waits for an inheriting child
 constexpr uint64_t kRingMagic = 0x3146464946534847ull;     // GSHFIFF1
 constexpr uint64_t kTrailerMagic = 0x3145464946534847ull;  // GSHFIFE1
 constexpr uint32_t kRead = 1, kWrite = 2;
@@ -95,6 +102,7 @@ struct Trailer {
   uint64_t device, inode;
   uint32_t mode, reserved;
   int64_t access_time, write_time, change_time;
+  char path[1024];  // the FIFO's path when opened (UTF-8, Linux form; empty if longer)
 };
 
 namespace {
@@ -137,13 +145,24 @@ std::wstring EndpointName(const std::wstring& base, const uint64_t nonce[2]) {
 
 int Win32Errno() { return ErrnoFromWin32(GetLastError()); }
 
+// The ring's named mutex. Waits that may block (a transfer or an open) also
+// end on the caller's cancellation or interruption event (EINTR); others are
+// bounded (EAGAIN), so a stopped holder in another process cannot wedge a
+// poll timeout or a close here.
 class RingLock {
  public:
-  explicit RingLock(FifoRing& ring) : ring_(ring) {
-    const DWORD wait = WaitForSingleObject(ring.lock, INFINITE);
+  explicit RingLock(FifoRing& ring, DWORD timeout = INFINITE, HANDLE canceled = nullptr,
+                    HANDLE interrupted = nullptr) : ring_(ring) {
+    HANDLE handles[3] = {ring.lock, nullptr, nullptr};
+    DWORD count = 1;
+    if (canceled) handles[count++] = canceled;
+    if (interrupted && interrupted != canceled) handles[count++] = interrupted;
+    const DWORD wait = WaitForMultipleObjects(count, handles, FALSE, timeout);
     // An abandoned mutex is held: every update publishes its counters after
     // the bytes, so a crashed holder leaves a consistent ring.
-    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) held_ = true;
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED_0) held_ = true;
+    else if (wait == WAIT_TIMEOUT) error_ = EAGAIN;
+    else if (wait > WAIT_OBJECT_0 && wait < WAIT_OBJECT_0 + count) error_ = EINTR;
     else error_ = wait == WAIT_FAILED ? Win32Errno() : EIO;
   }
   ~RingLock() { if (held_) ReleaseMutex(ring_.lock); }
@@ -187,7 +206,7 @@ std::shared_ptr<FifoRing> AcquireRing(const uint64_t key[3]) {
   if (!ring->header) { errno = Win32Errno(); return {}; }
   ring->data = reinterpret_cast<unsigned char*>(ring->header + 1);
   {
-    RingLock lock(*ring);
+    RingLock lock(*ring, kSetupLockMs);
     if (lock.Error()) { errno = lock.Error(); return {}; }
     RingHeader& header = *ring->header;
     if (header.magic == 0) {
@@ -275,6 +294,29 @@ FifoEndpoint* EndpointLocked(OpenFileDescription& description) {
   endpoint->ring = AcquireRing(trailer->key);
   if (!endpoint->ring) return nullptr;
   endpoint->name = EndpointName(endpoint->ring->base, endpoint->nonce);
+  {
+    // A description outlives every mapping of its ring only when it was
+    // inherited before its importer could bind (fifo.cc keeps the exporter's
+    // ring until then, see ~FifoEndpoint). Should the ring still have been
+    // recreated, the endpoint is registered again so that its peers count it.
+    RingLock lock(*endpoint->ring, kSetupLockMs);
+    if (lock.Error()) { errno = lock.Error(); return nullptr; }
+    RingHeader& header = *endpoint->ring->header;
+    bool listed = false;
+    Slot* free_slot = nullptr;
+    for (Slot& slot : header.slots) {
+      if (slot.role && slot.nonce[0] == endpoint->nonce[0] && slot.nonce[1] == endpoint->nonce[1]) listed = true;
+      if (!slot.role && !free_slot) free_slot = &slot;
+    }
+    if (!listed) {
+      if (!free_slot) { errno = ENFILE; return nullptr; }
+      free_slot->nonce[0] = endpoint->nonce[0];
+      free_slot->nonce[1] = endpoint->nonce[1];
+      free_slot->role = trailer->role;
+      Recount(header);
+      PulseEvent(endpoint->ring->wake);
+    }
+  }
   description.fifo = std::move(endpoint);
   return description.fifo.get();
 }
@@ -318,7 +360,7 @@ int WaitForPartner(FifoRing& ring, bool reader, uint32_t start) {
   if (previous == PTHREAD_CANCEL_ENABLE && !canceled) error = ENOMEM;
   while (!error) {
     {
-      RingLock lock(ring);
+      RingLock lock(ring, INFINITE, canceled);
       if (lock.Error()) { error = lock.Error(); break; }
       const RingHeader& header = *ring.header;
       if ((reader ? header.writer_opens : header.reader_opens) != start) break;
@@ -332,19 +374,58 @@ int WaitForPartner(FifoRing& ring, bool reader, uint32_t start) {
 
 }  // namespace
 
+namespace {
+
+DWORD WINAPI Linger(void* raw) {
+  std::unique_ptr<std::shared_ptr<FifoRing>> owner(static_cast<std::shared_ptr<FifoRing>*>(raw));
+  FifoRing& ring = **owner;
+  const ULONGLONG deadline = GetTickCount64() + kLingerMs;
+  while (GetTickCount64() < deadline) {
+    uint32_t access = 0, handles = 0;
+    if (record_locks::HandleAccess(ring.section, &access, &handles) != 0 || handles > 1) break;
+    RingLock lock(ring, kRetireLockMs);
+    if (lock.Error()) break;
+    Sweep(ring, true);
+    if (ring.header->readers == 0 && ring.header->writers == 0) break;
+    Sleep(kWaitSliceMs * 5);
+  }
+  return 0;
+}
+
+}  // namespace
+
 FifoEndpoint::~FifoEndpoint() {
   if (view) UnmapViewOfFile(view);
   if (!ring || name.empty()) return;
+  const int saved = errno;
   // The description's own section handle and view are already released (the
   // description destroys its members after closing them). If no process
   // holds the description any more, its endpoint closed: count it out now
   // rather than at the next sweep, so readers see end of file at once.
   HANDLE probe = OpenFileMappingW(FILE_MAP_READ, FALSE, name.c_str());
-  if (probe) { CloseHandle(probe); return; }
-  if (GetLastError() != ERROR_FILE_NOT_FOUND) return;
-  const int saved = errno;
-  RingLock lock(*ring);
-  if (!lock.Error()) RemoveSlot(*ring, nonce);
+  if (probe) CloseHandle(probe);
+  bool live = true;
+  if (!probe && GetLastError() == ERROR_FILE_NOT_FOUND) {
+    RingLock lock(*ring, kRetireLockMs);
+    if (!lock.Error()) {
+      RemoveSlot(*ring, nonce);
+      live = ring->header->readers != 0 || ring->header->writers != 0;
+    }
+  }
+  // Endpoints remain (another process holds a description, perhaps one
+  // inherited by a child that has not imported it yet), but this may be the
+  // last process that maps the ring: a named section ends with its last
+  // handle, and the bytes with it. Keep the ring until another process maps
+  // it, its endpoints are gone, or a bounded time has passed.
+  uint32_t access = 0, handles = 0;
+  if (live && ring.use_count() == 1 && record_locks::HandleAccess(ring->section, &access, &handles) == 0 &&
+      handles == 1) {
+    auto* owner = new (std::nothrow) std::shared_ptr<FifoRing>(ring);
+    HANDLE thread = owner ? CreateThread(nullptr, 64 * 1024, Linger, owner, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr)
+                          : nullptr;
+    if (thread) CloseHandle(thread);
+    else delete owner;
+  }
   errno = saved;
 }
 
@@ -354,16 +435,87 @@ bool IsFifoHandle(HANDLE file) {
          (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && tag.ReparseTag == kReparseTagFifo;
 }
 
+HANDLE OpenFifoFollowing(const std::wstring& start, DWORD access, DWORD share, DWORD flags_and_attributes,
+                         SECURITY_ATTRIBUTES* security) {
+  // Windows follows every symbolic link of a path but its last component's
+  // target, the FIFO, it refuses: walk the final links here.
+  std::wstring path = start;
+  for (int depth = 0; depth < 40; ++depth) {
+    HANDLE file = CreateFileW(path.c_str(), access | FILE_READ_ATTRIBUTES, share, security, OPEN_EXISTING,
+                              flags_and_attributes | FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) return file;
+    FILE_ATTRIBUTE_TAG_INFO tag{};
+    if (!GetFileInformationByHandleEx(file, FileAttributeTagInfo, &tag, sizeof(tag)) ||
+        (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+      CloseHandle(file);
+      SetLastError(ERROR_CANT_ACCESS_FILE);
+      return INVALID_HANDLE_VALUE;
+    }
+    if (tag.ReparseTag == kReparseTagFifo) return file;
+    alignas(8) unsigned char buffer[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
+    DWORD bytes = 0;
+    const bool read = tag.ReparseTag == IO_REPARSE_TAG_SYMLINK &&
+        DeviceIoControl(file, FSCTL_GET_REPARSE_POINT, nullptr, 0, buffer, sizeof(buffer), &bytes, nullptr);
+    CloseHandle(file);
+    struct Symlink {
+      DWORD tag;
+      WORD length, reserved, substitute_offset, substitute_length, print_offset, print_length;
+      ULONG flags;
+    };
+    if (!read || bytes < sizeof(Symlink)) {
+      SetLastError(ERROR_CANT_ACCESS_FILE);
+      return INVALID_HANDLE_VALUE;
+    }
+    Symlink link;
+    std::memcpy(&link, buffer, sizeof(link));
+    if (sizeof(Symlink) + link.substitute_offset + link.substitute_length > bytes) {
+      SetLastError(ERROR_CANT_ACCESS_FILE);
+      return INVALID_HANDLE_VALUE;
+    }
+    std::wstring target(reinterpret_cast<const wchar_t*>(buffer + sizeof(Symlink) + link.substitute_offset),
+                        link.substitute_length / sizeof(wchar_t));
+    if ((link.flags & 1) != 0) {  // SYMLINK_FLAG_RELATIVE
+      const size_t slash = path.find_last_of(L"\\/");
+      path = (slash == std::wstring::npos ? std::wstring() : path.substr(0, slash + 1)) + target;
+    } else if (target.rfind(L"\\??\\", 0) == 0) {
+      path = L"\\\\?\\" + target.substr(4);
+    } else {
+      path = target;
+    }
+  }
+  SetLastError(ERROR_CANT_RESOLVE_FILENAME);
+  return INVALID_HANDLE_VALUE;
+}
+
 HANDLE CreateFileFollowingFifo(const wchar_t* path, DWORD access, DWORD share, DWORD flags_and_attributes) {
   HANDLE file = CreateFileW(path, access, share, nullptr, OPEN_EXISTING, flags_and_attributes, nullptr);
   if (file != INVALID_HANDLE_VALUE || (flags_and_attributes & FILE_FLAG_OPEN_REPARSE_POINT) != 0 ||
       GetLastError() != ERROR_CANT_ACCESS_FILE) return file;
-  HANDLE special = CreateFileW(path, access | FILE_READ_ATTRIBUTES, share, nullptr, OPEN_EXISTING,
-                               flags_and_attributes | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-  if (special != INVALID_HANDLE_VALUE && IsFifoHandle(special)) return special;
-  if (special != INVALID_HANDLE_VALUE) CloseHandle(special);
-  SetLastError(ERROR_CANT_ACCESS_FILE);
-  return INVALID_HANDLE_VALUE;
+  return OpenFifoFollowing(path, access, share, flags_and_attributes, nullptr);
+}
+
+HANDLE OpenFifoFile(const DescriptorSnapshotPtr& snapshot, DWORD access) {
+  FifoEndpoint* endpoint = Endpoint(snapshot);
+  if (!endpoint) return INVALID_HANDLE_VALUE;
+  std::wstring windows;
+  if (!endpoint->trailer->path[0] || MapPath(endpoint->trailer->path, &windows) != PathKind::kFile) {
+    errno = EOPNOTSUPP;
+    return INVALID_HANDLE_VALUE;
+  }
+  HANDLE file = CreateFileW(windows.c_str(), access | FILE_READ_ATTRIBUTES,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  uint64_t key[3] = {0, 0, 0};
+  BY_HANDLE_FILE_INFORMATION info{};
+  // Renamed away or replaced since it was opened: the FIFO has no name here.
+  if (file == INVALID_HANDLE_VALUE || FileIdentity(file, key, &info) != 0 ||
+      std::memcmp(key, endpoint->trailer->key, sizeof(key)) != 0) {
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    errno = EOPNOTSUPP;
+    return INVALID_HANDLE_VALUE;
+  }
+  return file;
 }
 
 int OpenFifoHandle(HANDLE probe, int flags) {
@@ -420,6 +572,16 @@ int OpenFifoHandle(HANDLE probe, int flags) {
   trailer->access_time = Time(info.ftLastAccessTime);
   trailer->write_time = Time(info.ftLastWriteTime);
   trailer->change_time = Time(info.ftLastWriteTime);
+  {
+    wchar_t final_path[1024];
+    const DWORD length = GetFinalPathNameByHandleW(owned.probe, final_path, 1024,
+                                                   FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (length != 0 && length < 1024) {
+      const std::string linux_path = LinuxPath(final_path);
+      if (linux_path.size() < sizeof(trailer->path))
+        std::memcpy(trailer->path, linux_path.c_str(), linux_path.size() + 1);
+    }
+  }
   CloseHandle(owned.probe);
   owned.probe = nullptr;
 
@@ -427,7 +589,7 @@ int OpenFifoHandle(HANDLE probe, int flags) {
   bool wait = false;
   uint32_t start = 0;
   {
-    RingLock lock(*ring);
+    RingLock lock(*ring, kSetupLockMs);
     if (lock.Error()) return errno = lock.Error(), -1;
     Sweep(*ring, true);
     RingHeader& header = *ring->header;
@@ -452,7 +614,7 @@ int OpenFifoHandle(HANDLE probe, int flags) {
     PulseEvent(ring->wake);
   }
   auto unregister = [&] {
-    RingLock lock(*ring);
+    RingLock lock(*ring, kRetireLockMs);
     if (!lock.Error()) RemoveSlot(*ring, nonce);
   };
   if (wait) {
@@ -532,8 +694,9 @@ int TransferFifo(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned co
     if (Signaled(canceled) || Signaled(interrupted)) return done ? static_cast<int>(done) : (errno = EINTR, -1);
     const bool nonblocking = (snapshot->description->Flags() & O_NONBLOCK) != 0;
     {
-      RingLock lock(ring);
-      if (lock.Error()) return errno = lock.Error(), -1;
+      RingLock lock(ring, nonblocking ? kRetireLockMs : INFINITE, canceled, interrupted);
+      if (lock.Error() == EINTR) return done ? static_cast<int>(done) : (errno = EINTR, -1);
+      if (lock.Error()) return done ? static_cast<int>(done) : (errno = lock.Error(), -1);
       Sweep(ring, false);
       RingHeader& header = *ring.header;
       const uint64_t used = header.tail - header.head;
@@ -587,7 +750,10 @@ int PollFifo(const DescriptorSnapshotPtr& snapshot, short events, short* ready) 
   if (!endpoint) return -1;
   const int access = snapshot->description->Flags() & O_ACCMODE;
   FifoRing& ring = *endpoint->ring;
-  RingLock lock(ring);
+  // One poll slice at most: a peer stopped while holding the lock reads as
+  // "nothing ready yet", and the poll's own timeout still applies.
+  RingLock lock(ring, kWaitSliceMs);
+  if (lock.Error() == EAGAIN) return 0;
   if (lock.Error()) return errno = lock.Error(), -1;
   Sweep(ring, false);
   const RingHeader& header = *ring.header;
@@ -610,7 +776,7 @@ int FifoBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes) {
   if (!bytes) return errno = EFAULT, -1;
   FifoEndpoint* endpoint = Endpoint(snapshot);
   if (!endpoint) return -1;
-  RingLock lock(*endpoint->ring);
+  RingLock lock(*endpoint->ring, kRetireLockMs);
   if (lock.Error()) return errno = lock.Error(), -1;
   const RingHeader& header = *endpoint->ring->header;
   *bytes = static_cast<int>(header.tail - header.head);
@@ -630,6 +796,30 @@ int FifoStatus(const DescriptorSnapshotPtr& snapshot, FifoFileStatus* status) {
   return 0;
 }
 
+namespace {
+
+// An inherited FIFO description binds its ring while the process starts,
+// as long as its exporter still keeps that ring (see ~FifoEndpoint).
+void BindInheritedFifos() {}
+struct InheritedFifoBinding {
+  InheritedFifoBinding() {
+    HMODULE self = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(reinterpret_cast<void*>(&BindInheritedFifos)), &self) ||
+        self != GetModuleHandleW(nullptr)) return;
+    const int saved = errno;
+    std::vector<std::pair<int, DescriptorSnapshotPtr>> descriptors;
+    if (CaptureDescriptors(&descriptors, true) == 0) {
+      for (const auto& entry : descriptors)
+        if (entry.second->kind == DescriptorKind::kFifo) Endpoint(entry.second);
+    }
+    errno = saved;
+  }
+};
+InheritedFifoBinding inherited_fifo_binding;
+
+}  // namespace
+
 }  // namespace gesher
 
 // mkfifo(3) and mknod(S_IFIFO): an empty file with WSL's FIFO tag. A volume
@@ -638,23 +828,69 @@ extern "C" int mkfifo(const char* path, mode_t mode) {
   if (path == nullptr) return errno = EFAULT, -1;
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EEXIST)) return -1;
-  // As open(O_CREAT) does here: no owner write permission makes it read-only.
-  HANDLE file = CreateFileW(windows.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, 0, nullptr, CREATE_NEW,
-                            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS |
-                                ((mode & 0200) == 0 ? FILE_ATTRIBUTE_READONLY : FILE_ATTRIBUTE_NORMAL),
-                            nullptr);
+  // The name appears already tagged, or not at all: the FIFO is made under a
+  // private name in the same directory and renamed without replacing, so a
+  // concurrent creator that gets EEXIST never sees a regular file there.
+  if (GetFileAttributesW(windows.c_str()) != INVALID_FILE_ATTRIBUTES) return errno = EEXIST, -1;
+  uint64_t nonce[2] = {0, 0};
+  if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(nonce), sizeof(nonce),
+                                      BCRYPT_USE_SYSTEM_PREFERRED_RNG))) return errno = EIO, -1;
+  const size_t slash = windows.find_last_of(L"\\/");
+  std::wstring temporary = (slash == std::wstring::npos ? std::wstring() : windows.substr(0, slash + 1)) +
+                           L".gesher-fifo-";
+  gesher::Hex(&temporary, nonce, 2);
+  HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, 0, nullptr,
+                            CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS |
+                                FILE_ATTRIBUTE_HIDDEN, nullptr);
   if (file == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  auto discard = [&](int error) {
+    FILE_DISPOSITION_INFO remove{TRUE};
+    SetFileInformationByHandle(file, FileDispositionInfo, &remove, sizeof(remove));
+    CloseHandle(file);
+    return errno = error, -1;
+  };
   struct { DWORD tag; WORD length, reserved; } reparse{gesher::kReparseTagFifo, 0, 0};
   DWORD returned = 0;
   if (!DeviceIoControl(file, FSCTL_SET_REPARSE_POINT, &reparse, sizeof(reparse), nullptr, 0, &returned, nullptr)) {
     const DWORD error = GetLastError();
-    FILE_DISPOSITION_INFO remove{TRUE};
-    SetFileInformationByHandle(file, FileDispositionInfo, &remove, sizeof(remove));
-    CloseHandle(file);
-    if (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_PARAMETER)
-      return errno = EPERM, -1;
-    return errno = gesher::ErrnoFromWin32(error), -1;
+    return discard(error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED ||
+                   error == ERROR_INVALID_PARAMETER ? EPERM : gesher::ErrnoFromWin32(error));
+  }
+  const size_t bytes = sizeof(FILE_RENAME_INFO) + windows.size() * sizeof(wchar_t);
+  std::unique_ptr<unsigned char[]> storage(new (std::nothrow) unsigned char[bytes]());
+  if (!storage) return discard(ENOMEM);
+  auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(storage.get());
+  rename->ReplaceIfExists = FALSE;
+  rename->RootDirectory = nullptr;
+  rename->FileNameLength = static_cast<DWORD>(windows.size() * sizeof(wchar_t));
+  std::memcpy(rename->FileName, windows.c_str(), windows.size() * sizeof(wchar_t));
+  if (!SetFileInformationByHandle(file, FileRenameInfo, rename, static_cast<DWORD>(bytes))) {
+    const DWORD error = GetLastError();
+    return discard(error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS ? EEXIST
+                                                                               : gesher::ErrnoFromWin32(error));
+  }
+  // As open(O_CREAT) does here: no owner write permission makes it read-only.
+  FILE_BASIC_INFO basic{};
+  if (GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic))) {
+    DWORD attributes = basic.FileAttributes & (FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED);
+    if ((mode & 0200) == 0) attributes |= FILE_ATTRIBUTE_READONLY;
+    FILE_BASIC_INFO update{};  // zero times: unchanged
+    update.FileAttributes = attributes ? attributes : FILE_ATTRIBUTE_NORMAL;
+    SetFileInformationByHandle(file, FileBasicInfo, &update, sizeof(update));
   }
   CloseHandle(file);
   return 0;
+}
+
+// For bionic's truncate(2), which must not open a FIFO (EINVAL, as Linux).
+extern "C" int gesher_is_fifo_path(const char* path) {
+  std::wstring windows;
+  if (path == nullptr || gesher::MapPath(path, &windows) != gesher::PathKind::kFile) return 0;
+  HANDLE file = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
+                                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                                FILE_FLAG_BACKUP_SEMANTICS);
+  if (file == INVALID_HANDLE_VALUE) return 0;
+  const bool fifo = gesher::IsFifoHandle(file);
+  CloseHandle(file);
+  return fifo ? 1 : 0;
 }
