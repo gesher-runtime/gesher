@@ -335,6 +335,14 @@ public final class Services {
         // that name registerTelephonyCallback / listen threw NullPointerException (Waze).
         services.put("telephony.registry", StandIn.of(
                 com.android.internal.telephony.ITelephonyRegistry.class, telephony.registry).asBinder());
+        // credential: CredentialManager for passkeys (docs/passkeys.md, ADR 0093). The system
+        // server is the one credential provider, over Windows' WebAuthn API (WindowsWebAuthn,
+        // null without its natives). Without that API, and for other credential types, the
+        // answers are AOSP's for a device without a provider.
+        services.put(Context.CREDENTIAL_SERVICE, StandIn.of(
+                android.credentials.ICredentialManager.class,
+                new CredentialManagerService(new CredentialManagerHost(am, pm),
+                        WindowsWebAuthn.create(), new AssetLinks.Https())).asBinder());
         StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
                 android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
         services.put(Context.TRUST_SERVICE, trust.asBinder());
