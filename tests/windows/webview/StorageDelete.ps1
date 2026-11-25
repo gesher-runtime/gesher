@@ -4,6 +4,21 @@ function StorageDeleteCheck {
   if (-not (Test-Path "$Dir/webview2_probe.exe")) {
     Write-Host 'FAIL  storage-delete: probe binary is missing'; $script:failed++; return
   }
+  # Prove that the standalone fault diagnostic reports the actual native
+  # exception and preserves a failing process exit before relying on its stack.
+  # This separate pre-COM control never substitutes for the storage operation.
+  $faultControl = RunTimed "$Dir/webview2_probe.exe" @('--native-exception-self-test') 15
+  $faultExit = $LASTEXITCODE
+  $faultCode = [regex]::Matches($faultControl, '(?m)^native-exception: code=0xe0470001 flags=0x00000001 thread=[1-9][0-9]* parameters=2 access=0x47534852 target=0x53544143\r?$').Count
+  $faultAddress = [regex]::Matches($faultControl, '(?im)^native-exception: fault\[0\] pc=0x[0-9a-f]+ sp=0x[0-9a-f]+ module=[^ <]+\.dll base=0x[0-9a-f]+ rva=0x[0-9a-f]+\r?$').Count
+  $probeFrames = [regex]::Matches($faultControl, '(?im)^native-exception: frame\[[1-9][0-9]*\] pc=0x[0-9a-f]+ sp=0x[0-9a-f]+ module=webview2_probe\.exe base=0x[0-9a-f]+ rva=0x[0-9a-f]*[1-9a-f][0-9a-f]*\r?$').Count
+  if ($faultExit -ne -532217855 -or $faultCode -ne 1 -or $faultAddress -ne 1 -or $probeFrames -lt 1) {
+    Write-Host "FAIL  storage-delete: native fault diagnostic control failed (exit=$faultExit code=$faultCode address=$faultAddress probe-frames=$probeFrames)"
+    $script:failed++
+  } else {
+    Write-Host 'PASS  storage-delete: native fault diagnostic control preserved the failing exit and actual exception stack'
+  }
+  Write-Host $faultControl
   $output = RunTimed "$Dir/webview2_probe.exe" @('--storage-delete') 690
   $exit = $LASTEXITCODE
   ($output -split "`n" | Where-Object { $_ -match '^(PASS|FAIL|INFO) ' }) | Out-Host

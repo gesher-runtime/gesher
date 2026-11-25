@@ -45,14 +45,16 @@ function BaseFixture([bool]$Rejection) {
 }
 function ScopeFixture {
   $rows = [Collections.Generic.List[string]]::new()
-  foreach ($name in 'post-pass', 'post-deny', 'cors-pass', 'cors-deny', 'redirect-pass', 'redirect-deny', 'parallel-allow', 'parallel-deny', 'sequential-pass', 'teardown-deny', 'teardown-followup') {
-    $count = if ($name -in 'redirect-pass', 'redirect-deny') { 2 } elseif ($name -eq 'teardown-followup') { 0 } else { 1 }
+  $rows.Add('INFO  worker-denial: fresh-profile=C:\fixture\scope origin=http://127.0.0.1:32123 other=http://127.0.0.1:32124')
+  foreach ($name in 'post-pass', 'post-deny', 'cors-pass', 'cors-deny', 'redirect-pass', 'redirect-deny', 'parallel-allow', 'parallel-deny', 'sequential-pass', 'cors-preflight-deny', 'teardown-deny', 'teardown-followup') {
+    $count = if ($name -in 'redirect-pass', 'redirect-deny') { 2 } elseif ($name -in 'teardown-followup', 'cors-preflight-deny') { 0 } else { 1 }
     $rows.Add("INFO  worker-denial: case=$name intercepted=$count")
   }
   foreach ($name in 'parallel-allow', 'parallel-deny') { $rows.Add("INFO  worker-denial: parallel reverse-complete case=$name") }
-  foreach ($name in 'post-deny', 'cors-deny', 'redirect-deny', 'parallel-deny', 'teardown-deny') {
+  foreach ($name in 'post-deny', 'cors-deny', 'redirect-deny', 'parallel-deny', 'cors-preflight-deny', 'teardown-deny') {
     $route = if ($name -eq 'redirect-deny') { 'redirect-deny-target' } elseif ($name -eq 'parallel-deny') { 'concurrent' } else { $name }
-    $rows.Add("INFO  worker-denial: terminal-denial case=$name original=http://127.0.0.1:32123/denial/network/$route rewritten=gesher-denial-00000000000000000000000000000000:blocked")
+    $port = if ($name -in 'cors-deny', 'cors-preflight-deny', 'redirect-deny') { 32124 } else { 32123 }
+    $rows.Add("INFO  worker-denial: terminal-denial case=$name original=http://127.0.0.1:$port/denial/network/$route rewritten=gesher-denial-00000000000000000000000000000000:blocked")
     $rows.Add("INFO  worker-denial: result case=$name initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed")
   }
   foreach ($control in @(@('A', 'POST', 'post-pass', 32768), @('B', 'POST', 'cors-pass', 32768), @('B', 'OPTIONS', 'cors-pass', 0),
@@ -66,8 +68,36 @@ function ScopeFixture {
   $rows.Add('INFO  worker-denial: late-allow rejected case=teardown-deny terminal=denied original-restores=0')
   $rows.Add('INFO  worker-denial: clear upload before owner closure hr=0x00000000')
   $rows.Add('INFO  worker-denial: Complete after owner closure hr=0x8007139f')
+  $rows.Add('INFO  worker-denial: preflight-policy case=cors-preflight-deny options-intercepted=1 post-intercepted=0')
+  $rows.Add('INFO  worker-denial: preflight case=cors-preflight-deny requested-method=POST requesting-origin=http://127.0.0.1:32123 source=SERVICE_WORKER')
+  $rows.Add('INFO  worker-denial: request uri=http://127.0.0.1:32124/denial/network/cors-preflight-deny method=OPTIONS source=SERVICE_WORKER')
   $rows.Add('INFO  worker-denial: redirect-start-network=1 redirect-target-callback=yes; observed WebView2 routing only; Android redirect parity unqualified')
   $rows.Add('PASS  worker-denial: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled')
+  return ($rows -join "`n") + "`n"
+}
+function OrderingFixture {
+  $rows = [Collections.Generic.List[string]]::new()
+  $rows.Add('INFO  worker-ordering: fresh-profile=C:\fixture\ordering origin=http://127.0.0.1:32125 other=http://127.0.0.1:32126')
+  $rows.Add('INFO  worker-ordering: terminal put_Uri hr=0x00000000')
+  $rows.Add('INFO  worker-ordering: terminal-denial case=teardown-complete-deny original=http://127.0.0.1:32125/denial/network/teardown-complete-deny rewritten=gesher-denial-11111111111111111111111111111111:blocked')
+  $rows.Add('INFO  worker-ordering: clear upload before owner closure hr=0x00000000')
+  $rows.Add('INFO  worker-ordering: Complete before owner closure hr=0x00000000')
+  $rows.Add('INFO  worker-ordering: completion-order case=teardown-complete-deny complete-before-filters-and-close=yes owner-live=yes filters=2')
+  $rows.Add('INFO  worker-ordering: remove source filter hr=0x00000000')
+  $rows.Add('INFO  worker-ordering: remove source filter hr=0x00000000')
+  $rows.Add('INFO  worker-ordering: controller.Close hr=0x00000000')
+  $rows.Add('INFO  worker-ordering: late-allow rejected case=teardown-complete-deny terminal=denied original-restores=0')
+  $rows.Add('INFO  worker-ordering: controller.Close hr=0x00000000')
+  $rows.Add('INFO  worker-ordering: case=post-pass intercepted=1')
+  $rows.Add('INFO  worker-ordering: case=teardown-complete-deny intercepted=1')
+  $rows.Add('INFO  worker-ordering: case=teardown-complete-followup intercepted=0')
+  $rows.Add('INFO  worker-ordering: origin=A method=POST path=/denial/network/post-pass body-bytes=32768 complete=yes')
+  $rows.Add('INFO  worker-ordering: origin=A method=GET path=/denial/network/teardown-complete-followup body-bytes=0 complete=yes')
+  $rows.Add('INFO  worker-ordering: unknown-origin-requests=0 origin-a-connections=5 origin-b-connections=0')
+  $rows.Add('INFO  worker-ordering: received-http-bytes-a=34000 received-http-bytes-b=0 unattributed-http-bytes=0')
+  $rows.Add('INFO  worker-ordering: parallel-reverse-completions=0 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0')
+  $rows.Add('INFO  worker-ordering: result case=teardown-complete-deny initial-typeerror=yes request-identity=yes timing-identity=yes target-network=0 preflight-network=0 outcome=network-rejection-observed')
+  $rows.Add('PASS  worker-ordering: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled')
   return ($rows -join "`n") + "`n"
 }
 $script:checks = 0
@@ -79,8 +109,9 @@ function Check([string]$Name, [string]$Output, [int]$ExitCode, [int]$Failures) {
 }
 try {
   $scope = ScopeFixture
-  $positive = (BaseFixture $true) + $scope
-  $negative = (BaseFixture $false) + $scope
+  $ordering = OrderingFixture
+  $positive = (BaseFixture $true) + $scope + $ordering
+  $negative = (BaseFixture $false) + $scope + $ordering
   Check 'observed rejection' $positive 0 0
   Check 'valid primitive negative' $negative 0 0
   Check 'base timing identity lost' ($positive -replace 'timing-identity=yes origin-network=0 outcome=network-rejection-observed', 'timing-identity=no origin-network=0 outcome=not-qualified') 0 0
@@ -122,6 +153,37 @@ try {
   $lostTiming = $positive -replace '(result case=post-deny .*?)timing-identity=yes', '${1}timing-identity=no'
   Check 'changed identity cannot qualify' $lostTiming 0 1
   Check 'changed identity is valid negative' ($lostTiming -replace '(result case=post-deny .*?)outcome=network-rejection-observed', '${1}outcome=not-qualified') 0 0
+
+  $preflightDenied = $positive + "INFO  worker-denial: origin=B method=OPTIONS path=/denial/network/cors-preflight-deny body-bytes=0 complete=yes`n"
+  Check 'denied OPTIONS escape must be counted' $preflightDenied 0 1
+  $preflightDenied = $preflightDenied -replace '(result case=cors-preflight-deny .*?)preflight-network=0 outcome=network-rejection-observed', '${1}preflight-network=1 outcome=not-qualified'
+  Check 'denied OPTIONS escape is valid negative' $preflightDenied 0 0
+  Check 'preflight requested another method' ($positive -replace 'requested-method=POST', 'requested-method=PUT') 0 1
+  $noOptions = $positive -replace 'options-intercepted=1', 'options-intercepted=0'
+  $noOptions = $noOptions -replace '(?m)^INFO  worker-denial: (preflight case=cors-preflight-deny|request uri=[^ ]+/cors-preflight-deny method=OPTIONS|terminal-denial case=cors-preflight-deny)[^\n]*\n', ''
+  Check 'missing OPTIONS cannot qualify' $noOptions 0 1
+  Check 'missing OPTIONS is valid negative' ($noOptions -replace '(result case=cors-preflight-deny .*?)outcome=network-rejection-observed', '${1}outcome=not-qualified') 0 0
+  $postAfterOptions = $positive -replace 'case=cors-preflight-deny intercepted=0', 'case=cors-preflight-deny intercepted=1' -replace 'post-intercepted=0', 'post-intercepted=1'
+  Check 'POST after OPTIONS denial cannot qualify' $postAfterOptions 0 1
+  Check 'POST after OPTIONS denial is valid negative' ($postAfterOptions -replace '(result case=cors-preflight-deny .*?)outcome=network-rejection-observed', '${1}outcome=not-qualified') 0 0
+
+  $oldClose = $positive + "INFO  worker-denial: origin=A method=POST path=/denial/network/teardown-deny body-bytes=32768 complete=yes`n"
+  $oldClose = $oldClose -replace 'result case=teardown-deny initial-typeerror=yes', 'result case=teardown-deny initial-typeerror=no'
+  $oldClose = $oldClose -replace '(result case=teardown-deny .*?)target-network=0 preflight-network=0 outcome=network-rejection-observed', '${1}target-network=1 preflight-network=0 outcome=not-qualified'
+  Check 'original Close-before-Complete negative retained' $oldClose 0 0
+  $newClose = $positive + "INFO  worker-ordering: origin=A method=POST path=/denial/network/teardown-complete-deny body-bytes=32768 complete=yes`n"
+  Check 'new ordering escape must be counted' $newClose 0 1
+  $newClose = $newClose -replace 'result case=teardown-complete-deny initial-typeerror=yes', 'result case=teardown-complete-deny initial-typeerror=no'
+  $newClose = $newClose -replace '(result case=teardown-complete-deny .*?)target-network=0 preflight-network=0 outcome=network-rejection-observed', '${1}target-network=1 preflight-network=0 outcome=not-qualified'
+  Check 'new ordering full upload escape is valid negative' $newClose 0 0
+  Check 'new ordering cannot fabricate success' ($newClose -replace '(result case=teardown-complete-deny .*?)outcome=not-qualified', '${1}outcome=network-rejection-observed') 0 1
+  $lateComplete = $positive -replace '(?m)^INFO  worker-ordering: Complete before owner closure[^\n]+\n', ''
+  $lateComplete += "INFO  worker-ordering: Complete before owner closure hr=0x00000000`n"
+  Check 'native order contradicts completion claim' $lateComplete 0 1
+  Check 'duplicate completion forbidden' ($positive + "INFO  worker-ordering: Complete before owner closure hr=0x00000000`n") 0 1
+  Check 'ordering must have a distinct profile' ($positive -replace 'fresh-profile=C:\\fixture\\ordering', 'fresh-profile=C:\fixture\scope') 0 1
+  Check 'ordering followup is required' ($positive -replace '(?m)^INFO  worker-ordering: origin=A method=GET path=/denial/network/teardown-complete-followup[^\n]+\n', '') 0 1
+  Check 'ordering cannot run after unsupported first phase' ($unavailable + $ordering) 2 1
   Write-Host "Worker response PowerShell gate: $script:checks fixture scenarios passed; no native runtime exercised"
 } finally {
   Remove-Item -LiteralPath $Dir -Recurse -Force

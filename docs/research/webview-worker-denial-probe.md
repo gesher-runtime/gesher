@@ -213,3 +213,50 @@ Local validation of this extension:
 The new socket accounting controls passed in both actual Windows jobs recorded
 above. They were compiled, but not executed, in this Linux workspace. The
 Windows sparse checkout includes both the gate and its fixture script.
+
+## Follow-up variants: awaiting actual Windows execution
+
+The exact `7a41155f` results justify two separate experiments. They preserve
+the measured POST-only CORS and Close-before-Complete negative controls.
+Neither variant enables a production flag or changes Android API behavior.
+
+`cors-preflight-deny` adds a distinct cross-origin JSON/custom-header POST to
+the first matrix. The handler observes the actual `SERVICE_WORKER` OPTIONS
+callback, checks `Access-Control-Request-Method: POST` and the originating
+worker origin, takes its deferral, and applies the same unregistered nonnetwork
+URI after the callback returns. This models a policy already denying network
+before preflight admission. It does not turn OPTIONS into an application POST
+callback or claim that a later Java decision can retract an earlier preflight.
+Any ensuing POST is observed and left unchanged so the independent server can
+expose a failed preflight denial. Qualification requires the actual OPTIONS
+callback, no subsequent POST callback, initial `TypeError`, unchanged original
+JavaScript POST identity and timing, and zero OPTIONS or POST at the origin.
+Missing interception, escaped traffic or another genuine fetch result is a
+recorded negative; malformed headers, timeouts and uncertain evidence fail
+the harness.
+
+`teardown-complete-deny` runs in a second fresh, verified profile with its own
+worker, two controllers and loopback origins. A full permitted POST first
+proves ordinary operation. The observer then asks that same worker for a new
+32 KiB POST. The owner retains its native deferral, applies and reads back the
+terminal URI, clears the upload, and calls `Complete` **while the owner and
+both source filters are still alive**. In that same STA turn it immediately
+removes the filters/callbacks and closes the owner. No delay or explicit pump
+occurs between completion and closure. A successful HRESULT records call
+acceptance; it is not treated as synchronous acknowledgement of a network
+decision. The separate observer reports the actual fetch and then another
+real GET from the same worker. Late allow is rejected before restoring any URI.
+
+This second scenario logs as `worker-ordering`; its three observations and
+independent byte accounting cannot substitute for the first matrix's twelve
+observations. Both run within the existing 120-second native deadline and
+140-second process watchdog. All existing response controls run first. The
+PowerShell gate checks actual native call order, distinct profile paths,
+follow-up/control evidence and independent origin counts. Valid negative
+outcomes are retained even when the new ordering accepts every API call.
+
+Local validation compiles both static/DLL targets with the cached SDK and
+`-Wall -Werror`, executes 577 exact-script adapter checks plus the original
+159, and checks 44 positive/negative Windows-log fixtures. These local checks
+validate the observation protocol only. The two new outcomes require a later
+exact-head Windows receipt; no result is inferred from the previous run.

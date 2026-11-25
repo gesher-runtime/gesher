@@ -10,8 +10,9 @@ const workerScript = source.match(/char kWorker\[\] = R"JS\(([\s\S]*?)\)JS";/)[1
 const pageScript = source.match(/char kPage\[\] = R"HTML\([\s\S]*?<script>([\s\S]*?)<\/script>\)HTML";/)[1];
 const origin = 'http://127.0.0.1:32123', other = 'http://127.0.0.1:32124';
 const identity = 'e466a13e-3852-49d2-bb22-7adb6bc53cda';
-const actions = ['post-pass', 'post-deny', 'cors-pass', 'cors-deny', 'redirect-pass', 'redirect-deny', 'parallel', 'sequential-pass'];
-const names = [...actions.slice(0, 6), 'parallel-allow', 'parallel-deny', 'sequential-pass', 'teardown-deny', 'teardown-followup'];
+const actions = ['post-pass', 'post-deny', 'cors-pass', 'cors-deny', 'redirect-pass', 'redirect-deny', 'parallel', 'sequential-pass', 'cors-preflight-deny'];
+const names = [...actions.slice(0, 6), 'parallel-allow', 'parallel-deny', 'sequential-pass', 'cors-preflight-deny',
+               'teardown-deny', 'teardown-followup', 'teardown-complete-deny', 'teardown-complete-followup'];
 let checks = 0;
 function check(actual, expected, description) { assert.deepEqual(actual, expected, description); ++checks; }
 
@@ -67,7 +68,7 @@ function worker(behavior, {timingName, noTiming = false} = {}) {
       requests.push(name);
       check(request.cache, 'no-store'); check(request.mode, 'cors');
       const body = await request.clone().text();
-      const isPost = !name.startsWith('redirect-') && name !== 'teardown-followup';
+      const isPost = !name.startsWith('redirect-') && !name.endsWith('-followup');
       check(request.method, isPost ? 'POST' : 'GET');
       const token = name + '|' + identity + '|';
       check(body, isPost ? token + 'P'.repeat(32768 - token.length) : '', 'the whole upload is attributable to this worker and case');
@@ -96,7 +97,7 @@ function worker(behavior, {timingName, noTiming = false} = {}) {
   };
 }
 
-async function page(observer, {wrongGroup = false, timeout = false, redundant = false} = {}) {
+async function page(observer, {wrongGroup = false, timeout = false, redundant = false, completeFirst = false} = {}) {
   const clock = timers(), messages = [], dispatched = [];
   let unregisters = 0, registrations = 0, lookups = 0, closedPorts = 0;
   class Channel {
@@ -120,7 +121,8 @@ async function page(observer, {wrongGroup = false, timeout = false, redundant = 
   const registration = {active: worker, scope: origin + '/denial/', async unregister() { ++unregisters; return true; }};
   const context = vm.createContext({
     URL, Array, MessageChannel: Channel, isSecureContext: true,
-    location: new URL(origin + '/denial/' + (observer ? 'observer' : 'index') + '.html?other=' + other),
+    location: new URL(origin + '/denial/' + (observer ? 'observer' : 'index') + '.html?other=' + other +
+                      (completeFirst ? '&order=complete-first' : '')),
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
     chrome: {webview: {postMessage: value => messages.push(value)}},
     navigator: {serviceWorker: {
@@ -140,7 +142,7 @@ async function main() {
     return response(request, name);
   });
   const all = [];
-  for (const action of [...actions, 'teardown-deny', 'teardown-followup']) all.push(...await run(action));
+  for (const action of [...actions, 'teardown-deny', 'teardown-followup', 'teardown-complete-deny', 'teardown-complete-followup']) all.push(...await run(action));
   check(all.map(item => item.name), names);
   for (const item of all) {
     const denied = item.name.endsWith('-deny');
@@ -182,7 +184,15 @@ async function main() {
   check(observer.dispatched, ['teardown-deny', 'teardown-followup']); check(observer.unregisters, 1);
   check(observer.messages[0].observer, true); check(observer.messages.at(-1).event, 'matrix-complete');
   check(observer.messages.at(-1).unregistered, true);
-  for (const options of [{wrongGroup: true}, {timeout: true}, {redundant: true}]) {
+  check(owner.messages[0].completeFirst, false); check(observer.messages[0].completeFirst, false);
+  const orderedOwner = await page(false, {completeFirst: true}), orderedObserver = await page(true, {completeFirst: true});
+  check(orderedOwner.dispatched, ['post-pass']); check(orderedOwner.unregisters, 0);
+  check(orderedOwner.messages[0].completeFirst, true); check(orderedOwner.messages.at(-1).event, 'matrix-main-complete');
+  check(orderedObserver.dispatched, ['teardown-complete-deny', 'teardown-complete-followup']);
+  check(orderedObserver.unregisters, 1); check(orderedObserver.messages[0].completeFirst, true);
+  check(orderedObserver.messages.at(-1).event, 'matrix-complete'); check(orderedObserver.messages.at(-1).unregistered, true);
+  for (const completeFirst of [false, true]) for (const options of [{wrongGroup: true}, {timeout: true}, {redundant: true}]) {
+    options.completeFirst = completeFirst;
     const bad = await page(true, options);
     check(bad.unregisters, 1); check(bad.messages.at(-1).event, 'matrix-failure');
     check(bad.messages.some(item => item.event === 'matrix-complete'), false);

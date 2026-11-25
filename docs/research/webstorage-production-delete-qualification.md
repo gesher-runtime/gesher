@@ -34,9 +34,40 @@ ran in [45591406389](https://github.com/gesher-runtime/gesher/actions/runs/45591
 Both runtimes passed the profile checks, five persisted-key measurements and
 the expanded thirteen-key fixture. They then exceeded the CDP deadline while
 writing the nested A → B → A case, still before any production deletion call.
-The next candidate gives outer A a distinct owned document URL, as described
-below. That change is supported by the HTML ancestor-URL rule; its causal
-confirmation and production acceptance require the next actual runtime.
+The next candidate gave outer A a distinct owned document URL, as described
+below. Both runtimes still stalled at that nested seed in run 45593812298; the
+URL distinction did not establish a fix.
+
+## Actual Host admission and native crash at 107d7fa5
+
+[Run 45597266059](https://github.com/gesher-runtime/gesher/actions/runs/45597266059)
+tested `107d7fa57c3daf66511d475ceeb09ec907c969cb`, tree
+`f9266df78377922a5c3f3ef37988362c03c9c13c`. The build produced artifact
+`15013338305`; its upload log records ZIP SHA-256
+`6754c9b5eef048583bee699a5051605e8a5aadccd71f0d1270f29cee4430ce19`.
+Attempt 1 stopped at the existing first cold controller-setup gate, before the
+storage test. Failed jobs were rerun at the unchanged head and artifact.
+
+In attempt 2, jobs `139149103447` (Windows 2022, runtime 131.0.2903.86) and
+`139149104127` (Windows 2025, runtime 157.0.4341.46) successfully completed the
+real nested write and discovered all fourteen positive full keys. The
+document-source-aware filter change therefore crossed the earlier fixture
+blocker. Both then started the actual Host deletion and crashed with native
+access violation `0xC0000005` (process exit `-1073741819`). Runtime 157 recorded
+two ordered, exactly-once successful callbacks on the owner STA before the crash;
+runtime 131 did not reach the callback summary.
+
+The [exact attempt-2 receipt](webview-runtime-qualification-107d7fa5-attempt2.json)
+retains both complete-log hashes, source/artifact identities and actual anchored
+observations. No final preservation, network-isolation, shutdown or `QUALIFIED` result was
+produced. Callback success alone is not acceptance. The fault location is under
+investigation; no specific lifetime defect has been established. The standalone
+probe now records an unhandled native exception's code, thread, access address,
+fault module/RVA and bounded stack from a copied exception context. A separate
+pre-COM subprocess deliberately raises `0xe0470001`; the Windows wrapper must
+observe that exact nonzero exit and an actual probe frame before trusting the
+diagnostic. The real storage operation still runs in its own process with the
+original checks. No production behavior or acceptance rule has been relaxed.
 
 ## State and operations
 

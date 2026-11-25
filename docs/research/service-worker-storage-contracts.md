@@ -7,23 +7,42 @@ established a bounded deferred-denial primitive at source
 `6c104766a73d0778747111898744326f22e00ade` on WebView2 131.0.2903.86 and
 157.0.4341.46. Changing a retained worker request to a fresh unregistered
 nonnetwork URI after `Invoke` returned produced an initial `fetch` `TypeError`,
-zero original-origin requests, unchanged JavaScript request/resource-timing
+zero complete-header original-origin requests, unchanged JavaScript request/resource-timing
 identity, no timeout/abort or external launch, and a successful later request
 from the same worker. Synchronous handler `E_ABORT` did not cancel; all three
 response-stream failures also remained successful HTTP responses.
 
-The [exact report and receipt](webview-worker-denial-probe.md) distinguish this
-same-origin bodyless-GET observation from the still-unmeasured upload, CORS,
-redirect, concurrent-ownership and teardown contracts. It supersedes the older
-absence of runtime evidence for URI rewriting below. It does not supply cache
-modes, unrestricted streaming or a complete production worker implementation;
-the public gates remain unavailable.
+The expanded [exact report and receipt](webview-worker-denial-7a41155f.md) at
+`7a41155fc31285b803a9bf4d422c89622f9ad4d0`,
+[run 45593812298](https://github.com/gesher-runtime/gesher/actions/runs/45593812298),
+adds independent accounting of partial HTTP requests and received bytes. Both
+runtimes observed genuine initial rejection with original request/timing identity
+and zero denied-target requests for a full same-origin POST, an observed final
+redirect target and concurrent requests. The redirect's initial request was
+intentionally allowed; Android redirect parity remains unqualified.
+
+Two measured failures remain: denying only the CORS POST allowed one OPTIONS
+request, and closing the owner before completing its deferral allowed the
+original complete 32 KiB POST to reach the server. The same five outcomes
+recurred at `107d7fa57c3daf66511d475ceeb09ec907c969cb` in attempt 2 of
+[run 45597266059](https://github.com/gesher-runtime/gesher/actions/runs/45597266059).
+Separate diagnostics now test denying the observed OPTIONS request and completing
+the deferral before immediately removing filters and closing its owner. Those
+new variants have not yet run on Windows. The original negative cases remain.
+
+These results supersede the older absence of runtime evidence below. They do
+not supply cache modes, unrestricted streaming or a complete production worker
+implementation; the public gates remain unavailable.
 
 The separately qualified quota registry now backs a candidate production
 partition-aware origin deletion operation with owned ordinary/InPrivate
 controllers. Its [full-key contract record](webstorage-full-key-contract-2026-11-25.md)
-states the implementation and actual-Host acceptance requirement. Full origin
-enumeration still needs effective quotas for arbitrary full storage keys.
+states the implementation and actual-Host acceptance requirement. At `107d7fa5`,
+both Windows runtimes seeded and discovered all fourteen actual keys, then the
+native process crashed during production deletion. Two successful completion
+callbacks on runtime 157 do not establish deletion/preservation acceptance.
+Full origin enumeration still needs effective quotas for arbitrary full storage
+keys.
 
 ## Delivered behavior and remaining scope
 
@@ -107,8 +126,9 @@ The newer service-worker management interface adds lifecycle/messaging, not a
 before-start request interception guarantee. Changing an HRESULT, inventing a
 status code, or failing a response stream was not an established equivalent of
 an initial network failure. The later deferred URI experiment above supplies
-actual evidence for its stated GET boundary; it does not establish the other
-worker contracts.
+actual evidence for its stated GET boundary. The expanded POST, CORS, redirect,
+concurrency and teardown results above further delimit that primitive; they do
+not establish a complete worker contract.
 
 CDP `Fetch.failRequest` is a real network-failure primitive, including
 `AccessDenied`, on a request owned by `Fetch.requestPaused`. WebView2's

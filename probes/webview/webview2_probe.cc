@@ -15,6 +15,7 @@
 //   webview2_probe.exe --quota-registry
 //   webview2_probe.exe --worker-response
 //   webview2_probe.exe --storage-delete
+//   webview2_probe.exe --native-exception-self-test (intentional failing control)
 // Exit code 0 when 1, 2, 3 (preview) and 4 pass; 2 when no runtime is
 // installed. The separate quota diagnostic returns 0 only after qualification,
 // 3 for an unavailable runtime route, and 1 for a harness/semantic failure.
@@ -32,6 +33,7 @@
 
 #include "webview_host.h"
 #include "browser_session_probe.h"
+#include "native_exception_probe.h"
 #include "quota_registry_probe.h"
 #include "storage_delete_probe.h"
 #include "worker_response_probe.h"
@@ -245,6 +247,9 @@ bool IsColor(long px, long want) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  native_exception_probe::Install();
+  if (argc == 2 && wcscmp(argv[1], L"--native-exception-self-test") == 0)
+    return native_exception_probe::SelfTest();
   _putenv("GESHER_WEBVIEW_DEBUG=1");  // the bridge reports how it is called
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   int failures = 0;

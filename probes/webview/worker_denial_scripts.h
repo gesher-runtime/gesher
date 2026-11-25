@@ -15,7 +15,7 @@ self.addEventListener('message', event => event.waitUntil((async () => {
   const observations = await Promise.all(specs.map(async name => {
     const cross = name.startsWith('cors-');
     const concurrent = name.startsWith('parallel-') || name === 'sequential-pass';
-    const method = name.startsWith('redirect-') || name === 'teardown-followup' ? 'GET' : 'POST';
+    const method = name.startsWith('redirect-') || name.endsWith('-followup') ? 'GET' : 'POST';
     const url = (cross ? other : own) + '/denial/network/' + (concurrent ? 'concurrent' : name);
     const token = name + '|' + workerIdentity + '|';
     const payload = method === 'POST' ? token + 'P'.repeat(32768 - token.length) : undefined;
@@ -69,6 +69,7 @@ inline constexpr char kPage[] = R"HTML(<!doctype html><meta charset="utf-8"><tit
 (async () => {
   const post = value => chrome.webview.postMessage(value);
   const observer = location.pathname === '/denial/observer.html';
+  const completeFirst = new URL(location.href).searchParams.get('order') === 'complete-first';
   const other = new URL(location.href).searchParams.get('other');
   const within = (promise, ms) => new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(Error('operation timeout')), ms);
@@ -90,9 +91,10 @@ inline constexpr char kPage[] = R"HTML(<!doctype html><meta charset="utf-8"><tit
       const timer = setTimeout(() => finish(Error('activation timeout')), 15000);
       worker.addEventListener('statechange', changed); changed();
     });
-    post({event:'matrix-ready', observer, secure:isSecureContext, script:worker.scriptURL, scope:registration.scope});
-    const actions = observer ? ['teardown-deny', 'teardown-followup'] :
-      ['post-pass', 'post-deny', 'cors-pass', 'cors-deny', 'redirect-pass', 'redirect-deny', 'parallel', 'sequential-pass'];
+    post({event:'matrix-ready', observer, completeFirst, secure:isSecureContext, script:worker.scriptURL, scope:registration.scope});
+    const actions = completeFirst ? (observer ? ['teardown-complete-deny', 'teardown-complete-followup'] : ['post-pass']) :
+      observer ? ['teardown-deny', 'teardown-followup'] :
+      ['post-pass', 'post-deny', 'cors-pass', 'cors-deny', 'redirect-pass', 'redirect-deny', 'parallel', 'sequential-pass', 'cors-preflight-deny'];
     for (const action of actions) {
       const group = await new Promise((resolve, reject) => {
         const channel = new MessageChannel();

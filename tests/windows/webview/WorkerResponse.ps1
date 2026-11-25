@@ -12,7 +12,7 @@ function WorkerResponseCheck {
   $unavailable = [regex]::Matches($output, '(?m)^INFO  worker-response: unavailable: (SERVICE_WORKER filter|external-scheme guard) interface absent; cases not run; no production worker capability enabled\r?$').Count
   $recorded = [regex]::Matches($output, '(?m)^PASS  worker-response: controls and independent network counters verified; error outcomes recorded; no production worker capability enabled\r?$').Count
   if ($exit -eq 2 -and $unavailable -eq 1 -and $recorded -eq 0 -and $output -notmatch '(?m)^FAIL ' -and
-      $output -notmatch '(?m)^(PASS|INFO)  worker-denial:') {
+      $output -notmatch '(?m)^(PASS|INFO)  worker-(denial|ordering):') {
     Write-Host 'INFO  worker-response: required diagnostic interface unavailable; worker qualification remains incomplete'
     return
   }
@@ -56,8 +56,24 @@ function WorkerResponseCheck {
   $patterns += $redirectPattern
   $redirectRows = [regex]::Matches($output, $redirectPattern)
   $redirectSeen = $redirectRows.Count -eq 1 -and $redirectRows[0].Groups[1].Value -eq 'yes'
-  foreach ($name in 'post-pass', 'post-deny', 'cors-pass', 'cors-deny', 'redirect-pass', 'redirect-deny', 'parallel-allow', 'parallel-deny', 'sequential-pass', 'teardown-deny', 'teardown-followup') {
-    $count = if ($name -eq 'redirect-pass') { '[12]' } elseif ($name -eq 'redirect-deny') { if ($redirectSeen) { '2' } else { '1' } } elseif ($name -eq 'teardown-followup') { '0' } else { '1' }
+  $preflightPattern = '(?m)^INFO  worker-denial: preflight-policy case=cors-preflight-deny options-intercepted=([01]) post-intercepted=([01])\r?$'
+  $patterns += $preflightPattern
+  $preflightRows = [regex]::Matches($output, $preflightPattern)
+  $preflightSeen = $preflightRows.Count -eq 1 -and $preflightRows[0].Groups[1].Value -eq '1'
+  $preflightOnly = $preflightSeen -and $preflightRows[0].Groups[2].Value -eq '0'
+  $preflightEvidence = @(
+    '(?m)^INFO  worker-denial: preflight case=cors-preflight-deny requested-method=POST requesting-origin=http://127\.0\.0\.1:[0-9]+ source=SERVICE_WORKER\r?$',
+    '(?m)^INFO  worker-denial: request uri=http://127\.0\.0\.1:[0-9]+/denial/network/cors-preflight-deny method=OPTIONS source=SERVICE_WORKER\r?$',
+    '(?m)^INFO  worker-denial: terminal-denial case=cors-preflight-deny original=http://127\.0\.0\.1:[0-9]+/denial/network/cors-preflight-deny rewritten=gesher-denial-[0-9a-f]{32}:blocked\r?$'
+  )
+  foreach ($pattern in $preflightEvidence) {
+    if ([regex]::Matches($output, $pattern).Count -ne [int]$preflightSeen) { $inconsistent++ }
+  }
+  $preflightPost = [regex]::Matches($output, '(?m)^INFO  worker-denial: case=cors-preflight-deny intercepted=([01])\r?$')
+  if ($preflightPost.Count -ne 1 -or $preflightRows.Count -ne 1 -or
+      $preflightPost[0].Groups[1].Value -ne $preflightRows[0].Groups[2].Value) { $inconsistent++ }
+  foreach ($name in 'post-pass', 'post-deny', 'cors-pass', 'cors-deny', 'redirect-pass', 'redirect-deny', 'parallel-allow', 'parallel-deny', 'sequential-pass', 'cors-preflight-deny', 'teardown-deny', 'teardown-followup') {
+    $count = if ($name -eq 'redirect-pass') { '[12]' } elseif ($name -eq 'redirect-deny') { if ($redirectSeen) { '2' } else { '1' } } elseif ($name -eq 'teardown-followup') { '0' } elseif ($name -eq 'cors-preflight-deny') { '[01]' } else { '1' }
     $patterns += "(?m)^INFO  worker-denial: case=$name intercepted=$count\r?`$"
   }
   foreach ($name in 'parallel-allow', 'parallel-deny') {
@@ -81,26 +97,71 @@ function WorkerResponseCheck {
   }
   $concurrentControls = [regex]::Matches($output, '(?m)^INFO  worker-denial: origin=A method=POST path=/denial/network/concurrent body-bytes=32768 complete=yes\r?$').Count
   if ($concurrentControls -lt 2) { $inconsistent++ }
-  foreach ($name in 'post-deny', 'cors-deny', 'redirect-deny', 'parallel-deny', 'teardown-deny') {
+  foreach ($name in 'post-deny', 'cors-deny', 'redirect-deny', 'parallel-deny', 'cors-preflight-deny', 'teardown-deny') {
     $pattern = "(?m)^INFO  worker-denial: result case=$name initial-typeerror=(yes|no) request-identity=(yes|no) timing-identity=(yes|no) target-network=([0-9]+) preflight-network=([0-9]+) outcome=(network-rejection-observed|not-qualified)\r?`$"
     $patterns += $pattern
     $rows = [regex]::Matches($output, $pattern)
     if ($rows.Count -ne 1) { continue }
     $row = $rows[0]
-    $side = if ($name -in 'cors-deny', 'redirect-deny') { 'B' } else { 'A' }
+    $side = if ($name -in 'cors-deny', 'cors-preflight-deny', 'redirect-deny') { 'B' } else { 'A' }
     $route = if ($name -eq 'redirect-deny') { 'redirect-deny-target' } elseif ($name -eq 'parallel-deny') { 'concurrent' } else { $name }
     $requests = @($originRows | Where-Object { $_.Groups[1].Value -eq $side -and $_.Groups[3].Value -eq "/denial/network/$route" })
-    $preflight = if ($name -eq 'cors-deny') { @($requests | Where-Object { $_.Groups[2].Value -eq 'OPTIONS' }).Count } else { 0 }
+    $preflight = if ($name -in 'cors-deny', 'cors-preflight-deny') { @($requests | Where-Object { $_.Groups[2].Value -eq 'OPTIONS' }).Count } else { 0 }
     $network = $requests.Count - $preflight - $(if ($name -eq 'parallel-deny') { 2 } else { 0 })
     if ([int]$row.Groups[4].Value -ne $network -or [int]$row.Groups[5].Value -ne $preflight) { $inconsistent++ }
     $observed = $row.Groups[1].Value -eq 'yes' -and $row.Groups[2].Value -eq 'yes' -and $row.Groups[3].Value -eq 'yes' -and
-                $network -eq 0 -and $preflight -eq 0 -and ($name -ne 'redirect-deny' -or $redirectSeen)
+                $network -eq 0 -and $preflight -eq 0 -and ($name -ne 'redirect-deny' -or $redirectSeen) -and
+                ($name -ne 'cors-preflight-deny' -or $preflightOnly)
     $expected = if ($observed) { 'network-rejection-observed' } else { 'not-qualified' }
     if ($row.Groups[6].Value -ne $expected) { $inconsistent++ }
   }
+  # The separate fresh-profile closure experiment must complete the deferral
+  # before its first actual filter-removal/Close call, not just print a claim.
+  $orderingRecorded = [regex]::Matches($output, '(?m)^PASS  worker-ordering: scope controls and independent request bodies verified; outcomes recorded; no production worker capability enabled\r?$').Count
+  $patterns += '(?m)^INFO  worker-ordering: unknown-origin-requests=0 origin-a-connections=[1-9][0-9]* origin-b-connections=[0-9]+\r?$'
+  $patterns += '(?m)^INFO  worker-ordering: received-http-bytes-a=[1-9][0-9]* received-http-bytes-b=0 unattributed-http-bytes=0\r?$'
+  $patterns += '(?m)^INFO  worker-ordering: parallel-reverse-completions=0 terminal-before-close=yes late-allow-rejections=1 original-restores=0 external-launches=0\r?$'
+  $patterns += '(?m)^INFO  worker-ordering: late-allow rejected case=teardown-complete-deny terminal=denied original-restores=0\r?$'
+  $patterns += '(?m)^INFO  worker-ordering: completion-order case=teardown-complete-deny complete-before-filters-and-close=yes owner-live=yes filters=2\r?$'
+  $patterns += '(?m)^INFO  worker-ordering: terminal-denial case=teardown-complete-deny original=http://127\.0\.0\.1:[0-9]+/denial/network/teardown-complete-deny rewritten=gesher-denial-[0-9a-f]{32}:blocked\r?$'
+  foreach ($name in 'post-pass', 'teardown-complete-deny', 'teardown-complete-followup') {
+    $count = if ($name -eq 'teardown-complete-followup') { 0 } else { 1 }
+    $patterns += "(?m)^INFO  worker-ordering: case=$name intercepted=$count\r?`$"
+  }
+  $patterns += '(?m)^INFO  worker-ordering: origin=A method=POST path=/denial/network/post-pass body-bytes=32768 complete=yes\r?$'
+  $patterns += '(?m)^INFO  worker-ordering: origin=A method=GET path=/denial/network/teardown-complete-followup body-bytes=0 complete=yes\r?$'
+  $priorIndex = -1
+  foreach ($operation in @('terminal put_Uri', 'clear upload before owner closure', 'Complete before owner closure', 'remove source filter', 'controller.Close')) {
+    $rows = [regex]::Matches($output, "(?m)^INFO  worker-ordering: $([regex]::Escape($operation)) hr=0x00000000\r?`$")
+    $expectedCount = if ($operation -in 'remove source filter', 'controller.Close') { 2 } else { 1 }
+    if ($rows.Count -ne $expectedCount -or $rows[0].Index -le $priorIndex) { $inconsistent++ }
+    if ($rows.Count -gt 0) { $priorIndex = $rows[-1].Index }
+  }
+  if ($output -match '(?m)^INFO  worker-ordering: Complete after owner closure') { $inconsistent++ }
+  $profiles = @()
+  foreach ($tag in 'worker-denial', 'worker-ordering') {
+    $pattern = "(?m)^INFO  ${tag}: fresh-profile=(.+) origin=http://127\.0\.0\.1:[0-9]+ other=http://127\.0\.0\.1:[0-9]+\r?`$"
+    $patterns += $pattern
+    $rows = [regex]::Matches($output, $pattern)
+    if ($rows.Count -eq 1) { $profiles += $rows[0].Groups[1].Value }
+  }
+  if ($profiles.Count -ne 2 -or $profiles[0] -eq $profiles[1]) { $inconsistent++ }
+  $orderingOrigins = [regex]::Matches($output, ($originPattern -replace 'worker-denial', 'worker-ordering'))
+  if ($orderingOrigins.Count -ne [regex]::Matches($output, '(?m)^INFO  worker-ordering: origin=').Count) { $inconsistent++ }
+  $orderingPattern = '(?m)^INFO  worker-ordering: result case=teardown-complete-deny initial-typeerror=(yes|no) request-identity=(yes|no) timing-identity=(yes|no) target-network=([0-9]+) preflight-network=0 outcome=(network-rejection-observed|not-qualified)\r?$'
+  $patterns += $orderingPattern
+  $rows = [regex]::Matches($output, $orderingPattern)
+  if ($rows.Count -eq 1) {
+    $row = $rows[0]
+    $network = @($orderingOrigins | Where-Object { $_.Groups[1].Value -eq 'A' -and $_.Groups[3].Value -eq '/denial/network/teardown-complete-deny' }).Count
+    if ([int]$row.Groups[4].Value -ne $network) { $inconsistent++ }
+    $observed = $row.Groups[1].Value -eq 'yes' -and $row.Groups[2].Value -eq 'yes' -and $row.Groups[3].Value -eq 'yes' -and $network -eq 0
+    $expected = if ($observed) { 'network-rejection-observed' } else { 'not-qualified' }
+    if ($row.Groups[5].Value -ne $expected) { $inconsistent++ }
+  }
   $missing = @($patterns | Where-Object { [regex]::Matches($output, $_).Count -ne 1 })
-  if ($exit -ne 0 -or $recorded -ne 1 -or $scopeRecorded -ne 1 -or $unavailable -ne 0 -or $missing.Count -ne 0 -or $inconsistent -ne 0 -or $output -match '(?m)^FAIL ') {
-    Write-Host "FAIL  worker-response: diagnostic failed (exit=$exit recorded=$recorded scope=$scopeRecorded unavailable=$unavailable missing=$($missing.Count) inconsistent=$inconsistent)"
+  if ($exit -ne 0 -or $recorded -ne 1 -or $scopeRecorded -ne 1 -or $orderingRecorded -ne 1 -or $unavailable -ne 0 -or $missing.Count -ne 0 -or $inconsistent -ne 0 -or $output -match '(?m)^FAIL ') {
+    Write-Host "FAIL  worker-response: diagnostic failed (exit=$exit recorded=$recorded scope=$scopeRecorded ordering=$orderingRecorded unavailable=$unavailable missing=$($missing.Count) inconsistent=$inconsistent)"
     Write-Host $output
     $script:failed++
   } else {
