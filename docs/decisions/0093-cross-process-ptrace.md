@@ -267,14 +267,17 @@ record lock it holds, data it would write).
 
 `CONT` or `DETACH` resumes the process; so does the tracer's exit, which
 releases the tracee as Linux does, after killing it under
-`PTRACE_O_EXITKILL`.
+`PTRACE_O_EXITKILL`. That death is a SIGKILL death in the exit code the
+tracee's parent decodes: a forked child's own code (0092), 128 + 9 for a
+process whose parent reads Windows exit codes.
 
 The tracer's `wait4` reports the stop once the guard has published it
 (`0x137f`, `WIFSTOPPED` with `SIGSTOP`, for `ATTACH`; `PTRACE_EVENT_STOP`,
 `0x80057f`, for `PTRACE_INTERRUPT` on a seized tracee), and a tracee's exit
 (unless the tracer is also its parent, whose ordinary `wait4` reports it
 once). `__WALL` is honoured; `__WCLONE` without `__WALL` does not select a
-tracee (it is not a clone); `WNOHANG` and `WNOWAIT` work. This is a small
+tracee (it is not a clone); `WNOHANG` works, and `WNOWAIT`, which Linux's
+`wait4` refuses, is `EINVAL` as there (0092's `wait4` checks its options). This is a small
 hook, `PtraceWaitPoll`, at the top of the shim's `CollectOne` (0055), which
 otherwise keeps reporting the shim's children as before. Raw `wait4` from
 arm64 code (`svc #0`, 260) reaches the same function.
@@ -357,34 +360,45 @@ or is halted before running a block.
 
 ## With fork (0092)
 
-A process cloned with `RtlCloneUserProcess` maps the parent's section through
-its inherited view. Every accessor (`gesher::ptrace::Self()`) checks the
-current pid; in a clone it creates the clone's own section and guard, keeps the
-dumpable flag (a forked child keeps its `mm`'s) and drops the parent's tracer
-and ptracer exception, as Linux. The shim's tracee map is emptied in a clone
-(a forked child traces nothing), unmapping the views it copied; none of its
-handles is inheritable. The clone should call `Self()` from the executable's
-copy of gesher-base early, so its guard runs before a tracer asks; the guard
-is a dedicated thread, not the thread pool (which does not work in a clone).
-The translator's code-epoch counter is at the same address in the clone, and
-the clone's guard updates it. A tracer's own identity (`SelfTracerId()`: pid and creation
-time) is cached per pid, so a clone computes its own.
+A process cloned with `RtlCloneUserProcess` (0092's fork) maps the parent's
+section through its inherited view. Every accessor (`gesher::ptrace::Self()`)
+checks the current pid; in a clone it creates the clone's own section and
+guard, keeps the dumpable flag (a forked child keeps its `mm`'s) and drops the
+parent's tracer, ptracer exception, stop request and parked slots, as Linux.
+The fork calls `Self()` from the executable's copy of gesher-base in the child
+before `fork` returns there (`ReinitializeAfterFork`), so its guard runs
+before a tracer can ask; the guard is a dedicated thread, not the thread pool
+(which does not work in a clone). The dumpable flag is the one the parent had
+at the clone: `ptrace_state`'s `g_lock` is in the fork set, `PR_SET_DUMPABLE`
+takes it, and the fork records the flag while it holds it. The fork makes
+every handle inheritable for the clone, so the child closes its copies of the
+parent's (the section, the guard's events, the watched tracer, threads the
+guard had suspended), only values the clone really brought (the guard may
+have opened one after the handles were made inheritable), and unmaps the
+parent's view, without writing it. The
+shim's tracee map (its lock is in the fork set) is emptied in the child at
+once (a forked child traces nothing), closing the handles and views of the
+parent's tracees without touching their state. The translator's code-epoch
+counter is at the same address in the clone, and the clone's guard updates
+it. A tracer's own identity (`SelfTracerId()`: pid and creation time) is
+cleared in the clone, which computes its own.
 
 ## Relation to 0055 and 0086
 
 - 0055's `wait4` keeps its contract for the shim's children; tracees are
   added through one hook, and a tracee that is also a child is reported once.
 - 0086's Ijiami checks do not use ptrace across processes. Its guest
-  `fork`/`vfork` stay `EAGAIN` here (0092 decides that). `TRACEME` still
+  `fork`/`vfork` are real with 0092. `TRACEME` still
   succeeds once and then fails with `EPERM`; `TracerPid` now shows the parent
   after it, as on a device.
 
 ## Consequences
 
-- PairIP's sequence works between real processes once its child exists
-  (0092). `tests/exec/ptrace_contract.c` runs the same sequence between a
-  parent and a spawned child, for x86_64 and translated arm64, and the
-  record-lock case the review found.
+- PairIP's sequence works between real processes, its child made by 0092's
+  fork (`tests/native/arm64_fork_exec.c` runs it with the raw `clone`, and a
+  parent tracing its forked child). `tests/exec/ptrace_contract.c` runs the
+  same sequence between a parent and a spawned child, for x86_64 and
+  translated arm64, and the record-lock case the review found.
 - Every Gesher process has one more thread (the guard: a 64 KiB stack
   reservation, blocked in one wait) and a page-sized named section: measured
   at 35-190 µs and about 28 KiB of private memory per process.

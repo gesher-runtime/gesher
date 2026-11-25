@@ -24,6 +24,10 @@
 #include <vector>
 
 #include "internal.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace {
 
@@ -320,3 +324,8 @@ int dladdr(const void* addr, Dl_info* info) {
 }
 
 }  // extern "C"
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): dlopen of Windows DLLs in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, builtins_mutex);
+#endif
