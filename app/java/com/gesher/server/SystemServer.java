@@ -305,6 +305,7 @@ public final class SystemServer {
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.
         created.am.invalidatePermissionCaches();
+        ExternalStorageAccess.syncAll(created.pm);
         startAppProcessesOnDemand(created.atm, created.pm);
         PersistentDevice device = null;
         if (persistent) {
@@ -380,6 +381,7 @@ public final class SystemServer {
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
                     "GESHER_UID=" + uid,
                     "GESHER_BINDER_UID=" + uid,
+                    "GESHER_APP_PACKAGE=" + packageName,
                     "GESHER_LOG_FILE=" + logFile.getPath() + ".logcat",
                     // The package's AppUserModelID, its Start menu shortcut's (shell track).
                     com.gesher.app.shell.AppShell.ENV_APP_USER_MODEL_ID + "="
@@ -406,7 +408,7 @@ public final class SystemServer {
                     String.valueOf(targetSdk), "--runtime-flags", String.valueOf(runtimeFlags)));
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
-                return AppSandbox.spawn(command, env, logFile, pkg, packageName,
+                return AppSandbox.spawn(command, env, logFile, pm, pkg, packageName,
                         ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
             }
             return Zygote.spawn(command, env, logFile.getPath(), false);

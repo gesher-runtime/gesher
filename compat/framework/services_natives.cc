@@ -189,6 +189,11 @@ static jint Zygote_grantToAppContainer(JNIEnv* env, jclass, jstring path, jstrin
         inherit == JNI_TRUE));
 }
 
+static jint Zygote_revokeFromAppContainer(JNIEnv* env, jclass, jstring path, jstring name) {
+    return static_cast<jint>(gesher::zygote::RevokeFromAppContainer(
+        ZygoteString(env, path), ZygoteString(env, name)));
+}
+
 static jint Zygote_grantToCapability(JNIEnv* env, jclass, jstring path, jstring capability,
                                      jint access, jboolean inherit) {
     return static_cast<jint>(gesher::zygote::GrantToCapability(
@@ -296,6 +301,8 @@ static const JNINativeMethod gZygoteMethods[] = {
      GESHER_JNI(Zygote_ensureAppContainer)},
     {"nativeGrantToAppContainer", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
      GESHER_JNI(Zygote_grantToAppContainer)},
+    {"nativeRevokeFromAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_revokeFromAppContainer)},
     {"nativeGrantToCapability", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
      GESHER_JNI(Zygote_grantToCapability)},
     {"nativeDeleteAppContainer", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_deleteAppContainer)},

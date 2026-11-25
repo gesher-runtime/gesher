@@ -8,6 +8,7 @@
 
 #include "internal.h"
 #include "revocable_internal.h"
+#include "storage_policy.h"
 
 extern "C" int gesher_is_socket(int fd);
 
@@ -86,6 +87,7 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
   std::wstring windows;
   switch (gesher::MapPath(path, &windows)) {
     case gesher::PathKind::kFile: {
+      if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kStat)) return -1;
       // Directories need backup semantics to be opened; no access right is
       // needed to read attributes.
       HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,

@@ -30,6 +30,7 @@
 #include "record_lock_descriptors.h"
 #include "pipe_io.h"
 #include "system_linker.h"
+#include "storage_policy.h"
 
 namespace {
 
@@ -869,6 +870,7 @@ char* realpath(const char* path, char* resolved_path) {
     return nullptr;
   }
   if (kind == gesher::PathKind::kFile) {
+    if (!gesher::CheckExternalStorageAccess(wpath, gesher::AccessKind::kStat)) return nullptr;
     HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (h == INVALID_HANDLE_VALUE) {

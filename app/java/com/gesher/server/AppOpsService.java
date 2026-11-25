@@ -222,6 +222,9 @@ public final class AppOpsService extends IAppOpsService.Default {
             }
         }
         changed(changes);
+        if (op == AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE) {
+            ExternalStorageAccess.syncUid(mPm, uid);
+        }
         return true;
     }
     /** Serialize an install's final authorization and package commit against mode writes. */
@@ -268,6 +271,9 @@ public final class AppOpsService extends IAppOpsService.Default {
             }
         }
         changed(changes);
+        if (op == AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE) {
+            ExternalStorageAccess.syncUid(mPm, uid);
+        }
         return true;
     }
     private List<ApkPackage> packagesForUid(int uid) {
@@ -318,14 +324,15 @@ public final class AppOpsService extends IAppOpsService.Default {
         enforce(Manifest.permission.MANAGE_APP_OPS_MODES);
         if (user != UserHandle.USER_ALL && user != 0) throw new SecurityException("Unknown user " + user);
         List<Change> changes;
+        Set<Integer> ops = new HashSet<>();
+        ApkPackage selected;
         synchronized (mMutationLock) {
             synchronized (mPm) {
                 State before = mStore.state();
                 Map<UidOp, UidMode> uids = new HashMap<>(before.uids());
                 Map<PackageOp, PackageMode> packages = new HashMap<>(before.packages());
-                ApkPackage selected = name == null ? null : mPm.get(name);
+                selected = name == null ? null : mPm.get(name);
                 if (name != null && selected == null) return;
-                Set<Integer> ops = new HashSet<>();
                 uids.entrySet().removeIf(e -> {
                     boolean reset = (name == null || e.getKey().uid() == selected.uid())
                             && AppOpsManager.opAllowsReset(e.getKey().op());
@@ -342,6 +349,10 @@ public final class AppOpsService extends IAppOpsService.Default {
             }
         }
         changed(changes);
+        if (ops.contains(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE)) {
+            if (selected == null) ExternalStorageAccess.syncAll(mPm);
+            else ExternalStorageAccess.syncUid(mPm, selected.uid());
+        }
     }
 
     /** Current foreground capabilities are supplied only by authenticated process lifecycle. */

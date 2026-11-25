@@ -1107,6 +1107,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
 
     private void permissionsChanged(ApkPackage installed, java.util.function.BooleanSupplier stillRevoked) {
         invalidateCaches();
+        ExternalStorageAccess.syncUid(mPm, installed.uid());
         NotificationManagerService notifications = NotificationManagerService.sLast;
         if (notifications != null) for (ApkPackage member : uidMembers(installed.uid())) {
             notifications.permissionChanged(member.packageName);
@@ -1246,6 +1247,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             if (changed) { scheduleWrite(); publishRuntimeModes(uid, before); }
         } }
         invalidateCaches();
+        ExternalStorageAccess.syncUid(mPm, uid);
         return true;
     }
 

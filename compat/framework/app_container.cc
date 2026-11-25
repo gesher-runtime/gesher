@@ -194,7 +194,7 @@ DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) 
   }
   EXPLICIT_ACCESS_W entry{};
   entry.grfAccessPermissions = access;
-  entry.grfAccessMode = GRANT_ACCESS;
+  entry.grfAccessMode = SET_ACCESS;
   entry.grfInheritance = inherit ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
   entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
   entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
@@ -203,6 +203,30 @@ DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) 
   error = SetEntriesInAclW(1, &entry, dacl, &updated);
   if (error == ERROR_SUCCESS) {
     // A copy: SetNamedSecurityInfoW takes a non-const path.
+    std::wstring target = path;
+    error = SetNamedSecurityInfoW(target.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                  nullptr, nullptr, updated, nullptr);
+    LocalFree(updated);
+  }
+  LocalFree(descriptor);
+  return error;
+}
+
+DWORD Revoke(const std::wstring& path, PSID trustee) {
+  if (path.empty() || trustee == nullptr) return ERROR_INVALID_PARAMETER;
+  PACL dacl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  DWORD error = GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                      nullptr, nullptr, &dacl, nullptr, &descriptor);
+  if (error != ERROR_SUCCESS) return error;
+  EXPLICIT_ACCESS_W entry{};
+  entry.grfAccessMode = REVOKE_ACCESS;
+  entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+  entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+  entry.Trustee.ptstrName = static_cast<LPWSTR>(trustee);
+  PACL updated = nullptr;
+  error = SetEntriesInAclW(1, &entry, dacl, &updated);
+  if (error == ERROR_SUCCESS) {
     std::wstring target = path;
     error = SetNamedSecurityInfoW(target.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
                                   nullptr, nullptr, updated, nullptr);

@@ -954,6 +954,7 @@ $script:SpecialAccessLabels = [ordered]@{
     'android:request_install_packages' = 'cp_access_install'
     'android:write_settings' = 'cp_access_write_settings'
     'android:get_usage_stats' = 'cp_access_usage'
+    'android:manage_external_storage' = 'cp_access_all_files'
 }
 $script:SpecialAccessTimeoutMs = 120000
 # Background queries whose dialog closed before they answered; the live timer disposes them.

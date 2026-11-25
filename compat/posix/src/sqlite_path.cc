@@ -13,6 +13,7 @@ extern "C" int gesher_sqlite_full_pathname(
   full[0] = '\0';
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EINVAL)) return SQLITE_CANTOPEN;
+  if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kStat)) return SQLITE_CANTOPEN;
   const std::string native = gesher::Narrow(windows.c_str());
   if (native.empty()) return SQLITE_CANTOPEN;
   // Keep Win32's canonicalization and its exact error codes. In particular,

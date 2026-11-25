@@ -60,6 +60,9 @@ DWORD FolderPath(PSID container, std::wstring* path);
 // there; inherited by children and propagated to existing ones when `inherit`).
 DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit);
 
+// Removes any explicit ACE for `trustee` from the DACL of `path`.
+DWORD Revoke(const std::wstring& path, PSID trustee);
+
 // The security descriptor binderd's pipe uses when the sandbox is enabled:
 // SYSTEM and this user full access, the binder-client capability read and write
 // but not FILE_CREATE_PIPE_INSTANCE, and a Low mandatory label (AppContainer

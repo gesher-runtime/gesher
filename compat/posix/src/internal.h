@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "storage_policy.h"
+
 namespace gesher {
 
 // POSIX paths are UTF-8; Windows APIs take UTF-16.

@@ -110,6 +110,10 @@ bool MapUnixPath(ws::Address* address, bool binding) {
   std::wstring windows;
   switch (gesher::MapPath(path.c_str(), &windows)) {
     case gesher::PathKind::kFile:
+      if (!gesher::CheckExternalStorageAccess(
+              windows, binding ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) {
+        return false;
+      }
       break;
     case gesher::PathKind::kMissing:
       return errno = ENOENT, false;

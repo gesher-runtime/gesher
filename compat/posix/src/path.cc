@@ -30,12 +30,14 @@
 #include <limits>
 #include <cstdlib>
 #include <string_view>
+#include <vector>
 
 #include "binder_internal.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
 #include "system_linker.h"
 #include "revocable_internal.h"
+#include "storage_policy.h"
 
 namespace gesher {
 namespace {
@@ -183,6 +185,14 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   // direct I/O. O_PATH ignores I/O flags because it opens no data access.
   if ((flags & O_DIRECT) != 0 && (flags & O_PATH) == 0) return errno = EINVAL, -1;
   if ((flags & O_NOATIME) != 0 && (flags & O_PATH) == 0) return errno = EOPNOTSUPP, -1;
+  const bool is_path_only = (flags & O_PATH) != 0;
+  const bool is_write = !is_path_only &&
+      ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND)) != 0);
+  const AccessKind access_kind =
+      is_path_only ? AccessKind::kStat : (is_write ? AccessKind::kWrite : AccessKind::kRead);
+  if (!CheckExternalStorageAccess(path, access_kind)) {
+    return -1;
+  }
   if ((flags & O_PATH) == 0) flags |= O_LARGEFILE;
   DWORD disposition;
   if ((flags & O_PATH) != 0) {
@@ -386,6 +396,60 @@ static int SystemFontPath(const char* path, std::wstring* windows) {
   return 1;
 }
 
+bool ExternalStoragePath(const char* path, std::wstring* windows) {
+  static constexpr std::string_view kPrefixes[] = {
+      "/sdcard",
+      "/storage/emulated/0",
+      "/storage/self/primary",
+  };
+  std::string_view p(path);
+  std::string_view suffix;
+  bool matched = false;
+  for (std::string_view prefix : kPrefixes) {
+    if (p.starts_with(prefix) && (p.size() == prefix.size() || p[prefix.size()] == '/')) {
+      suffix = p.substr(prefix.size());
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) return false;
+  const char* android_data = getenv("ANDROID_DATA");
+  if (android_data == nullptr || android_data[0] == '\0') return false;
+  // Normalize and clamp '..' within the external storage root so /sdcard/../foo
+  // cannot escape $ANDROID_DATA/media/0.
+  std::string norm_suffix;
+  std::vector<std::string_view> parts;
+  std::string_view sview(suffix);
+  while (!sview.empty()) {
+    size_t slash = sview.find('/');
+    std::string_view part =
+        slash == std::string_view::npos ? sview : sview.substr(0, slash);
+    sview.remove_prefix(slash == std::string_view::npos ? sview.size() : slash + 1);
+    if (part.empty() || part == ".") continue;
+    if (part == "..") {
+      if (!parts.empty()) parts.pop_back();
+      continue;
+    }
+    parts.push_back(part);
+  }
+  for (std::string_view part : parts) {
+    norm_suffix.push_back('/');
+    norm_suffix.append(part);
+  }
+  std::string base(android_data);
+  while (!base.empty() && (base.back() == '/' || base.back() == '\\')) base.pop_back();
+  std::string target = base + "/media/0" + norm_suffix;
+  if (!DrivePath(target.c_str(), windows)) {
+    *windows = Widen(target.c_str());
+    for (wchar_t& c : *windows) {
+      if (c == L'/') c = L'\\';
+    }
+  }
+  reserved_names::Encode(windows);
+  Lengthen(windows);
+  return true;
+}
+
 PathKind MapPath(const char* path, std::wstring* windows) {
   // "//name" is left to Windows as a UNC path; POSIX lets an implementation
   // give a leading "//" its own meaning. A name with a character Windows
@@ -412,6 +476,7 @@ PathKind MapPath(const char* path, std::wstring* windows) {
     }
     int font = SystemFontPath(path, windows);
     if (font != 0) return font > 0 ? PathKind::kFile : PathKind::kMissing;
+    if (ExternalStoragePath(path, windows)) return PathKind::kFile;
     if (DrivePath(path, windows)) {
       reserved_names::Encode(windows);
       Lengthen(windows);
@@ -498,6 +563,7 @@ std::string LinuxPath(const wchar_t* windows) {
 // scanner's brief open of a new file is waited out. A symbolic link is
 // removed itself, by unlink, also when it points to a directory.
 int PosixDelete(const std::wstring& windows, bool directory) {
+  if (!CheckExternalStorageAccess(windows, AccessKind::kWrite)) return -1;
   HANDLE h = INVALID_HANDLE_VALUE;
   for (int attempt = 0; attempt < 20; ++attempt) {
     h = CreateFileW(windows.c_str(), DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
@@ -717,6 +783,7 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
   std::wstring windows;
   switch (gesher::MapPath(resolved.c_str(), &windows)) {
     case PathKind::kFile: {
+      if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
       HANDLE h = CreateFileW(windows.c_str(), 0,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS |
@@ -769,6 +836,7 @@ int mkdir(const char* path) {
   std::wstring windows;
   switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
     case PathKind::kFile:
+      if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
       return CreateDirectoryW(windows.c_str(), nullptr) ? 0 : gesher::FailWithLastError();
     case PathKind::kMissing:
       return errno = ENOENT, -1;

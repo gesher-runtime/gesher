@@ -32,6 +32,7 @@ public final class Zygote {
     static native int nativeEnsureAppContainer(String container, String displayName);
     static native int nativeGrantToAppContainer(String path, String container, int access,
             boolean inherit);
+    static native int nativeRevokeFromAppContainer(String path, String container);
     static native int nativeGrantToCapability(String path, String capability, int access,
             boolean inherit);
     static native int nativeDeleteAppContainer(String container);

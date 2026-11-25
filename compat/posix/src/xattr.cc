@@ -398,12 +398,16 @@ int CheckTarget(Target* target, const Request& request) {
   return 0;
 }
 
-int PinPath(const char* path, bool follow, Target* target) {
+int PinPath(const char* path, bool follow, bool mutates, Target* target) {
   char stable_path[4096];
   int error = ReadString(path, stable_path, sizeof(stable_path), ENAMETOOLONG);
   if (error) return error;
   std::wstring windows;
   if (!gesher::DiskPath(stable_path, &windows, EOPNOTSUPP)) return errno;
+  if (!gesher::CheckExternalStorageAccess(
+          windows, mutates ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) {
+    return errno;
+  }
   // Open the link itself when requested. Zero desired access pins the actual
   // object without letting an EA/data permission denial preempt argument
   // preparation. Classification and current authorization follow below.
@@ -631,7 +635,9 @@ int RefuseLinkerChange(const Target& target, const Request& request) {
 ssize_t PathRequest(const char* path, bool follow, const Request& request) {
   Target target;
   PreparedRequest prepared;
-  int error = PinPath(path, follow, &target);
+  const bool mutates =
+      request.operation == Operation::kSet || request.operation == Operation::kRemove;
+  int error = PinPath(path, follow, mutates, &target);
   if (!error) error = RefuseLinkerChange(target, request);
   if (!error) error = PrepareRequest(request, &prepared);
   if (!error) error = AuthorizeTarget(&target, request);

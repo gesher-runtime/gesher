@@ -98,8 +98,8 @@ final class AppSandbox {
      * Prepares the package's container and starts {@code commandLine} in it. Grants are
      * idempotent: an ACE already there is not written (or propagated) again.
      */
-    static int spawn(String commandLine, List<String> env, File logFile, ApkPackage pkg,
-            String packageName, boolean internet) {
+    static int spawn(String commandLine, List<String> env, File logFile,
+            PackageManagerService pm, ApkPackage pkg, String packageName, boolean internet) {
         String container = containerName(packageName);
         int error = Zygote.nativeEnsureAppContainer(container, packageName);
         if (error != 0) {
@@ -147,11 +147,82 @@ final class AppSandbox {
             SystemServer.log("sandbox: cannot create " + logcat + ": " + e);
         }
         grantContainer(logcat.getPath(), container, MODIFY, false);
+        grantStorageAccess(pm, pkg, packageName, container);
         List<String> caps = capabilities(internet);
         SystemServer.log("sandbox: " + packageName + " in AppContainer " + container
                 + " with " + caps);
         return Zygote.spawnInAppContainer(commandLine, env, logFile.getPath(), container,
                 packageName, caps);
+    }
+
+    /**
+     * Grants AppContainer access to the package's storage-policy file, its own
+     * {@code Android/{data,obb,media}/<pkg>} directories, and (when permitted) shared
+     * storage without inheriting into other packages' {@code Android/data} or {@code Android/obb}.
+     */
+    private static void grantStorageAccess(PackageManagerService pm, ApkPackage pkg,
+            String packageName, String container) {
+        ExternalStorageAccess.syncPackage(pm, pkg);
+        File policyFile = ExternalStorageAccess.policyFile(packageName);
+        if (policyFile != null) {
+            grantContainer(policyFile.getPath(), container, READ_EXECUTE, false);
+        }
+        File sharedRoot = new File(Device.dataDir(), "media/0");
+        for (String sub : new String[] {"data", "obb", "media"}) {
+            File appDir = new File(sharedRoot, "Android/" + sub + "/" + packageName);
+            appDir.mkdirs();
+            grantContainer(appDir.getPath(), container, MODIFY, true);
+        }
+        ExternalStorageAccess.Policy policy = ExternalStorageAccess.computePolicy(pm, pkg);
+        int sharedAccess = switch (policy.mode()) {
+            case MANAGER, LEGACY_RW -> MODIFY;
+            case LEGACY_RO, MEDIA_RO -> READ_EXECUTE;
+            case SCOPED -> 0;
+        };
+        if (!sharedRoot.isDirectory()) return;
+        File[] children = sharedRoot.listFiles();
+        if (sharedAccess == 0) {
+            revokeContainer(sharedRoot.getPath(), container);
+            if (children != null) {
+                for (File child : children) {
+                    if ("Android".equalsIgnoreCase(child.getName())) {
+                        revokeContainer(child.getPath(), container);
+                        File androidMedia = new File(child, "media");
+                        if (androidMedia.isDirectory()) {
+                            revokeContainer(androidMedia.getPath(), container);
+                        }
+                    } else {
+                        revokeContainer(child.getPath(), container);
+                    }
+                }
+            }
+            return;
+        }
+        // Grant sharedRoot non-inheriting so it never propagates into Android/data or Android/obb.
+        grantContainer(sharedRoot.getPath(), container, sharedAccess, false);
+        if (children != null) {
+            for (File child : children) {
+                if ("Android".equalsIgnoreCase(child.getName())) {
+                    grantContainer(child.getPath(), container, READ_EXECUTE, false);
+                    File androidMedia = new File(child, "media");
+                    if (androidMedia.isDirectory()) {
+                        grantContainer(androidMedia.getPath(), container, sharedAccess, true);
+                    }
+                } else {
+                    grantContainer(child.getPath(), container, sharedAccess, true);
+                }
+            }
+        }
+    }
+
+    private static void revokeContainer(String path, String container) {
+        if (path == null || !new File(path).exists()) return;
+        String target = Zygote.windowsPath(path);
+        int error = Zygote.nativeRevokeFromAppContainer(target, container);
+        if (error != 0) {
+            SystemServer.log("sandbox: revoking " + container + " " + target
+                    + ": Win32 error " + error);
+        }
     }
 
     /** The package is uninstalled: its container's profile goes with it. */

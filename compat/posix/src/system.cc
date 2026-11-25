@@ -213,7 +213,9 @@ int statvfs(const char* path, struct statvfs* buf) {
   std::wstring mapped;
   gesher::PathKind kind = gesher::MapPath(path, &mapped);
   if (kind == gesher::PathKind::kMissing) return errno = ENOENT, -1;
-  if (kind != gesher::PathKind::kFile) {
+  if (kind == gesher::PathKind::kFile) {
+    if (!gesher::CheckExternalStorageAccess(mapped, gesher::AccessKind::kStat)) return -1;
+  } else {
     // Retain the existing backing-volume approximation for virtual paths.
     // This repair does not supply procfs/device filesystem statistics.
     mapped = gesher::Widen(path);

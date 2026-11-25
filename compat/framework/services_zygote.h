@@ -50,6 +50,7 @@ uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& di
 // DACL, inherited by and propagated to its children when `inherit`. 0 or a Win32 error.
 uint32_t GrantToAppContainer(const std::u16string& path, const std::u16string& name,
                              uint32_t access, bool inherit);
+uint32_t RevokeFromAppContainer(const std::u16string& path, const std::u16string& name);
 uint32_t GrantToCapability(const std::u16string& path, const std::u16string& capability,
                            uint32_t access, bool inherit);
 

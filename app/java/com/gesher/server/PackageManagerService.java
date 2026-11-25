@@ -294,6 +294,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         Runnable permissions = mPermissions.publishPackage(p, () -> {
             publishPackages(map);
             PackageManager.invalidatePackageInfoCache();
+            ExternalStorageAccess.syncUid(PackageManagerService.this, p.uid());
         }, publicationLock);
         mPackageEventExecutor.execute(() -> {
             synchronized (publicationLock) { }
@@ -323,6 +324,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (p != null) {
             p.clearComponentStates();
             PackageManager.invalidatePackageInfoCache();
+            ExternalStorageAccess.removePackage(packageName);
         }
         return p;
     }

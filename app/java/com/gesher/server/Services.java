@@ -753,6 +753,19 @@ public final class Services {
 
         @Override
         public void mkdirs(String callingPkg, String path) {
+            Created created = sLast;
+            if (created != null) {
+                CallerIdentity callers = created.am.callers();
+                if (!callers.isSystem()) {
+                    String actualPkg = callers.requirePackage(callingPkg);
+                    int uid = callers.callerUid();
+                    if (!ExternalStorageAccess.canAccessPath(created.pm, uid, actualPkg, path, true)) {
+                        throw new SecurityException("Permission denied: cannot create " + path);
+                    }
+                }
+            } else if (!android.os.UserHandle.isCore(android.os.Binder.getCallingUid())) {
+                throw new SecurityException("Cannot verify storage caller");
+            }
             new java.io.File(path).mkdirs();
         }
     }
