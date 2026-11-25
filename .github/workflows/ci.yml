@@ -2163,8 +2163,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
+          $env:GESHER_TRACE_WEBVIEW_NAVIGATION = '1'
           pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -BuildTools $env:GESHER_TEST_BUILD_TOOLS
           exit $LASTEXITCODE
+
+      - name: Show captured WebView navigation event diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem e2e-results -Filter '*.app.log' -ErrorAction SilentlyContinue | ForEach-Object {
+            $trace = @(Select-String -Path $_.FullName -SimpleMatch 'gesher-webview: navigation-trace ')
+            if ($trace.Count) {
+              Write-Host "Navigation trace from $($_.Name)"
+              $trace | ForEach-Object { Write-Host $_.Line }
+            }
+          }
 
       - name: Validate and publish real-app coverage
         if: always()
