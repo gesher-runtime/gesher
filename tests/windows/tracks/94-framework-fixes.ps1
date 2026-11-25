@@ -451,6 +451,34 @@ Check 'services: AppOps defaults, authority, attributed delivery, foreground lif
   $appOpsOut
 } @('AppOpsContractTest all passed: 489 checks; binder=true')
 
+$specialAccessOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SpecialAccessTest') 90
+$specialAccessCode = $LASTEXITCODE
+Check 'services: special app access switches write, persist and notify real AppOps; apps cannot grant themselves' {
+  $global:LASTEXITCODE = $specialAccessCode
+  $specialAccessOut
+} @('SpecialAccessTest all passed:')
+$alertWindowUid = [Environment]::GetEnvironmentVariable('GESHER_UID', 'Process')
+$alertWindowBinderUid = [Environment]::GetEnvironmentVariable('GESHER_BINDER_UID', 'Process')
+try {
+  $env:GESHER_UID = '12931'
+  $env:GESHER_BINDER_UID = '12931'
+  $alertWindowOut = FixesRun ($dvmFixes + 'gesher.services.AlertWindowContractTest') 90
+  $alertWindowCode = $LASTEXITCODE
+} finally {
+  [Environment]::SetEnvironmentVariable('GESHER_UID', $alertWindowUid, 'Process')
+  [Environment]::SetEnvironmentVariable('GESHER_BINDER_UID', $alertWindowBinderUid, 'Process')
+}
+Check 'services: window admission and live Windows overlay visibility follow the app-op' {
+  $global:LASTEXITCODE = $alertWindowCode
+  $alertWindowOut
+} @('AlertWindowContractTest all passed:')
+$settingsResultsOut = FixesRun ($dvmFixes + 'gesher.services.SettingsResultsTest') 60
+$settingsResultsCode = $LASTEXITCODE
+Check 'services: per-app Settings screen results wait for the Control Center, once, bounded and timed out' {
+  $global:LASTEXITCODE = $settingsResultsCode
+  $settingsResultsOut
+} @('SettingsResultsTest all passed:')
+
 $permissionStateOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'RuntimePermissionStateTest') 90
 $permissionStateCode = $LASTEXITCODE

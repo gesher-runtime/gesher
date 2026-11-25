@@ -91,7 +91,16 @@ public final class SettingsIntentsTest {
         settingsIntents(pm, pmClass);
         componentStates((IPackageManager) pm);
         contentProviders((IPackageManager) pm);
-        storageStats(pm, pmClass, data);
+        // Measured as the system: this fixture's own UID is an ordinary app without an
+        // attached process, and usage-access authorization has its own contracts.
+        long identity = android.os.Binder.clearCallingIdentity();
+        try {
+            android.os.Binder.restoreCallingIdentity(
+                    ((long) android.os.Process.SYSTEM_UID << 32) | android.os.Process.myPid());
+            storageStats(pm, pmClass, data);
+        } finally {
+            android.os.Binder.restoreCallingIdentity(identity);
+        }
         standInDefaults();
         System.out.println("SettingsIntentsTest all passed: " + checks + " checks");
     }

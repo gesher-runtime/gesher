@@ -31,16 +31,6 @@ public final class PackageServiceQueriesTest {
     }
 
     /**
-     * The reported system features follow what backs them (docs/system-features.md):
-     * the production list matches the probes this process can make, and the helpers claim
-     * a feature only for the hardware or runtime that implements it.
-     */
-    /**
-     * The system server's OpenGL ES probe is bounded (PackageManagerService.boundedProbe):
-     * an answer passes through, a probe that hangs gives -2 (no version declared) after the
-     * timeout instead of blocking the start, and a LinkageError reaches the caller.
-     */
-    /**
      * PackageManagerService.lateGlEsVersion: a late answer is declared once nothing was;
      * a known version stays. Run only where it cannot write ro.opengles.version for real
      * (no property natives, or the property already set); the fields are restored.
@@ -84,6 +74,11 @@ public final class PackageServiceQueriesTest {
         }
     }
 
+    /**
+     * The system server's OpenGL ES probe is bounded (PackageManagerService.boundedProbe):
+     * an answer passes through, a probe that hangs gives -2 (no version declared) after the
+     * timeout instead of blocking the start, and a LinkageError reaches the caller.
+     */
     private static void checkBoundedGlesProbe() {
         try {
             java.lang.reflect.Method bounded = PackageManagerService.class.getDeclaredMethod(
@@ -199,6 +194,11 @@ public final class PackageServiceQueriesTest {
         }
     }
 
+    /**
+     * The reported system features follow what backs them (docs/system-features.md):
+     * the production list matches the probes this process can make, and the helpers claim
+     * a feature only for the hardware or runtime that implements it.
+     */
     private static void checkSystemFeatures(PackageManagerService service) {
         checkBootProbeBounded();
         checkBuildPropGlesVersion();
@@ -410,6 +410,14 @@ public final class PackageServiceQueriesTest {
         return list;
     }
 
+    /** The install policy without the Binder caller check (SpecialAccessTest covers that). */
+    private static boolean installs(PackageManagerService service, String name) throws Exception {
+        java.lang.reflect.Method method = PackageManagerService.class
+                .getDeclaredMethod("canRequestPackageInstallsInternal", String.class);
+        method.setAccessible(true);
+        return (Boolean) method.invoke(service, name);
+    }
+
     private static void field(Object target, String name, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
@@ -606,25 +614,23 @@ public final class PackageServiceQueriesTest {
                         && sensors.containsKey(PackageManager.FEATURE_SENSOR_COMPASS),
                 "Sensor features do not match a gyroscope and a magnetometer");
         checkSystemFeatures(service);
-        require(service.canRequestPackageInstalls("fixture.one", 0),
-                "Package declaring REQUEST_INSTALL_PACKAGES could not request installs");
+        // A requesting O+ installer then needs the user's Install unknown apps decision
+        // (OP_REQUEST_INSTALL_PACKAGES): SpecialAccessTest covers it with real AppOps policy.
         PackageImpl installer = (PackageImpl) packages.get("fixture.one").parsed;
         installer.setTargetSdkVersion(android.os.Build.VERSION_CODES.O - 1);
-        require(!service.canRequestPackageInstalls("fixture.one", 0),
+        require(!installs(service, "fixture.one"),
                 "Installer targeting pre-O Android acquired the O-only capability");
         installer.setTargetSdkVersion(android.os.Build.VERSION_CODES.O);
-        require(service.canRequestPackageInstalls("fixture.one", 0),
-                "Installer targeting Android O lost the capability at its API boundary");
-        require(!service.canRequestPackageInstalls("fixture.two", 0)
-                        && !service.canRequestPackageInstalls("fixture.absent", 0)
+        require(!installs(service, "fixture.two")
+                        && !installs(service, "fixture.absent")
                         && !service.canRequestPackageInstalls(null, 0)
                         && !service.canRequestPackageInstalls("fixture.one", 10),
                 "Package without permission, unknown package, null or secondary user could request installs");
-        require(service.canRequestPackageInstalls("android", 0)
+        require(installs(service, "android")
                         && !service.canRequestPackageInstalls("android", 10),
                 "Platform package install-request status broke");
         removing.put("fixture.one", packages.get("fixture.one"));
-        require(!service.canRequestPackageInstalls("fixture.one", 0),
+        require(!installs(service, "fixture.one"),
                 "Package pending removal could still request installs");
         removing.clear();
 
