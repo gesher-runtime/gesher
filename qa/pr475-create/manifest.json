@@ -1,0 +1,20 @@
+{
+  "old_source_ref": "61d97f6aec54662caef3b3414fcbe268ce61dfbd",
+  "control": "original native bodies with injection/signature adapters only",
+  "fixture_classes": "exact prefix of current hello_key_create_windows_test.cc",
+  "files": {
+    "late_create_regression.cc": "377288150a7e43acf0dfe269328214f49fb2b1b712cf5346ef959e932fab29ea",
+    "hello_key_win_before.cc": "37ba5d269e304f967f0429d40ab928d5ebb73f038cb0575aff776a4aa6f1d36e"
+  },
+  "expected_old_failure": "FAIL late successful canceled create is deleted before its ownership is released",
+  "execution_claimed": false,
+  "fixed_source": "908f4aaef4113764bb5e92f9df5a8cb259758f1e",
+  "old_native_sha256": "17e2ed6e5bb38c989d2811fc99aa6becb4f80b27776fa1d0659505491cf51356",
+  "fixed_files": {
+    "compat/devices/hello_key_win.cc": "2de74dc210051a8d3d8ce9307161bcc56d508779df52a38d17263a2f862f5344",
+    "compat/devices/hello_key_win.h": "53919788873e3a7630eadd374e31b1e68f40c8c1a9043843b3f272d0b2493b19",
+    "compat/devices/hello_win.cc": "9e0ac7b48a6eb3ecf7f6fd98571754c89df313b71d70afb450e051799172a8fc",
+    "compat/devices/winrt.cc": "01167f9365e9e6d8fd1770cdd8f03aafddeeff23595cb752c62c18bbfff68a1a",
+    "tests/biometrics/hello_key_create_windows_test.cc": "812cbee362f4ef8df5d8be4aa560eb62141b589a09a2b31c0a5ced10b6855ec9"
+  }
+}

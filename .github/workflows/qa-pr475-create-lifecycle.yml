@@ -1,0 +1,104 @@
+name: QA 475 retained Hello creation
+
+on:
+  push:
+    branches: [palmoni5/qa-pr475-create-lifecycle-20261125]
+    paths: ['.github/workflows/qa-pr475-create-lifecycle.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-pr475-create-lifecycle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-create:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact reviewed candidate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: 908f4aaef4113764bb5e92f9df5a8cb259758f1e
+          path: source
+          sparse-checkout: |
+            compat/devices
+            tests/biometrics
+      - name: Check out exact prior native implementation
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: 61d97f6aec54662caef3b3414fcbe268ce61dfbd
+          path: baseline
+          sparse-checkout: compat/devices
+      - name: Check out source-bound isolated controls
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: controls
+          sparse-checkout: qa/pr475-create
+      - name: Verify source and exact original-behavior adapter
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python controls/qa/pr475-create/verify.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source-bound control verification failed' }
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Compile actual production lifecycle and both controls
+        shell: cmd
+        working-directory: source
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_key_create_windows_test.cc compat\devices\hello_key_win.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:qa-475-full.exe ole32.lib user32.lib
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices ..\controls\qa\pr475-create\late_create_regression.cc compat\devices\hello_key_win.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:qa-475-fixed.exe ole32.lib user32.lib
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices ..\controls\qa\pr475-create\late_create_regression.cc ..\controls\qa\pr475-create\hello_key_win_before.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:qa-475-before.exe ole32.lib user32.lib
+          if errorlevel 1 exit /b 1
+      - name: Require full pass and the exact old-fail new-pass regression
+        shell: pwsh
+        working-directory: source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+          function Invoke-BoundedNative([string]$name) {
+            $out = Join-Path $PWD "$name.stdout.log"
+            $err = Join-Path $PWD "$name.stderr.log"
+            $p = Start-Process -FilePath (Join-Path $PWD "$name.exe") -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
+            if (-not $p.WaitForExit(120000)) {
+              $p.Kill($true)
+              $p.WaitForExit()
+              throw "$name exceeded the strict two-minute process bound"
+            }
+            $p.WaitForExit()
+            $p.Refresh()
+            $text = [IO.File]::ReadAllText($out) + [IO.File]::ReadAllText($err)
+            Write-Host $text
+            if ($null -eq $p.ExitCode) { throw "$name returned no process exit code" }
+            Write-Host "NATIVE_RESULT name=$name exit=$($p.ExitCode)"
+            return [pscustomobject]@{ code = $p.ExitCode; text = $text }
+          }
+          $full = Invoke-BoundedNative 'qa-475-full'
+          if ($full.code -ne 0 -or $full.text -notmatch '\d+ create-lifecycle checks, 0 failures') { throw 'Actual production lifecycle fixture failed' }
+          $fixed = Invoke-BoundedNative 'qa-475-fixed'
+          if ($fixed.code -ne 0 -or $fixed.text -notmatch '\d+ focused late-create checks, 0 failures') { throw 'Fixed late-create control failed' }
+          $before = Invoke-BoundedNative 'qa-475-before'
+          if ($before.code -ne 1 -or -not $before.text.Contains('FAIL late successful canceled create is deleted before its ownership is released')) { throw 'The original-behavior control did not fail for the expected ownership defect' }
+          Write-Host 'EXPECTED_REGRESSION_CONFIRMED old=failed-owned-late-cleanup fixed=pass full=pass'
+          Write-Host 'LIMIT: scripted WinRT COM boundaries on real Windows; no interactive Hello or ART ceremony is claimed.'
+      - name: Preserve exact native output
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-475-create-${{ matrix.os }}
+          path: source/qa-475-*.log
+          if-no-files-found: warn
