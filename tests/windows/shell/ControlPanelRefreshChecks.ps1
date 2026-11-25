@@ -40,13 +40,16 @@ function Reset-Refresh {
     $script:ChangeAppsDuringRead = $false
 }
 function Get-StateStamp { $script:StateStamp }
-function Get-AppFilesStamp { $script:AppsStamp }
+function Get-AppFilesStamp([hashtable] $ReadStamps = $null) {
+    if ($null -ne $ReadStamps) { $ReadStamps.Apps } else { $script:AppsStamp }
+}
 function Get-DeviceStatus { $script:Device }
 function Get-MicrogStatus { $false }
 function Update-DeviceView([bool] $running) { $script:ShownDevice = $running }
 function Update-MicrogView([bool] $enabled) { }
 function Update-StoreView($installed) { }
-function Get-InstalledApps {
+function Get-InstalledApps([hashtable] $ReadStamps = $null) {
+    if ($null -ne $ReadStamps) { $ReadStamps.Apps = $script:AppsStamp }
     $script:Reads++
     if ($script:FailRead) { $script:FailRead = $false; throw 'Transient package read failure' }
     if ($script:ChangeAppsDuringRead) {

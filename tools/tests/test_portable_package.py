@@ -31,7 +31,7 @@ class PortablePackageTests(unittest.TestCase):
             'org.apache.http.legacy.jar com.android.location.provider.jar android.test.base.jar '
             'android.test.mock.jar android.test.runner.jar binderd.exe '
             'servicemanager.exe gesher-exec.exe gesher-launch.exe gesher_shellext.dll '
-            'dex2oat.exe profman.exe oatdump.exe lifecycle.apk gesher-camera.apk gesher-tts.apk libEGL.dll '
+            'dex2oat.exe profman.exe oatdump.exe lifecycle.apk gesher-camera.apk gesher-tts.apk gesher-stt.apk libEGL.dll '
             'libGLESv2.dll gesher_arm64.dll ANGLE-NOTICES.txt DYNARMIC-NOTICES.txt '
             'FONTS-NOTICES.txt TZDATA-NOTICES.txt NET-NOTICES.txt '
             'framework/x86_64/boot.art fonts/Roboto-Regular.ttf fonts/fonts.xml '
@@ -74,7 +74,7 @@ class PortablePackageTests(unittest.TestCase):
                          'App/licenses/ANGLE-NOTICES.txt', 'App/licenses/APKSIG-LICENSE.txt',
                          'App/etc/permissions/org.apache.http.legacy.xml',
                          'App/tzdata/etc/tz/tzdata', 'App/media/audio/notifications/Test.ogg',
-                         'App/framework/x86_64/boot.art', 'App/gesher-tts.apk'):
+                         'App/framework/x86_64/boot.art', 'App/gesher-tts.apk', 'App/gesher-stt.apk'):
                 self.assertIn(prefix + name, names)
             self.assertNotIn(prefix + 'App/unshipped-test-fixture.jar', names)
             self.assertEqual(z.read(prefix + 'Gesher.exe'), (self.build / 'gesher-launch.exe').read_bytes())
