@@ -797,7 +797,24 @@ public final class Services {
 
         @Override
         public void mkdirs(String callingPkg, String path) {
-            new java.io.File(path).mkdirs();
+            Created created = sLast;
+            ApkPackage owner = null;
+            if (created != null) {
+                CallerIdentity callers = created.am.callers();
+                if (!callers.isSystem()) {
+                    owner = callers.requireCurrentPackage(callingPkg);
+                }
+            } else if (!android.os.UserHandle.isCore(android.os.Binder.getCallingUid())) {
+                throw new SecurityException("Cannot verify storage caller");
+            }
+            java.io.File target = ExternalStorageAccess.resolveMkdirsPath(
+                    created == null ? null : created.pm, owner, path);
+            if (!target.isDirectory()) {
+                target.mkdirs();
+                if (!target.isDirectory()) {
+                    throw new IllegalStateException("Failed to prepare " + target);
+                }
+            }
         }
     }
 

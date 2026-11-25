@@ -21,6 +21,7 @@
 #include "ofd_internal.h"
 #include "record_lock_descriptors.h"
 #include "socket_user_copy.h"
+#include "storage_policy.h"
 
 // The fork set (gesher/fork.h); absent where a host test compiles this file alone.
 #if __has_include(<gesher/fork.h>)
@@ -821,6 +822,7 @@ extern "C" int mkfifo(const char* path, mode_t mode) {
   if (path == nullptr) return errno = EFAULT, -1;
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EEXIST)) return -1;
+  if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
   // The name appears already tagged, or not at all: the FIFO is made under a
   // private name in the same directory and renamed without replacing, so a
   // concurrent creator that gets EEXIST never sees a regular file there.
@@ -848,6 +850,9 @@ extern "C" int mkfifo(const char* path, mode_t mode) {
     CloseHandle(file);
     return errno = error, -1;
   };
+  // Check the created object too: a changed parent junction must not redirect
+  // the FIFO into another package's private external-storage directory.
+  if (!gesher::CheckExternalStorageHandle(file, gesher::AccessKind::kWrite)) return discard(EACCES);
   struct { DWORD tag; WORD length, reserved; } reparse{gesher::kReparseTagFifo, 0, 0};
   DWORD returned = 0;
   if (!DeviceIoControl(file, FSCTL_SET_REPARSE_POINT, &reparse, sizeof(reparse), nullptr, 0, &returned, nullptr)) {
@@ -876,11 +881,13 @@ extern "C" int mkfifo(const char* path, mode_t mode) {
 extern "C" int gesher_is_fifo_path(const char* path) {
   std::wstring windows;
   if (path == nullptr || gesher::MapPath(path, &windows) != gesher::PathKind::kFile) return 0;
+  if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kStat)) return 0;
   HANDLE file = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
                                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                                 FILE_FLAG_BACKUP_SEMANTICS);
   if (file == INVALID_HANDLE_VALUE) return 0;
-  const bool fifo = gesher::IsFifoHandle(file);
+  const bool fifo = gesher::CheckExternalStorageHandle(file, gesher::AccessKind::kStat) &&
+                    gesher::IsFifoHandle(file);
   CloseHandle(file);
   return fifo ? 1 : 0;
 }

@@ -30,6 +30,7 @@
 #include <limits>
 #include <cstdlib>
 #include <string_view>
+#include <vector>
 
 #include "binder_internal.h"
 #include "fifo_internal.h"
@@ -37,6 +38,7 @@
 #include "record_lock_descriptors.h"
 #include "system_linker.h"
 #include "revocable_internal.h"
+#include "storage_policy.h"
 
 namespace gesher {
 namespace {
@@ -184,14 +186,22 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   // direct I/O. O_PATH ignores I/O flags because it opens no data access.
   if ((flags & O_DIRECT) != 0 && (flags & O_PATH) == 0) return errno = EINVAL, -1;
   if ((flags & O_NOATIME) != 0 && (flags & O_PATH) == 0) return errno = EOPNOTSUPP, -1;
+  const bool is_path_only = (flags & O_PATH) != 0;
+  const bool is_write = !is_path_only &&
+      ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND)) != 0);
+  const AccessKind access_kind =
+      is_path_only ? AccessKind::kStat : (is_write ? AccessKind::kWrite : AccessKind::kRead);
+  if (!CheckExternalStorageAccess(path, access_kind)) {
+    return -1;
+  }
   if ((flags & O_PATH) == 0) flags |= O_LARGEFILE;
   DWORD disposition;
   if ((flags & O_PATH) != 0) {
     disposition = OPEN_EXISTING;
   } else if ((flags & O_CREAT) != 0) {
-    disposition = (flags & O_EXCL) != 0 ? CREATE_NEW : (flags & O_TRUNC) != 0 ? CREATE_ALWAYS : OPEN_ALWAYS;
+    disposition = (flags & O_EXCL) != 0 ? CREATE_NEW : OPEN_ALWAYS;
   } else {
-    disposition = (flags & O_TRUNC) != 0 ? TRUNCATE_EXISTING : OPEN_EXISTING;
+    disposition = OPEN_EXISTING;
   }
   // Backup semantics open directories too, as Linux does for reading. A new
   // file without the owner's write permission is read-only, as chmod makes
@@ -217,6 +227,13 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
         : OpenFifoFollowing(path, 0, share, 0, security);
     if (probe == INVALID_HANDLE_VALUE) return false;
     if (!IsFifoHandle(probe)) { CloseHandle(probe); return false; }
+    // A FIFO's reparse tag cannot be followed by ordinary path canonicalization.
+    // Authorize the real object before creating either kind of descriptor.
+    if (!CheckExternalStorageHandle(probe, access_kind)) {
+      CloseHandle(probe);
+      *fd = (errno = EACCES, -1);
+      return true;
+    }
     // Linux: EEXIST for O_CREAT|O_EXCL, and O_TRUNC is ignored for a FIFO.
     if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) { CloseHandle(probe); *fd = (errno = EEXIST, -1); }
     else if ((flags & O_PATH) != 0) *fd = (flags & O_DIRECTORY) != 0 ? (CloseHandle(probe), errno = ENOTDIR, -1)
@@ -234,6 +251,12 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     h = CreateFileW(path.c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     &inherit, disposition, attributes, nullptr);
     if (h != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) break;
+    // Gesher's ELF loader, held against writers by a process using it, is
+    // not a brief open to wait out (below).
+    if (attempt == 0 && (access & GENERIC_WRITE) != 0 &&
+        system_linker::IsFilePath(path, true, true)) {
+      return errno = EROFS, -1;
+    }
     Sleep(1);
   }
   if (h == INVALID_HANDLE_VALUE) {
@@ -244,7 +267,7 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     // truncated. Read-only, as through its own name.
     if ((access & GENERIC_WRITE) != 0 &&
         (error == ERROR_SHARING_VIOLATION || error == ERROR_USER_MAPPED_FILE) &&
-        system_linker::IsFilePath(path)) {
+        system_linker::IsFilePath(path, true, true)) {
       return errno = EROFS, -1;
     }
     DWORD existing = GetFileAttributesW(path.c_str());
@@ -259,10 +282,14 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     CloseHandle(h);
     return errno = ELOOP, -1;
   }
+  if (!CheckExternalStorageHandle(h, access_kind)) {
+    CloseHandle(h);
+    return errno = EACCES, -1;
+  }
   BY_HANDLE_FILE_INFORMATION info;
   const bool have_info = GetFileInformationByHandle(h, &info) != 0;
   bool directory = have_info && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-  if (have_info && (access & GENERIC_WRITE) != 0 && !directory && system_linker::IsFileInfo(info)) {
+  if ((access & GENERIC_WRITE) != 0 && !directory && system_linker::IsFileHandle(h)) {
     CloseHandle(h);
     return errno = EROFS, -1;
   }
@@ -273,6 +300,15 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   if (directory && (access & GENERIC_WRITE) != 0) {
     CloseHandle(h);
     return errno = EISDIR, -1;
+  }
+  // Never truncate while resolving a mutable pathname. Authorize the actual
+  // object first, then change that same handle; a swapped junction cannot
+  // redirect the truncation to a different file between the two operations.
+  if (!is_path_only && (flags & O_TRUNC) != 0 && !SetEndOfFile(h)) {
+    const DWORD error = GetLastError();
+    CloseHandle(h);
+    SetLastError(error);
+    return FailWithLastError();
   }
   return FdFromHandle(h, flags);
 }
@@ -410,6 +446,54 @@ static int SystemFontPath(const char* path, std::wstring* windows) {
   return 1;
 }
 
+bool ExternalStoragePath(const char* path, std::wstring* windows) {
+  static constexpr std::string_view kPrefixes[] = {
+      "/sdcard",
+      "/storage/emulated/0",
+      "/storage/self/primary",
+  };
+  std::string_view p(path);
+  std::string_view suffix;
+  bool matched = false;
+  for (std::string_view prefix : kPrefixes) {
+    if (p.starts_with(prefix) && (p.size() == prefix.size() || p[prefix.size()] == '/')) {
+      suffix = p.substr(prefix.size());
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) return false;
+  std::wstring base = ExternalStorageDataRoot();
+  if (base.empty()) return false;
+  // Normalize and clamp '..' within the external storage root so /sdcard/../foo
+  // cannot escape $ANDROID_DATA/media/0.
+  std::string norm_suffix;
+  std::vector<std::string_view> parts;
+  std::string_view sview(suffix);
+  while (!sview.empty()) {
+    size_t slash = sview.find('/');
+    std::string_view part =
+        slash == std::string_view::npos ? sview : sview.substr(0, slash);
+    sview.remove_prefix(slash == std::string_view::npos ? sview.size() : slash + 1);
+    if (part.empty() || part == ".") continue;
+    if (part == "..") {
+      if (!parts.empty()) parts.pop_back();
+      continue;
+    }
+    parts.push_back(part);
+  }
+  for (std::string_view part : parts) {
+    norm_suffix.push_back('/');
+    norm_suffix.append(part);
+  }
+  while (!base.empty() && (base.back() == L'/' || base.back() == L'\\')) base.pop_back();
+  *windows = base + L"\\media\\0" + Widen(norm_suffix.c_str());
+  for (wchar_t& c : *windows) if (c == L'/') c = L'\\';
+  reserved_names::Encode(windows);
+  Lengthen(windows);
+  return true;
+}
+
 PathKind MapPath(const char* path, std::wstring* windows) {
   // "//name" is left to Windows as a UNC path; POSIX lets an implementation
   // give a leading "//" its own meaning. A name with a character Windows
@@ -436,6 +520,7 @@ PathKind MapPath(const char* path, std::wstring* windows) {
     }
     int font = SystemFontPath(path, windows);
     if (font != 0) return font > 0 ? PathKind::kFile : PathKind::kMissing;
+    if (ExternalStoragePath(path, windows)) return PathKind::kFile;
     if (DrivePath(path, windows)) {
       reserved_names::Encode(windows);
       Lengthen(windows);
@@ -522,6 +607,7 @@ std::string LinuxPath(const wchar_t* windows) {
 // scanner's brief open of a new file is waited out. A symbolic link is
 // removed itself, by unlink, also when it points to a directory.
 int PosixDelete(const std::wstring& windows, bool directory) {
+  if (!CheckExternalStorageAccess(windows, AccessKind::kWrite)) return -1;
   HANDLE h = INVALID_HANDLE_VALUE;
   for (int attempt = 0; attempt < 20; ++attempt) {
     h = CreateFileW(windows.c_str(), DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
@@ -531,6 +617,10 @@ int PosixDelete(const std::wstring& windows, bool directory) {
     Sleep(10);
   }
   if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
+  if (!CheckExternalStorageHandle(h, AccessKind::kWrite)) {
+    CloseHandle(h);
+    return errno = EACCES, -1;
+  }
   FILE_BASIC_INFO basic;
   bool is_directory = GetFileInformationByHandleEx(h, FileBasicInfo, &basic, sizeof(basic)) &&
                       (basic.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
@@ -741,12 +831,19 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
   std::wstring windows;
   switch (gesher::MapPath(resolved.c_str(), &windows)) {
     case PathKind::kFile: {
+      if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
       HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), 0,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                              FILE_FLAG_BACKUP_SEMANTICS |
                                  ((flags & AT_SYMLINK_NOFOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0));
       if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-      const int result = SetHandleTimes(h, times);
+      // Gesher's ELF loader through a link to it (system_linker.h).
+      if (gesher::system_linker::RefuseChangeHandle(h) != 0) {
+        CloseTimeHandle(h);
+        return errno = EROFS, -1;
+      }
+      const int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite)
+                             ? SetHandleTimes(h, times) : -1;
       CloseTimeHandle(h);
       return result;
     }
@@ -766,6 +863,7 @@ int futimens(int fd, const struct timespec times[2]) {
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   if (gesher::system_linker::RefuseChangeHandle(snapshot->handle) != 0) return -1;
+  if (!gesher::CheckExternalStorageHandle(snapshot->handle, gesher::AccessKind::kWrite)) return -1;
   return SetHandleTimes(snapshot->handle, times);
 }
 
@@ -792,6 +890,7 @@ int mkdir(const char* path) {
   std::wstring windows;
   switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
     case PathKind::kFile:
+      if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
       return CreateDirectoryW(windows.c_str(), nullptr) ? 0 : gesher::FailWithLastError();
     case PathKind::kMissing:
       return errno = ENOENT, -1;

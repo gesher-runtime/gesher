@@ -5,16 +5,22 @@
 package com.gesher.server;
 
 import android.app.ActivityManager;
+import android.app.AppOpsManager;
 import android.app.IActivityManager;
 import android.app.IActivityTaskManager;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.ServiceManager;
+import android.os.UserHandle;
+import com.android.internal.app.IAppOpsService;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
@@ -151,6 +157,58 @@ public final class RuntimeCommands {
         return 0;
     }
 
+    private static int appops(String[] args) throws Exception {
+        IPackageManager pm = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
+        if (pm == null) throw new IllegalStateException("the device's package service is unavailable");
+        IAppOpsService appOps = IAppOpsService.Stub.asInterface(ServiceManager.getService(Context.APP_OPS_SERVICE));
+        if (appOps == null) throw new IllegalStateException("the device's appops service is unavailable");
+        if (args.length == 4 && args[1].equals("get") && args[3].equals("MANAGE_EXTERNAL_STORAGE")) {
+            String pkgName = args[2];
+            PackageInfo pkgInfo = pm.getPackageInfo(pkgName, PackageManager.GET_PERMISSIONS, 0);
+            if (pkgInfo == null || pkgInfo.applicationInfo == null) {
+                throw new IllegalArgumentException("unknown package " + pkgName);
+            }
+            int uid = pkgInfo.applicationInfo.uid;
+            boolean declared = pkgInfo.requestedPermissions != null
+                    && Arrays.asList(pkgInfo.requestedPermissions).contains(
+                            android.Manifest.permission.MANAGE_EXTERNAL_STORAGE);
+            int rawMode = appOps.checkOperationRaw(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, uid, pkgName, null);
+            String modeName = switch (rawMode) {
+                case AppOpsManager.MODE_ALLOWED -> "allow";
+                case AppOpsManager.MODE_IGNORED -> "ignore";
+                case AppOpsManager.MODE_ERRORED -> "errored";
+                case AppOpsManager.MODE_DEFAULT -> "default";
+                default -> "errored";
+            };
+            boolean allowed = rawMode == AppOpsManager.MODE_ALLOWED
+                    || (rawMode == AppOpsManager.MODE_DEFAULT && (UserHandle.isCore(uid)
+                            || pm.checkUidPermission(android.Manifest.permission.MANAGE_EXTERNAL_STORAGE, uid)
+                                    == PackageManager.PERMISSION_GRANTED));
+            System.out.println("declared=" + (declared ? 1 : 0)
+                    + " mode=" + modeName
+                    + " allowed=" + (allowed ? 1 : 0));
+            return 0;
+        }
+        if (args.length == 5 && args[1].equals("set") && args[3].equals("MANAGE_EXTERNAL_STORAGE")) {
+            String pkgName = args[2];
+            PackageInfo pkgInfo = pm.getPackageInfo(pkgName, 0, 0);
+            if (pkgInfo == null || pkgInfo.applicationInfo == null) {
+                throw new IllegalArgumentException("unknown package " + pkgName);
+            }
+            int uid = pkgInfo.applicationInfo.uid;
+            int mode = switch (args[4]) {
+                case "allow" -> AppOpsManager.MODE_ALLOWED;
+                case "ignore" -> AppOpsManager.MODE_IGNORED;
+                case "default" -> AppOpsManager.MODE_DEFAULT;
+                default -> throw new IllegalArgumentException("unsupported mode " + args[4]);
+            };
+            appOps.setUidMode(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE, uid, mode);
+            return 0;
+        }
+        throw new IllegalArgumentException("appops get PACKAGE MANAGE_EXTERNAL_STORAGE"
+                + " | appops set PACKAGE MANAGE_EXTERNAL_STORAGE allow|ignore|default");
+    }
+
     public static void main(String[] args) {
         int result = 1;
         try {
@@ -162,6 +220,7 @@ public final class RuntimeCommands {
             if (args.length == 0) throw new IllegalArgumentException("missing tool name");
             if (args[0].equals("pm")) result = pm(args);
             else if (args[0].equals("am")) result = am(args);
+            else if (args[0].equals("appops")) result = appops(args);
             else if (args[0].equals("notification")) result = notification(args);
             else if (args[0].equals("spell-checker")) {
                 result = SpellCheckerCommands.run(java.util.Arrays.asList(args).subList(1, args.length));
