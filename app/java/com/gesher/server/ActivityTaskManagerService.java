@@ -33,7 +33,6 @@ import android.app.servertransaction.TopResumedActivityChangeItem;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.IIntentSender;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
@@ -138,7 +137,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             AtomicLongFieldUpdater.newUpdater(ProcessRecord.class, "lastActive");
 
     /**
-     * Opens a URL no activity of the device handles (http, https, mailto) with Windows'
+     * Opens a URL no activity of the device handles (http and https; mailto, tel, sms, geo) with Windows'
      * handler (WindowsHost.openUrl): the user's default browser or mail app. The tests
      * replace it (gesher.services.BrowserIntentTest), so that no browser opens.
      */
@@ -564,6 +563,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
     private volatile AuthService mAuth; // confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0091)
     private final Set<NativeUiActivity> mNativeUiActivities = new HashSet<>();
+    private DialRequests mDialRequests = new DialRequests(); // server-local dialog injection for tests
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private final ThreadLocal<ProcessRecord> mVerifiedIntentSenderSource = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
@@ -2765,7 +2765,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             try { thread.scheduleTransaction(transaction); }
             catch (RemoteException failure) {
-                SystemServer.log("Bluetooth consent pause failed: " + failure);
+                SystemServer.log("Native consent pause failed: " + failure);
             }
         }
 
@@ -2823,10 +2823,139 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final BluetoothRequests requests = mBluetoothRequests;
         // Validate before consuming a forwarded result route or scheduling host work.
         requests.validate(action, pkg, captured);
-        return startSystemUi("Bluetooth", intent, callingProcess, internalCreator, delegated,
-                publication, resultToToken, resultWho, requestCode,
-                (source, lifetime, awaitPause, completion) ->
-                        requests.request(action, pkg, captured, lifetime, awaitPause, completion));
+        return requestNativeConsent(intent, callingProcess, internalCreator, delegated, publication,
+                resultToToken, resultWho, requestCode, (ownerPid, lifetime, beforeWork, completion) ->
+                        requests.request(action, pkg, captured, lifetime, beforeWork, completion));
+    }
+
+    private int requestDial(Intent intent, String resolvedType, String verifiedCaller,
+            ProcessRecord callingProcess, boolean internalCreator,
+            java.util.function.BooleanSupplier delegated,
+            java.util.function.BooleanSupplier publication,
+            IBinder resultToToken, String resultWho, int requestCode) {
+        final String pkg = verifiedCaller == null ? "android" : verifiedCaller;
+        final ApkPackage captured = mPm.get(pkg);
+        if (captured == null && !"android".equals(pkg)) {
+            throw new SecurityException("Dial request requires an installed caller");
+        }
+        final Intent launch = new Intent(intent);
+        return requestNativeConsent(launch, callingProcess, internalCreator, delegated, publication,
+                resultToToken, resultWho, requestCode, (ownerPid, lifetime, beforeWork, completion) -> {
+                    java.util.function.BooleanSupplier current = () -> lifetime.getAsBoolean()
+                            && (captured == null || mPm.get(pkg) == captured
+                                && !mPm.isRemovalPending(pkg) && captured.matchesEnabledApplication(0));
+                    mDialRequests.request(launch, pkg, ownerPid, current,
+                            () -> canDelegateExternalUrl(launch, resolvedType), beforeWork,
+                            opened -> {
+                                SystemServer.log("startActivity: Windows dial request "
+                                        + (opened ? "opened" : "canceled or unavailable"));
+                                // The confirmation is finished; shell acceptance is not a call result.
+                                completion.accept(android.app.Activity.RESULT_CANCELED);
+                            });
+                });
+    }
+
+    @FunctionalInterface
+    private interface NativeConsentRequest {
+        void enqueue(int ownerPid, java.util.function.BooleanSupplier lifetime,
+                Runnable beforeWork, java.util.function.IntConsumer completion);
+    }
+
+    private int requestNativeConsent(Intent intent, ProcessRecord callingProcess,
+            boolean internalCreator, java.util.function.BooleanSupplier delegated,
+            java.util.function.BooleanSupplier publication,
+            IBinder resultToToken, String resultWho, int requestCode, NativeConsentRequest request) {
+        final ActivityRecord source, recipient;
+        final ProcessRecord sourceProcess, expectedProcess;
+        final String targetWho;
+        final int targetCode;
+        final boolean forwarded, cancelResult;
+        final NativeUiActivity activity;
+        synchronized (this) {
+            source = resultToToken == null ? null : forToken(resultToToken);
+            if (resultToToken != null && (source == null || source.app == null
+                    || source.finishing || source.state == State.DESTROYED || !activityEnabled(source)
+                    || (internalCreator ? publication == null || !publication.getAsBoolean()
+                            : callingProcess == null || source.app != callingProcess))) {
+                throw new SecurityException("Native consent result must belong to its live caller activity");
+            }
+            if (requestCode >= 0 && source == null) {
+                throw new SecurityException("Native consent result requires a live activity");
+            }
+            sourceProcess = source == null ? null : source.app;
+            forwarded = source != null && (intent.getFlags() & Intent.FLAG_ACTIVITY_FORWARD_RESULT) != 0;
+            if (forwarded && requestCode >= 0) return ActivityManager.START_FORWARD_AND_REQUEST_CONFLICT;
+            if (forwarded) {
+                ActivityRecord target = source.resultTo;
+                recipient = target != null && !isActivityRetired(target) ? target : null;
+                targetWho = source.resultWho;
+                targetCode = source.requestCode;
+                source.resultTo = null;
+                if (recipient != null) {
+                    recipient.pendingResults.removeIf(result -> {
+                        if (!(result instanceof PendingActivityResult pending) || pending.source != source
+                                || result.mRequestCode != source.requestCode
+                                || !Objects.equals(result.mResultWho, source.resultWho)) return false;
+                        recipient.callerState.remove(result.mCallerToken);
+                        return true;
+                    });
+                }
+                // A forwarded route belongs to the saved activity, not its old process.
+                expectedProcess = null;
+            } else {
+                recipient = requestCode >= 0 ? source : null;
+                targetWho = resultWho;
+                targetCode = requestCode;
+                expectedProcess = sourceProcess;
+            }
+            cancelResult = recipient != null && ((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
+                    || source.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE);
+            activity = new NativeUiActivity(source);
+        }
+        // After a result is forwarded/detached (or none was requested), the system UI
+        // owns its work. A trampoline may finish or die without canceling that request.
+        final boolean detached = forwarded || cancelResult || source == null || requestCode < 0;
+        java.util.function.BooleanSupplier lifetime = () -> {
+            synchronized (ActivityTaskManagerService.this) {
+                return (delegated == null || delegated.getAsBoolean())
+                        && (detached || internalCreator || callingProcess == null
+                            || !callingProcess.exiting && !callingProcess.dead && !callingProcess.pidSuperseded
+                                && processByPid(callingProcess.pid) == callingProcess
+                                && (callingProcess.enabledProcessLifetime == null
+                                    || callingProcess.enabledProcessLifetime.getAsBoolean()))
+                        && (detached
+                            || source.app == sourceProcess && !source.finishing
+                                && source.state != State.DESTROYED && mActivities.contains(source)
+                                && activityEnabled(source) && sourceProcess != null
+                                && !sourceProcess.exiting && !sourceProcess.dead
+                                && processByPid(sourceProcess.pid) == sourceProcess);
+            }
+        };
+        java.util.function.IntConsumer completion = result -> activity.finish(() -> {
+            if (recipient != null && !cancelResult && lifetime.getAsBoolean()) {
+                deliverResult(recipient, targetWho, targetCode, result, null, expectedProcess);
+            }
+        });
+        try {
+            if (cancelResult) {
+                deliverResult(recipient, new ResultInfo(targetWho, targetCode,
+                        android.app.Activity.RESULT_CANCELED, null, null), null, null, expectedProcess);
+            }
+            activity.pauseCovered((intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
+            updateTopResumed();
+            // A detached request may outlive its source process. Do not attach its
+            // later dialog to a recycled PID's window; Gesher owns that dialog.
+            int ownerPid = !detached && sourceProcess != null ? sourceProcess.pid : 0;
+            request.enqueue(ownerPid, lifetime, activity::awaitPause, completion);
+        } catch (SecurityException revoked) {
+            // Permission may be revoked after admission consumed a forwarded route.
+            // That accepted launch must finish with cancellation, not lose its result.
+            completion.accept(android.app.Activity.RESULT_CANCELED);
+        } catch (RuntimeException | Error failure) {
+            completion.accept(android.app.Activity.RESULT_CANCELED);
+            throw failure;
+        }
+        return ActivityManager.START_SUCCESS;
     }
 
     /** The work of a system activity that Gesher shows as Windows UI over the caller. */
@@ -3145,7 +3274,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             throw new SecurityException("Initial launch does not match the attached process package");
         }
         if (info == null) {
-            if (requiredTask == null && BluetoothRequests.handles(intent, resolvedType)) {
+            boolean bluetoothRequest = BluetoothRequests.handles(intent, resolvedType);
+            boolean dialRequest = DialRequests.handles(intent) && canDelegateExternalUrl(intent, resolvedType);
+            if (requiredTask == null && (bluetoothRequest || dialRequest)) {
                 // Standalone services share the APK's PID and UID. Local Binder calls
                 // are normally trusted control-plane work, but must not turn that
                 // admitted APK (or a retired admission) into the Android system caller.
@@ -3164,18 +3295,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                     && !originalProcess.enabledProcessLifetime.getAsBoolean()
                                 || caller == null || originalProcess.thread == null
                                 || !originalProcess.thread.asBinder().equals(caller.asBinder())) {
-                            throw new SecurityException("Bluetooth request requires its live standalone admission");
+                            throw new SecurityException("Native consent request requires its live standalone admission");
                         }
                         ApkPackage claimed = mPm.get(callingPackage);
                         if (!owner.packageName.equals(callingPackage)
                                 && (claimed == null || claimed.uid() != owner.uid())) {
-                            throw new SecurityException("Bluetooth caller cannot act for another package");
+                            throw new SecurityException("Native consent caller cannot act for another package");
                         }
                         verifiedCaller = owner.packageName;
                     }
                 }
-                return requestBluetoothState(intent, verifiedCaller, originalProcess,
-                        internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
+                return bluetoothRequest
+                        ? requestBluetoothState(intent, verifiedCaller, originalProcess,
+                                internalCreator, delegated, publication, resultToToken, resultWho, requestCode)
+                        : requestDial(intent, resolvedType, verifiedCaller, originalProcess,
+                                internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
             }
             if (requiredTask == null && mAuth != null
                     && ConfirmCredential.handles(intent, resolvedType)) {
@@ -3296,14 +3430,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     }
                     return ActivityManager.START_SUCCESS;
                 }
-                if (Intent.ACTION_VIEW.equals(action)) {
+                if (Intent.ACTION_VIEW.equals(action)
+                        || WindowsUriHandlers.handlesScheme(intent.getScheme())) {
                     Uri data = intent.getData();
                     if (data != null) {
                         String scheme = data.getScheme();
-                        if ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)
-                                || "mailto".equalsIgnoreCase(scheme)) {
+                        if (Intent.ACTION_VIEW.equals(action) && ("http".equalsIgnoreCase(scheme)
+                                || "https".equalsIgnoreCase(scheme))
+                                || WindowsUriHandlers.handlesScheme(scheme)) {
                             // Also a VIEW for the Windows default browser's package
-                            // (BrowserPackageSupport, of which resolve() runs nothing).
+                            // (BrowserPackageSupport), or a mailto/tel/sms/geo request for
+                            // Windows' handler (WindowsUriHandlers): resolve() runs neither.
                             final ActivityRecord resultSource;
                             final ProcessRecord expectedResultProcess;
                             final String resultTargetWho;
@@ -3355,7 +3492,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                 }
                             }
                             boolean externalTarget = canDelegateExternalUrl(intent, resolvedType);
-                            boolean opened = externalTarget && sOpenExternalUrl.test(data.toString());
+                            // The handler receives the URI with the fields of the intent's
+                            // contract (WindowsUriHandlers.windowsUri); a browser the URL.
+                            String externalUri = WindowsUriHandlers.handlesScheme(scheme)
+                                    ? WindowsUriHandlers.windowsUri(intent) : data.toString();
+                            boolean opened = externalTarget && externalUri != null
+                                    && sOpenExternalUrl.test(externalUri);
                             SystemServer.log("startActivity: Windows external URL "
                                     + (opened ? "opened" : "unavailable") + " (" + scheme + ")");
                             // ActivityStarter cancels a failed launch or detaches an explicit
@@ -3836,6 +3978,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // The Windows default browser (BrowserPackageSupport) has no activity to run: the
         // start delegates the URL to Windows, as when nothing resolves it.
         if (BrowserPackageSupport.isBrowserPackage(info.packageName)) return null;
+        // Likewise Windows' mailto/tel/sms/geo handlers (WindowsUriHandlers).
+        if (WindowsUriHandlers.isHandlerPackage(info.packageName)
+                && mPm.get(WindowsUriHandlers.PACKAGE) == null) return null;
         info = new ActivityInfo(info);
         if (info.applicationInfo == null) {
             info.applicationInfo = mPm.getApplicationInfo(info.packageName, flags, 0);
@@ -3846,16 +3991,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** An unresolved app-specific or filter-constrained request must not become a shell launch. */
     private boolean canDelegateExternalUrl(Intent intent, String resolvedType) {
         Intent target = resolutionIntent(intent);
-        if ("mailto".equalsIgnoreCase(intent.getScheme())) {
-            // No synthetic Android mail package is advertised. Only an implicit
-            // mail viewer request may use the Windows protocol handler.
-            if (target.getComponent() != null || target.getPackage() != null) return false;
-            IntentFilter mail = new IntentFilter(Intent.ACTION_VIEW);
-            mail.addCategory(Intent.CATEGORY_DEFAULT);
-            mail.addCategory(Intent.CATEGORY_BROWSABLE);
-            mail.addDataScheme("mailto");
-            return mail.match(target.getAction(), resolvedType != null ? resolvedType : target.getType(),
-                    target.getScheme(), target.getData(), target.getCategories(), "gesher") >= 0;
+        if (WindowsUriHandlers.handlesScheme(intent.getScheme())) {
+            // Only what PackageManager resolves to Windows' handler: Windows has one
+            // registered for the scheme now, and the request names that activity or
+            // matches its filter. A selector may choose the activity, but the outer
+            // intent's payload must belong to that same handler.
+            return mPm.get(WindowsUriHandlers.PACKAGE) == null
+                    && mPm.uriHandlers().canDelegate(intent, resolvedType,
+                            PackageManager.MATCH_DEFAULT_ONLY);
         }
         return mPm.get(BrowserPackageSupport.PACKAGE) == null
                 && !BrowserPackageSupport.queryIntentActivities(target, resolvedType,

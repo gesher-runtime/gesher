@@ -48,7 +48,9 @@ DevCheck 'hello credential: createConfirmDeviceCredentialIntent is null on a dev
 # NO_DEVICE_CREDENTIAL (14). Never a success.
 $hcStrong = if ($hcOut -match 'hellocred: prompt: strong: error (\d+)') { $Matches[1] } else { '?' }
 $hcCredential = if ($hcOut -match 'hellocred: prompt: credential: error (\d+)') { $Matches[1] } else { '?' }
-if (($hcStrong -eq '12' -and $hcCredential -eq '14') -or ($hcStrong -eq '5' -and $hcCredential -eq '5')) {
+# These are separate sequential requests; foreground can change between them.
+# Each request must independently report its own permitted unavailable error.
+if (($hcStrong -eq '12' -or $hcStrong -eq '5') -and ($hcCredential -eq '14' -or $hcCredential -eq '5')) {
   Write-Host "PASS  hello credential: BiometricPrompt ends with Android's unavailable errors (biometric-only $hcStrong, credential $hcCredential), no success"
 } else {
   Write-Host "FAIL  hello credential: BiometricPrompt errors: biometric-only $hcStrong (12, or 5 in the background), credential $hcCredential (14, or 5 in the background)"
