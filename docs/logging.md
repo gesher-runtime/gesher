@@ -41,7 +41,10 @@ Values are replaced and the surrounding text is kept, so the log stays useful:
   `auth_token`, `authToken`, `securityToken`, `access_token`, `refresh_token`,
   `id_token`, `Token`, `client_secret`, `Passwd`, `Cookie`, `Set-Cookie` and
   `Authorization`. An unquoted value ends at whitespace or at one of
-  `, ; & ) } ] " '`. A quoted value ends at its closing quote. `Authorization`
+  `, ; & ) } ] " '`. A quoted value ends at its closing quote, not at an
+  escaped one (`\"`). The same forms inside an escaped JSON string
+  (`{\"access_token\":\"…\"}`, a JSON body logged as a string) are
+  recognized too. `Authorization`
   and `…cookie` header values run to the end of the line (`Bearer x`,
   `a=1; b=2`).
 
@@ -84,9 +87,12 @@ of the device's processes run (`LogRedaction.scrubLogs`):
 
 - Text logs are streamed through the same redaction into a temporary file. The
   temporary file replaces the log only when something changed.
-- A `.logcat` file is rewritten record by record with corrected lengths. A file
-  that is not a valid record stream is deleted, because `logcat` cannot read it
-  anyway.
+- A `.logcat` file is rewritten record by record with corrected lengths. A
+  broken tail (a writer killed during an append) is dropped and the records
+  before it are kept, so `logcat` can read them again. A file that does not
+  start with a valid record is deleted, because it cannot be redacted and
+  `logcat` cannot read it anyway. Leftover `.redacting` temporary files from an
+  interrupted pass are removed.
 
 The marker file `.credentials-redacted-v1` records the pass. If a file cannot
 be replaced (for example, a process left from an older device still holds it),
@@ -100,6 +106,7 @@ the marker is not written and the pass runs again at the next start.
 - Credentials in formats other than those above are not recognized. Examples
   are an unlabeled opaque session ID and a key name that is not on the list
   (`X-Goog-Api-Key`).
-- A credential split by an explicit flush in the middle of a Java line, or by
-  a native stderr write in the middle of one, is redacted only in the part
-  that still matches.
+- A credential split by an explicit flush in the middle of a Java line, by
+  the 8 KiB bound of a Java line without a newline, or by a native stderr
+  write in the middle of one, is redacted only in the part that still
+  matches.

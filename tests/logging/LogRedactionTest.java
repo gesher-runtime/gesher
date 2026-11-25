@@ -167,8 +167,19 @@ public final class LogRedactionTest {
         Files.write(logcat.toPath(), stream.toByteArray());
         File broken = new File(logs, "broken.log.logcat");
         Files.write(broken.toPath(), new byte[] {1, 2, 3, 4, 5});
+        // A writer killed in an append: the records before the broken tail are kept.
+        File tail = new File(logs, "tail.log.logcat");
+        ByteArrayOutputStream tailed = new ByteArrayOutputStream();
+        tailed.write(record(3, "GmsAuth", "auth_token=tailSYNTHETIC"));
+        tailed.write(record(3, "GmsAuth", "clean"));
+        tailed.write(record(3, "GmsAuth", "password=cutSYNTHETIC"), 0, 47);
+        Files.write(tail.toPath(), tailed.toByteArray());
+        Files.write(new File(logs, "stale.log.redacting").toPath(), new byte[] {'x'});
         int changed = LogRedaction.scrubLogs(logs);
-        check(changed == 3, "scrub changed the text log, the record stream and removed the broken one: " + changed);
+        check(changed == 4, "scrub changed the text log, the record streams and removed the broken one: " + changed);
+        List<String> tailRecords = texts(Files.readAllBytes(tail.toPath()));
+        check(tailRecords.equals(List.of("auth_token=<redacted>", "clean")),
+                "a broken tail is dropped, the earlier records kept redacted: " + tailRecords);
         check(new String(Files.readAllBytes(text1.toPath()), StandardCharsets.UTF_8).equals(expected),
                 "text log rewritten redacted");
         check(clean.lastModified() == cleanModified, "a log without credentials is not rewritten");

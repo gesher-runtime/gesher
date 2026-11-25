@@ -23,4 +23,6 @@ REDACTION_VECTOR("authToken='abc SYNTHETIC def' ok", "authToken='<redacted>' ok"
 REDACTION_VECTOR("line one\n  password = SYNTHETIC\tline two\napiKey=SYNTHETIC", "line one\n  password = <redacted>\tline two\napiKey=<redacted>")
 REDACTION_VECTOR("auth_token=<redacted> ya29.<redacted> Bearer <redacted> Authorization: <redacted>", "auth_token=<redacted> ya29.<redacted> Bearer <redacted> Authorization: <redacted>")
 REDACTION_VECTOR("tokens=5 tokenizer: ok, monkey=banana, std::string token_count", "tokens=5 tokenizer: ok, monkey=banana, std::string token_count")
+REDACTION_VECTOR("log {\\\"access_token\\\":\\\"abcSYNTHETIC\\\",\\\"password\\\": \\\"pw \\\\\\\"q SYNTHETIC\\\",\\\"n\\\":1}", "log {\\\"access_token\\\":\\\"<redacted>\\\",\\\"password\\\": \\\"<redacted>\\\",\\\"n\\\":1}")
+REDACTION_VECTOR("password=\"abc\\\"SYNTHETIC\" next", "password=\"<redacted>\" next")
 REDACTION_VECTOR("", "")

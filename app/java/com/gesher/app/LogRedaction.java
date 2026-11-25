@@ -145,17 +145,31 @@ public final class LogRedaction {
         if (c != '=' && c != ':') return false;
         int k = at;
         while (k > start && blank(s[k - 1])) --k;
-        if (k > start && (s[k - 1] == '"' || s[k - 1] == '\'')) --k;
+        if (k > start && (s[k - 1] == '"' || s[k - 1] == '\'')) {
+            --k;
+            if (k > start && s[k - 1] == '\\') --k;
+        }
         int keyEnd = k;
         while (k > start && keyEnd - k < 64 && keyChar(s[k - 1] & 0xff)) --k;
         if (!credentialKey(s, k, keyEnd - k)) return false;
         int v = at + 1;
         while (v < n && blank(s[v])) ++v;
         int j = v;
-        if (v < n && (s[v] == '"' || s[v] == '\'')) {
+        boolean nested = v + 1 < n && s[v] == '\\' && (s[v + 1] == '"' || s[v + 1] == '\'');
+        if (nested || (v < n && (s[v] == '"' || s[v] == '\''))) {
+            // A quoted value ends at its closing quote, not at an escaped one. In an escaped
+            // string (\"key\":\"value\") each \x is one character of the quoted text.
+            if (nested) v++;
             byte quote = s[v];
             j = ++v;
-            while (j < n && s[j] != quote && s[j] != '\n' && s[j] != '\r') ++j;
+            boolean escape = false;
+            while (j < n) {
+                int unit = nested && s[j] == '\\' && j + 1 < n ? 2 : 1;
+                byte d = s[j + unit - 1];
+                if (d == '\n' || d == '\r' || (!escape && d == quote)) break;
+                escape = !escape && d == '\\';
+                j += unit;
+            }
         } else if (lineValue(s, k, keyEnd - k)) {
             while (j < n && s[j] != '\n' && s[j] != '\r') ++j;
             while (j > v && blank(s[j - 1])) --j;
@@ -291,8 +305,8 @@ public final class LogRedaction {
     /**
      * Logs written before redaction existed are rewritten once, before the device's processes
      * start (Launcher). Text logs are redacted line by line; a binary .logcat file is rewritten
-     * record by record with consistent lengths, or removed when it is not a valid record
-     * stream (its reader rejects it). A file that cannot be replaced (in use) is kept and the
+     * record by record with consistent lengths; a broken tail is dropped, and a file that
+     * does not start with a valid record (its reader rejects it) is removed. A file that cannot be replaced (in use) is kept and the
      * scrub is retried at the next start. Returns the number of files changed.
      */
     public static int scrubLogs(File dir) {
@@ -304,9 +318,12 @@ public final class LogRedaction {
         boolean complete = true;
         for (File file : files) {
             String name = file.getName();
-            if (!file.isFile() || name.endsWith(".redacting")) continue;
+            if (!file.isFile()) continue;
             try {
-                if (name.endsWith(".logcat")) {
+                if (name.endsWith(".redacting")) {
+                    // Left by a scrub that was interrupted; the log it was made from remains.
+                    Files.deleteIfExists(file.toPath());
+                } else if (name.endsWith(".logcat")) {
                     if (scrubLogcat(file)) changed++;
                 } else if (name.endsWith(".log")) {
                     if (scrubText(file)) changed++;
@@ -354,13 +371,22 @@ public final class LogRedaction {
         ByteArrayOutputStream out = new ByteArrayOutputStream(bytes.length);
         boolean changed = false;
         for (int at = 0; at < bytes.length;) {
-            if (bytes.length - at < LOGCAT_HEADER) return deleteInvalid(file);
-            int magic = in.getInt(at), size = in.getInt(at + 4);
-            int tagSize = in.getInt(at + 32), textSize = in.getInt(at + 36);
-            if (magic != LOGCAT_MAGIC || tagSize < 0 || tagSize > 4096 || textSize < 0
-                    || textSize > 4096 || size != LOGCAT_HEADER + tagSize + textSize
-                    || size > bytes.length - at) {
-                return deleteInvalid(file);
+            boolean valid = bytes.length - at >= LOGCAT_HEADER;
+            int size = 0, tagSize = 0, textSize = 0;
+            if (valid) {
+                size = in.getInt(at + 4);
+                tagSize = in.getInt(at + 32);
+                textSize = in.getInt(at + 36);
+                valid = in.getInt(at) == LOGCAT_MAGIC && tagSize >= 0 && tagSize <= 4096
+                        && textSize >= 0 && textSize <= 4096
+                        && size == LOGCAT_HEADER + tagSize + textSize && size <= bytes.length - at;
+            }
+            if (!valid) {
+                // Not a record stream at all: removed. A broken tail (a writer killed in an
+                // append) is dropped and the records before it are kept, readable again.
+                if (at == 0) return deleteInvalid(file);
+                changed = true;
+                break;
             }
             int textAt = at + LOGCAT_HEADER + tagSize;
             byte[] redacted = redact(bytes, textAt, textSize);

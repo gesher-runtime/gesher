@@ -320,20 +320,35 @@ bool Secret(const char* s, size_t n, size_t at, size_t* begin, size_t* end) {
     }
   }
   if (c != '=' && c != ':') return false;
-  // key=value, key: value, "key": "value", key='value'.
+  // key=value, key: value, "key": "value", key='value', and the JSON forms
+  // inside an escaped JSON string (\"key\":\"value\").
   size_t k = at;
   while (k > 0 && Blank(s[k - 1])) --k;
-  if (k > 0 && (s[k - 1] == '"' || s[k - 1] == '\'')) --k;
+  if (k > 0 && (s[k - 1] == '"' || s[k - 1] == '\'')) {
+    --k;
+    if (k > 0 && s[k - 1] == '\\') --k;
+  }
   size_t key_end = k;
   while (k > 0 && key_end - k < 64 && KeyChar(static_cast<unsigned char>(s[k - 1]))) --k;
   if (!CredentialKey(s + k, key_end - k)) return false;
   size_t v = at + 1;
   while (v < n && Blank(s[v])) ++v;
   size_t j = v;
-  if (v < n && (s[v] == '"' || s[v] == '\'')) {
+  bool nested = v + 1 < n && s[v] == '\\' && (s[v + 1] == '"' || s[v + 1] == '\'');
+  if (nested || (v < n && (s[v] == '"' || s[v] == '\''))) {
+    // A quoted value ends at its closing quote, not at an escaped one. In an
+    // escaped string each \x is one character of the quoted text.
+    v += nested;
     char quote = s[v];
     j = ++v;
-    while (j < n && s[j] != quote && s[j] != '\n' && s[j] != '\r') ++j;
+    bool escape = false;
+    while (j < n) {
+      size_t unit = nested && s[j] == '\\' && j + 1 < n ? 2 : 1;
+      char c = s[j + unit - 1];
+      if (c == '\n' || c == '\r' || (!escape && c == quote)) break;
+      escape = !escape && c == '\\';
+      j += unit;
+    }
   } else if (LineValue(s + k, key_end - k)) {
     while (j < n && s[j] != '\n' && s[j] != '\r') ++j;
     while (j > v && Blank(s[j - 1])) --j;
