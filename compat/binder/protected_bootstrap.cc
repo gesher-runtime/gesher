@@ -291,7 +291,11 @@ DWORD ProtectedBootstrap::ConnectRole(std::wstring_view locator, wire::Role role
   if (!session->service_) return GetLastError();
   status = CheckServiceConfig(session->service_);
   if (status != ERROR_SUCCESS) return status;
-  if (!GetNamedPipeServerProcessId(session->pipe_, &session->server_pid_)) return GetLastError();
+  if (!GetNamedPipeServerProcessId(session->pipe_, &session->server_pid_) ||
+      !GetNamedPipeServerSessionId(session->pipe_, &session->server_session_)) {
+    return GetLastError();
+  }
+  if (session->server_session_ != 0) return ERROR_ACCESS_DENIED;
   status = session->Handshake();
   if (status != ERROR_SUCCESS) return status;
   *result = std::move(session);

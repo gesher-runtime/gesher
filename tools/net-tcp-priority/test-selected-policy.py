@@ -517,7 +517,7 @@ USB_BLOCK_PATH_BASES.update(dict.fromkeys((
  'compat/posix/src/unix_rights.cc',
  'tests/native/ofd_transfer_host_test.cc.in',
 ), 'a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a'))
-USB_BLOCK_TRANSITION_SHA256 = 'a753d6f95e1d9693a5d6e6924736e4bd2f978ac145100db678dbbd21f2fdea7d'
+USB_BLOCK_TRANSITION_SHA256 = 'bf3223a291011e499adb5f726e7cd2bc9da02093264f8f20edeb9f323d61d716'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',

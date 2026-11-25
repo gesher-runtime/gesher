@@ -441,6 +441,7 @@ class PackageNamespace {
     if (!native || !kernel) return ERROR_MOD_NOT_FOUND;
     open_ = reinterpret_cast<Open>(GetProcAddress(native, "NtOpenDirectoryObject"));
     create_ = reinterpret_cast<Create>(GetProcAddress(native, "NtCreateDirectoryObjectEx"));
+    create_file_ = reinterpret_cast<CreateFileFn>(GetProcAddress(native, "NtCreateFile"));
     query_ = reinterpret_cast<QuerySecurity>(GetProcAddress(native, "NtQuerySecurityObject"));
     error_ = reinterpret_cast<NativeError>(GetProcAddress(native, "RtlNtStatusToDosError"));
     compare_ = reinterpret_cast<Compare>(GetProcAddress(kernel, "CompareObjectHandles"));
@@ -458,7 +459,16 @@ class PackageNamespace {
     const std::wstring policy = std::wstring(L"O:SYG:SYD:P(A;;0x000f000f;;;SY)(A;OICIIO;GA;;;SY)") +
         L"(A;;0x000f000f;;;" + user + L")(A;OICIIO;GA;;;" + user + L")(A;;0x0002000f;;;" + package +
         L")(A;OICIIO;GA;;;" + package + L")S:P(ML;;NW;;;LW)";
-    const DWORD status = MakeDescriptor(policy.c_str(), &policy_);
+    // Match the NamedPipe AppContainer leaf so CreateAppContainerToken can open
+    // it under a medium-integrity restricted token even when the desktop session's
+    // NamedPipe AppContainerNamedObjects parent denies child creation.
+    const std::wstring pipe_policy = std::wstring(L"O:SYG:SYD:P(A;;0x001f01ff;;;SY)(A;OICIIO;GA;;;SY)") +
+        L"(A;;0x001f01ff;;;" + user + L")(A;OICIIO;GA;;;" + user + L")(A;;0x001201ff;;;" + package +
+        L")(A;OICIIO;GA;;;" + package + L")S:P(ML;;NW;;;LW)";
+    pipe_name_ = L"\\Device\\NamedPipe\\Sessions\\" + std::to_wstring(spec.desktop_session) +
+        L"\\AppContainerNamedObjects\\" + name_;
+    DWORD status = MakeDescriptor(policy.c_str(), &policy_);
+    if (status == ERROR_SUCCESS) status = MakeDescriptor(pipe_policy.c_str(), &pipe_policy_);
     if (status != ERROR_SUCCESS) return status;
     expected_dacl_ = GetAcl(policy_.get());
     BOOL present = FALSE, defaulted = FALSE;
@@ -510,6 +520,20 @@ class PackageNamespace {
       native = create_(&raw, kRead, &attributes, shadow_, 1);
       observed.value.native_status = native;
       Handle created(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
+      if ((native == 0 || native == static_cast<NTSTATUS>(0xc0000035)) && create_file_) {
+        UNICODE_STRING pipe_name = PipeName();
+        OBJECT_ATTRIBUTES pipe_attributes = Attributes(nullptr, &pipe_name);
+        pipe_attributes.Attributes |= 0x00000040;  // OBJ_CASE_INSENSITIVE
+        pipe_attributes.SecurityDescriptor = pipe_policy_.get();
+        IO_STATUS_BLOCK iosb{};
+        HANDLE pipe_raw = nullptr;
+        const NTSTATUS pipe_status = create_file_(&pipe_raw, 0x001f0006, &pipe_attributes, &iosb, nullptr,
+            FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE, 3 /* FILE_OPEN_IF */,
+            1 /* FILE_DIRECTORY_FILE */, nullptr, 0);
+        if (pipe_raw && pipe_raw != INVALID_HANDLE_VALUE) CloseHandle(pipe_raw);
+        // Ignore missing parent session path; CreateAppContainerToken will handle it if needed.
+        (void)pipe_status;
+      }
       stage("lowbox.restore-package-create-context");
       const DWORD restored = privilege.Restore();
       if (native < 0 && native != static_cast<NTSTATUS>(0xc0000035)) {
@@ -550,18 +574,21 @@ class PackageNamespace {
  private:
   using Open = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES);
   using Create = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, HANDLE, ULONG);
+  using CreateFileFn = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+      PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
   using QuerySecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, ULONG, PULONG);
   using NativeError = ULONG(NTAPI*)(NTSTATUS);
   using Compare = BOOL(WINAPI*)(HANDLE, HANDLE);
   static constexpr DWORD kSecurityLimit = 16384;
   Open open_ = nullptr;
   Create create_ = nullptr;
+  CreateFileFn create_file_ = nullptr;
   QuerySecurity query_ = nullptr;
   NativeError error_ = nullptr;
   Compare compare_ = nullptr;
   HANDLE shadow_ = nullptr;
-  std::wstring name_;
-  LocalMemory policy_;
+  std::wstring name_, pipe_name_;
+  LocalMemory policy_, pipe_policy_;
   PACL expected_dacl_ = nullptr, expected_label_ = nullptr;
   bool have_control_ = false;
   SECURITY_DESCRIPTOR_CONTROL control_ = 0;
@@ -574,6 +601,13 @@ class PackageNamespace {
     UNICODE_STRING value{};
     value.Buffer = name_.data();
     value.Length = static_cast<USHORT>(name_.size() * sizeof(wchar_t));
+    value.MaximumLength = static_cast<USHORT>(value.Length + sizeof(wchar_t));
+    return value;
+  }
+  UNICODE_STRING PipeName() {
+    UNICODE_STRING value{};
+    value.Buffer = pipe_name_.data();
+    value.Length = static_cast<USHORT>(pipe_name_.size() * sizeof(wchar_t));
     value.MaximumLength = static_cast<USHORT>(value.Length + sizeof(wchar_t));
     return value;
   }
