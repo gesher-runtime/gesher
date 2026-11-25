@@ -4,8 +4,10 @@
  */
 package gesher.services;
 
+import android.app.ContentProviderHolder;
 import android.app.IApplicationThread;
 import android.content.ComponentName;
+import android.content.IContentProvider;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ProviderInfo;
@@ -25,6 +27,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -306,7 +309,133 @@ public final class ProviderInitOrderTest {
         Map<?, ?> installing = (Map<?, ?>) field(cpType, "mInstalling").get(providers);
         require(installing.containsKey(process), "mInstalling missing target process");
 
+        sameAuthorityPublication();
         System.out.println("ProviderInitOrderTest all passed");
+    }
+
+    /**
+     * Two provider classes of one package declaring one authority, as merged library
+     * manifests can (issue #316): ComponentResolver registers the first declaration,
+     * queryContentProviders omits the skipped one from bindApplication, and the
+     * registered provider's publication succeeds.
+     */
+    @SuppressWarnings("unchecked")
+    private static void sameAuthorityPublication() throws Exception {
+        String authority = PKG + ".shared.fileprovider";
+        PackageImpl parsed = manifest();
+        addProvider(parsed, "Primary", PKG, 0, true).setAuthority(authority);
+        // A higher initOrder would install the later declaration first if it were bound.
+        addProvider(parsed, "Secondary", PKG, 50, true).setAuthority(authority);
+        // Syncable: Android registers its free authority on a non-syncable copy.
+        ParsedProviderImpl partial = addProvider(parsed, "Partial", PKG, 10, true);
+        partial.setAuthority(authority + ";" + PKG + ".partial");
+        partial.setSyncable(true);
+        addProvider(parsed, "Independent", PKG, 5, true);
+        ParsedProviderImpl syncable = addProvider(parsed, "Syncable", PKG, 4, true);
+        syncable.setAuthority(PKG + ".sync;" + PKG + ".sync.alias");
+        syncable.setSyncable(true);
+        ApkPackage pkg = packageFor(parsed);
+        PackageManagerService pm = (PackageManagerService) construct(PackageManagerService.class,
+                new Class<?>[] { Collection.class, boolean.class }, List.of(pkg), false);
+        ActivityTaskManagerService atm = (ActivityTaskManagerService) construct(
+                ActivityTaskManagerService.class, new Class<?>[] { PackageManagerService.class }, pm);
+        Class<?> cpType = Class.forName("com.gesher.server.ContentProviders");
+        Object providers = construct(cpType,
+                new Class<?>[] { PackageManagerService.class, ActivityTaskManagerService.class }, pm, atm);
+        Class<?> processType = Class.forName("com.gesher.server.ActivityTaskManagerService$ProcessRecord");
+        var onInstall = new java.util.concurrent.atomic.AtomicReference<java.util.function.Consumer<ProviderInfo>>();
+        IApplicationThread thread = new IApplicationThread.Default() {
+            private final IBinder binder = new Binder();
+            @Override public IBinder asBinder() { return binder; }
+            @Override public void scheduleInstallProvider(ProviderInfo info) { onInstall.get().accept(info); }
+        };
+        Object process;
+        long oldId = Binder.clearCallingIdentity();
+        try {
+            Binder.restoreCallingIdentity(((long) UID << 32) | 912346L);
+            process = construct(processType,
+                    new Class<?>[] { ActivityTaskManagerService.class, int.class, IApplicationThread.class },
+                    atm, 912346, thread);
+        } finally {
+            Binder.restoreCallingIdentity(oldId);
+        }
+        method(ActivityTaskManagerService.class, "assignPackage",
+                processType, String.class, String.class).invoke(atm, process, PKG, PKG);
+        synchronized (atm) {
+            ((List<Object>) field(ActivityTaskManagerService.class, "mProcesses").get(atm)).add(process);
+        }
+
+        ApplicationInfo ai = pm.getApplicationInfo(PKG, 0, 0);
+        List<ProviderInfo> bound = (List<ProviderInfo>) method(cpType, "providersFor", processType,
+                ApplicationInfo.class).invoke(providers, process, ai);
+        require(names(bound).equals(List.of(PKG + ".Independent", PKG + ".Syncable", PKG + ".Primary")),
+                "bindApplication providers for a shared authority: " + names(bound));
+        ProviderInfo primary = named(bound, "Primary");
+        require(authority.equals(primary.authority), "First declaration lost its authority");
+        require((PKG + ".sync").equals(named(bound, "Syncable").authority),
+                "Syncable class record was bound with its separate alias");
+        ProviderInfo secondary = pm.getProviderInfo(new ComponentName(PKG, PKG + ".Secondary"), 0, 0);
+        require(secondary != null && secondary.authority == null,
+                "Skipped declaration is not a registered component without an authority");
+
+        Method publish = method(cpType, "publishContentProviders", processType, List.class);
+        List<ContentProviderHolder> holders = new ArrayList<>();
+        for (ProviderInfo info : bound) holders.add(holder(info));
+        publish.invoke(providers, process, holders);
+        Map<String, ContentProviderHolder> published =
+                (Map<String, ContentProviderHolder>) field(cpType, "mPublished").get(providers);
+        require(published.get(authority) != null && (PKG + ".Primary").equals(published.get(authority).info.name),
+                "Registered provider was not published for its authority");
+        require(published.get(PKG + ".partial") == null,
+                "Alias-only provider was published without an explicit request");
+        require(published.get(PKG + ".Independent") != null, "Unrelated provider was not published");
+
+        // A provider that was never bound has no admission; Android ignores its publication.
+        ProviderInfo forged = new ProviderInfo(primary);
+        forged.name = PKG + ".Secondary";
+        publish.invoke(providers, process, List.of(holder(forged)));
+        require((PKG + ".Primary").equals(published.get(authority).info.name),
+                "Skipped declaration replaced the registered provider");
+
+        Method acquire = method(cpType, "getContentProvider", processType, String.class, String.class);
+        ContentProviderHolder acquired = (ContentProviderHolder) acquire.invoke(providers, null, null, authority);
+        require(acquired != null && (PKG + ".Primary").equals(acquired.info.name)
+                        && acquired.provider == published.get(authority).provider,
+                "Authority acquisition did not reach the registered provider");
+        ContentProviderHolder syncAlias = (ContentProviderHolder) acquire.invoke(
+                providers, null, null, PKG + ".sync.alias");
+        require(syncAlias != null && syncAlias.provider == published.get(PKG + ".sync").provider
+                        && syncAlias.info.isSyncable && (PKG + ".sync").equals(syncAlias.info.authority),
+                "Syncable alias did not reuse the already published class record");
+
+        String partialAuthority = PKG + ".partial";
+        ContentProviderHolder local = (ContentProviderHolder) acquire.invoke(
+                providers, process, PKG, partialAuthority);
+        require(local != null && local.mLocal && partialAuthority.equals(local.info.authority),
+                "Explicit local acquisition did not offer the alias-only provider");
+        field(processType, "ready").setBoolean(process, true);
+        onInstall.set(info -> {
+            require(partialAuthority.equals(info.authority) && !info.isSyncable,
+                    "Explicit installation received incorrect alias metadata");
+            try { publish.invoke(providers, process, List.of(holder(info))); }
+            catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+        });
+        ContentProviderHolder remote = (ContentProviderHolder) acquire.invoke(
+                providers, null, null, partialAuthority);
+        require(remote != null && (PKG + ".Partial").equals(remote.info.name)
+                        && remote.provider == published.get(partialAuthority).provider,
+                "Explicit remote acquisition failed after local alias-only acquisition");
+        System.out.println("Provider same-package authority contracts passed");
+    }
+
+    private static ContentProviderHolder holder(ProviderInfo info) {
+        ContentProviderHolder holder = new ContentProviderHolder(new ProviderInfo(info));
+        holder.info.applicationInfo = new ApplicationInfo(info.applicationInfo);
+        Binder binder = new Binder("android.content.IContentProvider");
+        holder.provider = (IContentProvider) Proxy.newProxyInstance(
+                IContentProvider.class.getClassLoader(), new Class<?>[] { IContentProvider.class },
+                (p, m, a) -> m.getName().equals("asBinder") ? binder : null);
+        return holder;
     }
 
     public static void main(String[] args) throws Exception {

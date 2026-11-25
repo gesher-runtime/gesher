@@ -80,6 +80,10 @@ static int PosixDelete(const std::wstring&, bool) {
   destination_exists = false;
   return 0;
 }
+// Gesher's ELF loader as /system/bin/linker64 is not part of this fixture.
+namespace system_linker {
+static int RefuseChange(const char*) { return 0; }
+}  // namespace system_linker
 }
 static bool SameFile(HANDLE, const std::wstring&) { return same; }
 static DWORD AttributesNoFollow(const std::wstring&, bool* link) {

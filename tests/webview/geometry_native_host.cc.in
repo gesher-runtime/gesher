@@ -1,0 +1,90 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Exact JNI decoder; JNI array access and Host submission are declared adapters.
+// Frames come from executed production Java geometry, not hand-copied records.
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <vector>
+
+using jint = int32_t;
+using jsize = int32_t;
+using jlong = int64_t;
+using jboolean = unsigned char;
+using jclass = void*;
+using jintArray = std::vector<jint>*;
+using HWND = intptr_t;
+constexpr jboolean JNI_TRUE = 1;
+#define JNICALL
+
+static int checks;
+static void Check(bool condition) {
+  ++checks;
+  if (!condition) { std::cerr << "geometry JNI check " << checks << " failed\n"; std::exit(1); }
+}
+struct JNIEnv {
+  int copies = 0;
+  jsize GetArrayLength(jintArray array) { return static_cast<jsize>(array->size()); }
+  void GetIntArrayRegion(jintArray array, jsize start, jsize length, jint* out) {
+    Check(start >= 0 && length >= 0 && static_cast<size_t>(start + length) <= array->size());
+    std::copy(array->begin() + start, array->begin() + start + length, out);
+    ++copies;
+  }
+};
+struct Rect { int32_t left, top, right, bottom; };
+struct Point { int32_t x, y; };
+struct Host {
+  struct Shape {
+    int32_t kind = 0;
+    Rect rect{};
+    int32_t radius = 0;
+    std::vector<Point> points;
+  };
+  std::vector<int64_t> placement;
+  std::vector<Shape> shapes;
+  void SetBounds(HWND parent, int x, int y, int width, int height, int cx, int cy,
+                 int cw, int ch, bool visible, const std::vector<Shape>& input) {
+    placement = {parent,x,y,width,height,cx,cy,cw,ch,visible ? 1 : 0};
+    shapes = input;
+  }
+};
+static Host host;
+static Host* Get(jlong h) { Check(h == 7); return &host; }
+static HWND Hwnd(jlong value) { return static_cast<HWND>(value); }
+
+@JNI_DECODER@
+
+int main(int argc, char** argv) {
+  Check(argc == 2);
+  std::ifstream input(argv[1]);
+  Check(input.good());
+  int frames = 0;
+  std::vector<int64_t> expected(10);
+  while (input >> expected[0]) {
+    for (size_t i = 1; i < expected.size(); ++i) Check(static_cast<bool>(input >> expected[i]));
+    size_t size = 0;
+    Check(static_cast<bool>(input >> size));
+    std::vector<jint> packed(size);
+    for (jint& value : packed) Check(static_cast<bool>(input >> value));
+    const std::vector<jint> frozen = packed;
+    JNIEnv env;
+    WebView2Host_setBounds(&env, nullptr, 7, expected[0], expected[1], expected[2],
+                          expected[3], expected[4], expected[5], expected[6], expected[7],
+                          expected[8], expected[9], packed.empty() ? nullptr : &packed);
+    Check(host.placement == expected);
+    Check(env.copies == (packed.empty() ? 0 : 1));
+    // The JNI call must have consumed the Java array before returning.
+    std::fill(packed.begin(), packed.end(), -999);
+    std::vector<jint> decoded;
+    for (const Host::Shape& shape : host.shapes) {
+      decoded.insert(decoded.end(), {shape.kind, shape.rect.left, shape.rect.top,
+          shape.rect.right, shape.rect.bottom, shape.radius, static_cast<jint>(shape.points.size())});
+      for (const Point& p : shape.points) decoded.insert(decoded.end(), {p.x,p.y});
+    }
+    Check(decoded == frozen);
+    ++frames;
+  }
+  Check(input.eof() && frames >= 100);
+  std::cout << "Production geometry JNI: " << frames << " Java frames, " << checks << " checks passed\n";
+}

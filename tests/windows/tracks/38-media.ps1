@@ -69,7 +69,7 @@ CheckSounds 'media: the engine''s capture has each tone at its frequency, durati
 # endpoint (CI) and that is said, not a crash.
 $out = & "$Dir/media_probe.exe" wasapi 2>&1 | Out-String
 $code = $LASTEXITCODE
-if ($code -eq 0 -and ($out -match 'wasapi: WASAPI shared mode on .+' -and $out -match 'wasapi: rendered [1-9]\d* frames')) {
+if ($code -eq 0 -and ($out -match 'wasapi: WASAPI shared mode on .+' -and $out -match 'wasapi: rendered [1-9]\d* media frames and [1-9]\d* voice frames')) {
   Write-Host "PASS  media: WASAPI shared mode opens on the default endpoint and renders ($(($out -split "`n")[0].Trim()))"
 } elseif ($code -eq 0 -and $out -match 'wasapi: unavailable: (WASAPI: .+)') {
   Write-Host "PASS  media: WASAPI fails cleanly where there is no audio endpoint ($($Matches[1].Trim()))"
@@ -210,6 +210,10 @@ if (Test-Path "$Dir/mediaapp.apk") {
   Write-Host 'INFO  media: mediaapp.apk not in the build output; its checks skipped'
 }
 
+Check 'media: WASAPI refills the requested group using endpoint padding' {
+  & "$Dir/wasapi_refill_test.exe"
+} @('WASAPI refill contracts passed')
+
 # --- Video (stage 2, ADR 0051): videoapp.apk (tests/apps/videoapp) ---------------------
 # A decoder's I420 frames drawn into a Surface go through compat/media/video/yuv_rgba.h's
 # rows (pairs of pixels, AVX2 where the CPU has it): every Y, U, V gives the reference
@@ -217,6 +221,9 @@ if (Test-Path "$Dir/mediaapp.apk") {
 Check 'media: I420 rows to RGBA give the reference pixel for every Y, U, V and width (generic and AVX2)' {
   & "$Dir/media_yuv_rgba_test.exe"
 } @('generic rows: every Y, U, V gives the reference pixel', 'yuv_rgba_test all passed')
+Check 'media: target-sized retriever pixels match the pinned full-image Skia oracle with bounded row storage' {
+  & "$Dir/media_retriever_pixels_test.exe"
+} @('filtered crop/rotation, config and bounded row storage passed')
 
 # Clips of 2 s at 320x240, red, lime, blue and white for 0.5 s each: each decoded frame's
 # color says which frame it is.
@@ -400,6 +407,10 @@ public static class GesherMediaCapture {
     $global:LASTEXITCODE = $video.Exit
     $video.Out
   } @('VideoTest retriever indexed: 60 frames, [320x240 red, 320x240 lime, 320x240 lime], last 320x240 white, RGB565 true, timed RGB565 true, fallback true 160x120 red, invalid true')
+  Check 'media: retriever filtered nonuniform pixels, rotation, display aspect, BitmapParams and Java Bitmap properties' {
+    $global:LASTEXITCODE = $video.Exit
+    $video.Out
+  } @('VideoTest retriever filtered pixels: 15 rotated/aspect/config cases, every pixel, density, alpha and mutability passed')
   Check 'media: MediaPlayer with video in videoapp.apk: the clip''s H.264 into a TextureView with its AAC audio, the video size, the frames shown, completion, A/V sync (the frame shown matches the audio position within 120 ms); VideoView plays to its end' {
     $global:LASTEXITCODE = $video.Exit
     $video.Out

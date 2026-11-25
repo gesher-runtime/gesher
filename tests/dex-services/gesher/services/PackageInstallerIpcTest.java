@@ -148,6 +148,12 @@ public final class PackageInstallerIpcTest {
         } catch (SecurityException expected) { }
         com.gesher.server.GesherService.Client host = com.gesher.server.GesherService.Client.find();
         require(host != null, "Host control service missing");
+        for (boolean explicit : new boolean[]{false, true}) {
+            try {
+                host.install("untrusted-host-install-probe.apk", explicit);
+                throw new AssertionError("Unattached caller reached host installation (explicit=" + explicit + ")");
+            } catch (SecurityException expected) { }
+        }
         try {
             host.startActivityAndWait(new android.content.Intent().setPackage("android"));
             throw new AssertionError("Unattached caller acquired a host launch receipt");

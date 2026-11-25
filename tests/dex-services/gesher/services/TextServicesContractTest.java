@@ -159,6 +159,7 @@ public final class TextServicesContractTest {
         check(callbacks.get() == 0, "unknown checker creates no fabricated callback or session");
         check(transactions.get() >= 12, "public and raw calls traversed generated Binder dispatch");
         check(TextServicesManager.getInstance() != null, "legacy static manager also constructs");
+        SpellCheckerBindingContractTest.contracts(true);
         System.out.println("TextServicesContractTest all passed: " + checks);
         System.exit(0);
     }

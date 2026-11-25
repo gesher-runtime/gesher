@@ -388,6 +388,7 @@ try {
     Guest 'AccountSecurityTest' @()
     Guest 'AccountSecurityTest' @('standin-storage') 'AccountSecurityTest all passed' 'standin-account-isolation'
     Guest 'AccountSecurityTest' @('authenticator-client', (AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountSecurityTest all passed' 'authenticator-client-delegation'
+    Guest 'AccountSecurityTest' @('previous-name', (AndroidPath $DevsvcApk), (AndroidPath $ProbeApk), (AndroidPath (Join-Path $SigningFixtures '../identity-fixtures'))) 'AccountSecurityTest all passed' 'account-previous-name'
     Guest 'AccountChooserTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountChooserTest all passed:'
     Guest 'AccountVisibilityNotificationTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountVisibilityNotificationTest all passed:'
     Guest 'AccountClientRemovalTest' @((AndroidPath $DevsvcApk), (AndroidPath $ProbeApk)) 'AccountClientRemovalTest all passed:'
@@ -395,6 +396,9 @@ try {
     Guest 'SdkSandboxUnsupportedTest' @() 'SdkSandboxUnsupportedTest all passed:'
     Guest 'NetworkStatsUnavailableTest' @() 'NetworkStatsUnavailableTest all passed:'
     Guest 'GrammaticalInflectionUnavailableTest' @() 'GrammaticalInflectionUnavailableTest all passed:'
+    Guest 'WebViewProviderPackageTest' @() 'WebViewProviderPackageTest all passed:'
+    Guest 'BluetoothBroadcastAttributionTest' @() 'BluetoothBroadcastAttributionTest all passed:'
+    Guest 'UsbServiceContractTest' @() 'UsbServiceContractTest all passed:'
     Guest 'WindowIdTest' @() 'WindowIdTest all passed:'
     Guest 'DynamicShortcutTest' @((AndroidPath (Join-Path $Dir 'orderedbroadcast-source.apk')),
         (AndroidPath (Join-Path $Dir 'orderedbroadcast-target.apk'))) 'DynamicShortcutTest all passed:' -Uid '1000'

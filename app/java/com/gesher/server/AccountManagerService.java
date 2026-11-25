@@ -74,9 +74,19 @@ public final class AccountManagerService extends IAccountManager.Default {
     /** AOSP Session budget, including binding and any login Activity continuation. */
     private static final long AUTHENTICATOR_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(15);
 
+    /**
+     * Before the dedicated field, renameAccount stored the previous name under this user-data
+     * key, where setUserData and addAccountExplicitly extras could also write it. Records
+     * without {@link #PREVIOUS_NAME_RECORD} move it out of user data once, on load.
+     */
+    private static final String LEGACY_PREVIOUS_NAME_KEY = "gesher.previousAccountName";
+    private static final String PREVIOUS_NAME_RECORD = "previousNameField";
+
     /** An account's password and user data. */
     private static final class Entry {
         String owner, ownerIdentity, password;
+        /** Set only by renameAccount; never part of the authenticator's user data. */
+        String previousName;
         long authenticatedAt;
         final Map<String, String> data = new LinkedHashMap<>();
         final Map<String, String> tokens = new LinkedHashMap<>();
@@ -169,6 +179,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 Entry old = item.getValue(), copy = new Entry();
                 copy.owner = old.owner; copy.ownerIdentity = old.ownerIdentity;
                 copy.password = old.password; copy.authenticatedAt = old.authenticatedAt;
+                copy.previousName = old.previousName;
                 copy.data.putAll(old.data); copy.tokens.putAll(old.tokens);
                 copy.visibility.putAll(old.visibility); copy.customTokens.putAll(old.customTokens);
                 for (Map.Entry<String, Set<String>> grant : old.tokenGrants.entrySet()) {
@@ -934,7 +945,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             if (mAccounts.containsKey(renamed)) {
                 error(response, AccountManager.ERROR_CODE_BAD_ARGUMENTS, "Account already exists"); return;
             }
-            beginMutation(); e.data.put("gesher.previousAccountName", account.name);
+            beginMutation(); e.previousName = account.name;
             e.tokens.clear(); e.customTokens.clear();
             mAccounts.remove(account); mAccounts.put(renamed, e); save();
         }
@@ -944,10 +955,22 @@ public final class AccountManagerService extends IAccountManager.Default {
         result.putString(AccountManager.KEY_ACCOUNT_TYPE, renamed.type); reply(response, result);
     }
 
+    /** Android requires no permission or authenticator signature to read a previous name. */
     @Override
-    public synchronized String getPreviousName(Account account) {
-        Entry e = mAccounts.get(account); requireOwner(caller(null), e);
-        return e.data.get("gesher.previousAccountName");
+    public String getPreviousName(Account account) {
+        java.util.Objects.requireNonNull(account, "account cannot be null");
+        return previousName(caller(null), account);
+    }
+
+    /**
+     * Any client that can see the account reads its previous name. An account hidden from
+     * the client is not disclosed here either, as getAccounts and getAccountsByType do not.
+     */
+    private synchronized String previousName(Caller c, Account account) {
+        if (!callerUnchanged(c)) return null;
+        Entry e = mAccounts.get(account);
+        if (e == null || !visible(c, account, e)) return null;
+        return e.previousName;
     }
 
     // --- passwords, tokens and user data -------------------------------------------------
@@ -2119,6 +2142,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     /** Load the protected data only after the store has authenticated it. */
     private void loadProtectedState(Properties p) {
         mUnclaimedLegacy = p.getProperty("unclaimedLegacy");
+        boolean legacyPreviousName = !"1".equals(p.getProperty(PREVIOUS_NAME_RECORD));
         for (int i = 0; i < count(p, "pendingRemoval.count"); i++) {
             String name = p.getProperty("pendingRemoval." + i);
             if (name == null || name.isEmpty()) throw new IllegalStateException("Invalid account removal record");
@@ -2134,6 +2158,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 throw new IllegalStateException("Invalid protected account ownership");
             }
             e.password = p.getProperty(prefix + "password");
+            e.previousName = p.getProperty(prefix + "previousName");
             e.authenticatedAt = Long.parseLong(p.getProperty(prefix + "authenticatedAt", "0"));
             for (int j = 0; j < count(p, prefix + "data.count"); j++) {
                 e.data.put(p.getProperty(prefix + "data." + j + ".key"),
@@ -2161,6 +2186,11 @@ public final class AccountManagerService extends IAccountManager.Default {
                 e.visibility.put(p.getProperty(prefix + "visibility." + j + ".client"),
                         Integer.parseInt(p.getProperty(prefix + "visibility." + j + ".value")));
             }
+            if (legacyPreviousName) {
+                // Records written before the dedicated field kept the name in user data.
+                String legacy = e.data.remove(LEGACY_PREVIOUS_NAME_KEY);
+                if (e.previousName == null) e.previousName = legacy;
+            }
             mAccounts.put(new Account(name, type), e);
         }
     }
@@ -2184,6 +2214,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 p.setProperty(prefix + "ownerIdentity", e.ownerIdentity);
                 p.setProperty(prefix + "authenticatedAt", Long.toString(e.authenticatedAt));
                 if (e.password != null) p.setProperty(prefix + "password", e.password);
+                if (e.previousName != null) p.setProperty(prefix + "previousName", e.previousName);
                 int j = 0;
                 for (Map.Entry<String, String> data : e.data.entrySet()) {
                     p.setProperty(prefix + "data." + j + ".key", data.getKey());
@@ -2215,6 +2246,7 @@ public final class AccountManagerService extends IAccountManager.Default {
                 p.setProperty(prefix + "visibility.count", Integer.toString(j)); i++;
             }
             p.setProperty("count", Integer.toString(i));
+            p.setProperty(PREVIOUS_NAME_RECORD, "1");
             mStoreWriter.write(p);
             mBeforeMutation = null;
         } catch (IOException | RuntimeException e) {

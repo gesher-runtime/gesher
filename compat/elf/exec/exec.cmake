@@ -49,10 +49,23 @@ target_link_libraries(exec3_tls_probe PRIVATE gesher_elf)
 
 add_executable(exec3_binder_ready_probe
   ${CMAKE_SOURCE_DIR}/tests/exec/binder-ready-probe.cc
-  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc)
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
 target_include_directories(exec3_binder_ready_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/framework ${CMAKE_SOURCE_DIR}/compat)
 target_compile_options(exec3_binder_ready_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(exec3_binder_ready_probe PRIVATE advapi32 ole32)
+
+# AppContainer isolation, M1 (ADR 0090): the production launch path in a real
+# AppContainer against a running binderd (tests/windows/sandbox/AppContainerPoc.ps1).
+add_executable(appcontainer_probe
+  ${CMAKE_SOURCE_DIR}/tests/sandbox/appcontainer-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
+target_include_directories(appcontainer_probe PRIVATE
+  ${CMAKE_SOURCE_DIR}/compat/framework ${CMAKE_SOURCE_DIR}/compat)
+target_compile_options(appcontainer_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(appcontainer_probe PRIVATE advapi32 ole32)
 
 add_executable(exec3_property_host_probe ${CMAKE_SOURCE_DIR}/tests/exec/property-host-probe.cc)
 target_compile_options(exec3_property_host_probe PRIVATE -Wall -Wextra -Werror)

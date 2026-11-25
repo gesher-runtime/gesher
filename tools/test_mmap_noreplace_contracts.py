@@ -47,12 +47,13 @@ def main() -> None:
               else (args.source or ROOT / SOURCE).read_text())
     types = "\n\n".join(block(source, signature) + ";" for signature in (
         "enum class Kind : uint8_t", "enum class Origin : uint8_t",
-        "struct Region {", "struct State {",
+        "struct Region {", "struct State {", "struct SavedPage {",
     ))
     signatures = [
         "size_t RoundUp(size_t x, size_t n)",
         "DWORD PageProtection(int prot)",
         "DWORD AnonymousCommit(int prot)",
+        "DWORD CopyOnWrite(DWORD protection)",
         "std::map<uintptr_t, Region>::iterator FindRegion(State& s, uintptr_t addr)",
         "std::map<uintptr_t, Region>::iterator AddRegion(State& s, uintptr_t start, size_t size,",
         ("void ForgetLocks(State& s, uintptr_t begin, uintptr_t end)"
@@ -67,6 +68,8 @@ def main() -> None:
     if "bool RangeIsHole(" in source:
         signatures.append("bool RangeIsHole(State& s, uintptr_t begin, uintptr_t end)")
     signatures += [
+        "bool MapViewInto(HANDLE mapping, uintptr_t start, size_t size, uint64_t offset, ULONG protection)",
+        "std::map<uintptr_t, Region>::iterator PunchView(State& s, std::map<uintptr_t, Region>::iterator it,",
         "std::map<uintptr_t, Region>::iterator Punch(State& s, uintptr_t begin, uintptr_t end)",
         "bool FillAnonymous(std::map<uintptr_t, Region>::iterator it, int prot, Origin origin)",
         "void* GroupAnonymous(State& s, void* start, size_t len, int prot, int flags)",
@@ -78,7 +81,14 @@ def main() -> None:
             "int Unmap(State& s, uintptr_t begin, uintptr_t end)",
         ]
     signatures.append("int munmap(void* addr, size_t length)")
-    production = "\n\n".join(block(source, signature) for signature in signatures)
+    production = "\n\n".join(
+        block(source, signature).replace(
+            "std::map<uintptr_t, Region>::iterator PunchView(",
+            "std::map<uintptr_t, Region>::iterator PunchViewExtracted(", 1
+        ) if signature.startswith("std::map<uintptr_t, Region>::iterator PunchView(")
+        else block(source, signature)
+        for signature in signatures
+    )
     template = (ROOT / "tests/mman/noreplace_mapping_host.cc.in").read_text()
     for marker, code in [("@TYPES@", types), ("@PRODUCTION@", production)]:
         if template.count(marker) != 1:

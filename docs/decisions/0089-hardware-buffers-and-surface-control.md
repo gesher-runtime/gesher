@@ -146,8 +146,13 @@ them.
   Binder/SCM_RIGHTS transfer; ordinary readable files or pipes are rejected as
   EGL fence inputs. Transfer snapshots retain their HANDLE until the broker
   acknowledges its duplicate. The event is not a `/dev/null` stand-in: its
-  one-way signaled state records the actual preceding GPU completion. Native
-  `sync_file` merge/timestamp ioctls remain unsupported. Reusable syncs stay
+  one-way signaled state records the actual preceding GPU completion.
+  `SYNC_IOC_FILE_INFO` (libsync's `sync_file_info`) describes such a
+  descriptor as one signaled fence whose timestamp is the `CLOCK_MONOTONIC`
+  time the process first saw the completion (the thread-pool wait fires as
+  the event is signaled; an fd received from another process reports when it
+  arrived, never earlier than the completion). `SYNC_IOC_MERGE` remains
+  unsupported (`ENOTTY`, so `sync_merge` fails). Reusable syncs stay
   ANGLE's. Native export still costs CPU/GPU overlap; this change removes the
   earlier wait at creation and the wait while holding the global GL mutex.
 

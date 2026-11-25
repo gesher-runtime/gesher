@@ -116,6 +116,21 @@ try{
         $results+=[pscustomobject]@{name=$case.name;osCode=$case.code;cliExitCode=$result.exitCode;cliFinished=$result.finished;liveSibling=$true;expectedBaselineFailure=[bool]$ExpectBaselineFailure}
         Write-Host "PASS named-process CLI $($case.name) baseline=$ExpectBaselineFailure"
     }
+    if (-not $ExpectBaselineFailure) {
+        $offset = (ReadLog $appLog).Length
+        $result = Launcher 'exit-before-idle' @('launch', 'com.gesher.namedprocesslauncher',
+            '--activity', '.ExitBeforeIdleActivity', '--headless', '--keep-task', '--detach') 20000
+        $segment = (ReadLog $appLog).Substring($offset)
+        if (-not $segment.Contains('named-launch: exiting before idle')) {
+            throw 'The early-exit Activity did not reach onCreate'
+        }
+        if (-not $result.finished -or $result.exitCode -ne 1 -or
+            -not $result.text.Contains('the system server did not start')) {
+            throw 'Detached CLI did not reject the process exit before activity idle'
+        }
+        $results += [pscustomobject]@{name='exit-before-idle'; cliExitCode=$result.exitCode; cliFinished=$result.finished}
+        Write-Host 'PASS named-process CLI rejects a detached launch that exits before idle'
+    }
     # The launcher and the system server it started run nterp, not the switch interpreter (ADR 0081).
     $serverLog=ReadLog (Join-Path $logs 'system_server.log')
     if(-not $install.text.Contains('gesher: execution: nterp') -or $install.text.Contains('gesher: execution: switch interpreter') -or
@@ -128,7 +143,7 @@ try{
             if(-not (ReadLog $_.FullName).Contains($expectedBoot)){throw 'Child did not load complete images'}
         }
     }
-    [pscustomobject]@{scope='Fresh headless ordinary APK: requested named worker exits while newer default sibling lives; exact0/17/0x80000000 OS status';expectedBaselineFailure=[bool]$ExpectBaselineFailure;requireBootImages=[bool]$RequireBootImages;results=$results;javaSha256=(Get-FileHash -LiteralPath (Join-Path $RuntimeDir 'gesher-app.jar') -Algorithm SHA256).Hash.ToLowerInvariant();apkSha256=(Get-FileHash -LiteralPath $Apk -Algorithm SHA256).Hash.ToLowerInvariant()}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $run 'validation.json') -Encoding UTF8
+    [pscustomobject]@{scope='Fresh headless ordinary APK: exact 0/17/0x80000000 OS status with a live sibling and detached launch rejection before activity idle';expectedBaselineFailure=[bool]$ExpectBaselineFailure;requireBootImages=[bool]$RequireBootImages;results=$results;javaSha256=(Get-FileHash -LiteralPath (Join-Path $RuntimeDir 'gesher-app.jar') -Algorithm SHA256).Hash.ToLowerInvariant();apkSha256=(Get-FileHash -LiteralPath $Apk -Algorithm SHA256).Hash.ToLowerInvariant()}|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $run 'validation.json') -Encoding UTF8
     Write-Host "Named-process CLI evidence: $run"
 }finally{
     if($started){$null=Launcher 'shutdown' @('shutdown')}

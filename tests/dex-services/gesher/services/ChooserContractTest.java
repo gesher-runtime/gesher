@@ -3,6 +3,7 @@ package gesher.services;
 
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.IAppTask;
 import android.app.IActivityClientController;
 import android.app.IActivityManager;
 import android.app.IActivityTaskManager;
@@ -308,6 +309,9 @@ public final class ChooserContractTest {
         Intent received = (Intent)get(launched, "intent");
         check("text/plain".equals(received.getType()) && uri.equals(received.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class)),
                 "Queued share changed after the caller mutated its original intent");
+        check(received.getClipData() != null && received.getClipData().getItemCount() == 1
+                && uri.equals(received.getClipData().getItemAt(0).getUri()),
+                "Binder-delivered share stream was not migrated to ClipData");
         check(h.access(h.target2, uri, 1) && !h.access(h.target2, uri, 2) && !h.access(h.target1, uri, 1),
                 "Selected-target URI grant was absent, broadened, or given to an unselected app");
         long identity = Binder.clearCallingIdentity();
@@ -472,6 +476,7 @@ public final class ChooserContractTest {
         final AtomicInteger fullTypeCalls = new AtomicInteger(), anonymousTypeCalls = new AtomicInteger();
         volatile String answer = "text/plain", anonymousAnswer;
         volatile boolean failure, heldConnection;
+        Checked beforeType;
         MimeFixture(Harness h) throws Exception { this(h, OWNER); }
         MimeFixture(Harness h, String packageName) throws Exception {
             this.h = h;
@@ -533,6 +538,7 @@ public final class ChooserContractTest {
                 }
                 check(!Thread.holdsLock(h.pm) && !Thread.holdsLock(get(h.tasks, "mLaunchLock")),
                         "Provider callback ran under a package or activity-launch monitor");
+                if (!anonymous && beforeType != null) beforeType.run();
                 // Observe the boundary, then execute the actual framework transport's
                 // MIME permission checks, callback protocol and exception conversion.
                 try { return method.invoke(transport, args); }
@@ -873,9 +879,44 @@ public final class ChooserContractTest {
         } finally { h.ui.choose(-1); secondUi.choose(-1); h.settled(); }
     }
 
+    private static void explicitTaskSelection() throws Exception {
+        for (boolean removeTask : new boolean[]{false, true}) {
+            Harness h = new Harness();
+            synchronized (h.tasks) {
+                // The harness installs its root directly. Publish the same owned
+                // task record as a real root launch before exercising IAppTask.
+                invoke(h.tasks, "recordAppTaskLocked", new Class<?>[]{h.recordType, boolean.class}, h.root, false);
+            }
+            IAppTask[] task = new IAppTask[1];
+            h.asOwner(() -> task[0] = IAppTask.Stub.asInterface(h.api.getAppTasks(OWNER).get(0)));
+            try (MimeFixture provider = new MimeFixture(h)) {
+                Uri uri = Uri.parse("content://" + OWNER + ".files/task");
+                Intent chooser = Intent.createChooser(new Intent(Intent.ACTION_SEND).setData(uri), "Owned task");
+                if (removeTask) provider.beforeType = () -> h.asOwner(task[0]::finishAndRemoveTask);
+                int expected = removeTask ? ActivityManager.START_CANCELED : ActivityManager.START_SUCCESS;
+                h.asOwner(() -> check(task[0].startActivity(h.owner.asBinder(), OWNER, null, chooser, null, null)
+                        == expected, "Chooser did not respect its AppTask after MIME lookup"));
+                check(provider.queries.get() == 1 && provider.released(),
+                        "AppTask chooser did not release its real MIME provider connection");
+                if (removeTask) {
+                    check(h.ui.shown.getCount() == 1 && h.pending() == 0
+                                    && h.launched(SECOND + ".Share") == null,
+                            "A stale chooser was published after its AppTask was removed");
+                } else {
+                    h.ui.displayed();
+                    h.ui.choose(1);
+                    h.settled();
+                    Object selected = h.launched(SECOND + ".Share");
+                    check(selected != null && (int)get(selected, "taskId") == (int)get(h.root, "taskId"),
+                            "Chooser did not launch the selection in its owned task");
+                }
+            } finally { h.ui.choose(-1); h.settled(); }
+        }
+    }
+
     public static int run(boolean binder) throws Exception {
         realBinder = binder; checks = 0;
-        idleOwnership(); detachedOverlap();
+        idleOwnership(); detachedOverlap(); explicitTaskSelection();
         validation(); parcelledSharePreparation(); selectionAndGrants(); cancellation(); initialsAndSingle(); sharedUid(); selectors(); providerTypes();
         retirement(); flagsAndSuspension(); callback();
         return checks;

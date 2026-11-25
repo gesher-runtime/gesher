@@ -19,6 +19,8 @@
 #include "../player/decoder.h"
 #include "../player/extractor.h"
 #include "../video/video_decoder.h"
+#include "../video/retriever_pixels.h"
+#include "../surface/retriever_bitmap.h"
 #include "jni_util.h"
 #include "java_data_source.h"
 #include "receiver_lease.h"
@@ -295,16 +297,6 @@ jobject RetrieverBitmapConfig(JNIEnv* env, jobject params, jfieldID* actual_fiel
   return env->GetStaticObjectField(config, argb_field);
 }
 
-// Clockwise rotation from coded pixels to presentation orientation.
-size_t RetrieverPixelIndex(int x, int y, int w, int h, int rotation) {
-  switch (rotation) {
-    case 90: return static_cast<size_t>(x) * h + (h - 1 - y);
-    case 180: return static_cast<size_t>(h - 1 - y) * w + (w - 1 - x);
-    case 270: return static_cast<size_t>(w - 1 - x) * h + y;
-    default: return static_cast<size_t>(y) * w + x;
-  }
-}
-
 // FrameDecoder::allocVideoFrame uses track presentation metadata after the
 // decoder's crop. A valid track crop overrides SAR and explicit display size.
 bool RetrieverDisplaySize(const VideoFrame& frame, const Format& track, int32_t* width,
@@ -339,62 +331,12 @@ jobject CreateRetrieverBitmap(JNIEnv* env, const VideoFrame& frame, jobject conf
     std::swap(bitmap_w, bitmap_h);
     std::swap(display_w, display_h);
   }
-  const size_t pixel_count = static_cast<size_t>(w) * h;
-  if (pixel_count > static_cast<size_t>(std::numeric_limits<jsize>::max()) / sizeof(jint)) {
+  if (!RetrieverTargetSize(display_w, display_h, dst_w, dst_h, &dst_w, &dst_h)) {
+    jniThrow(env, "java/lang/IllegalArgumentException", "Invalid bitmap display dimensions");
     return nullptr;
   }
-  if (env->PushLocalFrame(4) < 0) {
-    env->ExceptionClear();
-    return nullptr;
-  }
-  const jsize length = static_cast<jsize>(pixel_count);
-  jintArray colors = env->NewIntArray(length);
-  if (colors == nullptr) {
-    if (env->ExceptionCheck()) env->ExceptionClear();
-    return env->PopLocalFrame(nullptr);
-  }
-  std::unique_ptr<uint32_t[]> rgba(new (std::nothrow) uint32_t[pixel_count]);
-  std::unique_ptr<jint[]> argb(new (std::nothrow) jint[pixel_count]);
-  // Scratch storage belongs to the initial bitmap allocation. Like the Android
-  // bitmap allocation failure below, it produces a null frame without an exception.
-  if (rgba == nullptr || argb == nullptr) return env->PopLocalFrame(nullptr);
-  I420ToRgba(frame, rgba.get(), w, w, h);
-  for (int y = 0; y < h; ++y) {
-    for (int x = 0; x < w; ++x) {
-      const uint32_t p = rgba[static_cast<size_t>(y) * w + x];
-      argb[RetrieverPixelIndex(x, y, w, h, rotation)] = static_cast<jint>(
-          0xff000000u | ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu));
-    }
-  }
-  env->SetIntArrayRegion(colors, 0, length, argb.get());
-  if (env->ExceptionCheck()) return env->PopLocalFrame(nullptr);
-  jclass bitmap = env->FindClass("android/graphics/Bitmap");
-  if (bitmap == nullptr) return env->PopLocalFrame(nullptr);
-  jmethodID create = env->GetStaticMethodID(
-      bitmap, "createBitmap", "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
-  if (create == nullptr) return env->PopLocalFrame(nullptr);
-  jobject result = env->CallStaticObjectMethod(bitmap, create, colors, bitmap_w, bitmap_h, config);
-  if (result == nullptr) {
-    // AOSP clears failure to allocate the decoded frame's initial Java bitmap.
-    if (env->ExceptionCheck()) env->ExceptionClear();
-    return env->PopLocalFrame(nullptr);
-  }
-  if (dst_w <= 0 || dst_h <= 0) {
-    dst_w = display_w;
-    dst_h = display_h;
-  } else {
-    const float factor = std::min(static_cast<float>(dst_w) / display_w,
-                                  static_cast<float>(dst_h) / display_h);
-    dst_w = std::round(display_w * factor);
-    dst_h = std::round(display_h * factor);
-  }
-  if (dst_w != bitmap_w || dst_h != bitmap_h) {
-    jmethodID scale = env->GetStaticMethodID(
-        bitmap, "createScaledBitmap", "(Landroid/graphics/Bitmap;IIZ)Landroid/graphics/Bitmap;");
-    if (scale == nullptr) return env->PopLocalFrame(nullptr);
-    result = env->CallStaticObjectMethod(bitmap, scale, result, dst_w, dst_h, true);
-  }
-  return env->PopLocalFrame(result);
+  return AllocateRetrieverBitmap(env, frame, config, dst_w, dst_h, rotation,
+                                  dst_w != bitmap_w || dst_h != bitmap_h);
 }
 
 jobject JNICALL MMR_getFrameAtTime(JNIEnv* env, jobject thiz, jlong time_us, jint option, jint dst_w,

@@ -11,8 +11,8 @@
 // writes it); a drive-less "/system/..." would be the current drive's root.
 //
 // WrapSystemCacerts wraps the path-taking libc entries in the shim's table
-// (stat/lstat/fstatat/statfs/statvfs/access/faccessat/open/openat/fopen/
-// freopen/opendir/realpath, and their 64/_2 aliases) so that exactly those two
+// (stat/lstat/fstatat/statfs/statvfs/access/faccessat/open/openat/creat/
+// fopen/freopen/opendir/realpath, and their 64/_2 aliases) so that exactly those two
 // names, and the names under them, resolve to:
 //
 //   $ANDROID_ROOT/etc/security/cacerts   when that directory exists;
@@ -207,7 +207,7 @@ int BIONIC_SYSV PathBuffer(const char* path, void* buffer) {
   GESHER_CACERTS_MAPPED(path, -1);
   return reinterpret_cast<int(BIONIC_SYSV*)(const char*, void*)>(Original<N>::fn)(q, buffer);
 }
-// access.
+// access, creat, creat64.
 template <int N>
 int BIONIC_SYSV PathInt(const char* path, int mode) {
   GESHER_CACERTS_MAPPED(path, -1);
@@ -300,6 +300,8 @@ void WrapSystemCacerts(SymbolTable& t) {
   GESHER_CACERTS_WRAP(21, "freopen64", PathModeStream);
   GESHER_CACERTS_WRAP(22, "opendir", PathOnly);
   GESHER_CACERTS_WRAP(23, "realpath", PathResolved);
+  GESHER_CACERTS_WRAP(24, "creat", PathInt);
+  GESHER_CACERTS_WRAP(25, "creat64", PathInt);
 #undef GESHER_CACERTS_WRAP
 }
 

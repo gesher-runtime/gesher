@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +46,16 @@ def main() -> int:
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, timeout=120)
-        return subprocess.run([str(binary)], timeout=30).returncode
+        records = subprocess.run([str(binary)], timeout=30).returncode
+    # Keep the original native-record corpus and run the whole production local
+    # write/ownership path through the same maintained artifact-preflight gate.
+    command = [sys.executable, str(ROOT / "tools/test_inotify_write_routing.py"), "--cxx", args.cxx]
+    if args.source_ref:
+        command += ["--source-ref", args.source_ref]
+    if args.sanitize:
+        command += ["--sanitize"]
+    routing = subprocess.run(command, timeout=300).returncode
+    return int(bool(records or routing))
 
 
 if __name__ == "__main__":

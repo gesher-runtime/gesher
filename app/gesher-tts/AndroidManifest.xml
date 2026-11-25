@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gesher Text-to-speech (docs/tts.md): the device's TextToSpeechService engine, whose
+     voices are the PC's Windows voices (Windows.Media.SpeechSynthesis, through
+     com.gesher.server.WindowsSpeech). The device installs it at its start when Windows
+     has at least one voice, and removes it when there are none, as a device without
+     voices has no engine. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.tts"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <application
+        android:supportsRtl="true"
+        android:label="@string/app_name">
+        <service
+            android:name=".WindowsTtsService"
+            android:label="@string/app_name"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.TTS_SERVICE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech.tts"
+                android:resource="@xml/tts_engine" />
+        </service>
+        <!-- TextToSpeech.Engine.ACTION_CHECK_TTS_DATA: the installed voices. No
+             INSTALL_TTS_DATA: Windows installs its voices (Settings, Time & language). -->
+        <activity
+            android:name=".CheckVoiceDataActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.speech.tts.engine.CHECK_TTS_DATA" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

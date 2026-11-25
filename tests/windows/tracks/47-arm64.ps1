@@ -13,6 +13,16 @@
 # ($Dir). Absolute paths: $Dir may be relative to the starting directory.
 $a64 = (Resolve-Path $Dir).Path
 
+# Ends what a run left behind: processes whose parent it was, and theirs (a
+# guest fork's children outlive a parent that is killed, as orphans do on
+# Linux; the test job must not keep them).
+function A64StopDescendants([int] $ProcessId) {
+  foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue)) {
+    A64StopDescendants $child.ProcessId
+    Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
   $out = Join-Path $env:RUNNER_TEMP "a64-$([guid]::NewGuid()).out"
   $err = "$out.err"
@@ -20,6 +30,7 @@ function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
   $p = Start-Process -FilePath $Exe -ArgumentList $quoted -NoNewWindow -PassThru `
     -RedirectStandardOutput $out -RedirectStandardError $err
   if (-not $p.WaitForExit($Seconds * 1000)) {
+    A64StopDescendants $p.Id
     $p.Kill()
     $p.WaitForExit()
     Write-Output "TIMEOUT after $Seconds s: $Exe $($Arguments -join ' ')"
@@ -27,6 +38,7 @@ function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
   } else {
     $global:LASTEXITCODE = $p.ExitCode
   }
+  A64StopDescendants $p.Id
   Get-Content $out -ErrorAction SilentlyContinue
   Get-Content $err -ErrorAction SilentlyContinue
   Remove-Item $out, $err -ErrorAction SilentlyContinue
@@ -88,7 +100,14 @@ Check 'arm64: TEXTREL pages relocate before guest constructors and selftest' {
 Check 'arm64: an arm64-v8a libc/pthread .so runs its checks through the shim' {
   A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/libc_test_arm64.so"), (NoDrive "$a64"))
 } @('libc_test: all passed', 'sleep contracts: complete', 'arm64_elf_test all passed',
-    'Bionic realtime range contracts: all passed')
+    'Bionic realtime range contracts: all passed', 'Bionic tgkill contracts: all passed')
+
+# bionic's libstdc++.so from a translated guest (tests/native/libstdcxx_test.cc):
+# dlopen/dlsym of every export, operator new/delete crossing malloc/free, and
+# the static-local guard protocol with threads racing on one guard.
+Check 'arm64: bionic libstdc++.so (new/delete, __cxa_guard_*) through the shim' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/libstdcxx_test_arm64.so"))
+} @('libstdcxx: all passed', 'arm64_elf_test all passed')
 
 # The guest-ABI checks (tests/native/arm64_abi_test.c): ELF TLS through
 # TLSDESC in several threads, the stack protector, setjmp/longjmp, struct stat
@@ -100,6 +119,47 @@ Check 'arm64: guest ABI (TLS, stack protector, setjmp, stat, epoll, syscall, ato
 } @('arm64_abi_test: all passed', 'arm64_elf_test all passed', 'INFO  arm64 perf: compiled C kernel',
     'Bionic setjmp contracts: all passed')
 
+# IC IALLU is an EL1 instruction, UNDEFINED at EL0: guest code executing it
+# gets SIGILL, as on a device. The guest reads the mode with getenv, which the
+# shim answers from this process's environment, inherited by A64Run's process.
+$env:GESHER_ARM64_ABI_CRASH = 'ic-iallu'
+try {
+  A64Crash 'arm64: guest IC IALLU (EL1 only) is a SIGILL crash report' "$a64/arm64_elf_test.exe" `
+    @((NoDrive "$a64/arm64_abi_test.so"), (NoDrive "$a64")) @('Fatal signal 4 (SIGILL)') 132
+} finally {
+  Remove-Item Env:GESHER_ARM64_ABI_CRASH -ErrorAction SilentlyContinue
+}
+
+# ADR 0086: the arm64 stand-in libart.so and libdexfile.so for NetEase Yidun's
+# libnesec.so, loaded by LoadArtShimArm64 (their imports bound to recording
+# host fakes, Runtime::instance_ set) and run by the translator: the OpenCommon
+# entry as ART calls it and OpenCommon as a device calls it (X8, stack
+# arguments), the Runtime functions and LoadClass, each argument where the
+# fake reads it; a load that failed after libdexfile.so retries without
+# loading it twice; the imports are visible to nothing else.
+Check 'arm64: the stand-in libart.so/libdexfile.so run translated with each argument in place' {
+  $artScratch = Join-Path $env:RUNNER_TEMP "gesher-art-shim-arm64-$([guid]::NewGuid())"
+  try {
+    A64Run "$a64/art_shim_arm64_test.exe" @((NoDrive $artScratch)) 120
+  } finally {
+    Remove-Item -LiteralPath $artScratch -Recurse -Force -ErrorAction SilentlyContinue
+  }
+} @('PASS  ... with X8 first and each argument in its place',
+    'PASS  the retry loaded each object exactly once', 'art_shim_arm64_test all passed')
+
+# android_dlopen_ext from guest code (tests/native/dlext_test.c): the guest's
+# android_dlextinfo reaches the loader as it is; RESERVED_ADDRESS loads an
+# arm64-v8a library at the start of the guest's reservation (its ELF header is
+# readable there, as Chrome reads it) or fails without touching it.
+Check 'arm64: android_dlopen_ext reserved address space, hints, dlclose and flag checks' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/dlext-arm64/dlext_test.so"), (NoDrive "$a64/dlext-arm64"))
+} @('dlext_test: all passed', 'gesher_selftest() == 0', 'arm64_elf_test all passed')
+$env:GESHER_MMAP_NO_PLACEHOLDERS = '1'
+Check 'arm64: android_dlopen_ext with copied segments (no placeholder mappings)' {
+  A64Run "$a64/arm64_elf_test.exe" @((NoDrive "$a64/dlext-arm64/dlext_test.so"), (NoDrive "$a64/dlext-arm64"))
+} @('dlext_test: all passed', 'gesher_selftest() == 0', 'arm64_elf_test all passed')
+Remove-Item Env:GESHER_MMAP_NO_PLACEHOLDERS
+
 # Step 3/4 (guest JNI): dalvikvm runs gesher.Arm64Jni, whose System.load of an
 # arm64-v8a .so goes through ART's host libnativeloader path to the ELF loader,
 # the translator and the JNI bridge's guest proxy tables: JNI_OnLoad,
@@ -109,7 +169,8 @@ Check 'arm64: System.load of an arm64-v8a .so; JNI both ways, Call*MethodV, nest
   A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
     '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/arm64-jni.dex"), 'gesher.Arm64Jni',
     (NoDrive (Resolve-Path "$Dir/jni_test_arm64.so").Path))
-} @('JNI_OnLoad ran: ok', 'Arm64Jni all passed')
+} @('JNI_OnLoad ran: ok', 'GetEnv guest boundary: all passed',
+    'GetEnv attach/detach: all passed', 'Arm64Jni all passed')
 
 # arm64-v8a ELF executables (the exec track's launcher, ADR 0035): the exec
 # test program built for arm64 (arm64.yml, $Dir/arm64-exec) runs in
@@ -151,6 +212,63 @@ if (Test-Path "$a64exec/libexectest.so") {
 } else {
   Write-Host 'FAIL  arm64: the arm64 executable (arm64-exec/libexectest.so) is missing'
   $failed++
+}
+
+# fork/vfork/clone/wait4/exit in guest code (ADR 0092): real child processes
+# made with RtlCloneUserProcess. Exit codes, copy-on-write, a pipe, __WCLONE/
+# __WALL/WNOHANG, signals, pthread_atfork, Ijiami's two check shapes (0086),
+# a child that forks, and 120 forks while four threads run translated code.
+Check 'arm64: guest fork, vfork and raw clone make real children; wait4 reports their status' {
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-exec", 'arm64-fork-exec', (NoDrive "$a64/arm64-fork-exec")) 300
+} @('arm64_fork_exec all passed', 'fork + execve: the program''s death by SIGTERM is the child''s',
+    'fork + posix_spawn in the child: it starts the program and waits for it')
+# Forks while other threads hold each system call path's locks (and threads
+# start and leave, holding ntdll's loader lock), signals sent at once, a fork
+# from a library constructor, forks from four threads and nested forks.
+foreach ($forkCase in 'malloc', 'mmap', 'stdio', 'thread', 'env', 'prop', 'dlopen', 'exit', 'epoll') {
+  Check "arm64: fork while three threads use $forkCase (no child or parent hangs)" {
+    A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
+      'contend', '40', $forkCase) 300
+  } @("contend $forkCase", 'hung=0 bad=0 of 40')
+}
+foreach ($forkSignal in '10', '23') {
+  Check "arm64: signal $forkSignal sent right after fork reaches the child's handler" {
+    A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
+      'killrace', '40', $forkSignal) 300
+  } @("handled=40 killed=0 lost=0 of 40")
+}
+Check 'arm64: a library constructor forks; the loader works in both processes' {
+  $env:LD_LIBRARY_PATH = NoDrive $a64
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
+    'ctor', (NoDrive "$a64/libarm64forkctor.so")) 120
+  Remove-Item Env:LD_LIBRARY_PATH
+} @('loader usable after: ok')
+Check 'arm64: a fork while another thread is in a dl_iterate_phdr callback; the child unmaps the reservation' {
+  $env:LD_LIBRARY_PATH = NoDrive $a64
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial',
+    'cbfork', (NoDrive "$a64/libarm64forkctor.so")) 120
+  Remove-Item Env:LD_LIBRARY_PATH
+} @('cbfork: the child unmapped the reservation: ok',
+    'cbfork: forked 100 callbacks deep, the child unmapped the reservation: ok')
+Check 'arm64: four threads fork at once; a chain of nested forks' {
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial', 'multi', '25') 300
+  A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-adversarial", 'arm64-fork-adversarial', 'chain', '8') 300
+} @('multi: 100 of 100 ok', 'chain depth 8: ok')
+# The same fork checks inside ART: dalvikvm loads the arm64 JNI library, and
+# the guest forks while ART's and a Java thread run.
+Check 'arm64: guest fork inside dalvikvm (ART threads running); children compute and exit' {
+  A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+    '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/arm64-fork.dex"), 'gesher.Arm64Fork',
+    (NoDrive (Resolve-Path "$Dir/libarm64fork.so").Path)) 600
+} @('arm64_fork_exec all passed', 'Java thread computed while forking: true', 'Arm64Fork all passed')
+# Forks while Java threads keep starting and leaving: a thread's exit
+# callbacks run under ntdll's loader lock, which the clone waits for.
+foreach ($churnRun in 1..3) {
+  Check "arm64: 200 guest forks inside dalvikvm while four Java threads churn threads (run $churnRun)" {
+    A64Run "$Dir/dalvikvm.exe" @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
+      '-Xint', '-Xusejit:false', '-cp', (NoDrive "$Dir/arm64-fork.dex"), 'gesher.Arm64ForkChurn',
+      (NoDrive (Resolve-Path "$Dir/libarm64fork.so").Path), '4', '200') 600
+  } @('forkLoop n=200 fail=0 hung=0 bad=0', 'Arm64ForkChurn all passed')
 }
 
 # An arm64-only APK through gesher-app: tests/apps/nativeactivity built with

@@ -12,6 +12,16 @@
 #include <thread>
 #include <vector>
 
+// gesher/fork.h (ADR 0092): this fixture never forks, so a thread's key
+// destructors always take the key lock.
+namespace gesher {
+template <typename Lock>
+bool LockUnlessForkHolds(Lock& lock) {
+  lock.lock();
+  return true;
+}
+}  // namespace gesher
+
 namespace gesher::bionic {
 namespace {
 @KEY_STATE_AND_EXIT@
