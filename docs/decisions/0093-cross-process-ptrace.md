@@ -223,9 +223,10 @@ with the description's gate keeping every other Gesher user out:
   `PIPE_BUF` bytes is never split: it waits with nothing pending in the
   kernel, where a stop can take it, and tries again: yields for its first
   64 tries (a few hundred microseconds), then high-resolution
-  waitable-timer waits of 50 us that grow to 1 ms while the wait goes on
-  (`Sleep(1)` lasts a whole timer tick, about 16 ms, and would bound such a
-  writer to a few hundred kilobytes a second).
+  waitable-timer waits of 50 us for the first half millisecond, growing to
+  1 ms until 20 ms have passed, then to 16 ms (`Sleep(1)` lasts a whole
+  timer tick, about 16 ms, and would bound such a writer to a few hundred
+  kilobytes a second).
 
 A stopped writer therefore makes no progress beyond what it had written into
 the pipe, and a signal or a thread's cancellation of a blocking write returns
@@ -234,6 +235,13 @@ that keeps up, writes go through at full speed (4096-byte writes match
 4097-byte ones against a reader that pauses 200 us between 64 KiB reads); a
 `PIPE_BUF` writer that waits longer for a slow reader resumes within the
 timer waits above, not at once as a Linux writer woken by the reader does.
+The growth past 1 ms is the trade-off between the two: a writer whose reader
+has stopped reading wakes about 60 times a second instead of 1000, and its
+process used 0 to 0.3% of a core over 5 s (one 15.6 ms tick of the CPU
+clock at most; 1 to 2.5% with waits capped at 1 ms, 0% for a writer blocked
+in its one-byte write), while a reader that resumes after such a stall waits
+up to 16 ms for the writer. Throughput against readers that pause up to 2 ms
+is unchanged by it (they free room within the first 20 ms).
 
 While stopped it rescans every 20 ms. A thread the system started meanwhile
 (a thread pool worker) is suspended and checked as in 2; if it is not at a

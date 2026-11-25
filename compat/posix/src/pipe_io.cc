@@ -171,10 +171,12 @@ bool Signaled(HANDLE event) { return event && WaitForSingleObject(event, 0) == W
 // Waits a moment for a pipe's reader to free room, with nothing pending in
 // the kernel: yields for the first tries (with the caller's checks of the
 // pipe in between, a few hundred microseconds: a reader that keeps up frees
-// room within that), then high-resolution timer waits of 50 us, growing to
-// 1 ms while the wait goes on. (Sleep(1) lasts a whole timer tick, about
-// 16 ms, which would bound a writer that waits for room to a few hundred
-// kilobytes a second.)
+// room within that), then high-resolution timer waits of 50 us for the first
+// half millisecond, growing to 1 ms until 20 ms have passed, then to 16 ms:
+// a reader that pauses frees room within the short waits, and a writer whose
+// reader has stopped reading costs next to no CPU (each wake checks the
+// pipe). (Sleep(1) lasts a whole timer tick, about 16 ms, which would bound a
+// writer that waits for room to a few hundred kilobytes a second.)
 class RoomWait {
  public:
   RoomWait() = default;
@@ -183,16 +185,28 @@ class RoomWait {
   ~RoomWait() {
     if (timer_ != nullptr) CloseHandle(timer_);
   }
-  void Reset() { waits_ = 0; }
+  void Reset() {
+    waits_ = 0;
+    waited_ = 0;
+    last_ = 0;
+  }
   void Pause() {
-    const unsigned n = waits_++;
     constexpr unsigned kYields = 64;
-    if (n < kYields) {
+    if (waits_ < kYields) {
+      ++waits_;
       Sleep(0);
       return;
     }
-    const unsigned step = n - kYields;
-    const unsigned micros = step < 10 ? 50 : std::min(1000u, 50u << std::min(step - 9, 5u));
+    unsigned micros;
+    if (waited_ < 500) {
+      micros = 50;
+    } else if (waited_ < 20000) {
+      micros = std::min(1000u, std::max(100u, 2 * last_));
+    } else {
+      micros = std::min(16000u, 2 * last_);
+    }
+    last_ = micros;
+    waited_ = std::min(waited_ + micros, 1u << 30);
     if (timer_ == nullptr && !tried_) {
       tried_ = true;
       timer_ = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
@@ -206,13 +220,15 @@ class RoomWait {
         return;
       }
     }
-    Sleep(1);
+    Sleep(std::max(1u, micros / 1000));
   }
 
  private:
   HANDLE timer_ = nullptr;
   bool tried_ = false;
-  unsigned waits_ = 0;
+  unsigned waits_ = 0;   // yields so far
+  unsigned waited_ = 0;  // microseconds of timer waits asked for so far
+  unsigned last_ = 0;    // the last timer wait, in microseconds
 };
 
 // A blocking write to a Gesher pipe, so that no write of it is ever pending in
@@ -281,7 +297,10 @@ int WriteInPieces(HANDLE file, const char* bytes, unsigned count, unsigned* tota
     }
     if (mode(true)) {
       // The pipe is empty: the write goes in at once, all or nothing.
-      const unsigned reach = room < kBuffer ? 2 * kBuffer - room : 2 * kBuffer;
+      // A pending read of R bytes leaves room 65536 - R and takes R bytes
+      // besides the buffer; with none pending (room 65536) only the buffer
+      // takes the write; a read of 65536 or more (room 0) takes at least that.
+      const unsigned reach = room >= kBuffer ? kBuffer : 2 * kBuffer - room;
       unsigned piece = atomic ? remaining : std::min(std::min(remaining, reach), kMaxPiece);
       int written;
       for (;;) {
