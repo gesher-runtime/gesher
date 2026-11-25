@@ -47,7 +47,24 @@ foreach ($case in @(
         @('proxy.example.com', $null), @(':8080', $null), @('host:', $null), @('host:0', $null),
         @('host:65536', $null), @('host:-80', $null), @('host:+', $null), @('host:++80', $null),
         @('host:99999999999999999999', $null), @('host:8 0', $null), @("ho`nst:80", $null),
-        @("host`n:80", $null), @('ho st:80', $null), @('https://host:80', $null), @('', $null))) {
+        @("host`n:80", $null), @('ho st:80', $null), @('https://host:80', $null), @('', $null),
+        @('socks5://127.0.0.1:1080', 'socks5://127.0.0.1:1080'),
+        @(' SOCKS://proxy.example/ ', 'socks5://proxy.example:1080'),
+        @('socks=host', 'socks5://host:1080'), @('SOCKS5=host:00080', 'socks5://host:80'),
+        @('socks5://[::1]', 'socks5://[::1]:1080'),
+        @('socks=[2001:db8::1]:9050', 'socks5://[2001:db8::1]:9050'),
+        @('socks5://[::ffff:192.0.2.1]:65535', 'socks5://[::ffff:192.0.2.1]:65535'),
+        @('socks5://host:1', 'socks5://host:1'),
+        @('socks5://host:', $null), @('socks5://host:0', $null), @('socks5://host:65536', $null),
+        @('socks5://host:-1', $null), @('socks5://host:+80', $null), @('socks5://host:not-a-port', $null),
+        @("socks5://host:$([char]0xFF18)$([char]0xFF10)", $null),
+        @('socks5://user:password@host:1080', $null), @('socks5://host/path', $null),
+        @('socks5://host?x=1', $null), @('socks5://host#fragment', $null),
+        @('socks5://::1', $null), @('socks5://[::1', $null), @('socks5://[::1]:', $null),
+        @('socks5://[not-ipv6]:1080', $null), @('socks5://[1:2]:1080', $null),
+        @('socks5://256.1.1.1:1080', $null), @('socks5://a..b:1080', $null),
+        @('socks5://-host:1080', $null), @('socks5://host_:1080', $null),
+        @('socks4://host:1080', $null), @('socks5://', $null))) {
     $actual = ConvertTo-ProxyValue $case[0]
     Assert-Proxy ($actual -ceq $case[1]) "ConvertTo-ProxyValue '$($case[0])' gave '$actual', expected '$($case[1])'"
 }
@@ -84,6 +101,9 @@ try {
     Set-ProxySetting 'com.example.app' '[::1]:8888'
     Assert-Proxy ((Get-ProxySettings)['proxy.com.example.app'] -ceq '[::1]:8888') 'Package proxy does not round-trip'
     Assert-Proxy ([IO.File]::ReadAllText($script:ProxyFile).Contains('proxy.com.example.app=[\:\:1]\:8888')) 'IPv6 value is not escaped as Properties does'
+    Set-ProxySetting 'com.example.app' 'SOCKS=[::1]'
+    Assert-Proxy ((Get-ProxySettings)['proxy.com.example.app'] -ceq 'socks5://[::1]:1080') 'SOCKS setting does not round-trip canonically'
+    Assert-Proxy ([IO.File]::ReadAllText($script:ProxyFile).Contains('proxy.com.example.app=socks5\://[\:\:1]\:1080')) 'SOCKS value is not escaped as Properties does'
     Set-ProxySetting 'com.example.app' 'windows'
     Assert-Proxy ((Get-ProxySettings)['proxy.com.example.app'] -ceq 'windows') 'Windows'' settings for a package must be kept'
     Set-ProxySetting 'com.example.app' $null
@@ -266,6 +286,13 @@ try {
     $address.Text = 'http://10.2.2.2:3128/'
     $choice = Read-ProxyEditor $combo $address
     Assert-Proxy ($choice.Valid -and $choice.Value -ceq '10.2.2.2:3128') 'A server address was not read'
+    Initialize-ProxyEditor $combo $address 'socks5://[::1]:1080'
+    Assert-Proxy ($combo.SelectedItem.Tag -eq 'server' -and $address.Text -ceq 'socks5://[::1]:1080') 'A saved SOCKS server lost its protocol in the editor'
+    $address.Text = 'SOCKS=proxy.example'
+    $choice = Read-ProxyEditor $combo $address
+    Assert-Proxy ($choice.Valid -and $choice.Value -ceq 'socks5://proxy.example:1080') 'The editor did not normalize SOCKS input'
+    $address.Text = 'socks5://host:0'
+    Assert-Proxy (-not (Read-ProxyEditor $combo $address).Valid) 'The editor accepted an invalid SOCKS port'
     $address.Text = 'direct'
     Assert-Proxy (-not (Read-ProxyEditor $combo $address).Valid) 'A mode name is not a server address'
     $address.Text = 'nope'
@@ -289,6 +316,7 @@ try {
 
     Assert-Proxy ((Get-ProxyDisplayText 'direct') -eq (Get-GesherText 'cp_proxy_mode_direct')) 'Direct is not shown by name'
     Assert-Proxy ((Get-ProxyDisplayText '1.2.3.4:5') -eq '1.2.3.4:5') 'A server is not shown as it is'
+    Assert-Proxy ((Get-ProxyDisplayText 'socks5://host:1080') -ceq 'socks5://host:1080') 'The SOCKS protocol is hidden in the app row'
     Assert-Proxy ((Get-GesherText 'cp_proxy_app_value' @('x')) -eq 'Proxy: x') 'The app value text is missing'
 } finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
