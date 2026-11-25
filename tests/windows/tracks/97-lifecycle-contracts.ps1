@@ -31,6 +31,8 @@ foreach ($fixture in @(
      Label = 'kernel pipe admission, cancellation, aliases and truthful unsupported operations' },
   @{ Exe = 'pipe_native_process_test.exe'; Markers = @('pipe native process contracts:', ' checks, 0 failures');
      Label = 'native peer lifetime, shared process admission and external sync/async pipe I/O' },
+  @{ Exe = 'fifo_windows_test.exe'; Markers = @('fifo-windows:', ' assertions, 0 failures');
+     Label = 'POSIX FIFOs: cross-process rendezvous, inheritance, atomic writes and peer exit' },
   @{ Exe = 'revocable_file_test.exe'; Markers = @('revocable Windows contracts:', ' checks, 0 failures');
      Label = 'revocable descriptor aliases, in-flight I/O barrier and bounded native resources' },
   @{ Exe = 'ofd_spawn_test.exe'; Markers = @('OFD Windows spawn:', ' checks, 0 failures');

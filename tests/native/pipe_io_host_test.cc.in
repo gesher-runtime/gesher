@@ -230,7 +230,7 @@ struct OpenFileDescription {
   bool KnownPipeStatus() const { return known; }
   int Flags() const { return flags; }
 };
-enum class DescriptorKind { kFile, kUnshareable };
+enum class DescriptorKind { kFile, kUnshareable, kFifo };
 struct DescriptorSnapshot {
   HANDLE handle;
   std::shared_ptr<OpenFileDescription> description;
@@ -254,6 +254,10 @@ static DescriptorSnapshotPtr CaptureFileHandle(HANDLE handle) {
 static int ReadFileDescription(const DescriptorSnapshotPtr&, void*, unsigned) {
   std::abort();  // This declared shell boundary supplies pipes only.
 }
+// FIFO descriptors (fifo.cc) are outside this kernel-pipe boundary.
+static int TransferFifo(const DescriptorSnapshotPtr&, void*, unsigned, bool, HANDLE, HANDLE) { std::abort(); }
+static int PollFifo(const DescriptorSnapshotPtr&, short, short*) { std::abort(); }
+static int FifoBytesAvailable(const DescriptorSnapshotPtr&, int*) { std::abort(); }
 }
 
 @PIPE_IMPLEMENTATION@

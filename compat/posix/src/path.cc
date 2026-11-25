@@ -32,6 +32,7 @@
 #include <string_view>
 
 #include "binder_internal.h"
+#include "fifo_internal.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
 #include "revocable_internal.h"
@@ -202,6 +203,25 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
                      ((flags & O_NOFOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0) |
                      ((flags & O_DSYNC) != 0 ? FILE_FLAG_WRITE_THROUGH : 0);
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & O_CLOEXEC) == 0};
+  // A FIFO (fifo.cc) is classified before any open that could change it.
+  // Followed, Windows refuses its reparse tag (ERROR_CANT_ACCESS_FILE below);
+  // O_NOFOLLOW would open the file itself, so look first.
+  auto open_fifo = [&](int* fd) {
+    HANDLE probe = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               (flags & O_PATH) != 0 ? &inherit : nullptr, OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (probe == INVALID_HANDLE_VALUE) return false;
+    if (!IsFifoHandle(probe)) { CloseHandle(probe); return false; }
+    // Linux: EEXIST for O_CREAT|O_EXCL, and O_TRUNC is ignored for a FIFO.
+    if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) { CloseHandle(probe); *fd = (errno = EEXIST, -1); }
+    else if ((flags & O_PATH) != 0) *fd = (flags & O_DIRECTORY) != 0 ? (CloseHandle(probe), errno = ENOTDIR, -1)
+                                                                    : FdFromHandle(probe, flags);
+    else *fd = OpenFifoHandle(probe, flags);
+    return true;
+  };
+  int fifo = -1;
+  if ((flags & O_NOFOLLOW) != 0 && open_fifo(&fifo)) return fifo;
   DWORD access = Access(flags);
   HANDLE h = INVALID_HANDLE_VALUE;
   // A brief open that denies sharing (a scanner, inotify.cc's check for
@@ -214,6 +234,7 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
   }
   if (h == INVALID_HANDLE_VALUE) {
     DWORD error = GetLastError();
+    if (error == ERROR_CANT_ACCESS_FILE && open_fifo(&fifo)) return fifo;
     DWORD existing = GetFileAttributesW(path.c_str());
     if (error == ERROR_ACCESS_DENIED && existing != INVALID_FILE_ATTRIBUTES &&
         (existing & FILE_ATTRIBUTE_DIRECTORY) != 0) {

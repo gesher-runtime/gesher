@@ -10,8 +10,10 @@
 namespace gesher {
 // NUL-backed resources must never be exported as ordinary files. Stateless
 // devices have an explicit kind; resources without a cross-process transport
-// fail export instead of silently losing their behavior.
-enum class DescriptorKind : uint32_t { kFile = 0, kZero = 1, kRandom = 2, kUnshareable = 3 };
+// fail export instead of silently losing their behavior. A FIFO (fifo.cc)
+// travels as its placeholder handle and named shared description; 4 and 5
+// stay free because the AF_UNIX rights wire uses them for typed descriptors.
+enum class DescriptorKind : uint32_t { kFile = 0, kZero = 1, kRandom = 2, kUnshareable = 3, kFifo = 6 };
 
 struct OpenFileDescription;
 

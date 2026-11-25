@@ -1,500 +1,660 @@
-// gesher-base: POSIX FIFOs (mkfifo, S_IFIFO open/read/write/poll/fstat/fcntl).
+// POSIX FIFOs (mkfifo, fifo(7)) shared by every process that opens them
+// (ADR 0096).
 //
-// mkfifo() writes a small 16-byte magic marker file on disk so paths,
-// unlink(), rename(), EEXIST/ENOENT, and NTFS file identity work like
-// ordinary filesystem entries. Opening that marker switches to an in-process
-// ring buffer keyed by the file's volume serial and NTFS file index, with
-// POSIX reader/writer rendezvous, EOF, EPIPE, ENXIO, FIONREAD, and poll/epoll
-// wake integration.
+// On disk a FIFO is a file carrying WSL's IO_REPARSE_TAG_LX_FIFO tag. Its
+// pipe is a ring of kCapacity bytes in a section named after the FIFO's
+// stable identity (volume serial and file ID), guarded by a named mutex. Any
+// process of the same session (or AppContainer) that opens the path maps the
+// same ring, so independent opens rendezvous, block and exchange bytes as
+// Linux's single pipe object does.
+//
+// Each open creates an endpoint: the shared section of its open file
+// description, created with a name and listed in the ring's slot table. The
+// description section is inherited by exec and duplicated by dup like any
+// other description, so an endpoint stays open exactly while some process
+// holds a descriptor for it. Readers and writers are counted from the live
+// slots: a slot whose named section no longer exists belongs to descriptors
+// that are all closed (or whose processes have exited), and is dropped.
 #include "fifo_internal.h"
 
+#include "internal.h"
+#include "ofd_internal.h"
+#include "record_lock_descriptors.h"
+#include "socket_user_copy.h"
+
+#include <bcrypt.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
+#include <io.h>
 #include <poll.h>
-#include <stdint.h>
-#include <string.h>
+#include <pthread.h>
 #include <sys/stat.h>
-#include <unistd.h>
+#include <winioctl.h>
 
 #include <algorithm>
-#include <atomic>
-#include <condition_variable>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
-#include <vector>
-
-#include "event_internal.h"
-#include "internal.h"
-#include "record_lock_descriptors.h"
+#include <string>
 
 namespace gesher {
+
+// The descriptor layer's public definition; kept with the FIFO's state.
+struct FifoRing;
+struct FifoEndpoint {
+  std::wstring name;  // the description section's name
+  std::shared_ptr<FifoRing> ring;
+  uint64_t nonce[2] = {0, 0};
+  void* view = nullptr;  // this endpoint's own view of the description section
+  struct Trailer* trailer = nullptr;
+  ~FifoEndpoint();
+};
+
 namespace {
 
-constexpr char kFifoMagic[16] = {
-    '\0', 'G', 'E', 'S', 'H', 'E', 'R', '_', 'F', 'I', 'F', 'O', '_', 'V', '1', '\n',
+constexpr uint32_t kCapacity = 65536;  // Linux's default pipe size
+constexpr uint32_t kPipeBuf = 4096;    // PIPE_BUF: writes up to this are atomic
+constexpr uint32_t kSlots = 64;        // open descriptions per FIFO
+constexpr ULONGLONG kSweepMs = 100;    // how stale a dead endpoint may be
+constexpr DWORD kWaitSliceMs = 10;
+constexpr uint64_t kRingMagic = 0x3146464946534847ull;     // GSHFIFF1
+constexpr uint64_t kTrailerMagic = 0x3145464946534847ull;  // GSHFIFE1
+constexpr uint32_t kRead = 1, kWrite = 2;
+
+struct Slot {
+  uint64_t nonce[2];
+  uint32_t role;  // kRead | kWrite; 0 when free
+  uint32_t reserved[3];
 };
-constexpr size_t kFifoBufferSize = 64 * 1024;
+static_assert(sizeof(Slot) == 32);
 
-struct FifoKey {
-  DWORD volume = 0;
-  DWORD index_high = 0;
-  DWORD index_low = 0;
+// Mutated only while the ring's named mutex is held.
+struct RingHeader {
+  uint64_t magic;
+  uint32_t capacity, slot_count;
+  uint64_t head, tail;  // bytes read and written since the pipe was created
+  uint32_t reader_opens, writer_opens;  // Linux's r_counter and w_counter
+  uint32_t readers, writers;  // live endpoints with that access
+  uint64_t swept;  // GetTickCount64 of the last liveness sweep
+  uint64_t reserved[2];
+  Slot slots[kSlots];
+};
+constexpr size_t kRingSize = sizeof(RingHeader) + kCapacity;
 
-  bool operator<(const FifoKey& o) const {
-    if (volume != o.volume) return volume < o.volume;
-    if (index_high != o.index_high) return index_high < o.index_high;
-    return index_low < o.index_low;
+}  // namespace
+
+// The description section: the shared status every description has, then
+// what identifies its FIFO. Written once before the endpoint is published.
+struct Trailer {
+  uint64_t magic;
+  uint64_t key[3];  // volume serial, 128-bit file ID
+  uint64_t nonce[2];
+  uint32_t role;
+  uint32_t writer_epoch;  // w_counter when opened: POLLHUP needs a later writer
+  uint64_t device, inode;
+  uint32_t mode, reserved;
+  int64_t access_time, write_time, change_time;
+};
+
+namespace {
+
+constexpr size_t kTrailerOffset = (sizeof(OpenFileDescription::Shared) + 63) & ~size_t{63};
+constexpr size_t kDescriptionSize = kTrailerOffset + sizeof(Trailer);
+
+}  // namespace
+
+struct FifoRing {
+  std::wstring base;
+  HANDLE section = nullptr, lock = nullptr, wake = nullptr;
+  RingHeader* header = nullptr;
+  unsigned char* data = nullptr;
+  ~FifoRing() {
+    if (header) UnmapViewOfFile(header);
+    for (HANDLE handle : {section, lock, wake}) if (handle) CloseHandle(handle);
   }
 };
 
-struct FifoState {
-  FifoKey key;
-  std::mutex mu;
-  std::condition_variable cv;
-  std::vector<uint8_t> buf;
-  size_t head = 0;
-  size_t size = 0;
-  int readers = 0;
-  int writers = 0;
-  bool had_writer = false;
+namespace {
 
-  explicit FifoState(const FifoKey& k) : key(k), buf(kFifoBufferSize) {}
-  size_t FreeSpace() const { return buf.size() - size; }
-};
-
-std::mutex g_fifo_registry_mutex;
-std::map<FifoKey, std::weak_ptr<FifoState>> g_fifo_registry;
-
-struct FifoEndpoint {
-  std::shared_ptr<FifoState> state;
-  FifoKey key;
-  unsigned long long dev = 0;
-  unsigned long long ino = 0;
-  int access = 0;
-  bool can_read = false;
-  bool can_write = false;
-  std::atomic<bool> nonblocking{false};
-
-  ~FifoEndpoint() {
-    if (!state) return;
-    {
-      std::lock_guard<std::mutex> lock(state->mu);
-      if (can_read) state->readers--;
-      if (can_write) state->writers--;
-    }
-    state->cv.notify_all();
-    state.reset();
-    {
-      std::lock_guard<std::mutex> reg_lock(g_fifo_registry_mutex);
-      auto it = g_fifo_registry.find(key);
-      if (it != g_fifo_registry.end() && it->second.expired()) {
-        g_fifo_registry.erase(it);
-      }
-    }
-    if (HasPollWaiters()) WakePollers();
-  }
-};
-
-std::mutex g_fifo_fds_mutex;
-std::unordered_map<int, std::shared_ptr<FifoEndpoint>> g_fifo_fds;
-
-std::shared_ptr<FifoEndpoint> LookupFifoEndpoint(int fd) {
-  std::lock_guard<std::mutex> lock(g_fifo_fds_mutex);
-  auto it = g_fifo_fds.find(fd);
-  return it == g_fifo_fds.end() ? nullptr : it->second;
+void Hex(std::wstring* out, const uint64_t* values, size_t count) {
+  constexpr wchar_t digits[] = L"0123456789abcdef";
+  for (size_t i = 0; i < count; ++i)
+    for (int shift = 60; shift >= 0; shift -= 4) *out += digits[(values[i] >> shift) & 15];
 }
 
-std::shared_ptr<FifoState> GetOrCreateFifoState(const FifoKey& key) {
-  std::lock_guard<std::mutex> lock(g_fifo_registry_mutex);
-  auto& weak = g_fifo_registry[key];
-  std::shared_ptr<FifoState> state = weak.lock();
-  if (!state) {
-    state = std::make_shared<FifoState>(key);
-    weak = state;
-  }
-  return state;
+std::wstring BaseName(const uint64_t key[3]) {
+  std::wstring name = L"Local\\gesher-fifo-";
+  Hex(&name, key, 3);
+  return name;
 }
 
-bool HasMagicHeader(const std::wstring& windows) {
-  HANDLE probe = CreateFileW(windows.c_str(), GENERIC_READ,
-                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                             OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-  if (probe == INVALID_HANDLE_VALUE) return false;
-  char header[sizeof(kFifoMagic)];
-  DWORD n = 0;
-  bool match = ReadFile(probe, header, sizeof(header), &n, nullptr) &&
-               n == sizeof(kFifoMagic) &&
-               std::memcmp(header, kFifoMagic, sizeof(kFifoMagic)) == 0;
-  CloseHandle(probe);
-  return match;
+std::wstring EndpointName(const std::wstring& base, const uint64_t nonce[2]) {
+  std::wstring name = base + L"-e";
+  Hex(&name, nonce, 2);
+  return name;
+}
+
+int Win32Errno() { return ErrnoFromWin32(GetLastError()); }
+
+class RingLock {
+ public:
+  explicit RingLock(FifoRing& ring) : ring_(ring) {
+    const DWORD wait = WaitForSingleObject(ring.lock, INFINITE);
+    // An abandoned mutex is held: every update publishes its counters after
+    // the bytes, so a crashed holder leaves a consistent ring.
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) held_ = true;
+    else error_ = wait == WAIT_FAILED ? Win32Errno() : EIO;
+  }
+  ~RingLock() { if (held_) ReleaseMutex(ring_.lock); }
+  RingLock(const RingLock&) = delete;
+  RingLock& operator=(const RingLock&) = delete;
+  int Error() const { return error_; }
+ private:
+  FifoRing& ring_;
+  bool held_ = false;
+  int error_ = 0;
+};
+
+std::mutex& CacheMutex() {
+  static std::mutex* mutex = new std::mutex;  // process lifetime
+  return *mutex;
+}
+std::map<std::wstring, std::weak_ptr<FifoRing>>& Cache() {
+  static auto* cache = new std::map<std::wstring, std::weak_ptr<FifoRing>>;
+  return *cache;
+}
+
+// The process's mapping of one FIFO's ring, shared by its descriptions.
+std::shared_ptr<FifoRing> AcquireRing(const uint64_t key[3]) {
+  const std::wstring base = BaseName(key);
+  std::lock_guard<std::mutex> guard(CacheMutex());
+  auto& cache = Cache();
+  for (auto it = cache.begin(); it != cache.end();) it = it->second.expired() ? cache.erase(it) : std::next(it);
+  auto found = cache.find(base);
+  if (found != cache.end()) {
+    if (auto ring = found->second.lock()) return ring;
+  }
+  auto ring = std::make_shared<FifoRing>();
+  ring->base = base;
+  ring->lock = CreateMutexW(nullptr, FALSE, (base + L"-lock").c_str());
+  ring->wake = CreateEventW(nullptr, TRUE, FALSE, (base + L"-wake").c_str());
+  ring->section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                     static_cast<DWORD>(kRingSize), base.c_str());
+  if (!ring->lock || !ring->wake || !ring->section) { errno = Win32Errno(); return {}; }
+  ring->header = static_cast<RingHeader*>(MapViewOfFile(ring->section, FILE_MAP_READ | FILE_MAP_WRITE,
+                                                        0, 0, kRingSize));
+  if (!ring->header) { errno = Win32Errno(); return {}; }
+  ring->data = reinterpret_cast<unsigned char*>(ring->header + 1);
+  {
+    RingLock lock(*ring);
+    if (lock.Error()) { errno = lock.Error(); return {}; }
+    RingHeader& header = *ring->header;
+    if (header.magic == 0) {
+      header.capacity = kCapacity;
+      header.slot_count = kSlots;
+      MemoryBarrier();
+      header.magic = kRingMagic;
+    } else if (header.magic != kRingMagic || header.capacity != kCapacity || header.slot_count != kSlots) {
+      errno = EPROTO;
+      return {};
+    }
+  }
+  cache[base] = ring;
+  return ring;
+}
+
+void Recount(RingHeader& header) {
+  header.readers = header.writers = 0;
+  for (const Slot& slot : header.slots) {
+    header.readers += (slot.role & kRead) != 0;
+    header.writers += (slot.role & kWrite) != 0;
+  }
+}
+
+// Drops slots whose description no longer exists anywhere. The caller holds
+// the ring lock. A section that cannot be probed for another reason (an
+// access failure) stays counted: an endpoint is never invented as closed.
+void Sweep(FifoRing& ring, bool force) {
+  RingHeader& header = *ring.header;
+  const ULONGLONG now = GetTickCount64();
+  if (!force && now - header.swept < kSweepMs) return;
+  header.swept = now;
+  bool changed = false;
+  for (Slot& slot : header.slots) {
+    if (!slot.role) continue;
+    HANDLE probe = OpenFileMappingW(FILE_MAP_READ, FALSE, EndpointName(ring.base, slot.nonce).c_str());
+    if (probe) { CloseHandle(probe); continue; }
+    if (GetLastError() != ERROR_FILE_NOT_FOUND) continue;
+    std::memset(&slot, 0, sizeof(slot));
+    changed = true;
+  }
+  if (changed) {
+    Recount(header);
+    PulseEvent(ring.wake);
+  }
+}
+
+void RemoveSlot(FifoRing& ring, const uint64_t nonce[2]) {
+  RingHeader& header = *ring.header;
+  for (Slot& slot : header.slots) {
+    if (slot.role && slot.nonce[0] == nonce[0] && slot.nonce[1] == nonce[1]) {
+      std::memset(&slot, 0, sizeof(slot));
+      Recount(header);
+      PulseEvent(ring.wake);
+      return;
+    }
+  }
+}
+
+bool Signaled(HANDLE event) { return event && WaitForSingleObject(event, 0) == WAIT_OBJECT_0; }
+
+// One bounded wait for the ring to change. Peers in other processes wake it
+// through the named event; a missed pulse costs at most one slice.
+void WaitSlice(FifoRing& ring, HANDLE canceled, HANDLE interrupted) {
+  HANDLE handles[3];
+  DWORD count = 0;
+  handles[count++] = ring.wake;
+  if (canceled) handles[count++] = canceled;
+  if (interrupted && interrupted != canceled) handles[count++] = interrupted;
+  WaitForMultipleObjects(count, handles, FALSE, kWaitSliceMs);
+}
+
+// The caller holds description.mutex.
+FifoEndpoint* EndpointLocked(OpenFileDescription& description) {
+  if (description.fifo) return description.fifo.get();
+  if (!description.mapping) { errno = EBADF; return nullptr; }
+  auto endpoint = std::make_shared<FifoEndpoint>();
+  endpoint->view = MapViewOfFile(description.mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, kDescriptionSize);
+  if (!endpoint->view) { errno = Win32Errno(); return nullptr; }
+  auto* trailer = reinterpret_cast<Trailer*>(static_cast<unsigned char*>(endpoint->view) + kTrailerOffset);
+  if (trailer->magic != kTrailerMagic) { errno = EBADF; return nullptr; }
+  endpoint->trailer = trailer;
+  endpoint->nonce[0] = trailer->nonce[0];
+  endpoint->nonce[1] = trailer->nonce[1];
+  endpoint->ring = AcquireRing(trailer->key);
+  if (!endpoint->ring) return nullptr;
+  endpoint->name = EndpointName(endpoint->ring->base, endpoint->nonce);
+  description.fifo = std::move(endpoint);
+  return description.fifo.get();
+}
+
+FifoEndpoint* Endpoint(const DescriptorSnapshotPtr& snapshot) {
+  if (!snapshot || !snapshot->description || snapshot->kind != DescriptorKind::kFifo) {
+    errno = EBADF;
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> guard(snapshot->description->mutex);
+  return EndpointLocked(*snapshot->description);
+}
+
+int FileIdentity(HANDLE file, uint64_t key[3], BY_HANDLE_FILE_INFORMATION* info) {
+  if (!GetFileInformationByHandle(file, info)) return Win32Errno();
+  FILE_ID_INFO id{};
+  if (GetFileInformationByHandleEx(file, FileIdInfo, &id, sizeof(id))) {
+    key[0] = id.VolumeSerialNumber;
+    std::memcpy(&key[1], id.FileId.Identifier, sizeof(id.FileId.Identifier));
+  } else {
+    // ReFS-less older volumes: the 64-bit index is unique per volume.
+    key[0] = info->dwVolumeSerialNumber;
+    key[1] = (static_cast<uint64_t>(info->nFileIndexHigh) << 32) | info->nFileIndexLow;
+    key[2] = UINT64_MAX;
+  }
+  return 0;
+}
+
+int64_t Time(const FILETIME& value) {
+  return static_cast<int64_t>((static_cast<uint64_t>(value.dwHighDateTime) << 32) | value.dwLowDateTime);
+}
+
+// Waits for the other end as fifo_open's wait_for_partner does: until the
+// partner count's open counter moves, so a peer that opens and closes again
+// before this thread looks still completes the rendezvous.
+int WaitForPartner(FifoRing& ring, bool reader, uint32_t start) {
+  int previous = PTHREAD_CANCEL_DISABLE;
+  int error = pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous);
+  if (error) return gesher_errno_from_crt(error);
+  HANDLE canceled = previous == PTHREAD_CANCEL_ENABLE ? static_cast<HANDLE>(pthread_getevent()) : nullptr;
+  if (previous == PTHREAD_CANCEL_ENABLE && !canceled) error = ENOMEM;
+  while (!error) {
+    {
+      RingLock lock(ring);
+      if (lock.Error()) { error = lock.Error(); break; }
+      const RingHeader& header = *ring.header;
+      if ((reader ? header.writer_opens : header.reader_opens) != start) break;
+    }
+    if (Signaled(canceled)) { error = EINTR; break; }
+    WaitSlice(ring, canceled, nullptr);
+  }
+  pthread_setcancelstate(previous, nullptr);
+  return error;
 }
 
 }  // namespace
 
-bool IsFifoPath(const std::wstring& windows) {
-  HANDLE h = CreateFileW(windows.c_str(), GENERIC_READ,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-  if (h == INVALID_HANDLE_VALUE) return false;
-  BY_HANDLE_FILE_INFORMATION info;
-  bool match = false;
-  if (GetFileInformationByHandle(h, &info) &&
-      (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
-      info.nFileSizeHigh == 0 && info.nFileSizeLow == sizeof(kFifoMagic)) {
-    char header[sizeof(kFifoMagic)];
-    DWORD n = 0;
-    if (ReadFile(h, header, sizeof(header), &n, nullptr) &&
-        n == sizeof(kFifoMagic) &&
-        std::memcmp(header, kFifoMagic, sizeof(kFifoMagic)) == 0) {
-      match = true;
-    }
-  }
-  CloseHandle(h);
-  return match;
+FifoEndpoint::~FifoEndpoint() {
+  if (view) UnmapViewOfFile(view);
+  if (!ring || name.empty()) return;
+  // The description's own section handle and view are already released (the
+  // description destroys its members after closing them). If no process
+  // holds the description any more, its endpoint closed: count it out now
+  // rather than at the next sweep, so readers see end of file at once.
+  HANDLE probe = OpenFileMappingW(FILE_MAP_READ, FALSE, name.c_str());
+  if (probe) { CloseHandle(probe); return; }
+  if (GetLastError() != ERROR_FILE_NOT_FOUND) return;
+  const int saved = errno;
+  RingLock lock(*ring);
+  if (!lock.Error()) RemoveSlot(*ring, nonce);
+  errno = saved;
 }
 
-bool TryOpenFifo(const std::wstring& windows, HANDLE existing_handle, int flags, int* out_fd) {
-  BY_HANDLE_FILE_INFORMATION info;
-  if (!GetFileInformationByHandle(existing_handle, &info)) return false;
-  if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) return false;
-  if (info.nFileSizeHigh != 0 || info.nFileSizeLow != sizeof(kFifoMagic)) return false;
-  if (!HasMagicHeader(windows)) return false;
+bool IsFifoHandle(HANDLE file) {
+  FILE_ATTRIBUTE_TAG_INFO tag{};
+  return GetFileInformationByHandleEx(file, FileAttributeTagInfo, &tag, sizeof(tag)) &&
+         (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && tag.ReparseTag == kReparseTagFifo;
+}
 
-  // Release the filesystem handle so unlink() succeeds cleanly while open.
-  CloseHandle(existing_handle);
+HANDLE CreateFileFollowingFifo(const wchar_t* path, DWORD access, DWORD share, DWORD flags_and_attributes) {
+  HANDLE file = CreateFileW(path, access, share, nullptr, OPEN_EXISTING, flags_and_attributes, nullptr);
+  if (file != INVALID_HANDLE_VALUE || (flags_and_attributes & FILE_FLAG_OPEN_REPARSE_POINT) != 0 ||
+      GetLastError() != ERROR_CANT_ACCESS_FILE) return file;
+  HANDLE special = CreateFileW(path, access | FILE_READ_ATTRIBUTES, share, nullptr, OPEN_EXISTING,
+                               flags_and_attributes | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (special != INVALID_HANDLE_VALUE && IsFifoHandle(special)) return special;
+  if (special != INVALID_HANDLE_VALUE) CloseHandle(special);
+  SetLastError(ERROR_CANT_ACCESS_FILE);
+  return INVALID_HANDLE_VALUE;
+}
 
-  const FifoKey key{info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
-  std::shared_ptr<FifoState> state = GetOrCreateFifoState(key);
+int OpenFifoHandle(HANDLE probe, int flags) {
+  struct Owned {
+    HANDLE probe = nullptr, section = nullptr, placeholder = nullptr;
+    void* view = nullptr;
+    void Release() {
+      if (view) UnmapViewOfFile(view);
+      for (HANDLE handle : {probe, section, placeholder}) if (handle) CloseHandle(handle);
+      view = probe = section = placeholder = nullptr;
+    }
+    ~Owned() { Release(); }
+  } owned;
+  owned.probe = probe;
+  if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
+  const uint32_t role = (flags & O_ACCMODE) == O_RDONLY ? kRead : (flags & O_ACCMODE) == O_WRONLY ? kWrite
+                                                                                                   : kRead | kWrite;
+  const bool nonblocking = (flags & O_NONBLOCK) != 0;
+  uint64_t key[3] = {0, 0, 0};
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (int error = FileIdentity(probe, key, &info)) return errno = error, -1;
+  std::shared_ptr<FifoRing> ring = AcquireRing(key);
+  if (!ring) return -1;
 
-  const int access = flags & O_ACCMODE;
-  const bool can_read = (access == O_RDONLY || access == O_RDWR);
-  const bool can_write = (access == O_WRONLY || access == O_RDWR);
-  const bool nonblock = (flags & O_NONBLOCK) != 0;
+  // The description section, named so that every copy of it (dup, exec)
+  // keeps the endpoint alive and the ring can tell when all are gone.
+  uint64_t nonce[2] = {0, 0};
+  std::wstring name;
+  for (int attempt = 0; attempt < 4 && !owned.section; ++attempt) {
+    if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(nonce), sizeof(nonce),
+                                        BCRYPT_USE_SYSTEM_PREFERRED_RNG))) return errno = EIO, -1;
+    name = EndpointName(ring->base, nonce);
+    owned.section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                       static_cast<DWORD>(kDescriptionSize), name.c_str());
+    if (!owned.section) return errno = Win32Errno(), -1;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(owned.section); owned.section = nullptr; }
+  }
+  if (!owned.section) return errno = EEXIST, -1;
+  owned.view = MapViewOfFile(owned.section, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, kDescriptionSize);
+  if (!owned.view) return errno = Win32Errno(), -1;
+  auto* shared = static_cast<OpenFileDescription::Shared*>(owned.view);
+  std::memset(owned.view, 0, kDescriptionSize);
+  shared->magic = ofd_transfer::kMagic;
+  shared->version = ofd_transfer::kVersion;
+  const int status = (flags & kOpenDescriptionFlagsMask & ~(O_PATH | O_DIRECTORY | O_NOFOLLOW)) | O_LARGEFILE;
+  InterlockedExchange(&shared->flags, static_cast<LONG>(status));
+  auto* trailer = reinterpret_cast<Trailer*>(static_cast<unsigned char*>(owned.view) + kTrailerOffset);
+  std::memcpy(trailer->key, key, sizeof(key));
+  std::memcpy(trailer->nonce, nonce, sizeof(nonce));
+  trailer->role = role;
+  trailer->device = info.dwVolumeSerialNumber;
+  trailer->inode = (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+  trailer->mode = (info.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0 ? 0444 : 0666;
+  trailer->access_time = Time(info.ftLastAccessTime);
+  trailer->write_time = Time(info.ftLastWriteTime);
+  trailer->change_time = Time(info.ftLastWriteTime);
+  CloseHandle(owned.probe);
+  owned.probe = nullptr;
 
+  // Register the endpoint, as fifo_open counts it before any wait.
+  bool wait = false;
+  uint32_t start = 0;
   {
-    std::unique_lock<std::mutex> lock(state->mu);
-    if (can_read) state->readers++;
-    if (can_write) {
-      state->writers++;
-      state->had_writer = true;
-    }
-    state->cv.notify_all();
-
-    if (access == O_WRONLY && nonblock && state->readers == 0) {
-      state->writers--;
-      state->cv.notify_all();
-      *out_fd = -1;
-      errno = ENXIO;
-      return true;
-    }
-
-    if (!nonblock) {
-      if (access == O_RDONLY) {
-        while (state->writers == 0) state->cv.wait(lock);
-      } else if (access == O_WRONLY) {
-        while (state->readers == 0) state->cv.wait(lock);
-      }
+    RingLock lock(*ring);
+    if (lock.Error()) return errno = lock.Error(), -1;
+    Sweep(*ring, true);
+    RingHeader& header = *ring->header;
+    // The last close of a Linux FIFO frees its pipe: nothing written before
+    // survives into the next open.
+    if (header.readers == 0 && header.writers == 0) header.head = header.tail = 0;
+    if (role == kWrite && nonblocking && header.readers == 0) return errno = ENXIO, -1;
+    Slot* free_slot = nullptr;
+    for (Slot& slot : header.slots) if (!slot.role) { free_slot = &slot; break; }
+    if (!free_slot) return errno = ENFILE, -1;
+    free_slot->nonce[0] = nonce[0];
+    free_slot->nonce[1] = nonce[1];
+    free_slot->role = role;
+    if (role & kRead) ++header.reader_opens;
+    if (role & kWrite) ++header.writer_opens;
+    Recount(header);
+    trailer->writer_epoch = header.writer_opens;
+    MemoryBarrier();
+    trailer->magic = kTrailerMagic;
+    if (!nonblocking && role == kRead && header.writers == 0) wait = true, start = header.writer_opens;
+    if (!nonblocking && role == kWrite && header.readers == 0) wait = true, start = header.reader_opens;
+    PulseEvent(ring->wake);
+  }
+  auto unregister = [&] {
+    RingLock lock(*ring);
+    if (!lock.Error()) RemoveSlot(*ring, nonce);
+  };
+  if (wait) {
+    if (int error = WaitForPartner(*ring, role == kRead, start)) {
+      unregister();
+      // winpthreads cancels by unwinding without destructors: act on a
+      // pending cancellation only once this open holds nothing.
+      owned.Release();
+      ring.reset();
+      name = std::wstring();
+      errno = error;
+      pthread_testcancel();
+      return -1;
     }
   }
 
-  auto endpoint = std::make_shared<FifoEndpoint>();
-  endpoint->state = state;
-  endpoint->key = key;
-  endpoint->dev = info.dwVolumeSerialNumber;
-  endpoint->ino = (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
-  endpoint->access = access;
-  endpoint->can_read = can_read;
-  endpoint->can_write = can_write;
-  endpoint->nonblocking.store(nonblock, std::memory_order_relaxed);
-
-  int fd = -1;
-  {
-    record_locks::DescriptorGuard descriptor_guard;
-    fd = ReserveFd();
-    if (fd >= 0) {
-      if ((flags & O_CLOEXEC) == 0) {
-        HANDLE nul = HandleFromFd(fd);
-        if (nul != INVALID_HANDLE_VALUE) {
-          SetHandleInformation(nul, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-        }
-      }
-      std::lock_guard<std::mutex> lock(g_fifo_fds_mutex);
-      g_fifo_fds.emplace(fd, endpoint);
-    }
+  // The descriptor: a pipe-type placeholder without data access, so that the
+  // descriptor layer treats it as a stream (ESPIPE, EINVAL for fsync and
+  // ftruncate) and dispatches its I/O here by kind.
+  HANDLE read_end = nullptr, write_end = nullptr;
+  if (!CreatePipe(&read_end, &write_end, nullptr, 1)) {
+    const int error = Win32Errno();
+    unregister();
+    return errno = error, -1;
   }
+  CloseHandle(write_end);
+  const bool inherit = (flags & O_CLOEXEC) == 0;
+  if (!DuplicateHandle(GetCurrentProcess(), read_end, GetCurrentProcess(), &owned.placeholder,
+                       FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES | SYNCHRONIZE, inherit, 0)) {
+    const int error = Win32Errno();
+    CloseHandle(read_end);
+    unregister();
+    return errno = error, -1;
+  }
+  CloseHandle(read_end);
+  record_locks::DescriptorGuard descriptors;
+  const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(owned.placeholder),
+                                 _O_BINARY | (role == kRead ? _O_RDONLY : 0) | (inherit ? 0 : _O_NOINHERIT));
   if (fd < 0) {
-    const int saved = errno;
-    endpoint.reset();
-    errno = saved;
-    *out_fd = -1;
-    return true;
+    const int error = gesher_errno_from_crt(errno);
+    unregister();
+    return errno = error, -1;
   }
-
-  if (HasPollWaiters()) WakePollers();
-  *out_fd = fd;
-  return true;
+  owned.placeholder = nullptr;
+  std::shared_ptr<OpenFileDescription> description;
+  int error = RegisterOfd(fd, status) < 0 ? errno : 0;
+  if (!error && !LookupOfd(fd, &description)) error = EBADF;
+  if (!error) {
+    std::lock_guard<std::mutex> guard(description->mutex);
+    description->mapping = owned.section;
+    description->shared.store(shared, std::memory_order_release);
+    description->SetFlags(status);
+    description->kind = DescriptorKind::kFifo;
+    owned.section = nullptr;
+    owned.view = nullptr;
+    // Bind the endpoint now, so that closing the descriptor counts it out
+    // at once even if it never transferred a byte.
+    if (!EndpointLocked(*description)) error = errno;
+  }
+  if (error) {
+    _close(fd);
+    ForgetOfd(fd);
+    unregister();
+    return errno = error, -1;
+  }
+  return fd;
 }
 
-bool IsFifoFd(int fd) { return LookupFifoEndpoint(fd) != nullptr; }
-
-bool ReadFifo(int fd, void* buf, unsigned int count, int* result) {
-  std::shared_ptr<FifoEndpoint> ep = LookupFifoEndpoint(fd);
-  if (!ep) return false;
-  if (!ep->can_read) {
-    *result = -1;
-    errno = EBADF;
-    return true;
-  }
-  if (count == 0) {
-    *result = 0;
-    return true;
-  }
-  if (buf == nullptr) {
-    *result = -1;
-    errno = EFAULT;
-    return true;
-  }
-
-  FifoState& st = *ep->state;
-  size_t copied = 0;
-  {
-    std::unique_lock<std::mutex> lock(st.mu);
-    while (st.size == 0) {
-      if (st.writers == 0) {
-        *result = 0;
-        return true;
-      }
-      if (ep->nonblocking.load(std::memory_order_acquire)) {
-        *result = -1;
-        errno = EAGAIN;
-        return true;
-      }
-      st.cv.wait(lock);
-    }
-    const size_t to_read = std::min<size_t>(count, st.size);
-    const size_t first = std::min(to_read, st.buf.size() - st.head);
-    std::memcpy(buf, st.buf.data() + st.head, first);
-    if (to_read > first) {
-      std::memcpy(static_cast<uint8_t*>(buf) + first, st.buf.data(), to_read - first);
-    }
-    st.head = (st.head + to_read) % st.buf.size();
-    st.size -= to_read;
-    copied = to_read;
-    st.cv.notify_all();
-  }
-  if (HasPollWaiters()) WakePollers();
-  *result = static_cast<int>(copied);
-  return true;
-}
-
-bool WriteFifo(int fd, const void* buf, unsigned int count, int* result) {
-  std::shared_ptr<FifoEndpoint> ep = LookupFifoEndpoint(fd);
-  if (!ep) return false;
-  if (!ep->can_write) {
-    *result = -1;
-    errno = EBADF;
-    return true;
-  }
-  if (count == 0) {
-    *result = 0;
-    return true;
-  }
-  if (buf == nullptr) {
-    *result = -1;
-    errno = EFAULT;
-    return true;
-  }
-
-  FifoState& st = *ep->state;
-  const size_t total = std::min<size_t>(count, static_cast<size_t>(INT_MAX));
-  size_t written = 0;
-
-  while (written < total) {
-    bool wrote_chunk = false;
+int TransferFifo(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count, bool writing,
+                 HANDLE canceled, HANDLE interrupted) {
+  FifoEndpoint* endpoint = Endpoint(snapshot);
+  if (!endpoint) return -1;
+  FifoRing& ring = *endpoint->ring;
+  auto* buffer = static_cast<unsigned char*>(bytes);
+  unsigned done = 0;
+  for (;;) {
+    if (Signaled(canceled) || Signaled(interrupted)) return done ? static_cast<int>(done) : (errno = EINTR, -1);
+    const bool nonblocking = (snapshot->description->Flags() & O_NONBLOCK) != 0;
     {
-      std::unique_lock<std::mutex> lock(st.mu);
-      if (st.readers == 0) {
-        if (written > 0) break;
-        *result = -1;
-        errno = EPIPE;
-        return true;
-      }
-      while (st.FreeSpace() == 0) {
-        if (ep->nonblocking.load(std::memory_order_acquire)) {
-          if (written > 0) {
-            *result = static_cast<int>(written);
-            return true;
-          }
-          *result = -1;
-          errno = EAGAIN;
-          return true;
+      RingLock lock(ring);
+      if (lock.Error()) return errno = lock.Error(), -1;
+      Sweep(ring, false);
+      RingHeader& header = *ring.header;
+      const uint64_t used = header.tail - header.head;
+      if (!writing) {
+        if (used) {
+          const unsigned n = static_cast<unsigned>(std::min<uint64_t>(count, used));
+          const uint32_t at = static_cast<uint32_t>(header.head % kCapacity);
+          const unsigned first = std::min(n, kCapacity - at);
+          if (!ws::usercopy::To(buffer, ring.data + at, first) ||
+              !ws::usercopy::To(buffer + first, ring.data, n - first)) return errno = EFAULT, -1;
+          header.head += n;
+          PulseEvent(ring.wake);
+          return static_cast<int>(n);
         }
-        st.cv.wait(lock);
-        if (st.readers == 0) {
-          if (written > 0) {
-            *result = static_cast<int>(written);
-            return true;
-          }
-          *result = -1;
-          errno = EPIPE;
-          return true;
+        if (header.writers == 0) return 0;
+        if (nonblocking) {
+          // EAGAIN only for a writer that really exists: a writer whose
+          // last process has just exited means end of file instead.
+          Sweep(ring, true);
+          return header.writers == 0 ? 0 : (errno = EAGAIN, -1);
         }
+      } else {
+        if (header.readers == 0) return done ? static_cast<int>(done) : (errno = EPIPE, -1);
+        const uint64_t room = kCapacity - used;
+        // Up to PIPE_BUF bytes go in as one record or not at all; a larger
+        // write may be split, and interleave with other writers, as on Linux.
+        unsigned n = 0;
+        if (count <= kPipeBuf) n = room >= count ? count : 0;
+        else n = static_cast<unsigned>(std::min<uint64_t>(room, count - done));
+        if (n) {
+          const uint32_t at = static_cast<uint32_t>(header.tail % kCapacity);
+          const unsigned first = std::min(n, kCapacity - at);
+          if (!ws::usercopy::From(ring.data + at, buffer + done, first) ||
+              !ws::usercopy::From(ring.data, buffer + done + first, n - first))
+            return done ? static_cast<int>(done) : (errno = EFAULT, -1);
+          header.tail += n;
+          done += n;
+          PulseEvent(ring.wake);
+          if (done == count) return static_cast<int>(done);
+        }
+        if (nonblocking) return done ? static_cast<int>(done) : (errno = EAGAIN, -1);
       }
-      const size_t chunk = std::min(total - written, st.FreeSpace());
-      const size_t tail = (st.head + st.size) % st.buf.size();
-      const size_t first = std::min(chunk, st.buf.size() - tail);
-      std::memcpy(st.buf.data() + tail, static_cast<const uint8_t*>(buf) + written, first);
-      if (chunk > first) {
-        std::memcpy(st.buf.data(), static_cast<const uint8_t*>(buf) + written + first, chunk - first);
-      }
-      st.size += chunk;
-      written += chunk;
-      wrote_chunk = chunk > 0;
-      st.cv.notify_all();
     }
-    if (wrote_chunk && HasPollWaiters()) WakePollers();
-    if (ep->nonblocking.load(std::memory_order_acquire)) break;
-  }
-
-  *result = static_cast<int>(written);
-  return true;
-}
-
-int FifoWriteError(int fd) {
-  std::shared_ptr<FifoEndpoint> ep = LookupFifoEndpoint(fd);
-  if (!ep) return 0;
-  return ep->can_write ? 0 : EBADF;
-}
-
-bool PollFifo(int fd, short events, short* revents) {
-  std::shared_ptr<FifoEndpoint> ep = LookupFifoEndpoint(fd);
-  if (!ep) return false;
-
-  constexpr short kIn = POLLIN | POLLRDNORM;
-  constexpr short kOut = POLLOUT | POLLWRNORM;
-
-  bool has_data = false;
-  bool has_space = false;
-  int readers = 0;
-  int writers = 0;
-  bool had_writer = false;
-  {
-    std::lock_guard<std::mutex> lock(ep->state->mu);
-    has_data = ep->state->size > 0;
-    has_space = ep->state->FreeSpace() > 0;
-    readers = ep->state->readers;
-    writers = ep->state->writers;
-    had_writer = ep->state->had_writer;
-  }
-
-  short out = 0;
-  if (ep->can_read) {
-    if (has_data) out |= static_cast<short>(events & kIn);
-    if (had_writer && writers == 0) {
-      out |= POLLHUP | static_cast<short>(events & kIn);
-    }
-  }
-  if (ep->can_write) {
-    if (readers == 0) {
-      out |= POLLERR;
-    } else if (has_space) {
-      out |= static_cast<short>(events & kOut);
-    }
-  }
-  *revents = out;
-  return true;
-}
-
-bool FstatFifo(int fd, struct stat* buf) {
-  std::shared_ptr<FifoEndpoint> ep = LookupFifoEndpoint(fd);
-  if (!ep) return false;
-  std::memset(buf, 0, sizeof(*buf));
-  buf->st_dev = ep->dev;
-  buf->st_ino = ep->ino;
-  buf->st_nlink = 1;
-  buf->st_mode = S_IFIFO | 0600;
-  buf->st_uid = getuid();
-  buf->st_gid = getgid();
-  buf->st_blksize = 4096;
-  return true;
-}
-
-bool FifoAvailable(int fd, int* bytes) {
-  std::shared_ptr<FifoEndpoint> ep = LookupFifoEndpoint(fd);
-  if (!ep) return false;
-  std::lock_guard<std::mutex> lock(ep->state->mu);
-  const size_t n = ep->state->size;
-  *bytes = static_cast<int>(n > static_cast<size_t>(INT_MAX) ? static_cast<size_t>(INT_MAX) : n);
-  return true;
-}
-
-bool FcntlFifo(int fd, int cmd, long arg, int* result) {
-  std::shared_ptr<FifoEndpoint> ep = LookupFifoEndpoint(fd);
-  if (!ep) return false;
-  if (cmd == F_GETFL) {
-    *result = ep->access | (ep->nonblocking.load(std::memory_order_acquire) ? O_NONBLOCK : 0);
-    return true;
-  }
-  if (cmd == F_SETFL) {
-    ep->nonblocking.store((arg & O_NONBLOCK) != 0, std::memory_order_release);
-    *result = 0;
-    return true;
-  }
-  return false;
-}
-
-void DupFifo(int fd, int fd2) {
-  std::shared_ptr<FifoEndpoint> replaced;
-  {
-    std::lock_guard<std::mutex> lock(g_fifo_fds_mutex);
-    auto it = g_fifo_fds.find(fd);
-    if (it == g_fifo_fds.end()) return;
-    auto dst = g_fifo_fds.find(fd2);
-    if (dst != g_fifo_fds.end()) {
-      if (dst->second == it->second) return;
-      replaced = std::move(dst->second);
-      dst->second = it->second;
-    } else {
-      g_fifo_fds.emplace(fd2, it->second);
-    }
+    WaitSlice(ring, canceled, interrupted);
   }
 }
 
-bool ForgetFifo(int fd) {
-  std::shared_ptr<FifoEndpoint> dropped;
-  {
-    std::lock_guard<std::mutex> lock(g_fifo_fds_mutex);
-    auto it = g_fifo_fds.find(fd);
-    if (it == g_fifo_fds.end()) return false;
-    dropped = std::move(it->second);
-    g_fifo_fds.erase(it);
+int PollFifo(const DescriptorSnapshotPtr& snapshot, short events, short* ready) {
+  *ready = 0;
+  FifoEndpoint* endpoint = Endpoint(snapshot);
+  if (!endpoint) return -1;
+  const int access = snapshot->description->Flags() & O_ACCMODE;
+  FifoRing& ring = *endpoint->ring;
+  RingLock lock(ring);
+  if (lock.Error()) return errno = lock.Error(), -1;
+  Sweep(ring, false);
+  const RingHeader& header = *ring.header;
+  const uint64_t used = header.tail - header.head;
+  short result = 0;
+  if (access != O_WRONLY) {
+    if (used) result |= events & (POLLIN | POLLRDNORM);
+    // As pipe_poll: a reader hangs up only after a writer came and went.
+    if (header.writers == 0 && endpoint->trailer->writer_epoch != header.writer_opens) result |= POLLHUP;
   }
-  return true;
+  if (access != O_RDONLY) {
+    if (header.readers == 0) result |= POLLERR;
+    if (kCapacity - used >= kPipeBuf) result |= events & (POLLOUT | POLLWRNORM);
+  }
+  *ready = result;
+  return 0;
+}
+
+int FifoBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes) {
+  if (!bytes) return errno = EFAULT, -1;
+  FifoEndpoint* endpoint = Endpoint(snapshot);
+  if (!endpoint) return -1;
+  RingLock lock(*endpoint->ring);
+  if (lock.Error()) return errno = lock.Error(), -1;
+  const RingHeader& header = *endpoint->ring->header;
+  *bytes = static_cast<int>(header.tail - header.head);
+  return 0;
+}
+
+int FifoStatus(const DescriptorSnapshotPtr& snapshot, FifoFileStatus* status) {
+  FifoEndpoint* endpoint = Endpoint(snapshot);
+  if (!endpoint) return -1;
+  const Trailer& trailer = *endpoint->trailer;
+  status->device = trailer.device;
+  status->inode = trailer.inode;
+  status->mode = trailer.mode;
+  status->access_time = trailer.access_time;
+  status->write_time = trailer.write_time;
+  status->change_time = trailer.change_time;
+  return 0;
 }
 
 }  // namespace gesher
 
+// mkfifo(3) and mknod(S_IFIFO): an empty file with WSL's FIFO tag. A volume
+// without reparse points (FAT) cannot hold one; Linux's vfat fails with EPERM.
 extern "C" int mkfifo(const char* path, mode_t mode) {
-  (void)mode;
   if (path == nullptr) return errno = EFAULT, -1;
-  if (*path == '\0') return errno = ENOENT, -1;
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EEXIST)) return -1;
-  HANDLE h = CreateFileW(windows.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                         FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-  DWORD written = 0;
-  BOOL ok = WriteFile(h, gesher::kFifoMagic, sizeof(gesher::kFifoMagic), &written, nullptr);
-  DWORD error = ok ? ERROR_SUCCESS : GetLastError();
-  CloseHandle(h);
-  if (!ok || written != sizeof(gesher::kFifoMagic)) {
-    DeleteFileW(windows.c_str());
-    SetLastError(ok ? ERROR_WRITE_FAULT : error);
-    return gesher::FailWithLastError();
+  // As open(O_CREAT) does here: no owner write permission makes it read-only.
+  HANDLE file = CreateFileW(windows.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, 0, nullptr, CREATE_NEW,
+                            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS |
+                                ((mode & 0200) == 0 ? FILE_ATTRIBUTE_READONLY : FILE_ATTRIBUTE_NORMAL),
+                            nullptr);
+  if (file == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  struct { DWORD tag; WORD length, reserved; } reparse{gesher::kReparseTagFifo, 0, 0};
+  DWORD returned = 0;
+  if (!DeviceIoControl(file, FSCTL_SET_REPARSE_POINT, &reparse, sizeof(reparse), nullptr, 0, &returned, nullptr)) {
+    const DWORD error = GetLastError();
+    FILE_DISPOSITION_INFO remove{TRUE};
+    SetFileInformationByHandle(file, FileDispositionInfo, &remove, sizeof(remove));
+    CloseHandle(file);
+    if (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_PARAMETER)
+      return errno = EPERM, -1;
+    return errno = gesher::ErrnoFromWin32(error), -1;
   }
+  CloseHandle(file);
   return 0;
 }
