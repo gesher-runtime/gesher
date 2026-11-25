@@ -2040,7 +2040,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     /** Called with PM locked after checking current installations; admission verified shared signers. */
-    private static boolean sameInstallSourceIdentity(ApkPackage first, ApkPackage second) {
+    static boolean sameInstallSourceIdentity(ApkPackage first, ApkPackage second) {
         if (first == second) return true;
         String group = first.sharedUserId();
         return first.uid() == second.uid() && group != null && !group.isEmpty()
