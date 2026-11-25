@@ -8,16 +8,18 @@ import android.graphics.ImageDecoder;
 import android.graphics.Point;
 import android.media.MediaMetadataRetriever;
 import android.os.CancellationSignal;
-import android.os.SharedMemory;
+import android.os.Environment;
+import android.os.ParcelFileDescriptor;
 import android.system.ErrnoException;
-import android.system.OsConstants;
+import android.system.Os;
 import android.util.Size;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /** Renders a disposable thumbnail of an already-authorized MediaStore item. */
 final class MediaStoreThumbnail {
@@ -45,12 +47,7 @@ final class MediaStoreThumbnail {
             Bitmap bitmap = video ? videoFrame(file, bounds) : image(file, bounds, signal);
             if (bitmap == null) throw new IOException("No thumbnail pixels available");
             try {
-                checkCancellation(signal);
-                ByteArrayOutputStream stream = new ByteArrayOutputStream();
-                if (!bitmap.compress(format, 85, stream)) {
-                    throw new IOException("Could not encode media thumbnail");
-                }
-                return export(stream.toByteArray(), signal);
+                return export(bitmap, format, signal);
             } finally {
                 bitmap.recycle();
             }
@@ -83,22 +80,37 @@ final class MediaStoreThumbnail {
         }
     }
 
-    private static AssetFileDescriptor export(byte[] bytes, CancellationSignal signal)
+    private static AssetFileDescriptor export(Bitmap bitmap, Bitmap.CompressFormat format,
+            CancellationSignal signal)
             throws IOException, ErrnoException {
         checkCancellation(signal);
-        // A seekable snapshot contains only the encoded bitmap and has no persistent path.
-        try (SharedMemory memory = SharedMemory.create("media-thumbnail", bytes.length)) {
-            ByteBuffer buffer = memory.mapReadWrite();
-            try {
-                buffer.put(bytes);
-            } finally {
-                SharedMemory.unmap(buffer);
-            }
-            if (!memory.setProtect(OsConstants.PROT_READ)) {
-                throw new IOException("Could not protect media thumbnail");
+        Path directory = new File(Environment.getDataDirectory(), "system/media").toPath();
+        Files.createDirectories(directory);
+        Path snapshot = Files.createTempFile(directory, "thumbnail-", ".tmp");
+        ParcelFileDescriptor input = null;
+        boolean unlinked = false;
+        try {
+            try (FileOutputStream output = new FileOutputStream(snapshot.toFile())) {
+                // Use a separate read-only file open. Binder duplicates that handle with
+                // its original rights. Remove the name before writing any image data.
+                input = ParcelFileDescriptor.open(snapshot.toFile(), ParcelFileDescriptor.MODE_READ_ONLY);
+                Os.unlink(snapshot.toString());
+                unlinked = true;
+                checkCancellation(signal);
+                if (!bitmap.compress(format, 85, output)) {
+                    throw new IOException("Could not encode media thumbnail");
+                }
             }
             checkCancellation(signal);
-            return new AssetFileDescriptor(memory.getFdDup(), 0, bytes.length);
+            AssetFileDescriptor asset = new AssetFileDescriptor(input, 0, AssetFileDescriptor.UNKNOWN_LENGTH);
+            input = null; // AssetFileDescriptor owns the handle now.
+            return asset;
+        } finally {
+            try {
+                if (input != null) input.close();
+            } finally {
+                if (!unlinked) Files.deleteIfExists(snapshot);
+            }
         }
     }
 
