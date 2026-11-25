@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: gesher-runtime/gesher
-          ref: e8a983f003605209dfc697de1754f5778bb0ff6b
+          ref: 80e351001158bfe5dd11197e5d3f10db86b4f7a1
           path: speech
           persist-credentials: false
           sparse-checkout: |
