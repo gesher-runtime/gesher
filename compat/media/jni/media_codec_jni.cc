@@ -46,6 +46,7 @@ constexpr int kCbOutputFormatChange = 4;
 
 struct {
   jfieldID context;
+  jfieldID listener_lock;
   jmethodID post_event;
   jclass buffer_info;
   jmethodID buffer_info_ctor;
@@ -380,27 +381,30 @@ class Codec {
       return engine_->SetAsync(false);
     }
     std::shared_ptr<WeakRef> self = self_;
+    std::weak_ptr<CodecEngine> engine = engine_;
     CodecCallbacks cbs;
-    cbs.on_input_available = [self](uint64_t, int index) { PostEvent(self, kCbInputAvailable, index, nullptr); };
-    cbs.on_output_available = [self](uint64_t, int index, const CodecBufferInfo& info) {
+    cbs.on_input_available = [self, engine](uint64_t generation, int index) {
+      PostEvent(engine, self, generation, kCbInputAvailable, index, nullptr);
+    };
+    cbs.on_output_available = [self, engine](uint64_t generation, int index, const CodecBufferInfo& info) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       env->PushLocalFrame(16);
       jobject jinfo = env->NewObject(gJ.buffer_info, gJ.buffer_info_ctor);
       env->CallVoidMethod(jinfo, gJ.buffer_info_set, info.offset, info.size,
                           static_cast<jlong>(info.time_us), static_cast<jint>(info.flags));
-      PostEvent(self, kCbOutputAvailable, index, jinfo);
+      PostEvent(engine, self, generation, kCbOutputAvailable, index, jinfo);
       env->PopLocalFrame(nullptr);
     };
-    cbs.on_output_format_changed = [self](uint64_t, const Format& format) {
+    cbs.on_output_format_changed = [self, engine](uint64_t generation, const Format& format) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       env->PushLocalFrame(64);
       jobject map = FormatToMap(env, format);
-      PostEvent(self, kCbOutputFormatChange, 0, map);
+      PostEvent(engine, self, generation, kCbOutputFormatChange, 0, map);
       env->PopLocalFrame(nullptr);
     };
-    cbs.on_error = [self](uint64_t, int error, int action, const std::string& msg) {
+    cbs.on_error = [self, engine](uint64_t generation, int error, int action, const std::string& msg) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       jstring m = env->NewStringUTF(msg.c_str());
@@ -409,7 +413,7 @@ class Codec {
         return;
       }
       jobject e = env->NewObject(gJ.codec_exception, gJ.codec_exception_ctor, error, action, m);
-      if (e != nullptr) PostEvent(self, kCbError, 0, e);
+      if (e != nullptr) PostEvent(engine, self, generation, kCbError, 0, e);
       CheckException(env, "MediaCodec error callback");
       env->DeleteLocalRef(e);
       env->DeleteLocalRef(m);
@@ -598,13 +602,28 @@ class Codec {
     };
   }
 
-  static void PostEvent(const std::shared_ptr<WeakRef>& self, int what, int index, jobject obj) {
+  static void PostEvent(const std::weak_ptr<CodecEngine>& engine,
+                        const std::shared_ptr<WeakRef>& self, uint64_t generation,
+                        int what, int index, jobject obj) {
+    const auto owner = engine.lock();
+    if (!owner) return;
     JNIEnv* env = AttachedEnv("gesher-codec");
     if (env == nullptr) return;
     jobject s = env->NewLocalRef(self->get());
     if (s == nullptr) return;
-    env->CallVoidMethod(s, gJ.post_event, kEventCallback, what, index, obj);
+    jobject listener = env->GetObjectField(s, gJ.listener_lock);
+    if (listener != nullptr && env->MonitorEnter(listener) == JNI_OK) {
+      // AOSP postEventFromNative only enqueues under this reentrant monitor.
+      // Take it before the engine mutex: setOnFrameRenderedListener holds it
+      // while calling native code. The epoch check and post then linearize
+      // together with native flush/stop/release, without a check/post race.
+      owner->EnqueueCallbackIfCurrent(generation, [&] {
+        env->CallVoidMethod(s, gJ.post_event, kEventCallback, what, index, obj);
+      });
+      env->MonitorExit(listener);
+    }
     CheckException(env, "MediaCodec.postEventFromNative");
+    env->DeleteLocalRef(listener);
     env->DeleteLocalRef(s);
   }
 
@@ -634,6 +653,7 @@ CodecOwner GetCodec(JNIEnv* env, jobject thiz) {
 void JNICALL MC_init(JNIEnv* env, jclass clazz) {
   gJ.context = env->GetFieldID(clazz, "mNativeContext", "J");
   gJ.post_event = env->GetMethodID(clazz, "postEventFromNative", "(IIILjava/lang/Object;)V");
+  gJ.listener_lock = env->GetFieldID(clazz, "mListenerLock", "Ljava/lang/Object;");
   auto global = [&](const char* name) {
     jclass c = env->FindClass(name);
     jclass g = c != nullptr ? static_cast<jclass>(env->NewGlobalRef(c)) : nullptr;

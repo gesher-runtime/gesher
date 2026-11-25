@@ -2,6 +2,9 @@ package gesher.services;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
+import android.os.Handler;
+import android.os.HandlerThread;
+import java.nio.ByteBuffer;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -131,6 +134,112 @@ public final class CodecLifecycleContractTest {
         }
     }
 
+    private static void asynchronousLifecycle() throws Exception {
+        HandlerThread callbacks = new HandlerThread("codec-java-callbacks");
+        callbacks.start();
+        Handler handler = new Handler(callbacks.getLooper());
+        MediaCodec codec = MediaCodec.createDecoderByType("audio/raw");
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        // These fields are confined to the callback Handler.
+        int[] phase = {0}, formats = {0}, outputs = {0};
+        boolean[] sent = {false};
+        Runnable failed = () -> {
+            try { codec.release(); }
+            catch (Throwable cleanup) { failure.compareAndSet(null, cleanup); }
+            finished.countDown();
+        };
+        try {
+            codec.setCallback(new MediaCodec.Callback() {
+                @Override public void onInputBufferAvailable(MediaCodec owner, int index) {
+                    try {
+                        if (phase[0] == 0) {
+                            phase[0] = 1;
+                            owner.flush();
+                            // AOSP permits callbacks already queued before flush.
+                            // Drain that Handler prefix before starting the new epoch.
+                            handler.post(() -> {
+                                try {
+                                    phase[0] = 2;
+                                    // This public setter enters native code while
+                                    // holding the same Java listener monitor as posts.
+                                    codec.setOnFrameRenderedListener((c, mediaUs, systemNs) -> {}, handler);
+                                    codec.start();
+                                } catch (Throwable unexpected) {
+                                    failure.compareAndSet(null, unexpected);
+                                    failed.run();
+                                }
+                            });
+                            return;
+                        }
+                        if (phase[0] != 2 || sent[0]) return;
+                        sent[0] = true;
+                        ByteBuffer input = owner.getInputBuffer(index);
+                        if (input == null || input.capacity() < 2) {
+                            throw new AssertionError("callback has no owned PCM input");
+                        }
+                        input.put(0, (byte) 0);
+                        input.put(1, (byte) 0);
+                        owner.queueInputBuffer(index, 0, 2, 1234, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                    } catch (Throwable unexpected) {
+                        failure.compareAndSet(null, unexpected);
+                        failed.run();
+                    }
+                }
+                @Override public void onOutputFormatChanged(MediaCodec owner, MediaFormat output) {
+                    try {
+                        formats[0]++;
+                        if (output.getInteger(MediaFormat.KEY_SAMPLE_RATE) != 8000
+                                || output.getInteger(MediaFormat.KEY_CHANNEL_COUNT) != 1) {
+                            throw new AssertionError("callback PCM format differs from real decoder");
+                        }
+                    } catch (Throwable unexpected) {
+                        failure.compareAndSet(null, unexpected);
+                        failed.run();
+                    }
+                }
+                @Override public void onOutputBufferAvailable(MediaCodec owner, int index,
+                        MediaCodec.BufferInfo info) {
+                    try {
+                        outputs[0]++;
+                        if (info.size > 0) {
+                            ByteBuffer output = owner.getOutputBuffer(index);
+                            if (output == null || info.size != 2 || info.presentationTimeUs != 1234
+                                    || output.get(info.offset) != 0 || output.get(info.offset + 1) != 0) {
+                                throw new AssertionError("callback lost real PCM data or timestamp");
+                            }
+                        }
+                        owner.releaseOutputBuffer(index, false);
+                        if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            phase[0] = 3;
+                            owner.stop();
+                            owner.release();
+                            finished.countDown();
+                        }
+                    } catch (Throwable unexpected) {
+                        failure.compareAndSet(null, unexpected);
+                        failed.run();
+                    }
+                }
+                @Override public void onError(MediaCodec owner, MediaCodec.CodecException error) {
+                    failure.compareAndSet(null, error);
+                    failed.run();
+                }
+            }, handler);
+            codec.configure(format(), null, null, 0);
+            codec.start();
+            await(finished, "public Java callbacks flush/restart/stop/release on real ART/JNI");
+            check(failure.get() == null, "Java callback lifecycle: " + failure.get());
+            check(phase[0] == 3 && sent[0] && formats[0] == 1 && outputs[0] == 2,
+                    "restarted Java callback epoch emits actual PCM then EOS once");
+        } finally {
+            codec.release();
+            callbacks.quitSafely();
+            callbacks.join(2000);
+            check(!callbacks.isAlive(), "Java callback Handler retires");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         // Standalone ART callers need the framework natives used by MediaCodec's Trace calls.
         System.loadLibrary("android_runtime");
@@ -138,6 +247,7 @@ public final class CodecLifecycleContractTest {
         retireBlockedCall(false, true);
         retireBlockedCall(true, true);
         retireBlockedCall(false, false);
+        asynchronousLifecycle();
         System.out.println("CodecLifecycleContractTest: " + checks + " checks passed; native=true");
     }
 }

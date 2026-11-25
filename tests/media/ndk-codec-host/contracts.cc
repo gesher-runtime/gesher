@@ -575,7 +575,10 @@ void CallbackQueue() {
   Check(calls == 1, "closed queue never admits another callback");
 }
 
+#include "jni_codec_callbacks.inc"
+
 int main() {
+  jni_callbacks_host::Run();
   CallbackQueue();
   Synchronous();
   DelayedStartEpoch();

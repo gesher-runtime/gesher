@@ -355,6 +355,14 @@ bool CodecEngine::IsCallbackCurrent(uint64_t generation) {
   return !released_ && generation == wait_generation_;
 }
 
+bool CodecEngine::EnqueueCallbackIfCurrent(uint64_t generation,
+                                          const std::function<void()>& enqueue) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (released_ || generation != wait_generation_) return false;
+  enqueue();
+  return true;
+}
+
 bool CodecEngine::SetAsync(bool async, CodecCallbacks callbacks) {
   std::lock_guard<std::mutex> lock(mu_);
   if (released_ || fatal_ || started_) return false;

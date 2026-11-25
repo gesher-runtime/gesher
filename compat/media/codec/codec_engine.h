@@ -138,6 +138,10 @@ class CodecEngine : public std::enable_shared_from_this<CodecEngine> {
   bool GetMetrics(std::optional<CodecMetrics>* out_metrics);
   bool IsReleasedOrFatal();
   bool IsCallbackCurrent(uint64_t generation);
+  // Serialize an adapter's enqueue with flush/stop/release invalidation. The
+  // function must only enqueue an event; it must not run application code or
+  // reenter the engine. Acquire any destination queue lock before calling.
+  bool EnqueueCallbackIfCurrent(uint64_t generation, const std::function<void()>& enqueue);
 
   bool SetAsync(bool async, CodecCallbacks callbacks = {});
   void EnableFrameRendered(bool enable, std::function<void(int64_t, int64_t)> cb = {});

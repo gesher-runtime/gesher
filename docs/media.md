@@ -212,6 +212,13 @@ the app's ELF code) or players.
   engine and NDK adapter with explicit host metadata, codec and window seams;
   that portable test checks lifetime, ownership, cancellation epochs and
   malformed PCM layouts, and does not establish Windows or media-backend results.
+  It also executes the actual Java callback adapter bodies over declared JNI
+  seams: delayed input/output/format/error events cannot be posted after their
+  epoch retires. Java enqueue holds the listener monitor before the engine
+  epoch gate, preserving the public listener setter's lock order. An event
+  already enqueued before flush retains Android's documented outstanding-event
+  semantics. `CodecLifecycleContractTest` separately exercises the public Java
+  callback flush/restart/stop/release path through Windows ART/JNI.
 - **Surfaces without a compositor** (`compat/media/surface`, built into hwui):
   a SurfaceTexture's and a SurfaceView's Surface is a `QueueSurface` (frames
   stay in the process; a producer in another process, given the Surface in a
