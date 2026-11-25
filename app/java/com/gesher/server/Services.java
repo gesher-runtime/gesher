@@ -205,6 +205,15 @@ public final class Services {
         services.put(CameraSourceService.NAME, new CameraSourceService(am));
         services.put(Context.CLIPBOARD_SERVICE, StandIn.of(android.content.IClipboard.class,
                 clipboard).asBinder());
+        // content://media: MediaStore over the shared volume (docs/media-provider.md).
+        try {
+            MediaStoreProvider.create(am, pm, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/media")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to index.
+            SystemServer.log("media: provider unavailable: " + e);
+        }
         // print (docs/print.md): FEATURE_PRINTING means the runtime has the Windows
         // print bridge, even with no default printer. Without the native bridge,
         // PrintManager never asks for the service.
