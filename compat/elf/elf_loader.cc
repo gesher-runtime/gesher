@@ -2135,6 +2135,34 @@ void SetBionicResolver(SymbolResolver resolver) {
   g_resolver = std::move(resolver);
 }
 
+// Gesher's ELF loader under Android's name, /system/bin/linker64
+// (compat/posix/src/system_linker.cc, ADR 0096): an ELF64 file whose PT_NOTE
+// holds a "Gesher" note of type 1. It is this process's dynamic linker, not a
+// library: it has no code and no symbols, so dlopen refuses it instead of
+// returning an empty object.
+bool IsGesherLinkerImage(const uint8_t* data, size_t size) {
+  if (size < sizeof(Elf64_Ehdr)) return false;
+  const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
+  if (std::memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0 || ehdr->e_ident[EI_CLASS] != ELFCLASS64 ||
+      ehdr->e_phentsize != sizeof(Elf64_Phdr) || ehdr->e_phoff > size ||
+      ehdr->e_phnum > (size - ehdr->e_phoff) / sizeof(Elf64_Phdr)) {
+    return false;
+  }
+  const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
+  for (int i = 0; i < ehdr->e_phnum; ++i) {
+    if (phdr[i].p_type != PT_NOTE || phdr[i].p_offset > size || phdr[i].p_filesz < 20 ||
+        phdr[i].p_filesz > size - phdr[i].p_offset) {
+      continue;
+    }
+    const uint8_t* note = data + phdr[i].p_offset;
+    uint32_t namesz, type;
+    std::memcpy(&namesz, note, 4);
+    std::memcpy(&type, note + 8, 4);
+    if (namesz == 7 && type == 1 && std::memcmp(note + 12, "Gesher", 7) == 0) return true;
+  }
+  return false;
+}
+
 Library* Load(const char* path, std::string* error, const LoadOptions& options) {
   std::lock_guard<LoaderMutex> operation(g_mutex);
   // Name the object by its file base name.
@@ -2148,6 +2176,12 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
   }
   FileImage image;
   if (!OpenImage(path, &image, error)) return nullptr;
+  if (IsGesherLinkerImage(image.data, image.size)) {
+    Fail(error, std::string(path) +
+                    " is Gesher's ELF loader (/system/bin/linker64): the process's own dynamic "
+                    "linker, not a library to load");
+    return nullptr;
+  }
   return LoadCommon(name.c_str(), path, image.data, image.size, image.fd, error, options);
 }
 

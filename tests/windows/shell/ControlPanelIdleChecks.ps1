@@ -152,6 +152,7 @@ try {
     Refresh-Dashboard
     $window.Show()
     Pump-Until { $script:LiveState.WasVisible -and -not $script:LiveState.PendingSince } 'Initial visible view did not settle'
+    Assert-Idle ($script:Scans.List -eq 1 -and $script:Draws -eq 1) 'Quiet WPF first show repeated its initial list read or render'
     Assert-Idle ($script:ShownPackages -contains 'fixture.alpha') 'Initial application view is stale'
     Assert-Idle ($script:MetadataMonitor.WatcherCount -ge 1 -and $script:MetadataMonitor.WatcherCount -le 8) 'Watcher handle budget is invalid'
 

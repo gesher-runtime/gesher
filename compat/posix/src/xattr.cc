@@ -21,6 +21,7 @@
 #include "record_lock_liveness.h"
 #include "xattr_access.h"
 #include "xattr_security_policy.h"
+#include "system_linker.h"
 
 namespace {
 
@@ -620,10 +621,18 @@ ssize_t Perform(const Target& target, const Request& request, const PreparedRequ
   return error ? (errno = error, -1) : 0;
 }
 
+// Gesher's ELF loader (/system/bin/linker64) is on Android's read-only /system,
+// whatever name or fd reaches it (system_linker.h).
+int RefuseLinkerChange(const Target& target, const Request& request) {
+  if (request.operation != Operation::kSet && request.operation != Operation::kRemove) return 0;
+  return gesher::system_linker::IsFileHandle(target.original.value) ? EROFS : 0;
+}
+
 ssize_t PathRequest(const char* path, bool follow, const Request& request) {
   Target target;
   PreparedRequest prepared;
   int error = PinPath(path, follow, &target);
+  if (!error) error = RefuseLinkerChange(target, request);
   if (!error) error = PrepareRequest(request, &prepared);
   if (!error) error = AuthorizeTarget(&target, request);
   return error ? (errno = error, -1) : Perform(target, request, prepared);
@@ -633,6 +642,7 @@ ssize_t FdRequest(int fd, const Request& request, bool allow_path = false) {
   Target target;
   PreparedRequest prepared;
   int error = PinFd(fd, allow_path, &target);
+  if (!error) error = RefuseLinkerChange(target, request);
   if (!error) error = PrepareRequest(request, &prepared);
   if (!error) error = AuthorizeTarget(&target, request);
   return error ? (errno = error, -1) : Perform(target, request, prepared);

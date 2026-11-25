@@ -2,8 +2,29 @@
 # Gesher Control Center (לוח הבקרה של גשר) - GUI Dashboard for apps and Google Play services.
 
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
 $here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Resolve-Path (Join-Path $PWD 'tools/package')).Path }
+. (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Set-GesherProfileEnvironment $here
+
+# One Control Center. A second start (the Start menu again, or an app's "App info", which
+# the system server answers by writing the package here and opening the panel:
+# ControlCenter.java) signals the open panel, which comes to the front and takes the
+# request on its live-refresh timer, and exits. The mutex is only a name (never owned);
+# a panel closes its handles as its window closes, so a start right after that opens a
+# new one. "Reopen" after an update starts the new version while the old one is still
+# open: GESHER_PANEL_REOPEN lets that start through.
+$script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
+Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
+$script:PanelInstanceCreated = $false
+$panelName = Get-GesherControlPanelName $root
+$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
+$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
+if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
+    $null = $script:PanelShowEvent.Set()
+    exit 0
+}
+
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Drawing
 
 # Set explicit AppUserModelID so Windows taskbar groups under Gesher instead of PowerShell host
 try {
@@ -14,32 +35,21 @@ try {
 . (Join-Path $here 'gesher-ui.ps1')
 . (Join-Path $here 'gesher-update.ps1')
 . (Join-Path $here 'gesher-panel-view.ps1')
-. (Join-Path $here 'gesher-runtime-files.ps1')
-$root = Set-GesherProfileEnvironment $here
 $script:UpdateDirectory = Join-Path $root 'updates'
-
-# One Control Center. A second start (the Start menu again, or an app's "App info", which
-# the system server answers by writing the package here and opening the panel:
-# ControlCenter.java) signals the open panel, which comes to the front and takes the
-# request on its live-refresh timer, and exits. The mutex is only a name (never owned);
-# a panel closes its handles as its window closes, so a start right after that opens a
-# new one. "Reopen" after an update starts the new version while the old one is still
-# open: GESHER_PANEL_REOPEN lets that start through.
+# Legacy single-file requests are imported for an older running server.
 $script:PanelRequestFile = Join-Path $root 'data/system/control-panel-request'
-$script:PanelReopen = ($env:GESHER_PANEL_REOPEN -eq '1')
+$script:PanelRequestsDir = Join-Path $root 'data/system/control-panel-requests'
+# Requests waiting for their result: one file per token, holding the package (ControlCenter.java).
+$script:PanelResultsDir = Join-Path $root 'data/system/control-panel-results'
+# The package whose details are shown for a request: a new request never replaces its tokens.
+$script:PanelShowingFile = Join-Path $root 'data/system/control-panel-showing'
+$script:PanelLogFile = Join-Path $root 'logs/control-panel.log'
 # Apps whose tasks are windows of their own (ADR 0088; AppWindows.java): separate.<package>=true.
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
 # Gesher's own proxy (ProxySetting.java, docs/network.md): proxy=<every app>, proxy.<package>=<one app>.
 $script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
-Remove-Item Env:GESHER_PANEL_REOPEN -ErrorAction SilentlyContinue
-$script:PanelInstanceCreated = $false
-$panelName = Get-GesherControlPanelName $root
-$script:PanelInstance = [System.Threading.Mutex]::new($false, $panelName, [ref] $script:PanelInstanceCreated)
-$script:PanelShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, ($panelName + '.Show'))
-if (-not $script:PanelInstanceCreated -and -not $script:PanelReopen) {
-    $null = $script:PanelShowEvent.Set()
-    exit 0
-}
+# Gesher's camera settings: image_picker_fallback=true.
+$script:CameraFile = Join-Path $root 'data/system/camera.properties'
 
 $isHe = ($script:GesherUiLanguage -eq 'he')
 $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
@@ -51,6 +61,40 @@ $script:ActionState = @{ Worker = $null; Completing = $false; Closed = $false }
 $script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{} }
 $script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; PendingFirst = $null; Tick = 0; WasVisible = $false; RecoveryAt = $null }
 $script:MetadataMonitor = $null
+$script:UpdatingCameraView = $false
+
+# Camera image-picker fallback setting (data/system/camera.properties).
+function Get-CameraImagePickerEnabled {
+    if ([string]::IsNullOrEmpty($script:CameraFile) -or -not (Test-Path -LiteralPath $script:CameraFile)) { return $false }
+    $enabled = $false
+    try {
+        foreach ($line in Get-Content -LiteralPath $script:CameraFile) {
+            if ($line -match '^\s*image_picker_fallback\s*[=:]\s*(.+?)\s*$') {
+                $enabled = ($Matches[1].Trim().ToLowerInvariant() -eq 'true')
+            }
+        }
+    } catch { return $false }
+    return $enabled
+}
+
+function Set-CameraImagePickerEnabled([bool] $enabled) {
+    $lines = [System.Collections.Generic.List[string]]::new()
+    if (Test-Path -LiteralPath $script:CameraFile) {
+        foreach ($line in Get-Content -LiteralPath $script:CameraFile) {
+            if ($line -match '^\s*image_picker_fallback\s*[=:]') { continue }
+            $lines.Add($line)
+        }
+    } else {
+        $lines.Add('#Gesher camera settings')
+    }
+    if ($enabled) { $lines.Add('image_picker_fallback=true') }
+    $directory = Split-Path -Parent $script:CameraFile
+    if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
+    # The system server reads the file at any time: write a sibling, then move it into place.
+    $temporary = $script:CameraFile + '.tmp'
+    [IO.File]::WriteAllLines($temporary, $lines, [Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $temporary -Destination $script:CameraFile -Force
+}
 
 # Packages whose tasks are windows of their own (AppWindows.java's file).
 function Get-SeparateWindowApps {
@@ -350,6 +394,7 @@ function Get-StateStamp {
         Get-FileStamp (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
         Get-FileStamp $script:AppWindowsFile
         Get-FileStamp $script:ProxyFile
+        Get-FileStamp $script:CameraFile
     ) -join '|')
 }
 
@@ -378,13 +423,19 @@ function Update-PanelMetadataWatch {
         (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk')
         $script:AppWindowsFile
         $script:ProxyFile
+        $(if (-not [string]::IsNullOrEmpty($script:CameraFile)) { $script:CameraFile })
     ) + @($script:ViewState.AppFiles)
     $script:MetadataMonitor.SetFiles($root, [string[]]$paths)
 }
 
 function Invoke-PanelMetadataVisibilityChanged {
     if (-not (Test-PanelMetadataVisible)) {
+        $script:LiveState.InitialShowPending = $false
         $script:LiveState.WasVisible = $false
+        return
+    }
+    if ($script:LiveState.InitialShowPending) {
+        $script:LiveState.WasVisible = $true
         return
     }
     # Restore resynchronizes even if the watcher overflowed or a directory was replaced.
@@ -394,6 +445,11 @@ function Invoke-PanelMetadataVisibilityChanged {
 
 function Invoke-PanelMetadataActivated {
     try {
+        if ($script:LiveState.InitialShowPending -and (Test-PanelMetadataVisible)) {
+            $script:LiveState.InitialShowPending = $false
+            $script:LiveState.WasVisible = $true
+            return
+        }
         Invoke-PanelMetadataVisibilityChanged
         if (-not $script:IsBusy -and (Test-PanelMetadataVisible)) {
             $script:LiveState.WasVisible = $true
@@ -407,7 +463,16 @@ function Initialize-PanelMetadata {
         $context = [System.Windows.Threading.DispatcherSynchronizationContext]::new($window.Dispatcher,
             [System.Windows.Threading.DispatcherPriority]::Background)
         $script:MetadataMonitor = [Gesher.PanelChangeMonitor]::new($context)
-        $script:MetadataMonitor.add_Changed({ try { Request-PanelMetadataRefresh } catch { } })
+        $script:MetadataMonitor.add_Changed({
+            try {
+                if ($null -ne $script:LiveState.IgnoreChangedGeneration) {
+                    $ignored = $script:LiveState.IgnoreChangedGeneration
+                    $script:LiveState.IgnoreChangedGeneration = $null
+                    if ($script:MetadataMonitor -and $script:MetadataMonitor.Generation -eq $ignored) { return }
+                }
+                Request-PanelMetadataRefresh
+            } catch { }
+        })
     } catch { $script:MetadataMonitor = $null }
     $window.Add_StateChanged({ Invoke-PanelMetadataVisibilityChanged })
     $window.Add_IsVisibleChanged({ Invoke-PanelMetadataVisibilityChanged })
@@ -534,6 +599,7 @@ $btnProxyAll = $window.FindName('BtnProxyAll')
 $updateVersionText = $window.FindName('UpdateVersionText')
 $updateStatusText = $window.FindName('UpdateStatusText')
 $automaticUpdateChecks = $window.FindName('AutomaticUpdateChecks')
+$cameraImagePickerFallback = $window.FindName('CameraImagePickerFallback')
 $btnCheckUpdate = $window.FindName('BtnCheckUpdate')
 $btnInstallUpdate = $window.FindName('BtnInstallUpdate')
 $btnCancelUpdate = $window.FindName('BtnCancelUpdate')
@@ -545,8 +611,8 @@ $panelLayout = $window.FindName('PanelLayout')
 
 function Update-PanelWindowLayout {
     # A short or scaled display can scroll the complete dashboard. Its app list
-    # keeps a useful viewport rather than being squeezed behind the update card.
-    $panelLayout.Height = [Math]::Max(640, $panelScroll.ActualHeight - 48)
+    # keeps a useful viewport rather than being squeezed behind the update and camera cards.
+    $panelLayout.Height = [Math]::Max(740, $panelScroll.ActualHeight - 48)
 }
 
 function Set-Busy([bool] $busy, [string] $msg = '') {
@@ -708,6 +774,14 @@ function Update-AppsView($installed) {
 
 # Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
 function Refresh-Dashboard {
+    # Subscribe before the first snapshot. Only the setup notification already covered
+    # by that snapshot may be ignored; changes during the read must remain dirty.
+    if ($script:MetadataMonitor -and $script:MetadataMonitor.WatcherCount -eq 0) {
+        Update-PanelMetadataWatch
+        if ($script:MetadataMonitor.WatcherCount -gt 0) {
+            $script:LiveState.IgnoreChangedGeneration = $script:MetadataMonitor.Generation
+        }
+    }
     $generation = if ($script:MetadataMonitor) { $script:MetadataMonitor.Generation } else { 0 }
     # Stamps precede reads so notifications or visible recovery notice a change during the read.
     $stateStamp = Get-StateStamp
@@ -717,10 +791,14 @@ function Refresh-Dashboard {
     if (-not $script:LiveState.PendingSince) { Request-PanelMetadataRefresh }
     Update-DeviceView (Get-DeviceStatus)
     Update-MicrogView (Get-MicrogStatus)
+    if (Get-Command Update-CameraView -ErrorAction SilentlyContinue) { Update-CameraView }
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
     Update-PanelMetadataWatch
+    if ($null -eq $script:LiveState.Stamp -and -not (Test-PanelMetadataVisible)) {
+        $script:LiveState.InitialShowPending = $true
+    }
     $script:LiveState.Stamp = $stateStamp
     $script:LiveState.AppsStamp = $appsStamp
     $script:LiveState.RecoveryAt = [DateTime]::UtcNow.AddMilliseconds($script:LiveRefreshRecoveryMs)
@@ -753,6 +831,7 @@ function Invoke-LiveRefreshTick {
         Refresh-Dashboard
         return
     }
+    $live.InitialShowPending = $false
     $now = [DateTime]::UtcNow
     if (-not $live.RecoveryAt -or $now -ge $live.RecoveryAt) {
         $live.RecoveryAt = $now.AddMilliseconds($script:LiveRefreshRecoveryMs)
@@ -773,6 +852,7 @@ function Invoke-LiveRefreshTick {
 function Invoke-PanelHeartbeat {
     if ($script:ActionState.Closed) { return }
     try { Complete-PanelAction } catch { }
+    try { Clear-PanelSpecialAccessWorkers } catch { }
     try { Invoke-PanelRequest } catch { }
     try { Invoke-PanelUpdateTick } catch {
         Set-PanelUpdateStatus 'cp_update_check_failed' @() $_.Exception.Message
@@ -797,6 +877,57 @@ function Read-PanelRequest {
     return $text.Trim()
 }
 
+# The package and result token are one immutable record (ControlCenter.publishRequest).
+# A legacy single-line record has no embedded token; its old result files are taken
+# only after its details become the owned visit.
+function ConvertFrom-QueuedPanelRequest([string] $text) {
+    if ($null -eq $text -or $text.Length -gt 1024) { return $null }
+    $lines = @($text -split "`r?`n")
+    while ($lines.Count -gt 1 -and $lines[-1] -eq '') { $lines = @($lines[0..($lines.Count - 2)]) }
+    if ($lines.Count -gt 2) { return $null }
+    $package = ConvertFrom-PanelRequest $lines[0]
+    $token = if ($lines.Count -eq 2) { $lines[1] } else { '' }
+    if ($token -and ($token -cnotmatch '^[0-9a-f]{32}$' -or -not $package)) { return $null }
+    return [PSCustomObject]@{
+        Package = $(if ($package) { $package.Package } else { $null })
+        Tokens = [string[]]$(if ($token) { @($token) } else { @() })
+    }
+}
+
+# Imports the old server's one-file protocol without a peek/take split. The renamed
+# file is now immutable and belongs to the queue even when a different app is shown.
+function Import-LegacyPanelRequest {
+    if (-not (Test-Path -LiteralPath $script:PanelRequestFile)) { return }
+    if (-not (Test-Path -LiteralPath $script:PanelRequestsDir)) {
+        [void](New-Item -ItemType Directory -Path $script:PanelRequestsDir -Force)
+    }
+    if (@(Get-ChildItem -LiteralPath $script:PanelRequestsDir -Filter '*.request' -File).Count -ge 32) { return }
+    $name = '{0:D19}-legacy-{1}.request' -f [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(), [guid]::NewGuid().ToString('N')
+    $owned = Join-Path $script:PanelRequestsDir $name
+    try { Move-Item -LiteralPath $script:PanelRequestFile -Destination $owned -ErrorAction Stop } catch { }
+}
+
+# Claims one complete request; filtering reads an immutable filename, so another
+# publisher cannot replace the inspected package with a different package's token.
+# Reopen can briefly create two consumers: only the successful rename owns a visit.
+function Receive-PanelRequest([string] $Package = '') {
+    Import-LegacyPanelRequest
+    if (-not (Test-Path -LiteralPath $script:PanelRequestsDir)) { return $null }
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:PanelRequestsDir -Filter '*.request' -File | Sort-Object Name)) {
+        try { $request = ConvertFrom-QueuedPanelRequest ([IO.File]::ReadAllText($file.FullName)) } catch { continue }
+        if ($Package -and (-not $request -or $request.Package -cne $Package)) { continue }
+        $taken = "$($file.FullName).$([guid]::NewGuid().ToString('N')).taken"
+        try { Move-Item -LiteralPath $file.FullName -Destination $taken -ErrorAction Stop } catch { continue }
+        # The selected record is immutable. The successful rename owns the parsed
+        # value too; a second read adds I/O and can lose the visit on a transient error.
+        Remove-Item -LiteralPath $taken -Force -ErrorAction SilentlyContinue
+        # Malformed legacy records still raise the main panel, as the old protocol did.
+        if (-not $request) { $request = [PSCustomObject]@{ Package = $null; Tokens = [string[]]@() } }
+        return $request
+    }
+    return $null
+}
+
 # packages.list's install and update times (milliseconds since 1970, UTC), as local dates.
 function Get-AppInstallTimes([string] $pkg) {
     $packagesFile = Join-Path $root 'data/system/packages.list'
@@ -816,7 +947,262 @@ function Get-AppInstallTimes([string] $pkg) {
     return $null
 }
 
-function Show-AppInfoDialog([string] $pkg) {
+# Android Settings' special app access switches the App info shows (SpecialAccess.java):
+# the app-op's public name and its label. The device lists only those the app requests.
+$script:SpecialAccessLabels = [ordered]@{
+    'android:system_alert_window' = 'cp_access_overlay'
+    'android:request_install_packages' = 'cp_access_install'
+    'android:write_settings' = 'cp_access_write_settings'
+    'android:get_usage_stats' = 'cp_access_usage'
+}
+$script:SpecialAccessTimeoutMs = 120000
+# Background queries whose dialog closed before they answered; the live timer disposes them.
+$script:OrphanSpecialAccessWorkers = [Collections.Generic.List[object]]::new()
+
+# The device's answer (gesher-app special-access): "special-access<TAB>op<TAB>allowed|denied"
+# lines, with "<TAB>fixed" when the switch cannot change it, among the launcher's other
+# output. Unknown switches are left out.
+function ConvertFrom-SpecialAccessOutput([string[]] $lines) {
+    $switches = [Collections.Generic.List[object]]::new()
+    foreach ($line in $lines) {
+        if ($line -cmatch '^special-access\t(android:[a-z_]+)\t(allowed|denied)(\tfixed)?\s*$' -and
+                @($script:SpecialAccessLabels.Keys) -ccontains $Matches[1]) {
+            $switches.Add([PSCustomObject]@{ Op = $Matches[1]; Allowed = ($Matches[2] -eq 'allowed'); Fixed = [bool]$Matches[3] })
+        }
+    }
+    return $switches.ToArray()
+}
+
+# Runs gesher-app special-access in its own process (the script ends with exit), hidden;
+# the device authenticates it as the host shell. Returns its exit code and output lines.
+# Runs in a background runspace for the dialog (Start-PanelSpecialAccess): never on the UI thread.
+function Invoke-PanelSpecialAccess([string[]] $arguments,
+        [ValidateSet('special-access', 'settings-shown', 'settings-closed')] [string] $command = 'special-access') {
+    $appScript = Join-Path $here 'gesher-app.ps1'
+    $system = [Environment]::GetFolderPath('System')
+    $info = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'))
+    # Every argument was checked against a fixed pattern: no quoting is needed.
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $appScript + '" ' + $command + ' ' + ($arguments -join ' ')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($script:SpecialAccessTimeoutMs)) {
+            # The launcher's dalvikvm is a child of this PowerShell: end the whole tree.
+            try {
+                $kill = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'taskkill.exe'), "/PID $($process.Id) /T /F")
+                $kill.UseShellExecute = $false; $kill.CreateNoWindow = $true
+                $killer = [System.Diagnostics.Process]::Start($kill)
+                $null = $killer.WaitForExit(10000); $killer.Dispose()
+            } catch { }
+            try { if (-not $process.HasExited) { $process.Kill() } } catch { }
+            return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
+        }
+        $process.WaitForExit()
+        $null = $errors.Result
+        return [PSCustomObject]@{ ExitCode = $process.ExitCode; Lines = @($output.Result -split "`r?`n") }
+    } finally { $process.Dispose() }
+}
+
+# Starts Invoke-PanelSpecialAccess in a background runspace; poll it with
+# Test-PanelSpecialAccessDone and take its answer with Receive-PanelSpecialAccess.
+function Start-PanelSpecialAccess([string[]] $arguments, [string] $command = 'special-access') {
+    $powerShell = [PowerShell]::Create()
+    try {
+        $body = "param(`$here, `$timeout, `$arguments, `$command)`n`$script:SpecialAccessTimeoutMs = `$timeout`n" +
+            "function Invoke-PanelSpecialAccess {`n$((Get-Command Invoke-PanelSpecialAccess).Definition)`n}`n" +
+            "Invoke-PanelSpecialAccess `$arguments `$command"
+        $null = $powerShell.AddScript($body).AddArgument($here).AddArgument($script:SpecialAccessTimeoutMs).AddArgument([string[]]$arguments).AddArgument($command)
+        return [PSCustomObject]@{ PowerShell = $powerShell; Handle = $powerShell.BeginInvoke() }
+    } catch {
+        $powerShell.Dispose()
+        throw
+    }
+}
+
+function Test-PanelSpecialAccessDone($worker) {
+    return [bool]$worker.Handle.IsCompleted
+}
+
+# A diagnostic line in logs\control-panel.log; never fails the caller.
+function Write-PanelLog([string] $message) {
+    try {
+        $directory = Split-Path -Parent $script:PanelLogFile
+        if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Path $directory) }
+        [IO.File]::AppendAllText($script:PanelLogFile,
+            "$([DateTime]::Now.ToString('yyyy-MM-dd HH:mm:ss')) $message`r`n", [Text.UTF8Encoding]::new($false))
+    } catch { }
+}
+
+function Receive-PanelSpecialAccess($worker) {
+    try {
+        $results = @($worker.PowerShell.EndInvoke($worker.Handle))
+        foreach ($failure in @($worker.PowerShell.Streams.Error)) { Write-PanelLog "special access: $failure" }
+        $last = if ($results.Count) { $results[-1] } else { $null }
+        if ($last -and $last.PSObject.Properties['ExitCode']) { return $last }
+        Write-PanelLog 'special access: the background query returned no result'
+    } catch { Write-PanelLog "special access: $($_.Exception.Message)" }
+    finally { try { $worker.PowerShell.Dispose() } catch { } }
+    return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
+}
+
+# Disposes background queries of closed dialogs once they have finished.
+function Clear-PanelSpecialAccessWorkers {
+    foreach ($worker in @($script:OrphanSpecialAccessWorkers)) {
+        if (Test-PanelSpecialAccessDone $worker) {
+            $null = Receive-PanelSpecialAccess $worker
+            [void]$script:OrphanSpecialAccessWorkers.Remove($worker)
+        }
+    }
+    if ($script:PanelVisitReports -and $script:PanelVisitReports.Count) { Update-PanelVisitReports }
+}
+
+function Test-PanelPackageName([string] $pkg) {
+    return $pkg -cmatch '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$' -and $pkg.Length -le 255
+}
+
+function Test-PanelSpecialAccessOp([string] $op) {
+    # The ordered table's lookup ignores case; the device's op names do not.
+    return @($script:SpecialAccessLabels.Keys) -ccontains $op
+}
+
+# A query's answer: the switches (one array, possibly empty: an app requesting none), or
+# $null when the device could not answer.
+function Read-AppSpecialAccessResult($result) {
+    if ($null -eq $result -or $result.ExitCode -ne 0) { return $null }
+    return ,@(ConvertFrom-SpecialAccessOutput $result.Lines)
+}
+
+# A change's answer: the switch's state afterwards, or $null on failure.
+function Read-SetSpecialAccessResult($result, [string] $op) {
+    if ($null -eq $result -or $result.ExitCode -ne 0) { return $null }
+    $answer = @(ConvertFrom-SpecialAccessOutput $result.Lines) | Where-Object { $_.Op -ceq $op } | Select-Object -First 1
+    if (-not $answer) { return $null }
+    return [bool]$answer.Allowed
+}
+
+# Synchronous forms (diagnostics and tests; the dialog uses the background worker).
+function Get-AppSpecialAccess([string] $pkg) {
+    if (-not (Test-PanelPackageName $pkg)) { return $null }
+    return Read-AppSpecialAccessResult (Invoke-PanelSpecialAccess @($pkg))
+}
+
+function Set-AppSpecialAccess([string] $pkg, [string] $op, [bool] $allow) {
+    if (-not (Test-PanelPackageName $pkg) -or -not (Test-PanelSpecialAccessOp $op)) { return $null }
+    return Read-SetSpecialAccessResult (Invoke-PanelSpecialAccess @($pkg, $op, $(if ($allow) { 'allow' } else { 'deny' }))) $op
+}
+
+# A visit belongs to one exact Control Center process, even if Windows reuses its PID.
+function Get-PanelVisitIdentity {
+    $process = [Diagnostics.Process]::GetCurrentProcess()
+    try { return "$($process.Id)", "$($process.StartTime.ToFileTimeUtc())" }
+    finally { $process.Dispose() }
+}
+
+function Send-PanelSettingsShown([string[]] $tokens) {
+    if (-not $tokens.Count) { return }
+    $script:PanelVisitReports.Enqueue(@{
+        Command = 'settings-shown'; Arguments = @(Get-PanelVisitIdentity) + $tokens
+        Mutations = @(); Worker = $null; RetryAfter = [DateTime]::MinValue
+    })
+}
+
+function Send-PanelSettingsClosed([string[]] $tokens, [object[]] $mutations = @()) {
+    if (-not $tokens.Count) { return }
+    $script:PanelVisitReports.Enqueue(@{
+        Command = 'settings-closed'; Arguments = @(Get-PanelVisitIdentity) + $tokens
+        Mutations = $mutations; Worker = $null; RetryAfter = [DateTime]::MinValue
+    })
+}
+
+# Keep reports ordered and retry transport failures while the host is alive. A
+# visit's close is sent only after every settings write from that dialog returned.
+function Update-PanelVisitReports {
+    $report = $script:PanelVisitReports.Peek()
+    if ($report.Worker) {
+        if (-not (Test-PanelSpecialAccessDone $report.Worker)) { return }
+        $result = Receive-PanelSpecialAccess $report.Worker
+        $report.Worker = $null
+        # An absent device has no waiting request. An older server has no shown API.
+        if ($result.ExitCode -in 0, 3, 4) {
+            $null = $script:PanelVisitReports.Dequeue()
+            return
+        }
+        Write-PanelLog "$($report.Command): delivery failed ($($result.ExitCode))"
+        $report.RetryAfter = [DateTime]::UtcNow.AddSeconds(1)
+    }
+    if ($report.RetryAfter -gt [DateTime]::UtcNow) { return }
+    foreach ($mutation in $report.Mutations) {
+        if (-not (Test-PanelSpecialAccessDone $mutation)) { return }
+    }
+    $report.Worker = Start-PanelSpecialAccess $report.Arguments $report.Command
+}
+
+# The panel window is already closed; give a committed choice its terminal report
+# before the host process exits. A failed device cannot leave this process waiting.
+function Complete-PanelVisitReportsOnExit([int] $timeoutMs = (2 * $script:SpecialAccessTimeoutMs + 1000)) {
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ($script:PanelVisitReports.Count -gt 0 -and $watch.ElapsedMilliseconds -lt $timeoutMs) {
+        try { Update-PanelVisitReports } catch { Write-PanelLog "closing Settings visit: $($_.Exception.Message)" }
+        if ($script:PanelVisitReports.Count) { Start-Sleep -Milliseconds 50 }
+    }
+}
+
+# A request from the system server: one package name. $null for anything else.
+function ConvertFrom-PanelRequest([string] $text) {
+    if ($null -eq $text) { return $null }
+    if ($text -cmatch '^([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)$' -and $Matches[1].Length -le 255) {
+        return [PSCustomObject]@{ Package = $Matches[1] }
+    }
+    return $null
+}
+
+# Takes the result tokens of the requests waiting for this package's details: each a file
+# named by its token, holding the package. Taken files are removed (reported on close).
+function Receive-PanelResultTokens([string] $pkg) {
+    $tokens = [Collections.Generic.List[string]]::new()
+    if (-not $pkg -or -not (Test-Path -LiteralPath $script:PanelResultsDir)) { return $tokens.ToArray() }
+    foreach ($file in @(Get-ChildItem -LiteralPath $script:PanelResultsDir -File -ErrorAction SilentlyContinue)) {
+        if ($file.Name -cnotmatch '^[0-9a-f]{32}$') { continue }
+        try { $owner = [IO.File]::ReadAllText($file.FullName).Trim() } catch { continue }
+        if ($owner -cne $pkg) { continue }
+        # The device may be reading the file: retry briefly. A token is reported even if its
+        # file stays; the device answers each token once and removes its file then.
+        foreach ($attempt in 1..5) {
+            try { [IO.File]::Delete($file.FullName); break } catch { Start-Sleep -Milliseconds 20 }
+        }
+        $tokens.Add($file.Name)
+    }
+    return $tokens.ToArray()
+}
+
+# Records the package whose details are shown for a request ($null: none), for
+# ControlCenter.publishRequest. Written before the request is taken.
+function Set-PanelShowing([string] $pkg) {
+    try {
+        if ($pkg) { [IO.File]::WriteAllText($script:PanelShowingFile, $pkg) }
+        elseif (Test-Path -LiteralPath $script:PanelShowingFile) { [IO.File]::Delete($script:PanelShowingFile) }
+    } catch { Write-PanelLog "showing marker: $($_.Exception.Message)" }
+}
+
+# Adds result tokens to the details shown, once each.
+function Add-PanelShowingTokens([string[]] $tokens) {
+    $added = [Collections.Generic.List[string]]::new()
+    foreach ($token in $tokens) {
+        if ($token -and -not $script:ShowingTokens.Contains($token)) {
+            $script:ShowingTokens.Add($token)
+            $added.Add($token)
+        }
+    }
+    if ($script:SettingsVisitVisible) { Send-PanelSettingsShown $added.ToArray() }
+}
+
+# FromList: the user opened it from the app list, rather than an app from Settings' screens.
+function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
     $item = $appsList.ItemsSource | Where-Object { $_.Package -eq $pkg } | Select-Object -First 1
     if (-not $item) {
         Refresh-Dashboard
@@ -831,40 +1217,76 @@ function Show-AppInfoDialog([string] $pkg) {
         if ($times[1] -and $times[1] -ne $times[0]) { $lines += Get-GesherText 'cp_app_info_updated' @($times[1]) }
     }
     $message = if ($lines.Count -gt 0) { $lines -join "`n" } else { $label }
+    # The dialog opens at once; the device's switches load in the background. From the
+    # app list, a stopped device is not started for them (the dialog says so).
     $uninstall = Show-ModernConfirmDialog `
         -Title $label `
         -SubTitle $pkg `
         -Message $message `
-        -Detail (Get-GesherText 'cp_app_info_detail') `
+        -Detail (Get-GesherText $(if ($FromList) { 'cp_app_info_detail_list' } else { 'cp_app_info_detail' })) `
         -ConfirmText (Get-GesherText 'cp_btn_uninstall') `
         -CancelText (Get-GesherText 'cp_app_info_close') `
         -IconImage $item.IconImage `
-        -CancelIsDefault
+        -CancelIsDefault `
+        -SpecialAccessPackage $pkg
     if ($uninstall) { & $script:OnAppUninstall $pkg }
 }
 
 # Shows a pending request: brings the panel to the front and, for a package, its details.
+# The details shown and the result tokens of the requests they answer: a request for the
+# app already shown joins it instead of opening the details again after they close.
 $script:ShowingAppInfo = $false
+$script:ShowingPackage = $null
+$script:ShowingTokens = [Collections.Generic.List[string]]::new()
+$script:SettingsVisitVisible = $false
+$script:SettingsVisitMutations = @()
+$script:PanelVisitReports = [Collections.Generic.Queue[hashtable]]::new()
 function Invoke-PanelRequest {
     # Another start signalled: come to the front even while busy or showing a dialog.
     $raise = $false
     if ($script:PanelShowEvent) { try { $raise = $script:PanelShowEvent.WaitOne(0) } catch { } }
-    # The dialog runs a nested message loop in which this timer keeps ticking; an action
-    # in progress keeps the request until it ends.
+    # The dialog runs a nested message loop in which this timer keeps ticking.
     $request = $null
-    if (-not $script:IsBusy -and -not $script:ShowingAppInfo) { $request = Read-PanelRequest }
+    if ($script:ShowingAppInfo -and $script:ShowingPackage -and -not $script:IsBusy) {
+        # Only immutable records for this dialog join it; other packages stay queued.
+        # Bound dispatcher work even if tokenless callers keep refilling the queue.
+        for ($claimed = 0; $claimed -lt 32; $claimed++) {
+            $joined = Receive-PanelRequest $script:ShowingPackage
+            if (-not $joined) { break }
+            Add-PanelShowingTokens $joined.Tokens
+            $raise = $true
+        }
+        Add-PanelShowingTokens (Receive-PanelResultTokens $script:ShowingPackage)
+    } elseif (-not $script:IsBusy -and -not $script:ShowingAppInfo) {
+        $request = Receive-PanelRequest
+    }
     if ($null -ne $request) { $raise = $true }
     if (-not $raise) { return }
     if ($window.WindowState -eq [System.Windows.WindowState]::Minimized) {
         $window.WindowState = [System.Windows.WindowState]::Normal
     }
-    # Topmost on and off: Windows lets a background process raise its own window that way.
     $window.Topmost = $true
     $window.Topmost = $false
     $null = $window.Activate()
-    if ($request -match '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$') {
+    if ($request -and $request.Package) {
         $script:ShowingAppInfo = $true
-        try { Show-AppInfoDialog $request } finally { $script:ShowingAppInfo = $false }
+        $script:ShowingPackage = $request.Package
+        $script:ShowingTokens.Clear()
+        # Only legacy publishers use this marker; queue ownership never depends on it.
+        Set-PanelShowing $request.Package
+        Add-PanelShowingTokens $request.Tokens
+        Add-PanelShowingTokens (Receive-PanelResultTokens $request.Package)
+        try { Show-AppInfoDialog $request.Package }
+        finally {
+            $tokens = $script:ShowingTokens.ToArray()
+            $script:ShowingTokens.Clear()
+            $script:ShowingPackage = $null
+            $script:ShowingAppInfo = $false
+            $script:SettingsVisitVisible = $false
+            Set-PanelShowing $null
+            if ($tokens.Count) { Send-PanelSettingsClosed $tokens $script:SettingsVisitMutations }
+            $script:SettingsVisitMutations = @()
+        }
     }
 }
 
@@ -1122,7 +1544,9 @@ function Show-ModernConfirmDialog {
         [string] $SubTitle = $null,
         # Enter closes instead of confirming: for a dialog another app raised (App info),
         # where the user may be typing elsewhere when it takes the focus.
-        [switch] $CancelIsDefault
+        [switch] $CancelIsDefault,
+        # App info: the package whose special access switches load in the background.
+        [string] $SpecialAccessPackage = $null
     )
 
     $badgeBg = if ($IsDanger) { '#FEE4E2' } elseif ($IsWarning) { '#FEF0C7' } else { '#F2F4F7' }
@@ -1148,6 +1572,126 @@ function Show-ModernConfirmDialog {
     }
     $dialog.Owner = $window
     if ($window.Icon) { $dialog.Icon = $window.Icon }
+
+    if ($SpecialAccessPackage) {
+        # The switches load and change in background runspaces; a timer of the dialog takes
+        # their answers on the UI thread. A switch is disabled while its change is pending.
+        $accessState = @{ Query = $null; Pending = @{}; Closed = $false }
+        $switchPanel = $dialog.FindName('SwitchPanel')
+        $switchStatus = $dialog.FindName('SwitchStatus')
+        $switchError = $dialog.FindName('SwitchError')
+        $switchList = $dialog.FindName('SwitchList')
+        $switchPanel.Visibility = 'Visible'
+        $dialog.FindName('SwitchTitle').Text = Get-GesherText 'cp_access_title'
+        $switchStatus.Text = Get-GesherText 'cp_access_loading'
+        $switchStatus.Visibility = 'Visible'
+        $accessTimer = [System.Windows.Threading.DispatcherTimer]::new()
+        $accessTimer.Interval = [TimeSpan]::FromMilliseconds(100)
+        $accessTimer.Add_Tick({
+            if ($accessState.Closed) { return }
+            try {
+            if ($accessState.Query -and (Test-PanelSpecialAccessDone $accessState.Query)) {
+                $switches = Read-AppSpecialAccessResult (Receive-PanelSpecialAccess $accessState.Query)
+                $accessState.Query = $null
+                $switchStatus.Visibility = 'Collapsed'
+                if ($null -eq $switches) {
+                    $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                    $switchError.Visibility = 'Visible'
+                } elseif (@($switches).Count -eq 0) {
+                    $switchPanel.Visibility = 'Collapsed'
+                } else {
+                    foreach ($item in @($switches)) {
+                        $box = [System.Windows.Controls.CheckBox]::new()
+                        $labelText = Get-GesherText $script:SpecialAccessLabels[[string]$item.Op]
+                        $box.Tag = [string]$item.Op
+                        $box.IsChecked = [bool]$item.Allowed
+                        $box.Margin = [System.Windows.Thickness]::new(0, 2, 0, 2)
+                        $box.FontSize = 13
+                        if ($item.Fixed) {
+                            # The device would answer allowed whatever the switch says.
+                            $box.Content = Get-GesherText 'cp_access_fixed' @($labelText)
+                            $box.IsEnabled = $false
+                        } else {
+                            $box.Content = $labelText
+                            $box.Add_Click({
+                                param($sender, $e)
+                                $op = [string]$sender.Tag
+                                $wanted = [bool]$sender.IsChecked
+                                $switchError.Visibility = 'Collapsed'
+                                if ($accessState.Pending.ContainsKey($op)) { $sender.IsChecked = -not $wanted; return }
+                                $sender.IsEnabled = $false
+                                try {
+                                    $arguments = @($SpecialAccessPackage, $op, $(if ($wanted) { 'allow' } else { 'deny' }))
+                                    if ($op -ceq 'android:request_install_packages' -and $script:SettingsVisitVisible -and $script:ShowingTokens.Count) {
+                                        $arguments += @(Get-PanelVisitIdentity)
+                                        $arguments += @($script:ShowingTokens | Select-Object -Last 32)
+                                    }
+                                    $worker = Start-PanelSpecialAccess $arguments
+                                    $accessState.Pending[$op] = @{ Worker = $worker; Box = $sender; Wanted = $wanted }
+                                } catch {
+                                    $sender.IsEnabled = $true
+                                    $sender.IsChecked = -not $wanted
+                                    $switchError.Text = Get-GesherText 'cp_access_failed' @([string]$sender.Content)
+                                    $switchError.Visibility = 'Visible'
+                                }
+                            })
+                        }
+                        [void]$switchList.Children.Add($box)
+                    }
+                }
+            }
+            foreach ($op in @($accessState.Pending.Keys)) {
+                $change = $accessState.Pending[$op]
+                if (-not (Test-PanelSpecialAccessDone $change.Worker)) { continue }
+                $accessState.Pending.Remove($op)
+                $state = Read-SetSpecialAccessResult (Receive-PanelSpecialAccess $change.Worker) $op
+                $change.Box.IsEnabled = $true
+                if ($null -eq $state) {
+                    $change.Box.IsChecked = -not $change.Wanted
+                    $switchError.Text = Get-GesherText 'cp_access_failed' @([string]$change.Box.Content)
+                    $switchError.Visibility = 'Visible'
+                } else {
+                    # What the device answers, not what was asked.
+                    $change.Box.IsChecked = [bool]$state
+                }
+            }
+            } catch {
+                # A failure here must not leave the dialog loading forever or end the panel.
+                Write-PanelLog "special access dialog: $($_.Exception.Message)"
+                $switchStatus.Visibility = 'Collapsed'
+                $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                $switchError.Visibility = 'Visible'
+            }
+        })
+        $dialog.Add_Closed({
+            $accessTimer.Stop()
+            $accessState.Closed = $true
+            # Answers still running are disposed by the live timer once they finish.
+            if ($accessState.Query) { $script:OrphanSpecialAccessWorkers.Add($accessState.Query); $accessState.Query = $null }
+            $mutations = @($accessState.Pending.Values | ForEach-Object { $_.Worker })
+            if ($script:SettingsVisitVisible) { $script:SettingsVisitMutations = $mutations }
+            foreach ($mutation in $mutations) { $script:OrphanSpecialAccessWorkers.Add($mutation) }
+            $accessState.Pending.Clear()
+        })
+        # Nothing runs before the dialog is shown: an error before ShowDialog leaves no
+        # timer or background query behind.
+        $dialog.Add_Loaded({
+            if ($accessState.Closed) { return }
+            if ($script:ShowingPackage -ceq $SpecialAccessPackage) {
+                $script:SettingsVisitVisible = $true
+                Send-PanelSettingsShown $script:ShowingTokens.ToArray()
+            }
+            try { $accessState.Query = Start-PanelSpecialAccess @($SpecialAccessPackage) }
+            catch {
+                Write-PanelLog "special access: $($_.Exception.Message)"
+                $switchStatus.Visibility = 'Collapsed'
+                $switchError.Text = Get-GesherText 'cp_access_unavailable'
+                $switchError.Visibility = 'Visible'
+                return
+            }
+            $accessTimer.Start()
+        })
+    }
 
     $btnConfirm = $dialog.FindName('BtnConfirm')
     $iconContainer = $dialog.FindName('IconContainer')
@@ -1337,6 +1881,27 @@ $btnInstallUpdate.Add_Click({
 $btnCancelUpdate.Add_Click({ Request-PanelUpdateCancellation })
 $automaticUpdateChecks.Add_Checked({ Set-PanelAutomaticUpdateChecks $true })
 $automaticUpdateChecks.Add_Unchecked({ Set-PanelAutomaticUpdateChecks $false })
+
+function Update-CameraView {
+    if ($null -eq $cameraImagePickerFallback) { return }
+    $script:UpdatingCameraView = $true
+    try { $cameraImagePickerFallback.IsChecked = [bool](Get-CameraImagePickerEnabled) }
+    finally { $script:UpdatingCameraView = $false }
+}
+
+function Set-PanelCameraImagePickerFallback([bool] $enabled) {
+    if ($script:UpdatingCameraView) { return }
+    try {
+        Set-CameraImagePickerEnabled $enabled
+        $statusMessage.Text = Get-GesherText 'cp_camera_image_picker_saved'
+    } catch {
+        Show-ModernMessageDialog -Title (Get-GesherText 'cp_title') -Message (Get-GesherText 'cp_camera_image_picker_failed' @($_.Exception.Message)) -IsError $true
+        Update-CameraView
+    }
+}
+
+$cameraImagePickerFallback.Add_Checked({ Set-PanelCameraImagePickerFallback $true })
+$cameraImagePickerFallback.Add_Unchecked({ Set-PanelCameraImagePickerFallback $false })
 $btnUpdateNotes.Add_Click({
     try {
         if ($script:UpdateState.Release) { Start-Process -FilePath $script:UpdateState.Release.Url }
@@ -1484,6 +2049,14 @@ $script:OnAppLaunch = {
     param($pkg)
     if ($script:IsBusy) { return }
     Start-Process -FilePath (Join-Path $here 'gesher-launch.exe') -ArgumentList 'launch', $pkg -WindowStyle Hidden
+}
+
+# The app's details (uninstall, special access), as an app's Settings screen opens them.
+$script:OnAppDetails = {
+    param($pkg)
+    if ($script:IsBusy -or $script:ShowingAppInfo) { return }
+    $script:ShowingAppInfo = $true
+    try { Show-AppInfoDialog $pkg -FromList } finally { $script:ShowingAppInfo = $false }
 }
 
 $script:OnAppUninstall = {
@@ -1641,6 +2214,8 @@ $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windo
         $pkg = [string]$btn.Tag
         if ($btn.Content -eq (Get-GesherText 'cp_btn_launch')) {
             & $script:OnAppLaunch $pkg
+        } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_app_info')) {
+            & $script:OnAppDetails $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_uninstall')) {
             & $script:OnAppUninstall $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_proxy')) {
@@ -1684,6 +2259,7 @@ $script:LiveTimer.Start()
 try { $window.ShowDialog() | Out-Null }
 finally {
     $script:LiveTimer.Stop()
+    Complete-PanelVisitReportsOnExit
     Close-PanelMetadata
     Close-PanelUpdates
     # The window is already closed. Drain the cooperatively cancelled, bounded
