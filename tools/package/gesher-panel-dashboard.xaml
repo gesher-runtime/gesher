@@ -60,8 +60,9 @@
     </Window.Resources>
     <ScrollViewer Name="PanelScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <!-- Bound the first measure too, before SizeChanged adjusts the viewport. -->
-    <Grid Name="PanelLayout" Margin="24" MinHeight="640" Height="640">
+    <Grid Name="PanelLayout" Margin="24" MinHeight="740" Height="740">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -167,8 +168,16 @@
             </Grid>
         </Border>
 
+        <!-- Camera -->
+        <Border Grid.Row="3" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="18,14" Margin="0,0,0,16">
+            <StackPanel>
+                <TextBlock Text="{DynamicResource Text_cp_camera_title}" FontSize="15" FontWeight="Bold" Foreground="#101828"/>
+                <CheckBox Name="CameraImagePickerFallback" Content="{DynamicResource Text_cp_camera_image_picker}" ToolTip="{DynamicResource Text_cp_camera_image_picker_hint}" FontSize="12" Foreground="#475467" Margin="0,9,0,0"/>
+            </StackPanel>
+        </Border>
+
         <!-- Installed Applications Section -->
-        <Border Name="ApplicationsSection" Grid.Row="3" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="20">
+        <Border Name="ApplicationsSection" Grid.Row="4" Background="#FFFFFF" BorderBrush="#E4E7EC" BorderThickness="1" CornerRadius="10" Padding="20">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -224,6 +233,7 @@
                                             <CheckBox Content="{DynamicResource Text_cp_separate_windows}" ToolTip="{DynamicResource Text_cp_separate_windows_tip}" IsChecked="{Binding SeparateWindows, Mode=OneWay}" Tag="{Binding Package}" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                             <Button Content="{DynamicResource Text_cp_btn_proxy}" ToolTip="{DynamicResource Text_cp_btn_proxy_tip}" Tag="{Binding Package}" Margin="0,0,8,0"/>
                                             <Button Content="{DynamicResource Text_cp_btn_launch}" Tag="{Binding Package}" Visibility="{Binding LaunchVisibility}" Margin="0,0,8,0"/>
+                                            <Button Content="{DynamicResource Text_cp_btn_app_info}" Tag="{Binding Package}" Margin="0,0,8,0"/>
                                             <Button Style="{StaticResource DangerButton}" Content="{DynamicResource Text_cp_btn_uninstall}" Tag="{Binding Package}"/>
                                         </StackPanel>
                                     </Grid>
@@ -235,7 +245,7 @@
         </Border>
 
         <!-- Status & Progress Footer -->
-        <Border Grid.Row="4" Margin="0,12,0,0">
+        <Border Grid.Row="5" Margin="0,12,0,0">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>

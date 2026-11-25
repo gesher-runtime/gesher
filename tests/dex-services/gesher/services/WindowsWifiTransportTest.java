@@ -84,6 +84,54 @@ public final class WindowsWifiTransportTest {
             return result;
         }
         @Override public boolean startScan(String name, String tag) { record(name, tag); return scanAccepted; }
+        int group, kind;
+        IBinder callback;
+        boolean unregistered;
+        @Override public long getCapabilities(String name, int group) {
+            record(name, null); this.group = group; return 0x7_0000_0000L | group;
+        }
+        @Override public void registerCallback(String name, String tag, int kind, IBinder callback) {
+            record(name, tag); this.kind = kind; this.callback = callback;
+            // Force the parcelled one-way path a cross-process client receives.
+            android.os.Bundle extras = new android.os.Bundle(); extras.putString("ssid", "Fixture AP");
+            IWindowsWifi.Callback.send(remote(callback), kind, 3, extras);
+        }
+        @Override public void unregisterCallback(String name, int kind, IBinder callback) {
+            record(name, null); unregistered = this.callback == callback && this.kind == kind;
+        }
+        android.net.wifi.WifiNetworkSpecifier requested;
+        List<android.net.wifi.WifiNetworkSuggestion> suggested;
+        int removeAction;
+        android.net.wifi.BlockingOption blocked;
+        @Override public void requestLocalNetwork(String name, String tag,
+                android.net.wifi.WifiNetworkSpecifier specifier, IBinder callback) {
+            record(name, tag); requested = specifier; this.callback = callback;
+        }
+        @Override public void releaseLocalNetwork(String name, IBinder callback) {
+            record(name, null); unregistered = this.callback == callback;
+        }
+        @Override public int addNetworkSuggestions(String name, String tag,
+                List<android.net.wifi.WifiNetworkSuggestion> list) {
+            record(name, tag); suggested = list; return WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS;
+        }
+        @Override public int removeNetworkSuggestions(String name, String tag,
+                List<android.net.wifi.WifiNetworkSuggestion> list, int action) {
+            record(name, tag); suggested = list; removeAction = action;
+            return WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID;
+        }
+        @Override public List<android.net.wifi.WifiNetworkSuggestion> getNetworkSuggestions(String name) {
+            record(name, null); return suggested == null ? new ArrayList<>() : new ArrayList<>(suggested);
+        }
+        @Override public void disallowCurrentSuggestedNetwork(String name, android.net.wifi.BlockingOption option) {
+            record(name, null); blocked = option;
+        }
+        @Override public List<android.os.Bundle> getChannelData(String name, String tag) {
+            record(name, tag);
+            android.os.Bundle channel = new android.os.Bundle();
+            channel.putInt(WifiManager.CHANNEL_DATA_KEY_FREQUENCY_MHZ, 5180);
+            channel.putInt(WifiManager.CHANNEL_DATA_KEY_NUM_AP, 2);
+            List<android.os.Bundle> result = new ArrayList<>(); result.add(channel); return result;
+        }
     }
     private static IBinder remote(IBinder target) {
         return new Binder() {
@@ -153,6 +201,49 @@ public final class WindowsWifiTransportTest {
         check("request".equals(endpoint.tag), "Scan request attribution tag");
         endpoint.scanAccepted = false;
         check(!wifi.startScan("fixture.app", null), "Rejected boolean scan result");
+        check(wifi.getCapabilities("fixture.app", IWindowsWifi.CAPABILITIES_BANDS) == 0x7_0000_0001L
+                && endpoint.group == IWindowsWifi.CAPABILITIES_BANDS, "64-bit capability group round trip");
+        java.util.concurrent.atomic.AtomicInteger delivered = new java.util.concurrent.atomic.AtomicInteger(-1);
+        IWindowsWifi.Callback callback = new IWindowsWifi.Callback() {
+            @Override protected void onEvent(int kind, int value, android.os.Bundle extras) {
+                if (extras != null && "Fixture AP".equals(extras.getString("ssid"))) delivered.set(kind * 100 + value);
+            }
+        };
+        wifi.registerCallback("fixture.app", "listen", IWindowsWifi.CALLBACK_WIFI_STATE, callback);
+        check(endpoint.callback == callback && endpoint.kind == IWindowsWifi.CALLBACK_WIFI_STATE
+                && "listen".equals(endpoint.tag), "Callback binder, kind and attribution cross the transport");
+        check(delivered.get() == IWindowsWifi.CALLBACK_WIFI_STATE * 100 + 3, "One-way event reaches the client callback");
+        wifi.unregisterCallback("fixture.app", IWindowsWifi.CALLBACK_WIFI_STATE, callback);
+        check(endpoint.unregistered, "Unregistration names the same binder");
+        List<android.os.Bundle> channels = wifi.getChannelData("fixture.app", "channels");
+        check(channels.size() == 1 && channels.get(0).getInt(WifiManager.CHANNEL_DATA_KEY_FREQUENCY_MHZ) == 5180
+                && channels.get(0).getInt(WifiManager.CHANNEL_DATA_KEY_NUM_AP) == 2, "Channel bundles round trip");
+        android.net.wifi.WifiNetworkSpecifier specifier = new android.net.wifi.WifiNetworkSpecifier.Builder()
+                .setSsid("Fixture device").setWpa2Passphrase("fixture-passphrase").build();
+        IWindowsWifi.Callback request = new IWindowsWifi.Callback() {
+            @Override protected void onEvent(int kind, int value, android.os.Bundle extras) { }
+        };
+        wifi.requestLocalNetwork("fixture.app", "request", specifier, request);
+        check(specifier.equals(endpoint.requested) && endpoint.callback == request && "request".equals(endpoint.tag),
+                "Specifier and request binder cross the transport");
+        wifi.releaseLocalNetwork("fixture.app", request);
+        check(endpoint.unregistered, "Release names the same request binder");
+        android.net.wifi.WifiNetworkSuggestion suggestion = new android.net.wifi.WifiNetworkSuggestion.Builder()
+                .setSsid("Fixture suggestion").setWpa3Passphrase("fixture-passphrase").build();
+        check(wifi.addNetworkSuggestions("fixture.app", "suggest", List.of(suggestion))
+                == WifiManager.STATUS_NETWORK_SUGGESTIONS_SUCCESS && endpoint.suggested.equals(List.of(suggestion)),
+                "Suggestion list and status round trip");
+        check(wifi.removeNetworkSuggestions("fixture.app", null, List.of(), WifiManager.ACTION_REMOVE_SUGGESTION_LINGER)
+                == WifiManager.STATUS_NETWORK_SUGGESTIONS_ERROR_REMOVE_INVALID
+                && endpoint.suggested.isEmpty() && endpoint.removeAction == WifiManager.ACTION_REMOVE_SUGGESTION_LINGER,
+                "Removal list, action and status round trip");
+        wifi.addNetworkSuggestions("fixture.app", null, null);
+        check(endpoint.suggested == null, "A null suggestion list stays null");
+        endpoint.suggested = List.of(suggestion);
+        check(wifi.getNetworkSuggestions("fixture.app").equals(List.of(suggestion)), "Suggestions list round trip");
+        android.net.wifi.BlockingOption option = new android.net.wifi.BlockingOption.Builder(120).build();
+        wifi.disallowCurrentSuggestedNetwork("fixture.app", option);
+        check(endpoint.blocked != null && endpoint.blocked.getBlockingTimeSeconds() == 120, "Blocking option round trip");
         endpoint.empty = true;
         check(wifi.getConnectionInfo("fixture.app", null) == null && wifi.getDhcpInfo("fixture.app") == null,
                 "Null typed objects");

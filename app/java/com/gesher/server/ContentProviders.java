@@ -230,8 +230,10 @@ final class ContentProviders {
 
     /**
      * Ambiguous declarations never select an attacker simply because it installed first.
-     * ApkPackage handles ordinary collisions within the same manifest. Reject any
-     * remaining ambiguity here, including names declared by multiple packages.
+     * ApkPackage handles ordinary collisions within the same manifest: an authority
+     * belongs to the package's first provider declaring it, and one left with none has
+     * a null authority, which matches no lookup. Reject any remaining ambiguity here,
+     * including names declared by multiple packages.
      */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
         synchronized (pm) {

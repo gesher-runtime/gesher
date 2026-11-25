@@ -42,6 +42,9 @@ public final class StandInWindowSession extends IWindowSession.Default {
     public int addToDisplayAsUser(IWindow window, WindowManager.LayoutParams attrs,
             int viewVisibility, int layerStackId, int userId, int requestedVisibleTypes,
             InputChannel outInputChannel, WindowRelayoutResult result) {
+        if (AlertWindowPolicy.applies(attrs) && AlertWindowPolicy.checkAdd(attrs) == null) {
+            return WindowManagerGlobal.ADD_PERMISSION_DENIED;
+        }
         fill(result);
         SystemServer.log("window session (stand-in): added " + attrs.getTitle()
                 + " (type " + attrs.type + ")");
@@ -54,6 +57,13 @@ public final class StandInWindowSession extends IWindowSession.Default {
             InputChannel outInputChannel, WindowRelayoutResult result) {
         return addToDisplayAsUser(window, attrs, viewVisibility, layerStackId, 0,
                 requestedVisibleTypes, outInputChannel, result);
+    }
+
+    @Override
+    public int addToDisplayWithoutInputChannel(IWindow window, WindowManager.LayoutParams attrs,
+            int viewVisibility, int layerStackId, WindowRelayoutResult result) {
+        return addToDisplayAsUser(window, attrs, viewVisibility, layerStackId, 0,
+                android.view.WindowInsets.Type.defaultVisible(), null, result);
     }
 
     @Override

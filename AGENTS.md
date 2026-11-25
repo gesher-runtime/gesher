@@ -25,7 +25,7 @@ asks for a general code review without repeating the policy.
   substitute content, and a new default applications can see needs a
   maintainer decision listed in CONTRIBUTING.md's examples, which list the
   decided ones (display-relative camera orientation, the front-facing PC camera, the
-  stationary accelerometer). For capabilities that may be missing on a PC, a
+  stationary accelerometer, the PC's own device identity). For capabilities that may be missing on a PC, a
   maintainer-approved adaptation may substitute a similar available capability
   (e.g., using a regular PC camera in place of a missing rear camera) even
   without a setting, whereas an alternative operation (e.g., choosing an
