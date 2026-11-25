@@ -587,7 +587,7 @@ def qualified_usb_main513_endpoints():
  return after
 
 
-USB_BLOCK_TRANSITION_SHA256 = '5a154bddf3f179e675be17d6a9a92c5673d5317ac28ef937eda2711a78db1c29'
+USB_BLOCK_TRANSITION_SHA256 = '50458cdb340e5d947101e57acc6f4dc3cc6f46c038f732ab4cbb9c6cd578402c'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',

@@ -45,6 +45,23 @@ struct AuthorityNamespaceRecheckResult {
   AuthorityNamespacePolicyResult directory_policy, pipe_policy;
 };
 
+// A single authority-only SACL finalization after the Windows lowbox wrapper.
+// The pre-write full-SACL read and post-write strict read are separate receipts.
+enum class AuthorityNamespaceSealStage : DWORD {
+  kNotAttempted, kPrepared, kPrivilege, kBind, kOpen, kSamePin, kFullPolicy,
+  kDescriptor, kWrite, kReadback, kClose, kRestore, kComplete,
+};
+struct AuthorityNamespaceSealResult {
+  AuthorityNamespaceSealStage stage = AuthorityNamespaceSealStage::kNotAttempted;
+  DWORD status = ERROR_NOT_READY;
+  DWORD privilege_status = ERROR_NOT_READY, bind_status = ERROR_NOT_READY;
+  DWORD privilege_before = 0, privilege_enabled = 0, privilege_restored = 0, privilege_changes = 0;
+  DWORD privilege_restore_status = ERROR_NOT_READY, context_restore_status = ERROR_NOT_READY;
+  LONG open_status = 0, write_status = 0;
+  DWORD write_called = 0, close_called = 0, close_status = ERROR_NOT_READY;
+  AuthorityNamespacePolicyResult before_policy, after_policy;
+};
+
 // Optional diagnostics for the authority's one package-directory creation.
 // Values are written to trusted caller memory only; they never select behavior.
 struct AuthorityNamespaceCreateResult {
@@ -61,6 +78,7 @@ struct AuthorityNamespaceCreateResult {
   DWORD pipe_policy_status = ERROR_NOT_READY;
   AuthorityNamespacePolicyResult directory_policy, pipe_policy;
   AuthorityNamespaceRecheckResult recheck;
+  AuthorityNamespaceSealResult reseal;
   DWORD context_restore_status = ERROR_NOT_READY;
 };
 
@@ -100,6 +118,8 @@ class AuthorityLaunch {
   // The unimpersonated LocalSystem service supplies the desktop primary token
   // for its authenticated, selected session. No handles or environment are
   // inherited from the service. The process remains suspended on success.
+  // The caller serializes same-package launches, including the Windows wrapper's
+  // namespace update and the authority's subsequent policy finalization.
   static DWORD Create(HANDLE desktop_token, const AuthorityLaunchSpec& spec,
                       std::unique_ptr<AuthorityLaunch>* result,
                       const char** startup_stage = nullptr);

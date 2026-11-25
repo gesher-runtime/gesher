@@ -279,7 +279,8 @@ DWORD VerifyObject(HANDLE object, PACL expected) {
 
 // An explicit SACL requires SeSecurityPrivilege at object creation. Enable it
 // only on a private SYSTEM impersonation token; never adjust the process token
-// shared with other authority threads. The package wrapper runs after cleanup.
+// shared with other authority threads. The package wrapper runs outside this
+// context; post-wrapper SACL finalization uses a separate scoped duplicate.
 class PackageSaclPrivilege {
  public:
   explicit PackageSaclPrivilege(AuthorityNamespaceCreateResult* observed) : observed_(observed) {}
@@ -444,9 +445,10 @@ class PackageNamespace {
     create_ = reinterpret_cast<Create>(GetProcAddress(native, "NtCreateDirectoryObjectEx"));
     create_file_ = reinterpret_cast<CreateFileFn>(GetProcAddress(native, "NtCreateFile"));
     query_ = reinterpret_cast<QuerySecurity>(GetProcAddress(native, "NtQuerySecurityObject"));
+    set_ = reinterpret_cast<SetSecurity>(GetProcAddress(native, "NtSetSecurityObject"));
     error_ = reinterpret_cast<NativeError>(GetProcAddress(native, "RtlNtStatusToDosError"));
     compare_ = reinterpret_cast<Compare>(GetProcAddress(kernel, "CompareObjectHandles"));
-    if (!open_ || !create_ || !create_file_ || !query_ || !error_ || !compare_) return ERROR_PROC_NOT_FOUND;
+    if (!open_ || !create_ || !create_file_ || !query_ || !set_ || !error_ || !compare_) return ERROR_PROC_NOT_FOUND;
     wchar_t* package = nullptr;
     if (!ConvertSidToStringSidW(spec.capabilities.AppContainerSid, &package)) return GetLastError();
     const LocalMemory package_owner(package);
@@ -616,8 +618,97 @@ class PackageNamespace {
     stage("lowbox.verify-package-pipe-namespace");
     status = VerifyPipePolicy(retained_pipe->get(), spec.namespace_create_result ? &observed.value.pipe_policy : nullptr);
     observed.value.pipe_policy_status = status;
-    return status == ERROR_SUCCESS ? Recheck(root, retained->get(), retained_pipe->get(),
-        spec.namespace_create_result ? &observed.value.recheck : nullptr) : status;
+    if (status == ERROR_SUCCESS) status = Recheck(root, retained->get(), retained_pipe->get(),
+        spec.namespace_create_result ? &observed.value.recheck : nullptr);
+    prepared_ = status == ERROR_SUCCESS;
+    return status;
+  }
+
+  DWORD SealAfterLowbox(HANDLE root, HANDLE expected, AuthorityNamespaceSealResult* output) {
+    using Stage = AuthorityNamespaceSealStage;
+    AuthorityNamespaceCreateResult privilege_observed;
+    struct Result {
+      AuthorityNamespaceSealResult value;
+      AuthorityNamespaceSealResult* output;
+      const AuthorityNamespaceCreateResult* privilege;
+      ~Result() {
+        value.privilege_before = privilege->privilege_before;
+        value.privilege_enabled = privilege->privilege_enabled;
+        value.privilege_restored = privilege->privilege_restored;
+        value.privilege_changes = privilege->privilege_changes;
+        value.privilege_restore_status = privilege->privilege_restore_status;
+        value.context_restore_status = privilege->context_restore_status;
+        if (output) *output = value;
+      }
+    } observed{{}, output, &privilege_observed};
+    const auto stage = [&](Stage value) { observed.value.stage = value; };
+    stage(Stage::kPrepared);
+    if (!prepared_ || resealed_ || !have_control_) return observed.value.status = ERROR_ACCESS_DENIED;
+    resealed_ = true;
+
+    // The verified wrapper resets SACL protection/auto-inheritance on the same
+    // leaf while setting its low label. Only that exact intermediate state is
+    // eligible here. Ordinary preparation/reuse/collision admission stays strict.
+    // Session serializes launches for a package across this entire transition.
+    PackageSaclPrivilege privilege(&privilege_observed);
+    Handle writable;
+    const DWORD operation = [&]() -> DWORD {
+      stage(Stage::kPrivilege);
+      DWORD status = privilege.Enable();
+      observed.value.privilege_status = status;
+      if (status != ERROR_SUCCESS) return status;
+      stage(Stage::kBind);
+      status = privilege.Bind();
+      observed.value.bind_status = status;
+      if (status != ERROR_SUCCESS) return status;
+      stage(Stage::kOpen);
+      status = OpenLeaf(root, &writable, &observed.value.open_status, READ_CONTROL | ACCESS_SYSTEM_SECURITY);
+      if (status != ERROR_SUCCESS) return status;
+      stage(Stage::kSamePin);
+      status = SamePin(expected, writable.get());
+      if (status != ERROR_SUCCESS) return status;
+      stage(Stage::kFullPolicy);
+      status = VerifyPolicy(writable.get(), expected_dacl_, expected_label_, &have_control_, &control_,
+          &observed.value.before_policy, PolicyRead::kWrapperSacl);
+      if (status != ERROR_SUCCESS) return status;
+
+      // The privileged full read above rejects every extra SACL ACE before any
+      // replacement. A label-only read cannot establish that no audit entry is
+      // being erased. Restore only this policy's exact single low-MIC ACL and
+      // original SACL control bits; owner, group and DACL are never written.
+      stage(Stage::kDescriptor);
+      SECURITY_DESCRIPTOR descriptor{};
+      constexpr WORD sacl_control = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ;
+      if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+          !SetSecurityDescriptorSacl(&descriptor, TRUE, expected_label_, FALSE) ||
+          !SetSecurityDescriptorControl(&descriptor, sacl_control, static_cast<WORD>(control_ & sacl_control))) return GetLastError();
+      stage(Stage::kWrite);
+      observed.value.write_called = 1;
+      const NTSTATUS written = set_(writable.get(), SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION,
+          &descriptor);
+      observed.value.write_status = written;
+      if (written < 0) return Error(written);
+      stage(Stage::kReadback);
+      return VerifyPolicy(writable.get(), expected_dacl_, expected_label_, &have_control_, &control_,
+          &observed.value.after_policy, PolicyRead::kCompleteSacl);
+    }();
+
+    // Close the only temporary SACL-capable handle before returning to the
+    // ordinary authority context. Preserve the primary, close and restoration
+    // failures separately; successful launch requires every one to succeed.
+    DWORD close_status = ERROR_SUCCESS;
+    if (writable) {
+      observed.value.close_called = 1;
+      if (CloseHandle(writable.get())) static_cast<void>(writable.release());
+      else close_status = GetLastError();
+    }
+    observed.value.close_status = close_status;
+    const DWORD restored = privilege.Restore();
+    if (operation != ERROR_SUCCESS) return observed.value.status = operation;
+    if (close_status != ERROR_SUCCESS) { stage(Stage::kClose); return observed.value.status = close_status; }
+    if (restored != ERROR_SUCCESS) { stage(Stage::kRestore); return observed.value.status = restored; }
+    stage(Stage::kComplete);
+    return observed.value.status = ERROR_SUCCESS;
   }
 
   DWORD Recheck(HANDLE root, HANDLE expected, HANDLE pipe,
@@ -655,6 +746,7 @@ class PackageNamespace {
   using CreateFileFn = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
       PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
   using QuerySecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, ULONG, PULONG);
+  using SetSecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR);
   using NativeError = ULONG(NTAPI*)(NTSTATUS);
   using Compare = BOOL(WINAPI*)(HANDLE, HANDLE);
   static constexpr DWORD kSecurityLimit = 16384;
@@ -666,6 +758,7 @@ class PackageNamespace {
   Create create_ = nullptr;
   CreateFileFn create_file_ = nullptr;
   QuerySecurity query_ = nullptr;
+  SetSecurity set_ = nullptr;
   NativeError error_ = nullptr;
   Compare compare_ = nullptr;
   HANDLE shadow_ = nullptr;
@@ -674,7 +767,9 @@ class PackageNamespace {
   PACL expected_dacl_ = nullptr, expected_label_ = nullptr;
   PACL expected_pipe_dacl_ = nullptr, expected_pipe_label_ = nullptr;
   bool have_control_ = false, have_pipe_control_ = false;
+  bool prepared_ = false, resealed_ = false;
   SECURITY_DESCRIPTOR_CONTROL control_ = 0, pipe_control_ = 0;
+  enum class PolicyRead { kLabel, kCompleteSacl, kWrapperSacl };
 
   DWORD Error(NTSTATUS status) const {
     const DWORD result = error_(status);
@@ -702,11 +797,11 @@ class PackageNamespace {
     value.Attributes = 0x00001000;  // OBJ_DONT_REPARSE; no OPENIF/INHERIT/PERMANENT.
     return value;
   }
-  DWORD OpenLeaf(HANDLE root, Handle* result, NTSTATUS* native_status = nullptr) {
+  DWORD OpenLeaf(HANDLE root, Handle* result, NTSTATUS* native_status = nullptr, ACCESS_MASK access = kRead) {
     UNICODE_STRING name = Name();
     OBJECT_ATTRIBUTES attributes = Attributes(root, &name);
     HANDLE raw = nullptr;
-    const NTSTATUS status = open_(&raw, kRead, &attributes);
+    const NTSTATUS status = open_(&raw, access, &attributes);
     Handle opened(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
     if (native_status) *native_status = status;
     if (status < 0) return Error(status);
@@ -769,12 +864,13 @@ class PackageNamespace {
   }
   DWORD VerifyPolicy(HANDLE directory, PACL expected_dacl, PACL expected_label,
                      bool* have_control, SECURITY_DESCRIPTOR_CONTROL* saved_control,
-                     AuthorityNamespacePolicyResult* observed = nullptr) {
+                     AuthorityNamespacePolicyResult* observed = nullptr, PolicyRead read = PolicyRead::kLabel) {
     const auto stage = [observed](AuthorityNamespacePolicyStage value) {
       if (observed) observed->stage = value;
     };
-    constexpr SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
-        DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+    const SECURITY_INFORMATION information = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+        DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION |
+        (read == PolicyRead::kLabel ? 0 : SACL_SECURITY_INFORMATION);
     // NPFS secure prefixes return a valid descriptor but zero LengthNeeded on
     // successful queries on Windows 2022 and 2025. Obtain a bounded allocation
     // from the size probe; never infer a missing descriptor or an implicit label.
@@ -836,13 +932,20 @@ class PackageNamespace {
     stage(AuthorityNamespacePolicyStage::kDescriptor);
     if (!IsValidSecurityDescriptor(storage.data())) return ERROR_INVALID_SECURITY_DESCR;
     constexpr WORD protected_lists = SE_DACL_PROTECTED | SE_SACL_PROTECTED;
+    constexpr WORD wrapper_reset = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED;
     stage(AuthorityNamespacePolicyStage::kPolicy);
+    const bool strict_control = (control & protected_lists) == protected_lists &&
+        (!*have_control || control == *saved_control);
+    const bool wrapper_control = read == PolicyRead::kWrapperSacl && *have_control &&
+        control == static_cast<WORD>(*saved_control & ~wrapper_reset);
     if (!IsWellKnownSid(owner, WinLocalSystemSid) || !IsWellKnownSid(group, WinLocalSystemSid) ||
-        (control & protected_lists) != protected_lists || dacl->AclRevision != expected_dacl->AclRevision ||
+        (!strict_control && !wrapper_control) || dacl->AclRevision != expected_dacl->AclRevision ||
         label->AclRevision != expected_label->AclRevision || !SameAcl(expected_dacl, dacl) ||
-        !SameAcl(expected_label, label) || (*have_control && control != *saved_control)) return ERROR_ACCESS_DENIED;
-    *saved_control = control;
-    *have_control = true;
+        !SameAcl(expected_label, label)) return ERROR_ACCESS_DENIED;
+    if (read != PolicyRead::kWrapperSacl) {
+      *saved_control = control;
+      *have_control = true;
+    }
     stage(AuthorityNamespacePolicyStage::kComplete);
     return ERROR_SUCCESS;
   }
@@ -1207,6 +1310,10 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
   if (spec.app_container_objects) {
     stage("lowbox.recheck-appcontainer-namespace");
     status = VerifySessionObjects(spec, SessionObjectRoot::kAppContainer, &app_container_objects_after);
+    if (status != ERROR_SUCCESS) return status;
+    stage("lowbox.reseal-package-sacl");
+    status = package_namespace.SealAfterLowbox(app_container_objects_after.get(), launch->package_objects_,
+        spec.namespace_create_result ? &spec.namespace_create_result->reseal : nullptr);
     if (status != ERROR_SUCCESS) return status;
     stage("lowbox.recheck-package-namespace");
     status = package_namespace.Recheck(app_container_objects_after.get(), launch->package_objects_, launch->package_pipe_objects_,

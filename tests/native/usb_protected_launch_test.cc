@@ -125,6 +125,8 @@ struct PackageLeafEvidence {
   DWORD object_created = 0, subdirectory_created = 0;
   DWORD expected_reuse = 0, null_pin_reuse = 0, independent_pin_lifetime = 0;
   DWORD wrong_type_rejected = 0, wrong_object_rejected = 0, changed_policy_rejected = 0;
+  DWORD sacl_mutation_denials = 0, unprotected_reuse_rejected = 0, audit_reuse_rejected = 0;
+  DWORD audit_preserved = 0, sacl_fixture_restored = 0;
   DWORD pipe_pin_verified = 0, pipe_policy_verified = 0, pipe_positive = 0;
   DWORD pipe_denials = 0, pipe_reused = 0, pipe_changed_policy_rejected = 0;
   DWORD policy_own_read = 0, policy_other_denied = 0, policy_write_denials = 0;
@@ -1142,6 +1144,69 @@ Local SessionObjectSecurity(HANDLE object) {
       "session-objects-security-bound", ERROR_INVALID_SECURITY_DESCR);
   return owned;
 }
+Local FullSaclSecurity(HANDLE object) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  Check(GetSecurityInfo(object, SE_KERNEL_OBJECT,
+      OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION |
+      SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+      nullptr, nullptr, nullptr, nullptr, &descriptor), "fixture-full-sacl-snapshot");
+  Local owned(descriptor);
+  Require(descriptor && IsValidSecurityDescriptor(descriptor) && GetSecurityDescriptorLength(descriptor) <= 16384,
+      "fixture-full-sacl-bound", ERROR_INVALID_SECURITY_DESCR);
+  return owned;
+}
+Handle OpenFixtureSacl(const std::wstring& path) {
+  HANDLE raw = nullptr;
+  Require(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &raw),
+      "fixture-sacl-system-token");
+  const Handle process(raw);
+  const auto process_before = CaptureAuthorityPrivilegeBytes(process.get());
+  raw = nullptr;
+  Require(DuplicateTokenEx(process.get(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES | TOKEN_IMPERSONATE,
+      nullptr, SecurityImpersonation, TokenImpersonation, &raw), "fixture-sacl-private-token");
+  const Handle token(raw);
+  const auto before = CaptureAuthorityPrivilegeBytes(token.get());
+  TOKEN_PRIVILEGES requested{}, previous{};
+  requested.PrivilegeCount = 1;
+  Require(LookupPrivilegeValueW(nullptr, L"SeSecurityPrivilege", &requested.Privileges[0].Luid),
+      "fixture-sacl-privilege-name");
+  requested.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+  DWORD bytes = 0;
+  SetLastError(ERROR_SUCCESS);
+  Require(AdjustTokenPrivileges(token.get(), FALSE, &requested, sizeof(previous), &previous, &bytes) &&
+      GetLastError() == ERROR_SUCCESS && bytes <= sizeof(previous) && previous.PrivilegeCount <= 1,
+      "fixture-sacl-enable-private-privilege");
+  DWORD opened = 0;
+  Handle object = OpenSessionDirectory(path, READ_CONTROL | ACCESS_SYSTEM_SECURITY, token.get(), &opened);
+  SetLastError(ERROR_SUCCESS);
+  Require(AdjustTokenPrivileges(token.get(), FALSE, &previous, 0, nullptr, nullptr) &&
+      GetLastError() == ERROR_SUCCESS && CaptureAuthorityPrivilegeBytes(token.get()) == before &&
+      CaptureAuthorityPrivilegeBytes(process.get()) == process_before,
+      "fixture-sacl-restore-private-privilege", ERROR_ACCESS_DENIED);
+  Require(opened == 0 && object && SessionObjectAccess(object.get()) == (READ_CONTROL | ACCESS_SYSTEM_SECURITY),
+      "fixture-sacl-exact-temporary-handle", ERROR_ACCESS_DENIED);
+  return object;
+}
+using SetDiagnosticSecurity = NTSTATUS(NTAPI*)(HANDLE, SECURITY_INFORMATION, PSECURITY_DESCRIPTOR);
+SetDiagnosticSecurity SecuritySetter() {
+  const auto setter = reinterpret_cast<SetDiagnosticSecurity>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetSecurityObject")));
+  Require(setter != nullptr, "fixture-security-set-export", ERROR_PROC_NOT_FOUND);
+  return setter;
+}
+struct FixtureSaclRestore {
+  SetDiagnosticSecurity set;
+  HANDLE object;
+  PSECURITY_DESCRIPTOR original;
+  bool dirty = false;
+  NTSTATUS Restore() {
+    if (!dirty) return 0;
+    const NTSTATUS result = set(object, SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION, original);
+    if (result >= 0) dirty = false;
+    return result;
+  }
+  ~FixtureSaclRestore() { if (dirty && Restore() < 0) std::abort(); }
+};
 SessionObjectsSnapshot CaptureSessionObjects(DWORD session, const wchar_t* root, SessionObjectsEvidence* evidence) {
   SessionObjectsSnapshot snapshot;
   snapshot.path = L"\\Sessions\\" + std::to_wstring(session) + L"\\" + root;
@@ -1744,9 +1809,128 @@ void ObservePackageLeaf(const std::wstring& path, const storage::AuthorityLaunch
   Require(evidence->opens[0][0].opened && evidence->opens[0][1].opened,
       "package-leaf-own-create-positive-control", ERROR_ACCESS_DENIED);
   Require(isolated, "package-leaf-own-standard-and-other-desktop-mutations-denied", ERROR_ACCESS_DENIED);
+  for (HANDLE subject : subjects) {
+    DWORD denied = 0;
+    const Handle forbidden = OpenSessionDirectory(path, ACCESS_SYSTEM_SECURITY, subject, &denied);
+    Require(!forbidden && (denied == 0xc0000022 || denied == 0xc0000061),
+        "package-leaf-lowbox-and-desktop-sacl-mutation-denied", ERROR_ACCESS_DENIED);
+    ++evidence->sacl_mutation_denials;
+  }
   CreatePackageChildren(path, guest, other, desktop, evidence);
   ObservePackagePipe(launch, spec, guest, other, desktop, evidence);
   evidence->status = ERROR_SUCCESS;
+}
+
+void ObservePackageSaclReuse(HANDLE private_token, const storage::AuthorityLaunchSpec& original,
+    const storage::AuthorityLaunch& first, const std::wstring& path, PackageLeafEvidence* evidence) {
+  // Mutate only this fixture-owned leaf. The production finalizer must never
+  // adopt a preexisting unprotected descriptor or erase an unseen audit ACE.
+  const Handle writable = OpenFixtureSacl(path);
+  Require(SameSessionObject(writable.get(), first.package_objects()),
+      "fixture-sacl-exact-retained-object", ERROR_NOT_SAME_OBJECT);
+  const Local before = FullSaclSecurity(writable.get());
+  VerifyPackageLeafPolicy(before.get(), original);
+  SECURITY_DESCRIPTOR_CONTROL control{};
+  DWORD revision = 0;
+  PACL original_sacl = nullptr;
+  BOOL present = FALSE, defaulted = FALSE;
+  Require(GetSecurityDescriptorControl(before.get(), &control, &revision) &&
+      GetSecurityDescriptorSacl(before.get(), &present, &original_sacl, &defaulted) && present && original_sacl,
+      "fixture-sacl-original-complete-policy");
+  const auto set = SecuritySetter();
+  FixtureSaclRestore restore{set, writable.get(), before.get()};
+  constexpr WORD control_bits = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED | SE_SACL_AUTO_INHERIT_REQ;
+  constexpr WORD wrapper_reset = SE_SACL_PROTECTED | SE_SACL_AUTO_INHERITED;
+  SECURITY_DESCRIPTOR unprotected{};
+  Require(InitializeSecurityDescriptor(&unprotected, SECURITY_DESCRIPTOR_REVISION) &&
+      SetSecurityDescriptorSacl(&unprotected, TRUE, original_sacl, FALSE) &&
+      SetSecurityDescriptorControl(&unprotected, control_bits,
+          static_cast<WORD>(control & control_bits & ~wrapper_reset)), "fixture-sacl-unprotected-descriptor");
+  restore.dirty = true;
+  {
+    // Reproduce the actual wrapper's LABEL-only update on this fixture object.
+    // This separate WRITE_OWNER handle is never used by production resealing.
+    DWORD opened = 0;
+    const Handle label_writer = OpenSessionDirectory(path, WRITE_OWNER, nullptr, &opened);
+    Require(opened == 0 && label_writer && SameSessionObject(label_writer.get(), first.package_objects()) &&
+        SessionObjectAccess(label_writer.get()) == WRITE_OWNER,
+        "fixture-sacl-exact-label-control-handle", ERROR_ACCESS_DENIED);
+    Require(set(label_writer.get(), LABEL_SECURITY_INFORMATION, &unprotected) == 0,
+        "fixture-sacl-apply-wrapper-label-update", ERROR_ACCESS_DENIED);
+  }
+  const Local unprotected_before = FullSaclSecurity(writable.get());
+  SECURITY_DESCRIPTOR_CONTROL unprotected_control{};
+  Require(GetSecurityDescriptorControl(unprotected_before.get(), &unprotected_control, &revision) &&
+      unprotected_control == static_cast<WORD>(control & ~wrapper_reset),
+      "fixture-sacl-unprotected-change-observed", ERROR_INVALID_SECURITY_DESCR);
+  storage::AuthorityNamespaceCreateResult observed;
+  auto spec = original;
+  spec.expected_package_objects = first.package_objects();
+  spec.namespace_create_result = &observed;
+  std::unique_ptr<storage::AuthorityLaunch> child;
+  const char* stage = "package-reuse.unprotected-sacl";
+  DWORD rejected = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
+  const Local unprotected_after = FullSaclSecurity(writable.get());
+  SECURITY_DESCRIPTOR_CONTROL unchanged_control{};
+  const bool unprotected_unchanged = GetSecurityDescriptorControl(unprotected_after.get(), &unchanged_control, &revision) &&
+      unchanged_control == unprotected_control;
+  Require(restore.Restore() == 0, "fixture-sacl-restore-unprotected-control", ERROR_ACCESS_DENIED);
+  Require(rejected == ERROR_ACCESS_DENIED && !child && stage &&
+      std::strcmp(stage, "lowbox.verify-package-namespace") == 0 && unprotected_unchanged &&
+      observed.reseal.stage == storage::AuthorityNamespaceSealStage::kNotAttempted && !observed.reseal.write_called,
+      "package-reuse-preexisting-unprotected-sacl-is-never-repaired", ERROR_INVALID_DATA);
+  evidence->unprotected_reuse_rejected = 1;
+
+  PSECURITY_DESCRIPTOR audit_raw = nullptr;
+  Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"S:P(AU;SAFA;0x00000001;;;WD)(ML;;NW;;;LW)", SDDL_REVISION_1, &audit_raw, nullptr),
+      "fixture-sacl-audit-descriptor");
+  const Local audit(audit_raw);
+  Require(SetSecurityDescriptorControl(audit.get(), control_bits, static_cast<WORD>(control & control_bits)),
+      "fixture-sacl-audit-original-control");
+  PACL audit_acl = nullptr;
+  Require(GetSecurityDescriptorSacl(audit.get(), &present, &audit_acl, &defaulted) && present && audit_acl &&
+      audit_acl->AceCount == 2, "fixture-sacl-audit-and-label");
+  const auto audit_bytes = SessionAclBytes(audit_acl);
+  restore.dirty = true;
+  Require(set(writable.get(), SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION, audit.get()) == 0,
+      "fixture-sacl-apply-audit-entry", ERROR_ACCESS_DENIED);
+  const Local audit_before = FullSaclSecurity(writable.get());
+  PACL actual_audit = nullptr;
+  Require(GetSecurityDescriptorSacl(audit_before.get(), &present, &actual_audit, &defaulted) && present && actual_audit &&
+      SessionAclBytes(actual_audit) == audit_bytes, "fixture-sacl-audit-change-observed", ERROR_INVALID_ACL);
+  // This is the independent control for the original label-only read: it still
+  // looks valid even though the privileged full read exposes the extra ACE.
+  const Local label_only = SessionObjectSecurity(writable.get());
+  VerifyPackageLeafPolicy(label_only.get(), original);
+  observed = {};
+  stage = "package-reuse.audit-sacl";
+  rejected = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
+  const Local audit_after = FullSaclSecurity(writable.get());
+  PACL retained_audit = nullptr;
+  const bool audit_preserved = GetSecurityDescriptorSacl(audit_after.get(), &present, &retained_audit, &defaulted) &&
+      present && retained_audit && SessionAclBytes(retained_audit) == audit_bytes;
+  Require(restore.Restore() == 0, "fixture-sacl-restore-original-audit-policy", ERROR_ACCESS_DENIED);
+  Require(rejected == ERROR_ACCESS_DENIED && !child && stage &&
+      std::strcmp(stage, "lowbox.reseal-package-sacl") == 0 &&
+      observed.directory_policy.stage == storage::AuthorityNamespacePolicyStage::kComplete &&
+      observed.reseal.stage == storage::AuthorityNamespaceSealStage::kFullPolicy &&
+      observed.reseal.before_policy.stage == storage::AuthorityNamespacePolicyStage::kPolicy &&
+      observed.reseal.before_policy.requested_information == 0x1f && !observed.reseal.write_called &&
+      observed.reseal.after_policy.stage == storage::AuthorityNamespacePolicyStage::kNotAttempted &&
+      observed.reseal.close_called == 1 && observed.reseal.close_status == ERROR_SUCCESS &&
+      observed.reseal.privilege_restore_status == ERROR_SUCCESS &&
+      observed.reseal.privilege_before == observed.reseal.privilege_restored &&
+      observed.reseal.context_restore_status == ERROR_SUCCESS && audit_preserved,
+      "package-reuse-extra-audit-entry-rejected-without-erasure", ERROR_INVALID_DATA);
+  evidence->audit_reuse_rejected = 1;
+  evidence->audit_preserved = 1;
+  const Local after = FullSaclSecurity(writable.get());
+  VerifyPackageLeafPolicy(after.get(), original);
+  SECURITY_DESCRIPTOR_CONTROL after_control{};
+  Require(GetSecurityDescriptorControl(after.get(), &after_control, &revision) && after_control == control,
+      "fixture-sacl-exact-original-control-restored", ERROR_INVALID_SECURITY_DESCR);
+  evidence->sacl_fixture_restored = 1;
 }
 
 void ObservePackageReuse(HANDLE private_token, const storage::AuthorityLaunchSpec& original,
@@ -1894,6 +2078,7 @@ void ObservePackageReuse(HANDLE private_token, const storage::AuthorityLaunchSpe
       std::strcmp(stage, "lowbox.verify-package-pipe-namespace") == 0,
       "pipe-reuse-changed-policy-rejected-before-wrapper", ERROR_INVALID_DATA);
   evidence->pipe_changed_policy_rejected = 1;
+  ObservePackageSaclReuse(private_token, original, first, path, evidence);
 }
 
 Local CollisionSecurity(PSID desktop, PSID private_user, PSID package, bool changed, bool system_owner = false) {
@@ -2168,6 +2353,39 @@ void PrintNamespaceRecheck(const storage::AuthorityNamespaceRecheckResult& obser
   PrintPolicyReadback("recheck pipe", observed.pipe_policy);
 }
 
+void PrintNamespaceSeal(const storage::AuthorityNamespaceSealResult& observed) {
+  using Stage = storage::AuthorityNamespaceSealStage;
+  const char* stage = "invalid";
+  switch (observed.stage) {
+    case Stage::kNotAttempted: stage = "not-attempted"; break;
+    case Stage::kPrepared: stage = "prepared"; break;
+    case Stage::kPrivilege: stage = "privilege"; break;
+    case Stage::kBind: stage = "bind"; break;
+    case Stage::kOpen: stage = "open"; break;
+    case Stage::kSamePin: stage = "retained-object-identity"; break;
+    case Stage::kFullPolicy: stage = "full-policy"; break;
+    case Stage::kDescriptor: stage = "descriptor"; break;
+    case Stage::kWrite: stage = "write"; break;
+    case Stage::kReadback: stage = "readback"; break;
+    case Stage::kClose: stage = "close"; break;
+    case Stage::kRestore: stage = "restore"; break;
+    case Stage::kComplete: stage = "complete"; break;
+  }
+  Require(std::strcmp(stage, "invalid") != 0 && observed.write_called <= 1 && observed.close_called <= 1,
+      "bounded-namespace-seal-stage", ERROR_INVALID_DATA);
+  std::printf("Protected package SACL reseal: stage=%s win32=%lu open-ntstatus=0x%08lx write-called=%lu write-ntstatus=0x%08lx close-called=%lu close-win32=%lu\n",
+      stage, static_cast<unsigned long>(observed.status), static_cast<unsigned long>(observed.open_status),
+      static_cast<unsigned long>(observed.write_called), static_cast<unsigned long>(observed.write_status),
+      static_cast<unsigned long>(observed.close_called), static_cast<unsigned long>(observed.close_status));
+  std::printf("Protected package SACL reseal context: privilege-enable-win32=%lu bind-win32=%lu before=0x%08lx enabled=0x%08lx restored=0x%08lx changed-count=%lu privilege-restore-win32=%lu context-restore-win32=%lu\n",
+      static_cast<unsigned long>(observed.privilege_status), static_cast<unsigned long>(observed.bind_status),
+      static_cast<unsigned long>(observed.privilege_before), static_cast<unsigned long>(observed.privilege_enabled),
+      static_cast<unsigned long>(observed.privilege_restored), static_cast<unsigned long>(observed.privilege_changes),
+      static_cast<unsigned long>(observed.privilege_restore_status), static_cast<unsigned long>(observed.context_restore_status));
+  PrintPolicyReadback("reseal full-before", observed.before_policy);
+  PrintPolicyReadback("reseal full-after", observed.after_policy);
+}
+
 void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceCollisionEvidence& collision) {
   std::printf("Protected package leaf: absent-before-launch=%lu captured=%lu status=%lu control=0x%04lx path=%ls\n",
       static_cast<unsigned long>(leaf.absent_before_launch), static_cast<unsigned long>(leaf.captured),
@@ -2184,6 +2402,10 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
       static_cast<unsigned long>(leaf.pipe_pin_verified), static_cast<unsigned long>(leaf.pipe_policy_verified),
       static_cast<unsigned long>(leaf.pipe_positive), static_cast<unsigned long>(leaf.pipe_denials),
       static_cast<unsigned long>(leaf.pipe_reused), static_cast<unsigned long>(leaf.pipe_changed_policy_rejected));
+  std::printf("Protected SACL controls: mutation-denials=%lu preexisting-unprotected-rejected=%lu extra-audit-rejected=%lu audit-preserved=%lu fixture-restored=%lu\n",
+      static_cast<unsigned long>(leaf.sacl_mutation_denials), static_cast<unsigned long>(leaf.unprotected_reuse_rejected),
+      static_cast<unsigned long>(leaf.audit_reuse_rejected), static_cast<unsigned long>(leaf.audit_preserved),
+      static_cast<unsigned long>(leaf.sacl_fixture_restored));
   std::printf("Protected policy admission: own-read=%lu other-package-denials=%lu modification-denials=%lu atomic-replacement-read=%lu path-override-denied=%lu\n",
       static_cast<unsigned long>(leaf.policy_own_read), static_cast<unsigned long>(leaf.policy_other_denied),
       static_cast<unsigned long>(leaf.policy_write_denials), static_cast<unsigned long>(leaf.policy_replacement),
@@ -2482,6 +2704,18 @@ Evidence RunSystem() {
         creation.pipe_policy.allocation_bytes <= 16384 && creation.pipe_policy.query_status >= 0 &&
         creation.pipe_policy.captured_bytes >= sizeof(SECURITY_DESCRIPTOR_RELATIVE),
         "authority-package-create-scoped-privilege-and-native-success", ERROR_INVALID_DATA);
+    const auto& reseal = creation.reseal;
+    Require(reseal.stage == storage::AuthorityNamespaceSealStage::kComplete && reseal.status == ERROR_SUCCESS &&
+        reseal.privilege_status == ERROR_SUCCESS && reseal.bind_status == ERROR_SUCCESS &&
+        (reseal.privilege_enabled & SE_PRIVILEGE_ENABLED) && reseal.privilege_changes <= 1 &&
+        reseal.privilege_restored == reseal.privilege_before && reseal.privilege_restore_status == ERROR_SUCCESS &&
+        reseal.context_restore_status == ERROR_SUCCESS && reseal.open_status == 0 && reseal.write_called == 1 &&
+        reseal.write_status == 0 && reseal.close_called == 1 && reseal.close_status == ERROR_SUCCESS &&
+        reseal.before_policy.stage == storage::AuthorityNamespacePolicyStage::kComplete &&
+        reseal.after_policy.stage == storage::AuthorityNamespacePolicyStage::kComplete &&
+        reseal.before_policy.requested_information == 0x1f && reseal.after_policy.requested_information == 0x1f &&
+        creation.recheck.stage == storage::AuthorityNamespaceRecheckStage::kComplete,
+        "authority-package-full-sacl-reseal-and-exact-readback", ERROR_INVALID_DATA);
     Require(WaitForSingleObject(child->process(), 0) == WAIT_TIMEOUT, "exact-child-suspended");
     BOOL contained = FALSE;
     Require(IsProcessInJob(child->process(), service_job.get(), &contained) && contained, "inherited-lowbox-job");
@@ -2807,6 +3041,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
         static_cast<unsigned long>(creation.pipe_create_status), static_cast<unsigned long>(creation.pipe_policy_status));
     PrintPolicyReadback("package", creation.directory_policy);
     PrintPolicyReadback("pipe", creation.pipe_policy);
+    PrintNamespaceSeal(creation.reseal);
     PrintNamespaceRecheck(creation.recheck);
     std::printf("Protected package creation: actual-process-privileges-unchanged=%lu actual-no-thread-token=%lu context-check-win32=%lu\n",
         static_cast<unsigned long>(evidence.namespace_process_privileges_unchanged),
