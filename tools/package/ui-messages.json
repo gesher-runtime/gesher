@@ -84,6 +84,30 @@
       "en": "Don't allow",
       "he": "לא לאפשר"
     },
+    "background_permission_title": {
+      "en": "Gesher background permission request",
+      "he": "גשר — בקשת הרשאה ברקע"
+    },
+    "background_permission_heading": {
+      "en": "Allow access all the time?",
+      "he": "לאפשר גישה כל הזמן?"
+    },
+    "background_permission_requested": {
+      "en": "This app is also asking to use this permission in the background, when you are not using it:",
+      "he": "היישום מבקש להשתמש בהרשאה זו גם ברקע, כשאינך משתמש בו:"
+    },
+    "background_permission_always": {
+      "en": "Allow all the time",
+      "he": "לאפשר כל הזמן"
+    },
+    "background_permission_foreground": {
+      "en": "Allow only while using the app",
+      "he": "לאפשר רק בזמן השימוש ביישום"
+    },
+    "background_permission_deny": {
+      "en": "Don't allow, not even while using the app",
+      "he": "לא לאפשר, גם לא בזמן השימוש ביישום"
+    },
     "exact_alarm_title": {
       "en": "Alarms and reminders",
       "he": "התראות ותזכורות"

@@ -410,6 +410,28 @@ Check 'native libs: the same pending EGL fence and native descriptor checks on W
   }
 } @('gesher EGL: default display: ANGLE, Direct3D 11 WARP device', 'egl_fence_test all passed')
 
+# eglDestroyContext on one thread while another thread keeps drawing with its
+# own context of the default display (issue #485,
+# tests/native/egl_context_destroy_scenarios.h): two threads stepped in a
+# fixed order, so thread B destroys its released context right after thread
+# A's last GL call. Before compat/angle/patches/0001 thread A's next draw
+# faulted in libGLESv2.dll (StateManager11's emptied draw framebuffer).
+foreach ($device in 'default', 'warp') {
+  Check "native libs: eglDestroyContext on one thread while another keeps drawing ($device adapter)" {
+    if ($device -eq 'warp') { $env:GESHER_EGL_DEVICE = 'warp' }
+    try {
+      & "$Dir/egl_context_destroy_test.exe"
+    } finally {
+      Remove-Item Env:GESHER_EGL_DEVICE -ErrorAction SilentlyContinue
+    }
+  } (@('egl_context_destroy_test: ok: glUseProgram then draw: thread A''s draw after X''s destruction has its own program''s color',
+      'egl_context_destroy_test: ok: draw with the same program: thread A''s draw after X''s destruction has its own program''s color',
+      'egl_context_destroy_test: ok: destroying thread has another context current: thread B''s context C still draws',
+      'egl_context_destroy_test all passed') +
+    # The WARP run must really be on WARP, not silently on the default adapter.
+    @(if ($device -eq 'warp') { 'gesher EGL: default display: ANGLE, Direct3D 11 WARP device' }))
+}
+
 # The GPU kept from sleeping between the frames Gesher reads back (child
 # surfaces, SurfaceControl composition; compat/bionic/gpu_keepalive.h): on a
 # hardware adapter it gives the GPU work in the gaps of frames coming 25 a
