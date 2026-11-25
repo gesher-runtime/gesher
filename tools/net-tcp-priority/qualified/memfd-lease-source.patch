@@ -264,7 +264,7 @@ index 0697d4a22..fd49e2c74 100644
 +GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_seal_mutex);
 +#endif
 diff --git a/compat/posix/src/mman.cc b/compat/posix/src/mman.cc
-index 01eb82f81..e0958d3dd 100644
+index 01eb82f81..41be9a0e7 100644
 --- a/compat/posix/src/mman.cc
 +++ b/compat/posix/src/mman.cc
 @@ -44,0 +45 @@
@@ -327,14 +327,12 @@ index 01eb82f81..e0958d3dd 100644
 @@ -1607 +1647 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -    if (result != MAP_FAILED && deny_write) {
 +    if (result != MAP_FAILED) {
-@@ -1610 +1650,5 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
+@@ -1610 +1650,3 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
 -        it->second.deny_write = true;
 +        if (deny_write) it->second.deny_write = true;
-+        if (it->second.kind == Kind::kView) {
-+          if (write_lease) it->second.write_lease = write_lease;
-+          it->second.file_writable = file_writable;
-+        }
-@@ -1624,0 +1669,11 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
++        if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;
++        if (it->second.kind == Kind::kView) it->second.file_writable = file_writable;
+@@ -1624,0 +1667,11 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
 +namespace gesher {
 +
 +bool MappedFileWritable(const void* address) {
@@ -346,9 +344,9 @@ index 01eb82f81..e0958d3dd 100644
 +
 +}  // namespace gesher
 +
-@@ -1693,0 +1749 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
+@@ -1693,0 +1747 @@ int Unmap(State& s, uintptr_t begin, uintptr_t end) {
 +      region.write_lease.reset();
-@@ -2174,0 +2231,33 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
+@@ -2174,0 +2229,33 @@ void* mremap(void* old_address, size_t old_size, size_t new_size, int flags, ...
 +
 +#ifdef GESHER_FORK_LOCK
 +// fork (gesher/fork.h): mmap/munmap/mprotect in a forked child.

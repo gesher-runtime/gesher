@@ -1648,10 +1648,8 @@ void* mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset)
       const uintptr_t begin_view = reinterpret_cast<uintptr_t>(result);
       for (auto it = FindRegion(s, begin_view); it != s.regions.end() && it->first < begin_view + length; ++it) {
         if (deny_write) it->second.deny_write = true;
-        if (it->second.kind == Kind::kView) {
-          if (write_lease) it->second.write_lease = write_lease;
-          it->second.file_writable = file_writable;
-        }
+        if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;
+        if (it->second.kind == Kind::kView) it->second.file_writable = file_writable;
       }
     }
   }
