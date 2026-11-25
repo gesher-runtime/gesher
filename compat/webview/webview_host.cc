@@ -510,6 +510,8 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
 
   std::wstring document_script_id;
   uint64_t document_script_generation = 0;
+  bool document_script_in_flight = false;
+  std::deque<std::function<void(Impl*)>> document_script_waiters;
   std::wstring bridge_endpoint;
   bool bridge_guarded = false;
   uint64_t bridge_generation = 0;
@@ -886,6 +888,8 @@ bool OriginStorageKey(const std::wstring& origin, std::wstring* key) {
 void Fail(Impl* impl, HRESULT hr, const std::wstring& what) {
   impl->failed = true;
   impl->pending.clear();
+  impl->document_script_waiters.clear();
+  impl->document_script_in_flight = false;
   impl->Report(kFailed, 0, static_cast<int32_t>(hr), what + L": " + Hex(hr));
   auto waiting = std::move(impl->service_waiting);
   impl->service_waiting.clear();
@@ -903,6 +907,68 @@ void Do(const std::shared_ptr<Impl>& impl, std::function<void(Impl*)> fn) {
     }
     fn(impl.get());
   });
+}
+
+void DrainDocumentScriptWaiters(Impl* impl) {
+  while (!impl->document_script_waiters.empty() && !impl->document_script_in_flight) {
+    if (impl->destroyed || impl->closing || impl->failed || !impl->webview) {
+      impl->document_script_waiters.clear();
+      return;
+    }
+    auto fn = std::move(impl->document_script_waiters.front());
+    impl->document_script_waiters.pop_front();
+    fn(impl);
+  }
+}
+
+void DoAfterDocumentScript(const std::shared_ptr<Impl>& impl, std::function<void(Impl*)> fn) {
+  Do(impl, [fn = std::move(fn)](Impl* impl) mutable {
+    if (impl->document_script_in_flight) {
+      impl->document_script_waiters.push_back(std::move(fn));
+      return;
+    }
+    fn(impl);
+  });
+}
+
+void ApplyDocumentScript(Impl* impl, const std::wstring& script) {
+  if (impl->destroyed || impl->closing || impl->failed || !impl->webview) return;
+  if (!impl->document_script_id.empty()) {
+    impl->webview->RemoveScriptToExecuteOnDocumentCreated(impl->document_script_id.c_str());
+    impl->document_script_id.clear();
+  }
+  uint64_t generation = ++impl->document_script_generation;
+  if (script.empty()) return;
+  impl->document_script_in_flight = true;
+  std::weak_ptr<Impl> weak = impl->weak_from_this();
+  HRESULT hr = impl->webview->AddScriptToExecuteOnDocumentCreated(
+      script.c_str(),
+      GESHER_CALLBACK(
+          ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler,
+          [weak, generation](HRESULT error, LPCWSTR id) -> HRESULT {
+            auto impl = weak.lock();
+            if (!impl) return S_OK;
+            impl->document_script_in_flight = false;
+            if (impl->destroyed || impl->closing || impl->failed || !impl->webview) {
+              impl->document_script_waiters.clear();
+              return S_OK;
+            }
+            if (SUCCEEDED(error) && id != nullptr) {
+              if (generation != impl->document_script_generation) {
+                // Replaced while it was being added.
+                impl->webview->RemoveScriptToExecuteOnDocumentCreated(id);
+              } else {
+                impl->document_script_id = id;
+              }
+            }
+            DrainDocumentScriptWaiters(impl.get());
+            return S_OK;
+          })
+          .get());
+  if (FAILED(hr)) {
+    impl->document_script_in_flight = false;
+    DrainDocumentScriptWaiters(impl);
+  }
 }
 
 std::wstring Headers(ICoreWebView2HttpRequestHeaders* headers) {
@@ -2004,6 +2070,8 @@ bool FinishDestroy(const std::shared_ptr<Impl>& impl) {
     if (impl->container != nullptr && !DestroyWindow(impl->container)) ok = false;
     impl->container = nullptr;
     impl->pending.clear();
+    impl->document_script_waiters.clear();
+    impl->document_script_in_flight = false;
     Listener* listener = impl->listener;
     impl->listener = nullptr;
     if (listener != nullptr) listener->OnDestroyed();
@@ -2098,6 +2166,8 @@ void Host::Destroy() {
     if (impl->webview) impl->webview->Stop();
     CancelBridgeRequests(impl.get());
     impl->pending.clear();
+    impl->document_script_waiters.clear();
+    impl->document_script_in_flight = false;
     if (impl->bridge_acknowledgments.empty()) FinishDestroy(impl);
     // No timer forces a controller closed with outstanding acknowledgments.
     // A vanished renderer may retain this inert controller until process exit;
@@ -2112,7 +2182,7 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
   if (!body.empty() && !method.empty() && method != L"GET") {
     bytes = std::make_shared<const std::vector<uint8_t>>(std::move(body));
   }
-  Do(impl_, [url, headers, method, body = std::move(bytes), number](Impl* impl) {
+  DoAfterDocumentScript(impl_, [url, headers, method, body = std::move(bytes), number](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = E_FAIL;
     Com<ICoreWebView2_2> wv2;
@@ -2146,7 +2216,7 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
 }
 
 void Host::NavigateToString(const std::wstring& html) {
-  Do(impl_, [html](Impl* impl) {
+  DoAfterDocumentScript(impl_, [html](Impl* impl) {
     impl->api_navigation = true;
     HRESULT hr = impl->webview->NavigateToString(html.c_str());
     if (FAILED(hr)) {
@@ -2172,7 +2242,7 @@ void Host::SetBridgeEndpoint(const std::wstring& path) {
 }
 
 void Host::Run(Command command) {
-  Do(impl_, [command](Impl* impl) {
+  auto run = [command](Impl* impl) {
     switch (command) {
       case kReload:
         impl->api_navigation = true;
@@ -2206,7 +2276,20 @@ void Host::Run(Command command) {
         impl->webview->OpenDevToolsWindow();
         break;
     }
-  });
+  };
+  switch (command) {
+    case kReload:
+    case kStop:
+    case kGoBack:
+    case kGoForward:
+      DoAfterDocumentScript(impl_, std::move(run));
+      break;
+    case kFocus:
+    case kBlur:
+    case kDevTools:
+      Do(impl_, std::move(run));
+      break;
+  }
 }
 
 void Host::SetBounds(HWND parent, int x, int y, int width, int height, int clip_x, int clip_y,
@@ -2299,31 +2382,7 @@ void Host::ExecuteScript(const std::wstring& script, int64_t callback_id) {
 }
 
 void Host::SetDocumentScript(const std::wstring& script) {
-  std::weak_ptr<Impl> weak = impl_;
-  Do(impl_, [script, weak](Impl* impl) {
-    if (!impl->document_script_id.empty()) {
-      impl->webview->RemoveScriptToExecuteOnDocumentCreated(impl->document_script_id.c_str());
-      impl->document_script_id.clear();
-    }
-    uint64_t generation = ++impl->document_script_generation;
-    if (script.empty()) return;
-    impl->webview->AddScriptToExecuteOnDocumentCreated(
-        script.c_str(),
-        GESHER_CALLBACK(ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler,
-                        [weak, generation](HRESULT error, LPCWSTR id) -> HRESULT {
-                          auto impl = weak.lock();
-                          if (!impl || FAILED(error) || id == nullptr) return S_OK;
-                          if (impl->destroyed || !impl->webview) return S_OK;
-                          if (generation != impl->document_script_generation) {
-                            // Replaced while it was being added.
-                            impl->webview->RemoveScriptToExecuteOnDocumentCreated(id);
-                          } else {
-                            impl->document_script_id = id;
-                          }
-                          return S_OK;
-                        })
-            .get());
-  });
+  DoAfterDocumentScript(impl_, [script](Impl* impl) { ApplyDocumentScript(impl, script); });
 }
 
 void Host::RespondToRequest(int64_t id, int32_t status, const std::wstring& reason,
