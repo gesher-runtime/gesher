@@ -127,6 +127,22 @@ bool List(const std::wstring& name, std::vector<Entry>* entries);
 bool ReadLink(const std::wstring& name, std::string* target);
 // n for /proc/self/fd/<n> when fd n is open, else -1.
 int FdOfLink(const std::wstring& name);
+// The name's Linux path, as an fd open on it reports it: "/proc/<pid>/maps"
+// for proc/self/maps.
+std::string LinuxName(const std::wstring& name);
+// The inode number stat and fstat report for that Linux path.
+unsigned long long Inode(const std::string& linux_path);
+// What following a link fails with (Linux refuses /proc/<pid>/map_files/*
+// to a process without CAP_CHECKPOINT_RESTORE: EPERM), or 0 when it may be
+// followed. Links only.
+int FollowError(const std::wstring& name);
+// A link's permission bits, as lstat reports them.
+unsigned LinkMode(const std::wstring& name);
+// Whether the file behind `file` (a handle of an fd) is one that open() made
+// for a name here: its Linux path, and whether it is a directory. Such an fd
+// stays a /proc file for fstat, fstatfs, getdents64, readlink of
+// /proc/self/fd/<n> and the *at calls, as Linux's does.
+bool DescribeHandle(HANDLE file, bool* directory, std::string* linux_path);
 }  // namespace procfs
 
 // Symbolic links on disk (links.cc): whether a handle opened with

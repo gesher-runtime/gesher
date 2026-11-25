@@ -11,6 +11,7 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/clocks.h>
+#include <gesher/procfs_fd.h>
 #include <gesher/ptrace_state.h>
 #include <gesher/xattr.h>
 
@@ -777,8 +778,28 @@ void AddVolumeInfo(const wchar_t* path, BionicStatfs* out) {
 // statfs over gesher-base's statvfs, which takes the .so's path as the rest
 // of the shim's file calls do (an Android directory that is not on the disk,
 // such as /data, answers for the volume it would be on).
+// /proc and /sys are file systems of their own on Linux: statfs of their names
+// (and fstatfs of an fd open on one) reports procfs or sysfs, not the volume.
+constexpr uint64_t kProcSuperMagic = 0x9FA0;
+constexpr uint64_t kSysfsMagic = 0x62656572;
+constexpr uint64_t kStRelatime = 0x0400;
+void FillVirtualStatfs(const std::string& linux_path, BionicStatfs* out) {
+  std::memset(out, 0, sizeof(*out));
+  out->f_type = linux_path.rfind("/sys", 0) == 0 ? kSysfsMagic : kProcSuperMagic;
+  out->f_bsize = 4096;
+  out->f_frsize = 4096;
+  out->f_namelen = 255;
+  // Android's init mounts both with no flags: only the default relatime.
+  out->f_flags = kStValid | kStRelatime;
+}
+
 int BIONIC_SYSV Statfs(const char* path, BionicStatfs* out) {
   if (path == nullptr || out == nullptr) return errno = kEFAULT, -1;
+  std::string virtual_path;
+  if (::gesher::ProcfsName(path, &virtual_path)) {
+    FillVirtualStatfs(virtual_path, out);
+    return 0;
+  }
   struct statvfs v;
   std::memset(&v, 0, sizeof(v));
   if (::statvfs(path, &v) != 0) return -1;
@@ -798,6 +819,12 @@ int BIONIC_SYSV Statfs(const char* path, BionicStatfs* out) {
 // file's own path, which it only takes for a directory, and fails on a file).
 int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
   if (out == nullptr) return errno = kEFAULT, -1;
+  std::string virtual_path;
+  bool directory;
+  if (::gesher::ProcfsDescriptor(fd, &virtual_path, &directory)) {
+    FillVirtualStatfs(virtual_path, out);
+    return 0;
+  }
   auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, -1;
   std::wstring w(32768, L'\0');

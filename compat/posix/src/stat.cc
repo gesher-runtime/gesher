@@ -18,6 +18,10 @@ namespace {
 // 100 ns intervals between 1601-01-01 and 1970-01-01.
 constexpr long long kEpochDifference = 116444736000000000LL;
 
+// The device of /proc's names (a file system of its own, as procfs is), for
+// stat of a name and fstat of an fd open on one alike.
+constexpr unsigned long long kProcDevice = 0x16;
+
 timespec ToTimespec(LARGE_INTEGER t) {
   long long since_1970 = t.QuadPart - kEpochDifference;
   long long seconds = since_1970 / 10000000;
@@ -51,6 +55,19 @@ int FromHandle(HANDLE h, struct stat* buf) {
     return gesher::FailWithLastError();
   }
   Clear(buf);
+  bool proc_directory;
+  std::string proc_path;
+  if ((info.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY) != 0 &&
+      gesher::procfs::DescribeHandle(h, &proc_directory, &proc_path)) {
+    // An fd open on a /proc (or /sys) name: what stat of the name reports.
+    buf->st_mode = proc_directory ? S_IFDIR | 0555 : S_IFREG | 0444;
+    buf->st_dev = kProcDevice;
+    buf->st_ino = gesher::procfs::Inode(proc_path);
+    buf->st_atim = ToTimespec(basic.LastAccessTime);
+    buf->st_mtim = ToTimespec(basic.LastWriteTime);
+    buf->st_ctim = ToTimespec(basic.ChangeTime);
+    return 0;
+  }
   buf->st_dev = info.dwVolumeSerialNumber;
   buf->st_ino = (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
   buf->st_nlink = info.nNumberOfLinks;
@@ -117,6 +134,7 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
         type = S_IFLNK;
       }
       if (type == S_IFLNK && follow) {
+        if (int error = gesher::procfs::FollowError(windows)) return errno = error, -1;
         // /proc/self/fd/<n> is the file open as fd n, a pipe or socket too.
         int fd = gesher::procfs::FdOfLink(windows);
         if (fd >= 0) return fstat(fd, buf);
@@ -127,8 +145,11 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
       }
       // Size 0, like Linux's /proc files.
       Clear(buf);
-      buf->st_mode = type | (type == S_IFDIR ? 0555 : type == S_IFLNK ? 0777 : 0444);
-      buf->st_dev = 0x16;  // a file system of its own, as procfs is
+      buf->st_mode = type | (type == S_IFDIR   ? 0555
+                             : type == S_IFLNK ? gesher::procfs::LinkMode(windows)
+                                               : 0444);
+      buf->st_dev = kProcDevice;
+      buf->st_ino = gesher::procfs::Inode(gesher::procfs::LinuxName(windows));
       return 0;
     }
     case gesher::PathKind::kNull:

@@ -12,7 +12,7 @@ Phase 1 items closed by the posix track (branch `wip/posix`). Design:
 | Other drives | `compat/posix/src/path.cc` | `/mnt/<drive>/...` is `<DRIVE>:\...`; `getcwd`, `realpath`, `readlink` give it back for a drive other than the current one, so no Linux path has a colon |
 | Path calls | `src/fsops.cc`, `src/links.cc`, `src/path.cc`, `src/stat.cc`, `src/dirent.cc`, `src/ftw.cc` | `access`/`faccessat`, `rename`/`renameat`/`renameat2` (atomic replace, POSIX semantics), `remove`, `unlink`/`unlinkat`/`rmdir` (POSIX delete, read-only files too), `chdir`/`fchdir`, `chmod`/`fchmod`/`fchmodat` (owner write bit = read-only attribute), `creat`, `open`'s mode and `O_NOFOLLOW`, `fopen`/`freopen` (over `open`, binary, `x`/`e`), `symlink`/`readlink`/`link` and their `*at` forms, `lstat` and `fstatat(AT_SYMLINK_NOFOLLOW)` of symbolic links, `mkdtemp`/`mkstemp`/`mkostemp`/`mkstemps`, `nftw`/`ftw`, `fdopendir`/`dirfd`/`readdir_r`/`telldir`/`seekdir`; UTF-8 names and paths past `MAX_PATH` everywhere |
 | Reserved characters | `include/gesher/reserved_names.h`, `src/path.cc`, `src/dirent.cc`, `src/links.cc`, `src/inotify.cc` | a name with `< > : " \| ? *` or a control character (Firebase's `frc_...:android:..._settings.xml`, Play Store's `<package>:<process>` directories) is stored with each such character as U+F000 + c, as Cygwin does, and read back as given; the Windows root of a path (`C:` before a separator, `\\?\`, UNC) keeps its own ([ADR 0083](decisions/0083-reserved-file-name-characters.md)) |
-| /proc | `src/procfs.cc` | `/proc/self` (and `/proc/<own pid>`): `cmdline comm environ status stat statm maps mounts`, `fd/<n>` links, `task/<tid>/{comm,stat,status}`, `exe`, `cwd`; `/proc/meminfo cpuinfo uptime mounts` |
+| /proc | `src/procfs.cc` | `/proc/self` (and `/proc/<own pid>`): `cmdline comm environ status stat statm maps mounts`, `fd/<n>` links, `map_files/<start>-<end>` links, `task/<tid>/{comm,stat,status}`, `exe`, `cwd`; `/proc/meminfo cpuinfo uptime mounts`. An fd open on a name stays a /proc file or directory (`fstat`, `fstatfs`, `readlink` of `/proc/self/fd/<n>`, `getdents64`, the `*at` calls) |
 | Time zones | `src/windows_zones.cc`, `gen_windows_zones.py`, `compat/libcore/collect-tzdata.sh` | `/etc/timezone` = Windows' zone as an IANA id (CLDR windowsZones from the pinned ICU, by the user's region), which libcore's `TimeZone.getDefault()` reads; the tzdata module's files from `system/timezone` in `dist/tzdata` and the installer (`ANDROID_TZDATA_ROOT`) |
 | inotify | `src/inotify.cc`, `<sys/inotify.h>` | over `ReadDirectoryChangesExW`, an fd that `poll`/`epoll` wait on; libopenjdk's `LinuxWatchService.c` (`WatchService`) and libandroid_runtime's FileObserver natives are linked in |
 | Processes | `src/process.cc`, `src/misc.cc` | `getppid`; `kill` to other processes (signal mailbox), `SIGKILL`/`SIGSTOP`/`SIGCONT` to any; `$GESHER_UID`; `getrlimit`/`setrlimit`/`prlimit`/`getrusage`; `prctl(PR_SET_NAME)` names the Windows thread too |
@@ -219,6 +219,20 @@ closed three of this layer's leftovers:
   a 64-bit device has its linker; `/proc/self/maps` and `/proc/self/fd` name
   that file `/system/bin/linker64`, as `realpath` does; changes through that
   name fail with `EROFS`.
+- An fd open on a `/proc` (or `/sys`) name is a snapshot in an anonymous file
+  that carries the name's Linux path (the extended attribute
+  `GESHER.PROCFS`): `fstat` reports what `stat` of the name does (size 0,
+  procfs's device, the same inode), `fstatfs`/`statfs` report procfs
+  (`0x9fa0`) or sysfs, and `readlink` of `/proc/self/fd/<n>` gives
+  `/proc/<pid>/maps`. A `/proc` directory opens as a directory fd that serves
+  `getdents64` and the `*at` calls; `read` of it returns 0 bytes rather than
+  `EISDIR`. `/proc/self/map_files` lists a link per file-backed line of
+  `maps` (named `%lx-%lx`, as Linux names them); `readlink` and `lstat` work,
+  and following one (`open`, `stat`) fails with `EPERM`, as Linux refuses it
+  to a process without `CAP_CHECKPOINT_RESTORE`.
+- `getdents64` on a directory on disk lists it again from the start on each
+  call and skips the entries already returned (the fd's file position is the
+  index of the next one); its `d_ino` is the entry's position, as `readdir`'s.
 - Permissions are the read-only attribute only: regular files show
   `0755` (`0555` read-only) and `access(X_OK)` holds for every file (native2,
   ADR 0057), as on an NTFS volume mounted on Linux; `chmod` changes only the

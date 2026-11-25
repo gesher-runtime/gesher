@@ -6,7 +6,10 @@
 //   /proc/cpuinfo
 //   /proc/meminfo
 //   /sys/devices/system/cpu/online, present, possible
+//   fds open on /proc names: fstat, readlink of /proc/self/fd/<n>, directory
+//   fds (getdents64, openat), and /proc/self/map_files
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -17,6 +20,7 @@
 #include <unistd.h>
 #include <windows.h>
 
+#include <set>
 #include <string>
 #include <vector>
 
@@ -471,6 +475,172 @@ static void TestRandom() {
   RemoveDirectoryW(data.c_str());
 }
 
+// The names getdents64 gives for the directory open as fd, read with a
+// buffer of `size` bytes (a small one takes several calls).
+static std::vector<std::string> Dents(int fd, size_t size) {
+  std::vector<std::string> names;
+  std::vector<char> buffer(size);
+  for (int calls = 0; calls < 100000; ++calls) {
+    ssize_t n = getdents64(fd, buffer.data(), buffer.size());
+    if (n <= 0) {
+      CHECK_MSG(n == 0, "getdents64 ends with 0");
+      break;
+    }
+    for (ssize_t at = 0; at < n;) {
+      unsigned short reclen;
+      memcpy(&reclen, buffer.data() + at + 16, 2);
+      CHECK(reclen >= 24 && reclen % 8 == 0 && at + reclen <= n);
+      if (reclen < 24 || at + reclen > n) return names;
+      unsigned long long ino;
+      memcpy(&ino, buffer.data() + at, 8);
+      CHECK_MSG(ino != 0, "getdents64 entries have an inode number");
+      names.push_back(buffer.data() + at + 19);
+      at += reclen;
+    }
+  }
+  return names;
+}
+
+static bool Has(const std::vector<std::string>& names, const char* name) {
+  for (const std::string& n : names) {
+    if (n == name) return true;
+  }
+  return false;
+}
+
+static void TestProcfsDescriptors() {
+  printf("Testing fds of /proc names (fstat, readlink, getdents64, map_files)...\n");
+  const std::string pid = std::to_string(GetCurrentProcessId());
+
+  // An fd open on /proc/self/maps is a /proc file: what stat of the name says.
+  int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+  CHECK(fd >= 0);
+  struct stat by_fd = {}, by_name = {};
+  CHECK(fstat(fd, &by_fd) == 0);
+  CHECK(stat("/proc/self/maps", &by_name) == 0);
+  CHECK_MSG(S_ISREG(by_fd.st_mode) && (by_fd.st_mode & 0777) == 0444, "fstat: a read-only file");
+  CHECK_MSG(by_fd.st_size == 0, "fstat: size 0, as Linux's /proc files");
+  CHECK_MSG(by_fd.st_dev == by_name.st_dev && by_fd.st_ino == by_name.st_ino && by_fd.st_ino != 0,
+            "fstat of the fd and stat of the name agree");
+  char link[512];
+  const std::string fd_link = "/proc/self/fd/" + std::to_string(fd);
+  ssize_t n = readlink(fd_link.c_str(), link, sizeof(link));
+  CHECK_MSG(n > 0 && std::string(link, n) == "/proc/" + pid + "/maps",
+            "readlink of /proc/self/fd/<n> names /proc/<pid>/maps");
+  char head[32];
+  CHECK_MSG(read(fd, head, sizeof(head)) > 0, "the fd still reads the content");
+  close(fd);
+
+  // A /proc directory opens as a directory fd.
+  int dir = open("/proc/self", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  CHECK(dir >= 0);
+  CHECK(fstat(dir, &by_fd) == 0 && S_ISDIR(by_fd.st_mode));
+  n = readlink(("/proc/self/fd/" + std::to_string(dir)).c_str(), link, sizeof(link));
+  CHECK(n > 0 && std::string(link, n) == "/proc/" + pid);
+  errno = 0;
+  CHECK_MSG(open("/proc/self", O_WRONLY) < 0 && errno == EISDIR, "a directory opens read-only");
+  errno = 0;
+  CHECK(open("/proc/self/maps", O_RDONLY | O_DIRECTORY) < 0 && errno == ENOTDIR);
+  int status = openat(dir, "status", O_RDONLY | O_CLOEXEC);
+  CHECK_MSG(status >= 0, "openat relative to a /proc directory fd");
+  if (status >= 0) {
+    std::string text;
+    char buf[256];
+    while ((n = read(status, buf, sizeof(buf))) > 0) text.append(buf, static_cast<size_t>(n));
+    CHECK(text.rfind("Name:", 0) == 0);
+    close(status);
+  }
+  std::vector<std::string> names = Dents(dir, 64);  // a record or two per call
+  CHECK(Has(names, ".") && Has(names, "..") && Has(names, "maps") && Has(names, "status") &&
+        Has(names, "map_files") && Has(names, "fd"));
+  CHECK_MSG(lseek(dir, 0, SEEK_SET) == 0 && Dents(dir, 4096) == names,
+            "lseek to 0 rewinds; the buffer size does not change the listing");
+  char tiny[16];
+  errno = 0;
+  lseek(dir, 0, SEEK_SET);
+  CHECK_MSG(getdents64(dir, tiny, sizeof(tiny)) < 0 && errno == EINVAL,
+            "a buffer too small for an entry is EINVAL");
+  close(dir);
+  fd = open("/proc/self/maps", O_RDONLY);
+  errno = 0;
+  CHECK(getdents64(fd, tiny, sizeof(tiny)) < 0 && errno == ENOTDIR);
+  close(fd);
+
+  // /proc/self/map_files: a link per file mapping, named "%lx-%lx".
+  dir = open("/proc/self/map_files", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  CHECK(dir >= 0);
+  std::vector<std::string> links = Dents(dir, 4096);
+  close(dir);
+  std::string maps = ReadAll("/proc/self/maps");
+  std::set<std::string> file_ranges;
+  std::vector<std::pair<std::string, std::string>> files;  // name, path
+  for (size_t at = 0; at < maps.size();) {
+    size_t end = maps.find('\n', at);
+    if (end == std::string::npos) end = maps.size();
+    const std::string line = maps.substr(at, end - at);
+    at = end + 1;
+    unsigned long long lo = 0, hi = 0;
+    char path[1024] = {};
+    if (sscanf(line.c_str(), "%llx-%llx %*s %*s %*s %*s %1023[^\n]", &lo, &hi, path) == 3 &&
+        path[0] == '/') {
+      char name[64];
+      snprintf(name, sizeof(name), "%llx-%llx", lo, hi);
+      file_ranges.insert(name);
+      files.push_back({name, path});
+    }
+  }
+  CHECK_MSG(!files.empty(), "maps has file mappings (this executable)");
+  size_t listed = 0;
+  for (const std::string& l : links) {
+    if (l == "." || l == "..") continue;
+    ++listed;
+    CHECK_MSG(file_ranges.count(l) == 1, "each map_files entry is a file mapping of maps");
+  }
+  CHECK_MSG(listed == file_ranges.size(), "map_files lists every file mapping of maps");
+  if (!files.empty()) {
+    const std::string entry = "/proc/self/map_files/" + files[0].first;
+    n = readlink(entry.c_str(), link, sizeof(link));
+    CHECK_MSG(n > 0 && std::string(link, n) == files[0].second, "readlink names the mapped file");
+    struct stat st = {};
+    CHECK(lstat(entry.c_str(), &st) == 0 && S_ISLNK(st.st_mode) && (st.st_mode & 0400) != 0);
+    errno = 0;
+    CHECK_MSG(stat(entry.c_str(), &st) < 0 && errno == EPERM, "following a map_files link is EPERM");
+    errno = 0;
+    CHECK_MSG(open(entry.c_str(), O_RDONLY) < 0 && errno == EPERM, "opening one is EPERM");
+    errno = 0;
+    CHECK(lstat(("/proc/self/map_files/0" + files[0].first).c_str(), &st) < 0 && errno == ENOENT);
+  }
+  struct stat st = {};
+  errno = 0;
+  CHECK(lstat("/proc/self/map_files/1-2", &st) < 0 && errno == ENOENT);
+}
+
+// getdents64 on a directory on disk.
+static void TestDiskGetdents() {
+  printf("Testing getdents64 on a directory on disk...\n");
+  wchar_t temp[MAX_PATH];
+  GetTempPathW(MAX_PATH, temp);
+  std::wstring root = std::wstring(temp) + L"gesher-getdents-" + std::to_wstring(GetCurrentProcessId());
+  CreateDirectoryW(root.c_str(), nullptr);
+  for (const wchar_t* f : {L"\\alpha", L"\\beta", L"\\gamma"}) {
+    HANDLE h = CreateFileW((root + f).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+  }
+  CreateDirectoryW((root + L"\\sub").c_str(), nullptr);
+  char narrow[MAX_PATH * 3];
+  WideCharToMultiByte(CP_UTF8, 0, root.c_str(), -1, narrow, sizeof(narrow), nullptr, nullptr);
+  int dir = open(narrow, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  CHECK(dir >= 0);
+  std::vector<std::string> names = Dents(dir, 48);
+  CHECK(names.size() == 6 && Has(names, ".") && Has(names, "..") && Has(names, "alpha") &&
+        Has(names, "beta") && Has(names, "gamma") && Has(names, "sub"));
+  CHECK(lseek(dir, 0, SEEK_SET) == 0 && Dents(dir, 4096) == names);
+  close(dir);
+  for (const wchar_t* f : {L"\\alpha", L"\\beta", L"\\gamma"}) DeleteFileW((root + f).c_str());
+  RemoveDirectoryW((root + L"\\sub").c_str());
+  RemoveDirectoryW(root.c_str());
+}
+
 int main(int argc, char** argv) {
   if (argc == 2 && strcmp(argv[1], "--boot-id") == 0) {
     std::string id = ReadAll("/proc/sys/kernel/random/boot_id");
@@ -486,6 +656,8 @@ int main(int argc, char** argv) {
   TestSysfs();
   TestSelfLink();
   TestRandom();
+  TestProcfsDescriptors();
+  TestDiskGetdents();
 
   if (g_failed == 0) {
     printf("procfs & sysfs contracts: all passed (%d checks)\n", g_checks);

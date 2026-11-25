@@ -213,6 +213,11 @@ struct Entry {
 };
 }  // namespace procfs
 
+// ptrace_state.cc is not part of this fixture: no tracer.
+namespace ptrace {
+static inline int TracerPid() { return 0; }
+}  // namespace ptrace
+
 // system_linker.cc is not part of this fixture: no file, nothing mapped.
 namespace system_linker {
 inline constexpr char kPath[] = "/system/bin/linker64";
