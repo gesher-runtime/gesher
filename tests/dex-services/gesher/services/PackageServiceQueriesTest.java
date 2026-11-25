@@ -306,7 +306,6 @@ public final class PackageServiceQueriesTest {
                 PackageManager.FEATURE_HOME_SCREEN,
                 PackageManager.FEATURE_PICTURE_IN_PICTURE,
                 PackageManager.FEATURE_AUDIO_LOW_LATENCY,
-                PackageManager.FEATURE_CAMERA_AUTOFOCUS,
                 PackageManager.FEATURE_CAMERA_EXTERNAL,
                 PackageManager.FEATURE_CAMERA_FLASH,
                 PackageManager.FEATURE_USB_HOST,
@@ -325,14 +324,22 @@ public final class PackageServiceQueriesTest {
         }
         boolean rearCamera = false;
         boolean frontCamera = false;
+        boolean rearAutofocus = false;
         for (com.gesher.server.WindowsCamera.Device camera : cameras) {
-            if (camera.isRearFacing()) rearCamera = true;
-            else frontCamera = true;
+            if (camera.isRearFacing()) {
+                rearCamera = true;
+                rearAutofocus |= camera.autofocus;
+            } else {
+                frontCamera = true;
+            }
         }
+        // FEATURE_CAMERA_AUTOFOCUS: only a rear camera's real autofocus (CameraAutofocusContractTest).
         require(service.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY, 0) == !cameras.isEmpty()
                         && service.hasSystemFeature(PackageManager.FEATURE_CAMERA, 0) == rearCamera
                         && service.hasSystemFeature(PackageManager.FEATURE_CAMERA_FRONT, 0)
-                                == frontCamera,
+                                == frontCamera
+                        && service.hasSystemFeature(PackageManager.FEATURE_CAMERA_AUTOFOCUS, 0)
+                                == rearAutofocus,
                 "Camera features disagree with the " + cameras.size() + " Windows cameras");
 
         android.util.ArrayMap<String, FeatureInfo> f = new android.util.ArrayMap<>();

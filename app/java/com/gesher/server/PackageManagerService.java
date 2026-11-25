@@ -1190,11 +1190,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (String name : new String[] {PackageManager.FEATURE_APP_WIDGETS,
                 PackageManager.FEATURE_TOUCHSCREEN,
                 PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
-                PackageManager.FEATURE_SCREEN_LANDSCAPE,
-                // Gesher's built-in WebView (WebView2, ADR 0041; WebViewUpdateService). The
-                // WebView2 Runtime is the installer's prerequisite; without it WebViews
-                // stay empty and webviewupdate names no valid provider.
-                PackageManager.FEATURE_WEBVIEW}) {
+                PackageManager.FEATURE_SCREEN_LANDSCAPE}) {
             android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
             f.name = name;
             FEATURES.put(name, f);
