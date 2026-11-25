@@ -112,6 +112,8 @@ public final class GesherAppProcess {
      * zygote's fork). Exits with 0 when the server ends it, 1 on a failure.
      */
     public static void main(String[] args) {
+        // stdout/stderr are the package's .log file: no credentials (docs/logging.md).
+        com.gesher.app.LogRedaction.installStandardStreams();
         int code = 0;
         try {
             String packageName = null;

@@ -544,6 +544,10 @@ public final class Launcher {
                 "system_server.log"}) {
             new File(logs, log).delete();
         }
+        // Logs written before credential redaction, once, before any process of the
+        // device runs (docs/logging.md).
+        int scrubbed = LogRedaction.scrubLogs(logs);
+        if (scrubbed > 0) log("redacted credentials in " + scrubbed + " earlier log file(s)");
         log(text("device_starting", name, logs));
         Properties state = new Properties();
         state.setProperty(Device.STATE_DEVICE, name);

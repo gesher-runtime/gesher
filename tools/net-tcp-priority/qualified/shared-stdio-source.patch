@@ -1,5 +1,5 @@
 diff --git a/compat/bionic/stdio_bionic.cc b/compat/bionic/stdio_bionic.cc
-index 3848a9a10..0f46ab7c1 100644
+index 3848a9a10..10ce0edbc 100644
 --- a/compat/bionic/stdio_bionic.cc
 +++ b/compat/bionic/stdio_bionic.cc
 @@ -31,7 +31,6 @@
@@ -409,7 +409,17 @@ index 3848a9a10..0f46ab7c1 100644
    if (Orient(stderr, -1) == 0) return;
    if (s != nullptr && *s != 0) {
      std::fprintf(stderr, "%s: %s\n", s, strerror(errno));
-@@ -1205,6 +1072,7 @@ int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* a
+@@ -1161,6 +1028,9 @@ const HANDLE logOutput = [] {
+ int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool filter = true) {
+   if (!tag) tag = ::gesher_android_default_log_tag();
+   if (filter && !::__android_log_is_loggable_len(prio, tag, tag ? std::strlen(tag) : 0, 2)) return -1;
++  // Both sinks persist (the logcat file and the package's .log): no credentials.
++  std::string redacted;
++  if (text && logging::RedactCredentials(text, std::strlen(text), &redacted)) text = redacted.c_str();
+   logging::Record(buffer, prio, tag, text);
+   std::string line(1, PriorityLetter(prio));
+   line += '/';
+@@ -1205,6 +1075,7 @@ int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* a
  int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt, SysvVaList* ap) {
    FILE* stream = F(f);
    StreamLock lock(stream);
@@ -417,7 +427,7 @@ index 3848a9a10..0f46ab7c1 100644
    if (Orient(stream, -1) == 0) return -1;
    bool valid;
    std::string s = Format(fmt, ap, &valid);
-@@ -1255,6 +1123,7 @@ int BIONIC_SYSV gesher_bionic_vsscanf(const char* str, const char* fmt, SysvVaLi
+@@ -1255,6 +1126,7 @@ int BIONIC_SYSV gesher_bionic_vsscanf(const char* str, const char* fmt, SysvVaLi
  int BIONIC_SYSV gesher_bionic_vfscanf(void* f, const char* fmt, SysvVaList* ap) {
    FILE* stream = F(f);
    StreamLock lock(stream);
@@ -425,7 +435,7 @@ index 3848a9a10..0f46ab7c1 100644
    if (Orient(stream, -1) == 0) return EOF;
    return VFscanfImpl(stream, fmt, ap);
  }
-@@ -1297,10 +1166,11 @@ int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t*
+@@ -1297,10 +1169,11 @@ int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t*
  int BIONIC_SYSV gesher_bionic_vfwprintf(void* f, const uint32_t* fmt, SysvVaList* ap) {
    FILE* stream = F(f);
    StreamLock lock(stream);

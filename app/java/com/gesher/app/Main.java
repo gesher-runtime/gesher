@@ -95,6 +95,8 @@ public final class Main {
     }
 
     public static void main(String[] args) {
+        // stdout/stderr may be a persisted log file: no credentials (docs/logging.md).
+        LogRedaction.installStandardStreams();
         int code;
         try {
             code = run(args);
