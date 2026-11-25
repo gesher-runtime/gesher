@@ -256,19 +256,31 @@ closed three of this layer's leftovers:
   link, or a symbolic link on disk) reads the link. Following one (`open`, `stat`, `access`,
   `realpath`, `statfs`) fails with `EPERM`, as Linux refuses it to a process
   without `CAP_CHECKPOINT_RESTORE`.
-- `getdents64` keeps an open enumeration of the directory (a find handle) on
-  the open file description: a call that continues where the last one
-  stopped reads on from it, and one at a position it did not stop at
-  (`lseek`, a process sharing the description after `fork`) opens the
-  directory again and skips to that position. Nothing is copied: the
-  enumeration's memory is the find handle's, and it goes when the last fd on
-  the description closes. Calls on one description take turns, as Linux's
+- `getdents64` keeps a stream on the open file description: a directory
+  handle of its own (opened by the directory's name, not inheritable) that it
+  enumerates with `GetFileInformationByHandleEx`, or a `/proc` directory's
+  entries. A call that continues where the last one stopped reads on; one at
+  a position the stream did not stop at (`lseek`, a process sharing the
+  description after `fork`) enumerates again from the start and skips to
+  that position. The stream and its handle go when the last fd on the
+  description closes. Calls on one description take turns, as Linux's
   per-file `f_pos_lock` makes them, so threads reading one fd share its
-  entries out between them; calls on other fds do not wait. The fd's file
-  position is the index of the next entry; `d_ino` is the entry's position,
-  as `readdir`'s.
+  entries out between them; calls on other fds do not wait. A call resolves
+  its fd once, so a `close` and `open` of that number by another thread does
+  not turn it to another file. A forked child closes the stream handles it
+  inherited and opens the directory again on its next call. The fd's file
+  position is the index of the next entry (`d_off` is that ordinal);
+  `d_ino` is the entry's position, as `readdir`'s.
+- Positions are ordinals, not cookies: after an `lseek` to a `d_off`, or in a
+  forked child, the stream counts entries from the start again, so an entry
+  removed before that point meanwhile shifts the rest and one live entry may
+  be skipped. A listing read straight through (`readdir`, `rm -rf`) is not
+  affected.
 - `fstatfs` of a pipe reports pipefs (`0x50495045`), of a socket sockfs
-  (`0x534f434b`), and `statfs` of `/proc/self/fd/<n>` the same for them.
+  (`0x534f434b`), of a FIFO the volume that holds its file (as Linux reports
+  the FIFO inode's file system), and `statfs` of `/proc/self/fd/<n>` the same
+  for them. `fstat` of an fd opened `O_PATH | O_NOFOLLOW` on a symbolic link
+  on disk reports the link.
 - Permissions are the read-only attribute only: regular files show
   `0755` (`0555` read-only) and `access(X_OK)` holds for every file (native2,
   ADR 0057), as on an NTFS volume mounted on Linux; `chmod` changes only the

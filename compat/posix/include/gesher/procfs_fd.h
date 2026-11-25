@@ -18,4 +18,9 @@ bool ProcfsDescriptor(int fd, std::string* linux_path, bool* directory);
 // that is not one of these.
 int ProcfsFollow(const char* path, std::string* linux_path, int* fd, std::string* target);
 
+// Whether fd is open on a FIFO: the Windows path of its file, whose volume
+// fstatfs reports (Linux: the file system that holds the FIFO's inode).
+// False with errno set when the FIFO's file is gone (renamed or removed).
+bool FifoFilePath(int fd, std::wstring* windows_path, bool* is_fifo);
+
 }  // namespace gesher
