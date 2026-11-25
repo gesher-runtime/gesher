@@ -164,6 +164,24 @@ current target SDKs is no). The app sees the `file:///` URLs everywhere
 Pages see the https origin: same-origin requests between assets work without
 `setAllowFileAccessFromFileURLs`; `location.protocol` is `https:`.
 
+For a page-initiated `intent:` navigation, Gesher lets the application's
+`shouldOverrideUrlLoading` handle the original URI first. When it declines,
+Gesher parses the URI with Android's `Intent.parseUri` and continues to a valid
+HTTP(S) `browser_fallback_url`, or to the intent's HTTP(S) data URI when the
+explicit fallback is unusable. The resolved destination is offered to the
+application as a redirect before it loads. A default client can also use the
+fallback. Unsupported or malformed targets keep the normal navigation failure
+behavior; this path does not launch an external application or report that one
+was launched.
+
+The fallback is decided and issued in one WebView Looper task. New app loads,
+stop/reload/history requests, destruction and an expired callback wait invalidate
+older fallback work. Application-initiated `loadUrl` and other API navigations
+retain their existing callback suppression. This is Gesher's handling of the
+[web intent fallback convention](https://developer.chrome.com/docs/android/intents),
+with the application's [navigation callback](https://developer.android.com/reference/android/webkit/WebViewClient#shouldOverrideUrlLoading(android.webkit.WebView,%20android.webkit.WebResourceRequest))
+retaining control of the actual destination.
+
 - `loadUrl(url, headers)`: `Navigate`, or `NavigateWithWebResourceRequest`
   with the extra headers; `javascript:` URLs run as scripts.
 - `loadData`: a `data:` URL (the data percent-decoded, then base64), as

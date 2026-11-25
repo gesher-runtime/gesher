@@ -282,6 +282,33 @@ filter with BROWSABLE, e.g. `net.thunderbird.android:/oauth2redirect` or
   browser's filter (`com.gesher.server.BrowserPackageSupport`); starting it opens
   the URL with Windows' default browser (`WindowsHost.openUrl`), as any http(s)
   VIEW nothing else handles.
+- **Mail, phone, messaging and map links**: `com.gesher.urihandlers`
+  (`com.gesher.server.WindowsUriHandlers`) has one activity per Windows protocol
+  handler: `mailto:` (VIEW, SENDTO), `tel:` (VIEW, DIAL), `sms:`/`smsto:` (VIEW,
+  SENDTO) and `geo:` (VIEW), the filters of AOSP's own apps for them. An activity
+  exists only while Windows has a handler registered for its scheme
+  (`AssocQueryStringW`, `ASSOCF_IS_PROTOCOL`: the current user's default); without
+  one, `resolveActivity` is null and `startActivity` throws
+  `ActivityNotFoundException`, as on a device without such an app. Starting one
+  hands Windows the URI with the intent's own fields: for mail the URI's
+  recipients, subject and body plus `EXTRA_EMAIL`/`EXTRA_CC`/`EXTRA_BCC` and, when
+  the URI has none, `EXTRA_SUBJECT`/`EXTRA_TEXT`; for SMS the recipients and the
+  body AOSP Messaging reads (`sms_body`, `body=`, `EXTRA_TEXT` of `text/plain`).
+  `ACTION_DIAL` first shows **Gesher - Confirm dialing**, with the complete
+  number and requesting package, and Cancel selected by default. It explains
+  that the Windows phone app may place the call immediately; only an explicit
+  OK hands that same URI to Windows. This review runs off the activity-launch
+  thread and preserves pause/resume and result ownership. Caller/package
+  retirement or removal of the handler cancels the pending dialog; the handler
+  is checked again after approval. Detached requests belong to Gesher rather
+  than a possibly recycled source process. The queue is bounded to 16 requests
+  and one per requesting package. Closing this review yields `RESULT_CANCELED`
+  to a result caller, never a fabricated call-completion result. `ACTION_VIEW`
+  keeps its direct Windows delegation.
+  Not handled: `ACTION_CALL` (no confirmation step is promised by a Windows
+  handler), `mms:`, and `ACTION_SEND` of `message/rfc822` (attachments). These
+  schemes are among those Gesher never registers for an Android app (below), so
+  the handler is never Gesher itself.
 - **The way back**: `gesher-app install` (and launches that install or update)
   registers each custom scheme of the package's BROWSABLE VIEW filters as a URL
   protocol, per user:
