@@ -520,25 +520,28 @@ class PackageNamespace {
       native = create_(&raw, kRead, &attributes, shadow_, 1);
       observed.value.native_status = native;
       Handle created(raw == INVALID_HANDLE_VALUE ? nullptr : raw);
+      NTSTATUS pipe_status = 0;
       if ((native == 0 || native == static_cast<NTSTATUS>(0xc0000035)) && create_file_) {
         UNICODE_STRING pipe_name = PipeName();
         OBJECT_ATTRIBUTES pipe_attributes = Attributes(nullptr, &pipe_name);
-        pipe_attributes.Attributes |= 0x00000040;  // OBJ_CASE_INSENSITIVE
+        pipe_attributes.Attributes = 0x00000040;  // OBJ_CASE_INSENSITIVE
         pipe_attributes.SecurityDescriptor = pipe_policy_.get();
         IO_STATUS_BLOCK iosb{};
         HANDLE pipe_raw = nullptr;
-        const NTSTATUS pipe_status = create_file_(&pipe_raw, 0x001f0006, &pipe_attributes, &iosb, nullptr,
+        pipe_status = create_file_(&pipe_raw, 0x001f0006, &pipe_attributes, &iosb, nullptr,
             FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE, 3 /* FILE_OPEN_IF */,
             1 /* FILE_DIRECTORY_FILE */, nullptr, 0);
         if (pipe_raw && pipe_raw != INVALID_HANDLE_VALUE) CloseHandle(pipe_raw);
-        // Ignore missing parent session path; CreateAppContainerToken will handle it if needed.
-        (void)pipe_status;
       }
       stage("lowbox.restore-package-create-context");
       const DWORD restored = privilege.Restore();
       if (native < 0 && native != static_cast<NTSTATUS>(0xc0000035)) {
         stage("lowbox.create-package-namespace");
         return Error(native);  // Keep the original error; cleanup has its own result.
+      }
+      if (pipe_status < 0) {
+        stage("lowbox.create-package-pipe-namespace");
+        return Error(pipe_status);
       }
       if (restored != ERROR_SUCCESS) return restored;
       stage("lowbox.create-package-namespace");
