@@ -56,6 +56,19 @@ def main() -> None:
         raise ValueError('production metadata constant changed')
     markers = ['InstallSessionMetadata(File canonical)', 'static boolean auxiliary(String name)',
                'boolean matches(File installed)']
+    # Include the delegated constructor and its field when the source has the
+    # session eligibility change. The opaque ALL token is the only dependency;
+    # actual permission policy is exercised by the separate installer suites.
+    # Older --source-ref baselines retain the original single constructor.
+    boundary = ''
+    if 'InstallerPermissionAllowlist' in production:
+        field = 'final InstallerPermissionAllowlist permissionAllowlist;'
+        if production.count(field) != 1:
+            raise ValueError('production metadata allowlist field boundary changed')
+        fields.append(field)
+        markers.append('InstallSessionMetadata(File canonical, InstallerPermissionAllowlist permissionAllowlist)')
+        boundary = ('final class InstallerPermissionAllowlist {\n'
+                    '    static final InstallerPermissionAllowlist ALL = new InstallerPermissionAllowlist();\n}\n')
     if 'private static boolean sameContents(' in production:
         markers.append('private static boolean sameContents(File file, File previous)')
     exact = '\n'.join(fields + constant + [method(production, marker) for marker in markers])
@@ -63,7 +76,7 @@ def main() -> None:
     exact = exact.replace('new FileInputStream(', 'new CountingFileInputStream(')
     exact = exact.replace('Files.readAllBytes(', 'MetadataComparisonHost.readAllBytes(')
     generated = ('package com.gesher.server;\nimport java.io.*;\nimport java.nio.file.Files;\n'
-                 'import java.util.*;\nfinal class InstallSessionMetadata {\n' + exact + '\n}\n')
+                 'import java.util.*;\n' + boundary + 'final class InstallSessionMetadata {\n' + exact + '\n}\n')
     with tempfile.TemporaryDirectory(prefix='gesher-metadata-compare-') as temporary:
         work = Path(temporary)
         java = work / 'InstallSessionMetadata.java'

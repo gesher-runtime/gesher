@@ -656,21 +656,27 @@ public final class PackageEnabledStateContractTest {
         invoke(installer, "writeRegistry", new Class<?>[0]);
         byte[] before = Files.readAllBytes(registry);
         ApkPackage candidate = record(added, true);
+        // Real installer eligibility token; exercise the same publication as a host install.
+        Class<?> allowlistType = Class.forName("com.gesher.server.InstallerPermissionAllowlist");
+        var allField = allowlistType.getDeclaredField("ALL");
+        allField.setAccessible(true);
+        Object all = allField.get(null);
+        Class<?>[] publicationSignature = {entryType, ApkPackage.class, allowlistType};
         Files.createDirectories(marker); // A deterministic owner-publication I/O failure.
         expect(IllegalStateException.class,
-                () -> invoke(installer, "publishInstalled", new Class<?>[]{entryType, ApkPackage.class}, addition, candidate),
+                () -> invoke(installer, "publishInstalled", publicationSignature, addition, candidate, all),
                 "Installer committed a package whose owner could not be established");
         check(Arrays.equals(before, Files.readAllBytes(registry)) && !entries.containsKey(added)
                 && h.service.get(added) == null, "Owner failure changed the registry or live package set");
         Files.delete(marker);
-        invoke(installer, "publishInstalled", new Class<?>[]{entryType, ApkPackage.class}, addition, candidate);
+        invoke(installer, "publishInstalled", publicationSignature, addition, candidate, all);
         check(h.service.get(added) == candidate && entries.get(added) == addition
                 && Files.readString(registry).contains(added + "\t"), "Prepared install failed to publish");
 
         h.client.setApplicationEnabledSetting(added, 3, KEEP);
         byte[] owner = Files.readAllBytes(marker);
         ApkPackage update = record(added, true);
-        invoke(installer, "publishInstalled", new Class<?>[]{entryType, ApkPackage.class}, replacement, update);
+        invoke(installer, "publishInstalled", publicationSignature, replacement, update, all);
         check(h.service.get(added) == update && h.client.getApplicationEnabledSetting(added) == 3
                 && Arrays.equals(owner, Files.readAllBytes(marker)), "Update replaced its installation owner or enabled state");
 
@@ -680,7 +686,7 @@ public final class PackageEnabledStateContractTest {
         Files.move(registry, saved); Files.createDirectory(registry);
         try {
             expect(java.io.IOException.class,
-                    () -> invoke(installer, "publishInstalled", new Class<?>[]{entryType, ApkPackage.class}, failed, record(added, true)),
+                    () -> invoke(installer, "publishInstalled", publicationSignature, failed, record(added, true), all),
                     "Registry replacement failure returned success");
             check(entries.get(added) == replacement && h.service.get(added) == update
                     && h.client.getApplicationEnabledSetting(added) == 3,
@@ -693,7 +699,7 @@ public final class PackageEnabledStateContractTest {
         Path savedOwner = marker.resolveSibling(added + ".saved");
         Files.move(marker, savedOwner); Files.createDirectory(marker);
         try {
-            invoke(installer, "publishInstalled", new Class<?>[]{entryType, ApkPackage.class}, replacement, prepared);
+            invoke(installer, "publishInstalled", publicationSignature, replacement, prepared, all);
             check(h.service.get(added) == prepared && h.client.getApplicationEnabledSetting(added) == 3,
                     "Prepared publication repeated owner I/O after registry commit");
         } finally { Files.delete(marker); Files.move(savedOwner, marker); }

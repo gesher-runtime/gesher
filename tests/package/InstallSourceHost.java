@@ -225,7 +225,8 @@ public final class InstallSourceHost {
         constructor.setAccessible(true);
         Object replacementEntry = constructor.newInstance(current.packageName,
                 new File(replacement.apkPath).getParent(), 1L, 2L, source);
-        var publish = Installer.class.getDeclaredMethod("publishInstalled", type, ApkPackage.class);
+        var publish = Installer.class.getDeclaredMethod("publishInstalled", type, ApkPackage.class,
+                InstallerPermissionAllowlist.class);
         publish.setAccessible(true);
         Path registry = data.resolve("system/packages.list");
         String before = Files.readString(registry);
@@ -236,7 +237,7 @@ public final class InstallSourceHost {
         try {
             expect(java.io.IOException.class, () -> {
                 synchronized (storage) {
-                    try { publish.invoke(storage, replacementEntry, replacement); }
+                    try { publish.invoke(storage, replacementEntry, replacement, InstallerPermissionAllowlist.ALL); }
                     catch (java.lang.reflect.InvocationTargetException failure) {
                         if (failure.getCause() instanceof Exception cause) throw cause;
                         throw failure;
