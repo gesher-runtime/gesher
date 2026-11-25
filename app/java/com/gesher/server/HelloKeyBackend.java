@@ -34,9 +34,11 @@ public interface HelloKeyBackend {
     /**
      * KeyCredentialManager.RequestCreateAsync(name, FailIfExists), shown over the foreground
      * window of {@code pid}. Blocks until the user answers. SUCCESS carries the key's public
-     * key (X.509 SubjectPublicKeyInfo).
+     * key (X.509 SubjectPublicKeyInfo). The returned creation owns the new key until the
+     * caller commits its stored binding; closing an uncommitted creation retains cleanup
+     * ownership, including when Windows has not yet finished deleting it.
      */
-    Result create(String name, int pid);
+    Creation create(String name, int pid);
 
     /**
      * KeyCredentialManager.OpenAsync and the key's public key (SubjectPublicKeyInfo). Shows
@@ -46,8 +48,9 @@ public interface HelloKeyBackend {
 
     /**
      * KeyCredential.RequestSignAsync over {@code data}, shown over the foreground window of
-     * {@code pid}. {@code completion} is called exactly once, on any thread, never before
-     * this returns; SUCCESS carries the signature.
+     * {@code pid}. If the waiter starts, {@code completion} is called exactly once on
+     * its thread and may race this method's return; SUCCESS carries the signature.
+     * Failure to start throws after rejecting the native request, without a callback.
      */
     Operation sign(String name, int pid, byte[] data, Completion completion);
 
@@ -62,6 +65,38 @@ public interface HelloKeyBackend {
         public Result(int status, byte[] data) {
             this.status = status;
             this.data = data;
+        }
+    }
+
+    /** One creation transaction. A successful result alone does not keep the new key. */
+    final class Creation implements AutoCloseable {
+        public final Result result;
+        private final java.util.function.Consumer<Boolean> mDisposition;
+        private boolean mFinished;
+        private boolean mCommitted;
+
+        public Creation(Result result, java.util.function.Consumer<Boolean> disposition) {
+            this.result = java.util.Objects.requireNonNull(result);
+            mDisposition = java.util.Objects.requireNonNull(disposition);
+        }
+
+        /** Keep the new key only after its binding record has been written. */
+        public synchronized void commit() {
+            if (result.status != SUCCESS || (mFinished && !mCommitted)) {
+                throw new IllegalStateException("creation was not accepted");
+            }
+            if (mFinished) return;
+            mFinished = true;
+            mCommitted = true;
+            mDisposition.accept(true);
+        }
+
+        /** Reject once. Cleanup may continue in the backend after this returns. */
+        @Override
+        public synchronized void close() {
+            if (mFinished) return;
+            mFinished = true;
+            mDisposition.accept(false);
         }
     }
 
