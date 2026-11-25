@@ -22,6 +22,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.BooleanSupplier;
+import java.util.function.IntPredicate;
 
 /**
  * Internal WLAN backend for the authenticated Wi-Fi service, not an Android application API.
@@ -41,12 +42,33 @@ public final class WindowsWifi {
     private static long sReadNanos;
     private static long sGeneration;
     private static Operation sOperation;
-    private static boolean sLoaded;
+    private static volatile boolean sLoaded;
     private WindowsWifi() { }
+
+    private static void load() {
+        if (sLoaded) return;
+        synchronized (WindowsWifi.class) {
+            if (!sLoaded) {
+                System.loadLibrary("gesher_wifi");
+                sLoaded = true;
+            }
+        }
+    }
 
     // The built-in library uses WlanQueryInterface/WlanGetNetworkBssList. A requested
     // scan uses WlanScan and waits for its completion notification, never netsh output.
     private static native String nativeQuery(boolean scan, BooleanSupplier eligible);
+    // Synchronous WlanEnumInterfaces census with each adapter's PHY and auth/cipher support.
+    private static native String nativeHardware();
+    // Blocks while WLAN notifications are watched; sink receives event-class bits.
+    private static native int nativeWatch(IntPredicate sink, int pollMs);
+    // User-approved connections through per-user Windows profiles (WlanSetProfile/WlanConnect).
+    private static native int nativeConnect(int ifIndex, String xml, String profile, byte[] bssid,
+            BooleanSupplier active, int timeoutMs);
+    private static native boolean nativeDisconnect(int ifIndex, String removeProfile, String restoreProfile);
+    private static native boolean nativeStoreProfile(int ifIndex, String xml, String profile);
+    private static native String nativeCurrentProfile(int ifIndex);
+    private static native String nativeInterfaceProfiles(String prefix);
 
     private static final class Operation {
         final boolean scan;
@@ -54,6 +76,8 @@ public final class WindowsWifi {
         final List<Consumer<Boolean>> callbacks = new ArrayList<>();
         final List<BooleanSupplier> eligible = new ArrayList<>();
         boolean expired;
+        // This read follows a Windows-initiated scan completion (set by launch).
+        boolean externalScan;
         ScheduledFuture<?> deadline;
         Operation(boolean scan) { this.scan = scan; generation = sGeneration; }
     }
@@ -140,6 +164,9 @@ public final class WindowsWifi {
     // Called with LOCK. At most one native query exists, even if a driver/RPC hangs.
     private static void launch(Operation operation) {
         sOperation = operation;
+        operation.externalScan = sExternalScanPending && !operation.scan;
+        if (operation.externalScan) sExternalScanPending = false;
+        sEventPending = false;
         Thread worker = new Thread(() -> refresh(operation), "gesher-wifi");
         worker.setDaemon(true);
         try {
@@ -165,10 +192,7 @@ public final class WindowsWifi {
     private static void refresh(Operation operation) {
         Data result = null;
         try {
-            if (!sLoaded) {
-                System.loadLibrary("gesher_wifi");
-                sLoaded = true;
-            }
+            load();
             String raw = nativeQuery(operation.scan, () -> eligible(operation));
             result = parse(raw, elapsedMicros());
             if (result != null) {
@@ -179,7 +203,8 @@ public final class WindowsWifi {
             // Unavailable WLAN or Windows location denial remains unavailable.
         } finally {
             List<Consumer<Boolean>> callbacks;
-            boolean updated = false;
+            boolean updated = false, externalScan = false;
+            int previous = WifiManager.WIFI_STATE_UNKNOWN, state = WifiManager.WIFI_STATE_UNKNOWN;
             synchronized (LOCK) {
                 if (operation.deadline != null) operation.deadline.cancel(false);
                 if (!operation.expired && operation.generation == sGeneration) {
@@ -188,6 +213,17 @@ public final class WindowsWifi {
                         sData = result;
                         sReadNanos = System.nanoTime();
                         updated = result.scansValid;
+                        // Only a successful read with a known state is a transition source;
+                        // a failed RPC is not evidence that the radio changed.
+                        int observed = state(result);
+                        if (observed != WifiManager.WIFI_STATE_UNKNOWN && observed != sPublishedState) {
+                            previous = sPublishedState;
+                            sPublishedState = observed;
+                            state = observed;
+                        }
+                        if (operation.scan) sOwnScanNanos = System.nanoTime();
+                        // Windows completed a scan this backend did not request.
+                        externalScan = operation.externalScan && result.scansValid && !result.scansDenied;
                     } else {
                         sData = null;
                         // A short retry interval also applies to failed queries.
@@ -196,9 +232,410 @@ public final class WindowsWifi {
                 }
                 callbacks = drain(operation);
                 if (sOperation == operation) sOperation = null;
+                // A WLAN event that arrived during this read asks for a fresh one.
+                if (sOperation == null && sEventPending) {
+                    try { launch(new Operation(false)); }
+                    catch (RuntimeException | Error ignored) { /* The next read retries. */ }
+                }
             }
             notifyFinished(callbacks, updated);
+            if (state != WifiManager.WIFI_STATE_UNKNOWN) {
+                for (Events listener : EVENTS) {
+                    try { listener.onWifiStateChanged(previous, state); }
+                    catch (RuntimeException ignored) { }
+                }
+            }
+            if (externalScan) {
+                for (Events listener : EVENTS) {
+                    try { listener.onScanResultsAvailable(); }
+                    catch (RuntimeException ignored) { }
+                }
+            }
         }
+    }
+
+    private static int state(Data data) {
+        if (data.unmappedRadioEnabled) return WifiManager.WIFI_STATE_ENABLED;
+        boolean unknown = data.unmappedRadioUnknown;
+        for (State state : data.states.values()) {
+            if (state.radio == 1) return WifiManager.WIFI_STATE_ENABLED;
+            unknown |= state.radio < 0;
+        }
+        return unknown ? WifiManager.WIFI_STATE_UNKNOWN : WifiManager.WIFI_STATE_DISABLED;
+    }
+
+    // ---- WLAN notifications ------------------------------------------------------
+
+    /** Service-side observers of real WLAN events. Called on Wi-Fi backend threads. */
+    public interface Events {
+        /** A successful read observed a known state different from the last one. */
+        void onWifiStateChanged(int previous, int current);
+        /** Windows completed a scan that this backend did not initiate. */
+        void onScanResultsAvailable();
+        /** Association, disconnection, radio or adapter presence changed. */
+        default void onConnectionChanged() { }
+    }
+
+    static final int EVENT_STATE = 1, EVENT_SCAN = 2, EVENT_CONNECTION = 4, EVENT_INTERFACES = 8;
+    private static final long OWN_SCAN_NS = TimeUnit.SECONDS.toNanos(2);
+    private static final List<Events> EVENTS = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private static int sPublishedState = WifiManager.WIFI_STATE_UNKNOWN; // guarded by LOCK
+    private static long sOwnScanNanos; // guarded by LOCK
+    private static boolean sEventPending, sExternalScanPending; // guarded by LOCK
+    private static Thread sWatcher; // guarded by LOCK
+    private static volatile boolean sWatching;
+
+    /** Registers an observer and starts the single notification watcher. */
+    public static void addListener(Events listener) {
+        EVENTS.add(java.util.Objects.requireNonNull(listener));
+        synchronized (LOCK) {
+            if (sWatcher != null) return;
+            sWatching = true;
+            sWatcher = new Thread(WindowsWifi::watch, "gesher-wifi-watch");
+            sWatcher.setDaemon(true);
+            sWatcher.start();
+        }
+    }
+
+    public static void removeListener(Events listener) { EVENTS.remove(listener); }
+
+    private static void watch() {
+        long backoff = TimeUnit.SECONDS.toMillis(30);
+        while (sWatching) {
+            int result;
+            try {
+                load();
+                result = nativeWatch(WindowsWifi::onEvents, 30_000);
+            } catch (RuntimeException | LinkageError unavailable) {
+                result = -1;
+            }
+            if (!sWatching) return;
+            if (result == 0) { backoff = TimeUnit.SECONDS.toMillis(30); continue; }
+            // No WLAN service or library: look again later, since wlansvc or a USB
+            // adapter can start after boot. The census stays "absent" until then.
+            try { Thread.sleep(backoff); } catch (InterruptedException e) { return; }
+            backoff = Math.min(backoff * 2, TimeUnit.MINUTES.toMillis(5));
+            refreshHardware();
+        }
+    }
+
+    /** Native watcher delivery; false stops watching. Runs on the watcher thread. */
+    static boolean onEvents(int bits) {
+        if (!sWatching) return false;
+        if (bits == 0) return true;
+        if ((bits & EVENT_INTERFACES) != 0) refreshHardware();
+        synchronized (LOCK) {
+            if ((bits & EVENT_SCAN) != 0) {
+                boolean own = sOperation != null && sOperation.scan
+                        || sOwnScanNanos != 0 && System.nanoTime() - sOwnScanNanos < OWN_SCAN_NS;
+                // A requested scan's completion is published by its own requester path.
+                if (!own) sExternalScanPending = true;
+            }
+            sEventPending = true;
+            sReadNanos = 0;
+            if (sOperation == null) {
+                try { launch(new Operation(false)); }
+                catch (RuntimeException | Error ignored) { }
+            }
+        }
+        if ((bits & (EVENT_CONNECTION | EVENT_STATE)) != 0) {
+            for (Events listener : EVENTS) {
+                try { listener.onConnectionChanged(); }
+                catch (RuntimeException ignored) { }
+            }
+        }
+        return true;
+    }
+
+    /** Test boundary: the watcher loop stops at its next delivery. */
+    static void stopWatching() {
+        synchronized (LOCK) { sWatching = false; sWatcher = null; }
+    }
+
+    // ---- Connections ---------------------------------------------------------------
+
+    /** {@link #connect} outcome for a completed association; failures use Android's codes. */
+    public static final int CONNECTED = -1;
+    /** {@link #connect} outcome when the requester went away before Windows completed. */
+    public static final int CANCELLED = 100;
+
+    /**
+     * Stores a per-user, manual-mode profile and connects the interface with it, waiting
+     * (bounded) for Windows' completion notification of this attempt. Returns
+     * {@link #CONNECTED}, {@link #CANCELLED} or a STATUS_LOCAL_ONLY_CONNECTION_FAILURE_* code.
+     */
+    public static int connect(int ifIndex, String xml, String profile, byte[] bssid,
+            BooleanSupplier active, int timeoutMs) {
+        try {
+            load();
+            return nativeConnect(ifIndex, xml, profile, bssid, active, timeoutMs);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_UNKNOWN;
+        } finally {
+            synchronized (LOCK) { sReadNanos = 0; }
+        }
+    }
+
+    /** Disconnects, deletes {@code removeProfile} and reconnects {@code restoreProfile}. */
+    public static boolean disconnect(int ifIndex, String removeProfile, String restoreProfile) {
+        try {
+            load();
+            return nativeDisconnect(ifIndex, removeProfile, restoreProfile);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return false;
+        } finally {
+            synchronized (LOCK) { sReadNanos = 0; }
+        }
+    }
+
+    /** Stores ({@code xml} non-null) or deletes a per-user profile without connecting. */
+    public static boolean storeProfile(int ifIndex, String xml, String profile) {
+        try {
+            load();
+            return nativeStoreProfile(ifIndex, xml, profile);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return false;
+        }
+    }
+
+    /** The Windows profile name of the interface's current connection, or null. */
+    public static String currentProfile(int ifIndex) {
+        try {
+            load();
+            return nativeCurrentProfile(ifIndex);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return null;
+        }
+    }
+
+    /**
+     * This user's per-user profiles whose names start with prefix, on every WLAN interface
+     * Windows lists now (radio on or off), by IP interface index. An interface whose list
+     * could not be read maps to null: that is not evidence that a profile is absent. The
+     * whole result is null when the interfaces could not be enumerated (no WLAN library
+     * or service). An interface that is gone (disabled, unplugged) is simply not listed.
+     */
+    public static java.util.Map<Integer, List<String>> interfaceProfiles(String prefix) {
+        String raw;
+        try {
+            load();
+            raw = nativeInterfaceProfiles(prefix);
+        } catch (RuntimeException | LinkageError unavailable) {
+            return null;
+        }
+        return parseInterfaceProfiles(raw, prefix);
+    }
+
+    static java.util.Map<Integer, List<String>> parseInterfaceProfiles(String raw, String prefix) {
+        if (raw == null) return null;
+        java.util.Map<Integer, List<String>> result = new java.util.LinkedHashMap<>();
+        for (String line : raw.split("\n")) {
+            if (line.isEmpty()) continue;
+            String[] fields = line.split("\t", -1);
+            int index;
+            try { index = Integer.parseInt(fields[0]); }
+            catch (NumberFormatException malformed) { return null; }
+            if (fields.length < 2 || !(fields[1].equals("0") || fields[1].equals("1"))) return null;
+            boolean read = fields[1].equals("1") && index > 0;
+            List<String> names = read ? new ArrayList<>() : null;
+            if (read) for (int k = 2; k < fields.length; k++) if (fields[k].startsWith(prefix)) names.add(fields[k]);
+            // An interface Windows could not address (index 0) is unknown, never "empty".
+            result.put(index > 0 ? index : 0, names);
+        }
+        return result;
+    }
+
+    /** The IP interface index of an adapter with an enabled radio, or 0. */
+    public static int primaryInterface() {
+        Data data = current();
+        if (data == null) return 0;
+        for (State state : data.states.values()) if (state.radio == 1) return state.index;
+        return 0;
+    }
+
+    /**
+     * Whether Windows has a provisioned IPv4 address on this interface. A 169.254/16
+     * automatic (APIPA) address is not provisioning: Android's IpClient acquires IPv4 by
+     * DHCP and never counts a link-local address.
+     */
+    public static boolean hasIpv4(int ifIndex) {
+        try {
+            WindowsNetworks.Net network = WindowsNetworks.parse(WindowsNetworks.snapshot()).byNetId(100 + ifIndex);
+            if (network == null) return false;
+            for (InetAddress address : network.addresses) if (provisioned(address)) return true;
+        } catch (RuntimeException | LinkageError unavailable) {
+            // Unknown addressing is not provisioning.
+        }
+        return false;
+    }
+
+    static boolean provisioned(InetAddress address) {
+        return address instanceof Inet4Address && !address.isLinkLocalAddress() && !address.isAnyLocalAddress();
+    }
+
+    // ---- Adapter census --------------------------------------------------------
+
+    /** The union of all present WLAN adapters' reported capabilities. */
+    public static final class Hardware {
+        public final int interfaces;
+        /** Bit n: DOT11_PHY_TYPE n reported by WlanGetInterfaceCapability. */
+        public final int phyTypes;
+        /** Bit n: DOT11_AUTH_ALGORITHM n in the infrastructure auth/cipher pairs. */
+        public final int authAlgorithms;
+        /** Bit n: DOT11_CIPHER_ALGORITHM n; bit 31: DOT11_CIPHER_ALGO_WEP. */
+        public final int ciphers;
+        public Hardware(int interfaces, int phyTypes, int authAlgorithms, int ciphers) {
+            this.interfaces = interfaces; this.phyTypes = phyTypes;
+            this.authAlgorithms = authAlgorithms; this.ciphers = ciphers;
+        }
+        public boolean present() { return interfaces > 0; }
+        public boolean phy(int type) { return type > 0 && type < 31 && (phyTypes & (1 << type)) != 0; }
+        public boolean auth(int algorithm) {
+            return algorithm > 0 && algorithm < 31 && (authAlgorithms & (1 << algorithm)) != 0;
+        }
+        public boolean cipher(int bit) { return bit >= 0 && bit < 32 && (ciphers & (1 << bit)) != 0; }
+    }
+
+    public static final Hardware NO_HARDWARE = new Hardware(0, 0, 0, 0);
+    /** How long a caller waits for the first census (the package manager's boot features). */
+    static final long CENSUS_TIMEOUT_MS = 5_000;
+
+    /**
+     * The cached adapter census. The first read runs on its own thread and its caller
+     * waits at most a bound: a WLAN service that hangs (or is slow to start) in
+     * WlanOpenHandle/WlanEnumInterfaces must not stall system-server boot. A census not
+     * finished in time reports no hardware to that caller. A later caller arriving while
+     * it runs waits only for the rest of that first bound, never a new one, so a healthy
+     * census is not misreported and a hung one does not hold every caller again. The
+     * late result is cached for later callers, and WLAN interface arrival/removal
+     * refreshes it.
+     */
+    static final class Census {
+        private final java.util.function.Supplier<Hardware> mSource;
+        private Hardware mValue; // guarded by this
+        private Thread mProbe; // guarded by this: the first census, while it runs
+        private long mDeadline; // guarded by this: nanoTime the first caller's wait ends
+
+        Census(java.util.function.Supplier<Hardware> source) { mSource = source; }
+
+        Hardware get(long timeoutMs) {
+            Thread probe;
+            long waitNanos;
+            boolean first;
+            synchronized (this) {
+                if (mValue != null) return mValue;
+                long now = System.nanoTime();
+                first = mProbe == null;
+                if (first) {
+                    mDeadline = now + TimeUnit.MILLISECONDS.toNanos(Math.max(1, timeoutMs));
+                    mProbe = new Thread(() -> {
+                        Hardware fresh = null;
+                        try {
+                            fresh = mSource.get();
+                        } finally {
+                            synchronized (this) {
+                                // A refresh that finished meanwhile is newer than this read.
+                                if (mValue == null) mValue = fresh != null ? fresh : NO_HARDWARE;
+                                mProbe = null;
+                            }
+                        }
+                    }, "gesher-wlan-census");
+                    mProbe.setDaemon(true);
+                    mProbe.start();
+                }
+                probe = mProbe;
+                // A later caller waits at most what is left of the first caller's bound.
+                waitNanos = Math.min(mDeadline - now, TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMs)));
+            }
+            if (waitNanos > 0) {
+                try {
+                    TimeUnit.NANOSECONDS.timedJoin(probe, waitNanos);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            synchronized (this) {
+                if (mValue != null) return mValue;
+            }
+            if (first) {
+                System.out.println("WindowsWifi: WLAN census did not finish within " + timeoutMs
+                        + " ms; reporting no Wi-Fi hardware");
+            }
+            return NO_HARDWARE;
+        }
+
+        void refresh() {
+            Hardware fresh = mSource.get();
+            synchronized (this) { mValue = fresh != null ? fresh : NO_HARDWARE; }
+        }
+    }
+
+    private static final Census CENSUS = new Census(WindowsWifi::census);
+
+    /**
+     * The adapter census (system features are fixed when the package manager starts),
+     * refreshed on WLAN interface arrival/removal. No WLAN library, a stopped WLAN
+     * service, no adapter, or a census that does not finish in CENSUS_TIMEOUT_MS all
+     * mean no hardware.
+     */
+    public static Hardware hardware() {
+        return CENSUS.get(CENSUS_TIMEOUT_MS);
+    }
+
+    private static void refreshHardware() {
+        CENSUS.refresh();
+    }
+
+    private static Hardware census() {
+        try {
+            load();
+            Hardware parsed = parseHardware(nativeHardware());
+            return parsed != null ? parsed : NO_HARDWARE;
+        } catch (RuntimeException | LinkageError unavailable) {
+            return NO_HARDWARE;
+        }
+    }
+
+    static Hardware parseHardware(String raw) {
+        if (raw == null || raw.length() > 64 * 1024) return null;
+        String[] lines = raw.split("\n");
+        try {
+            String[] head = lines[0].split("\t", -1);
+            if (head.length != 2 || !head[0].equals("hw")) return null;
+            int count = integer(head[1], 0, 64);
+            if (lines.length != count + 1) return null;
+            int phy = 0, auth = 0, cipher = 0;
+            for (int i = 1; i < lines.length; i++) {
+                String[] values = lines[i].split("\t", -1);
+                if (values.length != 4 || !values[0].equals("cap")) return null;
+                phy |= unsigned(values[1]);
+                auth |= unsigned(values[2]);
+                cipher |= unsigned(values[3]);
+            }
+            return new Hardware(count, phy, auth, cipher);
+        } catch (RuntimeException malformed) {
+            return null;
+        }
+    }
+
+    private static int unsigned(String value) {
+        long parsed = Long.parseLong(value);
+        if (parsed < 0 || parsed > 0xffffffffL) throw new IllegalArgumentException("WLAN mask");
+        return (int) parsed;
+    }
+
+    /** True only with real evidence: an observed BSS or a connection in the band. */
+    public static boolean bandObserved(int lowMhz, int highMhz) {
+        Data data;
+        synchronized (LOCK) { data = sData; }
+        if (data == null) return false;
+        for (ScanResult scan : data.scans) {
+            if (scan.frequency >= lowMhz && scan.frequency <= highMhz) return true;
+        }
+        for (State state : data.states.values()) {
+            if (state.connected && state.frequency >= lowMhz && state.frequency <= highMhz) return true;
+        }
+        return false;
     }
 
     private static boolean eligible(Operation operation) {

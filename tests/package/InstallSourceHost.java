@@ -146,11 +146,12 @@ public final class InstallSourceHost {
             PackageInstallSource source, Runnable authorize) throws Exception {
         Object entry = ((Map<?, ?>)get(storage, "mEntries")).get(pkg.packageName);
         var method = Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
-                ApkPackage.class, entry.getClass(), PackageInstallSource.class, Runnable.class);
+                ApkPackage.class, entry.getClass(), PackageInstallSource.class, java.util.Collection.class,
+                Runnable.class);
         method.setAccessible(true);
         try {
             synchronized (storage) {
-                return (String[])method.invoke(storage, pkg.apkPath, pkg.packageName, pkg, entry, source,
+                return (String[])method.invoke(storage, pkg.apkPath, pkg.packageName, pkg, entry, source, null,
                         authorize);
             }
         } catch (java.lang.reflect.InvocationTargetException failure) {

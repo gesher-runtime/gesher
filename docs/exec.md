@@ -38,6 +38,11 @@ track provides both halves on Windows ([0035](decisions/0035-exec-elf-processes.
     and **`#!...sh` scripts** run in gesher-exec's shell; other `#!`
     interpreters are looked up like programs; a text file without `#!` runs
     with the shell, as the JDK's `execvp` fallback does;
+  - **`/system/bin/linker64 PROGRAM [ARGS...]`**, Android's way of running a
+    program through the dynamic linker (here Gesher's ELF loader, ADR 0096),
+    runs PROGRAM (a path; an ELF executable or one of the tools below) with
+    ARGS; without a program, with one of linker64's options or with a program
+    that is not ELF it is `ENOEXEC`;
   - anything else is `ENOEXEC`; a directory is `EACCES`; nothing found is
     `ENOENT`.
 - **The launcher** (`compat/elf/exec/gesher_exec.cc`, `gesher-exec.exe` next

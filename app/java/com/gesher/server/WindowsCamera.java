@@ -140,17 +140,56 @@ public final class WindowsCamera {
         private long mHandle;
         private long mRetiredHandle;
         private int mReaders;
+        /** A selected image's frame (CameraImageSource), repeated instead of a device's. */
+        private final byte[] mFrame;
+        private volatile boolean mFrameClosed;
         public final int width;
         public final int height;
 
         private Capture(long handle, int width, int height) {
             mHandle = handle;
+            mFrame = null;
             this.width = width;
             this.height = height;
         }
 
+        private Capture(byte[] frame, int width, int height) {
+            mFrame = frame;
+            this.width = width;
+            this.height = height;
+        }
+
+        /**
+         * A capture whose every frame is {@code nv12} ({@code width} x {@code height}), paced
+         * at 30 frames a second: the image the user selected instead of a camera's view
+         * (CameraImageSource, the Control Center's image-picker setting). No focus control.
+         */
+        static Capture ofFrame(byte[] nv12, int width, int height) {
+            if (width <= 0 || height <= 0 || nv12.length < width * height * 3 / 2) {
+                throw new IllegalArgumentException("NV12 frame does not match " + width + "x" + height);
+            }
+            return new Capture(nv12, width, height);
+        }
+
+        /** A selected image's frames ({@link #ofFrame}): no lens, fixed focus. */
+        public boolean isFrame() {
+            return mFrame != null;
+        }
+
         /** The next frame into {@code nv12}; blocks until there is one. 0 or an HRESULT. */
         public int read(byte[] nv12) {
+            if (mFrame != null) {
+                if (mFrameClosed) return 0x80004004;  // E_ABORT
+                try {
+                    Thread.sleep(33);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return 0x80004004;
+                }
+                if (mFrameClosed) return 0x80004004;
+                System.arraycopy(mFrame, 0, nv12, 0, Math.min(nv12.length, mFrame.length));
+                return 0;
+            }
             long handle;
             synchronized (this) {
                 if (mHandle == 0) return 0x80004004;  // E_ABORT
@@ -182,6 +221,7 @@ public final class WindowsCamera {
          * 0 or an HRESULT (E_NOTIMPL without a focus control, as for the test camera).
          */
         public int focus(int op, int[] out) {
+            if (mFrame != null) return mFrameClosed ? 0x80004004 : 0x80004001;  // E_NOTIMPL
             long handle;
             synchronized (this) {
                 if (mHandle == 0) return 0x80004004;  // E_ABORT
@@ -206,6 +246,10 @@ public final class WindowsCamera {
 
         @Override
         public void close() {
+            if (mFrame != null) {
+                mFrameClosed = true;
+                return;
+            }
             long handle;
             synchronized (this) {
                 if (mHandle == 0) return;
