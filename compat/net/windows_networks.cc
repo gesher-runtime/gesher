@@ -31,6 +31,7 @@
 #include <map>
 #include <mutex>
 #include "cost_events_win.h"
+#include "nlm_info.h"
 #include <string>
 #include <vector>
 
@@ -84,14 +85,12 @@ std::string Address(const SOCKADDR* sa) {
   return text;
 }
 
-// What the Network List Manager says of an adapter.
-struct NlmInfo {
-  bool internet = false;
-  bool captive_portal = false;
-  bool metered = false;
-  bool roaming = false;
-  bool congested = false;
-};
+using gesher::net::NlmInfo;
+static_assert(NlmInfo::kUnrestricted == NLM_CONNECTION_COST_UNRESTRICTED);
+static_assert(NlmInfo::kFixed == NLM_CONNECTION_COST_FIXED);
+static_assert(NlmInfo::kVariable == NLM_CONNECTION_COST_VARIABLE);
+static_assert(NlmInfo::kRoaming == NLM_CONNECTION_COST_ROAMING);
+static_assert(NlmInfo::kCongested == NLM_CONNECTION_COST_CONGESTED);
 
 // By adapter GUID; empty when the Network List Manager cannot be asked.
 std::map<GUID, NlmInfo, bool (*)(const GUID&, const GUID&)> QueryNlm(bool* machine_internet,
@@ -140,16 +139,14 @@ std::map<GUID, NlmInfo, bool (*)(const GUID&, const GUID&)> QueryNlm(bool* machi
             network->Release();
           }
           INetworkConnectionCost* cost = nullptr;
+          DWORD value = NLM_CONNECTION_COST_UNKNOWN;
+          bool cost_available = false;
           if (SUCCEEDED(c->QueryInterface(kIidNetworkConnectionCost,
-                                          reinterpret_cast<void**>(&cost)))) {
-            DWORD value = 0;
-            if (SUCCEEDED(cost->GetCost(&value))) {
-              info.metered = (value & (NLM_CONNECTION_COST_FIXED | NLM_CONNECTION_COST_VARIABLE)) != 0;
-              info.roaming = (value & NLM_CONNECTION_COST_ROAMING) != 0;
-              info.congested = (value & NLM_CONNECTION_COST_CONGESTED) != 0;
-            }
+                                          reinterpret_cast<void**>(&cost))) && cost != nullptr) {
+            cost_available = SUCCEEDED(cost->GetCost(&value));
             cost->Release();
           }
+          info.SetCost(cost_available, value);
         }
         c->Release();
       }
