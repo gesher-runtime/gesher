@@ -728,6 +728,14 @@ function Update-AppsView($installed) {
 
 # Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
 function Refresh-Dashboard {
+    # Subscribe before the first snapshot. Only the setup notification already covered
+    # by that snapshot may be ignored; changes during the read must remain dirty.
+    if ($script:MetadataMonitor -and $script:MetadataMonitor.WatcherCount -eq 0) {
+        Update-PanelMetadataWatch
+        if ($script:MetadataMonitor.WatcherCount -gt 0) {
+            $script:LiveState.IgnoreChangedGeneration = $script:MetadataMonitor.Generation
+        }
+    }
     $generation = if ($script:MetadataMonitor) { $script:MetadataMonitor.Generation } else { 0 }
     # Stamps precede reads so notifications or visible recovery notice a change during the read.
     $stateStamp = Get-StateStamp
@@ -740,13 +748,7 @@ function Refresh-Dashboard {
     $installed = Get-InstalledApps
     Update-StoreView $installed
     Update-AppsView $installed
-    $hadWatchers = $script:MetadataMonitor -and ($script:MetadataMonitor.WatcherCount -gt 0)
     Update-PanelMetadataWatch
-    if (-not $hadWatchers -and $script:MetadataMonitor -and $script:MetadataMonitor.WatcherCount -gt 0) {
-        # Initial watch setup calls Signal() even though there was no prior watch gap.
-        $generation = $script:MetadataMonitor.Generation
-        $script:LiveState.IgnoreChangedGeneration = $generation
-    }
     if ($null -eq $script:LiveState.Stamp -and -not (Test-PanelMetadataVisible)) {
         $script:LiveState.InitialShowPending = $true
     }
