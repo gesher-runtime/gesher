@@ -14,6 +14,7 @@
 
 #include <gesher/reserved_names.h>
 #include <gesher/file_description.h>
+#include <gesher/procfs_fd.h>
 #include <gesher/environment.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -76,6 +77,11 @@ bool PathOfFd(int fd, std::string* out) {
   // These callers resolve directory-relative paths. A session capability is
   // a file, and must not reveal/reopen its private backing pathname here.
   if (gesher::FileDescriptionIsRevocable(snapshot)) return errno = kENOTDIR, false;
+  // A /proc directory fd: its own path (a /proc file is no directory).
+  bool proc_directory;
+  if (gesher::ProcfsDescriptor(fd, out, &proc_directory)) {
+    return proc_directory || (errno = kENOTDIR, false);
+  }
   auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, false;
   wchar_t buf[32768];
@@ -313,6 +319,11 @@ int BIONIC_SYSV Scandirat(int dirfd, const char* path, BionicDirent*** list,
 
 // --- the *at() calls and other path calls ---------------------------------------
 
+// getdents64(2): struct linux_dirent64 is the same on every architecture.
+int64_t BIONIC_SYSV Getdents64(int fd, void* buffer, size_t size) {
+  return getdents64(fd, buffer, size);
+}
+
 // gesher-base's struct stat with its 32-bit tv_nsec widened (shim.cc's FixStat).
 void WidenStat(struct stat* st) {
   for (struct timespec* ts : {&st->st_atim, &st->st_mtim, &st->st_ctim}) {
@@ -446,6 +457,8 @@ int BIONIC_SYSV Fchdir(int fd) {
 char* BIONIC_SYSV Realpath(const char* path, char* resolved) { return realpath(path, resolved); }
 int64_t BIONIC_SYSV Readlink(const char* path, char* buf, size_t n) { return readlink(path, buf, n); }
 int64_t BIONIC_SYSV Readlinkat(int dirfd, const char* path, char* buf, size_t n) {
+  // An empty path reads the link the fd itself is open on (O_PATH | O_NOFOLLOW).
+  if (path != nullptr && path[0] == '\0' && dirfd != kAtFdcwd) return readlinkat(dirfd, "", buf, n);
   std::string p;
   if (!AtPath(dirfd, path, &p)) return -1;
   return readlink(p.c_str(), buf, n);
@@ -782,6 +795,7 @@ void RegisterPosix(SymbolTable& t) {
   E("telldir", Telldir);
   E("seekdir", Seekdir);
   E("dirfd", Dirfd);
+  E("getdents64", Getdents64);
   E("scandir", Scandir);
   E("scandir64", Scandir);
   E("scandirat", Scandirat);
