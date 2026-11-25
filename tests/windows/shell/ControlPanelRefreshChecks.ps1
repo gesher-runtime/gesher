@@ -7,7 +7,8 @@ $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     [IO.Path]::GetFullPath($PanelPath), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in 'Refresh-Dashboard', 'Invoke-LiveRefreshTick', 'Complete-DashboardAction') {
+foreach ($name in 'Refresh-Dashboard', 'Invoke-LiveRefreshTick', 'Complete-DashboardAction',
+        'Test-PanelMetadataVisible', 'Request-PanelMetadataRefresh', 'Update-PanelMetadataWatch') {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -24,8 +25,11 @@ function Assert-Refresh([bool] $value, [string] $message) {
 function Reset-Refresh {
     $script:IsBusy = $false
     $script:LiveRefreshDebounceMs = 400
-    $script:LiveRefreshSlowEvery = 4
-    $script:LiveState = @{ Stamp = 'state-a'; AppsStamp = 'apps-a'; PendingSince = $null; Tick = 0 }
+    $script:LiveRefreshMaximumDelayMs = 2000
+    $script:LiveRefreshRecoveryMs = 5000
+    $script:LiveState = @{ Stamp = 'state-a'; AppsStamp = 'apps-a'; PendingSince = $null; PendingFirst = $null; Tick = 0; WasVisible = $true; RecoveryAt = [DateTime]::MinValue }
+    $script:MetadataMonitor = $null
+    $script:window = @{ IsVisible = $true; WindowState = 'Normal' }
     $script:StateStamp = 'state-a'
     $script:AppsStamp = 'apps-a'
     $script:Device = $false
@@ -36,13 +40,16 @@ function Reset-Refresh {
     $script:ChangeAppsDuringRead = $false
 }
 function Get-StateStamp { $script:StateStamp }
-function Get-AppFilesStamp { $script:AppsStamp }
+function Get-AppFilesStamp([hashtable] $ReadStamps = $null) {
+    if ($null -ne $ReadStamps) { $ReadStamps.Apps } else { $script:AppsStamp }
+}
 function Get-DeviceStatus { $script:Device }
 function Get-MicrogStatus { $false }
 function Update-DeviceView([bool] $running) { $script:ShownDevice = $running }
 function Update-MicrogView([bool] $enabled) { }
 function Update-StoreView($installed) { }
-function Get-InstalledApps {
+function Get-InstalledApps([hashtable] $ReadStamps = $null) {
+    if ($null -ne $ReadStamps) { $ReadStamps.Apps = $script:AppsStamp }
     $script:Reads++
     if ($script:FailRead) { $script:FailRead = $false; throw 'Transient package read failure' }
     if ($script:ChangeAppsDuringRead) {
@@ -61,6 +68,7 @@ Reset-Refresh
 Invoke-LiveRefreshTick
 Assert-Refresh ($script:Reads -eq 0) 'Unchanged state rebuilt the application list'
 $script:StateStamp = 'state-b'
+Request-PanelMetadataRefresh
 Invoke-LiveRefreshTick
 Assert-Refresh ($script:Reads -eq 0 -and $null -ne $script:LiveState.PendingSince) 'File change bypassed debounce'
 Age-PendingRefresh
@@ -113,7 +121,7 @@ Assert-Refresh ($script:Draws -eq 1) 'Timer could not retry after an action-comp
 Reset-Refresh
 $script:ChangeAppsDuringRead = $true
 Refresh-Dashboard
-$script:LiveState.Tick = 3
+$script:LiveState.RecoveryAt = [DateTime]::MinValue
 Invoke-LiveRefreshTick
 Assert-Refresh ($null -ne $script:LiveState.PendingSince) 'Shortcut/icon change during a read was acknowledged without being displayed'
 Age-PendingRefresh
@@ -122,7 +130,14 @@ Assert-Refresh ($script:Draws -eq 2) 'Shortcut/icon change during a read was not
 
 Reset-Refresh
 $script:Device = $true
-$script:LiveState.Tick = 3
+$script:LiveState.RecoveryAt = [DateTime]::MinValue
 Invoke-LiveRefreshTick
 Assert-Refresh ($script:ShownDevice -and $script:Reads -eq 0) 'PID-only state change was not reflected independently of app reads'
+
+Reset-Refresh
+Request-PanelMetadataRefresh
+$script:LiveState.PendingFirst = [DateTime]::UtcNow.AddSeconds(-3)
+Request-PanelMetadataRefresh
+Invoke-LiveRefreshTick
+Assert-Refresh ($script:Draws -eq 1) 'Continuous notifications postponed visible refresh indefinitely'
 "PASS: control panel refresh contracts ($script:Checks checks)"

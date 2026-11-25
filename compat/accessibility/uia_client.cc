@@ -64,8 +64,14 @@ DWORD WINAPI UiaMain(void*) {
 // finish, but must not publish a snapshot its caller never received. Completion
 // and timeout arbitrate under the same mutex; cleanup always runs on the UIA
 // thread, outside that mutex (COM Release must not extend the caller's wait).
+// With skip_abandoned, a job whose caller gave up before it started does not run
+// at all (only its cleanup): a snapshot nobody receives is pure cost, and on a
+// slow provider (WebView2 enabling its accessibility) running each abandoned
+// traversal in turn delays every later request. Actions keep running late: the
+// AccessibilityNodeProvider already answered Android that it accepted them.
 bool RunOnUiaThread(std::function<void()> fn, DWORD timeout_ms,
-                    std::function<void()> completed = {}, std::function<void()> cleanup = {}) {
+                    std::function<void()> completed = {}, std::function<void()> cleanup = {},
+                    bool skip_abandoned = false) {
   struct Done {
     std::mutex m;
     std::condition_variable cv;
@@ -80,7 +86,16 @@ bool RunOnUiaThread(std::function<void()> fn, DWORD timeout_ms,
       HANDLE t = CreateThread(nullptr, 0, UiaMain, nullptr, 0, nullptr);
       if (t != nullptr) CloseHandle(t);
     }
-    g_jobs.push_back([fn, done, completed, cleanup] {
+    g_jobs.push_back([fn, done, completed, cleanup, skip_abandoned] {
+      bool abandoned = false;
+      if (skip_abandoned) {
+        std::lock_guard<std::mutex> l(done->m);
+        abandoned = done->abandoned;
+      }
+      if (abandoned) {
+        if (cleanup) cleanup();
+        return;
+      }
       fn();
       {
         std::lock_guard<std::mutex> l(done->m);
@@ -427,7 +442,8 @@ jstring UiaClient_nativeSnapshot(JNIEnv* env, jclass, jlong hwnd, jint max_nodes
                       [h, result] {
                         result->pending.reset();
                         ReleaseElements(h);
-                      })) {
+                      },
+                      /*skip_abandoned=*/true)) {
     std::fprintf(stderr, "gesher-a11y: UIA snapshot of %p timed out at %s\n",
                  static_cast<void*>(h), g_phase.load());
     return nullptr;

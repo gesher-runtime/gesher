@@ -5,6 +5,8 @@
 package com.gesher.web3app;
 
 import android.app.Activity;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
 import android.location.provider.ProviderProperties;
@@ -25,6 +27,7 @@ import android.widget.LinearLayout;
  * when the test location moves; a second WebView with geolocation disabled gets error 1.
  */
 public class GeoActivity extends Activity {
+    private static final int LOCATION_REQUEST = 74;
     static final double LAT1 = 31.7683, LON1 = 35.2137, LAT2 = 32.0853, LON2 = 34.7818;
 
     private LocationManager mLm;
@@ -33,6 +36,29 @@ public class GeoActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Web3.log("geo requesting location permissions");
+        requestPermissions(new String[] {Manifest.permission.ACCESS_COARSE_LOCATION,
+                Manifest.permission.ACCESS_FINE_LOCATION}, LOCATION_REQUEST);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != LOCATION_REQUEST) return;
+        if (grantResults.length != 2 || grantResults[0] != PackageManager.PERMISSION_GRANTED
+                || grantResults[1] != PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Web3.log("geo location permissions denied");
+            Web3.log("geo done");
+            finish();
+            return;
+        }
+        Web3.log("geo location permissions granted");
+        startGeolocation();
+    }
+
+    private void startGeolocation() {
         mLm = getSystemService(LocationManager.class);
         for (String p : new String[] {LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER,
                 LocationManager.FUSED_PROVIDER}) {
@@ -117,6 +143,7 @@ public class GeoActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (mLm == null) return;
         for (String p : new String[] {LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER,
                 LocationManager.FUSED_PROVIDER}) {
             try {

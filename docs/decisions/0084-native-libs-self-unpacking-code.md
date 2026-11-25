@@ -138,7 +138,8 @@ Android section header table past EOF, which Android's linker rejects).
   is not rewritten.
 - `fork`, `clone`, `execve`, `rt_sigreturn`, `arch_prctl` and `getdents64`
   are not emulated (-ENOSYS).
-- `ptrace` (a process nobody traces) and `regcomp`/`regexec` (via
+- `ptrace` (a process nobody traces; since [0093](0093-cross-process-ptrace.md)
+  real ptrace between Gesher processes) and `regcomp`/`regexec` (via
   `compat/bionic/posix_regex.h`) are now in the shim; Ijiami imports them.
   Regex compilation and matching use a POSIX BRE/ERE compiler and NFA with
   leftmost-longest whole-match selection, `REG_ICASE`, `REG_NOSUB`, `REG_NEWLINE`

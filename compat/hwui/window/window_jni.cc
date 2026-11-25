@@ -9,6 +9,7 @@
 #include <jni.h>
 #include <string.h>
 
+#include <cstdio>
 #include <mutex>
 #include <set>
 #include <string>
@@ -59,9 +60,25 @@ jobject BlastSurface(JNIEnv* env, int64_t blast) {
   return android::android_view_Surface_createFromSurface(env, surface);
 }
 
+// Window::Create or CreatePopup returned null: IllegalStateException with the
+// Windows call that failed and its error, so a report says why.
+void ThrowCreateFailure(JNIEnv* env, const char* what, int width, int height) {
+  unsigned long error = 0;
+  const char* call = gesher::Window::LastCreateFailure(&error);
+  char message[200];
+  std::snprintf(message, sizeof(message),
+                "Windows refused to create a %s (%dx%d): %s failed, Win32 error %lu", what, width,
+                height, call != nullptr ? call : "window creation", error);
+  jclass c = env->FindClass("java/lang/IllegalStateException");
+  if (c != nullptr) env->ThrowNew(c, message);
+}
+
 jlong JNICALL NativeWindow_create(JNIEnv* env, jclass, jstring title, jint width, jint height) {
   gesher::Window* window = gesher::Window::Create(Utf8(env, title), width, height);
-  if (window == nullptr) return 0;
+  if (window == nullptr) {
+    ThrowCreateFailure(env, "window", width, height);
+    return 0;
+  }
   auto* surface = new Win32Surface(window);
   surface->incStrong(reinterpret_cast<void*>(&NativeWindow_create));
   {
@@ -239,7 +256,10 @@ jlong JNICALL NativeWindow_createPopup(JNIEnv* env, jclass, jstring title, jint 
                                        jint height, jlong owner) {
   gesher::Window* window =
       gesher::Window::CreatePopup(Utf8(env, title), width, height, WindowOf(owner));
-  if (window == nullptr) return 0;
+  if (window == nullptr) {
+    ThrowCreateFailure(env, "popup window", width, height);
+    return 0;
+  }
   auto* surface = new Win32Surface(window);
   surface->incStrong(reinterpret_cast<void*>(&NativeWindow_create));
   {
