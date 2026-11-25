@@ -5,6 +5,7 @@ import android.app.IApplicationThread;
 import android.content.pm.IPackageInstaller;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
+import android.content.pm.PermissionInfo;
 import android.os.Binder;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import java.lang.reflect.Field;
@@ -13,6 +14,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import sun.misc.Unsafe;
 
 /** Real session admission and ownership; constructed package/process records and host JNI only. */
@@ -53,6 +55,8 @@ public final class PackageInstallerIdentityHost {
         if (sharedUserId != null) parsed.setSharedUserId(sharedUserId);
         parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
                 android.Manifest.permission.REQUEST_INSTALL_PACKAGES, 0, java.util.Set.of()));
+        parsed.addUsesPermission(new com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl(
+                android.Manifest.permission.READ_CALL_LOG, 0, Set.of()));
         parsed.hideAsFinal();
         ApkPackage pkg = (ApkPackage)unsafe.allocateInstance(ApkPackage.class);
         set(pkg, "packageName", name); set(pkg, "parsed", parsed); set(pkg, "apkPath", path);
@@ -72,6 +76,51 @@ public final class PackageInstallerIdentityHost {
             result[0] = process;
         });
         return result[0];
+    }
+    @SuppressWarnings("unchecked")
+    private static void allowlistSnapshot(IPackageInstaller service, PackageManagerService pm, String owner) throws Exception {
+        // The host has no framework-res.apk. These are the Android 16 manifest flags;
+        // the exercised capture, sanitation and session APIs are the production code.
+        Object catalog = field(PermissionPolicy.class, "mCatalog").get(pm.permissions());
+        Map<String, PermissionInfo> definitions = (Map<String, PermissionInfo>)field(catalog.getClass(), "mFramework").get(catalog);
+        for (String name : List.of(android.Manifest.permission.READ_CALL_LOG, android.Manifest.permission.WRITE_CALL_LOG,
+                android.Manifest.permission.CAMERA)) {
+            PermissionInfo info = new PermissionInfo(); info.name = name; info.packageName = "android";
+            info.protectionLevel = PermissionInfo.PROTECTION_DANGEROUS;
+            if (!name.equals(android.Manifest.permission.CAMERA)) info.flags = PermissionInfo.FLAG_HARD_RESTRICTED;
+            definitions.put(name, info);
+        }
+        field(catalog.getClass(), "mLoaded").set(catalog, true);
+        var params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        int all = service.createSession(params, owner, null, 0);
+        params.setWhitelistedRestrictedPermissions(Set.of());
+        check(service.getSessionInfo(all).getWhitelistedRestrictedPermissions()
+                == PackageInstaller.SessionParams.RESTRICTED_PERMISSIONS_ALL, "Default ALL was not frozen at creation");
+        check(service.openSession(all).getInstallFlags() == PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS,
+                "Session did not expose its supported allowlist flag");
+        service.abandonSession(all);
+        for (Set<String> selection : java.util.Arrays.<Set<String>>asList(null, Set.of())) {
+            params.setWhitelistedRestrictedPermissions(selection);
+            int empty = service.createSession(params, owner, null, 0);
+            check(service.getSessionInfo(empty).getWhitelistedRestrictedPermissions().isEmpty()
+                    && service.openSession(empty).getInstallFlags() == 0, "Explicit empty/null became default ALL");
+            service.abandonSession(empty);
+        }
+        params.setWhitelistedRestrictedPermissions(Set.of(android.Manifest.permission.READ_CALL_LOG,
+                android.Manifest.permission.CAMERA, "fixture.unknown.permission"));
+        params.installFlags |= 0x00000100; // INSTALL_GRANT_RUNTIME_PERMISSIONS is not accepted.
+        int subset = service.createSession(params, owner, null, 0);
+        params.whitelistedRestrictedPermissions.clear();
+        params.whitelistedRestrictedPermissions.add(android.Manifest.permission.WRITE_CALL_LOG);
+        var info = service.getSessionInfo(subset);
+        check(info.getWhitelistedRestrictedPermissions().equals(Set.of(android.Manifest.permission.READ_CALL_LOG)),
+                "Caller mutation changed the captured, sanitized allowlist");
+        check(service.openSession(subset).getInstallFlags() == 0 && info.installFlags == 0,
+                "Runtime grant flags escaped session sanitation");
+        info.whitelistedRestrictedPermissions.clear();
+        check(service.getSessionInfo(subset).getWhitelistedRestrictedPermissions()
+                .equals(Set.of(android.Manifest.permission.READ_CALL_LOG)), "SessionInfo leaked a mutable allowlist");
+        service.abandonSession(subset);
     }
     private static void run(boolean openOnly) throws Exception {
         String name = "fixture.installer.identity";
@@ -96,6 +145,7 @@ public final class PackageInstallerIdentityHost {
                     "Current installer cannot enumerate its session");
             check(service.getMySessions(name, 0).getList().size() == 1,
                     "Current installer lost its own session inventory");
+            allowlistSnapshot(service, pm, name);
         });
         old.exiting = true;
         as(old.pid, old.uid, () -> {
@@ -292,6 +342,23 @@ public final class PackageInstallerIdentityHost {
         if (source != null) check(authorizations[0] == 2, "Allowed compilation skipped source authorization");
         check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
                 "Compiled-code refresh changed the installed generation identity");
+        int exempt = PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
+        String permission = android.Manifest.permission.READ_CALL_LOG;
+        check((pm.permissions().getPermissionFlags(pkg.packageName, permission, "default:0", 0) & exempt) == 0,
+                "Ordinary unchanged launch added installer eligibility");
+        Class<?> allowlist = Class.forName("com.gesher.server.InstallerPermissionAllowlist");
+        var explicit = Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
+                ApkPackage.class, entry, source, Runnable.class, allowlist);
+        explicit.setAccessible(true);
+        result = (String[])explicit.invoke(backend, pkg.apkPath, pkg.packageName, pkg, installed,
+                null, (Runnable)() -> authorizations[0]++, field(allowlist, "ALL").get(null));
+        check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
+                "Explicit same-code reinstall replaced the attached installation");
+        check(authorizations[0] == 3, "Explicit reinstall skipped install-source authorization");
+        check((pm.permissions().getPermissionFlags(pkg.packageName, permission, "default:0", 0) & exempt) != 0,
+                "Explicit unchanged reinstall lost installer eligibility before publication");
+        check(pm.permissions().checkPermission(pkg.packageName, permission, "default:0", 0)
+                == PackageManager.PERMISSION_DENIED, "Explicit reinstall silently granted a runtime permission");
     }
     private static String[] stageNames() throws Exception {
         try (var files = Files.list(data.resolve("system/install-sessions"))) {

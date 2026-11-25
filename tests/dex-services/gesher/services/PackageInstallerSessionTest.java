@@ -15,6 +15,7 @@ import android.content.pm.IPackageManager;
 import android.content.pm.InstallSourceInfo;
 import android.content.pm.Signature;
 import android.content.pm.PackageInstaller;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -75,6 +76,36 @@ public final class PackageInstallerSessionTest {
         p.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
         p.installFlags = 0x00000100; // AOSP INSTALL_GRANT_RUNTIME_PERMISSIONS, hidden from this framework export.
         return installer.createSession(p, owner, null, 0);
+    }
+    private static void allowlistSnapshot(IPackageInstaller service, String owner) throws Exception {
+        PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        int all = service.createSession(params, owner, null, 0);
+        params.setWhitelistedRestrictedPermissions(Collections.emptySet());
+        require(service.getSessionInfo(all).getWhitelistedRestrictedPermissions()
+                == PackageInstaller.SessionParams.RESTRICTED_PERMISSIONS_ALL,
+                "Default restricted eligibility changed after session creation");
+        require(service.openSession(all).getInstallFlags() == PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS,
+                "Default session exposed unsupported flags or lost ALL eligibility");
+        service.abandonSession(all);
+        for (Set<String> empty : Arrays.<Set<String>>asList(null, Collections.emptySet())) {
+            params.setWhitelistedRestrictedPermissions(empty);
+            int id = service.createSession(params, owner, null, 0);
+            require(service.getSessionInfo(id).getWhitelistedRestrictedPermissions().isEmpty()
+                    && service.openSession(id).getInstallFlags() == 0, "Explicit empty/null selection became ALL");
+            service.abandonSession(id);
+        }
+        params.setWhitelistedRestrictedPermissions(Set.of(android.Manifest.permission.READ_CALL_LOG,
+                android.Manifest.permission.CAMERA, "fixture.UNKNOWN"));
+        int subset = service.createSession(params, owner, null, 0);
+        params.whitelistedRestrictedPermissions.clear();
+        params.whitelistedRestrictedPermissions.add(android.Manifest.permission.WRITE_CALL_LOG);
+        PackageInstaller.SessionInfo info = service.getSessionInfo(subset);
+        require(info.getWhitelistedRestrictedPermissions().equals(Set.of(android.Manifest.permission.READ_CALL_LOG)),
+                "Session selection was not frozen and sanitized against framework metadata");
+        info.whitelistedRestrictedPermissions.clear();
+        require(service.getSessionInfo(subset).getWhitelistedRestrictedPermissions().equals(Set.of(android.Manifest.permission.READ_CALL_LOG)),
+                "SessionInfo changed the stored selection");
+        service.abandonSession(subset);
     }
     private static void stage(IPackageInstaller installer, int id, File apk, String name) throws Exception {
         PackageInstaller.Session session = new PackageInstaller.Session(installer.openSession(id));
@@ -741,6 +772,7 @@ public final class PackageInstallerSessionTest {
                 "Committed sessions do not update the Windows shell by default");
         List<String> shellSteps = Collections.synchronizedList(new ArrayList<>());
         shellField.set(service, shell(serviceClass, shellSteps, false));
+        allowlistSnapshot(service, pkg);
         rejected(() -> create(service, "not.the.caller", pkg), SecurityException.class);
         PackageInstaller.SessionParams advanced = new PackageInstaller.SessionParams(-1);
         rejected(() -> service.createSession(advanced, pkg, null, 0), IllegalArgumentException.class);
@@ -791,7 +823,11 @@ public final class PackageInstallerSessionTest {
         IPackageInstallerSession held = service.openSession(first);
         require(service.getSessionInfo(first).getRequireUserAction()
                 == PackageInstaller.SessionParams.USER_ACTION_REQUIRED, "Caller bypassed consent requirement");
-        require(held.getInstallFlags() == 0, "Caller selected privileged installation flags");
+        // create() deliberately replaces the default ALL bit with only a privileged
+        // runtime-grant request. No supported eligibility flag remains in this case.
+        require(held.getInstallFlags() == 0
+                && service.getSessionInfo(first).getWhitelistedRestrictedPermissions().isEmpty(),
+                "Caller selected privileged grants or regained default ALL after clearing it");
         caller.set("foreign.application");
         rejected(() -> service.openSession(first), SecurityException.class);
         rejected(held::getNames, SecurityException.class);

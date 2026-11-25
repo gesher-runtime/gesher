@@ -277,10 +277,14 @@ public final class PackageManagerService extends IPackageManager.Default {
     void add(ApkPackage p) { add(p, this); }
 
     synchronized void add(ApkPackage p, Object publicationLock) {
+        add(p, publicationLock, null);
+    }
+
+    synchronized void add(ApkPackage p, Object publicationLock, InstallerPermissionAllowlist allowlist) {
         try (PackageUids.Admission identity = prepareAdd(p)) {
             identity.commit();
             identity.accept();
-            publishPrepared(p, publicationLock);
+            publishPrepared(p, publicationLock, allowlist);
         }
     }
 
@@ -288,13 +292,17 @@ public final class PackageManagerService extends IPackageManager.Default {
     void publishPrepared(ApkPackage p) { publishPrepared(p, this); }
 
     synchronized void publishPrepared(ApkPackage p, Object publicationLock) {
+        publishPrepared(p, publicationLock, null);
+    }
+
+    synchronized void publishPrepared(ApkPackage p, Object publicationLock, InstallerPermissionAllowlist allowlist) {
         if (p.uidPending() || p.uid() < 0) throw new IllegalStateException("Package identity was not admitted");
         Map<String, ApkPackage> map = new LinkedHashMap<>(mPackages);
         map.put(p.packageName, p);
         Runnable permissions = mPermissions.publishPackage(p, () -> {
             publishPackages(map);
             PackageManager.invalidatePackageInfoCache();
-        }, publicationLock);
+        }, publicationLock, allowlist);
         mPackageEventExecutor.execute(() -> {
             synchronized (publicationLock) { }
             synchronized (PackageManagerService.this) { }
@@ -1677,7 +1685,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     /** Called with PM locked after checking current installations; admission verified shared signers. */
-    private static boolean sameInstallSourceIdentity(ApkPackage first, ApkPackage second) {
+    static boolean sameInstallSourceIdentity(ApkPackage first, ApkPackage second) {
         if (first == second) return true;
         String group = first.sharedUserId();
         return first.uid() == second.uid() && group != null && !group.isEmpty()

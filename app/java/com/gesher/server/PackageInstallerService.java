@@ -306,8 +306,10 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         reapStaleSessions();
         if (ownerCode == null && !"android".equals(owner)) throw new SecurityException("Installer disappeared");
-        // Client installFlags, permission grants, originating UID and USER_ACTION_NOT_REQUIRED
-        // never select privileged behavior. Every caller, including Play, needs fresh consent.
+        // Restricted-permission allowlisting only makes a later runtime request eligible.
+        // Capture the caller's selection now; grant flags, originating UID and
+        // USER_ACTION_NOT_REQUIRED never select privileged behavior or bypass consent.
+        InstallerPermissionAllowlist permissionAllowlist = InstallerPermissionAllowlist.fromSession(p, mPm.permissions());
         Session created;
         synchronized (mSessions) {
             if (mPm.get(owner) != ownerCode || mPm.isRemovalPending(owner)) {
@@ -325,7 +327,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                 int id = mIds.getAndIncrement();
                 created = new Session(id, owner, ownerCode, p.appPackageName, p.mode, p.sizeBytes,
                         PackageInstallSource.category(p.packageSource), !"android".equals(actual),
-                        p.requireUserAction == PackageInstaller.SessionParams.USER_ACTION_REQUIRED, stage);
+                        p.requireUserAction == PackageInstaller.SessionParams.USER_ACTION_REQUIRED, stage, permissionAllowlist);
                 mSessions.put(id, created);
             } catch (IOException e) { throw io(); }
         }
@@ -643,6 +645,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         final int packageSource;
         final boolean hasApplicationInitiator;
         final boolean requestedUserAction;
+        final InstallerPermissionAllowlist permissionAllowlist;
         final File stage;
         final IPackageInstallerSession binder;
         final Map<String, InstallFileBridge> writes = new HashMap<>();
@@ -654,12 +657,13 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         float progress;
         long bytes;
         Session(int id, String owner, ApkPackage code, String pkg, int mode, long size, int packageSource,
-                boolean hasApplicationInitiator, boolean requestedUserAction, File stage) {
+                boolean hasApplicationInitiator, boolean requestedUserAction, File stage, InstallerPermissionAllowlist permissionAllowlist) {
             this.id = id; this.owner = owner; ownerCode = code; expectedPackage = pkg;
             this.mode = mode; expectedSize = size;
             this.packageSource = packageSource;
             this.hasApplicationInitiator = hasApplicationInitiator;
             this.requestedUserAction = requestedUserAction;
+            this.permissionAllowlist = permissionAllowlist;
             this.stage = stage;
             binder = StandIn.of(IPackageInstallerSession.class, this).asInterface();
         }
@@ -695,6 +699,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
             i.sealed = sealed; i.active = !writes.isEmpty() || committing;
             i.sizeBytes = expectedSize; i.appPackageName = expectedPackage;
             i.packageSource = packageSource;
+            permissionAllowlist.describe(i);
             i.requireUserAction = PackageInstaller.SessionParams.USER_ACTION_REQUIRED;
             i.createdMillis = created; i.updatedMillis = created; return i;
         }
@@ -1051,7 +1056,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                                 prepared.stagedSplits, prepared.removals);
                     }
                     installed = mInstaller.install(new File(prepared.canonical, "base.apk").getPath(),
-                            new InstallSessionMetadata(prepared.canonical), PackageInstallSource.fromSession(
+                            new InstallSessionMetadata(prepared.canonical, permissionAllowlist), PackageInstallSource.fromSession(
                                     hasApplicationInitiator ? ownerCode : null, packageSource),
                             this::verifyInstallSource);
                     if (!prepared.pkg.equals(installed[0]) || mPm.get(prepared.pkg) == null) {
@@ -1118,7 +1123,7 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
         }
         @Override public synchronized boolean isMultiPackage() { checkOwner(); return false; }
         @Override public synchronized boolean isStaged() { checkOwner(); return false; }
-        @Override public synchronized int getInstallFlags() { checkOwner(); return 0; }
+        @Override public synchronized int getInstallFlags() { checkOwner(); return permissionAllowlist.installFlags(); }
         @Override public synchronized int[] getChildSessionIds() { checkOwner(); return new int[0]; }
         @Override public synchronized int getParentSessionId() { checkOwner(); return -1; }
         @Override public void transfer(String pkg) { throw new UnsupportedOperationException("Transfer unsupported"); }

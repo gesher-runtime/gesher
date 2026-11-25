@@ -454,7 +454,12 @@ final class Installer {
      * version code.
      */
     synchronized String[] install(String apk) throws Exception {
-        return install(apk, null, null);
+        return install(apk, false);
+    }
+
+    /** A host install command may reapply eligibility; merely launching an APK may not. */
+    synchronized String[] install(String apk, boolean explicitInstall) throws Exception {
+        return install(apk, null, null, null, explicitInstall ? InstallerPermissionAllowlist.ALL : null);
     }
 
     /** Server-owned immutable session metadata, copied before package publication. */
@@ -465,6 +470,12 @@ final class Installer {
 
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
             PackageInstallSource installSource, Runnable authorize) throws Exception {
+        return install(apk, sessionMetadata, installSource, authorize,
+                sessionMetadata == null ? null : sessionMetadata.permissionAllowlist);
+    }
+
+    private String[] install(String apk, InstallSessionMetadata sessionMetadata,
+            PackageInstallSource installSource, Runnable authorize, InstallerPermissionAllowlist allowlist) throws Exception {
         if (authorize != null) authorize.run();
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
@@ -472,7 +483,9 @@ final class Installer {
         File source = new File(apk);
         if (!source.isFile()) throw new IllegalArgumentException("no such file: " + apk);
         final File original = source;
-        Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
+        // Only ordinary launches may reuse the path/size/time cache. An explicit
+        // install verifies the supplied bytes before reapplying installer eligibility.
+        Entry recorded = sessionMetadata == null && allowlist == null ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             ContactsProviderSupport.checkPackageAdmission(parsed);
@@ -563,7 +576,7 @@ final class Installer {
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
                 return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
-                        installSource, authorize);
+                        installSource, authorize, allowlist);
             }
             int n = 1;
             if (old != null) {
@@ -662,7 +675,7 @@ final class Installer {
                     NotificationManagerService notifications = NotificationManagerService.sLast;
                     if (notifications != null) notifications.packageRemoved(pkg);
                 }
-                publishInstalled(entry, installed);
+                publishInstalled(entry, installed, allowlist == null ? InstallerPermissionAllowlist.ALL : allowlist);
                 return null;
             });
             if (old != null && !old.codePath.equals(entry.codePath)) {
@@ -701,7 +714,7 @@ final class Installer {
     }
 
     /** Owner creation can fail; finish it before committing the installed registry. */
-    private void publishInstalled(Entry entry, ApkPackage installed) throws IOException {
+    private void publishInstalled(Entry entry, ApkPackage installed, InstallerPermissionAllowlist allowlist) throws IOException {
         synchronized (mPm) {
             try (PackageUids.Admission identity = mPm.prepareAdd(installed)) {
                 identity.commit();
@@ -709,7 +722,7 @@ final class Installer {
                 // the unaccepted UID/signer membership transaction on close.
                 commitEntry(entry);
                 identity.acceptPublished();
-                mPm.publishPrepared(installed, this);
+                mPm.publishPrepared(installed, this, allowlist);
             }
         }
         Dexopt.packagesChanged();
@@ -731,6 +744,11 @@ final class Installer {
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
     private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
             PackageInstallSource installSource, Runnable authorize) throws Exception {
+        return unchanged(apk, pkg, parsed, old, installSource, authorize, null);
+    }
+
+    private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
+            PackageInstallSource installSource, Runnable authorize, InstallerPermissionAllowlist allowlist) throws Exception {
         return commitAuthorized(authorize, () -> {
             Entry entry = old.withInstallSource(installSource);
             SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
@@ -757,13 +775,17 @@ final class Installer {
                     installed.setSystemAddon(true);
                 }
                 installed.prepareInstalledDataDirectories();
-                if (entry != old) publishInstalled(entry, installed);
-                else mPm.add(installed, this);
-            } else if (entry != old) {
+                if (entry != old) publishInstalled(entry, installed, allowlist);
+                else mPm.add(installed, this, allowlist);
+            } else if (entry != old || allowlist != null) {
                 // An explicit session reinstall can change attribution even when code bytes
                 // are unchanged. A direct host launch of the same file keeps the old record.
                 synchronized (mPm) {
-                    persistInstallSource(mPm.get(pkg), entry.installSource);
+                    ApkPackage installed = mPm.get(pkg);
+                    if (entry != old) persistInstallSource(installed, entry.installSource);
+                    // An explicit reinstall is still an installer decision, even with identical
+                    // code. Publish it under the same lock as the current installation identity.
+                    if (allowlist != null) mPm.publishPrepared(installed, this, allowlist);
                 }
             }
             return new String[] {pkg, "unchanged", old.codePath,

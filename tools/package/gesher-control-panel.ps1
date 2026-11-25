@@ -1137,6 +1137,10 @@ function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
         $item = $appsList.ItemsSource | Where-Object { $_.Package -eq $pkg } | Select-Object -First 1
     }
     if (-not $item) { return }
+    if ($appsList) {
+        if ($appsList.PSObject.Properties['SelectedItem']) { $appsList.SelectedItem = $item }
+        if ($appsList.PSObject.Methods['ScrollIntoView']) { $appsList.ScrollIntoView($item) }
+    }
     $label = if ($item.Label) { [string]$item.Label } else { $pkg }
     $lines = @()
     $times = Get-AppInstallTimes $pkg
@@ -1147,17 +1151,15 @@ function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
     $message = if ($lines.Count -gt 0) { $lines -join "`n" } else { $label }
     # The dialog opens at once; the device's switches load in the background. From the
     # app list, a stopped device is not started for them (the dialog says so).
-    $uninstall = Show-ModernConfirmDialog `
+    $null = Show-ModernConfirmDialog `
         -Title $label `
         -SubTitle $pkg `
         -Message $message `
         -Detail (Get-GesherText $(if ($FromList) { 'cp_app_info_detail_list' } else { 'cp_app_info_detail' })) `
-        -ConfirmText (Get-GesherText 'cp_btn_uninstall') `
         -CancelText (Get-GesherText 'cp_app_info_close') `
         -IconImage $item.IconImage `
-        -CancelIsDefault `
-        -SpecialAccessPackage $pkg
-    if ($uninstall) { & $script:OnAppUninstall $pkg }
+        -SpecialAccessPackage $pkg `
+        -CloseOnly
 }
 
 # Shows a pending request: brings the panel to the front and, for a package, its details.
@@ -1474,7 +1476,9 @@ function Show-ModernConfirmDialog {
         # where the user may be typing elsewhere when it takes the focus.
         [switch] $CancelIsDefault,
         # App info: the package whose special access switches load in the background.
-        [string] $SpecialAccessPackage = $null
+        [string] $SpecialAccessPackage = $null,
+        # App details can host settings controls without offering an approving action.
+        [switch] $CloseOnly
     )
 
     $badgeBg = if ($IsDanger) { '#FEE4E2' } elseif ($IsWarning) { '#FEF0C7' } else { '#F2F4F7' }
@@ -1640,18 +1644,24 @@ function Show-ModernConfirmDialog {
         $iconContainer.Child = $iconText
     }
 
-    $btnConfirm.Add_Click({
-        $dialog.DialogResult = $true
-        $dialog.Close()
-    })
-    if ($CancelIsDefault) {
+    if ($CloseOnly) {
+        $btnConfirm.Visibility = 'Collapsed'
+        $btnConfirm.IsEnabled = $false
+    } else {
+        $btnConfirm.Add_Click({
+            $dialog.DialogResult = $true
+            $dialog.Close()
+        })
+    }
+    if ($CancelIsDefault -or $CloseOnly) {
         $btnCancel = $dialog.FindName('BtnCancel')
         $btnConfirm.IsDefault = $false
         $btnCancel.IsDefault = $true
         $dialog.Add_ContentRendered({ $null = $btnCancel.Focus() })
     }
 
-    return ($dialog.ShowDialog() -eq $true)
+    $confirmed = $dialog.ShowDialog() -eq $true
+    return (-not $CloseOnly -and $confirmed)
 }
 
 function Show-UninstallConfirmDialog([string] $pkg, [string] $label = $pkg, $iconImage = $null) {

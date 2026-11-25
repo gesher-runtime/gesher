@@ -497,7 +497,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     /** PM holds its monitor. Permission readers cannot observe metadata with old flags. */
-    synchronized Runnable publishPackage(ApkPackage pkg, Runnable publish, Object publicationLock) {
+    synchronized Runnable publishPackage(ApkPackage pkg, Runnable publish, Object publicationLock,
+            InstallerPermissionAllowlist allowlist) {
         java.util.Set<Integer> uids = new java.util.LinkedHashSet<>();
         uids.add(pkg.uid());
         ApkPackage previous = mPm.get(pkg.packageName);
@@ -517,6 +518,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             if (snapshot.uid == pkg.uid()) for (String permission : pkg.parsed.getRequestedPermissions()) {
                 reconcileRuntimeState(snapshot.uid, mCatalog.get(permission), snapshot.permissions.get(permission), members);
             }
+            if (snapshot.uid == pkg.uid() && allowlist != null) applyInstallerAllowlist(pkg, members, allowlist);
             List<String> revoked = new ArrayList<>();
             for (var entry : snapshot.permissions.entrySet()) {
                 if (entry.getValue().access.granted && !permissionState(snapshot.uid, entry.getKey(), members).granted) revoked.add(entry.getKey());
@@ -530,6 +532,33 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             if (mPm.get(pkg.packageName) != pkg || mPm.isRemovalPending(pkg.packageName)) return;
             for (Runnable notification : notifications) notification.run();
         };
+    }
+
+    /** Android's install callback unions installer exemptions; it never grants a runtime permission. */
+    private void applyInstallerAllowlist(ApkPackage pkg, List<ApkPackage> members, InstallerPermissionAllowlist allowlist) {
+        int exemptions = PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT
+                | PackageManager.FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT
+                | PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
+        for (String permission : pkg.parsed.getRequestedPermissions()) {
+            PermissionInfo info = mCatalog.get(permission);
+            if (info == null || !"android".equals(info.packageName) || !info.isRuntime() || !info.isRestricted()) continue;
+            PermissionState old = permissionState(pkg.uid(), permission, members, info);
+            int flags = old.flags;
+            // An actual installer replaces the upgrade-time assumption. System packages
+            // (including requesting shared-UID peers) retain that implicit exemption.
+            if (!pkg.isSystemAddon() && members.stream().noneMatch(member -> member.isSystemAddon()
+                    && member.parsed.getRequestedPermissions().contains(permission))) {
+                flags &= ~PackageManager.FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT;
+            }
+            if (allowlist.includes(permission)) flags |= PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT;
+            // Preserve fixed policy across an upgrade-to-installer exemption transition.
+            // Only losing the final exemption can make a fixed hard grant ineligible.
+            if ((flags & exemptions) == 0 && info.isHardRestricted() && old.granted
+                    && flags != old.flags) flags &= ~PackageManager.FLAG_PERMISSION_POLICY_FIXED;
+            flags = (flags & exemptions) != 0 ? flags & ~PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION
+                    : flags | PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION;
+            if (flags != old.flags) mDecisions.setProperty(flagsKey(pkg.uid(), permission), Integer.toString(flags));
+        }
     }
 
     private void publishPermissionRevocation(ApkPackage current, List<String> revoked) {
@@ -974,7 +1003,54 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         }
         return result;
     }
-    @Override public List<String> getAllowlistedRestrictedPermissions(String pkg, int flags, int userId) { return Collections.emptyList(); }
+    @Override public List<String> getAllowlistedRestrictedPermissions(String pkg, int flags, int userId) {
+        java.util.Objects.requireNonNull(pkg);
+        user(userId);
+        int categories = PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM
+                | PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER | PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE;
+        if ((flags & ~categories) != 0) throw new IllegalArgumentException("Invalid permission allowlist flags");
+        int uid = Binder.getCallingUid();
+        CallerIdentity callers = mCallers;
+        boolean host = callers != null && callers.isSystem();
+        // Capture the attached APK before PM's lock; ATM itself enters PM.
+        if (callers == null) throw new SecurityException("Unknown allowlist caller");
+        ApkPackage caller = host ? null : callers.requireCurrentPackage(callers.callerPackage());
+        synchronized (mPm) { synchronized (this) {
+            ApkPackage target = mPm.get(pkg);
+            if (target == null || mPm.isRemovalPending(pkg)) return null;
+            if (!host && (caller == null || mPm.get(caller.packageName) != caller
+                    || caller.uid() != uid || mPm.isRemovalPending(caller.packageName))) {
+                throw new SecurityException("Unknown or retired allowlist caller");
+            }
+            boolean privileged = host || granted(Manifest.permission.WHITELIST_RESTRICTED_PERMISSIONS, caller.packageName);
+            PackageInstallSource source = target.installSource();
+            ApkPackage installer = mPm.get(source.installer());
+            boolean recordedInstaller = caller != null && source.isInstaller(installer)
+                    && !mPm.isRemovalPending(installer.packageName)
+                    && PackageManagerService.sameInstallSourceIdentity(caller, installer);
+            if (!privileged && !recordedInstaller
+                    && mPm.getVisibleSearchPackage(uid, caller.packageName, pkg) == null) return null;
+            if ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) != 0 && !privileged
+                    || (flags & (PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER
+                    | PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE)) != 0 && !privileged && !recordedInstaller) {
+                throw new SecurityException("Allowlist query requires the current installer or privileged permission");
+            }
+            int wanted = ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_SYSTEM) != 0
+                    ? PackageManager.FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT : 0)
+                    | ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_INSTALLER) != 0
+                    ? PackageManager.FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT : 0)
+                    | ((flags & PackageManager.FLAG_PERMISSION_WHITELIST_UPGRADE) != 0
+                    ? PackageManager.FLAG_PERMISSION_RESTRICTION_UPGRADE_EXEMPT : 0);
+            List<String> result = new ArrayList<>();
+            List<ApkPackage> members = uidMembers(target.uid());
+            for (PermissionInfo info : mCatalog.permissions().values()) {
+                if (info.isRestricted() && (permissionState(target.uid(), info.name, members, info).flags & wanted) != 0) {
+                    result.add(info.name);
+                }
+            }
+            return result;
+        } }
+    }
     @Override public List<android.content.pm.permission.SplitPermissionInfoParcelable> getSplitPermissions() { return Collections.emptyList(); }
 
     @Override public IBinder registerAttributionSource(AttributionSourceState source) {
