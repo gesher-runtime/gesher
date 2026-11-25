@@ -507,6 +507,22 @@
       "en": "Drag and drop APK files here to install",
       "he": "גרור ושחרר קובצי APK לכאן להתקנה מהירה"
     },
+    "cp_apps_search_placeholder": {
+      "en": "Search apps",
+      "he": "חיפוש אפליקציות"
+    },
+    "cp_apps_search_clear": {
+      "en": "Clear search",
+      "he": "ניקוי החיפוש"
+    },
+    "cp_apps_search_no_matches": {
+      "en": "No installed app matches the search.",
+      "he": "אין אפליקציה מותקנת שמתאימה לחיפוש."
+    },
+    "cp_apps_splitter_tip": {
+      "en": "Drag to resize the applications area; double-click to restore",
+      "he": "גרור כדי להגדיל או להקטין את אזור האפליקציות; לחיצה כפולה מחזירה לגודל הרגיל"
+    },
     "cp_btn_launch": {
       "en": "Launch",
       "he": "הפעל"
