@@ -460,6 +460,12 @@ final class Installer {
     /** Server-owned immutable session metadata, copied before package publication. */
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
             PackageInstallSource installSource) throws Exception {
+        return install(apk, sessionMetadata, installSource, null);
+    }
+
+    synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
+            PackageInstallSource installSource, Runnable authorize) throws Exception {
+        if (authorize != null) authorize.run();
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
         recoverRemovals();
@@ -470,7 +476,7 @@ final class Installer {
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             ContactsProviderSupport.checkPackageAdmission(parsed);
-            return unchanged(apk, recorded.packageName, parsed, recorded, null);
+            return unchanged(apk, recorded.packageName, parsed, recorded, null, authorize);
         }
         File tempDir = null;
         File pendingCode = null;
@@ -557,7 +563,7 @@ final class Installer {
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
                 return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
-                        installSource);
+                        installSource, authorize);
             }
             int n = 1;
             if (old != null) {
@@ -645,18 +651,20 @@ final class Installer {
                 }
                 installed.setSystemAddon(true);
             }
-            // The incoming manifest cannot authorize moving an older app's data.
-            // Boot preparation used the committed manifest before any update;
-            // changing defaultToDeviceProtectedStorage later does not migrate CE.
-            installed.prepareInstallDataDirectories(old != null || previous != null);
-            // Keep the running generation until parsing and native extraction succeed.
-            if (old != null || previous != null) mAtm.forceStopPackage(pkg);
-            if (previous != null && !previous.hasVerifiedSigningIdentity()) {
-                mPm.permissions().forgetPackage(pkg);
-                NotificationManagerService notifications = NotificationManagerService.sLast;
-                if (notifications != null) notifications.packageRemoved(pkg);
-            }
-            publishInstalled(entry, installed);
+            commitAuthorized(authorize, () -> {
+                // The incoming manifest cannot authorize moving an older app's data.
+                // Boot preparation used the committed manifest before any update.
+                installed.prepareInstallDataDirectories(old != null || previous != null);
+                // Keep the running generation until parsing and native extraction succeed.
+                if (old != null || previous != null) mAtm.forceStopPackage(pkg);
+                if (previous != null && !previous.hasVerifiedSigningIdentity()) {
+                    mPm.permissions().forgetPackage(pkg);
+                    NotificationManagerService notifications = NotificationManagerService.sLast;
+                    if (notifications != null) notifications.packageRemoved(pkg);
+                }
+                publishInstalled(entry, installed);
+                return null;
+            });
             if (old != null && !old.codePath.equals(entry.codePath)) {
                 delete(new File(old.codePath));
             }
@@ -676,6 +684,20 @@ final class Installer {
             }
             if (tempDir != null) deleteTree(tempDir);
         }
+    }
+
+    /**
+     * App installers enter the commit only after checking source access. Mode changes wait
+     * until that commit finishes so an access denial cannot stop the existing target.
+     * Host installs use the original publication path.
+     */
+    private <T> T commitAuthorized(Runnable authorize,
+            java.util.concurrent.Callable<T> publication) throws Exception {
+        if (authorize == null) return publication.call();
+        return mPm.appOps().withInstallSourceMode(() -> {
+            synchronized (mPm) { authorize.run(); }
+            return publication.call();
+        });
     }
 
     /** Owner creation can fail; finish it before committing the installed registry. */
@@ -708,43 +730,45 @@ final class Installer {
 
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
     private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
-            PackageInstallSource installSource) throws Exception {
-        Entry entry = old.withInstallSource(installSource);
-        SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
-                + old.codePath + ")");
-        // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
-        boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
-        boolean recompile = libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile();
-        if (recompile) {
-            if (libraryChange) {
-                mAtm.forceStopPackage(pkg);
-                SystemServer.log("install " + pkg + ": shared-library context/content changed");
-            }
-            Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-        }
-        // A cache-only rebuild leaves attached processes and session handles valid.
-        // Replacing the PM object would retire their identity without changing code.
-        if (recompile && (libraryChange || mPm.get(pkg) == null)) {
-            ApkPackage installed = open(entry);
-            ApkPackage previous = mPm.get(pkg);
-            if (previous != null && previous.isSystemAddon()) {
-                if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
-                    throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+            PackageInstallSource installSource, Runnable authorize) throws Exception {
+        return commitAuthorized(authorize, () -> {
+            Entry entry = old.withInstallSource(installSource);
+            SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
+                    + old.codePath + ")");
+            // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
+            boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
+            boolean recompile = libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile();
+            if (recompile) {
+                if (libraryChange) {
+                    mAtm.forceStopPackage(pkg);
+                    SystemServer.log("install " + pkg + ": shared-library context/content changed");
                 }
-                installed.setSystemAddon(true);
+                Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
             }
-            installed.prepareInstalledDataDirectories();
-            if (entry != old) publishInstalled(entry, installed);
-            else mPm.add(installed, this);
-        } else if (entry != old) {
-            // An explicit session reinstall can change attribution even when code bytes
-            // are unchanged. A direct host launch of the same file keeps the old record.
-            synchronized (mPm) {
-                persistInstallSource(mPm.get(pkg), entry.installSource);
+            // A cache-only rebuild leaves attached processes and session handles valid.
+            // Replacing the PM object would retire their identity without changing code.
+            if (recompile && (libraryChange || mPm.get(pkg) == null)) {
+                ApkPackage installed = open(entry);
+                ApkPackage previous = mPm.get(pkg);
+                if (previous != null && previous.isSystemAddon()) {
+                    if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
+                        throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+                    }
+                    installed.setSystemAddon(true);
+                }
+                installed.prepareInstalledDataDirectories();
+                if (entry != old) publishInstalled(entry, installed);
+                else mPm.add(installed, this);
+            } else if (entry != old) {
+                // An explicit session reinstall can change attribution even when code bytes
+                // are unchanged. A direct host launch of the same file keeps the old record.
+                synchronized (mPm) {
+                    persistInstallSource(mPm.get(pkg), entry.installSource);
+                }
             }
-        }
-        return new String[] {pkg, "unchanged", old.codePath,
-                String.valueOf(parsed.versionCode())};
+            return new String[] {pkg, "unchanged", old.codePath,
+                    String.valueOf(parsed.versionCode())};
+        });
     }
 
     /** {@code file}'s line in install-sources.list: path, size, time, .dm size and time. */

@@ -8,32 +8,32 @@ import java.nio.file.Files;
 public final class ControlCenterHost {
     public static void main(String[] args) throws Exception {
         Device.directory = Files.createTempDirectory("gesher-panel-open-").toFile();
-        File request = new File(Device.directory, ControlCenter.REQUEST);
+        File requests = new File(Device.directory, ControlCenter.REQUESTS);
         try {
             Zygote.exe = null;
-            if (ControlCenter.open("com.example.app") || request.exists()) {
+            if (ControlCenter.open("com.example.app") || (requests.isDirectory() && requests.list().length != 0)) {
                 throw new AssertionError("Unavailable launcher left a request behind");
             }
             Zygote.exe = "C:\\Gesher\\dalvikvm.exe";
             WindowsHost.opened = false;
-            if (ControlCenter.open("com.example.app") || request.exists()) {
+            if (ControlCenter.open("com.example.app") || (requests.isDirectory() && requests.list().length != 0)) {
                 throw new AssertionError("Failed shell launch left a request behind");
             }
             WindowsHost.fail = true;
-            if (ControlCenter.open("com.example.app") || request.exists()) {
+            if (ControlCenter.open("com.example.app") || (requests.isDirectory() && requests.list().length != 0)) {
                 throw new AssertionError("Throwing shell launch left a request behind");
             }
             WindowsHost.fail = false;
             WindowsHost.opened = true;
-            if (!ControlCenter.open("com.example.app") || !request.exists()) {
+            if (!ControlCenter.open("com.example.app") || !(requests.isDirectory() && requests.list().length != 0)) {
                 throw new AssertionError("Successful shell launch lost its request");
             }
             gesher.services.ControlCenterRequestsTest.main(new String[0]);
             System.out.println("ControlCenterHost all passed: unavailable, failed, throwing and successful launcher");
         } finally {
-            File[] children = request.getParentFile().listFiles();
-            if (children != null) for (File child : children) child.delete();
-            request.getParentFile().delete();
+            ControlCenter.clearResults(Device.directory.getPath());
+            requests.delete();
+            requests.getParentFile().delete();
             Device.directory.delete();
         }
     }
