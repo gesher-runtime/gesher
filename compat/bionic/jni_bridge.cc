@@ -55,6 +55,10 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace elf = gesher::elf;
 
@@ -1167,3 +1171,9 @@ JavaVM* gesher::bionic::ProxyJavaVm(JNIEnv* real) {
   }
   return ProxyVmPtr();
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, g_stub_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::shared_mutex, g_kinds_mutex);
+#endif
