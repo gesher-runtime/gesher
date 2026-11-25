@@ -815,6 +815,13 @@ jobs:
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
 
+      - name: WebView intent fallback and navigation lifecycle contracts
+        run: |
+          python3 tools/test_webview_intent_fallback.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod
+          python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod
+
       - name: Network registration and message port lifecycle contracts
         run: |
           python3 tools/test_network_builder_contracts.py --java-home "$JAVA_HOME" \
