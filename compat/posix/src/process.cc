@@ -599,6 +599,11 @@ void ScanCloneLocks(const NtdllCode& code, const BYTE* f, int length, bool calle
 }
 
 void FindCloneLocks() {
+#if !defined(__x86_64__) && !defined(_M_X64)
+  // The scan reads x86-64 instructions; on another host it finds nothing,
+  // and the capability check decides alone.
+  return;
+#endif
   HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
   MODULEINFO module{};
   if (ntdll == nullptr || !K32GetModuleInformation(GetCurrentProcess(), ntdll, &module, sizeof(module))) return;
@@ -637,7 +642,9 @@ BYTE g_probe_code[64];
   EmptyWaitTable();
   ResetStaleCloneLocks();
   g_probe_table[0].BeginAddress = 0;
-  g_probe_table[0].EndAddress = 16;
+#if defined(__x86_64__) || defined(_M_X64)
+  g_probe_table[0].EndAddress = 16;  // an ARM64 entry has no end: the unwind data gives the length
+#endif
   g_probe_table[0].UnwindData = 32;
   if (!RtlAddFunctionTable(g_probe_table, 1, reinterpret_cast<DWORD64>(g_probe_code))) {
     TerminateProcess(GetCurrentProcess(), 2);
