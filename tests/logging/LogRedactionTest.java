@@ -149,6 +149,26 @@ public final class LogRedactionTest {
         check(sink.size() == LogRedaction.Stream.LIMIT * 3, "long unterminated output is emitted at the bound");
         bounded.flush();
         check(sink.size() == big.length, "the rest is emitted at flush");
+        // A failing stdout (closed, disk full) leaves no full buffer behind: later writes
+        // report the I/O error instead of overrunning the line buffer.
+        LogRedaction.Stream failing = new LogRedaction.Stream(new java.io.OutputStream() {
+            @Override public void write(int b) throws java.io.IOException { throw new java.io.IOException("full"); }
+            @Override public void write(byte[] b, int off, int len) throws java.io.IOException {
+                throw new java.io.IOException("full");
+            }
+        });
+        String failure = "none";
+        for (int i = 0; i < LogRedaction.Stream.LIMIT + 2; i++) {
+            try {
+                failing.write('x');
+            } catch (java.io.IOException e) {
+                // reported like any failed write
+            } catch (RuntimeException e) {
+                failure = e.toString();
+                break;
+            }
+        }
+        check(failure.equals("none"), "a failed write does not break the stream: " + failure);
 
         // One-time scrub of logs written by earlier versions.
         File logs = new File(scratch, "logs");

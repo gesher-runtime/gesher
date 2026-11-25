@@ -243,14 +243,19 @@ public final class LogRedaction {
         /** Writes the first {@code count} buffered bytes, redacted, keeping the rest. */
         private void emit(int count) throws IOException {
             byte[] redacted = redact(line, 0, count);
-            if (redacted == null) {
-                out.write(line, 0, count);
-            } else {
-                this.redacted = true;
-                out.write(redacted);
+            try {
+                if (redacted == null) {
+                    out.write(line, 0, count);
+                } else {
+                    this.redacted = true;
+                    out.write(redacted);
+                }
+            } finally {
+                // Consumed even when the write fails (a closed or full stdout): a full buffer
+                // must never be left behind for the next write.
+                System.arraycopy(line, count, line, 0, size - count);
+                size -= count;
             }
-            System.arraycopy(line, count, line, 0, size - count);
-            size -= count;
         }
     }
 
