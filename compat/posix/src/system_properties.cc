@@ -20,6 +20,10 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 #include <gesher/device_identity.h>
 
@@ -563,3 +567,8 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
 }
 
 } // namespace gesher::properties
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): property reads in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::properties::LocalMutex());
+#endif

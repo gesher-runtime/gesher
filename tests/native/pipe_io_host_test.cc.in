@@ -261,6 +261,9 @@ static DescriptorSnapshotPtr CaptureFileHandle(HANDLE handle) {
 static int ReadFileDescription(const DescriptorSnapshotPtr&, void*, unsigned) {
   std::abort();  // This declared shell boundary supplies pipes only.
 }
+// gesher/fork.h (ADR 0092): this fixture is never a forked child, so its
+// transfers keep their asynchronous cancellation.
+static bool InForkedChild() { return false; }
 }
 
 // The production pipe I/O marks its blocking waits for gesher-base's ptrace

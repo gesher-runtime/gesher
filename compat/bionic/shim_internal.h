@@ -179,6 +179,11 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
 // A nonzero error reports unavailable delivery/registration, never completion.
 bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
 
+// A blocking call's wait (wait4): up to `ms`, running the handlers of signals
+// that arrive. 0, or EINTR when a handler without SA_RESTART ran (one with
+// SA_RESTART returns 0: the call restarts), or a delivery error.
+int InterruptibleWaitPoint(uint32_t ms);
+
 // As above, observing an interruption before delivering its handlers. The
 // observer is an internal host callback, never loaded application code; it
 // runs without the signal-state lock and must only record the wake instant.
@@ -207,6 +212,27 @@ constexpr int kNoHandler = 0, kHandlersRestart = 1, kHandlersWithoutRestart = 2;
 int DeliverAfterInterrupt();
 bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
                               unsigned long ms);
+
+// fork for translated arm64 code (process_bionic.cc, ADR 0092). The locks are
+// in gesher-base's fork set (gesher/fork.h); in the child, while they are
+// still held, each part drops what belonged to the parent's other threads.
+// pthread_bionic.cc: the thread registry and pthread_atfork handlers.
+int RegisterAtfork(void* prepare, void* parent, void* child);
+void RunAtforkPrepare();
+void RunAtforkParent();
+void RunAtforkChild();
+void PthreadForkPrepare();  // before the fork set is taken
+void PthreadForkChild();
+// Whether no thread the program made (pthread_create) runs besides the caller.
+bool OnlyProgramThread();
+// signal_bionic.cc: per-thread signal state and the shim's signal thread.
+void SignalForkChild();
+// Whether the loaded program is the whole process (gesher-exec), not a guest
+// of ART's (signal_bionic.cc, InstallSignalHook).
+bool SignalsAuthoritative();
+// Whether children are reaped at their exit: SIGCHLD is SIG_IGN or its
+// action has SA_NOCLDWAIT (signal_bionic.cc).
+bool ChildrenAutoReaped();
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();

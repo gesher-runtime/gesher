@@ -21,9 +21,16 @@
 #include <unistd.h>
 #include <windows.h>
 #include <psapi.h>
+#include <winternl.h>
 
+#include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <gesher/fork.h>
 
 #include "internal.h"
 
@@ -32,6 +39,7 @@
 // and returns nonzero if it delivered it to the code's own handlers.
 extern "C" {
 int (*gesher_signal_hook)(int sig, int sender_pid) = nullptr;
+int gesher_kill_other(pid_t pid, int sig);
 }
 
 namespace {
@@ -39,7 +47,29 @@ namespace {
 struct Mailbox {
   volatile LONG64 pending;  // bit (signal - 1)
   volatile LONG senders[NSIG];
+  volatile LONG forked;     // a forked child's (gesher/fork.h): its exit codes
+  // The process it belongs to (its creation time): a mailbox left by an
+  // earlier process with the same pid (a sender still had it open) is reset
+  // by the new owner rather than inherited with its pending signals.
+  volatile LONG64 owner_created;
 };
+
+LONG64 CreationTime(HANDLE process) {
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (!GetProcessTimes(process, &created, &exited, &kernel, &user)) return 0;
+  return static_cast<LONG64>((static_cast<ULONGLONG>(created.dwHighDateTime) << 32) | created.dwLowDateTime);
+}
+
+// Makes `mailbox` the one of the process created at `created`: a stale
+// mailbox (another owner) is emptied first.
+void ClaimMailbox(Mailbox* mailbox, LONG64 created, bool forked) {
+  if (InterlockedCompareExchange64(&mailbox->owner_created, 0, 0) != created) {
+    InterlockedExchange64(&mailbox->pending, 0);
+    InterlockedExchange(&mailbox->forked, 0);
+    InterlockedExchange64(&mailbox->owner_created, created);
+  }
+  if (forked) InterlockedExchange(&mailbox->forked, 1);
+}
 
 std::wstring MailboxName(DWORD pid) { return L"Local\\gesher-signals-" + std::to_wstring(pid); }
 std::wstring EventName(DWORD pid) { return L"Local\\gesher-signal-" + std::to_wstring(pid); }
@@ -50,7 +80,15 @@ bool DefaultIgnores(int sig) {
   return sig == SIGCHLD || sig == SIGCONT || sig == SIGURG || sig == SIGWINCH;
 }
 
+// The program an exec in this process started, which replaces it: signals sent
+// here go there (gesher::SetExecForward).
+std::atomic<DWORD> g_exec_forward{0};
+
 void Deliver(int sig) {
+  if (const DWORD target = g_exec_forward.load(std::memory_order_acquire)) {
+    gesher_kill_other(static_cast<pid_t>(target), sig);
+    return;
+  }
   // The bionic shim takes the signals its loaded code handles (exec2 track,
   // ADR 0055): gesher_signal_hook below.
   if (gesher_signal_hook != nullptr &&
@@ -63,7 +101,7 @@ void Deliver(int sig) {
   if (sa.sa_handler == SIG_DFL) {
     if (DefaultIgnores(sig)) return;
     if (sig == SIGTERM || sig == SIGINT || sig == SIGHUP) {
-      TerminateProcess(GetCurrentProcess(), 128 + sig);
+      TerminateProcess(GetCurrentProcess(), gesher::SignalExitCode(sig));
     }
   }
   kill(getpid(), sig);
@@ -76,22 +114,52 @@ void CALLBACK OnSignal(void*, BOOLEAN) {
   }
 }
 
-// The mailbox of this process, made at startup (posix.cmake keeps this file
-// linked into every executable).
-const bool g_mailbox_ready = [] {
+// A forked child's mailbox has no thread pool to watch its event (the
+// parent's pool does not exist in the clone): a thread of its own does.
+DWORD WINAPI MailboxThread(void* event) {
+  for (;;) {
+    if (WaitForSingleObject(static_cast<HANDLE>(event), INFINITE) != WAIT_OBJECT_0) return 1;
+    std::lock_guard<std::mutex> helper(gesher::ForkHelperLock());
+    OnSignal(nullptr, FALSE);
+  }
+}
+
+extern const bool g_fork_exit_codes;
+
+bool OpenMailbox(bool thread_pool) {
   DWORD pid = GetCurrentProcessId();
   HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
                                       sizeof(Mailbox), MailboxName(pid).c_str());
   if (section == nullptr) return false;
-  g_mailbox = static_cast<Mailbox*>(MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Mailbox)));
+  auto* mailbox = static_cast<Mailbox*>(MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Mailbox)));
   HANDLE event = CreateEventW(nullptr, FALSE, FALSE, EventName(pid).c_str());
-  HANDLE wait = nullptr;
-  if (g_mailbox == nullptr || event == nullptr ||
-      !RegisterWaitForSingleObject(&wait, event, OnSignal, nullptr, INFINITE, WT_EXECUTEDEFAULT)) {
-    return false;
+  if (mailbox == nullptr || event == nullptr) return false;
+  // A forked child's mailbox already exists (its parent made it for this
+  // process, and may have posted signals to it): those are delivered as soon
+  // as it is watched.
+  ClaimMailbox(mailbox, CreationTime(GetCurrentProcess()), !thread_pool || g_fork_exit_codes);
+  g_mailbox = mailbox;
+  if (thread_pool) {
+    HANDLE wait = nullptr;
+    return RegisterWaitForSingleObject(&wait, event, OnSignal, nullptr, INFINITE,
+                                       WT_EXECUTEDEFAULT) != FALSE;
   }
-  return true;  // the section and event stay open for the life of the process
+  return gesher::StartHelperThread(MailboxThread, event, 64 * 1024);  // the section and event stay open for the life of the process
+}
+
+// A process whose parent uses the forked child's exit codes (a program a
+// forked child exec'd, which replaces it, or spawned): the parent decodes this
+// process's status with them, so its death by a signal uses them too
+// (gesher/fork.h). The parent's mailbox says so; nothing is passed in the
+// program's environment.
+const bool g_fork_exit_codes = [] {
+  const pid_t parent = getppid();
+  return parent > 1 && gesher::IsForkedChild(static_cast<DWORD>(parent));
 }();
+
+// The mailbox of this process, made at startup (posix.cmake keeps this file
+// linked into every executable).
+const bool g_mailbox_ready = OpenMailbox(true);
 
 using NtProcessFn = LONG(NTAPI*)(HANDLE);
 
@@ -140,7 +208,10 @@ int gesher_kill_other(pid_t pid, int sig) {
   } else if (sig == 0) {
     // Existence and permission only.
   } else if (sig == SIGKILL) {
-    if (!TerminateProcess(process, 128 + SIGKILL)) result = gesher::FailWithLastError();
+    const DWORD killed = gesher::IsForkedChild(static_cast<DWORD>(pid))
+                             ? gesher::ForkSignalExitCode(SIGKILL)
+                             : 128 + SIGKILL;
+    if (!TerminateProcess(process, killed)) result = gesher::FailWithLastError();
   } else if (sig == SIGSTOP || sig == SIGCONT) {
     NtProcessFn fn = NtFunction(sig == SIGSTOP ? "NtSuspendProcess" : "NtResumeProcess");
     if (fn == nullptr || fn(process) < 0) result = (errno = EPERM, -1);
@@ -155,6 +226,12 @@ int gesher_kill_other(pid_t pid, int sig) {
     Mailbox* mailbox = section != nullptr ? static_cast<Mailbox*>(MapViewOfFile(
                                                 section, FILE_MAP_WRITE, 0, 0, sizeof(Mailbox)))
                                           : nullptr;
+    // A mailbox some earlier process with this pid left is not the target's.
+    const LONG64 owner = mailbox != nullptr ? InterlockedCompareExchange64(&mailbox->owner_created, 0, 0) : 0;
+    if (mailbox != nullptr && owner != 0 && owner != CreationTime(process)) {
+      UnmapViewOfFile(mailbox);
+      mailbox = nullptr;
+    }
     if (mailbox != nullptr && event != nullptr) {
       InterlockedExchange(&mailbox->senders[sig], static_cast<LONG>(GetCurrentProcessId()));
       InterlockedOr64(&mailbox->pending, static_cast<LONG64>(1) << (sig - 1));
@@ -324,3 +401,283 @@ int getrusage(int who, struct rusage* usage) {
 }
 
 }  // extern "C"
+
+// --- fork: a clone of this process (gesher/fork.h, ADR 0092) ----------------------
+
+namespace {
+
+std::atomic<bool> g_forked_child{false};
+
+// ProcessHandleInformation (51): every handle with its object type.
+struct HandleEntry {
+  HANDLE value;
+  ULONG_PTR handle_count;
+  ULONG_PTR pointer_count;
+  ACCESS_MASK granted_access;
+  ULONG type_index;
+  ULONG attributes;
+  ULONG reserved;
+};
+struct HandleSnapshot {
+  ULONG_PTR count;
+  ULONG_PTR reserved;
+  HandleEntry handles[1];
+};
+constexpr ULONG kObjInherit = 0x2;
+
+using QueryProcessFn = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+using QueryObjectFn = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+struct RtlProcessInformation {
+  ULONG length;
+  HANDLE process;
+  HANDLE thread;
+  CLIENT_ID client_id;
+  BYTE image_information[64];  // SECTION_IMAGE_INFORMATION
+};
+using CloneFn = LONG(NTAPI*)(ULONG, PSECURITY_DESCRIPTOR, PSECURITY_DESCRIPTOR, HANDLE,
+                             RtlProcessInformation*);
+constexpr ULONG kCloneInheritHandles = 0x2;  // RTL_CLONE_PROCESS_FLAGS_INHERIT_HANDLES
+constexpr LONG kStatusProcessCloned = 0x129;
+
+void* Ntdll(const char* name) {
+  return reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), name));
+}
+
+// Object types a clone must not share with this process: the thread pool's
+// worker factory and its completion ports and wait packets (which would run
+// the child's work on this process's threads), ALPC ports (this process's
+// connections to system services) and the graphics kernel's objects.
+bool Excluded(const std::wstring& type) {
+  static const wchar_t* const kTypes[] = {
+      L"TpWorkerFactory", L"IoCompletion", L"IoCompletionReserve", L"WaitCompletionPacket",
+      L"ALPC Port", L"EtwRegistration", L"EtwConsumer"};
+  for (const wchar_t* t : kTypes) {
+    if (type == t) return true;
+  }
+  return type.rfind(L"Dxgk", 0) == 0 || type.rfind(L"Composition", 0) == 0;
+}
+
+std::wstring TypeName(HANDLE handle) {
+  static auto query = reinterpret_cast<QueryObjectFn>(Ntdll("NtQueryObject"));
+  alignas(8) BYTE buffer[1024];
+  ULONG size = 0;
+  // ObjectTypeInformation (2): PUBLIC_OBJECT_TYPE_INFORMATION, a UNICODE_STRING first.
+  if (query == nullptr || query(handle, 2, buffer, sizeof(buffer), &size) < 0) return L"";
+  const auto* name = reinterpret_cast<const UNICODE_STRING*>(buffer);
+  return std::wstring(name->Buffer, name->Length / sizeof(wchar_t));
+}
+
+// A handle made inheritable for a clone, with what identifies its object
+// while it stays open: its type and granted access.
+struct Changed {
+  HANDLE value;
+  ULONG type_index;
+  ACCESS_MASK access;
+};
+
+bool Snapshot(std::vector<BYTE>* buffer) {
+  static auto query = reinterpret_cast<QueryProcessFn>(Ntdll("NtQueryInformationProcess"));
+  if (query == nullptr) return errno = ENOSYS, false;
+  buffer->resize(64 * 1024);
+  for (;;) {
+    ULONG size = 0;
+    LONG status = query(GetCurrentProcess(), 51, buffer->data(), static_cast<ULONG>(buffer->size()),
+                        &size);
+    if (status >= 0) return true;
+    if (status != static_cast<LONG>(0xC0000004) /* STATUS_INFO_LENGTH_MISMATCH */ ||
+        buffer->size() > (64u << 20)) {
+      return errno = ENOMEM, false;
+    }
+    buffer->resize(std::max<size_t>(buffer->size() * 2, size + 4096));
+  }
+}
+
+// The handles made inheritable for a clone, to be given back their flag.
+bool InheritAllHandles(std::vector<Changed>* changed) {
+  std::vector<BYTE> buffer;
+  if (!Snapshot(&buffer)) return false;
+  const auto* snapshot = reinterpret_cast<const HandleSnapshot*>(buffer.data());
+  std::vector<std::pair<ULONG, bool>> types;  // type index -> excluded
+  for (ULONG_PTR i = 0; i < snapshot->count; ++i) {
+    const HandleEntry& entry = snapshot->handles[i];
+    if ((entry.attributes & kObjInherit) != 0) continue;
+    // The spawn broker's pipe instances stay the root's: a clone holding one
+    // would keep it open after the root ends, and a request would wait there.
+    if (gesher::IsBrokerHandle(entry.value)) continue;
+    bool excluded = false, known = false;
+    for (const auto& t : types) {
+      if (t.first == entry.type_index) excluded = t.second, known = true;
+    }
+    if (!known) {
+      excluded = Excluded(TypeName(entry.value));
+      types.emplace_back(entry.type_index, excluded);
+    }
+    if (excluded) continue;
+    if (SetHandleInformation(entry.value, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+      changed->push_back({entry.value, entry.type_index, entry.granted_access});
+    }
+  }
+  return true;
+}
+
+// Gives each handle back its flag if the value still names an object of the
+// same type and access: another thread may have closed one meanwhile and
+// opened another, inheritable on purpose, at the same value. (Comparing the
+// objects themselves would cost a duplicate of every handle.)
+void RestoreHandles(const std::vector<Changed>& changed) {
+  if (changed.empty()) return;
+  std::vector<BYTE> buffer;
+  if (!Snapshot(&buffer)) {
+    for (const Changed& c : changed) SetHandleInformation(c.value, HANDLE_FLAG_INHERIT, 0);
+    return;
+  }
+  const auto* snapshot = reinterpret_cast<const HandleSnapshot*>(buffer.data());
+  std::unordered_map<HANDLE, const HandleEntry*> now;
+  now.reserve(static_cast<size_t>(snapshot->count));
+  for (ULONG_PTR i = 0; i < snapshot->count; ++i) now[snapshot->handles[i].value] = &snapshot->handles[i];
+  for (const Changed& c : changed) {
+    auto it = now.find(c.value);
+    if (it == now.end() || it->second->type_index != c.type_index ||
+        it->second->granted_access != c.access) {
+      continue;
+    }
+    SetHandleInformation(c.value, HANDLE_FLAG_INHERIT, 0);
+  }
+}
+
+// Gesher's own spawns hold this shared around CreateProcess (they pass
+// explicit handle lists anyway); a fork holds it exclusively while every
+// handle is inheritable.
+SRWLOCK g_spawn_lock = SRWLOCK_INIT;
+
+// The parent's references to its forked children's mailboxes: the child
+// opens the same named objects, and a signal sent before it does waits there.
+struct ChildMailbox {
+  DWORD pid;
+  HANDLE section;
+  HANDLE event;
+};
+std::mutex g_child_mailboxes_mutex;
+std::vector<ChildMailbox> g_child_mailboxes;
+
+void PrepareChildMailbox(DWORD pid, HANDLE process) {
+  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                      sizeof(Mailbox), MailboxName(pid).c_str());
+  if (section == nullptr) return;
+  if (auto* mailbox = static_cast<Mailbox*>(MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Mailbox)))) {
+    ClaimMailbox(mailbox, CreationTime(process), true);
+    UnmapViewOfFile(mailbox);
+  }
+  HANDLE event = CreateEventW(nullptr, FALSE, FALSE, EventName(pid).c_str());
+  // g_child_mailboxes_mutex is in the fork set, which the caller holds.
+  g_child_mailboxes.push_back({pid, section, event});
+}
+
+}  // namespace
+
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, g_child_mailboxes_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, g_limits_mutex);
+
+namespace gesher {
+
+void AcquireSpawnLock() { AcquireSRWLockShared(&g_spawn_lock); }
+void ReleaseSpawnLock() { ReleaseSRWLockShared(&g_spawn_lock); }
+
+bool InForkedChild() { return g_forked_child.load(std::memory_order_acquire); }
+
+bool UsesForkExitCodes() { return InForkedChild() || g_fork_exit_codes; }
+
+DWORD SignalExitCode(int sig) {
+  return UsesForkExitCodes() ? ForkSignalExitCode(sig) : 128 + static_cast<DWORD>(sig);
+}
+
+bool IsForkedChild(DWORD pid) {
+  HANDLE section = OpenFileMappingW(FILE_MAP_READ, FALSE, MailboxName(pid).c_str());
+  if (section == nullptr) return false;
+  bool forked = false;
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (auto* mailbox = static_cast<Mailbox*>(MapViewOfFile(section, FILE_MAP_READ, 0, 0, sizeof(Mailbox)))) {
+    forked = mailbox->forked != 0 && process != nullptr && mailbox->owner_created == CreationTime(process);
+    UnmapViewOfFile(mailbox);
+  }
+  if (process != nullptr) CloseHandle(process);
+  CloseHandle(section);
+  return forked;
+}
+
+void SetExecForward(DWORD pid) { g_exec_forward.store(pid, std::memory_order_release); }
+
+void ForgetChildMailbox(DWORD pid) {
+  ForgetForkedChild(pid);
+  std::lock_guard<std::mutex> lock(g_child_mailboxes_mutex);
+  for (auto it = g_child_mailboxes.begin(); it != g_child_mailboxes.end(); ++it) {
+    if (it->pid != pid) continue;
+    if (it->section != nullptr) CloseHandle(it->section);
+    if (it->event != nullptr) CloseHandle(it->event);
+    g_child_mailboxes.erase(it);
+    return;
+  }
+}
+
+int CloneProcess(HANDLE* process, DWORD* pid) {
+  static auto clone = reinterpret_cast<CloneFn>(Ntdll("RtlCloneUserProcess"));
+  if (clone == nullptr) return errno = ENOSYS, -1;
+  std::vector<Changed> changed;
+  changed.reserve(1024);
+  AcquireSRWLockExclusive(&g_spawn_lock);
+  if (!InheritAllHandles(&changed)) {
+    int error = errno;
+    RestoreHandles(changed);
+    ReleaseSRWLockExclusive(&g_spawn_lock);
+    return errno = error, -1;
+  }
+  RtlProcessInformation info{};
+  info.length = sizeof(info);
+  LONG status = clone(kCloneInheritHandles, nullptr, nullptr, nullptr, &info);
+  if (status == kStatusProcessCloned) {
+    g_forked_child.store(true, std::memory_order_release);
+    // The child's copies: their own flags again, at the same values.
+    RestoreHandles(changed);
+    InitializeSRWLock(&g_spawn_lock);
+    // The parent's references to its own children's mailboxes are not ours.
+    for (ChildMailbox& m : g_child_mailboxes) {
+      if (m.section != nullptr) CloseHandle(m.section);
+      if (m.event != nullptr) CloseHandle(m.event);
+    }
+    g_child_mailboxes.clear();
+    return 0;
+  }
+  RestoreHandles(changed);
+  ReleaseSRWLockExclusive(&g_spawn_lock);
+  if (status < 0) {
+    // STATUS_NO_MEMORY, STATUS_COMMITMENT_LIMIT, quota: EAGAIN/ENOMEM as fork(2).
+    return errno = (status == static_cast<LONG>(0xC0000017) || status == static_cast<LONG>(0xC000012D))
+                       ? ENOMEM
+                       : EAGAIN,
+           -1;
+  }
+  CloseHandle(info.thread);
+  *process = info.process;
+  *pid = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(info.client_id.UniqueProcess));
+  // Before fork returns: a signal the parent sends the new pid at once waits
+  // in this mailbox until the child watches it.
+  PrepareChildMailbox(*pid, *process);
+  // A forked descendant of the broker's root (spawn_broker.cc).
+  RegisterForkedChild(*pid, *process);
+  return 1;
+}
+
+void ReinitializeAfterFork() {
+  // IMM32's thread-attach code reads the session's win32k shared memory,
+  // which a clone does not map: every thread the child starts would fault
+  // there. The child has no windows; IMM32 needs no per-thread state in it.
+  if (HMODULE imm = GetModuleHandleW(L"imm32.dll")) DisableThreadLibraryCalls(imm);
+  // The parent's mailbox view is shared memory: the child must not take the
+  // parent's signals. Its own mailbox is named by its own pid.
+  g_mailbox = nullptr;
+  OpenMailbox(false);
+  // MERGE(0093): gesher::ptrace::Self() here, so the child's ptrace state
+  // and guard follow its pid (ADR 0093; this lands when both branches meet).
+}
+
+}  // namespace gesher

@@ -509,6 +509,32 @@ def preceding_ofd_sources():
      actual=actual.replace(after,before,1)
    assert actual==expected,(path,marker)
  return previous
+# Guest fork (ADR 0092) registers two fd.cc locks and one winsock.cc lock in
+# its fork set. Each file's one exact addition at its end, and nothing else, is
+# removed before the reviewed hunks and every byte check below run on the result.
+FORK_LOCK_ADDITIONS={
+ 'compat/posix/src/fd.cc':(b'''
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the socket table and descriptor waiters.
+GESHER_FORK_LOCK(gesher::kForkOrderDescriptors, std::mutex, gesher::table_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, waiters_mutex);
+#endif
+''',),
+ 'compat/posix/src/winsock.cc':(b'''
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the local IPv4 address cache recvmsg's IP_PKTINFO reads.
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::ws::LocalAddressCache().mutex);
+#endif
+''',),
+}
 # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
 # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
 # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
@@ -558,6 +584,9 @@ def check():
          CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
   expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
   actual=preceding.get(path,(ROOT/path).read_bytes())
+  for addition in FORK_LOCK_ADDITIONS.get(path,()):
+   assert actual.count(addition)==1 and actual.endswith(addition),path
+   actual=actual[:-len(addition)]
   if path=='compat/posix/src/winsock.cc':
    assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
    actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
