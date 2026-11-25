@@ -666,9 +666,11 @@ public final class RuntimePermissionStateTest {
         return (Integer)call(policy, "runtimeOpMode", new Class<?>[]{int.class, int.class}, op, uid);
     }
     /**
-     * A legacy (target < 23) requester: AOSP grants its restricted permissions only with an
-     * exemption and REVIEW_REQUIRED, withholds their AppOps and makes the user review them
-     * before the app runs. Gesher has no review, so the exemption must never activate them.
+     * A legacy (target < 23) requester: AOSP restorePermissionState always grants its
+     * permissions, restricted ones included, and expresses the restriction through the
+     * AppOp; PermissionPolicyService leaves a REVIEW_REQUIRED permission's AppOp ungranted
+     * until the user reviews the app. Gesher has no review, so an exemption must never make
+     * a legacy restricted permission effective (AppOp allowed) without the review cleared.
      */
     private static void legacyRestricted(Harness h) throws Exception {
         final int review = PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
@@ -681,16 +683,16 @@ public final class RuntimePermissionStateTest {
         for (int round = 0; round < 2; round++) {
             for (String restricted : List.of(BACKGROUND, STORAGE)) {
                 int flags = flagsOf(h.policy, name, restricted);
-                check(h.policy.checkPermission(name, restricted) == DENY
+                check(h.policy.checkPermission(name, restricted) == GRANTED
                         && (flags & (ANY_EXEMPT | APPLY | review)) == (INSTALLER_EXEMPT | review),
-                        "an installer exemption granted a legacy app's " + restricted + " without the user: " + flags);
+                        "a legacy app's exempt " + restricted + " lost its legacy grant or review: " + flags);
             }
             check(h.policy.checkPermission(name, FINE) == GRANTED && h.policy.checkPermission(name, CAMERA) == GRANTED,
                     "a legacy app lost its unrestricted compatibility grants");
             check(h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, uid, name, null) == AppOpsManager.MODE_FOREGROUND
                     && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_READ_EXTERNAL_STORAGE, uid, name, null)
                             == AppOpsManager.MODE_IGNORED,
-                    "a legacy app's unreviewed restricted permissions supplied AppOps");
+                    "an installer exemption gave a legacy app's unreviewed restricted permissions their AppOps");
             // The runtime grant API is a no-op for a legacy requester, and an update with
             // the default allowlist again adds an exemption without activating anything.
             h.policy.grantRuntimePermission(name, BACKGROUND, "default:0", 0);
@@ -698,22 +700,32 @@ public final class RuntimePermissionStateTest {
             call(update, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, (Object)null);
             call(h.pm, "add", new Class<?>[]{ApkPackage.class}, update);
         }
-        // Only an explicit review (the system clearing REVIEW_REQUIRED) activates the grant.
+        // Only an explicit review (the system clearing REVIEW_REQUIRED) makes the grant effective.
         h.policy.updatePermissionFlags(name, BACKGROUND, review, 0, true, "default:0", 0);
         check(h.policy.checkPermission(name, BACKGROUND) == GRANTED
-                && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, uid, name, null) == AppOpsManager.MODE_ALLOWED,
-                "a reviewed, exempt legacy grant was not held");
+                && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, uid, name, null) == AppOpsManager.MODE_ALLOWED
+                && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_READ_EXTERNAL_STORAGE, uid, name, null)
+                        == AppOpsManager.MODE_IGNORED,
+                "a reviewed, exempt legacy grant was not effective, or the review leaked to another permission");
         retire(h, legacy);
 
-        // The one-time migration of a legacy app admitted before exemptions existed: its
-        // ledger has APPLY_RESTRICTION with the unreviewed legacy grant.
+        // An install that opted out: the legacy grant stays, the restriction withholds the AppOp.
         ApkPackage old = pkg("fixture.permission.legacy.old", UID + 16, 22, (byte)9);
         call(old, "setRestrictedPermissionAllowlist", new Class<?>[]{Collection.class}, List.of());
         call(h.pm, "add", new Class<?>[]{ApkPackage.class}, old);
         ApkPackage modern = admit(h, "fixture.permission.optout", UID + 17, List.of(), true, false);
         check((flagsOf(h.policy, old.packageName, BACKGROUND) & (ANY_EXEMPT | APPLY | review)) == (APPLY | review)
-                && h.policy.checkPermission(old.packageName, BACKGROUND) == DENY,
-                "a restricted legacy permission without an exemption was granted");
+                && h.policy.checkPermission(old.packageName, BACKGROUND) == GRANTED
+                && h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, old.uid(), old.packageName, null)
+                        == AppOpsManager.MODE_FOREGROUND,
+                "a restricted legacy permission without an exemption lost its grant or supplied its AppOp");
+        // Even a review made while the restriction applied does not survive dropping it: AOSP
+        // restorePermissionState requires a new review for a legacy app's exempted permission.
+        h.policy.updatePermissionFlags(old.packageName, BACKGROUND, review, 0, true, "default:0", 0);
+        check(h.pm.appOps().checkOperationRaw(AppOpsManager.OP_FINE_LOCATION, old.uid(), old.packageName, null)
+                        == AppOpsManager.MODE_FOREGROUND,
+                "a reviewed but restricted legacy permission supplied its AppOp");
+        // The one-time migration of a legacy app admitted before exemptions existed.
         java.util.Properties ledger = (java.util.Properties)get(h.policy, "mDecisions");
         synchronized (h.policy) {
             ledger.remove("restriction-exemptions");
@@ -724,10 +736,10 @@ public final class RuntimePermissionStateTest {
         synchronized (h.policy) { ledger.setProperty("restriction-exemptions", "1"); }
         call(migrated, "initializePackages", new Class<?>[0]);
         for (String restricted : List.of(BACKGROUND, STORAGE)) {
-            check(migrated.checkPermission(old.packageName, restricted) == DENY
+            check(migrated.checkPermission(old.packageName, restricted) == GRANTED
                     && (flagsOf(migrated, old.packageName, restricted) & (ANY_EXEMPT | APPLY | review))
                             == (INSTALLER_EXEMPT | review),
-                    "the migration's exemption activated a legacy app's " + restricted);
+                    "the migration's exemption dropped a legacy app's " + restricted + " grant or its review");
         }
         check(appOp(migrated, AppOpsManager.OP_FINE_LOCATION, old.uid()) == AppOpsManager.MODE_FOREGROUND
                 && appOp(migrated, AppOpsManager.OP_READ_EXTERNAL_STORAGE, old.uid()) == AppOpsManager.MODE_IGNORED
@@ -907,7 +919,9 @@ public final class RuntimePermissionStateTest {
                 && (h.flags(BACKGROUND) & (USER_SET | USER_FIXED)) == USER_SET
                 && (h.flags(FINE) & (USER_SET | USER_FIXED)) == USER_SET,
                 "App info's \"Don't allow\" fixed a decision or kept location access");
-        // "Allow only while using the app" there changes nothing; closing it records nothing.
+        // "Allow only while using the app" there revokes a fixed background permission again
+        // with userFixed=false (AOSP requestChange: GRANT_FOREGROUND_ONLY on a USER_FIXED
+        // background): USER_SET only, foreground kept. Closing it records nothing.
         for (int choice : new int[]{FOREGROUND_ONLY, DISMISSED}) {
             h.policy.grantRuntimePermission(NAME, FINE, "default:0", 0);
             h.flags(BACKGROUND, INSTALLER_EXEMPT | USER_SET | USER_FIXED);
@@ -916,9 +930,10 @@ public final class RuntimePermissionStateTest {
             check((Boolean)call(page, "backgroundSettings", settingsSignature, h.owner, (Runnable)pageReturned::incrementAndGet)
                     && queue.size() == 1, "App info did not offer the background choice");
             queue.remove(0).run();
-            check(pageReturned.get() == 1 && h.flags(BACKGROUND) == (INSTALLER_EXEMPT | USER_SET | USER_FIXED)
+            int expected = INSTALLER_EXEMPT | USER_SET | (choice == DISMISSED ? USER_FIXED : 0);
+            check(pageReturned.get() == 1 && h.flags(BACKGROUND) == expected
                     && h.policy.checkPermission(NAME, FINE) == GRANTED && h.policy.checkPermission(NAME, BACKGROUND) == DENY,
-                    "App info changed permissions without an explicit change: " + choice);
+                    "App info's background choice left the wrong state: " + choice + " flags " + h.flags(BACKGROUND));
         }
         // Policy or system fixed background permissions are not offered there.
         for (int fixed : new int[]{PackageManager.FLAG_PERMISSION_POLICY_FIXED, PackageManager.FLAG_PERMISSION_SYSTEM_FIXED}) {

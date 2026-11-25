@@ -215,9 +215,11 @@ user consents to every grant through the dialogs below. Legacy apps (target SDK
 below 23) are the case where Android grants without a request: AOSP gives an
 exempt legacy app its restricted permissions with `REVIEW_REQUIRED`, withholds
 their AppOps and makes the user review the app's permissions before it runs.
-Gesher has no such review screen, so a legacy app's restricted permissions stay
-not granted, with no AppOps, whatever its exemptions (also after the
-migration); its unrestricted permissions keep their legacy grants as before.
+Gesher keeps those legacy grants (`checkPermission` reports them, as on Android)
+but has no such review screen, so their AppOps stay withheld whatever the
+exemptions (also after the migration): the framework soft-denies the access,
+for example an empty call log. Its unrestricted permissions keep their legacy
+grants and AppOps as before.
 `PackageManager.get/add/removeWhitelistedRestrictedPermission`
 (`IPermissionManager` allowlist calls) follow AOSP: the system allowlist needs
 `WHITELIST_RESTRICTED_PERMISSIONS`, the installer and upgrade allowlists also
@@ -243,8 +245,9 @@ The choice follows the rules of the screen Android shows at that point:
   a decision.
 - **Settings page** (App info, below, and the target R+ request, which Android
   sends to Settings). "Allow only while using the app" leaves the ungranted
-  background permission as it is; "Don't allow" revokes with `USER_SET` only and
-  clears `USER_FIXED` (AOSP `AppPermissionViewModel`). A background permission
+  background permission as it is, except that one the user fixed is revoked
+  again with `USER_SET` only, clearing `USER_FIXED`; "Don't allow" revokes the
+  same way (AOSP `AppPermissionViewModel`). A background permission
   the user fixed is still offered there; one that is policy or system fixed is
   not. For the target R+ request, returning without a choice counts against the
   app as in AOSP `sendDirectlyToSettings`: the first time sets `USER_SET`, the

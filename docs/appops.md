@@ -76,11 +76,15 @@ this policy does not derive or grant. Restriction exemptions are described in
 [microg.md](microg.md#restricted-and-background-permissions). A legacy
 requester supplies an automatic grant only for a runtime permission without
 runtime-only protection, and compatibility flags control that grant's AppOps
-access. For a restricted permission that legacy grant is held only once
-`REVIEW_REQUIRED` has been cleared and no restriction applies: AOSP holds it for
-the user's review, which Gesher does not have, so an exemption never activates
-it (admission and republication keep `REVIEW_REQUIRED` on such a grant that is
-not already held). The minimum target SDK is computed separately for each permission from
+access. As in AOSP `restorePermissionState`, that grant also covers restricted
+permissions, exempt or not, so `checkPermission` reports it; the restriction and
+the review withhold only its AppOp. A restricted permission's legacy grant gets
+no AppOp while the restriction applies or while it carries `REVIEW_REQUIRED`
+(AOSP `PermissionPolicyService` leaves the AppOp of a permission under review
+ungranted, and PermissionChecker then soft-denies). Gesher has no review screen,
+so an exemption never makes such a grant effective until the system clears
+`REVIEW_REQUIRED`, and dropping the restriction of a legacy app's permission at
+admission or republication requires that review again. The minimum target SDK is computed separately for each permission from
 its actual requesters. A legacy shared-UID member that does not request a
 permission cannot turn another member's denial into a grant or supply its
 legacy review flag. Shared packages observe one UID policy; retiring the last requesting
@@ -115,7 +119,7 @@ The bounded ordinary-runtime transition rules are:
 | Publication or lifecycle change | Prior state | Result |
 | --- | --- | --- |
 | An actual legacy requester is admitted | Modern denial with user flags | Binary legacy grant; compatibility revocation keeps raw AppOps ignored |
-| An actual legacy requester is admitted | No previous grant or flags | Legacy grant with review required; a restricted permission's grant is not held until that review is cleared |
+| An actual legacy requester is admitted | No previous grant or flags | Legacy grant with review required; a restricted permission's AppOp is withheld until that review is cleared |
 | An actual legacy requester is admitted | Explicit runtime grant | Retain the grant without inventing compatibility revocation |
 | A legacy package is republished | A legitimate compatibility or review clear | Keep that clear and the stored legacy grant basis |
 | Requesters become modern | Reviewed, compatible legacy grant | Convert it to an explicit runtime grant |

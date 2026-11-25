@@ -157,10 +157,19 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         return fuller != null && permissionState(pkg.uid(), fuller, members).granted;
     }
 
-    /** Android 16 PermissionFlags distinguishes the permission grant from its AppOps grant. */
-    private record PermissionState(boolean granted, int flags, boolean restricted) {
+    /**
+     * Android 16 PermissionFlags distinguishes the permission grant from its AppOps grant.
+     * {@code reviewPending}: a restricted permission's legacy grant still carries
+     * REVIEW_REQUIRED. AOSP keeps that grant (checkPermission) but PermissionPolicyService
+     * leaves its AppOp ungranted until the user reviews the app; Gesher has no review screen,
+     * so the AppOp stays withheld until the review flag is cleared, whatever the exemptions.
+     */
+    private record PermissionState(boolean granted, int flags, boolean restricted, boolean reviewPending) {
+        PermissionState(boolean granted, int flags, boolean restricted) { this(granted, flags, restricted, false); }
+
         boolean appOpGranted() {
-            return granted && !restricted && (flags & PackageManager.FLAG_PERMISSION_REVOKED_COMPAT) == 0;
+            return granted && !restricted && !reviewPending
+                    && (flags & PackageManager.FLAG_PERMISSION_REVOKED_COMPAT) == 0;
         }
     }
 
@@ -180,8 +189,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         int protection = info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE;
         if (protection == PermissionInfo.PROTECTION_NORMAL) return new PermissionState(true, flags, restricted);
         if (protection == PermissionInfo.PROTECTION_DANGEROUS) {
-            return new PermissionState(dangerousGranted(info, flags, legacy, "granted".equals(decision), restricted),
-                    flags, restricted);
+            return dangerousState(info, flags, legacy, "granted".equals(decision), restricted);
         }
         if ((info.protectionLevel & (PermissionInfo.PROTECTION_FLAG_ROLE
                 | PermissionInfo.PROTECTION_FLAG_DEVELOPMENT)) != 0 && "granted".equals(decision)) {
@@ -200,19 +208,18 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     /**
-     * Whether a dangerous permission is held. LEGACY_GRANTED stays a permission grant; its
-     * revocation is represented by REVOKED_COMPAT, so PermissionChecker can distinguish hard
-     * and soft denial. A restricted permission is different: AOSP withholds its legacy
-     * grant's AppOp while REVIEW_REQUIRED and makes the user review the app's permissions
-     * before it runs. Gesher has no such review, so an exemption never activates a legacy
-     * compatibility grant of a restricted permission: it is held only after the review flag
-     * was cleared by the system, and never while the restriction applies.
+     * A dangerous permission's state. LEGACY_GRANTED stays a permission grant, also for a
+     * restricted permission (AOSP restorePermissionState always grants a legacy app's
+     * permissions); its revocation is represented by REVOKED_COMPAT, so PermissionChecker can
+     * distinguish hard and soft denial. A restriction, and for a restricted permission a
+     * pending review, withhold only the AppOp (AOSP PermissionPolicyService).
      */
-    private static boolean dangerousGranted(PermissionInfo info, int flags, boolean legacy, boolean explicit,
+    private static PermissionState dangerousState(PermissionInfo info, int flags, boolean legacy, boolean explicit,
             boolean restricted) {
-        boolean legacyHeld = legacy && (!info.isRestricted()
-                || (flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) == 0 && !restricted);
-        return legacyHeld || explicit && !(restricted && info.isHardRestricted());
+        boolean granted = legacy || explicit && !(restricted && info.isHardRestricted());
+        boolean reviewPending = legacy && info.isRestricted()
+                && (flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) != 0;
+        return new PermissionState(granted, flags, restricted, reviewPending);
     }
 
     /**
@@ -466,15 +473,13 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             flags &= RESTRICTION_EXEMPT;
             granted = false;
         } else if (legacy) {
-            // A restricted legacy grant still awaiting review is not a user denial.
-            boolean awaitingReview = info.isRestricted() && old.legacy
-                    && (flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) != 0;
-            if (old.hasState() && !old.access.granted && !awaitingReview) {
-                flags |= PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
-            }
-            // A restricted permission's legacy grant that is not already held waits for an
-            // explicit review: the exemption this admission may add never activates it.
-            if (!old.hasState() || info.isRestricted() && !old.access.granted) {
+            if (old.hasState() && !old.access.granted) flags |= PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
+            if (!old.hasState()) flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+            // AOSP restorePermissionState: dropping the restriction of a legacy app's
+            // permission implies a review, so the exemption this admission adds never makes
+            // its AppOp effective without one.
+            if ((flags & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) != 0
+                    && (applyRestriction(info, flags | exemptions) & PackageManager.FLAG_PERMISSION_APPLY_RESTRICTION) == 0) {
                 flags |= PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
             }
         } else {
@@ -558,8 +563,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                             : Boolean.parseBoolean(storedLegacy);
                     boolean granted = "granted".equals(decision);
                     boolean restricted = restricted(info, flags, members);
-                    old = new RuntimeState(new PermissionState(dangerousGranted(info,
-                            implicitPermissionFlags(flags, legacy), legacy, granted, restricted),
+                    old = new RuntimeState(new PermissionState(legacy || granted && !(restricted && info.isHardRestricted()),
                             flags, restricted), legacy, granted);
                 }
                 // Only the one-time migration supplies the default installer exemption. Outside
@@ -906,21 +910,24 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      * grant that existed before this request stops the app as Android does.
      * <p>The request dialog of a pre-R target follows PermissionController's upgrade
      * dialog: each subgroup's repeated denial is fixed. On the Settings page
-     * ({@code settings}, AOSP AppPermissionViewModel) "Allow only while using the app"
-     * leaves the ungranted background permission as it is, and "Don't allow" revokes with
-     * USER_SET only (userFixed=false), clearing USER_FIXED.
+     * ({@code settings}, AOSP AppPermissionViewModel.requestChange) "Allow only while using
+     * the app" leaves the ungranted background permission as it is unless the user had fixed
+     * it, in which case it is revoked again with USER_SET only (userFixed=false), clearing
+     * USER_FIXED; "Don't allow" revokes the same way.
      */
     void recordBackgroundChoice(ApkPackage expected, String background, int choice, boolean killOnRevoke,
             boolean settings) {
         requireSystem();
         if (choice != PermissionRequests.ALWAYS && choice != PermissionRequests.FOREGROUND_ONLY
                 && choice != PermissionRequests.DENIED) return;
-        if (settings && choice == PermissionRequests.FOREGROUND_ONLY) return;
         List<String> revoked = new ArrayList<>();
         boolean changed;
         // One commit: the foreground cannot change between this check and the grant.
         synchronized (mPm) { synchronized (this) {
             if (!backgroundChoiceAvailable(expected, background, settings)) return;
+            if (settings && choice == PermissionRequests.FOREGROUND_ONLY
+                    && (permissionState(expected.uid(), background, uidMembers(expected.uid())).flags
+                            & PackageManager.FLAG_PERMISSION_USER_FIXED) == 0) return;
             changed = commitUserDecision(expected, List.of(background), choice == PermissionRequests.ALWAYS,
                     false, settings, revoked);
             if (choice == PermissionRequests.DENIED) {
