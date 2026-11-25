@@ -563,7 +563,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private final java.util.Set<ExactAlarmSettingsSession> mExactAlarmSettingsSessions = new java.util.HashSet<>();
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
     private volatile AuthService mAuth; // confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0094)
-    private final Set<BluetoothActivity> mBluetoothActivities = new HashSet<>();
+    private final Set<NativeUiActivity> mNativeUiActivities = new HashSet<>();
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
     private final ThreadLocal<ProcessRecord> mVerifiedIntentSenderSource = new ThreadLocal<>();
     private final ThreadLocal<java.util.function.BooleanSupplier> mVerifiedLifetime = new ThreadLocal<>();
@@ -577,6 +577,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private AccountChooser.Dialog mAccountDialog; // server-local synthetic fixture injection
     private final Map<Object, DocumentSession> mDocumentPickers = new HashMap<>();
     private DocumentPicker.Backend mDocumentDialog = DocumentPicker.WINDOWS;
+    private volatile PrintManagerService mPrint;
     private final Map<Object, IntentChoice> mIntentChoosers = new HashMap<>();
     private IntentChooser.Dialog mIntentChooserDialog = IntentChooser.HOST; // server-local UI fixture only
     private int mNextTaskId = 1;
@@ -748,6 +749,42 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     void attachShortcuts(DesktopShortcutService shortcuts) {
         if (mAm != null) mAm.attachShortcuts(shortcuts);
+    }
+
+    void attachPrint(PrintManagerService print) {
+        mPrint = print;
+    }
+
+    /**
+     * PrintManager starts its job's dialog IntentSender from the printing activity. As
+     * PrintSpooler's PrintActivity, the dialog covers that activity (paused until the
+     * job leaves its dialog); Windows' print dialog is owned by the app's window.
+     */
+    private int startPrintDialog(String creator, Intent intent, IBinder resultToToken) {
+        PrintManagerService print = mPrint;
+        if (print == null) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        final NativeUiActivity cover;
+        synchronized (this) {
+            ActivityRecord source = resultToToken == null ? null : forToken(resultToToken);
+            if (source != null && (source.finishing || source.state == State.DESTROYED)) source = null;
+            cover = new NativeUiActivity(source);
+        }
+        int ownerPid = cover.coveredProcess == null ? 0 : cover.coveredProcess.pid;
+        boolean started;
+        try {
+            started = print.startDialog(creator, intent, ownerPid, cover::awaitPause,
+                    () -> cover.finish(() -> { }));
+        } catch (RuntimeException | Error failure) {
+            cover.finish(() -> { });
+            throw failure;
+        }
+        if (!started) {
+            cover.finish(() -> { });
+            return ActivityManager.START_CANCELED;
+        }
+        cover.pauseCovered((intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
+        updateTopResumed();
+        return ActivityManager.START_SUCCESS;
     }
 
     synchronized boolean shortcutForeground(int uid) {
@@ -2682,14 +2719,17 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
-    /** A native consent activity covers the app and keeps a headless device alive. */
-    private final class BluetoothActivity {
+    /**
+     * Native system UI that covers the app as an activity would (Bluetooth consent, credential
+     * confirmation, or the print dialog) and keeps a headless device alive.
+     */
+    private final class NativeUiActivity {
         final ActivityRecord covered;
         final ProcessRecord coveredProcess;
         final boolean needsPause;
 
         // Constructed under the activity monitor; only completion releases the reservation.
-        BluetoothActivity(ActivityRecord source) {
+        NativeUiActivity(ActivityRecord source) {
             ActivityRecord top = source == null ? focusedTaskTopLocked() : topOf(source.taskId);
             covered = top != null && top.app != null ? top : null;
             coveredProcess = covered == null ? null : covered.app;
@@ -2699,7 +2739,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 covered.nativeUiCount++;
                 covered.resumeAfterNativeUi = true;
             }
-            mBluetoothActivities.add(this);
+            mNativeUiActivities.add(this);
             updateIdle();
         }
 
@@ -2709,7 +2749,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             synchronized (ActivityTaskManagerService.this) {
                 // A detached result callback may already have finished its caller.
                 // Admit the pause atomically and retain this process's thread.
-                if (!needsPause || !mBluetoothActivities.contains(this) || covered.finishing
+                if (!needsPause || !mNativeUiActivities.contains(this) || covered.finishing
                         || !mActivities.contains(covered) || !activityEnabled(covered)
                         || covered.app != coveredProcess || coveredProcess == null
                         || processByPid(coveredProcess.pid) != coveredProcess
@@ -2733,7 +2773,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (covered == null) return;
             synchronized (ActivityTaskManagerService.this) {
                 long until = SystemClock.uptimeMillis() + 500;
-                while (mBluetoothActivities.contains(this) && covered.app == coveredProcess
+                while (mNativeUiActivities.contains(this) && covered.app == coveredProcess
                         && covered.state == State.PAUSING) {
                     long left = until - SystemClock.uptimeMillis();
                     if (left <= 0) break;
@@ -2749,7 +2789,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         void finish(Runnable deliver) {
             boolean resumeCovered = false;
             synchronized (ActivityTaskManagerService.this) {
-                if (!mBluetoothActivities.remove(this)) return;
+                if (!mNativeUiActivities.remove(this)) return;
                 if (covered != null && --covered.nativeUiCount == 0 && covered.resumeAfterNativeUi
                         && covered.state != State.PAUSING) {
                     covered.resumeAfterNativeUi = false;
@@ -2863,7 +2903,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /**
      * Starts a system activity that is Windows UI: covers and pauses the caller's activity
-     * (BluetoothActivity), routes the result as ActivityStarter does (to the caller, or
+     * (NativeUiActivity), routes the result as ActivityStarter does (to the caller, or
      * forwarded), and resumes the caller when the work completes.
      */
     private int startSystemUi(String what, Intent intent, ProcessRecord callingProcess,
@@ -2875,7 +2915,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final String targetWho;
         final int targetCode;
         final boolean forwarded, cancelResult;
-        final BluetoothActivity activity;
+        final NativeUiActivity activity;
         synchronized (this) {
             source = resultToToken == null ? null : forToken(resultToToken);
             if (resultToToken != null && (source == null || source.app == null
@@ -2915,7 +2955,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             cancelResult = recipient != null && ((intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
                     || source.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE);
-            activity = new BluetoothActivity(source);
+            activity = new NativeUiActivity(source);
         }
         // After a result is forwarded/detached (or none was requested), the system UI
         // owns its work. A trampoline may finish or die without canceling that request.
@@ -3144,6 +3184,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 // window to own the prompt: its request ends as canceled.
                 return confirmDeviceCredential(intent, verifiedCaller, originalProcess,
                         internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
+            }
+            if (requiredTask == null && PrintManagerService.handles(intent)) {
+                return startPrintDialog(verifiedCaller, intent, resultToToken);
             }
             if (DocumentPicker.handles(intent)) {
                 return startDocumentPicker(caller, originalName, intent, resolvedType,
@@ -4210,7 +4253,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (mAm != null) mPm.appOps().requestUidStateRefresh();
         if (hasActivityLocked() || !mIntentChoosers.isEmpty() || !mAccountChoosers.isEmpty()
                 || !mExactAlarmSettingsSessions.isEmpty() || !mDocumentPickers.isEmpty()
-                || !mBluetoothActivities.isEmpty()) {
+                || !mNativeUiActivities.isEmpty()) {
             mIdleSince = 0;
         } else if (mIdleSince == 0) {
             mIdleSince = SystemClock.uptimeMillis();

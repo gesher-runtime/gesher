@@ -15,6 +15,7 @@ HOST.add('permission_dialog_test.exe')
 FRAMEWORK.update('icon-base.apk icon-density.apk icon-bundle.apks icon-bundle.xapk'.split())
 FRAMEWORK.add('crashnotice.apk')
 FRAMEWORK.update(('hellocred.apk', 'hellokeys.apk'))
+FRAMEWORK.add('gesher-stt.apk')
 
 def assemble(source, dest, ledger, owner, prefix='', exclude=()):
     source, dest, ledger = Path(source).resolve(), Path(dest).resolve(), Path(ledger).resolve()
