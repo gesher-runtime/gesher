@@ -460,6 +460,15 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
           *out = Value::Signed32(real->GetArrayLength(static_cast<jarray>(array)));
           return true;
         }, error) &&
+        Register("GetJavaVM", Slot(offsetof(JNINativeInterface_, GetJavaVM)),
+                 {P, P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          if (a[1].bits == 0 || !program.Memory().Write32(
+                  static_cast<uint32_t>(a[1].bits), kGuestVm, e))
+            return Fail(e, "JNI32 GetJavaVM output pointer is not writable guest memory");
+          *out = Value::Signed32(JNI_OK);
+          return true;
+        }, error) &&
         Register("ThrowNew", Slot(offsetof(JNINativeInterface_, ThrowNew)),
                  {P, P, P}, I, [this](const auto& a, Value* out, std::string* e) {
           if (!Args(a, 3, e)) return false;
