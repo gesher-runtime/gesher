@@ -1497,18 +1497,30 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
   Require(ImpersonateLoggedOnUser(guest), "package-child-create-lowbox-context");
   const NTSTATUS event_status = event_create(&event_raw, EVENT_ALL_ACCESS, &attributes, NativeEventType::notification, FALSE);
   const BOOL signaled = event_status == 0 && event_raw ? SetEvent(event_raw) : FALSE;
+  const DWORD signal_error = event_status == 0 && event_raw && !signaled ? GetLastError() : ERROR_SUCCESS;
   const DWORD waited = signaled ? WaitForSingleObject(event_raw, 0) : WAIT_FAILED;
+  const DWORD wait_error = signaled && waited == WAIT_FAILED ? GetLastError() : ERROR_SUCCESS;
   name.Buffer = directory_name;
   name.Length = static_cast<USHORT>(sizeof(directory_name) - sizeof(wchar_t));
   name.MaximumLength = sizeof(directory_name);
   const NTSTATUS directory_status = directory_create(&directory_raw, 0x000f000f, &attributes);
   if (!RevertToSelf()) std::abort();
   Handle event(event_raw), directory(directory_raw);
-  Require(event_status == 0 && event && signaled && waited == WAIT_OBJECT_0 &&
-      SessionObjectText(event.get(), ObjectTypeInformation) == L"Event" &&
-      SessionObjectText(event.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) == path + L"\\" + event_name &&
-      SessionObjectAccess(event.get()) == EVENT_ALL_ACCESS,
-      "package-leaf-actual-event-creation-use-and-inherited-access", ERROR_ACCESS_DENIED);
+  const bool event_type_ok = event && SessionObjectText(event.get(), ObjectTypeInformation) == L"Event";
+  const bool event_name_ok = event &&
+      SessionObjectText(event.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) == path + L"\\" + event_name;
+  const ACCESS_MASK event_access = event ? SessionObjectAccess(event.get()) : 0;
+  const bool event_ok = event_status == 0 && event && signaled && waited == WAIT_OBJECT_0 &&
+      event_type_ok && event_name_ok && event_access == EVENT_ALL_ACCESS;
+  if (!event_ok) {
+    std::fprintf(stderr, "Protected child event: status=0x%08lx handle=%d signal=%d signal-error=%lu "
+        "wait=0x%08lx wait-error=%lu type-match=%d name-match=%d access=0x%08lx expected=0x%08lx\n",
+        static_cast<unsigned long>(event_status), event ? 1 : 0, static_cast<int>(signaled),
+        static_cast<unsigned long>(signal_error), static_cast<unsigned long>(waited),
+        static_cast<unsigned long>(wait_error), event_type_ok ? 1 : 0, event_name_ok ? 1 : 0,
+        static_cast<unsigned long>(event_access), static_cast<unsigned long>(EVENT_ALL_ACCESS));
+  }
+  Require(event_ok, "package-leaf-actual-event-creation-use-and-inherited-access", ERROR_ACCESS_DENIED);
   evidence->object_created = 1;
   Require(directory_status == 0 && directory &&
       SessionObjectText(directory.get(), ObjectTypeInformation) == L"Directory" &&
