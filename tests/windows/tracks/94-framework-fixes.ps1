@@ -16,6 +16,15 @@ $bcpFixes = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app')
 $dvmFixes = @("-Xbootclasspath:$bcpFixes", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
   '-cp', (NoDrive "$Dir/services-tests.dex"))
 
+$cameraNv12Out = FixesRun ($dvmFixes + 'gesher.services.CameraNv12RgbaTest') 60
+$cameraNv12Code = $LASTEXITCODE
+Check 'camera: actual JNI NV12 pixels, scaling and independent RGBA image ownership' {
+  if ($cameraNv12Code -ne 0) { throw "Camera NV12/RGBA contract failed: $cameraNv12Out" }
+  $cameraNv12Out
+} @('CameraNv12RgbaTest: real JNI matching/scaled pixels and metadata passed',
+    'CameraNv12RgbaTest: held writable snapshots, bounded FIFO and maxImages passed',
+    'CameraNv12RgbaTest all passed:')
+
 $httpEngineOut = FixesRun ($dvmFixes + 'HttpEngineDeviceSmoke') 45
 $httpEngineCode = $LASTEXITCODE
 Check 'network: Android HttpEngine requests over real ART and HTTP sockets' {
