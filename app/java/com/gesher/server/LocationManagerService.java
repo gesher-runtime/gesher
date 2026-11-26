@@ -150,6 +150,27 @@ public final class LocationManagerService extends ILocationManager.Default {
         SystemServer.log(TAG + ": " + message);
     }
 
+    private void maybePromptWindowsLocation(String packageName) {
+        if (WindowsLocation.enabled() || isIpFallbackEnabled(null)) return;
+        int uid = Binder.getCallingUid();
+        if (uid < android.os.Process.FIRST_APPLICATION_UID || mPm == null) return;
+        String target = null;
+        if (packageName != null && grantedLocationLevel(packageName, false) != PERMISSION_NONE) {
+            target = packageName;
+        } else {
+            String[] packages = mPm.getPackagesForUid(uid);
+            if (packages != null) {
+                for (String p : packages) {
+                    if (grantedLocationLevel(p, false) != PERMISSION_NONE) {
+                        target = p;
+                        break;
+                    }
+                }
+            }
+        }
+        if (target != null) WindowsLocation.maybePromptEnable(target, target);
+    }
+
     // --- providers -----------------------------------------------------------------------
 
     private static final class TestProvider {
@@ -195,7 +216,7 @@ public final class LocationManagerService extends ILocationManager.Default {
     }
 
     /** Location is on when Windows gives it to this program, or a test provider is on. */
-    private boolean isLocationEnabled() {
+    boolean isLocationEnabled() {
         synchronized (mLock) {
             for (TestProvider t : mTestProviders.values()) {
                 if (t.enabled) return true;
@@ -292,12 +313,18 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     @Override
     public boolean isProviderEnabledForUser(String provider, int userId) {
-        return provider != null && exists(provider) && isEnabled(provider);
+        boolean enabled = provider != null && exists(provider) && isEnabled(provider);
+        if (!enabled && provider != null && exists(provider) && !isTest(provider)) {
+            maybePromptWindowsLocation(null);
+        }
+        return enabled;
     }
 
     @Override
     public boolean isLocationEnabledForUser(int userId) {
-        return isLocationEnabled();
+        boolean enabled = isLocationEnabled();
+        if (!enabled) maybePromptWindowsLocation(null);
+        return enabled;
     }
 
     @Override
@@ -422,7 +449,10 @@ public final class LocationManagerService extends ILocationManager.Default {
             String packageName, String attributionTag) {
         int level = enforceLocationPermission(packageName);
         checkProvider(provider);
-        if (!isEnabled(provider)) return null;
+        if (!isEnabled(provider)) {
+            if (!isTest(provider)) maybePromptWindowsLocation(packageName);
+            return null;
+        }
         Location last;
         synchronized (mLock) {
             last = mLast.get(provider);

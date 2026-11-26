@@ -1,0 +1,89 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Unchanged production parser/argument access/entry bodies; glibc is the
+// declared host CRT boundary. Real MinGW and exported guest ABI run in CI.
+#include <gesher/arm64_va_list.h>
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <chrono>
+#include <climits>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <limits>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <vector>
+#include <ctime>
+#include "snprintf_bounds_contract.inc"
+
+#define BIONIC_SYSV
+namespace gesher::bionic {
+namespace {
+constexpr int kENOMEM = 12;
+@VARARGS@
+@FORMATTING@
+}  // namespace
+extern "C" {
+@SNPRINTF@
+@CHECKED_SNPRINTF@
+}
+}  // namespace gesher::bionic
+
+int Invoke(char* destination, size_t capacity, const char* format, ...) {
+  va_list native;
+  va_start(native, format);
+  gesher::bionic::SysvVaList arguments;
+  static_assert(sizeof(native) == sizeof(arguments));
+  std::memcpy(&arguments, &native, sizeof(arguments));
+  int result = gesher::bionic::gesher_bionic_vsnprintf(destination, capacity, format, &arguments);
+  va_end(native);
+  return result;
+}
+int InvokeChecked(char* destination, size_t capacity, int flags, size_t object_size,
+                  const char* format, ...) {
+  va_list native;
+  va_start(native, format);
+  gesher::bionic::SysvVaList arguments;
+  std::memcpy(&arguments, &native, sizeof(arguments));
+  int result = gesher::bionic::gesher_bionic_vsnprintf_chk(destination, capacity, flags,
+                                                        object_size, format, &arguments);
+  va_end(native);
+  return result;
+}
+static size_t checks = 0;
+static void Check(const char* name, bool success) {
+  ++checks;
+  if (!success) { std::fprintf(stderr, "FAIL snprintf bounds: %s\n", name); std::exit(1); }
+}
+#include "snprintf_bounds_benchmark.inc"
+
+int main(int argc, char** argv) {
+  if (argc == 4 && std::strcmp(argv[1], "--benchmark") == 0) {
+    char* end = nullptr;
+    unsigned long long count = std::strtoull(argv[3], &end, 10);
+    Check("positive valid repetition count", count > 0 && count <= 100000000 && end && *end == 0);
+    return SnprintfBenchmark(argv[2], static_cast<size_t>(count));
+  }
+  if (argc == 3 && std::strcmp(argv[1], "--fatal") == 0) {
+    int written = -1;
+    Invoke(nullptr, 0, argv[2], &written); return 9;
+  }
+  if (argc == 2 && std::strcmp(argv[1], "--fortify") == 0) {
+    char destination[4];
+    InvokeChecked(destination, 5, 0, sizeof(destination), "%d", 12); return 9;
+  }
+  gesher_snprintf_contract::Run(Invoke, Check);
+  gesher_snprintf_contract::Errors(Invoke, Check, [] { return &errno; }, std::strerror);
+  char checked[16];
+  Check("checked entry delegates bounded formatting", InvokeChecked(checked, sizeof(checked), 0,
+        sizeof(checked), "%131073s", "x") == 131073 && checked[15] == '\0');
+  std::printf("snprintf bounds production contracts: %zu checks passed\n", checks);
+  return 0;
+}

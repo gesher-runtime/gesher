@@ -405,7 +405,7 @@ public final class AccountSecurityTest {
             Object packages = pm.getConstructor(java.util.Collection.class).newInstance(Collections.emptyList());
             Object manager = construct(service, new Class<?>[] {am, pm, boolean.class}, null, packages, false);
             @SuppressWarnings("unchecked") Map<Account, Object> accounts = (Map<Account, Object>)field(manager, "mAccounts");
-            require(accounts.size() == 1, "Stand-in loaded persisted accounts instead of the synthetic fallback");
+            require(accounts.isEmpty(), "Stand-in exposed a persisted or fabricated account");
             method(service, "beginMutation").invoke(manager);
             method(service, "save").invoke(manager);
             require(java.util.Arrays.equals(Files.readAllBytes(sealed.toPath()), protectedMarker),

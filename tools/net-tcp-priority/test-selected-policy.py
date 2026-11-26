@@ -266,6 +266,144 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
 # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
 # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
 OFD_QUALIFICATION_SHA256 = 'caeea5f5dd515a2522011a0a1f0dc5271dadfa8929e87ac1393f668bf096e49b'
+# Shared line input changes only these five complete sources. Reverse their
+# exact pinned transition before the original OFD preservation checks below;
+# retain that earlier manifest, all its digests and its runtime approval state.
+# This source admission does not stand in for the Windows/native CI gates.
+STDIO_LINE_QUALIFICATION_SHA256='83c559c6a16a1088013af39dc8938b61d2fb8a66ba9a5cc946956b7622735b31'
+STDIO_LINE_PATHS=['compat/bionic/stdio_bionic.cc','compat/posix/include/gesher/stdio.h',
+                  'compat/posix/src/misc.cc','compat/posix/src/stdio_output.cc',
+                  'compat/posix/src/stdio_stream_buffer.h']
+def preceding_stdio_line_sources(current):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'stdio-line-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==STDIO_LINE_QUALIFICATION_SHA256,'stdio line source qualification changed'
+ qualification=json.loads(raw)
+ assert qualification['baseline']=='6afcb6e671fc4f2d08a4a98220f9d9a906a327bf'
+ assert qualification['native_runtime_approval'] is False
+ assert qualification['paths']==STDIO_LINE_PATHS
+ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==STDIO_LINE_PATHS
+ patch=(folder/'stdio-line-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'stdio line transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STDIO_LINE_PATHS
+ assert list(current)==STDIO_LINE_PATHS,'stdio line historical paths changed'
+ for path,actual in current.items():
+  assert hashlib.sha256(actual).hexdigest()==qualification['source_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-stdio-line-qualification-') as temporary:
+  work=Path(temporary)
+  for path,actual in current.items():
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(actual)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous={path:(work/path).read_bytes() for path in STDIO_LINE_PATHS}
+  for path,actual in previous.items():
+   expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
+   assert actual==expected and hashlib.sha256(actual).hexdigest()==qualification['previous_sha256'][path],path
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'stdio line forward reconstruction changed'
+ return previous
+
+# Reverse only the pinned scanner adapter transition before all original OFD
+# checks. This source proof grants no supplier, controller or runtime approval.
+STDIO_SCAN_QUALIFICATION_SHA256='3c08f7f0ea996532377f7d4930ce2d0e84320f3339bd26eed8f7a4b89aad36d0'
+def preceding_stdio_scan_source(current):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'stdio-scan-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==STDIO_SCAN_QUALIFICATION_SHA256,'stdio scan source qualification changed'
+ qualification=json.loads(raw)
+ path='compat/posix/src/stdio_output.cc'
+ assert qualification['baseline']=='d38b5549dc3963f8d491e9205f9b2743bb6d3745'
+ assert qualification['native_runtime_approval'] is False
+ assert qualification['paths']==[path]
+ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==[path]
+ patch=(folder/'stdio-scan-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'stdio scan transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
+ assert hashlib.sha256(current).hexdigest()==qualification['source_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-stdio-scan-qualification-') as temporary:
+  work=Path(temporary)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous=(work/path).read_bytes()
+  expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
+  assert previous==expected and hashlib.sha256(previous).hexdigest()==qualification['previous_sha256'][path],('stdio scan reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/path).read_bytes()==current,'stdio scan forward reconstruction changed'
+ return previous
+
+# Reverse only the exact broker output transition, including its separately
+# reviewed zero-length input-copy prerequisite, before all original OFD checks.
+# This source proof grants no supplier, controller or native runtime approval.
+BINDER_OUTPUT_QUALIFICATION_SHA256='c221504d110bf48da4dab9577a0fc50f9bd0867a553e3bb9042a2eda82cafe64'
+def preceding_binder_output_source(current=None):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'binder-output-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==BINDER_OUTPUT_QUALIFICATION_SHA256,'Binder output source qualification changed'
+ qualification=json.loads(raw)
+ path='compat/binder/binderd.cc'
+ assert qualification['baseline']=='5aa6b39027e9c38de2781ff9cda066418d25b1ba'
+ assert qualification['native_runtime_approval'] is False
+ assert qualification['paths']==[path]
+ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==[path]
+ patch=(folder/'binder-output-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'Binder output transition patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
+ if current is None:current=(ROOT/path).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==qualification['source_sha256'][path],path
+ with tempfile.TemporaryDirectory(prefix='gesher-binder-output-qualification-') as temporary:
+  work=Path(temporary)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous=(work/path).read_bytes()
+  expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
+  assert previous==expected and hashlib.sha256(previous).hexdigest()==qualification['previous_sha256'][path],path
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/path).read_bytes()==current,'Binder output forward reconstruction changed'
+ return previous
+
+
+# Main's AppContainer admission changes are outside the original output delta.
+# Keep the original receipt/patch and validate its historical published source,
+# then apply that SAME immutable patch to the separately pinned current-main
+# endpoint. Reverse and forward must reproduce every byte at both endpoints;
+# the new main OFD ledger remains authoritative for the other coupled sources.
+COMPOSED_BINDER_OUTPUT_BASELINE='98215dd7e798090fb5ab6160490ae78f1793ab3a'
+COMPOSED_BINDER_OUTPUT_PRIOR_FEATURE='c61fa022341e38ca2c7e88ce229b0e08ac2170d6'
+COMPOSED_BINDER_OUTPUT_SHA256='1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c'
+COMPOSED_BINDER_OUTPUT_PREVIOUS_SHA256='bf09a9ae3dc590806f27951dc8f9d7df3aa468be958cac1ee47e4467e4fef79c'
+COMPOSED_BINDER_OUTPUT_PATCH_SHA256='1864085a254a4aaee67b3c6fa3fe4f8c3a8012596b5c1fac7fb3d953bcce6d36'
+def preceding_composed_binder_output_source():
+ path='compat/binder/binderd.cc'
+ historical=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_BINDER_OUTPUT_PRIOR_FEATURE+':'+path])
+ preceding_binder_output_source(historical)
+ current=(ROOT/path).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==COMPOSED_BINDER_OUTPUT_SHA256,'composed Binder source changed'
+ expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_BINDER_OUTPUT_BASELINE+':'+path])
+ assert hashlib.sha256(expected).hexdigest()==COMPOSED_BINDER_OUTPUT_PREVIOUS_SHA256,'composed Binder baseline changed'
+ patch=(ROOT/'tools/net-tcp-priority/qualified/binder-output-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==COMPOSED_BINDER_OUTPUT_PATCH_SHA256,'composed Binder original patch changed'
+ with tempfile.TemporaryDirectory(prefix='gesher-composed-binder-output-qualification-') as temporary:
+  work=Path(temporary)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous=(work/path).read_bytes()
+  assert previous==expected,'composed Binder reverse endpoint changed'
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/path).read_bytes()==current,'composed Binder forward endpoint changed'
+ return previous
+
+
 # PR73 unifies Bionic conversion metadata with the existing shared stream
 # owner. Keep the original OFD receipt and all of its 71 source digests intact.
 # Only this separately pinned four-file transition may be reversed to main's
@@ -281,7 +419,7 @@ SHARED_STDIO_PATHS = (
  'compat/posix/src/stdio_output.cc',
 )
 
-def preceding_shared_stdio_sources(qualification):
+def preceding_shared_stdio_sources(qualification,current_sources):
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'shared-stdio-source.json').read_bytes()
  assert hashlib.sha256(raw).hexdigest()==SHARED_STDIO_TRANSITION_SHA256,'shared-stdio source transition changed'
@@ -299,9 +437,10 @@ def preceding_shared_stdio_sources(qualification):
  assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'shared-stdio transition patch changed'
  assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
      ('diff --git a/'+path+' b/'+path).encode() for path in paths],'shared-stdio patch paths changed'
+ assert sorted(current_sources)==paths,'shared-stdio input paths changed'
  current={};baseline={}
  for path in paths:
-  current[path]=(ROOT/path).read_bytes()
+  current[path]=current_sources[path]
   assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
   baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':'+path])
   assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
@@ -323,6 +462,122 @@ def preceding_shared_stdio_sources(qualification):
  return baseline
 
 
+
+# Compose this leaf with PR73 through a separately pinned current-main delta.
+# The original leaf manifest/patch is still checked against its immutable
+# published ancestor; neither that receipt nor PR73/OFD approval is broadened.
+# Current bytes first reconstruct exact main, then the unchanged PR73 proof
+# reconstructs the original OFD sources. Both historical routes must agree.
+COMPOSED_STDIO_BASELINE='93c32f6f02521790eaf8936f2ff1fa1a650653f2'
+COMPOSED_STDIO_PRIOR_FEATURE='4328a34d04e63f6f3881b34c7dca09ef1fa8ec0b'
+COMPOSED_STDIO_PATHS=['compat/bionic/stdio_bionic.cc', 'compat/posix/include/gesher/stdio.h', 'compat/posix/src/misc.cc', 'compat/posix/src/stdio_output.cc', 'compat/posix/src/stdio_stream_buffer.h']
+COMPOSED_STDIO_SHA256={'compat/bionic/stdio_bionic.cc': '5bb5e959e3a32cbc2ce0ab594724b7207b6fd921c6310e8c28766faf34bad13a', 'compat/posix/include/gesher/stdio.h': '721085722d4253cfdb4c54bce03c79de5815417b05905316589a22a7d076fdc2', 'compat/posix/src/misc.cc': '5b65a38b98964f89a5f9224c4db5ed4655d5a0e22fce5b0c3cd68138f54ffdfa', 'compat/posix/src/stdio_output.cc': '4a82b1d38908aee96ab6e058ac8a4131705f37045e76781a8ef47de328ffb4e2', 'compat/posix/src/stdio_stream_buffer.h': '8f508a1fe0a389cfdb83d54f90690cedf30fbe1112e31526bf5fb5264deeca8d'}
+COMPOSED_STDIO_PREVIOUS_SHA256={'compat/bionic/stdio_bionic.cc': '2ff4ba736e9943b07a555e532682ae2e6ddcaffd115e15f3b1be201c4660b15e', 'compat/posix/include/gesher/stdio.h': '20e0b97b5333daae70d28bb90190e9e4c4f12921561596bdc94cfee38ee47cd7', 'compat/posix/src/misc.cc': '982ff45060b56d1f43cc1580909f9b17ac66889eddf3772f1af52ec763e3648b', 'compat/posix/src/stdio_output.cc': 'b777210b565d8eee802539c2e47c52138159fabe16ca4fdd9fd0c2679118d04f', 'compat/posix/src/stdio_stream_buffer.h': 'f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d'}
+COMPOSED_STDIO_PATCH_SHA256='f2c5d659b406965aaaf65c0f69e03f62a5d09deb140f6db1514cd760164cf9af'
+def preceding_composed_stdio_sources(current_sources=None):
+ current=({path:(ROOT/path).read_bytes() for path in COMPOSED_STDIO_PATHS}
+          if current_sources is None else dict(current_sources))
+ assert list(current)==COMPOSED_STDIO_PATHS,'composed stdio input paths changed'
+ assert list(COMPOSED_STDIO_SHA256)==list(COMPOSED_STDIO_PREVIOUS_SHA256)==COMPOSED_STDIO_PATHS,'composed stdio endpoint paths changed'
+ for path,actual in current.items():
+  assert hashlib.sha256(actual).hexdigest()==COMPOSED_STDIO_SHA256[path],path
+ patch=(ROOT/'tools/net-tcp-priority/qualified/stdio-line-shared-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==COMPOSED_STDIO_PATCH_SHA256,'composed stdio transition changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==COMPOSED_STDIO_PATHS,'composed stdio patch paths changed'
+ with tempfile.TemporaryDirectory(prefix='gesher-composed-stdio-qualification-') as temporary:
+  work=Path(temporary)
+  for path,actual in current.items():
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(actual)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous={path:(work/path).read_bytes() for path in COMPOSED_STDIO_PATHS}
+  for path,actual in previous.items():
+   expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_BASELINE+':'+path])
+   assert actual==expected and hashlib.sha256(actual).hexdigest()==COMPOSED_STDIO_PREVIOUS_SHA256[path],('composed stdio reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'composed stdio forward endpoint'
+ return previous
+
+# Compose the scanner with the reviewed line-input integration checkpoint.
+# The original scanner manifest/patch remains checked against its immutable
+# published ancestor, retaining its source proof and runtime approval state.
+# Current bytes reconstruct the exact line-input checkpoint; line/shared-stdio
+# normalization then restores every original OFD source endpoint below.
+COMPOSED_SCAN_BASELINE='dec85ab146a0b95994efa9abd65910693d0019fb'
+COMPOSED_SCAN_PRIOR_FEATURE='d38246cb583b669167909902529cb00f4f63e5eb'
+COMPOSED_SCAN_PATHS=['compat/posix/src/stdio_output.cc']
+COMPOSED_SCAN_SHA256={'compat/posix/src/stdio_output.cc': 'b19de754ba6bf99c122c2ce66418777111ffa3a4e19062a21a3da2145c7d2979'}
+COMPOSED_SCAN_PREVIOUS_SHA256={'compat/posix/src/stdio_output.cc': '4a82b1d38908aee96ab6e058ac8a4131705f37045e76781a8ef47de328ffb4e2'}
+COMPOSED_SCAN_PATCH_SHA256='ac3844172066ad228ec93f5f33c5874ecbc51ca0de9d1486b807eca46d323d00'
+def preceding_composed_scan_sources(current_sources=None):
+ current=({path:(ROOT/path).read_bytes() for path in COMPOSED_SCAN_PATHS}
+          if current_sources is None else dict(current_sources))
+ assert list(current)==COMPOSED_SCAN_PATHS,'composed scan input paths changed'
+ assert list(COMPOSED_SCAN_SHA256)==list(COMPOSED_SCAN_PREVIOUS_SHA256)==COMPOSED_SCAN_PATHS,'composed scan endpoint paths changed'
+ for path,actual in current.items():
+  assert hashlib.sha256(actual).hexdigest()==COMPOSED_SCAN_SHA256[path],path
+ patch=(ROOT/'tools/net-tcp-priority/qualified/stdio-scan-shared-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==COMPOSED_SCAN_PATCH_SHA256,'composed scan transition changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==COMPOSED_SCAN_PATHS,'composed scan patch paths changed'
+ with tempfile.TemporaryDirectory(prefix='gesher-composed-stdio-qualification-') as temporary:
+  work=Path(temporary)
+  for path,actual in current.items():
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(actual)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous={path:(work/path).read_bytes() for path in COMPOSED_SCAN_PATHS}
+  for path,actual in previous.items():
+   expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_BASELINE+':'+path])
+   assert actual==expected and hashlib.sha256(actual).hexdigest()==COMPOSED_SCAN_PREVIOUS_SHA256[path],('composed scan reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'composed scan forward endpoint'
+ return previous
+
+# Normalize the scanner before line input; shared-stdio then receives its
+# unchanged complete inputs. Every stage is independently reversible and pinned.
+def current_stdio_line_inputs():
+ scan=preceding_composed_scan_sources()
+ assert SNPRINTF_BOUNDS_SOURCE not in scan,'formatter/scanner source qualifications overlap'
+ current={path:scan[path] if path in scan else (ROOT/path).read_bytes() for path in COMPOSED_STDIO_PATHS}
+ current[SNPRINTF_BOUNDS_SOURCE]=preceding_snprintf_bounds_source()
+ return current
+
+def preceding_stdio_feature_sources():
+ return preceding_composed_stdio_sources(current_stdio_line_inputs())
+
+# The guest snprintf prefix accumulator changes only this formatter source.
+# Reverse its exact transition to the reviewed line-input integration checkpoint.
+# The line-input and original shared-stdio transitions then restore every OFD
+# digest. This grants no supplier, controller or native runtime approval.
+SNPRINTF_BOUNDS_SOURCE='compat/bionic/stdio_bionic.cc'
+SNPRINTF_BOUNDS_BASELINE='dec85ab146a0b95994efa9abd65910693d0019fb'
+SNPRINTF_BOUNDS_SHA256='96a90eb52ad6e4b91e1ee0e16c526894e5426a16f3a65e61e11e001a1caed75f'
+SNPRINTF_BOUNDS_PREVIOUS_SHA256='5bb5e959e3a32cbc2ce0ab594724b7207b6fd921c6310e8c28766faf34bad13a'
+SNPRINTF_BOUNDS_PATCH_SHA256='416b44106f476ea5c4dcd519bb8b0c100cb3d614e0afdcef0be334cfd4ec7208'
+def preceding_snprintf_bounds_source():
+ path=SNPRINTF_BOUNDS_SOURCE
+ current=(ROOT/path).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==SNPRINTF_BOUNDS_SHA256,path
+ patch=(ROOT/'tools/net-tcp-priority/qualified/snprintf-bounds-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==SNPRINTF_BOUNDS_PATCH_SHA256,'snprintf bounds transition changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
+ with tempfile.TemporaryDirectory(prefix='gesher-snprintf-qualification-') as temporary:
+  work=Path(temporary)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous=(work/path).read_bytes()
+  expected=subprocess.check_output(['git','-C',str(ROOT),'show',SNPRINTF_BOUNDS_BASELINE+':'+path])
+  assert previous==expected and hashlib.sha256(previous).hexdigest()==SNPRINTF_BOUNDS_PREVIOUS_SHA256,('snprintf bounds reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/path).read_bytes()==current,'snprintf bounds forward reconstruction changed'
+ return previous
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
@@ -525,7 +780,90 @@ def preceding_storage_policy_sources():
    assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
  return baseline
 
+# Reverse only the reviewed adaptive stable-directory sort before the exact
+# Memrchr transition and all original OFD checks. It grants no supplier,
+# controller or runtime approval and admits no other POSIX source change.
+SCANDIR_BASE = '5894cea6c2bc35d1ae316f8bb401181689a85424'
+SCANDIR_SOURCE = 'compat/bionic/posix_bionic.cc'
+SCANDIR_TRANSITION_SHA256 = '30447f7968242481142d2b4ac7cabff7231560210c1be8a5fd67393cef1b8758'
+def preceding_scandir_source(current):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'scandir-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==SCANDIR_TRANSITION_SHA256,'scandir source transition changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'baseline','baseline_policy_sha256','paths','before_sha256',
+                         'after_sha256','patch_sha256'},'scandir transition schema changed'
+ assert transition['baseline']==SCANDIR_BASE,'scandir baseline changed'
+ paths=[SCANDIR_SOURCE]
+ assert transition['paths']==paths,'scandir transition paths changed'
+ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==paths,'scandir endpoint paths changed'
+ policy=subprocess.check_output(['git','-C',str(ROOT),'show',SCANDIR_BASE+':tools/net-tcp-priority/test-selected-policy.py'])
+ assert hashlib.sha256(policy).hexdigest()==transition['baseline_policy_sha256'],'scandir baseline policy changed'
+ patch=(folder/'scandir-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'scandir transition patch changed'
+ assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+     ('diff --git a/'+SCANDIR_SOURCE+' b/'+SCANDIR_SOURCE).encode()],'scandir patch paths changed'
+ assert hashlib.sha256(current).hexdigest()==transition['after_sha256'][SCANDIR_SOURCE],SCANDIR_SOURCE
+ baseline=subprocess.check_output(['git','-C',str(ROOT),'show',SCANDIR_BASE+':'+SCANDIR_SOURCE])
+ assert hashlib.sha256(baseline).hexdigest()==transition['before_sha256'][SCANDIR_SOURCE],SCANDIR_SOURCE
+ assert current!=baseline,'empty scandir transition'
+ with tempfile.TemporaryDirectory(prefix='gesher-scandir-qualification-') as temporary:
+  work=Path(temporary)
+  (work/SCANDIR_SOURCE).parent.mkdir(parents=True)
+  (work/SCANDIR_SOURCE).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/SCANDIR_SOURCE).read_bytes()==baseline,'scandir reverse endpoint'
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/SCANDIR_SOURCE).read_bytes()==current,'scandir forward endpoint'
+ return baseline
+
+# Reverse only the reviewed bounded memrchr word-search delta to the exact
+# public main source before the unchanged OFD digest is checked. This admits
+# no other POSIX byte and grants no supplier, controller or runtime approval.
+MEMRCHR_BASE = '93c32f6f02521790eaf8936f2ff1fa1a650653f2'
+MEMRCHR_SOURCE = 'compat/bionic/posix_bionic.cc'
+MEMRCHR_TRANSITION_SHA256 = 'f814eed0ce7bee4fe49c0a36415e1fb4343db1930ef18115c5eb3693bd7f2c13'
+def preceding_memrchr_source(qualification):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'memrchr-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==MEMRCHR_TRANSITION_SHA256,'memrchr source transition changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'baseline','baseline_policy_sha256','paths','before_sha256',
+                         'after_sha256','patch_sha256'},'memrchr transition schema changed'
+ assert transition['baseline']==MEMRCHR_BASE,'memrchr baseline changed'
+ paths=[MEMRCHR_SOURCE]
+ assert transition['paths']==paths,'memrchr transition paths changed'
+ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==paths,'memrchr endpoint paths changed'
+ baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',MEMRCHR_BASE+':tools/net-tcp-priority/test-selected-policy.py'])
+ assert hashlib.sha256(baseline_policy).hexdigest()==transition['baseline_policy_sha256'],'memrchr baseline policy changed'
+ patch=(folder/'memrchr-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'memrchr transition patch changed'
+ assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+     ('diff --git a/'+MEMRCHR_SOURCE+' b/'+MEMRCHR_SOURCE).encode()],'memrchr patch paths changed'
+ current=preceding_scandir_source((ROOT/MEMRCHR_SOURCE).read_bytes())
+ assert hashlib.sha256(current).hexdigest()==transition['after_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
+ baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MEMRCHR_BASE+':'+MEMRCHR_SOURCE])
+ assert hashlib.sha256(baseline).hexdigest()==transition['before_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
+ assert transition['before_sha256'][MEMRCHR_SOURCE]==qualification['source_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
+ assert current!=baseline,'empty memrchr transition'
+ with tempfile.TemporaryDirectory(prefix='gesher-memrchr-qualification-') as temporary:
+  work=Path(temporary)
+  (work/MEMRCHR_SOURCE).parent.mkdir(parents=True)
+  (work/MEMRCHR_SOURCE).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/MEMRCHR_SOURCE).read_bytes()==baseline,'memrchr reverse endpoint'
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
+ return baseline
+
 def preceding_ofd_sources():
+ stdio_main=preceding_stdio_feature_sources()
+ historical=preceding_stdio_line_sources({path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_PRIOR_FEATURE+':'+path]) for path in COMPOSED_STDIO_PATHS})
+ historical_scan=preceding_stdio_scan_source(subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_PRIOR_FEATURE+':'+COMPOSED_SCAN_PATHS[0]]))
  folder=ROOT/'tools/net-tcp-priority/qualified'
  raw=(folder/'ofd-stream-source.json').read_bytes()
  assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
@@ -537,15 +875,29 @@ def preceding_ofd_sources():
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
  memfd_lease=preceding_memfd_lease_sources()
- shared_stdio=preceding_shared_stdio_sources(qualification)
+ shared_input={path:stdio_main[path] if path in stdio_main else (ROOT/path).read_bytes() for path in SHARED_STDIO_PATHS}
+ shared_stdio=preceding_shared_stdio_sources(qualification,shared_input)
+ assert shared_stdio[COMPOSED_SCAN_PATHS[0]]==historical_scan,'historical scanner and composed shared-stdio normalization disagree'
+ for path,previous in historical.items():
+  current=shared_stdio[path] if path in shared_stdio else stdio_main[path]
+  if path=='compat/posix/src/misc.cc':
+   # Main added real dumpability/ptrace protections after the historical receipt.
+   # Keep both complete immutable endpoints; the reviewed line delta is still
+   # reversed separately above and every current OFD source digest is unchanged.
+   expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_BASELINE+':'+path])
+   assert current==expected,('current main misc endpoint changed',path)
+  else:
+   assert current==previous,('historical stdio and current-main normalization disagree',path)
  storage_policy=preceding_storage_policy_sources()
- assert memfd_lease.keys().isdisjoint(shared_stdio),'source qualifications overlap'
- assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()),'source qualifications overlap'
- preceding={**memfd_lease,**shared_stdio,**storage_policy}
+ assert memfd_lease.keys().isdisjoint(shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
+ assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
+ preceding={**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
   actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
+  if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
+  if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
   work=Path(temporary)
@@ -638,10 +990,66 @@ NDK_ARCHIVE_SHARING={
   b"archive = Path('tcp-ndk-archive/android-ndk-r27c-linux.zip')\narchive.parent.mkdir(exist_ok=True)\n",
   b"# Shares native2's publisher-archive cache entry (same path and key), so one copy is kept.\narchive = Path('dns-ndk.zip')\n"),
 }
+# The independently reviewed TSF repair gives output-size queries their own
+# metadata-only file objects. Reverse only its exact two-file transition before
+# every original controller/fixture comparison below. The qualified TCP copy,
+# suppliers, deadlines and approval receipts remain unchanged; this is source
+# identity qualification, not proof of Windows execution or runtime approval.
+TSF_METADATA_BASE='3b2eaca95b5ddd9cee3c3db4e430460e512eb355'
+TSF_METADATA_FEATURE_HEAD='8d955bd7b6ec85b84fa31f7df685197ddb963276'
+TSF_METADATA_QUALIFICATION_SHA256='b6f40f75fa20ebfd9e47473c2cd2a2d5dfe697dd4b01e50d2c04f925545d6e22'
+TSF_METADATA_PATHS=('tools/windows4/TsfJobSupervisor.cs','tools/windows4/test-tsf-job-supervisor.ps1')
+TSF_METADATA_ADDITIONAL_SOURCE='tools/windows4/TsfOutputMetadataChecks.cs'
+def preceding_tsf_metadata_sources():
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'tsf-output-metadata-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==TSF_METADATA_QUALIFICATION_SHA256,'TSF metadata qualification changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'baseline','feature_head','baseline_policy_sha256','paths',
+                         'before_sha256','after_sha256','additional_sources','patch_sha256'},'TSF metadata schema changed'
+ assert transition['baseline']==TSF_METADATA_BASE,'TSF metadata baseline changed'
+ assert transition['feature_head']==TSF_METADATA_FEATURE_HEAD,'TSF metadata feature checkpoint changed'
+ paths=list(TSF_METADATA_PATHS)
+ assert transition['paths']==paths,'TSF metadata paths changed'
+ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==paths,'TSF metadata endpoint paths changed'
+ assert list(transition['additional_sources'])==[TSF_METADATA_ADDITIONAL_SOURCE],'TSF metadata additional paths changed'
+ baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_BASE+':tools/net-tcp-priority/test-selected-policy.py'])
+ assert hashlib.sha256(baseline_policy).hexdigest()==transition['baseline_policy_sha256'],'TSF metadata baseline policy changed'
+ additional=(ROOT/TSF_METADATA_ADDITIONAL_SOURCE).read_bytes()
+ assert hashlib.sha256(additional).hexdigest()==transition['additional_sources'][TSF_METADATA_ADDITIONAL_SOURCE],TSF_METADATA_ADDITIONAL_SOURCE
+ published=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_FEATURE_HEAD+':'+TSF_METADATA_ADDITIONAL_SOURCE])
+ assert additional==published,'TSF metadata additional source endpoint'
+ patch=(folder/'tsf-output-metadata-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'TSF metadata patch changed'
+ assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+     ('diff --git a/'+path+' b/'+path).encode() for path in paths],'TSF metadata patch paths changed'
+ current={};baseline={}
+ for path in paths:
+  current[path]=(ROOT/path).read_bytes()
+  assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
+  baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_BASE+':'+path])
+  assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
+  assert current[path]!=baseline[path],('empty TSF metadata transition',path)
+ with tempfile.TemporaryDirectory(prefix='gesher-tsf-metadata-qualification-') as temporary:
+  work=Path(temporary)
+  for path in paths:
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(current[path])
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in paths:
+   assert (work/path).read_bytes()==baseline[path],('TSF metadata reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path in paths:
+   assert (work/path).read_bytes()==current[path],('TSF metadata forward endpoint',path)
+ return baseline
+
 REVIEWED_PATHS=('compat/posix/src/fd.cc','compat/posix/src/socket.cc','compat/posix/src/socket_internal.h','compat/posix/src/system.cc','compat/posix/src/winsock.cc')
 def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
 def check():
  preceding=preceding_ofd_sources()
+ preceding.update(preceding_tsf_metadata_sources())
  assert hashlib.sha256((ROOT/OWNER_THREAD_DIAGNOSTIC_PATH).read_bytes()).hexdigest()==OWNER_THREAD_DIAGNOSTIC_SHA256,OWNER_THREAD_DIAGNOSTIC_PATH
  assert hashlib.sha256((ROOT/FD_POLL_SCRATCH_HEADER).read_bytes()).hexdigest()==FD_POLL_SCRATCH_SHA256,FD_POLL_SCRATCH_HEADER
  paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
@@ -801,6 +1209,38 @@ def storage_policy_negative_controls():
   checked+=1
  print('TCP_STORAGE_POLICY_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(checked)+' repinned_transition_controls='+str(repinned)+' native_processes_started=0')
 
+STDIO_LINE_NEGATIVE_CASES=[
+  # Reject changes inside each admitted line-input source, including the new
+  # helper and ABI entry, and reject qualification/transition drift itself.
+  ('compat/bionic/stdio_bionic.cc',b'line != nullptr && n != nullptr && Orient(fp, -1)',b'Orient(fp, -1)'),
+  ('compat/posix/include/gesher/stdio.h',b'bool unlocked = false);',b'bool unlocked = true);'),
+  ('compat/posix/src/misc.cc',b'gesher::stdio::ReadDelimited(lineptr, n, delim, stream)',b'gesher::stdio::ReadDelimited(lineptr, n, 0, stream)'),
+  ('compat/posix/src/stdio_output.cc',b'"gesher_stdio_delimited_v1"',b'"gesher_stdio_delimited_v2"'),
+  ('compat/posix/src/stdio_stream_buffer.h',b'static_cast<unsigned char>(delimiter), span.size)',b'0, span.size)'),
+  ('tools/net-tcp-priority/qualified/stdio-line-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
+  ('tools/net-tcp-priority/qualified/stdio-line-source.patch',b'@@',b'@x'),
+  ('tools/net-tcp-priority/qualified/stdio-line-shared-source.patch',b'@@',b'@x'),
+]
+STDIO_SCAN_NEGATIVE_CASES=[
+  ('compat/posix/src/stdio_output.cc',b'thread_local State* scanning_stream = nullptr;',b'State* scanning_stream = nullptr;'),
+  ('compat/posix/src/stdio_output.cc',b'scanning_stream->stream == stream && scanning_stream->live',b'true'),
+  ('compat/posix/src/stdio_output.cc',b'scanning_stream = static_cast<ScanScope*>(raw)->previous_;',b'scanning_stream = nullptr;'),
+  ('compat/posix/src/stdio_output.cc',b'  int fd = -1;',b'  int fd = 0;'),
+  ('tools/net-tcp-priority/qualified/stdio-scan-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
+  ('tools/net-tcp-priority/qualified/stdio-scan-source.patch',b'@@',b'@x'),
+  ('tools/net-tcp-priority/qualified/stdio-scan-shared-source.patch',b'@@',b'@x'),
+]
+
+SNPRINTF_BOUNDS_NEGATIVE_CASES=[
+  (SNPRINTF_BOUNDS_SOURCE,b'return bytes.size() + omitted;',b'return bytes.size();'),
+  (SNPRINTF_BOUNDS_SOURCE,b'size_t kept = count < Remaining() ? count : Remaining();',b'size_t kept = count;'),
+  (SNPRINTF_BOUNDS_SOURCE,b'out->bytes.resize(offset + kept);',b'out->bytes.resize(offset);'),
+  (SNPRINTF_BOUNDS_SOURCE,b'if (!valid) return -1;\n  if (n != 0) {',b'if (!valid) { if (n) buf[0] = 0; return -1; }\n  if (n != 0) {'),
+  # An unrelated unbounded formatter remains protected by the original digest.
+  (SNPRINTF_BOUNDS_SOURCE,b'std::memcpy(buf, s.c_str(), s.size() + 1);\n  return static_cast<int>(s.size());\n}\nint BIONIC_SYSV gesher_bionic_vfprintf',b'std::memcpy(buf, s.c_str(), s.size());\n  return static_cast<int>(s.size());\n}\nint BIONIC_SYSV gesher_bionic_vfprintf'),
+  ('tools/net-tcp-priority/qualified/snprintf-bounds-source.patch',b'@@',b'@x'),
+]
+
 def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
@@ -846,6 +1286,9 @@ def transition_negative_controls():
   ('compat/posix/src/mman.cc',b'if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;',b'if (it->second.kind == Kind::kView) {}'),
   (MEMFD_LEASE_PATCH,b'@@',b'@x'),
   (MEMFD_LEASE_PATCH,b'+constexpr int kLockAttempts = 5000;',b'+constexpr int kLockAttempts = 50;'),
+  *STDIO_LINE_NEGATIVE_CASES,
+  *STDIO_SCAN_NEGATIVE_CASES,
+  *SNPRINTF_BOUNDS_NEGATIVE_CASES,
  ]
  def memfd_lease_repin(name,data):
   # Refresh only the receipt's digest of the mutated file (and the receipt's
@@ -855,6 +1298,19 @@ def transition_negative_controls():
   else:qualification['source_sha256'][name]=hashlib.sha256(data).hexdigest()
   return (json.dumps(qualification,indent=2)+'\n').encode()
  repinned_memfd_lease=0
+ binder_cases=[
+  ('compat/binder/binderd.cc',b'  Out& out;',b'  Out out;'),
+  ('compat/binder/binderd.cc',b'command_start(output.bytes.size())',b'command_start(0)'),
+  ('compat/binder/binderd.cc',b'memcpy(reply.bytes.data() + sizeof(uint32_t), &ret, sizeof(int32_t));',
+   b'memcpy(reply.bytes.data(), &ret, sizeof(int32_t));'),
+  ('compat/binder/binderd.cc',b'if (n == 0) return true;',b'if (n == 0) return false;'),
+  ('compat/binder/binderd.cc',b'if (accepted && !thread->pending_buffer_claimed) return -EINVAL;',
+   b'if (false && !thread->pending_buffer_claimed) return -EINVAL;'),
+ ]
+ cases+=binder_cases+[
+  ('tools/net-tcp-priority/qualified/binder-output-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
+  ('tools/net-tcp-priority/qualified/binder-output-source.patch',b'@@',b'@x'),
+ ]
  for name,before,after in cases:
   target=ROOT/name
   assert before in original(target),name
@@ -886,7 +1342,110 @@ def transition_negative_controls():
    if repin and lease:
     message=str(rejected)
     assert 'qualification changed' not in message and 'transition patch changed' not in message and message!=name,(name,message)
- print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease))
+ # Exercise each original leaf at its exact normalized input, in addition
+ # to the complete-chain mutations above. Repinning an outer-stage digest must
+ # not hide the failure in a different stage before the intended guard executes.
+ line_current=current_stdio_line_inputs()
+ repinned_composed=0
+ for name,before,after in STDIO_LINE_NEGATIVE_CASES:
+  if name not in COMPOSED_STDIO_PATHS:continue
+  changed_source=line_current[name].replace(before,after,1)
+  assert changed_source!=line_current[name],name
+  pins=dict(COMPOSED_STDIO_SHA256);pins[name]=hashlib.sha256(changed_source).hexdigest()
+  rejected=None
+  with patch.dict(globals(),COMPOSED_STDIO_SHA256=pins):
+   try:preceding_composed_stdio_sources({**line_current,name:changed_source})
+   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+  assert rejected is not None and str(rejected)!=name,'repinned composed line mutation accepted or rejected by stale pin: '+name
+  repinned_composed+=1
+ print('COMPOSED_STDIO_REPINNED_CONTROLS_PASS cases='+str(repinned_composed))
+ scan_path=COMPOSED_SCAN_PATHS[0]
+ scan_current=original(ROOT/scan_path)
+ historical_source=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_PRIOR_FEATURE+':'+scan_path])
+ manifest=ROOT/'tools/net-tcp-priority/qualified/stdio-scan-source.json'
+ for name,before,after in STDIO_SCAN_NEGATIVE_CASES[:4]:
+  assert name==scan_path and scan_current.count(before)==historical_source.count(before)==1
+  changed=scan_current.replace(before,after,1)
+  pins={scan_path:hashlib.sha256(changed).hexdigest()}
+  rejected=None
+  with patch.dict(globals(),COMPOSED_SCAN_SHA256=pins):
+   try:preceding_composed_scan_sources({scan_path:changed})
+   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+  assert rejected is not None and str(rejected)!=name,'repinned composed scanner mutation accepted or rejected by stale pin: '+before.decode()
+  changed_historical=historical_source.replace(before,after,1)
+  qualification=json.loads(original(manifest));qualification['source_sha256'][name]=hashlib.sha256(changed_historical).hexdigest()
+  raw=(json.dumps(qualification,indent=2)+'\n').encode()
+  rejected=None
+  with patch.object(Path,'read_bytes',lambda path:raw if path==manifest else original(path)),patch.dict(globals(),STDIO_SCAN_QUALIFICATION_SHA256=hashlib.sha256(raw).hexdigest()):
+   try:preceding_stdio_scan_source(changed_historical)
+   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+  assert rejected is not None and str(rejected)!=name,'repinned historical scanner mutation accepted or rejected by stale pin: '+before.decode()
+ qualification=json.loads(original(manifest));qualification['native_runtime_approval']=True
+ raw=(json.dumps(qualification,indent=2)+'\n').encode();rejected=False
+ with patch.object(Path,'read_bytes',lambda path:raw if path==manifest else original(path)),patch.dict(globals(),STDIO_SCAN_QUALIFICATION_SHA256=hashlib.sha256(raw).hexdigest()):
+  try:preceding_stdio_scan_source(historical_source)
+  except (AssertionError,subprocess.CalledProcessError):rejected=True
+ assert rejected,'repinned scanner runtime approval accepted'
+ print('COMPOSED_SCAN_REPINNED_CONTROLS_PASS current=4 historical=4 runtime_approval=1')
+ # Merely refreshing the new source hash must not admit changed parser,
+ # destination-publication, capacity or unrelated unbounded-formatting bytes.
+ # The exact reverse patch and published baseline independently reject them.
+ target=ROOT/SNPRINTF_BOUNDS_SOURCE
+ for name,before,after in SNPRINTF_BOUNDS_NEGATIVE_CASES[:-1]:
+  assert ROOT/name==target and original(target).count(before)==1
+  changed_source=original(target).replace(before,after,1)
+  def repinned(path):return changed_source if path==target else original(path)
+  rejected=None
+  with patch.object(Path,'read_bytes',repinned), patch.dict(globals(),SNPRINTF_BOUNDS_SHA256=hashlib.sha256(changed_source).hexdigest()):
+   try:preceding_snprintf_bounds_source()
+   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+  assert rejected is not None and str(rejected)!=name,'repinned snprintf mutation accepted or rejected by stale pin: '+before.decode()
+ print('SNPRINTF_BOUNDS_REPINNED_CONTROLS_PASS cases=5')
+ # Fresh source/manifest digests alone cannot authorize a changed broker:
+ # the reversible patch and exact original OFD bytes must still agree.
+ target=ROOT/'compat/binder/binderd.cc'
+ manifest=ROOT/'tools/net-tcp-priority/qualified/binder-output-source.json'
+ for name,before,after in binder_cases:
+  assert ROOT/name==target and original(target).count(before)==1
+  changed_source=original(target).replace(before,after,1)
+  qualification=json.loads(original(manifest))
+  qualification['source_sha256'][name]=hashlib.sha256(changed_source).hexdigest()
+  changed_manifest=(json.dumps(qualification,indent=2)+'\n').encode()
+  def repinned(path):
+   return changed_source if path==target else changed_manifest if path==manifest else original(path)
+  rejected=False
+  with patch.object(Path,'read_bytes',repinned), patch.dict(globals(),BINDER_OUTPUT_QUALIFICATION_SHA256=hashlib.sha256(changed_manifest).hexdigest()):
+   try:check()
+   except (AssertionError,subprocess.CalledProcessError):rejected=True
+  assert rejected,'repinned Binder output mutation accepted: '+before.decode()
+ qualification=json.loads(original(manifest))
+ qualification['native_runtime_approval']=True
+ changed_manifest=(json.dumps(qualification,indent=2)+'\n').encode()
+ def elevated(path):return changed_manifest if path==manifest else original(path)
+ rejected=False
+ with patch.object(Path,'read_bytes',elevated), patch.dict(globals(),BINDER_OUTPUT_QUALIFICATION_SHA256=hashlib.sha256(changed_manifest).hexdigest()):
+  try:check()
+  except (AssertionError,subprocess.CalledProcessError):rejected=True
+ assert rejected,'repinned Binder output runtime approval accepted'
+ # A changed modern source hash cannot admit a modified output operation or
+ # unrelated main admission code: the same original patch must still restore
+ # the exact published main endpoint after the historical receipt is checked.
+ composed_cases=binder_cases+[
+  ('compat/binder/binderd.cc',b'if (g_sandbox && ClientIsRestricted(pipe)) {',
+   b'if (false && ClientIsRestricted(pipe)) {'),
+  ('compat/binder/binderd.cc',b'if (uid < 10000 || !known || actual != pid) {',
+   b'if (uid < 10000 || !known) {'),
+ ]
+ for name,before,after in composed_cases:
+  assert ROOT/name==target and original(target).count(before)==1
+  altered=original(target).replace(before,after,1)
+  def changed_current(path):return altered if path==target else original(path)
+  rejected=False
+  with patch.object(Path,'read_bytes',changed_current), patch.dict(globals(),COMPOSED_BINDER_OUTPUT_SHA256=hashlib.sha256(altered).hexdigest()):
+   try:check()
+   except (AssertionError,subprocess.CalledProcessError):rejected=True
+  assert rejected,'repinned composed Binder mutation accepted: '+before.decode()
+ print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease)+' repinned_binder_output_controls=6 repinned_composed_binder_controls='+str(len(composed_cases)))
 if __name__=='__main__':
  import sys
  check()
@@ -895,3 +1454,6 @@ if __name__=='__main__':
   transition_negative_controls()
   import runpy
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')
+  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
+  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-tsf-metadata-policy.py'),run_name='__main__')
+  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')

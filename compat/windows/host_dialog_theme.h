@@ -20,7 +20,8 @@
 #error "host_dialog_theme.h needs GDI: undefine NOGDI before including <windows.h>"
 #endif
 
-enum { GESHER_HOST_MESSAGE_TEXT = 1901, GESHER_HOST_MESSAGE_HEADING = 1902 };
+enum { GESHER_HOST_MESSAGE_TEXT = 1901, GESHER_HOST_MESSAGE_HEADING = 1902,
+       GESHER_HOST_MESSAGE_ICON = 1903 };
 /* Posted after a DPI change so a dialog can rebuild the fonts it owns once the
  * dialog manager has rescaled the dialog font. */
 #define GESHER_HOST_REFONT (WM_APP + 0x1e1)
@@ -304,11 +305,46 @@ typedef struct {
   const WCHAR* positive;
   const WCHAR* negative;
   BOOL rtl;
+  UINT icon;
   BOOL accepted;
   HFONT heading_font;
+  HICON icon_image;
   GesherHostTheme theme;
   GesherHostIcons icons;
 } GesherHostPromptState;
+
+/* The MessageBox icon kinds a host prompt may show (MB_ICONERROR, ...). */
+static inline LPCWSTR GesherHostIconResource(UINT icon) {
+  switch (icon & MB_ICONMASK) {
+    case MB_ICONERROR: return MAKEINTRESOURCEW(32513); /* IDI_ERROR */
+    case MB_ICONQUESTION: return MAKEINTRESOURCEW(32514); /* IDI_QUESTION */
+    case MB_ICONWARNING: return MAKEINTRESOURCEW(32515); /* IDI_WARNING */
+    case MB_ICONINFORMATION: return MAKEINTRESOURCEW(32516); /* IDI_INFORMATION */
+    default: return NULL;
+  }
+}
+
+/* Load the system icon at the window's DPI (a non-shared copy, owned by the
+ * prompt) and show it; called at creation and again after a DPI change. */
+static inline void GesherHostSetIcon(HWND dialog, GesherHostPromptState* state) {
+  LPCWSTR resource = GesherHostIconResource(state->icon);
+  HWND control = GetDlgItem(dialog, GESHER_HOST_MESSAGE_ICON);
+  if (resource == NULL || control == NULL) return;
+  HDC screen = GetDC(NULL);
+  int dpi = GesherHostDpi(dialog, screen);
+  if (screen != NULL) ReleaseDC(NULL, screen);
+  int size = MulDiv(32, dpi, 96);
+  /* System icons load only shared (at the system size); re-extract the copy at
+   * this DPI from the original resource, keeping the plain copy as a fallback. */
+  HICON shared = (HICON)LoadImageW(NULL, resource, IMAGE_ICON, 0, 0, LR_SHARED | LR_DEFAULTSIZE);
+  if (shared == NULL) return;
+  HICON image = (HICON)CopyImage(shared, IMAGE_ICON, size, size, LR_COPYFROMRESOURCE);
+  if (image == NULL) image = (HICON)CopyImage(shared, IMAGE_ICON, 0, 0, 0);
+  if (image == NULL) return;
+  SendMessageW(control, STM_SETICON, (WPARAM)image, 0);
+  if (state->icon_image != NULL) DestroyIcon(state->icon_image);
+  state->icon_image = image;
+}
 
 /* Windows EDIT controls use CRLF line breaks; do not mutate input or embed it in
  * a resource template. The window copies this buffer synchronously at creation. */
@@ -352,7 +388,15 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
     /* Text that fits is ordinary dialog text, which screen readers announce
      * with the dialog like a message box; longer text gets a scrolling,
      * selectable read-only box instead of overflowing. */
-    RECT area = {16, 44, 316, 168};
+    /* Like MessageBox, an error/question icon leads the message (on the right
+     * for right-to-left text) and the message takes the remaining width. */
+    BOOL has_icon = GesherHostIconResource(state->icon) != NULL;
+    int text_x = has_icon && !state->rtl ? 44 : 16;
+    int text_width = has_icon ? 272 : 300;
+    HWND icon = has_icon
+        ? GesherHostControl(dialog, 0, L"STATIC", L"", SS_ICON | SS_CENTERIMAGE,
+            GESHER_HOST_MESSAGE_ICON, state->rtl ? 296 : 16, 44, 20, 20) : NULL;
+    RECT area = {text_x, 44, text_x + text_width, 168};
     BOOL fits = FALSE;
     HDC dc = MapDialogRect(dialog, &area) ? GetDC(dialog) : NULL;
     if (dc != NULL) {
@@ -366,11 +410,12 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
     }
     HWND details = fits
         ? GesherHostControl(dialog, reading, L"STATIC", copy,
-            align | SS_NOPREFIX | SS_EDITCONTROL, GESHER_HOST_MESSAGE_TEXT, 16, 44, 300, 124)
+            align | SS_NOPREFIX | SS_EDITCONTROL, GESHER_HOST_MESSAGE_TEXT,
+            text_x, 44, text_width, 124)
         : GesherHostControl(dialog, reading, L"EDIT", copy,
             ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER
             | WS_TABSTOP | (state->rtl ? ES_RIGHT : ES_LEFT),
-            GESHER_HOST_MESSAGE_TEXT, 16, 44, 300, 124);
+            GESHER_HOST_MESSAGE_TEXT, text_x, 44, text_width, 124);
     SecureZeroMemory(copy, (wcslen(copy) + 1) * sizeof(WCHAR));
     HeapFree(GetProcessHeap(), 0, copy);
     /* Create Deny first so Tab order follows the on-screen order. */
@@ -379,11 +424,14 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
             WS_TABSTOP | BS_OWNERDRAW, IDCANCEL, 134, 182, 86, 24) : NULL;
     HWND accept = GesherHostControl(dialog, 0, L"BUTTON", state->positive,
         WS_TABSTOP | BS_OWNERDRAW, state->negative ? IDYES : IDOK, 230, 182, 86, 24);
+    /* The icon is decorative: a notice is still shown if only it fails. */
+    (void)icon;
     if (!heading || !details || !accept || (state->negative && !deny)) {
       EndDialog(dialog, IDCANCEL);
       return FALSE;
     }
     GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
+    GesherHostSetIcon(dialog, state);
     SendMessageW(dialog, DM_SETDEFID, deny ? IDCANCEL : IDOK, 0);
     GesherHostSetIcons(dialog, &state->icons);
     // A host prompt may originate on a background system-server thread. Request
@@ -393,11 +441,18 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
       FlashWindowEx(&flash);
     }
     SetFocus(deny ? deny : accept);
+    /* The system sound MessageBox plays for the same icon kind. Without an
+     * icon kind the prompt stays silent (no production caller uses that). */
+    if (has_icon) MessageBeep(state->icon & MB_ICONMASK);
     return FALSE;
   }
   if (state == NULL) return FALSE;
   if (message == WM_DESTROY) {
     if (state->heading_font != NULL) DeleteObject(state->heading_font);
+    if (state->icon_image != NULL) {
+      SendDlgItemMessageW(dialog, GESHER_HOST_MESSAGE_ICON, STM_SETICON, 0, 0);
+      DestroyIcon(state->icon_image);
+    }
     GesherHostThemeDispose(&state->theme);
     SetWindowLongPtrW(dialog, DWLP_USER, 0);
     return TRUE;
@@ -405,6 +460,7 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
   if (message == GESHER_HOST_REFONT) {
     GesherHostSetFont(GetDlgItem(dialog, GESHER_HOST_MESSAGE_HEADING),
                       &state->heading_font, 145, FW_SEMIBOLD);
+    GesherHostSetIcon(dialog, state);
     return TRUE;
   }
   if (message == WM_CLOSE) { EndDialog(dialog, IDCANCEL); return TRUE; }
@@ -421,10 +477,12 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
 }
 
 /* A no/deny result (including Esc, X, and creation failures) is always false.
- * For informational windows, the caller ignores the return value. */
+ * For informational windows, the caller ignores the return value. `icon` is a
+ * MessageBox icon kind (MB_ICONERROR, MB_ICONQUESTION, ...) or 0 for none; it
+ * selects the system icon and sound, as MessageBox does. */
 static inline BOOL GesherHostPrompt(const WCHAR* title, const WCHAR* message,
                                      const WCHAR* positive, const WCHAR* negative,
-                                     BOOL rtl, HWND owner) {
+                                     BOOL rtl, HWND owner, UINT icon) {
   if (title == NULL || message == NULL || positive == NULL) return FALSE;
   GesherHostPromptState state;
   ZeroMemory(&state, sizeof(state));
@@ -433,6 +491,7 @@ static inline BOOL GesherHostPrompt(const WCHAR* title, const WCHAR* message,
   state.positive = positive;
   state.negative = negative;
   state.rtl = rtl;
+  state.icon = icon;
   union { DWORD align; WORD words[256]; } buffer = {0};
   DLGTEMPLATE* layout = (DLGTEMPLATE*)buffer.words;
   layout->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER | DS_SETFONT;
