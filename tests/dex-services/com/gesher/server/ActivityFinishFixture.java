@@ -444,14 +444,14 @@ public final class ActivityFinishFixture {
                 return url.startsWith("https:");
             });
             Intent web = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/page"));
-            Intent mail = new Intent(Intent.ACTION_VIEW, Uri.parse("mailto:help@example.com"));
+            Intent unavailable = new Intent(Intent.ACTION_VIEW, Uri.parse("http://example.com/unavailable-help"));
             h.asApp(() -> {
-                int failedStart = atm.startActivity(h.thread, OWNER, null, mail, null, sourceToken,
+                int failedStart = atm.startActivity(h.thread, OWNER, null, unavailable, null, sourceToken,
                         "compose", 7, 0, null, null);
                 check(failedStart == ActivityManager.START_INTENT_NOT_RESOLVED,
                         "A failed Windows launch reported success");
                 try {
-                    Instrumentation.checkStartActivityResult(failedStart, mail);
+                    Instrumentation.checkStartActivityResult(failedStart, unavailable);
                     throw new AssertionError("A failed launch must surface as ActivityNotFoundException");
                 } catch (ActivityNotFoundException expected) {
                     // The same exception a caller of Activity.startActivity receives.
@@ -465,12 +465,12 @@ public final class ActivityFinishFixture {
                                 new Intent(web).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null,
                                 sourceToken, "browseNewTask", 9, 0, null, null) == ActivityManager.START_SUCCESS,
                         "An accepted NEW_TASK Windows launch did not report success");
-                check(atm.startActivity(h.thread, OWNER, null, mail, null, sourceToken,
+                check(atm.startActivity(h.thread, OWNER, null, unavailable, null, sourceToken,
                                 null, -1, 0, null, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
                         "A failed Windows launch without a result request reported success");
             });
-            check(attempts.equals(List.of(mail.getDataString(), web.getDataString(),
-                            web.getDataString(), mail.getDataString())),
+            check(attempts.equals(List.of(unavailable.getDataString(), web.getDataString(),
+                            web.getDataString(), unavailable.getDataString())),
                     "Windows received incorrect URLs or more than one call per request: " + attempts);
             List<ResultInfo> results = h.thread.results(source);
             check(results.size() == 2, "Each failed or NEW_TASK result request must cancel once: " + results);
@@ -701,7 +701,7 @@ public final class ActivityFinishFixture {
         Object previousOpener = opener.get(null);
         List<String> attempts = new ArrayList<>();
         Intent web = new Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/sender"));
-        Intent mail = new Intent(Intent.ACTION_VIEW, Uri.parse("mailto:sender@example.com"));
+        Intent unavailable = new Intent(Intent.ACTION_VIEW, Uri.parse("http://example.com/unavailable-sender"));
         try {
             opener.set(null, (Predicate<String>) url -> {
                 attempts.add(url);
@@ -709,7 +709,7 @@ public final class ActivityFinishFixture {
             });
             h.asApp(() -> {
                 IIntentSender failed = am.getIntentSenderWithFeature(ActivityManager.INTENT_SENDER_ACTIVITY,
-                        OWNER, null, null, null, 1, new Intent[]{mail}, new String[]{null},
+                        OWNER, null, null, null, 1, new Intent[]{unavailable}, new String[]{null},
                         PendingIntent.FLAG_IMMUTABLE, null, 0);
                 check(atm.startActivityIntentSender(h.thread, failed, null, null, null, sourceToken,
                                 "senderFailure", 21, 0, 0, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
@@ -862,12 +862,12 @@ public final class ActivityFinishFixture {
         set(foreign, "app", otherProcess);
         ActivityTaskManagerService atm = (ActivityTaskManagerService) h.atm;
         IActivityManager am = (IActivityManager) get(h.atm, "mAm");
-        Intent mail = new Intent(Intent.ACTION_VIEW, Uri.parse("mailto:ownership@example.com"));
+        Intent unavailable = new Intent(Intent.ACTION_VIEW, Uri.parse("http://example.com/unavailable-ownership"));
         final IIntentSender systemSender;
         long identity = Binder.clearCallingIdentity();
         try {
             systemSender = am.getIntentSenderWithFeature(ActivityManager.INTENT_SENDER_ACTIVITY,
-                    "android", null, null, null, 4, new Intent[]{mail}, new String[]{null},
+                    "android", null, null, null, 4, new Intent[]{unavailable}, new String[]{null},
                     PendingIntent.FLAG_IMMUTABLE, null, 0);
         } finally { Binder.restoreCallingIdentity(identity); }
         Field opener = field(h.atmType, "sOpenExternalUrl");
@@ -889,7 +889,7 @@ public final class ActivityFinishFixture {
                     check(attempts.size() == 1, "Foreign result token opened a Windows URL");
                 }
                 for (IBinder token : List.of(token(foreign), new Binder())) {
-                    check(atm.startActivity(h.thread, OWNER, null, mail, null, token,
+                    check(atm.startActivity(h.thread, OWNER, null, unavailable, null, token,
                                     "unowned", 43, 0, null, null) == ActivityManager.START_INTENT_NOT_RESOLVED,
                             "Unowned result token changed launch failure");
                 }

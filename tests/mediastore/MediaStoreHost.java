@@ -74,6 +74,7 @@ public final class MediaStoreHost {
         final Set<String> visible = new HashSet<>();
         boolean requestedLegacy;
         boolean system;
+        String[] sharedUidPackages;
 
         App(String pkg, int uid, int targetSdk, String... permissions) {
             this.pkg = pkg; this.uid = uid; this.targetSdk = targetSdk;
@@ -87,7 +88,9 @@ public final class MediaStoreHost {
         @Override public boolean self() { return system; }
         @Override public String packageName() { return pkg; }
         @Override public int uid() { return uid; }
-        @Override public String[] sharedPackages() { return new String[] {pkg}; }
+        @Override public String[] sharedPackages() {
+            return sharedUidPackages == null ? new String[] {pkg} : sharedUidPackages;
+        }
         @Override public int targetSdk() { return targetSdk; }
         @Override public boolean permission(String permission) { return system || granted.contains(permission); }
         @Override public int opMode(String op) { return ops.getOrDefault(op, 3); }
@@ -221,6 +224,164 @@ public final class MediaStoreHost {
     static final Uri AUDIO = Uri.parse("content://media/external_primary/audio/media");
     static final Uri DOWNLOADS = Uri.parse("content://media/external_primary/downloads");
     static final Uri FILES = Uri.parse("content://media/external/file");
+
+    private static void privateDenied(Runnable action, String what) {
+        SecurityException denied = expect(SecurityException.class, action, what);
+        check(denied.getMessage().contains("private storage"), what + ": private-directory boundary");
+    }
+
+    private static void privateOpenDenied(MediaStoreIndex index, App app, Uri uri, boolean write) {
+        privateDenied(() -> {
+            try { index.openFileTarget(app, uri, write); }
+            catch (IOException e) { throw new AssertionError(e); }
+        }, app.pkg + " cannot open foreign private storage for " + (write ? "write" : "read"));
+    }
+
+    /** Ordinary provider requests must retain the Android/data and obb UID boundary. */
+    private static void privateStorageContracts(File work) throws Exception {
+        File volume = new File(work, "volume");
+        volume.mkdirs();
+        SQLiteDatabase db = SQLiteDatabase.openOrCreateDatabase(new File(work, "media.db"), null);
+        MediaStoreIndex index = new MediaStoreIndex(db, new TestHost(volume, new Clock()));
+        App manager = new App("com.example.manager", 10501, 35, MediaStoreIndex.MANAGE_EXTERNAL_STORAGE);
+        App legacy = new App("com.example.legacy", 10502, 28,
+                MediaStoreIndex.READ_EXTERNAL_STORAGE, MediaStoreIndex.WRITE_EXTERNAL_STORAGE);
+        App scoped = new App("com.example.scoped", 10503, 35);
+        App system = new App("android", 1000, 36);
+        system.system = true;
+        try {
+            for (String sub : new String[] {"data", "obb"}) {
+                File foreign = new File(volume, "Android/" + sub + "/com.example.other");
+                ContentValues raw = new ContentValues();
+                raw.put("_data", new File(foreign, "new.png").getPath());
+                raw.put("mime_type", "image/png");
+                for (App app : new App[] {manager, legacy}) {
+                    privateDenied(() -> index.insert(app, FILES, raw),
+                            app.pkg + " cannot insert raw foreign " + sub + " path");
+                }
+                ContentValues relative = new ContentValues();
+                relative.put("relative_path", "Android/" + sub + "/com.example.other/");
+                relative.put("_display_name", "relative.png");
+                relative.put("mime_type", "image/png");
+                privateDenied(() -> index.insert(manager, FILES, relative),
+                        "manager cannot insert relative foreign " + sub + " path");
+                check(!foreign.exists(), "rejected private inserts create no directories");
+
+                Uri publicItem = ownedPng(index, manager, "Pictures/Public/", sub + "-public.png");
+                File publicFile = new File(dataOf(index, system, publicItem));
+                privateDenied(() -> index.update(manager, publicItem, relative, args()),
+                        "manager cannot move public item into foreign " + sub);
+                privateDenied(() -> index.update(legacy, publicItem, raw, args()),
+                        "legacy writer cannot move raw path into foreign " + sub);
+                check(publicFile.isFile() && dataOf(index, system, publicItem).equals(publicFile.getPath())
+                                && !foreign.exists(), "rejected private destination changes no row, file or directory");
+
+                // Model an existing row from before this exclusion. Its recorded
+                // owner does not authorize the other package's private directory.
+                ContentValues existing = new ContentValues(raw);
+                existing.put("_data", new File(foreign, "existing.png").getPath());
+                existing.put("owner_package_name", scoped.pkg);
+                Uri privateItem = index.insert(system, FILES, existing);
+                File privateFile = new File(dataOf(index, system, privateItem));
+                write(privateFile, png(3, 3));
+                ContentValues moveOut = new ContentValues();
+                moveOut.put("relative_path", "Download/Export/");
+                for (App app : new App[] {manager, legacy, scoped}) {
+                    privateOpenDenied(index, app, privateItem, false);
+                    privateOpenDenied(index, app, privateItem, true);
+                    privateDenied(() -> index.update(app, privateItem, moveOut, args()),
+                            app.pkg + " cannot move foreign private item out");
+                    privateDenied(() -> index.delete(app, privateItem, args()),
+                            app.pkg + " cannot delete foreign private item");
+                }
+                String[] both = {Long.toString(ContentUris.parseId(publicItem)),
+                        Long.toString(ContentUris.parseId(privateItem))};
+                privateDenied(() -> index.delete(manager, FILES, args("_id IN (?,?)", both, null)),
+                        "collection delete preflights private rows");
+                check(privateFile.isFile() && publicFile.isFile()
+                                && dataOf(index, system, privateItem).equals(privateFile.getPath())
+                                && !new File(volume, "Download/Export").exists(),
+                        "denied private operations preserve both files and the private row");
+
+                for (App app : new App[] {manager, legacy}) {
+                    ContentValues own = new ContentValues(raw);
+                    own.put("_data", new File(volume, "Android/" + sub + "/" + app.pkg + "/own.png").getPath());
+                    Uri item = index.insert(app, FILES, own);
+                    File ownFile = index.openFileTarget(app, item, true).file;
+                    write(ownFile, png(2, 2));
+                    check(index.openFileTarget(app, item, false).file.equals(ownFile),
+                            app.pkg + " retains own " + sub + " reads and writes");
+                    ContentValues rename = new ContentValues();
+                    rename.put("_display_name", "renamed.png");
+                    check(index.update(app, item, rename, args()) == 1 && !ownFile.exists(),
+                            app.pkg + " retains own private moves");
+                    File moved = new File(dataOf(index, system, item));
+                    check(index.delete(app, item, args()) == 1 && !moved.exists(),
+                            app.pkg + " retains own private deletion");
+                }
+            }
+
+            manager.sharedUidPackages = new String[] {manager.pkg, "com.example.sibling"};
+            ContentValues sibling = new ContentValues();
+            sibling.put("_data", new File(volume, "Android/data/com.example.sibling/shared.png").getPath());
+            sibling.put("mime_type", "image/png");
+            Uri siblingItem = index.insert(manager, FILES, sibling);
+            File siblingFile = index.openFileTarget(manager, siblingItem, true).file;
+            write(siblingFile, png(2, 2));
+            check(index.openFileTarget(manager, siblingItem, false).file.equals(siblingFile),
+                    "authenticated same-UID sibling retains private access");
+
+            Uri publicOwned = ownedPng(index, scoped, "Pictures/Scoped/", "owned.png");
+            check(index.openFileTarget(scoped, publicOwned, false).file.isFile()
+                            && index.openFileTarget(scoped, publicOwned, true).file.isFile(),
+                    "scoped owner without broad permissions retains public MediaStore read/write");
+            ContentValues rename = new ContentValues();
+            rename.put("_display_name", "owned-renamed.png");
+            check(index.update(scoped, publicOwned, rename, args()) == 1
+                            && index.delete(scoped, publicOwned, args()) == 1,
+                    "scoped owner retains public MediaStore move/delete");
+
+            File alias = new File(volume, "Pictures/PrivateAlias");
+            boolean linked = false;
+            try {
+                Files.createSymbolicLink(alias.toPath(), new File(volume,
+                        "Android/data/com.example.other").toPath());
+                linked = true;
+            } catch (UnsupportedOperationException | java.nio.file.FileSystemException e) {
+                System.out.println("SKIP media private-directory alias: host cannot create symbolic link: " + e);
+            }
+            if (linked) {
+                try {
+                    ContentValues aliased = new ContentValues();
+                    aliased.put("_data", new File(alias, "alias-new.png").getPath());
+                    aliased.put("mime_type", "image/png");
+                    privateDenied(() -> index.insert(manager, FILES, aliased),
+                            "canonical private destination remains excluded through a host directory alias");
+                    aliased.put("_data", new File(alias, "existing.png").getPath());
+                    Uri aliasItem = index.insert(system, FILES, aliased);
+                    privateOpenDenied(index, manager, aliasItem, false);
+                    privateDenied(() -> index.delete(manager, aliasItem, args()),
+                            "canonical private source remains excluded through a host directory alias");
+                } finally {
+                    Files.delete(alias.toPath());
+                }
+            }
+            File freshVolume = new File(work, "fresh-volume");
+            SQLiteDatabase freshDb = SQLiteDatabase.openOrCreateDatabase(new File(work, "fresh.db"), null);
+            try {
+                MediaStoreIndex freshIndex = new MediaStoreIndex(freshDb, new TestHost(freshVolume, new Clock()));
+                Uri first = ownedPng(freshIndex, scoped, "Pictures/", "first.png");
+                check(freshIndex.openFileTarget(scoped, first, true).file.isFile(),
+                        "first scoped MediaStore insert creates an absent shared-volume directory");
+            } finally {
+                freshDb.close();
+            }
+            pass("media: manager/legacy access preserves other packages' Android/data and obb boundaries; "
+                    + "own/shared-UID private files and scoped-owned public media keep their normal operations");
+        } finally {
+            db.close();
+        }
+    }
 
     public static void main(String[] argv) throws Exception {
         File work = Files.createTempDirectory("gesher-mediastore-").toFile();
@@ -769,6 +930,7 @@ public final class MediaStoreHost {
                 "a later journal recovery commits the removed file's row and generation together");
 
         recoveredDb.close();
+        privateStorageContracts(new File(work, "private-directory-contract"));
         System.out.println("media: " + sChecks + " checks passed");
     }
 }

@@ -281,6 +281,16 @@ public final class WindowsHost {
     }
 
     /**
+     * Display-off time without input as {@link #jobIdleMillis()} reads it, or
+     * {@link DeviceConstraints#NOT_OFF} unless Windows reported the session display OFF. Unlike
+     * jobIdleMillis, a display that has just gone off (0) is told apart from one that is on.
+     */
+    public static long jobIdleReading() {
+        if (sessionDisplayState() != DISPLAY_STATE_OFF) return DeviceConstraints.NOT_OFF;
+        return jobIdleMillis();
+    }
+
+    /**
      * The hardware behind system features (compat/devsvc/devsvc_hardware.cc,
      * docs/system-features.md): {touch digitizer contacts (0 without a touch digitizer),
      * audio render endpoints active or unplugged, wired Ethernet interfaces}, -1 for a count Windows
@@ -443,6 +453,30 @@ public final class WindowsHost {
         }
     }
 
+    /**
+     * Whether Windows has a handler registered for the URI scheme (the current user's
+     * default, AssocQueryStringW with ASSOCF_IS_PROTOCOL). False without the natives.
+     */
+    public static boolean hasUrlHandler(String scheme) {
+        if (!available() || scheme == null) return false;
+        try {
+            return nativeHasUrlHandler(scheme);
+        } catch (UnsatisfiedLinkError e) {
+            return false;
+        }
+    }
+
+    /** Gesher's ACTION_DIAL review, with Cancel selected and a cancellable caller lifetime. */
+    static boolean confirmDial(String packageName, String number, int ownerPid,
+            java.util.function.BooleanSupplier active) {
+        if (!available() || active == null || !active.getAsBoolean()) return false;
+        try {
+            return nativeConfirmDial(packageName, number, ownerPid, active);
+        } catch (UnsatisfiedLinkError unavailable) {
+            return false;
+        }
+    }
+
     /** Shows the native Windows folder picker dialog. Returns the selected folder path, or null. */
     public static String pickFolder(String title) {
         if (!available()) return null;
@@ -545,6 +579,9 @@ public final class WindowsHost {
     private static native String nativeFullPath(String path);
     private static native boolean nativeOpenUrl(String url);
     private static native String nativeHomeRegion();
+    private static native boolean nativeHasUrlHandler(String scheme);
+    private static native boolean nativeConfirmDial(String packageName, String number,
+            int ownerPid, java.util.function.BooleanSupplier active);
     private static native String nativePickFolder(String title);
     private static native String nativePickFile(String title);
     /** The IANA id of a Windows time zone key name (Windows' icu.dll), or null. */

@@ -178,6 +178,11 @@ static BOOL SetFileTime(HANDLE handle, const FILETIME* created, const FILETIME* 
 }
 
 namespace gesher {
+// This fixture isolates timestamp/descriptor semantics with authorization
+// granted. storage_policy_host_test exercises the actual storage boundary.
+enum class AccessKind { kStat, kRead, kWrite };
+static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
+static bool CheckExternalStorageHandle(HANDLE, AccessKind) { return true; }
 enum class PathKind { kFile, kMissing, kVirtual };
 static int FailWithLastError() { errno = static_cast<int>(last_error); return -1; }
 static HANDLE HandleFromFd(int fd) {
@@ -214,6 +219,10 @@ static PathKind MapPath(const char* path, std::wstring* result) {
   if (std::strcmp(path, "/proc/self/status") == 0) return PathKind::kVirtual;
   if (std::strcmp(path, "/mnt/c/תיקיה/file") == 0) { *result = L"mapped-file"; return PathKind::kFile; }
   result->assign(path, path + std::strlen(path)); return PathKind::kFile;
+}
+// No fixture path is a FIFO (fifo.cc): following one is the plain open.
+static HANDLE CreateFileFollowingFifo(const wchar_t* path, DWORD access, DWORD share, DWORD flags) {
+  return CreateFileW(path, access, share, nullptr, OPEN_EXISTING, flags, nullptr);
 }
 // Gesher's ELF loader as /system/bin/linker64 is not part of this fixture.
 namespace system_linker {

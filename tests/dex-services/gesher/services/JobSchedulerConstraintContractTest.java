@@ -922,7 +922,7 @@ public final class JobSchedulerConstraintContractTest {
         check(service.starts == 1, "Job 107 did not start");
 
         // User interacts with device: idle time drops to 0.
-        h.setDeviceIdleMillis(0L);
+        h.setDeviceIdleMillis(-1L); // DeviceConstraints.NOT_OFF: the display is on
 
         check(service.stops == 1, "Job 107 was not stopped when device became active");
         check(service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_DEVICE_IDLE,
@@ -1022,7 +1022,7 @@ public final class JobSchedulerConstraintContractTest {
         h.schedule(new JobInfo.Builder(122, serviceComponent()).setRequiresBatteryNotLow(true).build());
         check(h.reason(122) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW, "Unknown battery accepted as not low");
         h.cancel(122);
-        h.setDeviceIdleMillis(0L);
+        h.setDeviceIdleMillis(-1L); // NOT_OFF
         h.schedule(new JobInfo.Builder(123, serviceComponent()).setRequiresDeviceIdle(true).build());
         check(h.reason(123) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_DEVICE_IDLE, "Unknown/active device accepted as idle");
         h.cancel(123);

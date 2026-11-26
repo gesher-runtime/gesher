@@ -9,7 +9,7 @@ $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath($PanelPath), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($name in 'Get-SeparateWindowApps','Get-InstalledApps','Get-FileStamp','Get-StateStamp','Get-AppFilesStamp',
-        'Update-AppsView','Test-PanelMetadataVisible','Request-PanelMetadataRefresh','Update-PanelMetadataWatch',
+        'Update-AppsView', 'Update-AppsFilter','Test-PanelMetadataVisible','Request-PanelMetadataRefresh','Update-PanelMetadataWatch',
         'Refresh-Dashboard','Invoke-LiveRefreshTick',
         'ConvertTo-ProxyValue','Read-ProxyProperties','ConvertFrom-PropertiesEscapes','Get-ProxySettings','Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({ param($node)

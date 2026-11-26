@@ -1,0 +1,796 @@
+{
+  "status": "diagnostic-only; no Windows observation or repair acceptance yet",
+  "failed_upstream_pr": 360,
+  "failed_head": "07ab5dd901e4e380f96ddb3865945afc29476d5f",
+  "run": 45194542579,
+  "job": 137838581059,
+  "event": "workflow_dispatch",
+  "log_utf8_sha256": "68dfcfe8595a86fd15de7173637f3442fc5225f32743a418506dfe8ed9a9d428",
+  "original_decoded_log": "\ufeff2026-11-23T17:05:19.3999569Z Current runner version: '2.338.2'\r\n2026-11-23T17:05:19.4019411Z ##[group]Runner Image Provisioner\r\n2026-11-23T17:05:19.4020021Z Hosted Compute Agent\r\n2026-11-23T17:05:19.4020377Z Version: 20261111.635\r\n2026-11-23T17:05:19.4020761Z Commit: b8a594ea514ff44cadb5342986c68b1eac6e22ed\r\n2026-11-23T17:05:19.4021476Z Build Date: 2026-11-11T01:49:01Z\r\n2026-11-23T17:05:19.4021894Z Worker ID: {79972ea0-9012-447e-9af6-40bd09d58ef0}\r\n2026-11-23T17:05:19.4022319Z Region: centralus\r\n2026-11-23T17:05:19.4022650Z Cloud: Azure\r\n2026-11-23T17:05:19.4022990Z ##[endgroup]\r\n2026-11-23T17:05:19.4023819Z ##[group]Operating System\r\n2026-11-23T17:05:19.4024209Z Microsoft Windows Server 2022\r\n2026-11-23T17:05:19.4024570Z 10.0.20348\r\n2026-11-23T17:05:19.4024880Z Datacenter\r\n2026-11-23T17:05:19.4025173Z ##[endgroup]\r\n2026-11-23T17:05:19.4025475Z ##[group]Runner Image\r\n2026-11-23T17:05:19.4025825Z Image: windows-2022\r\n2026-11-23T17:05:19.4026159Z Version: 20261116.370.1\r\n2026-11-23T17:05:19.4026992Z Included Software: https://github.com/actions/runner-images/blob/win22/20261116.370/images/windows/Windows2022-Readme.md\r\n2026-11-23T17:05:19.4027870Z Image Release: https://github.com/actions/runner-images/releases/tag/win22%2F20261116.370\r\n2026-11-23T17:05:19.4028423Z ##[endgroup]\r\n2026-11-23T17:05:19.4029131Z ##[group]GITHUB_TOKEN Permissions\r\n2026-11-23T17:05:19.4030363Z Actions: read\r\n2026-11-23T17:05:19.4030694Z Contents: read\r\n2026-11-23T17:05:19.4031014Z Metadata: read\r\n2026-11-23T17:05:19.4031305Z ##[endgroup]\r\n2026-11-23T17:05:19.4032742Z Secret source: Actions\r\n2026-11-23T17:05:19.4033224Z Cache mode: write\r\n2026-11-23T17:05:19.4033681Z Prepare workflow directory\r\n2026-11-23T17:05:19.4316672Z Prepare all required actions\r\n2026-11-23T17:05:19.4350385Z Getting action download info\r\n2026-11-23T17:05:19.6829089Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)\r\n2026-11-23T17:05:19.8727493Z Uses: yom-chadash/gesher/.github/workflows/services-geocoder-worker-component.yml@refs/heads/perf/issue56-rgba-i420-20261123 (07ab5dd901e4e380f96ddb3865945afc29476d5f)\r\n2026-11-23T17:05:19.8730597Z Complete job name: union-services / controlled-worker (windows-2022)\r\n2026-11-23T17:05:20.0140151Z ##[group]Run actions/checkout@v4\r\n2026-11-23T17:05:20.0140830Z with:\r\n2026-11-23T17:05:20.0141063Z   repository: yom-chadash/gesher\r\n2026-11-23T17:05:20.0143152Z   token: ***\r\n2026-11-23T17:05:20.0143376Z   ssh-strict: true\r\n2026-11-23T17:05:20.0143603Z   ssh-user: git\r\n2026-11-23T17:05:20.0143833Z   persist-credentials: true\r\n2026-11-23T17:05:20.0144086Z   clean: true\r\n2026-11-23T17:05:20.0144323Z   sparse-checkout-cone-mode: true\r\n2026-11-23T17:05:20.0144593Z   fetch-depth: 1\r\n2026-11-23T17:05:20.0144827Z   fetch-tags: false\r\n2026-11-23T17:05:20.0145058Z   show-progress: true\r\n2026-11-23T17:05:20.0145287Z   lfs: false\r\n2026-11-23T17:05:20.0145497Z   submodules: false\r\n2026-11-23T17:05:20.0145732Z   set-safe-directory: true\r\n2026-11-23T17:05:20.0145996Z   allow-unsafe-pr-checkout: false\r\n2026-11-23T17:05:20.0146358Z ##[endgroup]\r\n2026-11-23T17:05:20.1183070Z Syncing repository: yom-chadash/gesher\r\n2026-11-23T17:05:20.1184225Z ##[group]Getting Git version info\r\n2026-11-23T17:05:20.1184626Z Working directory is 'D:\\a\\gesher\\gesher'\r\n2026-11-23T17:05:20.1733065Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" version\r\n2026-11-23T17:05:20.5477369Z git version 2.56.1.windows.1\r\n2026-11-23T17:05:20.5509354Z ##[endgroup]\r\n2026-11-23T17:05:20.5523092Z Temporarily overriding HOME='D:\\a\\_temp\\1bba3dfb-c2eb-4907-a880-d158fce4b9f4' before making global git config changes\r\n2026-11-23T17:05:20.5523935Z Adding repository directory to the temporary git global config as a safe directory\r\n2026-11-23T17:05:20.5530522Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --global --add safe.directory D:\\a\\gesher\\gesher\r\n2026-11-23T17:05:20.6136539Z Deleting the contents of 'D:\\a\\gesher\\gesher'\r\n2026-11-23T17:05:20.6140057Z ##[group]Initializing the repository\r\n2026-11-23T17:05:20.6146994Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" init D:\\a\\gesher\\gesher\r\n2026-11-23T17:05:20.6774729Z Initialized empty Git repository in D:/a/gesher/gesher/.git/\r\n2026-11-23T17:05:20.6806802Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" remote add origin https://github.com/yom-chadash/gesher\r\n2026-11-23T17:05:20.7361439Z ##[endgroup]\r\n2026-11-23T17:05:20.7361993Z ##[group]Disabling automatic garbage collection\r\n2026-11-23T17:05:20.7367595Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local gc.auto 0\r\n2026-11-23T17:05:20.7596376Z ##[endgroup]\r\n2026-11-23T17:05:20.7596991Z ##[group]Setting up auth\r\n2026-11-23T17:05:20.7606196Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local --name-only --get-regexp core\\.sshCommand\r\n2026-11-23T17:05:20.7851244Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" submodule foreach --recursive \"sh -c \\\"git config --local --name-only --get-regexp 'core\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\\\"\"\r\n2026-11-23T17:05:22.2815517Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local --name-only --get-regexp http\\.https\\:\\/\\/github\\.com\\/\\.extraheader\r\n2026-11-23T17:05:22.3072881Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" submodule foreach --recursive \"sh -c \\\"git config --local --name-only --get-regexp 'http\\.https\\:\\/\\/github\\.com\\/\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\\\"\"\r\n2026-11-23T17:05:22.7337600Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local --name-only --get-regexp ^includeIf\\.gitdir:\r\n2026-11-23T17:05:22.7584703Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" submodule foreach --recursive \"git config --local --show-origin --name-only --get-regexp remote.origin.url\"\r\n2026-11-23T17:05:23.1670909Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local http.https://github.com/.extraheader \"AUTHORIZATION: basic ***\"\r\n2026-11-23T17:05:23.1964977Z ##[endgroup]\r\n2026-11-23T17:05:23.1966209Z ##[group]Fetching the repository\r\n2026-11-23T17:05:23.1977875Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +07ab5dd901e4e380f96ddb3865945afc29476d5f:refs/remotes/origin/perf/issue56-rgba-i420-20261123\r\n2026-11-23T17:05:25.9460876Z From https://github.com/yom-chadash/gesher\r\n2026-11-23T17:05:25.9461600Z  * [new ref]         07ab5dd901e4e380f96ddb3865945afc29476d5f -> origin/perf/issue56-rgba-i420-20261123\r\n2026-11-23T17:05:25.9485081Z ##[endgroup]\r\n2026-11-23T17:05:25.9485327Z ##[group]Determining the checkout info\r\n2026-11-23T17:05:25.9486828Z ##[endgroup]\r\n2026-11-23T17:05:25.9493588Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" sparse-checkout disable\r\n2026-11-23T17:05:25.9861040Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local --unset-all extensions.worktreeConfig\r\n2026-11-23T17:05:26.0118462Z ##[group]Checking out the ref\r\n2026-11-23T17:05:26.0119093Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" checkout --progress --force -B perf/issue56-rgba-i420-20261123 refs/remotes/origin/perf/issue56-rgba-i420-20261123\r\n2026-11-23T17:05:26.6851127Z Switched to a new branch 'perf/issue56-rgba-i420-20261123'\r\n2026-11-23T17:05:26.6924440Z branch 'perf/issue56-rgba-i420-20261123' set up to track 'origin/perf/issue56-rgba-i420-20261123'.\r\n2026-11-23T17:05:26.6977494Z ##[endgroup]\r\n2026-11-23T17:05:26.7340197Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" log -1 --format=%H\r\n2026-11-23T17:05:26.7563975Z 07ab5dd901e4e380f96ddb3865945afc29476d5f\r\n2026-11-23T17:05:26.7879875Z ##[group]Run ./tools/windows4/test-tsf-job-supervisor.ps1\r\n2026-11-23T17:05:26.7880302Z \u001b[36;1m./tools/windows4/test-tsf-job-supervisor.ps1\u001b[0m\r\n2026-11-23T17:05:26.7981259Z shell: C:\\Program Files\\PowerShell\\7\\pwsh.EXE -command \". '{0}'\"\r\n2026-11-23T17:05:26.7981535Z ##[endgroup]\r\n2026-11-23T17:05:27.2364360Z TSF_CONTROLLER_SOURCE source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tools/windows4/TsfJobSupervisor.cs blob=625be4d5906bb48dd02d6103382fd2e85ac88738 sha256=070a03b1e1cc55538cd8bd5e5ff8bb2c65db5998b4d5442fc084f97f8c875359\r\n2026-11-23T17:05:27.2605393Z TSF_CONTROLLER_SOURCE source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tools/windows4/TsfJobWorker.cs blob=e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1 sha256=bbd8eb0982d1cf389114fa489c581b38fcaa09184618189dafd291504c99612c\r\n2026-11-23T17:05:27.2850658Z TSF_CONTROLLER_SOURCE source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tools/windows4/test-tsf-job-supervisor.ps1 blob=3b0f7ebb636b91859b86797f94136c0b6dccd5fd sha256=f73d32025218e9d962597d29107b10d5b9cf337ed85cdc1ad1a14d5a4903381e\r\n2026-11-23T17:05:27.3094343Z TSF_CONTROLLER_SOURCE source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tools/windows4/run-tsf-component.ps1 blob=ccc4d13fa150140ad5f6087f0139bf9e8958b30b sha256=8482a3a3ce7f2559431dfee660429f01a657694ca6db1fa38451d013935286ac\r\n2026-11-23T17:05:27.3337541Z TSF_CONTROLLER_SOURCE source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tools/ci/receipt-diagnostics.ps1 blob=b89f2f3f8a54a8b23937bae48ad900c85d4d49e9 sha256=6f9c75a7042b6777893cddfaf000498414ad192f2d006cd6a41d429a51d39b77\r\n2026-11-23T17:05:27.3595085Z TSF_CONTROLLER_SOURCE source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=.github/workflows/tsf-format-component.yml blob=9954d410d837da2b4cbe36735f3579d014b9754b sha256=7bc148d75ec9fde4e1c976f4ee0c92f1e1faff51b697d9efa3dbf34ef6b009cd\r\n2026-11-23T17:05:31.2692356Z TSF_RETAINED_PARENT exited=7788 toolhelp=absent expected_parent=4100 denied=actual wrong_pid=rejected\r\n2026-11-23T17:05:34.0277973Z TSF_CONTROL_COMPILER path=C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe sha256=baef2676444878d5818628f46483f4e55241d6380ecff0bbb855c470852e1872 worker_sha256=18d09991f19d38b54927b740f4b163512f01a184816d086cd1c49ca5748e556e\r\n2026-11-23T17:05:34.0588581Z TSF_LIMIT_POSITIVE child=executed marker=present\r\n2026-11-23T17:05:34.0884896Z TSF_CONSOLE_NEGATIVE case=console-invalid rejected=true handles_closed=true\r\n2026-11-23T17:05:34.0905415Z TSF_CONSOLE_NEGATIVE case=console-missing rejected=true handles_closed=true\r\n2026-11-23T17:05:34.1172634Z CONTROL stderr\r\n2026-11-23T17:05:34.1172919Z CONTROL race-writer\r\n2026-11-23T17:05:34.1386677Z TSF_CONSOLE_NEGATIVE case=console-changed rejected=true handles_closed=true\r\n2026-11-23T17:05:34.1400130Z TSF_CONTROL_MAIN_BUDGET case=normal milliseconds=3500\r\n2026-11-23T17:05:34.2274173Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":6832,\"ExitCode\":0,\"TotalProcesses\":2,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1984,\"JobHandleValue\":1996,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271341431056,\"MainMilliseconds\":56,\"CleanupMilliseconds\":13,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"CONTROL normal\\r\\n\",\"Error\":\"CONTROL stderr\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":8,\"ClosedHandles\":8,\"Errors\":[],\"Processes\":[{\"Pid\":6832,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271341431056,\"HandleValue\":1984,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":7216,\"Parent\":6832,\"WaitResult\":0,\"Birth\":134399271341518576,\"HandleValue\":924,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":16,\"StderrBytes\":16,\"CapturedBytes\":32,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:34.2538484Z TSF_CONTROL_MAIN_BUDGET case=exit23 milliseconds=3500\r\n2026-11-23T17:05:34.3233805Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":7840,\"ExitCode\":23,\"TotalProcesses\":2,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1968,\"JobHandleValue\":1948,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271342549553,\"MainMilliseconds\":53,\"CleanupMilliseconds\":13,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"CONTROL exit23\\r\\n\",\"Error\":\"CONTROL stderr\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":8,\"ClosedHandles\":8,\"Errors\":[],\"Processes\":[{\"Pid\":7840,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271342549553,\"HandleValue\":1968,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":8040,\"Parent\":7840,\"WaitResult\":0,\"Birth\":134399271342630414,\"HandleValue\":1852,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":16,\"StderrBytes\":16,\"CapturedBytes\":32,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:05:34.3239355Z TSF_CONTROL_MAIN_BUDGET case=hang milliseconds=1500\r\n2026-11-23T17:05:35.8512957Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":7156,\"ExitCode\":124,\"TotalProcesses\":2,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1992,\"JobHandleValue\":2028,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271343250249,\"MainMilliseconds\":1508,\"CleanupMilliseconds\":16,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"CONTROL hang\\r\\n\",\"Error\":\"CONTROL stderr\\r\\n\",\"Reason\":\"timeout\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":8,\"ClosedHandles\":8,\"Errors\":[],\"Processes\":[{\"Pid\":7156,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271343250249,\"HandleValue\":1992,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":2060,\"Parent\":7156,\"WaitResult\":0,\"Birth\":134399271343330356,\"HandleValue\":1976,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":14,\"StderrBytes\":16,\"CapturedBytes\":30,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:05:35.8530855Z TSF_CONTROL_MAIN_BUDGET case=descendant milliseconds=3500\r\n2026-11-23T17:05:36.0386376Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":3460,\"ExitCode\":0,\"TotalProcesses\":4,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1992,\"JobHandleValue\":2028,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":1,\"SnapshotWin32Error\":0,\"Birth\":134399271358543138,\"MainMilliseconds\":170,\"CleanupMilliseconds\":13,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"CONTROL descendant\\r\\nCONTROL writer\\r\\nRETAINED_WRITER_READY\\r\\nDESCENDANT_PID=2308\\r\\n\",\"Error\":\"CONTROL stderr\\r\\nCONTROL stderr\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":11,\"ClosedHandles\":11,\"Errors\":[],\"Processes\":[{\"Pid\":3460,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271358543138,\"HandleValue\":1992,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":3216,\"Parent\":3460,\"WaitResult\":0,\"Birth\":134399271358630178,\"HandleValue\":1968,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":2308,\"Parent\":3460,\"WaitResult\":0,\"Birth\":134399271359280601,\"HandleValue\":2000,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"descendant\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":7804,\"Parent\":2308,\"WaitResult\":0,\"Birth\":134399271359599041,\"HandleValue\":1996,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":2308,\"ConsoleChangedPid\":0,\"StdoutBytes\":80,\"StderrBytes\":32,\"CapturedBytes\":112,\"ControlStarted\":true,\"DescendantSuspended\":true,\"RetainedWriterReady\":true,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:36.0442560Z TSF_CONTROL_MAIN_BUDGET case=race milliseconds=3500\r\n2026-11-23T17:05:36.1416418Z TSF_CENSUS_RACE pid=960 live_capture=yes exited=yes toolhelp=absent\r\n2026-11-23T17:05:36.1656383Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":6588,\"ExitCode\":0,\"TotalProcesses\":3,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":2000,\"JobHandleValue\":2028,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271360453939,\"MainMilliseconds\":106,\"CleanupMilliseconds\":13,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"CONTROL race\\r\\nCONTROL race-writer\\r\\n\",\"Error\":\"CONTROL stderr\\r\\nCONTROL stderr\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":9,\"ClosedHandles\":9,\"Errors\":[],\"Processes\":[{\"Pid\":6588,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271360453939,\"HandleValue\":2000,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":7876,\"Parent\":6588,\"WaitResult\":0,\"Birth\":134399271360536588,\"HandleValue\":1984,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":960,\"Parent\":6588,\"WaitResult\":0,\"Birth\":134399271361176878,\"HandleValue\":2024,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"descendant\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":960,\"ConsoleChangedPid\":0,\"StdoutBytes\":35,\"StderrBytes\":32,\"CapturedBytes\":67,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:36.1662154Z TSF_CONTROL_MAIN_BUDGET case=unknown milliseconds=3500\r\n2026-11-23T17:05:36.2753870Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":7140,\"ExitCode\":124,\"TotalProcesses\":3,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":2028,\"JobHandleValue\":2016,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271361673230,\"MainMilliseconds\":91,\"CleanupMilliseconds\":16,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"\",\"Error\":\"\",\"Reason\":\"controller-error\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":false,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":9,\"ClosedHandles\":9,\"Errors\":[\"Unexpected job identity: 5944 parent=7140 image=D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\"],\"Processes\":[{\"Pid\":7140,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271361673230,\"HandleValue\":2028,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":1680,\"Parent\":7140,\"WaitResult\":0,\"Birth\":134399271361755260,\"HandleValue\":1996,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":5944,\"Parent\":7140,\"WaitResult\":0,\"Birth\":134399271362433410,\"HandleValue\":1992,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":17,\"StderrBytes\":16,\"CapturedBytes\":0,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":false,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:05:36.2760051Z TSF_UNEXPECTED_CHILD case=unknown actual=rejected cleanup=proved\r\n2026-11-23T17:05:36.2760279Z TSF_CONTROL_MAIN_BUDGET case=orphan milliseconds=3500\r\n2026-11-23T17:05:36.4161926Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":7376,\"ExitCode\":124,\"TotalProcesses\":4,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1996,\"JobHandleValue\":2016,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271362768613,\"MainMilliseconds\":125,\"CleanupMilliseconds\":12,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"\",\"Error\":\"\",\"Reason\":\"controller-error\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":false,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":9,\"ClosedHandles\":9,\"Errors\":[\"Unexpected job identity: 4552 parent=8172 image=D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Cumulative associations do not match captured unique identities: total=4 identities=3\"],\"Processes\":[{\"Pid\":7376,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271362768613,\"HandleValue\":1996,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":6848,\"Parent\":7376,\"WaitResult\":0,\"Birth\":134399271362852320,\"HandleValue\":1976,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":4552,\"Parent\":8172,\"WaitResult\":0,\"Birth\":134399271363687499,\"HandleValue\":2024,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":62,\"StderrBytes\":48,\"CapturedBytes\":0,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":false,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:05:36.4168069Z TSF_UNEXPECTED_CHILD case=orphan actual=rejected cleanup=proved\r\n2026-11-23T17:05:36.4168432Z TSF_CONTROL_MAIN_BUDGET case=limit milliseconds=3500\r\n2026-11-23T17:05:36.4827765Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":6116,\"ExitCode\":0,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":1,\"RootHandleValue\":1968,\"JobHandleValue\":2020,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271364175515,\"MainMilliseconds\":63,\"CleanupMilliseconds\":0,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"CONTROL limit\\r\\nLIMIT_CHILD_DENIED win32=1816\\r\\n\",\"Error\":\"CONTROL stderr\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[],\"Processes\":[{\"Pid\":6116,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271364175515,\"HandleValue\":1968,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":46,\"StderrBytes\":16,\"CapturedBytes\":62,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:36.4854850Z TSF_CONTROL_MAIN_BUDGET case=output milliseconds=3500\r\n2026-11-23T17:05:36.5721079Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":2544,\"ExitCode\":124,\"TotalProcesses\":2,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":2000,\"JobHandleValue\":924,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271364865888,\"MainMilliseconds\":68,\"CleanupMilliseconds\":16,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"\",\"Error\":\"\",\"Reason\":\"output-limit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":false,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":8,\"ClosedHandles\":8,\"Errors\":[],\"Processes\":[{\"Pid\":2544,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271364865888,\"HandleValue\":2000,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":6564,\"Parent\":2544,\"WaitResult\":0,\"Birth\":134399271364949555,\"HandleValue\":2016,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":1100016,\"StderrBytes\":16,\"CapturedBytes\":0,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":false,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:05:36.5743909Z TSF_CONTROL_MAIN_BUDGET case=terminate-denied milliseconds=1500\r\n2026-11-23T17:05:38.1059242Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":6616,\"ExitCode\":124,\"TotalProcesses\":2,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1984,\"JobHandleValue\":924,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271365755135,\"MainMilliseconds\":1513,\"CleanupMilliseconds\":15,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"\",\"Error\":\"\",\"Reason\":\"timeout\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":false,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":9,\"ClosedHandles\":9,\"Errors\":[\"Terminate denied Win32=5\"],\"Processes\":[{\"Pid\":6616,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271365755135,\"HandleValue\":1984,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":4592,\"Parent\":6616,\"WaitResult\":0,\"Birth\":134399271365835066,\"HandleValue\":1976,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":14,\"StderrBytes\":16,\"CapturedBytes\":0,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":false,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:05:38.1064112Z TSF_CONTROL_MAIN_BUDGET case=query-denied milliseconds=1500\r\n2026-11-23T17:05:39.6299813Z TSF_JOB_KERNEL_EVIDENCE {\"Pid\":5640,\"ExitCode\":124,\"TotalProcesses\":0,\"TerminatedProcesses\":0,\"LastJobActive\":4294967295,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1988,\"JobHandleValue\":2024,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271381075439,\"MainMilliseconds\":1505,\"CleanupMilliseconds\":16,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Output\":\"\",\"Error\":\"\",\"Reason\":\"timeout\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":false,\"OutputRead\":false,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":9,\"ClosedHandles\":9,\"Errors\":[\"QueryInformationJobObject Win32=5\",\"Cleanup unproved within shared 5000ms budget\"],\"Processes\":[{\"Pid\":5640,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271381075439,\"HandleValue\":1988,\"Image\":\"D:\\\\a\\\\_temp\\\\tsf-worker-ce4c4f9e52174b698916bef172ed10b9\\\\TsfJobWorker.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":2824,\"Parent\":5640,\"WaitResult\":0,\"Birth\":134399271381161215,\"HandleValue\":2016,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":14,\"StderrBytes\":16,\"CapturedBytes\":0,\"ControlStarted\":true,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":false,\"ExclusiveSnapshot\":false,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:05:39.6654522Z ##[group]Run ./tools/windows4/diagnose-pwsh-job.ps1\r\n2026-11-23T17:05:39.6654797Z \u001b[36;1m./tools/windows4/diagnose-pwsh-job.ps1\u001b[0m\r\n2026-11-23T17:05:39.6682231Z shell: C:\\Program Files\\PowerShell\\7\\pwsh.EXE -command \". '{0}'\"\r\n2026-11-23T17:05:39.6682433Z ##[endgroup]\r\n2026-11-23T17:05:40.4094836Z PWSH_CONSOLE_DETAILS pid=2416 hwnd=0 count=2 error=0 members=2416,5752\r\n2026-11-23T17:05:40.4375106Z PWSH_PARENT_CONSOLE actual=True\r\n2026-11-23T17:05:40.4431100Z PWSH_DIAGNOSTIC variant=production exe=C:\\Program Files\\PowerShell\\7\\pwsh.EXE args=-NoProfile -ExecutionPolicy Bypass -File \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1\" \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\production.marker\" script_sha256=5666A4EA549E270CE9397B8E99D7906FE0D63B5B748DCEF8E7DB6B0E33C68710 stdin=NUL stdout=owned-file stderr=owned-file\r\n2026-11-23T17:05:40.9490329Z PWSH_DIAGNOSTIC_RESULT variant=production marker=\"C:\\Program Files\\PowerShell\\7\\pwsh.dll\" -NoProfile -ExecutionPolicy Bypass -File D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1 D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\production.marker pid=780 count=3 members=780,2416,5752\r\n2026-11-23T17:05:40.9613258Z PWSH_DIAGNOSTIC_JOB {\"Pid\":780,\"ExitCode\":0,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":1,\"RootHandleValue\":1948,\"JobHandleValue\":1940,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271404536230,\"MainMilliseconds\":491,\"CleanupMilliseconds\":1,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Output\":\"DIAG_STDOUT\\r\\n\",\"Error\":\"DIAG_STDERR\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[],\"Processes\":[{\"Pid\":780,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271404536230,\"HandleValue\":1948,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":13,\"StderrBytes\":13,\"CapturedBytes\":26,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:40.9616526Z PWSH_CONSOLE_AFTER variant=production pid=2416 hwnd=0 count=2 error=0 members=2416,5752\r\n2026-11-23T17:05:40.9628086Z PWSH_DIAGNOSTIC variant=diag-detached-unlimited exe=C:\\Program Files\\PowerShell\\7\\pwsh.EXE args=-NoProfile -ExecutionPolicy Bypass -File \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1\" \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-detached-unlimited.marker\" script_sha256=5666A4EA549E270CE9397B8E99D7906FE0D63B5B748DCEF8E7DB6B0E33C68710 stdin=NUL stdout=owned-file stderr=owned-file\r\n2026-11-23T17:05:41.0781546Z PWSH_DIAGNOSTIC_RESULT variant=diag-detached-unlimited marker=<missing>\r\n2026-11-23T17:05:41.0796767Z PWSH_DIAGNOSTIC_JOB {\"Pid\":6708,\"ExitCode\":0,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1940,\"JobHandleValue\":1928,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271409638841,\"MainMilliseconds\":113,\"CleanupMilliseconds\":0,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Output\":\"\",\"Error\":\"\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[],\"Processes\":[{\"Pid\":6708,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271409638841,\"HandleValue\":1940,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":0,\"StderrBytes\":0,\"CapturedBytes\":0,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:41.0799482Z PWSH_CONSOLE_AFTER variant=diag-detached-unlimited pid=2416 hwnd=0 count=2 error=0 members=2416,5752\r\n2026-11-23T17:05:41.0806382Z PWSH_DIAGNOSTIC variant=diag-console-limited exe=C:\\Program Files\\PowerShell\\7\\pwsh.EXE args=-NoProfile -ExecutionPolicy Bypass -File \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1\" \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-console-limited.marker\" script_sha256=5666A4EA549E270CE9397B8E99D7906FE0D63B5B748DCEF8E7DB6B0E33C68710 stdin=NUL stdout=owned-file stderr=owned-file\r\n2026-11-23T17:05:41.5473090Z PWSH_DIAGNOSTIC_RESULT variant=diag-console-limited marker=\"C:\\Program Files\\PowerShell\\7\\pwsh.dll\" -NoProfile -ExecutionPolicy Bypass -File D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1 D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-console-limited.marker pid=7692 count=1 members=7692\r\n2026-11-23T17:05:41.5483675Z PWSH_DIAGNOSTIC_JOB {\"Pid\":7692,\"ExitCode\":0,\"TotalProcesses\":2,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":1,\"RootHandleValue\":1936,\"JobHandleValue\":1928,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271410815923,\"MainMilliseconds\":463,\"CleanupMilliseconds\":0,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Output\":\"\",\"Error\":\"\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":false,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":8,\"ClosedHandles\":8,\"Errors\":[\"Single-process job accumulated unexpected associations: 2\"],\"Processes\":[{\"Pid\":7692,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271410815923,\"HandleValue\":1936,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":7680,\"Parent\":7692,\"WaitResult\":0,\"Birth\":134399271410897246,\"HandleValue\":1948,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":13,\"StderrBytes\":13,\"CapturedBytes\":0,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":false,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:05:41.5486992Z PWSH_CONSOLE_AFTER variant=diag-console-limited pid=2416 hwnd=0 count=2 error=0 members=2416,5752\r\n2026-11-23T17:05:41.5495318Z PWSH_DIAGNOSTIC variant=diag-console-unlimited exe=C:\\Program Files\\PowerShell\\7\\pwsh.EXE args=-NoProfile -ExecutionPolicy Bypass -File \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1\" \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-console-unlimited.marker\" script_sha256=5666A4EA549E270CE9397B8E99D7906FE0D63B5B748DCEF8E7DB6B0E33C68710 stdin=NUL stdout=owned-file stderr=owned-file\r\n2026-11-23T17:05:42.0353670Z PWSH_DIAGNOSTIC_RESULT variant=diag-console-unlimited marker=\"C:\\Program Files\\PowerShell\\7\\pwsh.dll\" -NoProfile -ExecutionPolicy Bypass -File D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1 D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-console-unlimited.marker pid=7988 count=1 members=7988\r\n2026-11-23T17:05:42.0367030Z PWSH_DIAGNOSTIC_JOB {\"Pid\":7988,\"ExitCode\":0,\"TotalProcesses\":2,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1940,\"JobHandleValue\":1948,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271415506207,\"MainMilliseconds\":482,\"CleanupMilliseconds\":1,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Output\":\"DIAG_STDOUT\\r\\n\",\"Error\":\"DIAG_STDERR\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":8,\"ClosedHandles\":8,\"Errors\":[],\"Processes\":[{\"Pid\":7988,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271415506207,\"HandleValue\":1940,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true},{\"Pid\":1432,\"Parent\":7988,\"WaitResult\":0,\"Birth\":134399271415609715,\"HandleValue\":1968,\"Image\":\"C:\\\\Windows\\\\System32\\\\conhost.exe\",\"Role\":\"console-host\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":13,\"StderrBytes\":13,\"CapturedBytes\":26,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:42.0371043Z PWSH_CONSOLE_AFTER variant=diag-console-unlimited pid=2416 hwnd=0 count=2 error=0 members=2416,5752\r\n2026-11-23T17:05:42.0435229Z PWSH_DIAGNOSTIC variant=diag-inherit-limited exe=C:\\Program Files\\PowerShell\\7\\pwsh.EXE args=-NoProfile -ExecutionPolicy Bypass -File \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1\" \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-inherit-limited.marker\" script_sha256=5666A4EA549E270CE9397B8E99D7906FE0D63B5B748DCEF8E7DB6B0E33C68710 stdin=NUL stdout=owned-file stderr=owned-file\r\n2026-11-23T17:05:42.5446365Z PWSH_DIAGNOSTIC_RESULT variant=diag-inherit-limited marker=\"C:\\Program Files\\PowerShell\\7\\pwsh.dll\" -NoProfile -ExecutionPolicy Bypass -File D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1 D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-inherit-limited.marker pid=5456 count=3 members=5456,2416,5752\r\n2026-11-23T17:05:42.5456472Z PWSH_DIAGNOSTIC_JOB {\"Pid\":5456,\"ExitCode\":0,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":1,\"RootHandleValue\":1912,\"JobHandleValue\":1972,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271420394072,\"MainMilliseconds\":504,\"CleanupMilliseconds\":0,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Output\":\"DIAG_STDOUT\\r\\n\",\"Error\":\"DIAG_STDERR\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[],\"Processes\":[{\"Pid\":5456,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271420394072,\"HandleValue\":1912,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":13,\"StderrBytes\":13,\"CapturedBytes\":26,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:42.5461715Z PWSH_CONSOLE_AFTER variant=diag-inherit-limited pid=2416 hwnd=0 count=2 error=0 members=2416,5752\r\n2026-11-23T17:05:42.5472036Z PWSH_DIAGNOSTIC variant=diag-inherit-unlimited exe=C:\\Program Files\\PowerShell\\7\\pwsh.EXE args=-NoProfile -ExecutionPolicy Bypass -File \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1\" \"D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-inherit-unlimited.marker\" script_sha256=5666A4EA549E270CE9397B8E99D7906FE0D63B5B748DCEF8E7DB6B0E33C68710 stdin=NUL stdout=owned-file stderr=owned-file\r\n2026-11-23T17:05:43.0052847Z PWSH_DIAGNOSTIC_RESULT variant=diag-inherit-unlimited marker=\"C:\\Program Files\\PowerShell\\7\\pwsh.dll\" -NoProfile -ExecutionPolicy Bypass -File D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\child.ps1 D:\\a\\_temp\\pwsh-job-diag-91d9aba3e28d40aeb47c862afff47bc4\\diag-inherit-unlimited.marker pid=3840 count=3 members=3840,2416,5752\r\n2026-11-23T17:05:43.0062860Z PWSH_DIAGNOSTIC_JOB {\"Pid\":3840,\"ExitCode\":0,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":0,\"RootHandleValue\":1856,\"JobHandleValue\":1972,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271425484429,\"MainMilliseconds\":455,\"CleanupMilliseconds\":0,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Output\":\"DIAG_STDOUT\\r\\n\",\"Error\":\"DIAG_STDERR\\r\\n\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[],\"Processes\":[{\"Pid\":3840,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271425484429,\"HandleValue\":1856,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":13,\"StderrBytes\":13,\"CapturedBytes\":26,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:05:43.0067341Z PWSH_CONSOLE_AFTER variant=diag-inherit-unlimited pid=2416 hwnd=0 count=2 error=0 members=2416,5752\r\n2026-11-23T17:05:43.0993932Z ##[group]Run ./tests/windows/tracks/geocoder-operation-fixture.ps1\r\n2026-11-23T17:05:43.0994308Z \u001b[36;1m./tests/windows/tracks/geocoder-operation-fixture.ps1\u001b[0m\r\n2026-11-23T17:05:43.1019376Z shell: C:\\Program Files\\PowerShell\\7\\pwsh.EXE -command \". '{0}'\"\r\n2026-11-23T17:05:43.1019582Z ##[endgroup]\r\n2026-11-23T17:05:43.6684303Z case=success elapsed_ms=31 status=Completed cancel_calls=0 cancel_observed=0 result_reads=1 success_callbacks=1 worker_exited=True resources_disposed=True close_calls=2\r\n2026-11-23T17:05:43.6773879Z case=error elapsed_ms=8 status=Error cancel_calls=0 cancel_observed=0 result_reads=0 success_callbacks=0 worker_exited=True resources_disposed=True close_calls=2\r\n2026-11-23T17:05:43.6843418Z case=timeout elapsed_ms=6 status=Canceled cancel_calls=1 cancel_observed=1 result_reads=0 success_callbacks=0 worker_exited=True resources_disposed=True close_calls=2\r\n2026-11-23T17:05:43.6859091Z case=after elapsed_ms=1 status=Completed cancel_calls=1 cancel_observed=0 result_reads=0 success_callbacks=1 worker_exited=True resources_disposed=True close_calls=2\r\n2026-11-23T17:05:43.6872828Z case=unobserved elapsed_ms=0 status=Canceled cancel_calls=1 cancel_observed=1 result_reads=0 success_callbacks=0 worker_exited=True resources_disposed=True close_calls=2\r\n2026-11-23T17:06:28.8583109Z SERVICES_JOB_KERNEL_EVIDENCE {\"Pid\":2720,\"ExitCode\":124,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":1,\"RootHandleValue\":1956,\"JobHandleValue\":1920,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271438232981,\"MainMilliseconds\":45007,\"CleanupMilliseconds\":17,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Output\":\"worker-started\\r\\ncancel-entered\\r\\n\",\"Error\":\"\",\"Reason\":\"timeout\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":true,\"TerminateSucceeded\":true,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[],\"Processes\":[{\"Pid\":2720,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271438232981,\"HandleValue\":1956,\"Image\":\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":32,\"StderrBytes\":0,\"CapturedBytes\":32,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:06:28.8875191Z PASS controlled geocoder worker and child containment\r\n2026-11-23T17:06:28.9195883Z ##[group]Run if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'WinRT checkout identity mismatch' }\r\n2026-11-23T17:06:28.9196444Z \u001b[36;1mif ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'WinRT checkout identity mismatch' }\u001b[0m\r\n2026-11-23T17:06:28.9196764Z \u001b[36;1m$expected = @{\u001b[0m\r\n2026-11-23T17:06:28.9197118Z \u001b[36;1m  'tests/windows/tracks/geocoder-operation.ps1' = '75eb4cf6f9537c61ff27ec49d2a3a938c81b1618'\u001b[0m\r\n2026-11-23T17:06:28.9197735Z \u001b[36;1m  'tests/windows/tracks/geocoder-probe-exit.cs' = '4927e87a71c41069bbed24be748cfd0b771583d5'\u001b[0m\r\n2026-11-23T17:06:28.9198178Z \u001b[36;1m  'tests/windows/tracks/geocoder-winrt-supplier.cs' = '11da9f04efdbb98de30006b0c26e169bec6d8b19'\u001b[0m\r\n2026-11-23T17:06:28.9198583Z \u001b[36;1m  'tests/windows/helpers/geocoder-provider-probe.ps1' = 'd02fc316ccaca1ac856eaeae64df6e4053da569c'\u001b[0m\r\n2026-11-23T17:06:28.9199041Z \u001b[36;1m  'tests/windows/helpers/geocoder-winrt-fixture.ps1' = 'cbde2ac48b603f3cc12e544a3e42d744d9b58864'\u001b[0m\r\n2026-11-23T17:06:28.9199426Z \u001b[36;1m  'tests/windows/helpers/geocoder-roslyn-worker.ps1' = '31491e2cb20bf72e78c49476c9ab874649fee6c9'\u001b[0m\r\n2026-11-23T17:06:28.9199808Z \u001b[36;1m  'tests/windows/helpers/geocoder-compiler-host.ps1' = '43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f'\u001b[0m\r\n2026-11-23T17:06:28.9200181Z \u001b[36;1m  'tests/windows/helpers/geocoder-compile.ps1' = '90fceedc449a2ec11dfa80809e05163c89bcf2fa'\u001b[0m\r\n2026-11-23T17:06:28.9200570Z \u001b[36;1m  'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'\u001b[0m\r\n2026-11-23T17:06:28.9200930Z \u001b[36;1m  # The reviewed shared track also runs the camera callback-admission gate;\u001b[0m\r\n2026-11-23T17:06:28.9201230Z \u001b[36;1m  # its geocoder implementation and the other nine pins are unchanged.\u001b[0m\r\n2026-11-23T17:06:28.9201539Z \u001b[36;1m  'tests/windows/tracks/58-devices.ps1' = 'b912825df72db2afdd06c65edf760cc03c78e650'\u001b[0m\r\n2026-11-23T17:06:28.9201786Z \u001b[36;1m}\u001b[0m\r\n2026-11-23T17:06:28.9201930Z \u001b[36;1mforeach ($path in $expected.Keys) {\u001b[0m\r\n2026-11-23T17:06:28.9202105Z \u001b[36;1m  $actual = git hash-object $path\u001b[0m\r\n2026-11-23T17:06:28.9202382Z \u001b[36;1m  if ($LASTEXITCODE -ne 0 -or $actual -cne $expected[$path]) { throw \"WinRT source mismatch: $path\" }\u001b[0m\r\n2026-11-23T17:06:28.9202837Z \u001b[36;1m  Write-Host \"WINRT_SOURCE base=f0f52116 source=$env:GITHUB_SHA path=$path blob=$actual sha256=$((Get-FileHash $path -Algorithm SHA256).Hash)\"\u001b[0m\r\n2026-11-23T17:06:28.9203175Z \u001b[36;1m}\u001b[0m\r\n2026-11-23T17:06:28.9227216Z shell: C:\\Program Files\\PowerShell\\7\\pwsh.EXE -command \". '{0}'\"\r\n2026-11-23T17:06:28.9227415Z ##[endgroup]\r\n2026-11-23T17:06:29.1993251Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/helpers/geocoder-winrt-fixture.ps1 blob=cbde2ac48b603f3cc12e544a3e42d744d9b58864 sha256=D556DC02437E3305B7CE1CA9D13322D5C0B47FF3C0BE72A5752D4AAE5E9DFAC8\r\n2026-11-23T17:06:29.2290573Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/helpers/geocoder-compile.ps1 blob=90fceedc449a2ec11dfa80809e05163c89bcf2fa sha256=3419421BE6E3C1B9496503DED8E88F58AAE175AA3A436F6C90D131D639D73AF0\r\n2026-11-23T17:06:29.2618475Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/tracks/geocoder-operation.ps1 blob=75eb4cf6f9537c61ff27ec49d2a3a938c81b1618 sha256=9032F73125592E6AC6BC9337C8C86FB28750D4AB63C5F0079143BA2D143CC854\r\n2026-11-23T17:06:29.2942778Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/tracks/geocoder-winrt-supplier.cs blob=11da9f04efdbb98de30006b0c26e169bec6d8b19 sha256=B2E4AE3A46F3D9C16D37A849441B84A5F8B147AA03D09AAA12F5E05E6487ACCE\r\n2026-11-23T17:06:29.3324342Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/tracks/geocoder-probe-exit.cs blob=4927e87a71c41069bbed24be748cfd0b771583d5 sha256=C34B84C1D3C10C2C5AE4F6B2BC62B5A8540A27D46CA133C58C898EF0EC54ED1E\r\n2026-11-23T17:06:29.3605671Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/helpers/geocoder-roslyn-worker.ps1 blob=31491e2cb20bf72e78c49476c9ab874649fee6c9 sha256=581708EE7E2603212BDF885006D49D7AE4DAEBFF2FEA360F6D3ACD77B718ABF2\r\n2026-11-23T17:06:29.3898892Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/helpers/geocoder-compiler-host.ps1 blob=43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f sha256=1E0208BD6A7148E049ACBBB3619B02618BE72112887244F1ADC93BE31204103D\r\n2026-11-23T17:06:29.4201745Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/helpers/run-geocoder-winrt-component.ps1 blob=1277bcc858c9c52eb8b24476831aadb286831418 sha256=2F9CAB32B3F5324975635EBC4FBB8D79EC1689EB0570F60C817F96BF38287114\r\n2026-11-23T17:06:29.4472402Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/tracks/58-devices.ps1 blob=b912825df72db2afdd06c65edf760cc03c78e650 sha256=2DB21CFC41B89B594E85CD54F3DD268E9FE1ABD14D72CFEDFF4F138F6DDF9200\r\n2026-11-23T17:06:29.4714656Z WINRT_SOURCE base=f0f52116 source=07ab5dd901e4e380f96ddb3865945afc29476d5f path=tests/windows/helpers/geocoder-provider-probe.ps1 blob=d02fc316ccaca1ac856eaeae64df6e4053da569c sha256=805A0143745BB2DFEB45D7C7AFF2581ED8299D2AF1F81046356EBBAB0FF0DD09\r\n2026-11-23T17:06:29.5304839Z ##[group]Run ./tests/windows/helpers/run-geocoder-winrt-component.ps1\r\n2026-11-23T17:06:29.5305201Z \u001b[36;1m./tests/windows/helpers/run-geocoder-winrt-component.ps1\u001b[0m\r\n2026-11-23T17:06:29.5330136Z shell: C:\\Program Files\\PowerShell\\7\\pwsh.EXE -command \". '{0}'\"\r\n2026-11-23T17:06:29.5330351Z ##[endgroup]\r\n2026-11-23T17:06:30.3431611Z WINRT_ORCHESTRATOR version=7.6.10 home=C:\\Program Files\\PowerShell\\7\r\n2026-11-23T17:06:32.5648682Z WINRT_PRIVATE_COMPILER_PACKAGE {\"ReleaseId\":\"423544544\",\"Sha256\":\"ce7484804c0f0ad4dda10c958e71acdaf7eebfb22505c1b480f89e0e9f1da94d\",\"Version\":\"7.6.9\",\"Bytes\":109620855,\"AssetId\":\"675639558\",\"Entries\":661,\"Home\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\",\"ExpandedBytes\":256666658,\"Url\":\"https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/PowerShell-7.6.9-win-x64.zip\"}\r\n2026-11-23T17:06:33.5334063Z WINRT_COMPILER_START {\"Arguments\":\"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \\\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\helpers\\\\geocoder-roslyn-worker.ps1\\\"\",\"Package\":{\"ReleaseId\":\"423544544\",\"Sha256\":\"ce7484804c0f0ad4dda10c958e71acdaf7eebfb22505c1b480f89e0e9f1da94d\",\"Version\":\"7.6.9\",\"Bytes\":109620855,\"AssetId\":\"675639558\",\"Entries\":661,\"Home\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\",\"ExpandedBytes\":256666658,\"Url\":\"https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/PowerShell-7.6.9-win-x64.zip\"},\"CompilerSha256\":\"2a6769a3330dc1084d0154bfde7d164ab750ca7f700f313f9d417c1be78b2233\",\"CompilerVersion\":\"7.6.9.500\",\"PowerShell\":\"7.6.9\",\"WorkerSha256\":\"581708ee7e2603212bdf885006d49d7ae4daebff2fea360f6d3acd77b718abf2\",\"RunAttempt\":\"1\",\"Sources\":[{\"Sha256\":\"c34b84c1d3c10c2c5ae4f6b2bc62b5a8540a27d46ca133c58c898ef0ec54ed1e\",\"Path\":\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\tracks\\\\geocoder-probe-exit.cs\"},{\"Sha256\":\"b2e4ae3a46f3d9c16d37a849441b84a5f8b147aa03d09aaa12f5e05e6487acce\",\"Path\":\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\tracks\\\\geocoder-winrt-supplier.cs\"}],\"Options\":\"CSharp5; NetFramework4; library; Release; AnyCpu; deterministic; no concurrent build; no native resources; 40000ms cancellation\",\"SourceRevision\":\"07ab5dd901e4e380f96ddb3865945afc29476d5f\",\"Output\":\"D:\\\\a\\\\_temp\\\\geocoder-compiled-a29d2b8d568d4f4e8c21a52bf9254a2e\\\\GesherGeocoderProbes.dll\",\"Compiler\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\\\\pwsh.exe\",\"Worker\":\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\helpers\\\\geocoder-roslyn-worker.ps1\",\"ReferenceContract\":\"Explicit .NET Framework 4 references; helpers use no WinRT metadata. Runtime projects Windows.Services.Maps and System.Runtime.WindowsRuntime in Windows PowerShell 5.\",\"RunId\":\"45194542579\",\"ArgumentVector\":[\"-NoProfile\",\"-NonInteractive\",\"-ExecutionPolicy\",\"Bypass\",\"-File\",\"\\\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\helpers\\\\geocoder-roslyn-worker.ps1\\\"\"],\"Role\":\"geocoder-helper-compiler\",\"Repository\":\"yom-chadash/gesher\",\"Producer\":\"Pinned in-process Roslyn in private pwsh owned by TsfJobSupervisor\",\"Compilers\":[{\"AssemblyName\":\"Microsoft.CodeAnalysis.CSharp, Version=5.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35\",\"Path\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\\\\Microsoft.CodeAnalysis.CSharp.dll\",\"Sha256\":\"5e9323e98d99f669acd10705c40d985dbabeaf0984285ed32922f91df223124b\"},{\"AssemblyName\":\"Microsoft.CodeAnalysis, Version=5.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35\",\"Path\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\\\\Microsoft.CodeAnalysis.dll\",\"Sha256\":\"e7a25cbdec95390e9672659872189da368032625d784c25569617617932c145f\"}],\"References\":[{\"Sha256\":\"11ac114c43ecf6996bef58ba3c99fba3693a4560a84eeadde54d193060dc626c\",\"Path\":\"C:\\\\Windows\\\\Microsoft.NET\\\\Framework64\\\\v4.0.30319\\\\mscorlib.dll\"},{\"Sha256\":\"15adc79ede47ebfa67c9cbac1bfdc98493cddfcdff743fcfc10f4be4224a14aa\",\"Path\":\"C:\\\\Windows\\\\Microsoft.NET\\\\Framework64\\\\v4.0.30319\\\\System.dll\"},{\"Sha256\":\"8b898bed54ae8cc61f9c58cc3eb062724f8357d2bdda338b5d363654ecff333d\",\"Path\":\"C:\\\\Windows\\\\Microsoft.NET\\\\Framework64\\\\v4.0.30319\\\\System.Core.dll\"}]}\r\n2026-11-23T17:06:34.7942889Z WINRT_JOB_KERNEL_EVIDENCE role=compiler {\"Pid\":3720,\"ExitCode\":0,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":1,\"RootHandleValue\":2560,\"JobHandleValue\":2552,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271935469865,\"MainMilliseconds\":1240,\"CleanupMilliseconds\":1,\"Image\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\\\\pwsh.exe\",\"Output\":\"WINRT_COMPILER_HOST version=7.6.9 home=D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh clr=10.0.14\\r\\nWINRT_ROSLYN_EMIT success=True external_compilers=False cancellation_ms=40000 language=CSharp5 target=NetFramework4 output=library optimize=Release platform=AnyCpu deterministic=True concurrent=False native_resources=False\\r\\n\",\"Error\":\"\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[],\"Processes\":[{\"Pid\":3720,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271935469865,\"HandleValue\":2560,\"Image\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\\\\pwsh.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":340,\"StderrBytes\":0,\"CapturedBytes\":340,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:06:34.8167198Z WINRT_COMPILER_HOST version=7.6.9 home=D:\\a\\_temp\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\pwsh clr=10.0.14\r\n2026-11-23T17:06:34.8167964Z WINRT_ROSLYN_EMIT success=True external_compilers=False cancellation_ms=40000 language=CSharp5 target=NetFramework4 output=library optimize=Release platform=AnyCpu deterministic=True concurrent=False native_resources=False\r\n2026-11-23T17:06:34.8168430Z \r\n2026-11-23T17:06:34.8622907Z WINRT_COMPILER_RECEIPT {\"Arguments\":\"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \\\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\helpers\\\\geocoder-roslyn-worker.ps1\\\"\",\"Package\":{\"ReleaseId\":\"423544544\",\"Sha256\":\"ce7484804c0f0ad4dda10c958e71acdaf7eebfb22505c1b480f89e0e9f1da94d\",\"Version\":\"7.6.9\",\"Bytes\":109620855,\"AssetId\":\"675639558\",\"Entries\":661,\"Home\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\",\"ExpandedBytes\":256666658,\"Url\":\"https://github.com/PowerShell/PowerShell/releases/download/v7.6.9/PowerShell-7.6.9-win-x64.zip\"},\"CompilerSha256\":\"2a6769a3330dc1084d0154bfde7d164ab750ca7f700f313f9d417c1be78b2233\",\"CompilerVersion\":\"7.6.9.500\",\"PowerShell\":\"7.6.9\",\"WorkerSha256\":\"581708ee7e2603212bdf885006d49d7ae4daebff2fea360f6d3acd77b718abf2\",\"OutputSha256\":\"deec6ef8ebf0c6b8e8e405d1b65690ee290a54941290c06765bc960382544a14\",\"RunAttempt\":\"1\",\"Sources\":[{\"Sha256\":\"c34b84c1d3c10c2c5ae4f6b2bc62b5a8540a27d46ca133c58c898ef0ec54ed1e\",\"Path\":\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\tracks\\\\geocoder-probe-exit.cs\"},{\"Sha256\":\"b2e4ae3a46f3d9c16d37a849441b84a5f8b147aa03d09aaa12f5e05e6487acce\",\"Path\":\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\tracks\\\\geocoder-winrt-supplier.cs\"}],\"Options\":\"CSharp5; NetFramework4; library; Release; AnyCpu; deterministic; no concurrent build; no native resources; 40000ms cancellation\",\"SourceRevision\":\"07ab5dd901e4e380f96ddb3865945afc29476d5f\",\"Output\":\"D:\\\\a\\\\_temp\\\\geocoder-compiled-a29d2b8d568d4f4e8c21a52bf9254a2e\\\\GesherGeocoderProbes.dll\",\"Compiler\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\\\\pwsh.exe\",\"Worker\":\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\helpers\\\\geocoder-roslyn-worker.ps1\",\"ReferenceContract\":\"Explicit .NET Framework 4 references; helpers use no WinRT metadata. Runtime projects Windows.Services.Maps and System.Runtime.WindowsRuntime in Windows PowerShell 5.\",\"RunId\":\"45194542579\",\"ArgumentVector\":[\"-NoProfile\",\"-NonInteractive\",\"-ExecutionPolicy\",\"Bypass\",\"-File\",\"\\\"D:\\\\a\\\\gesher\\\\gesher\\\\tests\\\\windows\\\\helpers\\\\geocoder-roslyn-worker.ps1\\\"\"],\"Role\":\"geocoder-helper-compiler\",\"Repository\":\"yom-chadash/gesher\",\"Producer\":\"Pinned in-process Roslyn in private pwsh owned by TsfJobSupervisor\",\"Compilers\":[{\"AssemblyName\":\"Microsoft.CodeAnalysis.CSharp, Version=5.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35\",\"Path\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\\\\Microsoft.CodeAnalysis.CSharp.dll\",\"Sha256\":\"5e9323e98d99f669acd10705c40d985dbabeaf0984285ed32922f91df223124b\"},{\"AssemblyName\":\"Microsoft.CodeAnalysis, Version=5.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35\",\"Path\":\"D:\\\\a\\\\_temp\\\\geocoder-tools-ca4a1057761f4aa1aaed5249dba2c376\\\\pwsh\\\\Microsoft.CodeAnalysis.dll\",\"Sha256\":\"e7a25cbdec95390e9672659872189da368032625d784c25569617617932c145f\"}],\"References\":[{\"Sha256\":\"11ac114c43ecf6996bef58ba3c99fba3693a4560a84eeadde54d193060dc626c\",\"Path\":\"C:\\\\Windows\\\\Microsoft.NET\\\\Framework64\\\\v4.0.30319\\\\mscorlib.dll\"},{\"Sha256\":\"15adc79ede47ebfa67c9cbac1bfdc98493cddfcdff743fcfc10f4be4224a14aa\",\"Path\":\"C:\\\\Windows\\\\Microsoft.NET\\\\Framework64\\\\v4.0.30319\\\\System.dll\"},{\"Sha256\":\"8b898bed54ae8cc61f9c58cc3eb062724f8357d2bdda338b5d363654ecff333d\",\"Path\":\"C:\\\\Windows\\\\Microsoft.NET\\\\Framework64\\\\v4.0.30319\\\\System.Core.dll\"}]}\r\n2026-11-23T17:06:44.7927373Z WINRT_JOB_KERNEL_EVIDENCE role=fixture {\"Pid\":3120,\"ExitCode\":0,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":1,\"RootHandleValue\":2552,\"JobHandleValue\":1256,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399271948639038,\"MainMilliseconds\":9926,\"CleanupMilliseconds\":0,\"Image\":\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\",\"Output\":\"WINRT_RUNTIME_LOAD source_sha=07ab5dd901e4e380f96ddb3865945afc29476d5f dll_sha256=deec6ef8ebf0c6b8e8e405d1b65690ee290a54941290c06765bc960382544a14 assembly=GesherGeocoderProbes, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null receipt_sha256=1e013770b89e9cd4ba81bc421464f41e7be3545177eb8d2429001fbe648bb4a6 compilation=False ps=5.1.20348.5773 clr=4.0.30319.42000\\nWINRT_ADAPTER case=success operation_type=System.Threading.Tasks.TaskToAsyncOperationAdapter`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]] task_status=RanToCompletion cancel_observed=0 result_reads=1 disposed=True supplier_disposed=True\\nWINRT_ADAPTER case=error operation_type=System.Threading.Tasks.TaskToAsyncOperationAdapter`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]] task_status=Faulted cancel_observed=0 result_reads=0 disposed=True supplier_disposed=True\\nWINRT_ADAPTER case=timeout operation_type=System.Threading.Tasks.TaskToAsyncOperationAdapter`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]] task_status=Canceled cancel_observed=1 result_reads=0 disposed=True supplier_disposed=True\\nWINRT_ORDER case=late bridge_completed_before_cancel=True\\nWINRT_ADAPTER case=late operation_type=System.Threading.Tasks.TaskToAsyncOperationAdapter`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]] task_status=RanToCompletion cancel_observed=0 result_reads=0 disposed=True supplier_disposed=True\\n\",\"Error\":\"\",\"Reason\":\"exit\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":true,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[],\"Processes\":[{\"Pid\":3120,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399271948639038,\"HandleValue\":2552,\"Image\":\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":1550,\"StderrBytes\":0,\"CapturedBytes\":1550,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":true,\"LimitChildRan\":false,\"Success\":true}\r\n2026-11-23T17:06:44.7935813Z WINRT_RUNTIME_LOAD source_sha=07ab5dd901e4e380f96ddb3865945afc29476d5f dll_sha256=deec6ef8ebf0c6b8e8e405d1b65690ee290a54941290c06765bc960382544a14 assembly=GesherGeocoderProbes, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null receipt_sha256=1e013770b89e9cd4ba81bc421464f41e7be3545177eb8d2429001fbe648bb4a6 compilation=False ps=5.1.20348.5773 clr=4.0.30319.42000\r\n2026-11-23T17:06:44.7937168Z WINRT_ADAPTER case=success operation_type=System.Threading.Tasks.TaskToAsyncOperationAdapter`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]] task_status=RanToCompletion cancel_observed=0 result_reads=1 disposed=True supplier_disposed=True\r\n2026-11-23T17:06:44.7938467Z WINRT_ADAPTER case=error operation_type=System.Threading.Tasks.TaskToAsyncOperationAdapter`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]] task_status=Faulted cancel_observed=0 result_reads=0 disposed=True supplier_disposed=True\r\n2026-11-23T17:06:44.7939572Z WINRT_ADAPTER case=timeout operation_type=System.Threading.Tasks.TaskToAsyncOperationAdapter`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]] task_status=Canceled cancel_observed=1 result_reads=0 disposed=True supplier_disposed=True\r\n2026-11-23T17:06:44.7940193Z WINRT_ORDER case=late bridge_completed_before_cancel=True\r\n2026-11-23T17:06:44.7940829Z WINRT_ADAPTER case=late operation_type=System.Threading.Tasks.TaskToAsyncOperationAdapter`1[[System.Int32, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089]] task_status=RanToCompletion cancel_observed=0 result_reads=0 disposed=True supplier_disposed=True\r\n2026-11-23T17:06:44.7941628Z \r\n2026-11-23T17:06:44.7941737Z PASS WinRT fixture with actual bridge and owned child retirement\r\n2026-11-23T17:06:46.0241077Z WINRT_JOB_KERNEL_EVIDENCE role=provider {\"Pid\":780,\"ExitCode\":0,\"TotalProcesses\":1,\"TerminatedProcesses\":0,\"LastJobActive\":0,\"RootWaitResult\":0,\"PreResumeActive\":1,\"ActiveProcessLimit\":1,\"RootHandleValue\":2096,\"JobHandleValue\":2604,\"SuspendedThreadCount\":1,\"DescendantThreadCount\":0,\"SnapshotWin32Error\":0,\"Birth\":134399272047949407,\"MainMilliseconds\":1227,\"CleanupMilliseconds\":0,\"Image\":\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\",\"Output\":\"\",\"Error\":\"\",\"Reason\":\"controller-error\",\"Assigned\":true,\"MemberBeforeResume\":true,\"SuspendedSingleThread\":true,\"RootSignaled\":true,\"JobEmpty\":true,\"OutputRead\":false,\"TerminateRequested\":false,\"TerminateSucceeded\":false,\"RootHandleClosed\":true,\"ThreadHandleClosed\":true,\"OwnedHandles\":7,\"ClosedHandles\":7,\"Errors\":[\"Incomplete job PID census\"],\"Processes\":[{\"Pid\":780,\"Parent\":0,\"WaitResult\":0,\"Birth\":134399272047949407,\"HandleValue\":2096,\"Image\":\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\",\"Role\":\"root\",\"Member\":true,\"Signaled\":true,\"Closed\":true}],\"DescendantPid\":0,\"ConsoleChangedPid\":0,\"StdoutBytes\":537,\"StderrBytes\":0,\"CapturedBytes\":0,\"ControlStarted\":false,\"DescendantSuspended\":false,\"RetainedWriterReady\":false,\"WritersRetired\":true,\"ExclusiveSnapshot\":false,\"LimitChildRan\":false,\"Success\":false}\r\n2026-11-23T17:06:46.0368194Z WINRT_COMPILER_CLEANUP files_removed=True directory_removed=True\r\n2026-11-23T17:06:46.1001380Z WINRT_PRIVATE_COMPILER_CLEANUP directory_removed=True\r\n2026-11-23T17:06:46.1645257Z \u001b[31;1mException: \u001b[0mD:\\a\\gesher\\gesher\\tests\\windows\\helpers\\geocoder-compile.ps1:6\u001b[0m\r\n2026-11-23T17:06:46.1645628Z \u001b[31;1m\u001b[0m\u001b[36;1mLine |\u001b[0m\r\n2026-11-23T17:06:46.1646010Z \u001b[31;1m\u001b[0m\u001b[36;1m\u001b[36;1m   6 | \u001b[0m \u2026  0 -or $r.Errors.Count -ne 0) { \u001b[36;1mthrow \"WinRT $Role did not succeed\"\u001b[0m }\u001b[0m\r\n2026-11-23T17:06:46.1646453Z \u001b[31;1m\u001b[0m\u001b[36;1m\u001b[36;1m\u001b[0m\u001b[36;1m\u001b[0m\u001b[36;1m     | \u001b[31;1m                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\u001b[0m\r\n2026-11-23T17:06:46.1647144Z \u001b[31;1m\u001b[0m\u001b[36;1m\u001b[36;1m\u001b[0m\u001b[36;1m\u001b[0m\u001b[36;1m\u001b[31;1m\u001b[31;1m\u001b[36;1m     | \u001b[31;1mWinRT provider did not succeed\u001b[0m\r\n2026-11-23T17:06:46.1915252Z ##[error]Process completed with exit code 1.\r\n2026-11-23T17:06:46.2075842Z Post job cleanup.\r\n2026-11-23T17:06:46.3225955Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" version\r\n2026-11-23T17:06:46.3436991Z git version 2.56.1.windows.1\r\n2026-11-23T17:06:46.3484182Z Temporarily overriding HOME='D:\\a\\_temp\\b2548020-103f-40de-82fa-e30ec0bccd85' before making global git config changes\r\n2026-11-23T17:06:46.3484667Z Adding repository directory to the temporary git global config as a safe directory\r\n2026-11-23T17:06:46.3492970Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --global --add safe.directory D:\\a\\gesher\\gesher\r\n2026-11-23T17:06:46.3744370Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local --name-only --get-regexp core\\.sshCommand\r\n2026-11-23T17:06:46.3992538Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" submodule foreach --recursive \"sh -c \\\"git config --local --name-only --get-regexp 'core\\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\\\"\"\r\n2026-11-23T17:06:46.7804998Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local --name-only --get-regexp http\\.https\\:\\/\\/github\\.com\\/\\.extraheader\r\n2026-11-23T17:06:46.8008339Z http.https://github.com/.extraheader\r\n2026-11-23T17:06:46.8045909Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local --unset-all http.https://github.com/.extraheader\r\n2026-11-23T17:06:46.8298922Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" submodule foreach --recursive \"sh -c \\\"git config --local --name-only --get-regexp 'http\\.https\\:\\/\\/github\\.com\\/\\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\\\"\"\r\n2026-11-23T17:06:47.2158827Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" config --local --name-only --get-regexp ^includeIf\\.gitdir:\r\n2026-11-23T17:06:47.2394482Z [command]\"C:\\Program Files\\Git\\bin\\git.exe\" submodule foreach --recursive \"git config --local --show-origin --name-only --get-regexp remote.origin.url\"\r\n2026-11-23T17:06:47.6458904Z Cleaning up orphan processes\r\n2026-11-23T17:06:47.6697276Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/\r\n",
+  "provider_retirement_record": {
+    "Pid": 780,
+    "ExitCode": 0,
+    "TotalProcesses": 1,
+    "TerminatedProcesses": 0,
+    "LastJobActive": 0,
+    "RootWaitResult": 0,
+    "PreResumeActive": 1,
+    "ActiveProcessLimit": 1,
+    "RootHandleValue": 2096,
+    "JobHandleValue": 2604,
+    "SuspendedThreadCount": 1,
+    "DescendantThreadCount": 0,
+    "SnapshotWin32Error": 0,
+    "Birth": 134399272047949407,
+    "MainMilliseconds": 1227,
+    "CleanupMilliseconds": 0,
+    "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "Output": "",
+    "Error": "",
+    "Reason": "controller-error",
+    "Assigned": true,
+    "MemberBeforeResume": true,
+    "SuspendedSingleThread": true,
+    "RootSignaled": true,
+    "JobEmpty": true,
+    "OutputRead": false,
+    "TerminateRequested": false,
+    "TerminateSucceeded": false,
+    "RootHandleClosed": true,
+    "ThreadHandleClosed": true,
+    "OwnedHandles": 7,
+    "ClosedHandles": 7,
+    "Errors": [
+      "Incomplete job PID census"
+    ],
+    "Processes": [
+      {
+        "Pid": 780,
+        "Parent": 0,
+        "WaitResult": 0,
+        "Birth": 134399272047949407,
+        "HandleValue": 2096,
+        "Image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "Role": "root",
+        "Member": true,
+        "Signaled": true,
+        "Closed": true
+      }
+    ],
+    "DescendantPid": 0,
+    "ConsoleChangedPid": 0,
+    "StdoutBytes": 537,
+    "StderrBytes": 0,
+    "CapturedBytes": 0,
+    "ControlStarted": false,
+    "DescendantSuspended": false,
+    "RetainedWriterReady": false,
+    "WritersRetired": true,
+    "ExclusiveSnapshot": false,
+    "LimitChildRan": false,
+    "Success": false
+  },
+  "baseline": "e505ad227523aaca566d05b8af6e466495c819cc",
+  "controller_sha256": "070a03b1e1cc55538cd8bd5e5ff8bb2c65db5998b4d5442fc084f97f8c875359",
+  "pr393_controller_sha256": "15dd6752990656078caf08aa20f45dbce3fca734847cbe5948f27871cc05f20e",
+  "failed_main_controller_identical": true,
+  "original_geocoder_entry_restored_by_removing_single_invocation": true,
+  "current_inputs": {
+    "tools/windows4/TsfJobSupervisor.cs": "070a03b1e1cc55538cd8bd5e5ff8bb2c65db5998b4d5442fc084f97f8c875359",
+    "tests/windows/helpers/geocoder-compile.ps1": "31d5dff7fedf78b9addac84eb5fce3c076fe012d23495950680de983275a1da4",
+    "tests/windows/helpers/PidCensusExitProbe.cs": "d9dc66228a2959c9fcc31dee9fcfa159b0af7a35a1ad49cec9033816b03f6ddf",
+    "tests/windows/helpers/pid-census-exit-probe.ps1": "afe17a572d48bcbaa8fc0b45cae4788e839eee16d362be8d7d4a72ce9134bbfc",
+    "tools/test_pid_census_exit_probe.ps1": "107a5b6825cb528535cd502fd0e1236c993ca09e311cb10374fb0a411fe3ac48"
+  },
+  "local_host_controls": {
+    "checks": 13,
+    "log": "PID_CENSUS_HOST_CHECKS_PASS checks=13 native_windows_execution=False\n",
+    "log_sha256": "febeb9384ba064c3293d30b52b85ba4eadfe0fb975f2a255677cdd9ffd7a308c",
+    "windows_execution": false,
+    "reproduce": "pwsh -NoProfile -File tools/test_pid_census_exit_probe.ps1"
+  },
+  "original_selected_source_policy": {
+    "passed": true,
+    "log_sha256": "8c5fbf3e0a1c933e08fe243c344da366b5d0b9df0751ae36860c97ce3f1be49f"
+  },
+  "reference": "https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_process_id_list",
+  "limits": "The historical PID-list header/IDs were not logged. Adjacent raw observations and the separately invoked actual controller are not one atomic kernel observation; the probe will not claim otherwise.",
+  "winrt_source_identity_followup": {
+    "published_parent": "218b735e6c9a67a50124f50063c9dc672d6393be",
+    "failed_upstream_run": 45235096965,
+    "failed_run_attempt": 2,
+    "tested_merge": "71c4be9899c19cd280c674bb56bed9a90f2bb15b",
+    "diagnosed_failure": "The WinRT identity gate still pinned geocoder-compile.ps1 before the reviewed one-call PID diagnostic extension.",
+    "workflow_sha256": "784d9f7a0c1ec07e44f8093295e6944ecbdac8542780ecb8cbf67fa996416dfd",
+    "original_json_keys_retained": [
+      "status",
+      "failed_upstream_pr",
+      "failed_head",
+      "run",
+      "job",
+      "event",
+      "log_utf8_sha256",
+      "original_decoded_log",
+      "provider_retirement_record",
+      "baseline",
+      "controller_sha256",
+      "pr393_controller_sha256",
+      "failed_main_controller_identical",
+      "original_geocoder_entry_restored_by_removing_single_invocation",
+      "current_inputs",
+      "local_host_controls",
+      "original_selected_source_policy",
+      "reference",
+      "limits"
+    ],
+    "scope": "One reviewed helper pin and two new exact diagnostic input pins; nine original source pins and all executable gate predicates unchanged.",
+    "proof": {
+      "published_parent": "218b735e6c9a67a50124f50063c9dc672d6393be",
+      "workflow": ".github/workflows/services-geocoder-worker-component.yml",
+      "original_workflow_sha256": "e36fab8edbd2ef63e7e6330e383888732678fa776f4d5fb34a6cc4f373d4fd9e",
+      "current_workflow_sha256": "784d9f7a0c1ec07e44f8093295e6944ecbdac8542780ecb8cbf67fa996416dfd",
+      "original_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "current_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+        "tests/windows/helpers/pid-census-exit-probe.ps1": "21926a098bfc48e86b5723765ae3f4234615b5ab",
+        "tests/windows/helpers/PidCensusExitProbe.cs": "c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "unchanged_original_pins": 9,
+      "new_diagnostic_pins": 2,
+      "original_helper_git_blob": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+      "current_helper_git_blob": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+      "helper_changes_exactly_one_invocation": true,
+      "executable_workflow_skeleton_identical": true,
+      "runs": [
+        {
+          "label": "original-gate-negative",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "73c348c814082d109592d276975ecd64f78e21cf9c46abe19505e1be6f98a528",
+          "log": "media-pr405-winrt-qualification/original-gate-negative.log",
+          "log_sha256": "7740e3331487f1cf1558254455336c030c7a9db1fc54ee5b1c42b192963af874"
+        },
+        {
+          "label": "current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/current-gate.log",
+          "log_sha256": "4ce6f7e95f4890508810dafb7bbf1d6124c6479adda478ef74c80a4f23d8c364"
+        },
+        {
+          "label": "isolated-current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/isolated-current-gate.log",
+          "log_sha256": "f88e338b186aacf168a55db24ad30bbfc10e5591fb7c49e9212dfda9f6530f8a"
+        },
+        {
+          "label": "changed-input-0",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/changed-input-0.log",
+          "log_sha256": "d776e03e867ca04d22b38ef2573f7bd6e24127fd5e8c9a8d69d8f168748fe5c2"
+        },
+        {
+          "label": "changed-input-1",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/pid-census-exit-probe.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/changed-input-1.log",
+          "log_sha256": "2abe5d80858f20fea6050c9a674982f6239ca612ff6b39d3f53aed5e7f1daa50"
+        },
+        {
+          "label": "changed-input-2",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/PidCensusExitProbe.cs",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/changed-input-2.log",
+          "log_sha256": "add4409a824d9dd6d50fc1e7ebb487f079686bb53d2773f6023f37dbe515ccfc"
+        },
+        {
+          "label": "changed-input-3",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/geocoder-operation.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/changed-input-3.log",
+          "log_sha256": "ab723c252fb5be1847ff6dbd730000fa97613c0c84cf4c09b3715943fd2cbbfd"
+        },
+        {
+          "label": "wrong-checkout",
+          "returncode": 1,
+          "expected_failure": "WinRT checkout identity mismatch",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "media-pr405-winrt-qualification/wrong-checkout.log",
+          "log_sha256": "661ab36189d70e975d5f8bb82a3079ba0596ec35c4a131f2be84596cffbf0c12"
+        }
+      ],
+      "checks": 48,
+      "limits": [
+        "Actual PowerShell identity gate with real git/hash/filesystem operations.",
+        "Mutation controls use an isolated real Git repository; the source worktree is not mutated.",
+        "No Windows kernel/WinRT/provider execution occurs in this local qualification.",
+        "Original #360 PID-census failure remains unresolved; this corrects source qualification only."
+      ]
+    },
+    "independent_proof": {
+      "published_parent": "218b735e6c9a67a50124f50063c9dc672d6393be",
+      "workflow": ".github/workflows/services-geocoder-worker-component.yml",
+      "original_workflow_sha256": "e36fab8edbd2ef63e7e6330e383888732678fa776f4d5fb34a6cc4f373d4fd9e",
+      "current_workflow_sha256": "784d9f7a0c1ec07e44f8093295e6944ecbdac8542780ecb8cbf67fa996416dfd",
+      "original_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "current_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+        "tests/windows/helpers/pid-census-exit-probe.ps1": "21926a098bfc48e86b5723765ae3f4234615b5ab",
+        "tests/windows/helpers/PidCensusExitProbe.cs": "c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "unchanged_original_pins": 9,
+      "new_diagnostic_pins": 2,
+      "original_helper_git_blob": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+      "current_helper_git_blob": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+      "helper_changes_exactly_one_invocation": true,
+      "executable_workflow_skeleton_identical": true,
+      "runs": [
+        {
+          "label": "original-gate-negative",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "73c348c814082d109592d276975ecd64f78e21cf9c46abe19505e1be6f98a528",
+          "log": "native-review-pr405-winrt/original-gate-negative.log",
+          "log_sha256": "cdd76c66199826e6744b704f7860a3b6f056cd5105228a154f4509ccc45086f9"
+        },
+        {
+          "label": "current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/current-gate.log",
+          "log_sha256": "ffa073fbcea3ef4c16c9dd45fadbaf1c6366e35734baee75b15fbadd800791a4"
+        },
+        {
+          "label": "isolated-current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/isolated-current-gate.log",
+          "log_sha256": "05f9acece34d495dba0cb5b84b97d2c19104d31d120af1c98762f34ca82024b4"
+        },
+        {
+          "label": "changed-input-0",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/changed-input-0.log",
+          "log_sha256": "41f3b4b68d70195aaf8b435ba9e868092cddd8ecddae64d65bab925b17d92c33"
+        },
+        {
+          "label": "changed-input-1",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/pid-census-exit-probe.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/changed-input-1.log",
+          "log_sha256": "cc749623255b42d6a3f496bdaa7913476e90f1b130d5666b49076b0cd4b5dd04"
+        },
+        {
+          "label": "changed-input-2",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/PidCensusExitProbe.cs",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/changed-input-2.log",
+          "log_sha256": "ad575df31295c4f7bcd9b29576f6ab8b0dced233f62e677b7ff8544b3dc84367"
+        },
+        {
+          "label": "changed-input-3",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/geocoder-operation.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/changed-input-3.log",
+          "log_sha256": "1f7d6c5933f6f1e062a6725c425ee48d252a3465f622cef0e45995a5443dfe40"
+        },
+        {
+          "label": "wrong-checkout",
+          "returncode": 1,
+          "expected_failure": "WinRT checkout identity mismatch",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log": "native-review-pr405-winrt/wrong-checkout.log",
+          "log_sha256": "afea31f865234e1acfa296841e69d4262d69762c03561d283bedd4db0c6f639b"
+        }
+      ],
+      "checks": 48,
+      "limits": [
+        "Actual PowerShell identity gate with real git/hash/filesystem operations.",
+        "Mutation controls use an isolated real Git repository; the source worktree is not mutated.",
+        "No Windows kernel/WinRT/provider execution occurs in this local qualification.",
+        "Original #360 PID-census failure remains unresolved; this corrects source qualification only."
+      ]
+    },
+    "upstream_logs": [
+      {
+        "job": 137908795382,
+        "kind": "shared_primary_core_quota",
+        "bytes": 2856078,
+        "sha256": "bd6bfb913c31bfb6a202a8eea7c6eb49cfa6480072e43468ee74c1a309a4a42c",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137908795382",
+        "archive_member": "upstream/native-upstream-1900-405-137908795382.log"
+      },
+      {
+        "job": 137908797759,
+        "kind": "source_identity",
+        "bytes": 53634,
+        "sha256": "ed164a1fcd5f277b748222f09f21e9af6d0f3e0d0e86284c039c1bb987e114c8",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137908797759",
+        "archive_member": "upstream/native-upstream-1900-405-137908797759.log"
+      },
+      {
+        "job": 137908797902,
+        "kind": "source_identity",
+        "bytes": 57464,
+        "sha256": "0055deab0e55f99d5e4dedfe87c873099fb8fee01cdf2acc4d4e7ed0411c4c7a",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137908797902",
+        "archive_member": "upstream/native-upstream-1900-405-137908797902.log"
+      },
+      {
+        "job": 137910897739,
+        "kind": "shared_primary_core_quota",
+        "bytes": 111223,
+        "sha256": "5a775304a4c47fca2322395fc9b13e3db5df5400f5c2ace272506f6a826b1c3c",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137910897739",
+        "archive_member": "upstream/native-upstream-1900-405-137910897739.log"
+      },
+      {
+        "job": 137912354934,
+        "kind": "shared_primary_core_quota",
+        "bytes": 35049,
+        "sha256": "4d156a1b637dbd7409641d528fad62b94922bf3ad9378fda58a9d25766bd5379",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137912354934",
+        "archive_member": "upstream/native-upstream-1900-405-137912354934.log"
+      },
+      {
+        "job": 137913206284,
+        "kind": "shared_primary_core_quota",
+        "bytes": 32611,
+        "sha256": "2f51652075174fbe6ef5803ed5f7de039fbdbe1a9533e46ddd1c433af4e3d564",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137913206284",
+        "archive_member": "upstream/native-upstream-1900-405-137913206284.log"
+      },
+      {
+        "job": 137913387392,
+        "kind": "shared_primary_core_quota",
+        "bytes": 24060,
+        "sha256": "6c0cae7ad28f766bea39eb52f49e4180a4d1451c2ca85b0ad8d33278199bcec8",
+        "url": "https://github.com/gesher-runtime/gesher/actions/runs/45235096965/job/137913387392",
+        "archive_member": "upstream/native-upstream-1900-405-137913387392.log"
+      }
+    ],
+    "archive": {
+      "path": "docs/research/data/job-pid-census-winrt-qualification-2026-11-23.tar.gz",
+      "bytes": 339259,
+      "sha256": "352831fd602d1a6b4dacb815ba64f82dc873048a9a325717b042638c60f68287",
+      "members": 65,
+      "manifest_sha256": "2eb6eae5592008ccbbf8959fe951667fd9614f513921661aed630b253d49ae63"
+    },
+    "limitations": [
+      "The original submission omitted this coupled workflow pin update; the failed source gate is retained, not treated as infrastructure noise.",
+      "Other sampled jobs in the same attempt independently hit the existing shared primary core quota guard; its budget and refusal behavior are unchanged.",
+      "Only source qualification ran locally; no Windows kernel, WinRT provider, PID census or full CI success is claimed.",
+      "The original #360 incomplete PID census remains unresolved; the diagnostic is not a production repair or efficiency improvement."
+    ]
+  },
+  "camera_main_composition": {
+    "ordered_parents": [
+      "904540e5c38cd87471a83668a9629da0a9788513",
+      "d3076fc4d29d102ab633299d4654e85a6b261f79"
+    ],
+    "main_pr": 262,
+    "composition": {
+      "ordered_parents": [
+        "904540e5c38cd87471a83668a9629da0a9788513",
+        "d3076fc4d29d102ab633299d4654e85a6b261f79"
+      ],
+      "canonical_merge_tree_with_conflict": "e155ada2d14ce01f1e0a3aac61fd68fd0d9576ce",
+      "resolved_source_tree": "f85326e4d278da71b1f1d8401054288c390c1cb5",
+      "sole_conflict": ".github/workflows/services-geocoder-worker-component.yml",
+      "sole_changed_path_from_canonical": [
+        ".github/workflows/services-geocoder-worker-component.yml"
+      ],
+      "workflow_sha256": "b5db8eb95db82f8db9d51cccd76aa1cec8378d3a488e4e82d3e9d8c2c7aa8d60",
+      "base": "e505ad227523aaca566d05b8af6e466495c819cc",
+      "published_only_paths": [
+        "docs/research/data/job-pid-census-winrt-qualification-2026-11-23.tar.gz",
+        "docs/research/job-pid-census-2026-11-23.json",
+        "docs/research/job-pid-census-2026-11-23.md",
+        "tests/windows/helpers/PidCensusExitProbe.cs",
+        "tests/windows/helpers/geocoder-compile.ps1",
+        "tests/windows/helpers/pid-census-exit-probe.ps1",
+        "tools/test_pid_census_exit_probe.ps1"
+      ],
+      "incoming_only_paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/framework.yml",
+        "app/gesher-camera/java/com/gesher/camera/CaptureActivity.java",
+        "app/java/android/app/GesherAppDriver.java",
+        "app/java/com/gesher/app/locale/UiMessages.java",
+        "app/java/com/gesher/net/ProxySetting.java",
+        "app/java/com/gesher/server/ActivityTaskManagerService.java",
+        "app/java/com/gesher/server/CameraService.java",
+        "app/java/com/gesher/server/ContactsProvider.java",
+        "app/java/com/gesher/server/ContactsProviderSupport.java",
+        "app/java/com/gesher/server/ContentProviders.java",
+        "app/java/com/gesher/server/InProcessApplication.java",
+        "app/java/com/gesher/server/LegacyCamera.java",
+        "app/java/com/gesher/server/PackageManagerService.java",
+        "app/java/com/gesher/server/ProfilePhoto.java",
+        "app/java/com/gesher/server/ProfileStatusUpdates.java",
+        "app/java/com/gesher/server/ProfileVCard.java",
+        "compat/credentials/account_crypto.c",
+        "compat/locale/ui_messages.h",
+        "docs/devices.md",
+        "docs/network.md",
+        "docs/research/camera-permission-admission-2026-11-22.md",
+        "docs/research/persistable-uri-grants-2026-11-17.md",
+        "tests/apps/web3app/java/com/gesher/web3app/GeoActivity.java",
+        "tests/camera-permission/CameraPermissionHost.java",
+        "tests/camera-permission/CapturePermissionFlowHost.java.in",
+        "tests/camera-permission/framework_host.c",
+        "tests/dex-services/gesher/services/CameraPermissionContractTest.java",
+        "tests/dex-services/gesher/services/ContactsProviderContractTest.java",
+        "tests/windows/shell/ControlPanelIconCacheChecks.ps1",
+        "tests/windows/shell/ControlPanelLaunchChecks.ps1",
+        "tests/windows/shell/ControlPanelProxyChecks.ps1",
+        "tests/windows/shell/ControlPanelRecoveryChecks.ps1",
+        "tests/windows/shell/ControlPanelVirtualizationChecks.ps1",
+        "tests/windows/tracks/52-surfaces.ps1",
+        "tests/windows/tracks/54-web3.ps1",
+        "tests/windows/tracks/58-devices.ps1",
+        "tests/windows/tracks/98-system-contracts.ps1",
+        "tests/windows/web3/LocationConsent.ps1",
+        "tests/windows/web3/LocationConsentChecks.ps1",
+        "tools/ci/artifact_receipt.py",
+        "tools/ci/test_artifact_batch.py",
+        "tools/i18n/messages.json",
+        "tools/package/gesher-control-panel.ps1",
+        "tools/package/ui-messages.json",
+        "tools/test_camera_permission.py",
+        "tools/test_capture_permission_flow.py"
+      ],
+      "overlap_paths": [
+        ".github/workflows/services-geocoder-worker-component.yml"
+      ],
+      "all_disjoint_paths_identical": true
+    },
+    "qualification": {
+      "ordered_parents": [
+        "904540e5c38cd87471a83668a9629da0a9788513",
+        "d3076fc4d29d102ab633299d4654e85a6b261f79"
+      ],
+      "workflow": ".github/workflows/services-geocoder-worker-component.yml",
+      "published_workflow_sha256": "784d9f7a0c1ec07e44f8093295e6944ecbdac8542780ecb8cbf67fa996416dfd",
+      "main_workflow_sha256": "8034d1cd074f2d7e95ddcf01b651cd64e57316c258aea78567057953bc88a500",
+      "current_workflow_sha256": "b5db8eb95db82f8db9d51cccd76aa1cec8378d3a488e4e82d3e9d8c2c7aa8d60",
+      "published_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+        "tests/windows/helpers/pid-census-exit-probe.ps1": "21926a098bfc48e86b5723765ae3f4234615b5ab",
+        "tests/windows/helpers/PidCensusExitProbe.cs": "c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "main_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "0cddb9e852a5c96291a86255738727a27a3996cd"
+      },
+      "current_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+        "tests/windows/helpers/pid-census-exit-probe.ps1": "21926a098bfc48e86b5723765ae3f4234615b5ab",
+        "tests/windows/helpers/PidCensusExitProbe.cs": "c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "0cddb9e852a5c96291a86255738727a27a3996cd"
+      },
+      "all_executable_predicates_unchanged": true,
+      "runs": [
+        {
+          "label": "incoming-main-gate-negative",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "88a8239893caa864ae3a6cbccacb5d8d08d34ba118c016bee935ebd999edcef2",
+          "log_sha256": "4cf8d6128bd586f9abb186968cd354f3000ee4fa87cdebfb7402b64286365f9c"
+        },
+        {
+          "label": "previous-repair-gate-negative",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/58-devices.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log_sha256": "17c2b96b999cc997916173f26d77d8a75fd3340b5f77a62d4f64e7278a8a8cc9"
+        },
+        {
+          "label": "combined-current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "25096eec02fd1ef13e01e18d199312830cbb60d46de326400f837a5542dfaf00"
+        },
+        {
+          "label": "isolated-combined-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "67f2efd0fe82a6e7e4a41db9813150527ae37d42757bea1b9397810f2a57d981"
+        },
+        {
+          "label": "changed-input-0",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "9ec424a420d6a153598d8d9151cb62c35df957737f414a31130a9746c9a9bb3c"
+        },
+        {
+          "label": "changed-input-1",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/pid-census-exit-probe.ps1",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "f8c54c631288c7f4aa8af0ed15df0e5f4319ed79e321e8c81af746682b2772cb"
+        },
+        {
+          "label": "changed-input-2",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/PidCensusExitProbe.cs",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "fdc6ba72f97134d39a29d20a106d433fdac4b31ed6cf3e65f5a0738cbd147955"
+        },
+        {
+          "label": "changed-input-3",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/58-devices.ps1",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "a3d6b30e02f9aa487496f8ad742c89b02363aaf4f275e4b228eed7afe9522acb"
+        },
+        {
+          "label": "changed-input-4",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/geocoder-operation.ps1",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "6d8d95dfd116de2727acd4243c1f89257809171799ddc3d7cf3dc5f1514dab08"
+        },
+        {
+          "label": "wrong-checkout",
+          "returncode": 1,
+          "expected_failure": "WinRT checkout identity mismatch",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "ffdf7b095c5def32d888c69ec76591b2736c61a8dc14d9e81011a48141902c74"
+        }
+      ],
+      "checks": 45,
+      "limits": [
+        "Actual PowerShell/Git/source identity operations only; no Windows APIs execute.",
+        "Mutations affect only a temporary real Git repository.",
+        "Original #360 remains unresolved; neither this composition nor its gate replay proves a Windows runtime pass."
+      ]
+    },
+    "independent_qualification": {
+      "ordered_parents": [
+        "904540e5c38cd87471a83668a9629da0a9788513",
+        "d3076fc4d29d102ab633299d4654e85a6b261f79"
+      ],
+      "workflow": ".github/workflows/services-geocoder-worker-component.yml",
+      "published_workflow_sha256": "784d9f7a0c1ec07e44f8093295e6944ecbdac8542780ecb8cbf67fa996416dfd",
+      "main_workflow_sha256": "8034d1cd074f2d7e95ddcf01b651cd64e57316c258aea78567057953bc88a500",
+      "current_workflow_sha256": "b5db8eb95db82f8db9d51cccd76aa1cec8378d3a488e4e82d3e9d8c2c7aa8d60",
+      "published_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+        "tests/windows/helpers/pid-census-exit-probe.ps1": "21926a098bfc48e86b5723765ae3f4234615b5ab",
+        "tests/windows/helpers/PidCensusExitProbe.cs": "c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "b912825df72db2afdd06c65edf760cc03c78e650"
+      },
+      "main_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "90fceedc449a2ec11dfa80809e05163c89bcf2fa",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "0cddb9e852a5c96291a86255738727a27a3996cd"
+      },
+      "current_pins": {
+        "tests/windows/tracks/geocoder-operation.ps1": "75eb4cf6f9537c61ff27ec49d2a3a938c81b1618",
+        "tests/windows/tracks/geocoder-probe-exit.cs": "4927e87a71c41069bbed24be748cfd0b771583d5",
+        "tests/windows/tracks/geocoder-winrt-supplier.cs": "11da9f04efdbb98de30006b0c26e169bec6d8b19",
+        "tests/windows/helpers/geocoder-provider-probe.ps1": "d02fc316ccaca1ac856eaeae64df6e4053da569c",
+        "tests/windows/helpers/geocoder-winrt-fixture.ps1": "cbde2ac48b603f3cc12e544a3e42d744d9b58864",
+        "tests/windows/helpers/geocoder-roslyn-worker.ps1": "31491e2cb20bf72e78c49476c9ab874649fee6c9",
+        "tests/windows/helpers/geocoder-compiler-host.ps1": "43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f",
+        "tests/windows/helpers/geocoder-compile.ps1": "cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c",
+        "tests/windows/helpers/pid-census-exit-probe.ps1": "21926a098bfc48e86b5723765ae3f4234615b5ab",
+        "tests/windows/helpers/PidCensusExitProbe.cs": "c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9",
+        "tests/windows/helpers/run-geocoder-winrt-component.ps1": "1277bcc858c9c52eb8b24476831aadb286831418",
+        "tests/windows/tracks/58-devices.ps1": "0cddb9e852a5c96291a86255738727a27a3996cd"
+      },
+      "all_executable_predicates_unchanged": true,
+      "runs": [
+        {
+          "label": "incoming-main-gate-negative",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "88a8239893caa864ae3a6cbccacb5d8d08d34ba118c016bee935ebd999edcef2",
+          "log_sha256": "c533b4ea7d10ea37f5c538d7bdc75f9492a7215c4e6b4bdd4663b4b8ae9f7535"
+        },
+        {
+          "label": "previous-repair-gate-negative",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/58-devices.ps1",
+          "script_sha256": "018af12a969baca8b991f19e02f7337c7b721d1f7ace25dc8322619c74ca31c7",
+          "log_sha256": "628c7a5e6d0aa383def036550b6075e138d76cb10b95a897bc21fec7a5e0c9ff"
+        },
+        {
+          "label": "combined-current-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "ebb81fd3fba86aed36d2c4a806d89e4c42d6c065042a1869179cf3b388eebed3"
+        },
+        {
+          "label": "isolated-combined-gate",
+          "returncode": 0,
+          "expected_failure": null,
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "f8ff90fc9931e45a4d560a8842f49175d9774c6b3d27c75ca899821303f5888b"
+        },
+        {
+          "label": "changed-input-0",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/geocoder-compile.ps1",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "5aa0a7e625df4e557797fac01b1c759e815a69e6421c9566b82525fdae64e140"
+        },
+        {
+          "label": "changed-input-1",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/pid-census-exit-probe.ps1",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "b8dd917ca9749367d93ad248d584b1a0ee3fcc0b54c7d1bb68eba8c7e477b316"
+        },
+        {
+          "label": "changed-input-2",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/helpers/PidCensusExitProbe.cs",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "fbc64146c990cdb87fe9cf108e601d5283953af547151c1626ed94c6b9f0e94c"
+        },
+        {
+          "label": "changed-input-3",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/58-devices.ps1",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "d7634f6ee1e67a029d7e865d51baf5d1f9f151db15a314d51ba8027d7d86a48b"
+        },
+        {
+          "label": "changed-input-4",
+          "returncode": 1,
+          "expected_failure": "WinRT source mismatch: tests/windows/tracks/geocoder-operation.ps1",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "26a464cf8baa1da6928f0366de9ec28ffd3ebe3d6071409056b921a89dda371a"
+        },
+        {
+          "label": "wrong-checkout",
+          "returncode": 1,
+          "expected_failure": "WinRT checkout identity mismatch",
+          "script_sha256": "7afb665df02defe290c0b8c256264664c7e2d6972710406b4d75b91c51b6d3ab",
+          "log_sha256": "7b9d8af52fb2dd023201fa63dc571289031dee3e4d80e598311d8d306f75fc83"
+        }
+      ],
+      "checks": 45,
+      "limits": [
+        "Actual PowerShell/Git/source identity operations only; no Windows APIs execute.",
+        "Mutations affect only a temporary real Git repository.",
+        "Original #360 remains unresolved; neither this composition nor its gate replay proves a Windows runtime pass."
+      ]
+    },
+    "archive": {
+      "path": "docs/research/data/job-pid-census-camera-composition-2026-11-23.tar.gz",
+      "bytes": 81366,
+      "sha256": "36f186ff9c925e5b88fd64b20535688dd4e62361c45bf32c109e406684876ac3",
+      "members": 64,
+      "manifest_sha256": "c420b3e1abbdaeb177a9c62d86025ca3ddfb1588b2bca28da29fa4b3d155a36e"
+    },
+    "historical_json_fields_preserved": [
+      "status",
+      "failed_upstream_pr",
+      "failed_head",
+      "run",
+      "job",
+      "event",
+      "log_utf8_sha256",
+      "original_decoded_log",
+      "provider_retirement_record",
+      "baseline",
+      "controller_sha256",
+      "pr393_controller_sha256",
+      "failed_main_controller_identical",
+      "original_geocoder_entry_restored_by_removing_single_invocation",
+      "current_inputs",
+      "local_host_controls",
+      "original_selected_source_policy",
+      "reference",
+      "limits",
+      "winrt_source_identity_followup"
+    ],
+    "limitations": [
+      "The only manual source resolution combines exact reviewed source pins and comments.",
+      "All incoming runtime permission behavior, device gates, complete CI and framework recipe are inherited unchanged.",
+      "No Windows API executed locally and the original #360 PID failure remains unresolved."
+    ]
+  }
+}

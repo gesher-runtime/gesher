@@ -85,7 +85,7 @@ constexpr RawCall kRawCalls[] = {
     {194, "listxattr", 'l'}, {195, "llistxattr", 'l'}, {196, "__flistxattr", 'l'},
     {197, "removexattr", 'i'}, {198, "lremovexattr", 'i'}, {199, "fremovexattr", 'i'},
     {200, "tkill", 'i'},       {201, "time", 'l'},
-    {204, "sched_getaffinity", 'i'}, {228, "clock_gettime", 'i'}, {229, "clock_getres", 'i'},
+    {204, "sched_getaffinity", 'i'}, {217, "getdents64", 'l'}, {228, "clock_gettime", 'i'}, {229, "clock_getres", 'i'},
     {230, "clock_nanosleep", 'e'}, {231, "_exit", 'i'},    {232, "epoll_wait", 'i'},
     {233, "epoll_ctl", 'i'},   {234, "tgkill", 'i'},       {254, "inotify_add_watch", 'i'},
     {255, "inotify_rm_watch", 'i'}, {257, "openat", 'i'},  {258, "mkdirat", 'i'},

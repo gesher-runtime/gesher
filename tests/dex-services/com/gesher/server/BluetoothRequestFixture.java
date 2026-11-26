@@ -170,6 +170,7 @@ public final class BluetoothRequestFixture {
             pm = (PackageManagerService) UNSAFE.allocateInstance(PackageManagerService.class);
             set(pm, "mPackages", packages); set(pm, "mRemoving", removing);
             set(pm, "mTransientEnabled", true);
+            set(pm, "mUriHandlers", new WindowsUriHandlers(null));
             set(pm, "mPackageRemoval", new ArrayList<>()); set(pm, "mPackageRemovalChecks", new ArrayList<>());
             set(pm, "mPackageChanges", new java.util.concurrent.CopyOnWriteArrayList<>());
             Object permissions = construct(type("PermissionPolicy"), new Class<?>[]{PackageManagerService.class}, pm);
@@ -394,6 +395,7 @@ public final class BluetoothRequestFixture {
             check(Binder.getCallingUid() == android.os.Process.SYSTEM_UID,
                     "system request routing fixture lacks authenticated system identity");
             routingAsSystem();
+            dialRoutingAsSystem();
         } finally {
             Binder.restoreCallingIdentity(savedIdentity);
         }
@@ -457,6 +459,66 @@ public final class BluetoothRequestFixture {
             check(h.queue.work.isEmpty(), "foreign/malformed actual request queued work");
         }
         check(operations == h.radio.reads + h.radio.confirms + h.radio.switches, "unhandled intent reached backend");
+    }
+
+    /** Actual starter integration: a DIAL review never runs while mLaunchLock is held. */
+    private static void dialRoutingAsSystem() throws Exception {
+        Harness h = new Harness();
+        var registered = new java.util.concurrent.atomic.AtomicBoolean(true);
+        set(h.pm, "mUriHandlers", new WindowsUriHandlers(scheme -> registered.get() && "tel".equals(scheme)));
+        Object atm = construct(ActivityTaskManagerService.class, new Class<?>[]{PackageManagerService.class}, h.pm);
+        Class<?> backend = type("DialRequests$Backend");
+        int[] confirms = {0}, opens = {0};
+        boolean[] consent = {true};
+        Object windows = Proxy.newProxyInstance(backend.getClassLoader(), new Class<?>[]{backend}, (self, method, args) -> {
+            switch (method.getName()) {
+                case "confirm":
+                    confirms[0]++;
+                    check(!Thread.holdsLock(get(atm, "mLaunchLock")), "DIAL confirmation holds the activity launch lock");
+                    check("android".equals(args[0]) && "+15551234".equals(args[1]), "DIAL review changed caller or number");
+                    check((int) args[2] == 0, "detached review borrowed a source PID");
+                    check(((BooleanSupplier) args[3]).getAsBoolean(), "live review has no active lifetime");
+                    return consent[0];
+                case "open":
+                    opens[0]++;
+                    check("tel:+15551234".equals(args[0]), "confirmed DIAL address changed before shell handoff");
+                    return true;
+                case "toString": return "Explicit dial confirmation fixture";
+                case "hashCode": return System.identityHashCode(self);
+                case "equals": return self == args[0];
+                default: throw new AssertionError(method);
+            }
+        });
+        set(atm, "mDialRequests", construct(type("DialRequests"), new Class<?>[]{Executor.class, backend}, h.queue, windows));
+        Method start = null;
+        for (Method method : atm.getClass().getDeclaredMethods())
+            if (method.getName().equals("start") && method.getParameterCount() == 8) start = method;
+        check(start != null, "DIAL activity starter unavailable"); start.setAccessible(true);
+        Intent dial = new Intent(Intent.ACTION_DIAL, Uri.parse("tel:+15551234"));
+        check(Integer.valueOf(ActivityManager.START_SUCCESS).equals(
+                start.invoke(atm, null, dial, null, "android", null, null, -1, null)), "actual DIAL route rejected");
+        check(confirms[0] == 0 && opens[0] == 0 && h.queue.work.size() == 1, "DIAL performs host work before returning");
+        check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).size() == 1, "DIAL lost its native UI lifetime");
+        h.queue.next();
+        check(confirms[0] == 1 && opens[0] == 1, "approved DIAL did not open exactly once");
+        check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).isEmpty(), "DIAL leaked its native UI lifetime");
+        consent[0] = false;
+        start.invoke(atm, null, dial, null, "android", null, null, -1, null); h.queue.next();
+        check(confirms[0] == 2 && opens[0] == 1, "canceled DIAL reached Windows shell");
+        start.invoke(atm, null, dial, null, "android", null, null, -1, null);
+        registered.set(false); h.queue.next();
+        check(confirms[0] == 2 && opens[0] == 1, "removed tel handler still showed or opened DIAL");
+        check(((java.util.Set<?>) get(atm, "mNativeUiActivities")).isEmpty(), "removed handler leaked review lifetime");
+        registered.set(true);
+        Field opener = field(ActivityTaskManagerService.class, "sOpenExternalUrl");
+        Object saved = opener.get(null); int[] views = {0};
+        try {
+            opener.set(null, (java.util.function.Predicate<String>) uri -> { views[0]++; return true; });
+            check(Integer.valueOf(ActivityManager.START_SUCCESS).equals(start.invoke(atm, null,
+                    new Intent(Intent.ACTION_VIEW, Uri.parse("tel:+15551234")), null, "android", null, null, -1, null)),
+                    "tel VIEW no longer delegates directly");
+            check(views[0] == 1 && h.queue.work.isEmpty() && confirms[0] == 2, "VIEW unexpectedly entered DIAL confirmation");
+        } finally { opener.set(null, saved); }
     }
     /** Restore constructor defaults used by the real foreground-observation hooks. */
     private static void initializeForegroundTracking(Object am, Object atm, PackageManagerService pm) throws Exception {

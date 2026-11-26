@@ -1,0 +1,2252 @@
+{
+  "schema": 1,
+  "date": "2026-11-23",
+  "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+  "scope": "Focused producer/mixer correctness repair found while monitoring issue56; no general CPU/app performance claim",
+  "production": {
+    "engine_before_sha256": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da",
+    "engine_after_sha256": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+    "header_after_sha256": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+    "diff": "diff --git a/compat/media/audio/engine.cc b/compat/media/audio/engine.cc\nindex aa1af32b..fccf8fab 100644\n--- a/compat/media/audio/engine.cc\n+++ b/compat/media/audio/engine.cc\n@@ -539,6 +539,57 @@ bool Track::stopped() const {\n   return state_ == State::kStopped || (state_ == State::kStopping && drained_);\n }\n \n+// A blocking caller retains its input until Write returns. Register only the\n+// remainder waiting for ring space, so a large mix can refill without waiting\n+// for that caller to reacquire the mutex the mixer itself holds. All links and\n+// progress are protected by mu_; the wait reacquires it before scope cleanup.\n+struct Track::PendingWrite {\n+  PendingWrite(Track& track, const uint8_t* data, size_t frames, uint64_t interrupt)\n+      : owner(&track), previous(track.pending_write_tail_), data(data), frames(frames),\n+        interrupt(interrupt) {\n+    if (previous != nullptr) previous->next = this;\n+    else track.pending_write_head_ = this;\n+    track.pending_write_tail_ = this;\n+  }\n+  ~PendingWrite() { Unlink(); }\n+  PendingWrite(const PendingWrite&) = delete;\n+  PendingWrite& operator=(const PendingWrite&) = delete;\n+\n+  void Unlink() {\n+    if (owner == nullptr) return;\n+    if (previous != nullptr) previous->next = next;\n+    else owner->pending_write_head_ = next;\n+    if (next != nullptr) next->previous = previous;\n+    else owner->pending_write_tail_ = previous;\n+    owner = nullptr;\n+  }\n+\n+  Track* owner;\n+  PendingWrite* previous;\n+  PendingWrite* next = nullptr;\n+  const uint8_t* data;\n+  size_t frames;\n+  size_t committed = 0;\n+  uint64_t interrupt;\n+};\n+\n+size_t Track::CopyToRing(const uint8_t* source, size_t frames) {\n+  size_t limit = std::min(buffer_frames_, params_.capacity_frames);\n+  size_t queued = static_cast<size_t>(written_ - read_);\n+  size_t room = queued < limit ? limit - queued : 0;\n+  size_t n = std::min(room, frames);\n+  if (n == 0) return 0;\n+  size_t cap = params_.capacity_frames;\n+  size_t pos = static_cast<size_t>(written_ % cap);\n+  size_t first = std::min(n, cap - pos);\n+  memcpy(data_.data() + pos * frame_size_, source, first * frame_size_);\n+  if (n > first) {\n+    memcpy(data_.data(), source + first * frame_size_, (n - first) * frame_size_);\n+  }\n+  written_ += n;\n+  return n;\n+}\n+\n ssize_t Track::Write(const void* data, size_t bytes, bool blocking) {\n   const uint8_t* src = static_cast<const uint8_t*>(data);\n   size_t frames = bytes / frame_size_;\n@@ -555,26 +606,16 @@ ssize_t Track::Write(const void* data, size_t bytes, bool blocking) {\n   const uint64_t interrupt = write_interrupt_;\n   while (done < frames) {\n     if (released_ || write_interrupt_ != interrupt) break;\n-    size_t limit = std::min(buffer_frames_, params_.capacity_frames);\n-    size_t queued = static_cast<size_t>(written_ - read_);\n-    size_t room = queued < limit ? limit - queued : 0;\n-    if (room == 0) {\n+    size_t n = CopyToRing(src + done * frame_size_, frames - done);\n+    if (n == 0) {\n       // Android makes writes nonblocking while stopped/paused. Priming before\n       // play() may fill the buffer, but must not wait for a mixer that is idle.\n       if (!blocking || state_ != State::kPlaying) break;\n+      PendingWrite pending(*this, src + done * frame_size_, frames - done, interrupt);\n       room_.wait(lock);\n+      done += pending.committed;\n       continue;\n     }\n-    size_t n = std::min(room, frames - done);\n-    // Copy into the ring, in up to two pieces.\n-    size_t cap = params_.capacity_frames;\n-    size_t pos = static_cast<size_t>(written_ % cap);\n-    size_t first = std::min(n, cap - pos);\n-    memcpy(data_.data() + pos * frame_size_, src + done * frame_size_, first * frame_size_);\n-    if (n > first) {\n-      memcpy(data_.data(), src + (done + first) * frame_size_, (n - first) * frame_size_);\n-    }\n-    written_ += n;\n     done += n;\n   }\n   return static_cast<ssize_t>(done * frame_size_);\n@@ -757,6 +798,17 @@ size_t Track::ReadSource(float* dst, size_t frames, bool* ended) {\n   size_t bps = BytesPerSample(params_.format);\n   size_t done = 0;\n   if (!params_.is_static) {\n+    if (read_ == written_ && state_ == State::kPlaying && !released_) {\n+      while (pending_write_head_ != nullptr &&\n+             pending_write_head_->interrupt != write_interrupt_) {\n+        pending_write_head_->Unlink();\n+      }\n+      if (PendingWrite* pending = pending_write_head_) {\n+        pending->committed += CopyToRing(pending->data + pending->committed * frame_size_,\n+                                        pending->frames - pending->committed);\n+        if (pending->committed == pending->frames) pending->Unlink();\n+      }\n+    }\n     const uint64_t end = state_ == State::kStopping ? stop_end_ : written_;\n     size_t avail = static_cast<size_t>(end - read_);\n     size_t n = std::min(avail, frames);\ndiff --git a/compat/media/audio/engine.h b/compat/media/audio/engine.h\nindex 9b60df90..6e42724e 100644\n--- a/compat/media/audio/engine.h\n+++ b/compat/media/audio/engine.h\n@@ -163,6 +163,8 @@ class Track : public std::enable_shared_from_this<Track> {\n   bool MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_channels);\n   // Reads up to `frames` source frames as float (the track's channels).\n   size_t ReadSource(float* dst, size_t frames, bool* ended);\n+  // Copies only available ring capacity; both callers hold mu_.\n+  size_t CopyToRing(const uint8_t* source, size_t frames);\n   void QueueEvents(uint64_t before, uint64_t after);\n \n   Engine* engine_;\n@@ -176,6 +178,10 @@ class Track : public std::enable_shared_from_this<Track> {\n   bool drained_ = false;  // kStopping: all played\n   // A writer must observe pause/stop even if start() runs before it reacquires mu_.\n   uint64_t write_interrupt_ = 0;\n+  // Borrowed only while a blocking Write is waiting with its input still alive.\n+  struct PendingWrite;\n+  PendingWrite* pending_write_head_ = nullptr;\n+  PendingWrite* pending_write_tail_ = nullptr;\n \n   // Streaming ring, or static data.\n   std::vector<uint8_t> data_;\n",
+    "new_storage": "Two list pointers per Track; stack-local record during each wait; no additional ring/heap queue"
+  },
+  "original_windows_failure": {
+    "pr": 353,
+    "tested_merge": "498ed2a9fa8c9d63f0bb093f779463697d3a5715",
+    "run": 45150068724,
+    "job": 137649237541,
+    "url": "https://github.com/gesher-runtime/gesher/actions/runs/45150068724/job/137649237541",
+    "failure": "sound7:727.4 Hz,not750",
+    "original_frequency_tolerance": 0.02,
+    "source_identity": [
+      {
+        "path": "compat/media/audio/engine.cc",
+        "sha256": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da",
+        "tested_merge_equals_base": true
+      },
+      {
+        "path": "compat/media/audio/sink_file.cc",
+        "sha256": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+        "tested_merge_equals_base": true
+      },
+      {
+        "path": "compat/media/jni/audio_track_jni.cc",
+        "sha256": "2091c2ba5abaee8888856d642c69f5bb01b74fd8f375d5ec4e0d7f79c9f89081",
+        "tested_merge_equals_base": true
+      },
+      {
+        "path": "tests/apps/mediaapp/java/com/gesher/mediaapp/MediaActivity.java",
+        "sha256": "4d320b55fcaca6f5f9fe69f87a33fa4c61faa1d14d83f926ec2e11a6ca58b493",
+        "tested_merge_equals_base": true
+      },
+      {
+        "path": "tests/windows/tracks/38-media.ps1",
+        "sha256": "85fea17fb1d856fc2d5b207d9ca8462d10887fa4509b29de172752b2cbd74131",
+        "tested_merge_equals_base": true
+      }
+    ],
+    "wave_comparison": {
+      "failed": {
+        "path": "media-pr353-artifacts/14812914126/app/audio-6000.wav",
+        "sha256": "6270d231645fbf270a990d73451db543a7312740e8698e01147eac3620608e3d",
+        "rate": 48000,
+        "start_frame": 242463,
+        "end_frame": 257309,
+        "frames": 14846,
+        "long_zero_runs": [
+          [
+            4544,
+            4991
+          ]
+        ],
+        "crossing_intervals": {
+          "64": 222,
+          "510": 1
+        }
+      },
+      "passed": {
+        "path": "media-pr353-artifacts/14814867651/app/audio-1564.wav",
+        "sha256": "332be1c3ffe9b8e572278eece6aa9e6d13c7885583837850539d0f6f08517ca8",
+        "rate": 48000,
+        "start_frame": 241211,
+        "end_frame": 255611,
+        "frames": 14400,
+        "long_zero_runs": [],
+        "crossing_intervals": {
+          "64": 223
+        }
+      },
+      "scope": "Actual unedited CI WAV files, independently downloaded and SHA256 verified. This locates the audible interruption; it does not by itself identify its scheduler/producer cause.",
+      "tested_merge": "498ed2a9fa8c9d63f0bb093f779463697d3a5715",
+      "probe_function_sha256": "4470e9892d1f39b5c2ee80015e98c6c01275dac0b1aaf9294b60237255dcac31",
+      "actual_probe_compile_command": [
+        "c++",
+        "-std=c++20",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "media-pr353-oracle/actual-analyze.cc",
+        "-o",
+        "media-pr353-oracle/actual-analyze"
+      ],
+      "inserted_zero_frames": 446,
+      "interruption_ms": 9.291666666666666,
+      "removed_range_in_failed_tone": [
+        4544,
+        4990
+      ],
+      "original_wavs_modified": false,
+      "remaining_frames": 14400,
+      "remaining_stereo_pcm_sha256": "ced343ec5be8eca279f920eeef4a2da354ac1a9fad995acacddca3b473aef5ce",
+      "passing_tone_pcm_sha256": "ced343ec5be8eca279f920eeef4a2da354ac1a9fad995acacddca3b473aef5ce",
+      "exact_remaining_pcm_equal": true,
+      "oracle": "Actual unchanged C++ Analyze function independently replayed on both original WAVs: failing727.4 versus passing750.0; unchanged2% Windows gate still rejects interrupted original."
+    },
+    "original_wavs_modified": false,
+    "qualification": "Exact interruption; original mixer block sizes and scheduling trace were not recorded"
+  },
+  "pending_pr_overlap": {
+    "pr": 334,
+    "head": "3e7afab2c5a88128e08a41e7273257d3a5f323ce",
+    "Write_ReadSource_capture_sink_unchanged": true
+  },
+  "android_reference": [
+    {
+      "path": "media-audio-refill-sources/AudioTrack.cpp",
+      "url": "https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r4/media/libaudioclient/AudioTrack.cpp?format=TEXT",
+      "sha256": "89b0797c0ecb8ec0f2b940486981f19e744a8b438ab780bb2bf34351656b0f77"
+    },
+    {
+      "path": "media-audio-refill-sources/AudioTrack.h",
+      "url": "https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r4/media/libaudioclient/include/media/AudioTrack.h?format=TEXT",
+      "sha256": "8bba3b531430e032aee7db75d7fc36f23d6cdf9b4dd1a3547e38ce7e72224447"
+    }
+  ],
+  "sufficient_mechanism": {
+    "scope": "Complete actual Track methods/header with existing Engine/clock and observed real-condition-variable boundaries; no hooked waits. Explicit oversized request models one permitted ClockedSink catch-up. Demonstrates a sufficient mechanism, not unrecorded scheduling history of original Windows failure.",
+    "receipts": [
+      {
+        "label": "actual_failed_merge",
+        "ref": "498ed2a9fa8c9d63f0bb093f779463697d3a5715",
+        "generated_sha256": "ec760f3481104c9cd5f88950f1c1e113dd174d2ddaa8afa30d2e75640745bbdf",
+        "compile": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-reproducer/actual_failed_merge.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-reproducer/actual_failed_merge"
+        ],
+        "returncode": 0,
+        "result": {
+          "actual_request_frames": 1406,
+          "actual_ring_frames": 960,
+          "source_ready_frames": 14400,
+          "real_pcm_mismatches": 0,
+          "zero_tail_frames": 446,
+          "tail_nonzero_samples": 0,
+          "underrun_frames": 446,
+          "source_position": 960,
+          "writer_transferred_bytes_before_release": 3840,
+          "played": true
+        }
+      },
+      {
+        "label": "current_main",
+        "ref": "8f53b6045e26f0bb4a482c69099d084db3e94963",
+        "generated_sha256": "ec760f3481104c9cd5f88950f1c1e113dd174d2ddaa8afa30d2e75640745bbdf",
+        "compile": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-reproducer/current_main.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-reproducer/current_main"
+        ],
+        "returncode": 0,
+        "result": {
+          "actual_request_frames": 1406,
+          "actual_ring_frames": 960,
+          "source_ready_frames": 14400,
+          "real_pcm_mismatches": 0,
+          "zero_tail_frames": 446,
+          "tail_nonzero_samples": 0,
+          "underrun_frames": 446,
+          "source_position": 960,
+          "writer_transferred_bytes_before_release": 3840,
+          "played": true
+        }
+      },
+      {
+        "label": "pending_334",
+        "ref": "3e7afab2c5a88128e08a41e7273257d3a5f323ce",
+        "generated_sha256": "4a5d827aa329b440cfea09e689b97ecc0b3f88f67efa99f3eb893f391c8d78cf",
+        "compile": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-reproducer/pending_334.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-reproducer/pending_334"
+        ],
+        "returncode": 0,
+        "result": {
+          "actual_request_frames": 1406,
+          "actual_ring_frames": 960,
+          "source_ready_frames": 14400,
+          "real_pcm_mismatches": 0,
+          "zero_tail_frames": 446,
+          "tail_nonzero_samples": 0,
+          "underrun_frames": 446,
+          "source_position": 960,
+          "writer_transferred_bytes_before_release": 1920,
+          "played": true
+        }
+      }
+    ]
+  },
+  "current_boundary": {
+    "production": "Complete Track header/members, PCM/ring/resampler, complete CaptureSink Render/WAV and Analyze",
+    "adapters": "Engine attachment, host clock/CV scheduling, single-track Mixer and unit group gain; explicitly driven Render requests",
+    "limits": "No Windows engine thread, capture-clock scheduling, endpoint, ART or JNI VM execution",
+    "actual_checks": 1892,
+    "unchanged_source_negative_cases": 2,
+    "compiled_mutants": 7,
+    "current_capture_hz": 750.0,
+    "baseline_capture_hz": 727.3,
+    "frequency_rule": "Existing 2% rule; separate tone/placement from original Windows727.4 capture",
+    "source_receipts": [
+      {
+        "label": "actual-blocked-write",
+        "source_ref": null,
+        "case": "all",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/actual-blocked-write.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/actual-blocked-write",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "997b77af7f231124dfdbbe26360b4bd4e763d5bb96245bfe15b99a6cbc3b0f7e",
+        "executable_sha256": "9f45655351e1b1d34c42f81ec7f15be2b59141ed9d04531cc23d91a2f51fcf71",
+        "returncode": 0,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "unchanged-baseline",
+        "source_ref": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+        "case": "gap",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/unchanged-baseline.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/unchanged-baseline",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "3c4453893a3ed343fc195001cde87e241ba5c40f0b77b8389eb423a7e042a222",
+        "executable_sha256": "b09c97f32b2f495949b35709d48ea4575e737f84d57ea0e0b78e3ccd108bb697",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da",
+          "compat/media/audio/engine.h": "a26f0f29bbd97d998a4b5493e939dbe933a5a6d643ecb4120ba3186183e43da1",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "unchanged-capture",
+        "source_ref": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+        "case": "capture",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/unchanged-capture.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/unchanged-capture",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "3c4453893a3ed343fc195001cde87e241ba5c40f0b77b8389eb423a7e042a222",
+        "executable_sha256": "58756a8fc439404199d435267e2ad6897b401aecfd14e589fe7513e31d01efb9",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da",
+          "compat/media/audio/engine.h": "a26f0f29bbd97d998a4b5493e939dbe933a5a6d643ecb4120ba3186183e43da1",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "no-refill",
+        "source_ref": null,
+        "case": "gap",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/no-refill.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/no-refill",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "4ed22605a3b14bae56083a5b54c7810ed2963ba4869c6e05aee80c5ada5aa6e0",
+        "executable_sha256": "cfac03396450ff521cb949310b0f752584f6f64ed101ce4ed4ec3284407e6c5c",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "stale-epoch",
+        "source_ref": null,
+        "case": "epoch",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/stale-epoch.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/stale-epoch",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "0338672b4dc52d6f7794c19628691b80480b213a77212fa1a7fa65355004fd16",
+        "executable_sha256": "67a6f19e7a3270e85bd1255a3d39ec6a3d67ba988e3929054b2d72f17f6596e8",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "lost-progress",
+        "source_ref": null,
+        "case": "progress",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/lost-progress.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/lost-progress",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "7b0dc20e4f146ecc9aa1b8b12cacf3ed90a3ec9a66800dad465c8380f8301b26",
+        "executable_sha256": "c8987bf4079e733d0ce15d7c21036a2dee6d9612e6d925deec5cda64ae2f829e",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "lost-unlink",
+        "source_ref": null,
+        "case": "cancel",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/lost-unlink.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/lost-unlink",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "abbec451da7b87d9d0f6a1cb23bcfb16e757943815bf7f1c7b944851da5fcc1c",
+        "executable_sha256": "ffb8b7ec550fa854467dbfcb834bb90b176d638d86a0a9fbae55b8ec53b735ef",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "old-buffer-limit",
+        "source_ref": null,
+        "case": "shrink",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/old-buffer-limit.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/old-buffer-limit",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "2431fa44f23176845a97e40ac2799111c23ad1fee57b6e6eafe83818d4e90eb4",
+        "executable_sha256": "045b09cf39e715c832d7784aeee5908488ec3d35dfe603b280b333ca44e95025",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "reverse-waiters",
+        "source_ref": null,
+        "case": "multiple",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/reverse-waiters.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/reverse-waiters",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "a834ed05c916e6ac27e6f99ed5cc51853d80fce4434e0349f5a64779ed1e1f9f",
+        "executable_sha256": "39a615ad93115a3178625d641381877985c4e33b0318157f6a745efaa8ba5d82",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "repeated-prefix",
+        "source_ref": null,
+        "case": "shrink",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/repeated-prefix.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-final/repeated-prefix",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "2559232fd52f5b3934052ae7ef146f3c268dbdbf2d8c2960b4755f262f0a9cdd",
+        "executable_sha256": "f53d2b30df78843929ed58a909472541d61570956ce87291a76487e17c21fb75",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      }
+    ]
+  },
+  "independent_review": {
+    "review": "source and host runtime PASS; final commit/report adoption pending",
+    "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+    "production_sha256": {
+      "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+      "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697"
+    },
+    "all_inputs_sha256": {
+      "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+      "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+      "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+      "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+      "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+      "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+      "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+      "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+      "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+    },
+    "checks": 1892,
+    "baseline_negatives": 2,
+    "compiled_mutants": 7,
+    "receipts": [
+      {
+        "label": "actual-blocked-write",
+        "source_ref": null,
+        "case": "all",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/actual-blocked-write.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/actual-blocked-write",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "997b77af7f231124dfdbbe26360b4bd4e763d5bb96245bfe15b99a6cbc3b0f7e",
+        "executable_sha256": "20c4677f45ed6ef6afe87567ba904fc1a2f8e2ca97f28f53dd829d348cf0b229",
+        "returncode": 0,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "unchanged-baseline",
+        "source_ref": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+        "case": "gap",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/unchanged-baseline.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/unchanged-baseline",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "3c4453893a3ed343fc195001cde87e241ba5c40f0b77b8389eb423a7e042a222",
+        "executable_sha256": "48f90ce0e7559b562280e944252e42cf4c2fc75531611ce590b774c47fe287ee",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da",
+          "compat/media/audio/engine.h": "a26f0f29bbd97d998a4b5493e939dbe933a5a6d643ecb4120ba3186183e43da1",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "unchanged-capture",
+        "source_ref": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+        "case": "capture",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/unchanged-capture.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/unchanged-capture",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "3c4453893a3ed343fc195001cde87e241ba5c40f0b77b8389eb423a7e042a222",
+        "executable_sha256": "b1e0bdee2b9af25253f2a14b518da0f11a559ed394a047c13c799b672ea48830",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da",
+          "compat/media/audio/engine.h": "a26f0f29bbd97d998a4b5493e939dbe933a5a6d643ecb4120ba3186183e43da1",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "no-refill",
+        "source_ref": null,
+        "case": "gap",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/no-refill.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/no-refill",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "4ed22605a3b14bae56083a5b54c7810ed2963ba4869c6e05aee80c5ada5aa6e0",
+        "executable_sha256": "b5bc966e9d748b5867e35bfee802b91fe58cd70f41b427acc58a74f2f8787370",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "stale-epoch",
+        "source_ref": null,
+        "case": "epoch",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/stale-epoch.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/stale-epoch",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "0338672b4dc52d6f7794c19628691b80480b213a77212fa1a7fa65355004fd16",
+        "executable_sha256": "3ea3a41af7a3a0cde4b198f2c330688ebd382b506af79f53b7e59c20bb528c18",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "lost-progress",
+        "source_ref": null,
+        "case": "progress",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/lost-progress.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/lost-progress",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "7b0dc20e4f146ecc9aa1b8b12cacf3ed90a3ec9a66800dad465c8380f8301b26",
+        "executable_sha256": "d95bde64dae9b7988ffed4340cb94ce6108d11511057cafc05cca38c3f1722fc",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "lost-unlink",
+        "source_ref": null,
+        "case": "cancel",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/lost-unlink.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/lost-unlink",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "abbec451da7b87d9d0f6a1cb23bcfb16e757943815bf7f1c7b944851da5fcc1c",
+        "executable_sha256": "d3516c8a90b21d296f87df0f3fce5dd78d697ba31fc23c52479ebc941274bca8",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "old-buffer-limit",
+        "source_ref": null,
+        "case": "shrink",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/old-buffer-limit.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/old-buffer-limit",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "2431fa44f23176845a97e40ac2799111c23ad1fee57b6e6eafe83818d4e90eb4",
+        "executable_sha256": "cc289219669da15cc41448ddc0a2ae8bbecdb4dbe58fb89e3f6845a69500c521",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "reverse-waiters",
+        "source_ref": null,
+        "case": "multiple",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/reverse-waiters.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/reverse-waiters",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "a834ed05c916e6ac27e6f99ed5cc51853d80fce4434e0349f5a64779ed1e1f9f",
+        "executable_sha256": "d820d20d1271e9eeaafa90adb728bb430f8d5af05d1118d1322458ccdc8229e7",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      },
+      {
+        "label": "repeated-prefix",
+        "source_ref": null,
+        "case": "shrink",
+        "command": [
+          "c++",
+          "-std=c++20",
+          "-O1",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-pthread",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/repeated-prefix.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-review-audio-refill/repeated-prefix",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer"
+        ],
+        "generated_sha256": "2559232fd52f5b3934052ae7ef146f3c268dbdbf2d8c2960b4755f262f0a9cdd",
+        "executable_sha256": "3e85a03bc5e0166e46cdb8c6199fb589e53d8b0d987a3fb9e1807d072b34b6f6",
+        "returncode": 1,
+        "inputs": {
+          "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+          "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+          "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+          "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+          "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+          "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+          "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+          "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+          "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a"
+        }
+      }
+    ],
+    "ownership_review": [
+      "PendingWrite stack registration occurs only under Track mutex before the real CV wait; wait reacquires that mutex before RAII unlinks.",
+      "Mixer copies only genuine live input through the existing capacity-limited ring and accounts committed bytes once per writer.",
+      "Pause/Stop/Release epochs and frozen stop_end reject stale borrowed suffixes; no new source is admitted while stopping.",
+      "JNI array/direct-buffer references and shared Track owner remain live throughout WriteBytes; existing nonblocking AAudio/OpenSL paths do not register borrowed data.",
+      "Completed and cancelled records unlink before caller input can retire; real cancellation and concurrent Release are tested.",
+      "FIFO describes currently registered records, not a new global ordering promise across all Write calls."
+    ],
+    "limits": [
+      "Host executes complete production Track/PCM/ring/resampler plus actual CaptureSink and Analyze sections; Engine attachment, clock transport and CV scheduling are explicit boundaries.",
+      "Deterministic catch-up reproduces a sufficient real 446-frame gap mechanism, not the archived Windows scheduler.",
+      "No actual Windows device, WASAPI, ART/JNI or whole process performance claim from this replay."
+    ]
+  },
+  "preserved_existing_contracts": {
+    "audio_state_checks": 162,
+    "soundpool_state_checks": 10,
+    "unity_candidate_checks": 6882,
+    "unity_baseline_checks": 6878,
+    "identical_PCM_state_callback_transcript_bytes": 284559164,
+    "transcript_artifact": "Compared completely by the existing streaming comparator; full temporary transcripts are reproducible, not archived"
+  },
+  "strict_windows_TUs": {
+    "base": "98215dd7e798090fb5ab6160490ae78f1793ab3a",
+    "scope": "Complete actual engine.cc (baseline and candidate, runtime logging branch) and media_probe.cc standalone TU on x64 and ARM64. Strict -Werror and actual Windows/AOSP/project headers; no DLL/full link or execution claim.",
+    "results": [
+      {
+        "arch": "x86_64",
+        "variant": "baseline",
+        "source_sha256": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-parameter",
+          "-mno-ms-bitfields",
+          "-fno-exceptions",
+          "-fsized-deallocation",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/baseline/engine.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/x86_64-baseline.o",
+          "-MMD",
+          "-MF",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/x86_64-baseline.d"
+        ],
+        "returncode": 0,
+        "diagnostic": "",
+        "object_sha256": "aee1ab638d9cdf1c0a307fc1da23bc0111d45406fdee9c89834688d228a8e999",
+        "actual_inputs": [
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/baseline/engine.cc",
+            "sha256": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/baseline/engine.h",
+            "sha256": "a26f0f29bbd97d998a4b5493e939dbe933a5a6d643ecb4120ba3186183e43da1"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+            "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+            "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/clocks.h",
+            "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/errno.h",
+            "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/awake_clock.h",
+            "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/log.h",
+            "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+            "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/cdefs.h",
+            "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/time.h",
+            "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/shared_state.h",
+            "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/sink.h",
+            "sha256": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60"
+          }
+        ]
+      },
+      {
+        "arch": "x86_64",
+        "variant": "candidate",
+        "source_sha256": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-parameter",
+          "-mno-ms-bitfields",
+          "-fno-exceptions",
+          "-fsized-deallocation",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/x86_64-candidate.o",
+          "-MMD",
+          "-MF",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/x86_64-candidate.d"
+        ],
+        "returncode": 0,
+        "diagnostic": "",
+        "object_sha256": "016a9a6d57422d80d83463fbf80b8bd7c49891a682a9ea0ec56f2f36505530db",
+        "actual_inputs": [
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.cc",
+            "sha256": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.h",
+            "sha256": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+            "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+            "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/clocks.h",
+            "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/errno.h",
+            "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/awake_clock.h",
+            "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/log.h",
+            "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+            "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/cdefs.h",
+            "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/time.h",
+            "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/shared_state.h",
+            "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/sink.h",
+            "sha256": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60"
+          }
+        ]
+      },
+      {
+        "arch": "x86_64",
+        "variant": "probe",
+        "source_sha256": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-parameter",
+          "-mno-ms-bitfields",
+          "-fno-exceptions",
+          "-fsized-deallocation",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+          "-DGESHER_MEDIA_STANDALONE",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/media_probe.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/x86_64-probe.o",
+          "-MMD",
+          "-MF",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/x86_64-probe.d"
+        ],
+        "returncode": 0,
+        "diagnostic": "",
+        "object_sha256": "0a7ae44efec4b2bd15bef0766db62924979e7f2c6adef01c82ff6a104d4c390c",
+        "actual_inputs": [
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/media_probe.cc",
+            "sha256": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+            "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/../audio/capture.h",
+            "sha256": "deaed515017b954ecb7c682b2e65a05d9227edf3d2c196070a03b3cbfa726831"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+            "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/../audio/engine.h",
+            "sha256": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/../audio/sink.h",
+            "sha256": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60"
+          }
+        ]
+      },
+      {
+        "arch": "aarch64",
+        "variant": "baseline",
+        "source_sha256": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-parameter",
+          "-mno-ms-bitfields",
+          "-fno-exceptions",
+          "-fsized-deallocation",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/baseline/engine.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/aarch64-baseline.o",
+          "-MMD",
+          "-MF",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/aarch64-baseline.d"
+        ],
+        "returncode": 0,
+        "diagnostic": "",
+        "object_sha256": "0ec14df6d3c8242426cbef79d9d7fce5b2665bccea418f5d66dd9ae5d6be0efa",
+        "actual_inputs": [
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/baseline/engine.cc",
+            "sha256": "2960f2c31583befa52564621ce04e654e72c6c0ff137721db93ee608464585da"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/baseline/engine.h",
+            "sha256": "a26f0f29bbd97d998a4b5493e939dbe933a5a6d643ecb4120ba3186183e43da1"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+            "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+            "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/clocks.h",
+            "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/errno.h",
+            "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/awake_clock.h",
+            "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/log.h",
+            "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+            "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/cdefs.h",
+            "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/time.h",
+            "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/shared_state.h",
+            "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/sink.h",
+            "sha256": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60"
+          }
+        ]
+      },
+      {
+        "arch": "aarch64",
+        "variant": "candidate",
+        "source_sha256": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-parameter",
+          "-mno-ms-bitfields",
+          "-fno-exceptions",
+          "-fsized-deallocation",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/aarch64-candidate.o",
+          "-MMD",
+          "-MF",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/aarch64-candidate.d"
+        ],
+        "returncode": 0,
+        "diagnostic": "",
+        "object_sha256": "f96ce3b827d4914099b1784caf164999939be988a1f965d0911cd3e72dab8536",
+        "actual_inputs": [
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.cc",
+            "sha256": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.h",
+            "sha256": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+            "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+            "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/clocks.h",
+            "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/errno.h",
+            "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/awake_clock.h",
+            "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/log.h",
+            "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+            "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/cdefs.h",
+            "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/time.h",
+            "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/shared_state.h",
+            "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/sink.h",
+            "sha256": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60"
+          }
+        ]
+      },
+      {
+        "arch": "aarch64",
+        "variant": "probe",
+        "source_sha256": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-parameter",
+          "-mno-ms-bitfields",
+          "-fno-exceptions",
+          "-fsized-deallocation",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+          "-DGESHER_MEDIA_STANDALONE",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/media_probe.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/aarch64-probe.o",
+          "-MMD",
+          "-MF",
+          "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-windows/aarch64-probe.d"
+        ],
+        "returncode": 0,
+        "diagnostic": "",
+        "object_sha256": "e1ace839e70d17f7e61008c777b18b361a2173ea9ca17c1174ec6da0803afa79",
+        "actual_inputs": [
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/media_probe.cc",
+            "sha256": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+            "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/../audio/capture.h",
+            "sha256": "deaed515017b954ecb7c682b2e65a05d9227edf3d2c196070a03b3cbfa726831"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+            "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/../audio/engine.h",
+            "sha256": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697"
+          },
+          {
+            "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/../audio/sink.h",
+            "sha256": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60"
+          }
+        ]
+      }
+    ]
+  },
+  "source_policy": {
+    "ordinary_controls": 26,
+    "repinned_property": 4,
+    "shared_stdio": 23,
+    "supplier_metadata": 36,
+    "supplier_authority_hash_negative": 1,
+    "production_or_runtime_approval_change": false
+  },
+  "source_hashes": {
+    "compat/media/audio/engine.cc": "fa2809a64a1340b7353cc365d2a91ed5b94e9729d115c2b87639bb1fdb821467",
+    "compat/media/audio/engine.h": "d69f70408639aa97e425969dff603d43c6d7eea2b49e752b08fa647daa77d697",
+    "compat/media/audio/sink.h": "ae99952879de802166e727e7713f17b001dde2b4589dd333132944dce6c46a60",
+    "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+    "compat/media/probe/media_probe.cc": "9bb7c7e317f268c46a6c1f179fc710a63886864be560b73a277693359db9a2cc",
+    "compat/media/jni/audio_track_jni.cc": "2091c2ba5abaee8888856d642c69f5bb01b74fd8f375d5ec4e0d7f79c9f89081",
+    "tests/media/audio_blocked_write_host.cc.in": "d2f049d5212edadd60a56c6346840e8da34cc89e7aed8ea29e1cc267d2c3a17e",
+    "tests/media/audio_state_host.cc.in": "f5e38a1eda5e16488424f3b486ff0e68c20b36a36f4af552f32401cd09bc0138",
+    "tools/test_audio_blocked_write.py": "75ca40fdeb35324b810efeb4ebd246c93d6c29a6666fb1355d164dd91b2f7507",
+    "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a",
+    ".github/workflows/ci.yml": "7f1ecce48b5f22cc725b8eae53fd50ebb97da59357cb41c2353e1b6492492d14",
+    "tests/windows/tracks/38-media.ps1": "85fea17fb1d856fc2d5b207d9ca8462d10887fa4509b29de172752b2cbd74131"
+  },
+  "archive": {
+    "path": "data/audio-blocked-writer-2026-11-23.tar.gz",
+    "sha256": "31948601c22c2e47fbe19553421daeec4424543b67107f03d470629682f1f23b",
+    "bytes": 3272007,
+    "members_including_manifest": 107,
+    "manifest_member": "MANIFEST.json",
+    "manifest_sha256": "40a46dcaf4f83d75842fcc503f0466592648f50469175746b93aeaba3513bafb"
+  },
+  "remaining_limits": [
+    "Full manual fork CI and actual Windows media/ART execution remain pending.",
+    "Original Windows scheduler/block trace was not recorded; sufficient mechanism only.",
+    "No suppression of genuine underrun, sample padding, threshold change, timing or universal performance claim.",
+    "Local LeakSanitizer disabled under ptrace; remote CI settings unchanged."
+  ],
+  "current_main_integration": {
+    "source_commit_local": "32d9a53a3eaba6587e3e2e7e860a044dbb3d85ea",
+    "publication": "One identical final tree on public bcfb; local intermediate commits are archived source provenance.",
+    "composition": {
+      "feature": "63fc00202d6d410f744be44853881e53478a0b76",
+      "incoming_main": "bcfb5044029d486e17138dc417f3ced81524cf3f",
+      "ordered_merge": "da4da4977a9e04fc82bce8aa4091931d06807850",
+      "tree": "f80ab91a34dee76b5bb33af245acbc30879572ce",
+      "canonical_merge_tree": "f80ab91a34dee76b5bb33af245acbc30879572ce",
+      "production_hashes": {
+        "compat/media/audio/engine.cc": "f354f66ae1450dbdf8d9944a3208c8183ea95b6fda71bc2b43a95bf09d6aa07c",
+        "compat/media/audio/engine.h": "636b166bcff3b0fc569a81044865f1302dd9e8e7a4e6f995965aa20b5b1d42ea",
+        "compat/media/audio/sink.h": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65",
+        "tests/media/audio_state_host.cc.in": "8d30167970fe4e2ce6db9a6dd6014fc3a795ccdad8502383af2fa1c36d749da5",
+        "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a",
+        "tests/windows/tracks/38-media.ps1": "32770414c7cf7fb3a7fc7fb59de8fae704e31bd1f4d1df604428bf0c574b4c83"
+      },
+      "unchanged_feature_blocks": {
+        "struct Track::PendingWrite {": "3e86c12de243f0742b8a568c073c15ea2e89c9d9bf61ca3684bda3b02c72db7d",
+        "size_t Track::ReadSource(": "1e32a4e0dfa42cb95fbb204587d6e8d8224486443be5a5d954935ea32d76d034"
+      },
+      "workflow_delta": "one required helper; complete incoming local framework calls and all gates retained"
+    },
+    "source_hashes": {
+      "compat/media/audio/engine.cc": "f354f66ae1450dbdf8d9944a3208c8183ea95b6fda71bc2b43a95bf09d6aa07c",
+      "compat/media/audio/engine.h": "636b166bcff3b0fc569a81044865f1302dd9e8e7a4e6f995965aa20b5b1d42ea",
+      "compat/media/audio/sink.h": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65",
+      "compat/media/audio/sink_file.cc": "575d91e795bf41a83ba43102372bdc3f39a51d6a2bc60a0cdf72cccaf85a1061",
+      "compat/media/probe/media_probe.cc": "f50b7ca828f75c524a621104b79c3fd4402c7f5ad377de30fc769104a9488303",
+      "compat/media/jni/audio_track_jni.cc": "2091c2ba5abaee8888856d642c69f5bb01b74fd8f375d5ec4e0d7f79c9f89081",
+      "tests/media/audio_blocked_write_host.cc.in": "e07587b6f36676a51d81bff91074fc4ecb2b18cb0039373397e88ea2306ae040",
+      "tests/media/audio_state_host.cc.in": "8d30167970fe4e2ce6db9a6dd6014fc3a795ccdad8502383af2fa1c36d749da5",
+      "tools/test_audio_blocked_write.py": "6f5991daf7e6b4496c7314aad06d4b3bb493ff10dded759c9e1bc352025a986e",
+      "tools/test_audio_state_contracts.py": "545ab4da495ff13b5429a98893b7e4a4411460b1ffdd4aab95b55015afe3ba5a",
+      ".github/workflows/ci.yml": "3c52d8841ac6291db49ffae683dbcaa86230d2e5d6c6fa564e80156855932ae9",
+      "tests/windows/tracks/38-media.ps1": "32770414c7cf7fb3a7fc7fb59de8fae704e31bd1f4d1df604428bf0c574b4c83"
+    },
+    "fixture_adjustment": "Exact default Sink::WaitForRefill body with abort-only unused OS-wait boundary; incoming nominal playback clock shared only by paired reference mixes. Current negative baseline bcfb is ancestral.",
+    "contracts": {
+      "checks": 1892,
+      "unchanged_current_main_negatives": 2,
+      "assertion_mutants": 7,
+      "capture_hz": 750.0,
+      "unchanged_capture_hz": 727.3,
+      "independent_replay": "native-review-audio-refill-main.log"
+    },
+    "existing_contracts": {
+      "audio_state": 162,
+      "soundpool": 10,
+      "unity_current": 6882,
+      "unity_baseline": 6878,
+      "exact_transcript_bytes": 284542469
+    },
+    "strict_windows_TUs": {
+      "base": "bcfb5044029d486e17138dc417f3ced81524cf3f",
+      "scope": "Complete current-main engine.cc baseline and candidate, runtime logging branch; current-main media_probe.cc standalone. Strict Windows x64 and AArch64 compile only, no DLL or runtime claim.",
+      "results": [
+        {
+          "arch": "x86_64",
+          "variant": "baseline",
+          "source_sha256": "26869b74489faada856804f5bc48dd5c54dc8b81ea49de6a5a854554a3002634",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+            "-std=gnu++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/baseline/engine.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/x86_64-baseline.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/x86_64-baseline.d"
+          ],
+          "returncode": 0,
+          "diagnostic": "",
+          "object_sha256": "8b9ca0f52e25c4d0de7a8bc367d6443d035848f0157be48cdab7e7a8fb55d7d5",
+          "actual_inputs": [
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/baseline/engine.cc",
+              "sha256": "26869b74489faada856804f5bc48dd5c54dc8b81ea49de6a5a854554a3002634"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/baseline/engine.h",
+              "sha256": "d536c33e232ce224e28c62c0fb4b799d4a3670747df0488dcdc4ba6cd4f9a9d2"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+              "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+              "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/clocks.h",
+              "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/errno.h",
+              "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/awake_clock.h",
+              "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/log.h",
+              "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+              "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/cdefs.h",
+              "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/time.h",
+              "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/shared_state.h",
+              "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/baseline/sink.h",
+              "sha256": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65"
+            }
+          ]
+        },
+        {
+          "arch": "x86_64",
+          "variant": "candidate",
+          "source_sha256": "f354f66ae1450dbdf8d9944a3208c8183ea95b6fda71bc2b43a95bf09d6aa07c",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+            "-std=gnu++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/x86_64-candidate.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/x86_64-candidate.d"
+          ],
+          "returncode": 0,
+          "diagnostic": "",
+          "object_sha256": "d56e45fe5215ca6639c11c33966f4f2ccd47a8a6744d56517165ff2cd47e8dd4",
+          "actual_inputs": [
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.cc",
+              "sha256": "f354f66ae1450dbdf8d9944a3208c8183ea95b6fda71bc2b43a95bf09d6aa07c"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.h",
+              "sha256": "636b166bcff3b0fc569a81044865f1302dd9e8e7a4e6f995965aa20b5b1d42ea"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+              "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+              "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/clocks.h",
+              "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/errno.h",
+              "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/awake_clock.h",
+              "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/log.h",
+              "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+              "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/cdefs.h",
+              "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/time.h",
+              "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/shared_state.h",
+              "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/sink.h",
+              "sha256": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65"
+            }
+          ]
+        },
+        {
+          "arch": "x86_64",
+          "variant": "probe",
+          "source_sha256": "f50b7ca828f75c524a621104b79c3fd4402c7f5ad377de30fc769104a9488303",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-g++",
+            "-std=gnu++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-DGESHER_MEDIA_STANDALONE",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/media_probe.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/x86_64-probe.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/x86_64-probe.d"
+          ],
+          "returncode": 0,
+          "diagnostic": "",
+          "object_sha256": "0704a25a4ca5edd29c36a4e09831ae072be56514156d9d9441150546d1829172",
+          "actual_inputs": [
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/media_probe.cc",
+              "sha256": "f50b7ca828f75c524a621104b79c3fd4402c7f5ad377de30fc769104a9488303"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+              "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/capture.h",
+              "sha256": "deaed515017b954ecb7c682b2e65a05d9227edf3d2c196070a03b3cbfa726831"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+              "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.h",
+              "sha256": "636b166bcff3b0fc569a81044865f1302dd9e8e7a4e6f995965aa20b5b1d42ea"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/sink.h",
+              "sha256": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65"
+            }
+          ]
+        },
+        {
+          "arch": "aarch64",
+          "variant": "baseline",
+          "source_sha256": "26869b74489faada856804f5bc48dd5c54dc8b81ea49de6a5a854554a3002634",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+            "-std=gnu++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/baseline/engine.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/aarch64-baseline.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/aarch64-baseline.d"
+          ],
+          "returncode": 0,
+          "diagnostic": "",
+          "object_sha256": "91cd16a69dbd7d9a9512d53c440c4067d56c797b57c64a969b726424ffcd844d",
+          "actual_inputs": [
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/baseline/engine.cc",
+              "sha256": "26869b74489faada856804f5bc48dd5c54dc8b81ea49de6a5a854554a3002634"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/baseline/engine.h",
+              "sha256": "d536c33e232ce224e28c62c0fb4b799d4a3670747df0488dcdc4ba6cd4f9a9d2"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+              "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+              "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/clocks.h",
+              "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/errno.h",
+              "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/awake_clock.h",
+              "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/log.h",
+              "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+              "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/cdefs.h",
+              "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/time.h",
+              "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/shared_state.h",
+              "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/baseline/sink.h",
+              "sha256": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65"
+            }
+          ]
+        },
+        {
+          "arch": "aarch64",
+          "variant": "candidate",
+          "source_sha256": "f354f66ae1450dbdf8d9944a3208c8183ea95b6fda71bc2b43a95bf09d6aa07c",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+            "-std=gnu++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/aarch64-candidate.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/aarch64-candidate.d"
+          ],
+          "returncode": 0,
+          "diagnostic": "",
+          "object_sha256": "2b72bfd6de395ddd93f229555af894f4fee2406c44906f99d735abc0ef9e57ff",
+          "actual_inputs": [
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.cc",
+              "sha256": "f354f66ae1450dbdf8d9944a3208c8183ea95b6fda71bc2b43a95bf09d6aa07c"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.h",
+              "sha256": "636b166bcff3b0fc569a81044865f1302dd9e8e7a4e6f995965aa20b5b1d42ea"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+              "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+              "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/clocks.h",
+              "sha256": "788a6d2499808b36b7d6b266e8dc4277351ad118afb3f28186aedf36a6a0bbf7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/errno.h",
+              "sha256": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/gesher/awake_clock.h",
+              "sha256": "77a62b273e2c29d2b57c24f1587e93928ce12877f158eb3353b50f020b16206c"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/log.h",
+              "sha256": "78c4d82254d83b45d12f78517e483a01c745e25d19d55ecad80ca3bbc38acac7"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include/android/log.h",
+              "sha256": "ee10b13125564cfebd95b2a37e87d3f507b502eb426c6951985abe6299a8a17f"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/cdefs.h",
+              "sha256": "141e6c1b9445208b99fe950b6dfaecb6198cb0d285d0e84aeb6af20f840f4878"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/time.h",
+              "sha256": "3004adb779b14cd60f33a3ca2e48734cdf133a7d3b0a9d4b9af5ccb59b9f7385"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/shared_state.h",
+              "sha256": "df397a66b9b4891c779cce07fe5cb8acc0c06dbffe40635615ffe3ceb21bd2ae"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/sink.h",
+              "sha256": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65"
+            }
+          ]
+        },
+        {
+          "arch": "aarch64",
+          "variant": "probe",
+          "source_sha256": "f50b7ca828f75c524a621104b79c3fd4402c7f5ad377de30fc769104a9488303",
+          "command": [
+            "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-g++",
+            "-std=gnu++20",
+            "-O2",
+            "-g",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-Wno-unused-parameter",
+            "-mno-ms-bitfields",
+            "-fno-exceptions",
+            "-fsized-deallocation",
+            "-DGESHER",
+            "-DUSE_MINGW",
+            "-DWIN32_LEAN_AND_MEAN",
+            "-DNOMINMAX",
+            "-DNOGDI",
+            "-D_USE_MATH_DEFINES",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-D_WIN32_WINNT=0x0A00",
+            "-DWINVER=0x0A00",
+            "-D_FILE_OFFSET_BITS=64",
+            "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio",
+            "-I",
+            "/workspace/scratch/aa09b1a0dc1f/media-camera-headers/system/logging/liblog/include",
+            "-DGESHER_MEDIA_STANDALONE",
+            "-c",
+            "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/media_probe.cc",
+            "-o",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/aarch64-probe.o",
+            "-MMD",
+            "-MF",
+            "/workspace/scratch/aa09b1a0dc1f/media-audio-refill-main-windows/aarch64-probe.d"
+          ],
+          "returncode": 0,
+          "diagnostic": "",
+          "object_sha256": "b1dec7b56f01e2e28c965cb749d86693de4366b48efa4471021e8889c2df463d",
+          "actual_inputs": [
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/probe/media_probe.cc",
+              "sha256": "f50b7ca828f75c524a621104b79c3fd4402c7f5ad377de30fc769104a9488303"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/time.h",
+              "sha256": "ba9b9809d24dc540bff1c33cacd13a0602e6448a1815c27d4a3d91d9346ab1a6"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/capture.h",
+              "sha256": "deaed515017b954ecb7c682b2e65a05d9227edf3d2c196070a03b3cbfa726831"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/posix/include/sys/types.h",
+              "sha256": "fc181b10a2d82fca5d7dcbd0c03a56dd70348795b2ffcacf36593bab731aa26e"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/engine.h",
+              "sha256": "636b166bcff3b0fc569a81044865f1302dd9e8e7a4e6f995965aa20b5b1d42ea"
+            },
+            {
+              "path": "/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/compat/media/audio/sink.h",
+              "sha256": "2448fff467b3ba5a6a6b668ee9ae6b6503721a14198a943ade8a39d967132e65"
+            }
+          ]
+        }
+      ]
+    },
+    "source_policy": {
+      "ordinary": 26,
+      "repinned_property": 4,
+      "shared_stdio": 23,
+      "supplier_metadata": 36,
+      "supplier_authority_hash": 1,
+      "fork_diagnostic_tests": 22
+    },
+    "logs": {
+      "media-audio-refill-main-bcfb.log": {
+        "sha256": "26591b633522ba153c16ca1a20c883ca27367a8ec48ed09fc629357e9f4df4dd",
+        "text": "audio source SHA256 64d1afab25dada14b00fa011a68fc9a04a7fdb9aa72f17353b75bb83f4557c95\nwav: 48000 Hz, 2 channels, 0.309 s\nsound 1: start 0.000 s, duration 0.300 s, 750.0 Hz, rms 0.266 0.266\nsounds: 1\nblocked audio write contracts: 1892 checks, 0 failures\naudio source SHA256 044db8f21b351ba3db2b73548ff5fa9bfd5a87d54c46ecc8e4f8fe628bf36302\naudio source SHA256 044db8f21b351ba3db2b73548ff5fa9bfd5a87d54c46ecc8e4f8fe628bf36302\nPASS negative unchanged-baseline: prepared blocking input remains continuous across a catch-up mix\nPASS negative unchanged-capture: actual capture writes every prepared tone frame without an inserted interruption\nPASS negative no-refill: prepared blocking input remains continuous across a catch-up mix\nPASS negative stale-epoch: a restarted stream cannot borrow an interrupted writer's remaining input\nPASS negative lost-progress: assisted byte progress is counted once when interrupted\nPASS negative lost-unlink: cancelled writer unlinks borrowed input before caller storage can retire\nPASS negative old-buffer-limit: assisted commit respects the smaller current ring limit\nPASS negative reverse-waiters: currently registered waiters are refilled in their list order\nPASS negative repeated-prefix: ring wrap and limit changes preserve full source byte order\n"
+      },
+      "media-audio-refill-main-state.log": {
+        "sha256": "78be247c37a28bbca08cd20c5123517088d50e8ad968dc97a102fa19bdf26bdd",
+        "text": "audio source SHA256 64d1afab25dada14b00fa011a68fc9a04a7fdb9aa72f17353b75bb83f4557c95\naudio state contracts: 162 checks, 0 failures\nsoundpool source SHA256 2dec4eed191adda469ba28c87c94e03f5788d885f02e32f168cebcad79a0287a\nSoundPool state contracts: 10 checks, 0 failures\n"
+      },
+      "media-audio-refill-main-unity.log": {
+        "sha256": "a0edb251ab64abb766f8841a3c7858726cf4744128f10a85eeefac9d399bfe9a",
+        "text": "audio source SHA256 64d1afab25dada14b00fa011a68fc9a04a7fdb9aa72f17353b75bb83f4557c95\nwork channels=1 frames=480000 checks=2750 reads=1875 allocations=0 bytes=0\nwork channels=2 frames=480000 checks=2750 reads=1875 allocations=0 bytes=0\nwork channels=8 frames=480000 checks=2750 reads=1875 allocations=0 bytes=0\nwork channels=24 frames=480000 checks=2750 reads=1875 allocations=0 bytes=0\naudio unity-rate contracts: 6882 checks, 0 failures\naudio source SHA256 044db8f21b351ba3db2b73548ff5fa9bfd5a87d54c46ecc8e4f8fe628bf36302\nwork channels=1 frames=480000 checks=2750 reads=1875 allocations=0 bytes=0\nwork channels=2 frames=480000 checks=2750 reads=1875 allocations=0 bytes=0\nwork channels=8 frames=480000 checks=2750 reads=1875 allocations=0 bytes=0\nwork channels=24 frames=480000 checks=2750 reads=1875 allocations=0 bytes=0\naudio unity-rate contracts: 6878 checks, 0 failures\nBit-exact unity PCM/state/callback comparison: 284542469 bytes PASS\n"
+      },
+      "media-audio-refill-main-policy.log": {
+        "sha256": "34c22ac45564b380f28360fc26640ea1db5d8112ea66d94095fb194aad165a5e",
+        "text": "TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0\nTCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases=26 repinned_property_controls=4\nPASS shared-stdio source policy rejects unqualified bytes in compat/bionic/stdio_bionic.cc\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/include/gesher/stdio.h\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/include/stdio.h\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/src/stdio_output.cc\nPASS shared-stdio source policy rejects an undeclared include even with a repinned endpoint: compat/bionic/stdio_bionic.cc\nPASS shared-stdio source policy rejects an undeclared include even with a repinned endpoint: compat/posix/include/gesher/stdio.h\nPASS shared-stdio source policy rejects an undeclared transition file\nPASS shared-stdio source policy rejects an undeclared endpoint\nPASS shared-stdio source policy rejects an invented approval field\nPASS shared-stdio source policy rejects an undeclared patch path even with repinned patch and manifest\nPASS shared-stdio source policy rejects a modified before-hunk even with repinned patch and manifest\nPASS shared-stdio source policy rejects a repinned baseline identity\nPASS shared-stdio source policy rejects a repinned feature identity\nPASS shared-stdio source policy rejects a repinned baseline source digest\nPASS shared-stdio source policy rejects a repinned baseline policy\nPASS shared-stdio source policy rejects changed transition metadata without its independent pin\nPASS shared-stdio source policy rejects changed transition patch without its independent pin\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/ofd.cc\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/fd.cc\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/bionic/stdio_windows_lock.h\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/stdio_stream_buffer.h\nPASS shared-stdio source policy rejects a modified original OFD receipt\nPASS shared-stdio source policy rejects a modified original OFD patch\nSHARED_STDIO_SOURCE_POLICY_PASS exact_main_round_trip=4 original_protected_digests=71 negative_controls=23\n"
+      },
+      "media-audio-refill-main-supplier.log": {
+        "sha256": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120",
+        "text": "TCP_SELECTED_SUPPLIER_METADATA_PASS projection=SYNTHETIC_LOG_METADATA_ONLY semantic_mutants=36 authority_hash_negative=1 actual_selected_runtime_claim=false native_processes_started=0\n"
+      },
+      "media-audio-refill-main-diagnostic.log": {
+        "sha256": "60b4855578950ad431ccdb04420fb12846c20a7d21552aa403c67c158b0bdcae",
+        "text": "python3: can't open file '/workspace/scratch/aa09b1a0dc1f/gesher-media-audio-refill/tools/ci/test_fork_diagnostic.py': [Errno 2] No such file or directory\n"
+      },
+      "media-audio-refill-main-diagnostic-corrected.log": {
+        "sha256": "cdf11019173baa9048ee40cb076113e24d0306a628d29ebea0fe6a4ac7b0068b",
+        "text": ".................CANONICAL_SUPPLIER_BASELINE_PARITY leaf_mutants=564\n.....\n----------------------------------------------------------------------\nRan 22 tests in 2.124s\n\nOK\n"
+      },
+      "media-audio-refill-main-crossbuild.log": {
+        "sha256": "2bd0ad9cdcace01ebb9e5240a3a6cda11e77013b04518b6f38163cb0bd27e9f2",
+        "text": "x86_64-baseline 0\nx86_64-candidate 0\nx86_64-probe 0\naarch64-baseline 0\naarch64-candidate 0\naarch64-probe 0\n"
+      },
+      "native-review-audio-refill-main.log": {
+        "sha256": "26591b633522ba153c16ca1a20c883ca27367a8ec48ed09fc629357e9f4df4dd",
+        "text": "audio source SHA256 64d1afab25dada14b00fa011a68fc9a04a7fdb9aa72f17353b75bb83f4557c95\nwav: 48000 Hz, 2 channels, 0.309 s\nsound 1: start 0.000 s, duration 0.300 s, 750.0 Hz, rms 0.266 0.266\nsounds: 1\nblocked audio write contracts: 1892 checks, 0 failures\naudio source SHA256 044db8f21b351ba3db2b73548ff5fa9bfd5a87d54c46ecc8e4f8fe628bf36302\naudio source SHA256 044db8f21b351ba3db2b73548ff5fa9bfd5a87d54c46ecc8e4f8fe628bf36302\nPASS negative unchanged-baseline: prepared blocking input remains continuous across a catch-up mix\nPASS negative unchanged-capture: actual capture writes every prepared tone frame without an inserted interruption\nPASS negative no-refill: prepared blocking input remains continuous across a catch-up mix\nPASS negative stale-epoch: a restarted stream cannot borrow an interrupted writer's remaining input\nPASS negative lost-progress: assisted byte progress is counted once when interrupted\nPASS negative lost-unlink: cancelled writer unlinks borrowed input before caller storage can retire\nPASS negative old-buffer-limit: assisted commit respects the smaller current ring limit\nPASS negative reverse-waiters: currently registered waiters are refilled in their list order\nPASS negative repeated-prefix: ring wrap and limit changes preserve full source byte order\n"
+      }
+    },
+    "archive": {
+      "path": "data/audio-blocked-writer-main-2026-11-23.tar.gz",
+      "sha256": "4ee4c01b457f240d0ba572e0027d17713c4e46b54c1f89d2827df22b174188b0",
+      "bytes": 658639,
+      "members_including_manifest": 135,
+      "manifest_member": "MANIFEST.json",
+      "manifest_sha256": "46eeeb82d786b97de16174e493b30e1edf8c58c88ba00afbc02f3211d938d266"
+    },
+    "remaining_limits": "Original host boundary and platform limits remain; actual Windows audio and full manually dispatched fork CI are pending. No new benchmark or CPU claim."
+  }
+}

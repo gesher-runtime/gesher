@@ -1,12 +1,12 @@
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Qualification is CI only' }
 if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'Controller checkout identity mismatch' }
-foreach ($source in @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/windows4/run-tsf-component.ps1','tools/ci/receipt-diagnostics.ps1','.github/workflows/tsf-format-component.yml')) {
+foreach ($source in @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/TsfOutputMetadataChecks.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/windows4/run-tsf-component.ps1','tools/ci/receipt-diagnostics.ps1','.github/workflows/tsf-format-component.yml')) {
   $blob = git hash-object $source
   if ($LASTEXITCODE -ne 0) { throw "Cannot hash $source" }
   Write-Host "TSF_CONTROLLER_SOURCE source=$env:GITHUB_SHA path=$source blob=$blob sha256=$((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant())"
 }
-Add-Type -Path tools/windows4/TsfJobSupervisor.cs
+Add-Type -Path @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfOutputMetadataChecks.cs')
 # The PID is absent from a subsequent process census, but the retained
 # handle still refers to the exact exited child and must expose its parent.
 $start = [Diagnostics.ProcessStartInfo]::new($env:ComSpec, '/d /c pause >nul')
@@ -35,6 +35,7 @@ $directory = Join-Path $env:RUNNER_TEMP ('tsf-worker-' + [guid]::NewGuid().ToStr
 [void][IO.Directory]::CreateDirectory($directory)
 $worker = Join-Path $directory 'TsfJobWorker.exe'
 try {
+  [TsfOutputMetadataChecks]::Run($directory)
   # Framework csc emits a real console executable; no fixture or compilation occurs locally.
   $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
   $workerSource = Join-Path $PWD 'tools\windows4\TsfJobWorker.cs'
