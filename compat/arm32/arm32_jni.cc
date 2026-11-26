@@ -567,13 +567,23 @@ Jni32::Jni32(Program& program, JNIEnv* real_env)
     : state_(std::make_shared<State>(program, real_env)) {}
 Jni32::~Jni32() {
   if (!state_) return;
+  const bool owns_guest_tables = state_->active;
   state_->active = false;
   if (state_->real && std::this_thread::get_id() == state_->owner) {
     for (const auto& [address, copy] : state_->utf_copies) {
-      state_->program.Memory().Unmap(address, copy.mapped_size);
+      (void)state_->program.Memory().Unmap(address, copy.mapped_size);
     }
     state_->utf_copies.clear();
     state_->ClearReferences(true);
+  }
+  // After shutdown, retire only pages of a successfully installed bridge.
+  // Failed installations may have collided with someone else's guest pages;
+  // never unmap those merely because they occupy our reserved addresses.
+  if (owns_guest_tables) {
+    (void)state_->program.Memory().Unmap(kGuestEnv, kPage);
+    (void)state_->program.Memory().Unmap(kGuestTable, kPage);
+    (void)state_->program.Memory().Unmap(kGuestVm, kPage);
+    (void)state_->program.Memory().Unmap(kGuestVmTable, kPage);
   }
 }
 bool Jni32::Install(std::string* error) { return state_->Install(error); }
