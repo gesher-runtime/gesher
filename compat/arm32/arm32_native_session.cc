@@ -15,10 +15,6 @@ bool Fail(std::string* error, const char* reason) {
   if (error) *error = reason;
   return false;
 }
-bool Fail(std::string* error, const std::string& reason) {
-  if (error) *error = reason;
-  return false;
-}
 }  // namespace
 
 NativeLibrarySession::NativeLibrarySession(
