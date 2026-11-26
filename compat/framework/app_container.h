@@ -60,6 +60,20 @@ DWORD FolderPath(PSID container, std::wstring* path);
 // there; inherited by children and propagated to existing ones when `inherit`).
 DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit);
 
+// Removes any explicit ACE for `trustee` from the DACL of `path`.
+DWORD Revoke(const std::wstring& path, PSID trustee);
+
+// Replaces this trustee's explicit access exactly (zero revokes), propagating
+// inheritance even on a downgrade. Storage objects are pinned and reparse
+// targets rejected; unlike Grant, a superset of the requested rights is not a
+// successful no-op. Existing Windows owner/SYSTEM entries are retained.
+DWORD SetStorageAccess(const std::wstring& path, PSID trustee, DWORD access, bool inherit);
+
+// Protects Android/data or Android/obb against shared-storage inheritance,
+// retaining Windows principals while removing package/capability entries on
+// this root. Explicit own-package grants on children are preserved.
+DWORD ProtectPrivateStorage(const std::wstring& path);
+
 // The security descriptor binderd's pipe uses when the sandbox is enabled:
 // SYSTEM and this user full access, the binder-client capability read and write
 // but not FILE_CREATE_PIPE_INSTANCE, and a Low mandatory label (AppContainer

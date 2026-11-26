@@ -37,6 +37,14 @@ public final class CallerIdentity {
         return mAtm == null ? null : mAtm.authenticatedPackageForPid(pid);
     }
 
+    /**
+     * The installed code of the attached live process with this PID and UID, only while it is
+     * still its package's current installation; null otherwise.
+     */
+    public ApkPackage packageCodeForPid(int pid, int uid) {
+        return mAtm == null ? null : mAtm.authenticatedPackageCodeForPid(pid, uid);
+    }
+
     public boolean isSystem() {
         int pid = callerPid();
         if (pid == Process.myPid()) return true;

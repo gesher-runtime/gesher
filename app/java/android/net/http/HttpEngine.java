@@ -27,15 +27,14 @@ public abstract class HttpEngine {
                 HTTP_CACHE_DISK_NO_HTTP=2, HTTP_CACHE_DISK=3;
         private String agent;
         private boolean http2Enabled = true;
+        private boolean brotliEnabled;
         private int cacheMode = HTTP_CACHE_DISABLED;
         private long cacheSize;
         private String storagePath;
         public Builder(Context context) { Objects.requireNonNull(context, "Context is required"); }
         public String getDefaultUserAgent() { return System.getProperty("http.agent", "Gesher/1.0"); }
         public Builder setUserAgent(String value) { agent=Objects.requireNonNull(value); return this; }
-        // These are transport preferences. URLConnection negotiates the protocols and
-        // encodings it implements; it never advertises QUIC or Brotli it cannot decode.
-        public Builder setEnableBrotli(boolean enabled) { return this; }
+        public Builder setEnableBrotli(boolean enabled) { brotliEnabled = enabled; return this; }
         public Builder setEnableHttp2(boolean enabled) {
             http2Enabled = enabled;
             return this;
@@ -74,7 +73,8 @@ public abstract class HttpEngine {
         public Builder setQuicOptions(QuicOptions options) { Objects.requireNonNull(options); return this; }
         public HttpEngine build() {
             validateCachePath(cacheMode);
-            return new JavaHttpEngine(agent == null ? getDefaultUserAgent() : agent, http2Enabled,
+            if (brotliEnabled) BrotliInputStream.ensureAvailable();
+            return new JavaHttpEngine(agent == null ? getDefaultUserAgent() : agent, http2Enabled, brotliEnabled,
                     new EngineHttpCache(cacheMode, cacheSize, storagePath));
         }
     }

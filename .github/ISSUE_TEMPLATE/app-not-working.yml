@@ -1,0 +1,57 @@
+name: App Not Working
+description: Report an Android app that fails to install, launch, or work properly on Gesher.
+title: "[App]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an app compatibility issue! Please fill in the details below so we can reproduce and investigate it.
+
+  - type: input
+    id: app_name
+    attributes:
+      label: App name
+      description: Name of the application (and package ID or version, if known).
+      placeholder: e.g. Example App (com.example.app) v1.2.3
+    validations:
+      required: true
+
+  - type: input
+    id: download_link
+    attributes:
+      label: Download link
+      description: Link to where the APK / app can be downloaded (e.g. official website, GitHub Releases, APKMirror, or Google Play).
+      placeholder: https://...
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Gesher & Windows version
+      description: Which version of Gesher and Windows are you running?
+      placeholder: e.g. Gesher v0.1.0, Windows 11 24H2
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happens?
+      description: Describe the issue (fails to install, crashes on startup, missing UI, broken feature, etc.) and the steps to reproduce it.
+      placeholder: 1. Install the APK... 2. Open the app... 3. It crashes immediately.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        How to get your logs:
+        1. Open the **Gesher Control Center** (from the Start menu).
+        2. Click **Open logs location** at the bottom-right of the window to open the logs folder.
+        3. Find the relevant log file(s) from when the issue occurred.
+        4. Paste the log contents below (or drag and drop the log file(s) directly into this box).
+      placeholder: Paste log output or attach log file(s) here...
+    validations:
+      required: true

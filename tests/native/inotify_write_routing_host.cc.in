@@ -258,6 +258,10 @@ static BOOL ReadFile(HANDLE handle, void* bytes, DWORD count, DWORD* read, OVERL
 }
 
 namespace gesher {
+// Watch routing runs with storage access granted. The production policy has
+// separate native storage_policy_host_test coverage, including revocation.
+enum class AccessKind { kStat, kRead, kWrite };
+static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 struct EventFd { bool nonblocking = true, readable = false; };
 static std::shared_ptr<EventFd> NewReadiness(bool nonblocking) {
   auto source = std::make_shared<EventFd>(); source->nonblocking = nonblocking; return source;
@@ -290,6 +294,9 @@ static bool DiskPath(const char* input, std::wstring* result, int) {
 }
 void InotifyNoteWrite(HANDLE);
 void InotifyNoteWrite(int);
+// gesher/fork.h (ADR 0092): this fixture is never a forked child, so its
+// watches complete through the thread pool.
+static bool InForkedChild() { return false; }
 }
 
 @INOTIFY_SOURCE@

@@ -55,6 +55,10 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace elf = gesher::elf;
 
@@ -65,6 +69,20 @@ extern "C" std::atomic<void*> gesher_art_load_class_hook;
 // patches/art/0801).
 extern "C" const JNINativeInterface* gesher_art_jni_function_table();
 extern "C" void gesher_art_set_jni_table_override(const JNINativeInterface* table);
+// Runtime's verifier controls and OatHeader::kOatVersion (runtime/runtime.cc,
+// patches/art/0802) for the arm64 stand-in's functions. They act only on this
+// process's Runtime: false or -1 for any other pointer.
+extern "C" bool gesher_art_runtime_disable_verifier(void* runtime);
+extern "C" int gesher_art_runtime_verification(const void* runtime);
+extern "C" const uint8_t* gesher_art_oat_version();
+extern "C" void* gesher_art_runtime_current();
+// ART's DexFileLoader::OpenCommon hook and the function itself, System V
+// (libdexfile/dex/dex_file_loader.cc, patches/art/0803).
+extern "C" std::atomic<void*> gesher_art_open_common_hook;
+extern "C" __attribute__((sysv_abi)) void gesher_art_dex_file_loader_open_common(
+    void* result, void* container, const uint8_t* base, size_t size, const void* location,
+    uint64_t location_checksum, const void* oat_dex_file, uint64_t verify, uint64_t verify_checksum,
+    void* error_msg, void* error_code);
 using gesher::bionic::NextFp;
 using gesher::bionic::NextGp;
 using gesher::bionic::SysvVaList;
@@ -877,6 +895,71 @@ void Install() {
   });
 }
 
+// The arm64 stand-in's Runtime functions (gesher/art_shim.h): what
+// art::Runtime's do, on this process's Runtime. A pointer that is not the
+// Runtime is reported and left alone.
+void SYSV RuntimeDisableVerifierSysv(void* runtime) {
+  if (gesher_art_runtime_disable_verifier(runtime)) {
+    std::fprintf(stderr, "gesher art: the app disabled ART's verifier (Runtime::DisableVerifier)\n");
+  } else {
+    std::fprintf(stderr, "gesher art: Runtime::DisableVerifier called on %p, not the Runtime: ignored\n",
+                 runtime);
+  }
+}
+int SYSV RuntimeVerificationBit(const void* runtime, int bit, const char* what) {
+  const int state = gesher_art_runtime_verification(runtime);
+  if (state < 0) {
+    std::fprintf(stderr, "gesher art: Runtime::%s called on %p, not the Runtime: false\n", what,
+                 runtime);
+    return 0;
+  }
+  return (state & bit) != 0 ? 1 : 0;
+}
+int SYSV RuntimeIsVerificationEnabledSysv(const void* runtime) {
+  return RuntimeVerificationBit(runtime, 1, "IsVerificationEnabled");
+}
+int SYSV RuntimeIsVerificationSoftFailSysv(const void* runtime) {
+  return RuntimeVerificationBit(runtime, 2, "IsVerificationSoftFail");
+}
+
+// An arm64 shell (NetEase Yidun's libnesec.so): the arm64 stand-in, its
+// Runtime functions bound to the host ones above, and ART's LoadClass calling
+// its LoadClass through a host entry into the translator.
+void LoadArtShimArm64For(const char* path, const std::string& dir) {
+  if (!gesher::arm64::EnsureLoaded()) {
+    std::fprintf(stderr, "gesher art: %s hooks ART by symbol, but arm64 translation is unavailable\n",
+                 path);
+    return;
+  }
+  const std::string version(reinterpret_cast<const char*>(gesher_art_oat_version()), 4);
+  std::string shim, message;
+  void* guest_open_common = nullptr;
+  // The stand-ins' imports: bound to these while they load, and visible to no
+  // other object or dlsym (gesher::bionic::ResolveArtShimImport).
+  gesher::bionic::ArtShimArm64Imports imports;
+  imports.disable_verifier = reinterpret_cast<void*>(&RuntimeDisableVerifierSysv);
+  imports.is_verification_enabled = reinterpret_cast<void*>(&RuntimeIsVerificationEnabledSysv);
+  imports.is_verification_soft_fail = reinterpret_cast<void*>(&RuntimeIsVerificationSoftFailSysv);
+  imports.open_common = reinterpret_cast<void*>(&gesher_art_dex_file_loader_open_common);
+  void* guest = gesher::bionic::LoadArtShimArm64(dir, version, gesher_art_runtime_current(), imports,
+                                                 &guest_open_common, &shim, &message);
+  void* entry = guest != nullptr ? gesher::arm64::HostEntry(guest) : nullptr;
+  void* open_common = guest_open_common != nullptr ? gesher::arm64::HostEntry(guest_open_common)
+                                                   : nullptr;
+  if (entry == nullptr || open_common == nullptr) {
+    std::fprintf(stderr, "gesher art: %s hooks ART by symbol, but no arm64 stand-in libart.so: %s\n",
+                 path, message.c_str());
+    return;
+  }
+  gesher_art_open_common_hook.store(open_common, std::memory_order_release);
+  gesher_art_load_class_hook.store(entry, std::memory_order_release);
+  std::fprintf(stderr,
+               "gesher art: %s hooks ART by symbol: ClassLinker::LoadClass, "
+               "DexFileLoader::OpenCommon and Runtime's verifier controls from an arm64 stand-in "
+               "libart.so (%s)\n",
+               path, shim.c_str());
+}
+
 // ART's own JNIEnv in loaded code (ADR 0086). Ijiami makes Java methods native by
 // writing their ArtMethod (flags and JNI entry) instead of RegisterNatives, so ART
 // calls its functions with its own JNIEnv, not the proxy the NativeEntry stub
@@ -967,8 +1050,9 @@ bool InstallCallerAbiJniTable() {
 }
 
 // An app library that is a packer's shell hooking ART by symbol (Ijiami's
-// libexec*.so): before it runs, the stand-in libart.so it looks for, and ART's
-// LoadClass calling it (ADR 0086). GESHER_ART_SHIM=0 turns this off.
+// libexec*.so, NetEase Yidun's libnesec.so): before it runs, the stand-in
+// libart.so it looks for, for its machine, and ART's LoadClass calling it
+// (ADR 0086). GESHER_ART_SHIM=0 turns this off.
 void LoadArtShimFor(const char* path) {
 #if !defined(__x86_64__)
   // The stand-in and caller-ABI stubs contain host x86-64 instructions.
@@ -987,10 +1071,17 @@ void LoadArtShimFor(const char* path) {
   std::fclose(input);
   if (!complete || std::memcmp(header.e_ident, ELFMAG, SELFMAG) != 0 ||
       header.e_ident[EI_CLASS] != ELFCLASS64 || header.e_ident[EI_DATA] != ELFDATA2LSB ||
-      header.e_machine != EM_X86_64 || header.e_type != ET_DYN) return;
+      header.e_type != ET_DYN) return;
   const char* data = std::getenv("ANDROID_DATA");
   const std::string dir = std::string(data != nullptr && *data != 0 ? data : ".") +
                           "/system/gesher-art";
+  // Each shell has a stand-in for one machine only (Ijiami's x86-64 libexec*.so,
+  // NetEase Yidun's arm64 libnesec.so); another machine's gets none.
+  if (header.e_machine != gesher::bionic::ArtHookingPackerMachine(path)) return;
+  if (header.e_machine == EM_AARCH64) {
+    LoadArtShimArm64For(path, dir);
+    return;
+  }
   std::string shim, message;
   void* entry = gesher::bionic::LoadArtShim(dir, &shim, &message);
   if (entry == nullptr) {
@@ -1080,3 +1171,9 @@ JavaVM* gesher::bionic::ProxyJavaVm(JNIEnv* real) {
   }
   return ProxyVmPtr();
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, g_stub_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::shared_mutex, g_kinds_mutex);
+#endif

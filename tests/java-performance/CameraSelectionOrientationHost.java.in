@@ -57,6 +57,7 @@ public final class CameraSelectionOrientationHost {
         static final String FEATURE_CAMERA = "android.hardware.camera";
         static final String FEATURE_CAMERA_FRONT = "android.hardware.camera.front";
         static final String FEATURE_CAMERA_AUTOFOCUS = "android.hardware.camera.autofocus";
+        static final String FEATURE_CAMERA_EXTERNAL = "android.hardware.camera.external";
     }
 
     static final class android {
@@ -165,7 +166,8 @@ public final class CameraSelectionOrientationHost {
         check(rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
                 && rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA)
                 && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
-                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
+                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS)
+                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_EXTERNAL),
                 "rear-only feature map mismatch");
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> dualFeat =
@@ -174,14 +176,16 @@ public final class CameraSelectionOrientationHost {
         check(dualFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
                 && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA)
                 && dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
-                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
+                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS)
+                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_EXTERNAL),
                 "cameras not configured as rear must be front cameras, without autofocus");
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> mixedFeat =
                 new android.util.ArrayMap<>();
         addCameraFeatures(mixedFeat, selected);
         check(mixedFeat.containsKey(PackageManager.FEATURE_CAMERA)
-                && mixedFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT),
+                && mixedFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
+                && !mixedFeat.containsKey(PackageManager.FEATURE_CAMERA_EXTERNAL),
                 "a rear and a front camera must report both features");
 
         System.out.println("Camera selection & orientation PASS: " + checks + " checks");

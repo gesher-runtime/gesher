@@ -1,0 +1,33 @@
+// Generated with the complete production callback bodies. Only surrounding
+// state/clock boundaries are isolated; conversion, allocation and queueing run.
+#pragma once
+namespace rgba_fixture {
+using namespace gesher::media;
+using Converter = void (*)(const uint32_t*, int, int, VideoFrame*);
+
+template <Converter Convert>
+struct CodecInput {
+  VideoEncoderParams enc_params_;
+  std::mutex mu_;
+  std::condition_variable cv_;
+  bool started_ = true, surface_eos_ = false;
+  std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
+  static void RgbaToI420(const uint32_t* p, int w, int h, VideoFrame* f) { Convert(p, w, h, f); }
+  @CODEC_CALLBACK@
+};
+
+template <Converter Convert>
+struct RecorderInput {
+  VideoEncoderParams video_params_;
+  std::mutex mu_;
+  std::condition_variable cv_;
+  bool running_ = true, paused_ = false;
+  int64_t start_us_ = 1000000, paused_total_us_ = 0, resume_at_us_ = 0, last_video_us_ = -1;
+  uint64_t video_callbacks_ = 0, video_accepted_ = 0, video_rejected_ = 0, video_queue_drops_ = 0;
+  int64_t video_first_source_ns_ = -1, video_last_source_ns_ = -1, video_first_pts_us_ = -1;
+  std::deque<std::shared_ptr<VideoFrame>> frames_;
+  static void RgbaToI420(const uint32_t* p, int w, int h, VideoFrame* f) { Convert(p, w, h, f); }
+  @RECORDER_CLOCK@
+  @RECORDER_CALLBACK@
+};
+}  // namespace rgba_fixture
