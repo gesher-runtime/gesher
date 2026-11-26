@@ -23,9 +23,10 @@ DLL, or advertised by `NativeLibs.SUPPORTED` or `build.prop`.
 | `arm32_elf` | Checked little-endian ELF32 ARM EABI5 softfp `ET_DYN` parsing, owned image bytes, SysV/GNU symbols, ordinary REL relocations, standard/legacy Android RELR and bounded Android APS2 packed REL groups, explicit imports, BSS, init/fini arrays and validated RELRO ranges. |
 | `arm32_image_memory` | Mapping relocated image bytes into guest pages, inaccessible segment holes and read-only RELRO protection. |
 | `arm32_executor` | ARM/Thumb execution through the pinned Dynarmic A32 frontend, finite instruction budgets, checked instruction/data access, explicit faults and typed host-function thunks. |
-| `arm32_program` | Isolated dependency-DAG loader, guest-address allocation, typed host import bindings, transactional load rollback, guest constructor initialization and exported function calls. Not integrated with ART or APK packaging. |
+| `arm32_program` | Isolated dependency-DAG loader, guest-address allocation, typed host import bindings, transactional load rollback, guest constructors and reverse-order finalizers, exported function calls and explicit shutdown. Not integrated with ART or APK packaging. |
+| `arm32_bionic` | A narrow ILP32 guest-memory libc adapter for malloc/calloc/realloc/free, memcpy/memmove/memset/memcmp and strlen/strnlen/strcmp/strncmp; bounds checks and typed imports. Not a complete Bionic implementation or JNI32 bridge. |
 
-The linked-program test loads and calls the compiled ARM and Thumb fixtures through `Program`, including their constructors and typed host imports. This is a component test path, not a Windows/ART APK run. The executor runs the compiler-generated fixtures in `tests/arm32`: constructors,
+The linked-program test loads and calls the compiled ARM and Thumb fixtures through `Program`, including their constructors and typed host imports. Additional actual compiler-generated ARM/Thumb fixtures test libc imports and a two-DSO `DT_NEEDED` graph with guest-side constructor/finalizer ordering assertions. The dependency's destructor traps if the consumer has not run its own destructor first. The `arm32_bionic` adapter confines pointers to `GuestMemory`; it does not expose host pointers to 32-bit guest code. These are component test paths, not Windows/ART APK runs. The executor runs the compiler-generated fixtures in `tests/arm32`: constructors,
 relocated data pointers, integer and floating-point calls, 64-bit register/stack
 arguments, guest-pointer reads and writes, and an imported host adapter. ARM and
 Thumb builds are both checked by inspecting the actual exported function state
@@ -150,7 +151,7 @@ load alignment and cancellation of queued code-cache invalidation. These
 specific failures have regression tests. ASan/UBSan results do not include
 LeakSanitizer when leak detection is disabled in a ptrace-supervised environment.
 
-The later RELR, APS2, dependency-callback and linked-program additions have not yet been compiled or executed in a verified test run. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
+The later RELR, APS2, dependency-callback, linked-program and libc adapter additions have not yet been compiled or executed in a verified complete component test run. The ELF32 guest test source was separately compiled with local Clang 17 and LLD for both ARM and Thumb; `readelf` confirmed actual libc imports, `DT_NEEDED` and cross-library symbol imports plus constructor/finalizer arrays. The pinned Zig guest compiler and Dynarmic executor were not available in that local environment. These checks verify fixture shape only, not guest execution. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
 Existing x86-64/AArch64 production sources, packaging and advertised ABI lists
 are unchanged by these standalone components.
 
