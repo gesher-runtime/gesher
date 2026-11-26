@@ -117,7 +117,10 @@ int tx_sibling_init_count(void) { return sibling_initializations; }
 #elif TX_ROLE == 28
 extern int tx_reentry_trigger(void);
 int tx_reentry_graph(void) { return tx_reentry_trigger() + 3; }
-#elif TX_ROLE == 29 || TX_ROLE == 30
+#elif TX_ROLE == 29
+int tx_identity(void) { return TX_ROLE; }
+int tx_first_only(void) { return 290; }
+#elif TX_ROLE == 30
 int tx_identity(void) { return TX_ROLE; }
 #else
 #error Unknown TX_ROLE

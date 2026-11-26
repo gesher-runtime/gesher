@@ -371,6 +371,7 @@ void FileIdentity(const std::string& root) {
   Check(a != nullptr && b != nullptr && a != b, "same basename and SONAME can load from distinct files");
   Check(Call(a, "tx_identity") == 29 && Call(b, "tx_identity") == 30,
         "each explicit handle calls its own file's export");
+  Check(Call(b, "tx_first_only") == 290, "bare dependency uses the earlier loaded SONAME");
   Check(elf::OpenLoaded("tx_identity.so") == a, "bare SONAME retains first loaded match");
   Check(elf::Load(missing.c_str(), &error) == nullptr, "missing explicit path never resolves by basename");
   Check(elf::Load(first.c_str(), &error) == a, "repeated path reuses its loaded object");

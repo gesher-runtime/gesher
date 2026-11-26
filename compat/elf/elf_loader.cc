@@ -1980,8 +1980,8 @@ class LoadTransaction {
     // running any resolver. A cycle finds its already-mapped private node.
     for (const std::string& soname : lib->needed) {
       const bool by_name = soname.find_first_of("/\\") == std::string::npos;
-      Library* dep = by_name ? FindSoname(scope_, soname) : nullptr;
-      if (dep == nullptr && by_name) dep = FindSoname(Loaded(), soname);
+      Library* dep = by_name ? FindSoname(Loaded(), soname) : nullptr;
+      if (dep == nullptr && by_name) dep = FindSoname(scope_, soname);
       if (dep == nullptr) {
         std::string found;
         if (by_name) {
