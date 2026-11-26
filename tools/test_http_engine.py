@@ -9,6 +9,7 @@ fixtures. All engine/request/upload/callback code is production code.
 import argparse
 import hashlib
 import io
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -76,8 +77,12 @@ def main():
                    help='Run only the HTTP/2 transfer contracts and component measurements')
     p.add_argument('--credit-only', action='store_true',
                    help='Run bounded in-memory HTTP/2 receive-credit component contracts')
+    p.add_argument('--bindings-only', action='store_true',
+                   help='Run complete HTTP/2 header/binding wire contracts only')
+    p.add_argument('--compile-output', type=Path,
+                   help='Compile the real HTTP/2 provider and fixtures into an empty directory, then exit')
     args = p.parse_args()
-    if (args.transfer_only or args.sessions_only or args.credit_only) and not args.okhttp_source:
+    if (args.transfer_only or args.sessions_only or args.credit_only or args.bindings_only or args.compile_output) and not args.okhttp_source:
         p.error('focused HTTP/2 checks require the pinned --okhttp-source')
     with tempfile.TemporaryDirectory(prefix='gesher-httpengine-') as temporary:
         work = Path(temporary)
@@ -142,7 +147,7 @@ def main():
         subprocess.run([str(args.java_home / 'bin/javac'), '--release', '17', '-encoding', 'UTF-8',
                         '-d', str(work), str(context), str(network), *map(str, sources),
                         str(ROOT / 'tests/net/HttpEngineHostTest.java')], check=True, timeout=60)
-        if not args.transfer_only and not args.sessions_only and not args.credit_only:
+        if not (args.transfer_only or args.sessions_only or args.credit_only or args.bindings_only or args.compile_output):
             subprocess.run([str(args.java_home / 'bin/java'), '-cp', str(work), 'HttpEngineHostTest'],
                            check=True, timeout=90)
             # URL permits installing the global factory only once in a VM.
@@ -156,8 +161,11 @@ def main():
             policy = work / 'android/security/NetworkSecurityPolicy.java'
             policy.parent.mkdir(parents=True)
             policy.write_text('package android.security; public class NetworkSecurityPolicy {'
-                              'public static NetworkSecurityPolicy getInstance() { return new NetworkSecurityPolicy(); }'
-                              'public boolean isCleartextTrafficPermitted(String host) { return true; }}')
+                              'private static volatile NetworkSecurityPolicy current=new NetworkSecurityPolicy(true);'
+                              'private final boolean permitted; private NetworkSecurityPolicy(boolean p){permitted=p;}'
+                              'public static NetworkSecurityPolicy getInstance() { return current; }'
+                              'public static void setCleartextTrafficPermitted(boolean p){current=new NetworkSecurityPolicy(p);}'
+                              'public boolean isCleartextTrafficPermitted(String host) { return permitted; }}')
             annotation = work / 'android/compat/annotation/UnsupportedAppUsage.java'
             annotation.parent.mkdir(parents=True)
             annotation.write_text('package android.compat.annotation; public @interface UnsupportedAppUsage {}')
@@ -183,8 +191,28 @@ def main():
                             str(ROOT / 'tests/net/Http2TransferHost.java'),
                             str(ROOT / 'tests/net/Http2SessionContracts.java'),
                             str(ROOT / 'tests/net/Http2SessionHost.java'),
+                            str(ROOT / 'tests/net/Http2BindingsTest.java'),
+                            str(ROOT / 'tests/net/Http2BindingsLoaderHost.java'),
                             str(ROOT / 'tests/net/Http2CreditContracts.java')],
                            check=True, timeout=60)
+            if args.compile_output:
+                target=args.compile_output.resolve()
+                if target.exists() and any(target.iterdir()):
+                    raise RuntimeError('--compile-output must be empty')
+                target.mkdir(parents=True,exist_ok=True)
+                for compiled in work.rglob('*.class'):
+                    destination=target/compiled.relative_to(work)
+                    destination.parent.mkdir(parents=True,exist_ok=True)
+                    shutil.copyfile(compiled,destination)
+                print('HTTP2_COMPILED '+str(target),flush=True)
+                return
+            if args.bindings_only or not (args.credit_only or args.transfer_only or args.sessions_only):
+                subprocess.run([str(args.java_home / 'bin/java'), '-cp', str(work),
+                                'Http2BindingsTest'], check=True, timeout=60)
+                subprocess.run([str(args.java_home / 'bin/java'), '-cp', str(work),
+                                'Http2BindingsLoaderHost'], check=True, timeout=60)
+            if args.bindings_only:
+                return
             if args.credit_only or not (args.sessions_only or args.transfer_only):
                 subprocess.run([str(args.java_home / 'bin/java'), '-cp', str(work),
                                 'Http2CreditContracts'], check=True, timeout=35)
