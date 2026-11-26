@@ -41,15 +41,33 @@
 
 namespace gesher {
 
+struct EpollWakeChannel {
+  HANDLE event;
+  std::atomic<bool> available;
+};
+
 // A producer only takes this channel lock, never the epoll state lock.
 // Registration and retirement protect the Win32 handle lifetime here too.
 struct EpollWakeChannels {
   std::mutex mutex;
-  std::vector<HANDLE> waiters;
+  std::vector<EpollWakeChannel*> waiters;
 
   void Notify() {
     std::lock_guard<std::mutex> lock(mutex);
-    for (HANDLE waiter : waiters) SetEvent(waiter);
+    for (auto* waiter : waiters) {
+      waiter->available.store(false, std::memory_order_relaxed);
+      SetEvent(waiter->event);
+    }
+  }
+
+  bool NotifyOne() {
+    std::lock_guard<std::mutex> lock(mutex);
+    for (auto* waiter : waiters) {
+      if (!waiter->available.exchange(false, std::memory_order_relaxed)) continue;
+      SetEvent(waiter->event);
+      return true;
+    }
+    return false;
   }
 };
 
@@ -58,6 +76,8 @@ struct EventFdEdgeWatch {
   // Level-triggered entries only need a wake when the source becomes ready;
   // repeated writes to an already readable counter do not change the level.
   bool level = false;
+  bool exclusive = false;
+  bool pending = false;  // per-exclusive-registration producer notification
   std::shared_ptr<EpollWakeChannels> wake;
 };
 
@@ -114,9 +134,23 @@ struct EventFd {
     const uint32_t wake_notification = notification | became_ready;
     if (wake_notification != 0) {
       size_t kept = 0;
+      bool exclusive_woken = false;
+      const uint32_t ready = (r ? uint32_t{EPOLLIN} : 0) | (w ? uint32_t{EPOLLOUT} : 0);
       for (auto& weak : edge_watches) {
         if (auto watch = weak.lock()) {
           edge_watches[kept++] = weak;
+          if (watch->exclusive) {
+            if ((watch->events & ready) == 0) watch->pending = false;
+            if (!exclusive_woken && (watch->events & notification) != 0 &&
+                (watch->events & ready) != 0) {
+              // Before a blocking epoll takes the wake, eligible idle epolls
+              // can retain the notification. Regular watches always get it.
+              watch->pending = true;
+              exclusive_woken = watch->wake->NotifyOne();
+              edge_notified = true;
+            }
+            continue;
+          }
           const uint32_t match = watch->level ? became_ready : wake_notification;
           if ((watch->events & match) != 0) {
             watch->wake->Notify();
@@ -168,8 +202,8 @@ struct Entry {
   std::shared_ptr<OwnerWatch> owner_watch = nullptr;
   bool ordinary_eventfd = false;
   uint32_t readable_events = EPOLLIN;
-  // Eventfd, timerfd and inotify publish producer notifications. Sockets,
-  // pipes and nested targets retain their separate readiness path.
+  // Eventfd, timerfd and inotify publish producer notifications. Ordinary
+  // eventfd exclusive registrations use this path in level mode too.
   std::shared_ptr<EventFd> edge_source = nullptr;
   std::shared_ptr<EventFdEdgeWatch> edge_watch = nullptr;
   std::shared_ptr<EventFd> watch_source = nullptr;
@@ -216,27 +250,31 @@ struct EpollPollScratch {
 
 class EpollWaiter {
  public:
-  explicit EpollWaiter(std::shared_ptr<Epoll> ep) : ep_(std::move(ep)) {
-    changed_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (changed_ == nullptr) return;
+  EpollWaiter(std::shared_ptr<Epoll> ep, bool may_block) : ep_(std::move(ep)),
+      channel_{CreateEventW(nullptr, FALSE, FALSE, nullptr), may_block} {
+    if (channel_.event == nullptr) return;
     std::lock_guard<std::mutex> lock(ep_->wake->mutex);
-    ep_->wake->waiters.push_back(changed_);
+    ep_->wake->waiters.push_back(&channel_);
   }
   ~EpollWaiter() {
-    if (changed_ == nullptr) return;
+    if (channel_.event == nullptr) return;
     {
       std::lock_guard<std::mutex> lock(ep_->wake->mutex);
-      std::erase(ep_->wake->waiters, changed_);
+      std::erase(ep_->wake->waiters, &channel_);
     }
-    CloseHandle(changed_);
+    CloseHandle(channel_.event);
   }
   EpollWaiter(const EpollWaiter&) = delete;
   EpollWaiter& operator=(const EpollWaiter&) = delete;
-  HANDLE changed() const { return changed_; }
+  HANDLE changed() const { return channel_.event; }
+
+  void SetAvailable(bool available) {
+    channel_.available.store(available, std::memory_order_relaxed);
+  }
 
  private:
   std::shared_ptr<Epoll> ep_;  // survives a concurrent close of the descriptor
-  HANDLE changed_ = nullptr;
+  EpollWakeChannel channel_;
 };
 
 // Caller holds the epoll state lock. Producers only take the source and wake
@@ -248,11 +286,19 @@ uint32_t EventFdEdgeReady(Entry& entry, bool consume) {
   // Inotify also reports RDNORM; eventfd and timerfd report canonical IN.
   const uint32_t input = entry.events & entry.readable_events;
   const uint32_t output = source.read_only ? 0 : entry.events & EPOLLOUT;
+  const uint32_t ready = (source.counter > 0 ? input : 0) |
+                         (source.counter < EventFd::kMax ? output : 0);
+  if (entry.edge_watch->exclusive) {
+    if (!entry.edge_watch->pending) return 0;
+    if (consume && ready != 0) {
+      if (entry.edge_watch->level) entry.edge_watch->wake->NotifyOne();
+      else entry.edge_watch->pending = false;
+    }
+    return ready;
+  }
   if (!entry.edge_initial &&
       (input == 0 || entry.read_generation == source.read_generation) &&
       (output == 0 || entry.write_generation == source.write_generation)) return 0;
-  uint32_t ready = (source.counter > 0 ? input : 0) |
-                   (source.counter < EventFd::kMax ? output : 0);
   if (ready != 0 && consume) {
     entry.read_generation = source.read_generation;
     entry.write_generation = source.write_generation;
@@ -279,11 +325,16 @@ void ConfigureEventFdEntry(Entry& entry, const std::shared_ptr<EventFd>& source,
   // Eventfd, timerfd and inotify all publish producer notifications, so every
   // edge entry uses its source's generations; level entries wake on readiness.
   watch->level = !edge;
+  watch->exclusive = entry.ordinary_eventfd && (entry.events & EPOLLEXCLUSIVE) != 0;
   watch->wake = wake;
   std::lock_guard<std::mutex> lock(source->mutex);
+  if (watch->exclusive) {
+    watch->pending = ((watch->events & EPOLLIN) != 0 && source->counter > 0) ||
+                     ((watch->events & EPOLLOUT) != 0 && source->counter < EventFd::kMax);
+  }
   std::erase_if(source->edge_watches, [](const auto& weak) { return weak.expired(); });
   source->edge_watches.push_back(watch);
-  if (edge) entry.edge_source = source;
+  if (edge || watch->exclusive) entry.edge_source = source;
   entry.edge_watch = std::move(watch);
   entry.watch_source = source;
 }
@@ -808,8 +859,8 @@ int epoll_create1(int flags) {
 
 int epoll_create(int size) { return size <= 0 ? (errno = EINVAL, -1) : epoll_create1(0); }
 
-// Eventfds, timerfds and inotify publish edge notifications. Other descriptor
-// backends still use level readiness; their edge/exclusive contracts remain open.
+// Eventfds publish edge and exclusive notifications. Timerfds and inotify
+// publish edge notifications; the remaining backends still use level readiness.
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
   gesher::record_locks::DescriptorGuard descriptors;
   if (gesher::HandleFromFd(epfd) == INVALID_HANDLE_VALUE ||
@@ -826,6 +877,11 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
   if (op == EPOLL_CTL_MOD && (events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
   if (child && (events & EPOLLEXCLUSIVE) != 0 && op != EPOLL_CTL_DEL) return errno = EINVAL, -1;
   auto owner = gesher::Lookup(fd);
+  if (op == EPOLL_CTL_ADD && (events & EPOLLEXCLUSIVE) != 0) {
+    constexpr uint32_t allowed = EPOLLIN | EPOLLOUT | EPOLLERR | EPOLLHUP |
+                                 EPOLLWAKEUP | EPOLLET | EPOLLEXCLUSIVE;
+    if ((events & ~allowed) != 0) return errno = EINVAL, -1;
+  }
   gesher::EntryKey key(fd, owner);
   std::lock_guard<std::mutex> graph(gesher::epoll_graph_mutex);
   if (op == EPOLL_CTL_ADD && child) {
@@ -874,7 +930,7 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
   }
   // Register before the first snapshot. A topology change in the gap before
   // PollFds registers its generic wake channel stays pending on this handle.
-  gesher::EpollWaiter waiter(ep);
+  gesher::EpollWaiter waiter(ep, timeout != 0);
   if (waiter.changed() == nullptr) return gesher::FailWithLastError();
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
   gesher::PollScratchLease<gesher::EpollPollScratch> lease;
@@ -897,6 +953,7 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
     else if ((virtual_sample & 2) != 0 && (wait_ms < 0 || wait_ms > 10)) wait_ms = 10;
     bool interrupted = false;
     int ready = gesher::PollFds(fds.data(), fds.size(), wait_ms, waiter.changed(), &interrupted);
+    waiter.SetAvailable(false);
     if (ready < 0) return -1;
     const int virtual_ready = gesher::SampleVirtualEntries(scratch, false);
 
@@ -933,6 +990,7 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
     }
     if (count > 0) return count;
     if (timeout == 0 || (timeout > 0 && gesher::MonotonicMicros() >= deadline)) return 0;
+    waiter.SetAvailable(true);
     // The list changed, or what was ready is no longer reportable: again.
   }
 }
