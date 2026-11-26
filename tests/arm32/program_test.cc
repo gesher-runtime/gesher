@@ -113,6 +113,30 @@ void Run(const char* fixture) {
         static_cast<int32_t>(result.bits) == 35,
         "success after failed library transaction");
   Check(program.Initialize(&error), "successful constructors never rerun");
+
+  Program malformed([](std::string_view, std::vector<uint8_t>* output,
+                       std::string*) {
+    *output = {0x7f, 'E', 'L', 'F', 1};
+    return true;
+  });
+  Check(!malformed.LoadLibrary("bad.so", &error) &&
+        malformed.LibraryCount() == 0,
+        "malformed ELF never leaves a mapped module");
+  Check(!malformed.LoadLibrary("bad.so", &error) &&
+        malformed.LibraryCount() == 0,
+        "malformed ELF retry preserves image allocation cursor");
+
+  Program throwing([](std::string_view, std::vector<uint8_t>*, std::string*) -> bool {
+    throw 42;
+  });
+  Check(!throwing.LoadLibrary("bad.so", &error) &&
+        throwing.LibraryCount() == 0,
+        "provider exception is contained and rolled back");
+
+  Program no_stack({}, 4096);
+  Check(!no_stack.LoadLibrary("any.so", &error) &&
+        no_stack.LibraryCount() == 0,
+        "insufficient guest address budget fails before library provider");
 }
 }  // namespace
 
