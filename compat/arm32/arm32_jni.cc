@@ -473,7 +473,63 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
           return true;
         }, error);
 
-    if (!ok ||
+    const bool vm_ok = ok &&
+        RegisterVm("GetEnv", Slot(offsetof(JNIInvokeInterface_, GetEnv)),
+                   {P, P, I}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!VmArgs(a, 3, e)) return false;
+          const int32_t requested = static_cast<int32_t>(a[2].bits);
+          const int rc = requested >= JNI_VERSION_1_1 &&
+                         requested <= real->GetVersion() ? JNI_OK : JNI_EVERSION;
+          if (rc == JNI_OK &&
+              (a[1].bits == 0 || !program.Memory().Write32(
+                  static_cast<uint32_t>(a[1].bits), kGuestEnv, e)))
+            return Fail(e, "JNI32 JavaVM GetEnv output is invalid");
+          *out = Value::Signed32(rc);
+          return true;
+        }, error) &&
+        RegisterVm("AttachCurrentThread", Slot(offsetof(JNIInvokeInterface_, AttachCurrentThread)),
+                   {P, P, P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!VmArgs(a, 3, e)) return false;
+          if (a[2].bits != 0) {
+            *out = Value::Signed32(JNI_ERR);
+            return true;
+          }
+          if (a[1].bits == 0 || !program.Memory().Write32(
+                  static_cast<uint32_t>(a[1].bits), kGuestEnv, e))
+            return Fail(e, "JNI32 JavaVM AttachCurrentThread output is invalid");
+          *out = Value::Signed32(JNI_OK);
+          return true;
+        }, error) &&
+        RegisterVm("AttachCurrentThreadAsDaemon", Slot(offsetof(JNIInvokeInterface_, AttachCurrentThreadAsDaemon)),
+                   {P, P, P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!VmArgs(a, 3, e)) return false;
+          if (a[2].bits != 0) {
+            *out = Value::Signed32(JNI_ERR);
+            return true;
+          }
+          if (a[1].bits == 0 || !program.Memory().Write32(
+                  static_cast<uint32_t>(a[1].bits), kGuestEnv, e))
+            return Fail(e, "JNI32 JavaVM daemon attach output is invalid");
+          *out = Value::Signed32(JNI_OK);
+          return true;
+        }, error) &&
+        RegisterVm("DetachCurrentThread", Slot(offsetof(JNIInvokeInterface_, DetachCurrentThread)),
+                   {P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!VmArgs(a, 1, e)) return false;
+          // Never detach ART's actual Java thread while running guest code.
+          *out = Value::Signed32(JNI_ERR);
+          return true;
+        }, error) &&
+        RegisterVm("DestroyJavaVM", Slot(offsetof(JNIInvokeInterface_, DestroyJavaVM)),
+                   {P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!VmArgs(a, 1, e)) return false;
+          *out = Value::Signed32(JNI_ERR);
+          return true;
+        }, error);
+
+    if (!vm_ok ||
+        !memory.Protect(kGuestVm, kPage, MemoryPermission::kRead, error) ||
+        !memory.Protect(kGuestVmTable, kPage, MemoryPermission::kRead, error) ||
         !memory.Protect(kGuestEnv, kPage, MemoryPermission::kRead, error) ||
         !memory.Protect(kGuestTable, kPage, MemoryPermission::kRead, error)) {
       active = false;
@@ -481,6 +537,8 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
       // cannot access a host JNIEnv; the installed guest pages are retired.
       memory.Unmap(kGuestEnv, kPage);
       memory.Unmap(kGuestTable, kPage);
+      memory.Unmap(kGuestVm, kPage);
+      memory.Unmap(kGuestVmTable, kPage);
       return false;
     }
     if (error) error->clear();
