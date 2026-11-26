@@ -5948,6 +5948,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     boolean finishFromApp(ActivityRecord r, int resultCode, Intent resultData) {
+        synchronized (this) {
+            if (r.finishing) return !isActivityRetired(r);
+        }
         return finish(r, "app-request", resultCode, resultData, true);
     }
 
@@ -6003,17 +6006,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** State captured before any lifecycle transaction can reenter the service. */
     private static final class PendingFinish {
         final ActivityRecord activity;
-        final int resultCode;
-        final Intent resultData;
-        final ActivityCallerState.Snapshot resultCaller;
+        final PreparedActivityResult result;
+        boolean deliverResult;
         Runnable accountCompletion;
 
-        PendingFinish(ActivityRecord activity, int resultCode, Intent resultData,
-                ActivityCallerState.Snapshot resultCaller) {
+        PendingFinish(ActivityRecord activity, PreparedActivityResult result) {
             this.activity = activity;
-            this.resultCode = resultCode;
-            this.resultData = resultData;
-            this.resultCaller = resultCaller;
+            this.result = result;
         }
     }
 
@@ -6023,26 +6022,20 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      * member of the group. Result capture still happens outside the lifecycle monitor.
      */
     private boolean finishTogether(ActivityRecord source, List<ActivityRecord> selected,
-            String reason, int resultCode, Intent resultData) {
-        return finishTogether(source, selected, reason, resultCode, resultData, () -> true);
+            String reason, int resultCode, PreparedActivityResult sourceResult) {
+        return finishTogether(source, selected, reason, resultCode, sourceResult, () -> true);
     }
 
     private boolean finishTogether(ActivityRecord source, List<ActivityRecord> selected,
-            String reason, int resultCode, Intent resultData,
+            String reason, int resultCode, PreparedActivityResult sourceResult,
             java.util.function.BooleanSupplier allowedAtCommit) {
         List<PendingFinish> prepared = new ArrayList<>();
         synchronized (mPm) {
             for (ActivityRecord r : selected) {
                 int code = r == source ? resultCode : android.app.Activity.RESULT_CANCELED;
-                Intent data = r == source ? resultData : null;
-                ActivityRecord resultTarget = r.resultTo;
-                if (resultTarget != null) data = normalizeMicrogCredentialResult(r.info.packageName,
-                        r.info.name, resultTarget.info.name, code, data);
-                ActivityCallerState.Snapshot caller = r.resultTo == null || !activityCodeCurrent(r)
-                        ? null : ActivityCallerState.capture(new ActivityCallerState.Origin(r.targetCode,
-                                r.info.applicationInfo.uid, r.info.packageName, false, false),
-                                data, mAm.uriGrants());
-                prepared.add(new PendingFinish(r, code, data, caller));
+                PreparedActivityResult result = r == source && sourceResult != null
+                        ? sourceResult : prepareActivityResult(r, code, null);
+                prepared.add(new PendingFinish(r, result));
             }
         }
         List<PendingFinish> accepted = new ArrayList<>();
@@ -6052,20 +6045,25 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             for (PendingFinish pending : prepared) {
                 ActivityRecord r = pending.activity;
                 if (isActivityRetired(r) || r.finishing) continue;
-                r.finishing = true;
-                pending.accountCompletion = r.accountCompletion;
-                r.accountCompletion = null;
+                // The only result with data is the source's. Validate and
+                // publish it before marking any of the selected activities.
+                pending.deliverResult = pending.result != null
+                        && !selected.contains(pending.result.recipient)
+                        && publishActivityResultGrantsLocked(r, pending.result);
                 accepted.add(pending);
             }
             for (PendingFinish pending : accepted) {
                 ActivityRecord r = pending.activity;
+                r.finishing = true;
+                pending.accountCompletion = r.accountCompletion;
+                r.accountCompletion = null;
+            }
+            for (PendingFinish pending : accepted) {
+                ActivityRecord r = pending.activity;
                 updateRotationLocked(r.taskId);
-                ActivityRecord recipient = r.resultTo;
-                if (pending.resultCaller != null && !isActivityRetired(recipient) && !recipient.finishing) {
-                    IBinder callerToken = new Binder("Activity result caller");
-                    recipient.callerState.add(callerToken, pending.resultCaller);
-                    recipient.pendingResults.add(new PendingActivityResult(r,
-                            pending.resultCode, pending.resultData, callerToken));
+                if (pending.deliverResult) {
+                    ActivityRecord recipient = pending.result.recipient;
+                    queueActivityResultLocked(r, pending.result);
                     if (recipient.state == State.RESUMED && recipient.app != null) {
                         immediateResults.computeIfAbsent(recipient, ignored -> new ArrayList<>())
                                 .addAll(takeResults(recipient));
@@ -6103,41 +6101,65 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return true;
     }
 
+    private record PreparedActivityResult(ActivityRecord recipient, int code, Intent data,
+            ActivityCallerState.Snapshot caller, List<UriGrants.Grant> grants) {}
+
+    private PreparedActivityResult prepareActivityResult(ActivityRecord source, int code, Intent data) {
+        ActivityRecord recipient = source.resultTo;
+        if (recipient == null) return null;
+        data = normalizeMicrogCredentialResult(source.info.packageName,
+                source.info.name, recipient.info.name, code, data);
+        // Validate every URI before changing the activity lifecycle. Keep the
+        // package generation used for grant preparation and caller history aligned.
+        synchronized (mPm) {
+            if (!activityCodeCurrent(source) || !activityCodeCurrent(recipient)) return null;
+            UriGrants grants = mAm.uriGrants();
+            int uid = source.targetCode.uid();
+            List<UriGrants.Grant> needed = grants.prepareIntent(uid, recipient.info.packageName, data);
+            ActivityCallerState.Snapshot caller = ActivityCallerState.capture(
+                    new ActivityCallerState.Origin(source.targetCode, uid, source.info.packageName,
+                            false, false), data, grants);
+            return new PreparedActivityResult(recipient, code, data, caller, needed);
+        }
+    }
+
+    private boolean publishActivityResultGrantsLocked(ActivityRecord source, PreparedActivityResult result) {
+        if (result == null || source.resultTo != result.recipient || !activityCodeCurrent(source)
+                || isActivityRetired(result.recipient) || result.recipient.finishing) return false;
+        if (!result.grants.isEmpty()) {
+            synchronized (mPm) {
+                if (!activityCodeCurrent(source) || !activityCodeCurrent(result.recipient)) return false;
+                // The receiving record owns the whole batch, even when delivery
+                // waits for it to resume or attach to a replacement process.
+                mAm.uriGrants().publish(result.recipient.token, result.grants);
+            }
+        }
+        return true;
+    }
+
+    private static void queueActivityResultLocked(ActivityRecord source, PreparedActivityResult result) {
+        IBinder callerToken = new Binder("Activity result caller");
+        result.recipient.callerState.add(callerToken, result.caller);
+        result.recipient.pendingResults.add(new PendingActivityResult(source,
+                result.code, result.data, callerToken));
+    }
+
     private boolean finish(ActivityRecord r, String reason, int resultCode, Intent resultData,
             boolean requireCurrentCode) {
-        ActivityRecord resultTarget = r.resultTo;
-        if (resultTarget != null) resultData = normalizeMicrogCredentialResult(r.info.packageName,
-                r.info.name, resultTarget.info.name, resultCode, resultData);
-        final ActivityCallerState.Snapshot resultCaller;
-        synchronized (mPm) {
-            // Compute before taking the lifecycle monitor. URI grants and provider
-            // permissions have their own locks; result delivery must not invert them.
-            resultCaller = r.resultTo == null || !activityCodeCurrent(r) ? null
-                    : ActivityCallerState.capture(new ActivityCallerState.Origin(r.targetCode,
-                            r.info.applicationInfo.uid, r.info.packageName, false, false),
-                            resultData, mAm.uriGrants());
-        }
+        PreparedActivityResult result = prepareActivityResult(r, resultCode, resultData);
         synchronized (this) {
             if (!mActivities.contains(r) || r.state == State.DESTROYED
                     || requireCurrentCode && !activityCodeCurrent(r)) return false;
             if (r.finishing) return true;
+            if (publishActivityResultGrantsLocked(r, result)) queueActivityResultLocked(r, result);
             r.finishing = true;
             accountActivityFinished(r);
             // The activity below may ask for another orientation (it gets the configuration
             // as it resumes).
             updateRotationLocked(r.taskId);
-            if (resultCaller != null && activityCodeCurrent(r) && r.resultTo != null
-                    && mActivities.contains(r.resultTo) && activityCodeCurrent(r.resultTo)
-                    && r.resultTo.state != State.DESTROYED && !r.resultTo.finishing) {
-                IBinder callerToken = new Binder("Activity result caller");
-                r.resultTo.callerState.add(callerToken, resultCaller);
-                r.resultTo.pendingResults.add(new PendingActivityResult(r,
-                        resultCode, resultData, callerToken));
-            }
         }
         SystemServer.log("finishing " + r.name() + " (" + reason + ")"
-                + (resultTarget != null ? ", result " + resultCode + " to " + resultTarget.name()
-                        : ""));
+                + (result != null ? ", result " + resultCode + " to " + result.recipient.name() : ""));
         updateTopResumed();
         completeFinish(r);
         return true;
@@ -6230,6 +6252,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         SystemServer.log("navigateUpTo " + dest.flattenToShortString() + " from " + r.name()
                 + (parent != null ? ": back to it in task " + r.taskId
                         : ": not in task " + r.taskId + ", starting it there"));
+        PreparedActivityResult upResult = prepareActivityResult(r, resultCode, resultData);
         if (parent == null) {
             Intent up = new Intent(destIntent);
             up.setComponent(dest);
@@ -6251,7 +6274,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (result != ActivityManager.START_SUCCESS) return false;
         }
         if (isActivityRetired(r)) return false;
-        return finishTogether(r, above, "navigateUpTo", resultCode, resultData);
+        return finishTogether(r, above, "navigateUpTo", resultCode, upResult);
     }
 
     private void stop(ActivityRecord r) {
