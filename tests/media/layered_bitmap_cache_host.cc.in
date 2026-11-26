@@ -1,6 +1,7 @@
 ﻿// Real GDI on Windows, declared GDI on other hosts. Window/desktop publication is an adapter.
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -25,7 +26,13 @@ struct BITMAPINFOHEADER {
 struct BITMAPINFO { BITMAPINFOHEADER bmiHeader; };
 struct SIZE { int cx, cy; };
 struct POINT { int x, y; };
+struct RECT { int left, top, right, bottom; };
 struct BLENDFUNCTION { uint8_t BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; };
+struct UPDATELAYEREDWINDOWINFO {
+  unsigned cbSize; HDC hdcDst; const POINT* pptDst; const SIZE* psize;
+  HDC hdcSrc; const POINT* pptSrc; unsigned crKey; const BLENDFUNCTION* pblend;
+  unsigned dwFlags; const RECT* prcDirty;
+};
 constexpr unsigned BI_RGB = 0, DIB_RGB_COLORS = 0, RDW_INVALIDATE = 1, RDW_FRAME = 2,
                    RDW_ALLCHILDREN = 4, AC_SRC_OVER = 0, AC_SRC_ALPHA = 1, ULW_ALPHA = 2;
 #define FALSE 0
@@ -139,6 +146,9 @@ void NoLeaks(const char* reason) {
 }
 
 const std::vector<uint8_t>* expected_frame = nullptr;
+bool fail_update = false;
+bool had_dirty = false;
+RECT last_dirty = {};
 int CountUpdate(HWND, HDC, const POINT*, const SIZE* size, HDC source, const POINT* origin,
                 unsigned, const BLENDFUNCTION* blend, unsigned flags) {
   Owner();
@@ -152,11 +162,30 @@ int CountUpdate(HWND, HDC, const POINT*, const SIZE* size, HDC source, const POI
         "every byte reaches the layered-window boundary");
   return 1;
 }
+int CountUpdateIndirect(HWND hwnd, const UPDATELAYEREDWINDOWINFO* update) {
+  had_dirty = update->prcDirty != nullptr;
+  last_dirty = had_dirty ? *update->prcDirty : RECT{};
+  Check(update->cbSize == sizeof(*update), "indirect update structure size");
+  const int result = CountUpdate(hwnd, update->hdcDst, update->pptDst, update->psize,
+                                 update->hdcSrc, update->pptSrc, update->crKey,
+                                 update->pblend, update->dwFlags);
+  return fail_update ? 0 : result;
+}
 #if !defined(_WIN32) || defined(GESHER_TEST_DECLARED_GDI)
 HDC GetDC(HWND) { return nullptr; }
 int ReleaseDC(HWND, HDC) { return 1; }
 #endif
 int CountRedraw(HWND, const void*, const void*, unsigned) { return 1; }
+size_t invalidations = 0, posted_messages = 0;
+bool invalidated_full = false;
+RECT invalidated = {};
+int CountInvalidate(HWND, const RECT* rect, int) {
+  ++invalidations;
+  invalidated_full = rect == nullptr;
+  if (rect != nullptr) invalidated = *rect;
+  return 1;
+}
+int CountPost(HWND, unsigned, uintptr_t, intptr_t) { ++posted_messages; return 1; }
 
 #define CreateCompatibleDC CountCreateDC
 #define CreateDIBSection CountCreateDIB
@@ -165,19 +194,37 @@ int CountRedraw(HWND, const void*, const void*, unsigned) { return 1; }
 #define DeleteDC CountDeleteDC
 #define GdiFlush CountFlush
 #define UpdateLayeredWindow CountUpdate
+#define UpdateLayeredWindowIndirect CountUpdateIndirect
 #define RedrawWindow CountRedraw
+#define InvalidateRect CountInvalidate
+#define PostMessageW CountPost
 @CACHE@
 namespace gesher {
 class Window {
  public:
   void PresentLayered();
+  @POST_DECLARATION@
+  void Post(const PixelRect* dirty = nullptr) {
+    (void)dirty;
+    buffer_mutex_.lock();
+    UnlockAndPost(@POST_ARGUMENT@);
+  }
+  void SetDim(float amount);
   void ApplyExStyle() { ++style_changes; }
-  const uint8_t* DimmedPixels() { return pixels.data(); }
+  @DIM_DECLARATION@
   void* hwnd_ = nullptr;
-  bool translucent_ = true, layered_ = false;
+  std::atomic<bool> translucent_{true}, layered_{false};
   int buffer_width_ = 0, buffer_height_ = 0, style_changes = 0;
   std::mutex buffer_mutex_;
+  std::atomic<int> dim_{0};
+  int layered_dim_ = -1;
+  PixelRect layered_dirty_;
+  bool layered_full_dirty_ = true;
   std::vector<uint8_t> pixels;
+  std::vector<uint8_t>& pixels_ = pixels;
+  std::vector<uint8_t> dimmed_;
+  uint64_t buffer_version_ = 0, frames_ = 0;
+  static constexpr unsigned kMsgPresentLayered = 0x8001;
   std::unique_ptr<LayeredBitmap> layered_bitmap_;
 };
 }
@@ -189,7 +236,10 @@ class Window {
 #undef DeleteDC
 #undef GdiFlush
 #undef UpdateLayeredWindow
+#undef UpdateLayeredWindowIndirect
 #undef RedrawWindow
+#undef InvalidateRect
+#undef PostMessageW
 
 std::vector<uint8_t> Frame(int width, int height, uint8_t seed) {
   std::vector<uint8_t> frame(static_cast<size_t>(width) * height * 4);
@@ -265,6 +315,7 @@ void Presentation(bool gate) {
     const auto begin = std::chrono::steady_clock::now();
     for (int frame = 0; frame < frames; ++frame) {
       window.pixels[frame] ^= 0x55;
+      window.Post();
       window.PresentLayered();
     }
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
@@ -286,6 +337,110 @@ void Presentation(bool gate) {
   NoLeaks("window destruction releases restarted cache");
 }
 
+void PartialDirect() {
+  constexpr int w = 9, h = 7;
+  auto previous = Frame(w, h, 11), changed = Frame(w, h, 37);
+  gesher::PixelRect dirty{2, 1, 5, 4};
+  {
+    gesher::LayeredBitmap bitmap;
+    Check(bitmap.Copy(previous.data(), w, h, &dirty), "first dirty copy succeeds");
+    Contents(bitmap, previous, w, h);
+    auto expected = previous;
+    for (int y = dirty.top; y < dirty.bottom; ++y)
+      for (int x = dirty.left; x < dirty.right; ++x)
+        std::copy_n(changed.data() + (y * w + x) * 4, 4, expected.data() + (y * w + x) * 4);
+    Check(bitmap.Copy(changed.data(), w, h, &dirty), "partial DIB copy succeeds");
+    Contents(bitmap, expected, w, h);
+    gesher::PixelRect invalid{w + 1, h + 1, w + 3, h + 3};
+    Check(bitmap.Copy(changed.data(), w, h, &invalid), "invalid damage falls back to full DIB copy");
+    Contents(bitmap, changed, w, h);
+    auto resized = Frame(w + 3, h - 1, 93);
+    Check(bitmap.Copy(resized.data(), w + 3, h - 1, &dirty), "resize with damage succeeds");
+    Contents(bitmap, resized, w + 3, h - 1);
+  }
+  NoLeaks("partial-copy resources retired");
+}
+
+std::vector<uint8_t> Dimmed(const std::vector<uint8_t>& source, unsigned keep) {
+  auto result = source;
+  for (size_t i = 0; i < result.size(); ++i)
+    if (i % 4 != 3) result[i] = static_cast<uint8_t>((source[i] * keep + 127u) / 255u);
+  return result;
+}
+bool SameRect(const RECT& rect, int l, int t, int r, int b) {
+  return rect.left == l && rect.top == t && rect.right == r && rect.bottom == b;
+}
+void WindowDamage() {
+  constexpr int w = 8, h = 6;
+  {
+    gesher::Window window;
+    window.buffer_width_ = w; window.buffer_height_ = h;
+    window.pixels = Frame(w, h, 5);
+    expected_frame = &window.pixels;
+    const gesher::PixelRect a{1, 1, 3, 2}, b{5, 4, 7, 5};
+    window.Post(&a);
+    window.PresentLayered();
+    Check(!had_dirty, "first layered frame is full despite producer damage");
+    window.pixels[(1 * w + 1) * 4] ^= 0x55;
+    window.Post(&a);
+    window.pixels[(4 * w + 5) * 4] ^= 0x33;
+    window.Post(&b);
+    window.PresentLayered();
+    Check(had_dirty && SameRect(last_dirty, 1, 1, 7, 5), "coalesced posts union dirty rectangles");
+    const size_t published = calls.presentations, flushed = calls.flush;
+    window.PresentLayered();
+    window.PresentLayered();
+    Check(calls.presentations == published && calls.flush == flushed,
+          "queued messages whose dirty union was published do not recopy or present");
+    Check(window.frames_ == 3 && window.buffer_version_ == 3, "every producer post advances version once");
+
+    window.SetDim(0.5f);  // rounds to 128: RGB keep is 127, alpha unchanged.
+    auto expected_dim = Dimmed(window.pixels, 127);
+    expected_frame = &expected_dim;
+    window.PresentLayered();
+    Check(!had_dirty, "dim amount change refreshes the complete layered DIB");
+    window.pixels[(1 * w + 1) * 4] ^= 0x22;
+    expected_dim = Dimmed(window.pixels, 127);
+    window.Post(&a);
+    window.PresentLayered();
+    Check(had_dirty && SameRect(last_dirty, 1, 1, 3, 2), "steady dim updates only the dirty rectangle");
+
+    fail_update = true;
+    window.Post(&a);
+    window.PresentLayered();
+    Check(window.layered_full_dirty_, "failed layered update marks complete image dirty");
+    fail_update = false;
+    window.Post(&b);
+    window.PresentLayered();
+    Check(!had_dirty && !window.layered_full_dirty_, "retry after update failure fully restores image");
+
+    const gesher::PixelRect invalid{20, 20, 25, 25};
+    window.Post(&invalid);
+    window.PresentLayered();
+    Check(!had_dirty, "invalid producer damage forces full layered update");
+    window.SetDim(0);
+    expected_frame = &window.pixels;
+    window.PresentLayered();
+    Check(!had_dirty, "removing dim refreshes the complete image");
+
+    window.translucent_ = false;
+    window.PresentLayered();
+    size_t before_messages = posted_messages;
+    const gesher::PixelRect clipped{-10, -20, 3, 2};
+    window.Post(&clipped);
+    Check(!invalidated_full && SameRect(invalidated, 0, 0, 3, 2),
+          "regular window invalidates the clipped client rectangle");
+    Check(posted_messages == before_messages, "regular post does not queue layered presentation");
+    window.Post(&invalid);
+    Check(invalidated_full, "regular invalid damage invalidates complete client area");
+    window.translucent_ = true;
+    window.PresentLayered();
+    Check(!had_dirty, "re-enabling layered presentation recreates complete DIB");
+  }
+  expected_frame = nullptr;
+  NoLeaks("window damage tests retire all GDI resources");
+}
+
 int main(int argc, char** argv) {
   bool gate = argc < 2 || std::strcmp(argv[1], "measure") != 0;
 #if defined(_WIN32) && !defined(GESHER_TEST_DECLARED_GDI)
@@ -296,6 +451,7 @@ int main(int argc, char** argv) {
 #endif
   Direct();
   Presentation(gate);
+  if (gate) { PartialDirect(); WindowDamage(); }
   std::thread worker([] {
     owner = std::this_thread::get_id();
     Direct();

@@ -43,7 +43,10 @@ Design: [0085](decisions/0085-bluetooth-host-radio.md). Tests:
   with the paired selectors), with name, class of device, connection state and the SDP
   service classes of their records (`BluetoothDevice.SdpRecords`, parsed for
   ServiceClassIDList). Empty while the radio is off. `fetchUuidsWithSdp()` asks the device
-  again (an uncached RFCOMM service query) and broadcasts ACTION_UUID.
+  again (an uncached RFCOMM service query) and broadcasts ACTION_UUID. Lookups run on two
+  daemon threads; calls for a device whose lookup is already queued or running share it
+  and each still gets its broadcast, and the call is refused (false) while 64 other devices
+  are waiting.
 - **Pairing**: `createBond()` asks the system server, which pairs through Windows' basic
   pairing (`DeviceInformation.Pairing.PairAsync`): Windows shows its own pairing UI and the
   user confirms there. ACTION_BOND_STATE_CHANGED goes NONE>BONDING, then BONDING>BONDED
@@ -83,8 +86,13 @@ Design: [0085](decisions/0085-bluetooth-host-radio.md). Tests:
   one closes.
 - **RFCOMM**: `createRfcommSocketToServiceRecord` / `createInsecure...` connect AF_BTH
   sockets by service UUID (Windows looks it up in SDP); the hidden `createRfcommSocket(int)`
-  that SPP apps call by reflection connects to a channel. Streams, `available()`, and an
-  IOException at the end of the stream, as on Android. `connect()` is a non-blocking
+  that SPP apps call by reflection connects to a channel. Streams, `available()`, and
+  end-of-stream handling: local close, orderly peer close and a dropped connection
+  read as -1 for apps targeting Android 17 (API 37) and up and throw IOException
+  for older targets. Other native failures still throw IOException. Writes keep
+  throwing on failure; a write-detected disconnect also marks later reads as EOF.
+  Reconnection retires the prior native handle and starts a fresh stream.
+  `connect()` is a non-blocking
   connect and a wait, so `close()` from another thread cancels it. Secure sockets require
   authentication and encryption (SO_BTH_AUTHENTICATE, SO_BTH_ENCRYPT); the hidden
   `isEncrypted()` is true only while such a socket of the process is connected to the

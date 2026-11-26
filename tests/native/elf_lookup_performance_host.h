@@ -10,7 +10,9 @@
 #include <vector>
 #include "elf_types.h"
 
-inline std::recursive_mutex g_mutex;
+// The loader's recursive lock; its held-by-this-thread count is not used by lookup.
+using LoaderMutex = std::recursive_mutex;
+inline LoaderMutex g_mutex;
 
 struct Library {
   std::vector<Library*> dependencies;
@@ -29,6 +31,7 @@ struct Library {
   uint64_t bloom = ~uint64_t{0};
   uint32_t bucket = 0;
   void* (*resolver)() = nullptr;
+  bool retired = false;  // a retired object names nothing; never set here
 };
 
 uint32_t GnuHash(const char* name);

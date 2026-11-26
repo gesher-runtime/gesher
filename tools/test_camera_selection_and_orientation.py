@@ -28,7 +28,8 @@ def main() -> None:
         method(wc_src, 'static String selectionKey(String windowsId)'),
     ])
     cs_parts = '\n'.join([
-        method(cs_src, 'static int sensorOrientation()'),
+        method(cs_src, 'static int sensorOrientation(boolean rearFacing)'),
+        method(cs_src, 'private static int displayDegrees()'),
     ])
     pm_parts = '\n'.join([
         method(pm_src, 'static void addCameraFeatures('),
@@ -59,7 +60,8 @@ def main() -> None:
                 str(java),
             ],
             check=True,
-            timeout=60,
+            # javac's start-up alone can take most of a minute on a loaded runner.
+            timeout=300,
         )
         subprocess.run(
             [
