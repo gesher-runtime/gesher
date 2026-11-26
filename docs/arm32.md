@@ -23,8 +23,9 @@ DLL, or advertised by `NativeLibs.SUPPORTED` or `build.prop`.
 | `arm32_elf` | Checked little-endian ELF32 ARM EABI5 softfp `ET_DYN` parsing, owned image bytes, SysV/GNU symbols, ordinary REL relocations, standard/legacy Android RELR and bounded Android APS2 packed REL groups, explicit imports, BSS, init/fini arrays and validated RELRO ranges. |
 | `arm32_image_memory` | Mapping relocated image bytes into guest pages, inaccessible segment holes and read-only RELRO protection. |
 | `arm32_executor` | ARM/Thumb execution through the pinned Dynarmic A32 frontend, finite instruction budgets, checked instruction/data access, explicit faults and typed host-function thunks. |
+| `arm32_program` | Isolated dependency-DAG loader, guest-address allocation, typed host import bindings, transactional load rollback, guest constructor initialization and exported function calls. Not integrated with ART or APK packaging. |
 
-The executor runs the compiler-generated fixtures in `tests/arm32`: constructors,
+The linked-program test loads and calls the compiled ARM and Thumb fixtures through `Program`, including their constructors and typed host imports. This is a component test path, not a Windows/ART APK run. The executor runs the compiler-generated fixtures in `tests/arm32`: constructors,
 relocated data pointers, integer and floating-point calls, 64-bit register/stack
 arguments, guest-pointer reads and writes, and an imported host adapter. ARM and
 Thumb builds are both checked by inspecting the actual exported function state
@@ -63,7 +64,7 @@ executable interpreters and preinit arrays are explicitly rejected. The loader
 does not claim general Android DSO compatibility. It accepts System V/Linux
 OSABI values with ABI version zero and rejects unsupported FDPIC variants.
 
-Image mapping and execution require exclusive ownership of the guest address
+The standalone `Program` coordinates up to 64 guest dependency objects in dependency-first order and maps each into a reserved guest range. It rejects cyclic dependency graphs; its provider, symbol namespace and host bindings are intentionally explicit. Loaded objects are not Android linker namespaces, and a successful `DT_NEEDED` callback is not proof that an Android dependency is present. A failed load unmaps only objects created by that transaction. Any side effects of a guest constructor cannot be rolled back. The program deliberately has no native threads or nested JNI callbacks.\n\nImage mapping and execution require exclusive ownership of the guest address
 space while loading/running. One executor call can be active at a time;
 same-executor reentry fails explicitly. Guest threads, nested JNI callbacks,
 signals, TLS and system calls require further runtime work. An unimplemented
@@ -149,7 +150,7 @@ load alignment and cancellation of queued code-cache invalidation. These
 specific failures have regression tests. ASan/UBSan results do not include
 LeakSanitizer when leak detection is disabled in a ptrace-supervised environment.
 
-The later RELR and APS2 additions have not yet been compiled or executed in a verified test run. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
+The later RELR, APS2, dependency-callback and linked-program additions have not yet been compiled or executed in a verified test run. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
 Existing x86-64/AArch64 production sources, packaging and advertised ABI lists
 are unchanged by these standalone components.
 
