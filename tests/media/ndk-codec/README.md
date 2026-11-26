@@ -19,6 +19,10 @@ decoder. It checks each resulting image's luma, including the corresponding
 also checks that absent codecs and operations in the idle state report the
 Android error behavior.
 
-This fixture covers synchronous CPU buffers. Surface input, asynchronous
-callbacks, secure codecs and standalone Gesher ELF execution require separate
-implementation and validation.
+A second decode sends the same AVC access units to a YUV ImageReader surface.
+The test compares each submitted render timestamp and luma with the acquired
+image and verifies the first image remains readable after the decoder stops.
+
+This fixture covers synchronous CPU buffers and decoder output surfaces.
+Surface input, asynchronous callbacks, secure codecs and standalone Gesher
+ELF execution require separate implementation and validation.

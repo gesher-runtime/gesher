@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
+#ifndef CODEC_BUFFER_COMPONENT
+#include <media/NdkImageReader.h>
+#include <time.h>
+#endif
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -50,6 +54,106 @@ static bool Dimensions(AMediaFormat* format) {
       AMediaFormat_getInt32(format, "height", &height) && width == kWidth && height == kHeight;
 }
 
+#ifndef CODEC_BUFFER_COMPONENT
+static bool CheckSurfaceImage(AImage* image, int ordinal, int64_t expected_time) {
+  int32_t width = 0, height = 0, stride = 0, length = 0, format = 0;
+  int64_t timestamp = -1;
+  uint8_t* plane = NULL;
+  if (AImage_getWidth(image, &width) != AMEDIA_OK || width != kWidth ||
+      AImage_getHeight(image, &height) != AMEDIA_OK || height != kHeight ||
+      AImage_getFormat(image, &format) != AMEDIA_OK || format != AIMAGE_FORMAT_YUV_420_888 ||
+      AImage_getTimestamp(image, &timestamp) != AMEDIA_OK || timestamp != expected_time ||
+      AImage_getPlaneRowStride(image, 0, &stride) != AMEDIA_OK || stride < kWidth ||
+      AImage_getPlaneData(image, 0, &plane, &length) != AMEDIA_OK ||
+      plane == NULL || length <= stride + kWidth / 2) {
+    printf("NDK codec surface image invalid: image=%d %dx%d stride=%d length=%d timestamp=%" PRId64
+           " expected=%" PRId64 "\n", ordinal, width, height, stride, length, timestamp, expected_time);
+    return false;
+  }
+  const int luma = plane[stride + kWidth / 2];
+  printf("NDK codec surface frame=%d luma=%d timestamp=%" PRId64 "\n", ordinal, luma, timestamp);
+  return abs(luma - kLuma[ordinal]) <= 8;
+}
+
+static AImage* WaitForImage(AImageReader* reader) {
+  for (int i = 0; i < 200; ++i) {
+    AImage* image = NULL;
+    const media_status_t status = AImageReader_acquireNextImage(reader, &image);
+    if (status == AMEDIA_OK) return image;
+    if (status != AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE) {
+      printf("NDK codec surface acquire returned %d\n", status);
+      return NULL;
+    }
+    const struct timespec pause = {.tv_nsec = 10000000};
+    nanosleep(&pause, NULL);
+  }
+  puts("NDK codec surface timed out waiting for a decoded image");
+  return NULL;
+}
+
+static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFrames]) {
+  AMediaCodec* codec = AMediaCodec_createDecoderByType("video/avc");
+  AImageReader* reader = NULL;
+  AImage* first = NULL;
+  ANativeWindow* window = NULL;
+  int64_t first_time = -1;
+  int count = 0;
+  bool eos = false, passed = false;
+  if (codec == NULL || AImageReader_new(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888, 2, &reader) != AMEDIA_OK ||
+      AImageReader_getWindow(reader, &window) != AMEDIA_OK ||
+      AMediaCodec_configure(codec, format, window, NULL, 0) != AMEDIA_OK ||
+      AMediaCodec_start(codec) != AMEDIA_OK) {
+    puts("NDK codec surface could not start a decoder on its YUV reader");
+    goto cleanup;
+  }
+  for (int i = 0; i < kFrames; ++i) {
+    if (!Feed(codec, packets[i].data, packets[i].size, packets[i].time, 0)) goto cleanup;
+  }
+  if (!Feed(codec, NULL, 0, kFirstTime + kFrames * kInterval, AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM))
+    goto cleanup;
+
+  for (int attempt = 0; attempt < 24 && !eos; ++attempt) {
+    AMediaCodecBufferInfo info = {0};
+    const ssize_t index = AMediaCodec_dequeueOutputBuffer(codec, &info, 250000);
+    if (index < 0) {
+      if (index >= AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+      printf("NDK codec surface dequeue returned %zd\n", index);
+      goto cleanup;
+    }
+    eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
+    if (count < kFrames && (uint64_t)info.presentationTimeUs == packets[count].time) {
+      struct timespec now;
+      if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) goto cleanup;
+      const int64_t timestamp = (int64_t)now.tv_sec * INT64_C(1000000000) + now.tv_nsec;
+      if (AMediaCodec_releaseOutputBufferAtTime(codec, (size_t)index, timestamp) != AMEDIA_OK)
+        goto cleanup;
+      AImage* image = WaitForImage(reader);
+      if (image == NULL) goto cleanup;
+      const bool valid = CheckSurfaceImage(image, count, timestamp);
+      if (count == 0) {
+        first = image;
+        first_time = timestamp;
+      } else {
+        AImage_delete(image);
+      }
+      if (!valid) goto cleanup;
+      ++count;
+    } else if (AMediaCodec_releaseOutputBuffer(codec, (size_t)index, false) != AMEDIA_OK) {
+      goto cleanup;
+    }
+  }
+  passed = eos && count == kFrames && AMediaCodec_stop(codec) == AMEDIA_OK &&
+           CheckSurfaceImage(first, 0, first_time);
+  if (passed) puts("NDK codec surface: all passed");
+
+cleanup:
+  if (first != NULL) AImage_delete(first);
+  if (codec != NULL) AMediaCodec_delete(codec);
+  if (reader != NULL) AImageReader_delete(reader);
+  return passed;
+}
+#endif
+
 static int RunCodec(void) {
   int checks = 0, failures = 0;
 #if defined(__aarch64__)
@@ -75,6 +179,9 @@ static int RunCodec(void) {
   AMediaCodec* named = NULL;
   AMediaFormat* configuration = NULL;
   AMediaFormat* encoded = NULL;
+#ifndef CODEC_BUFFER_COMPONENT
+  AMediaFormat* surface_format = NULL;
+#endif
   char* name = NULL;
   struct Packet packets[kFrames] = {{0}};
   int packet_count = 0;
@@ -163,6 +270,11 @@ static int RunCodec(void) {
   REQUIRED(AMediaCodec_stop(encoder) == AMEDIA_OK, "stop encoder");
   CHECK(AMediaCodec_dequeueInputBuffer(encoder, 0) == AMEDIA_ERROR_UNKNOWN, "stop invalidates slots");
 
+#ifndef CODEC_BUFFER_COMPONENT
+  surface_format = AMediaFormat_new();
+  REQUIRED(surface_format != NULL && AMediaFormat_copy(surface_format, encoded) == AMEDIA_OK,
+           "retain a separate decoder format for the real ImageReader pass");
+#endif
   REQUIRED(AMediaCodec_configure(decoder, encoded, NULL, NULL, 0) == AMEDIA_OK, "configure AVC decoder");
   AMediaFormat_delete(encoded);
   encoded = NULL;
@@ -211,11 +323,17 @@ static int RunCodec(void) {
   const ssize_t reused = AMediaCodec_dequeueInputBuffer(decoder, 2000000);
   CHECK(reused >= 0, "flushed decoder exposes input again");
   CHECK(AMediaCodec_stop(decoder) == AMEDIA_OK, "stop decoder");
+#ifndef CODEC_BUFFER_COMPONENT
+  CHECK(DecodeToReader(surface_format, packets), "decode and render actual PTS to YUV reader");
+#endif
 
 cleanup:
   if (name != NULL) AMediaCodec_releaseName(encoder, name);
   if (configuration != NULL) AMediaFormat_delete(configuration);
   if (encoded != NULL) AMediaFormat_delete(encoded);
+#ifndef CODEC_BUFFER_COMPONENT
+  if (surface_format != NULL) AMediaFormat_delete(surface_format);
+#endif
   if (encoder != NULL) AMediaCodec_delete(encoder);
   if (decoder != NULL) AMediaCodec_delete(decoder);
   if (named != NULL) AMediaCodec_delete(named);
