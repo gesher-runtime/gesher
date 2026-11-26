@@ -152,7 +152,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > SET_SPECIAL_ACCESS_VISIT) {
+        if (code < INSTALL || code > INSTALL_CONFIRMED) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);

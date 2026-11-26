@@ -1970,8 +1970,16 @@ jobs:
           if (Select-String -LiteralPath $registry -Pattern '^com\.gesher\.splitcontract\t' -Quiet) {
             throw 'a mismatched digest published an installed package'
           }
+          $expectedHashes = @{}
+          foreach ($name in @($looseInputs.Values) + 'base.dm') {
+            $expectedHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $loose $name)).Hash
+          }
           $run = Start-ApkOpen $baseApk
-          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -Done Done
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -Done Done -BeforeAnswer {
+            # These are disposable runner fixtures. The install should use the already
+            # confirmed snapshot even when the original input is no longer at its path.
+            Move-Item -LiteralPath $baseApk -Destination (Join-Path $loose 'original-base.saved') -ErrorAction Stop
+          }
           $out = Complete-ApkOpen $run 'gesher-launch with loose splits and dex metadata'
           if ($run.Process.ExitCode -ne 0 -or $answer.Problems.Count) {
             throw "confirmed loose APK install failed: $out $($answer.Problems -join '; ')"
@@ -1981,8 +1989,7 @@ jobs:
           $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
           $installedDir = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir"
           foreach ($name in @($looseInputs.Values) + 'base.dm') {
-            if ((Get-FileHash -LiteralPath (Join-Path $installedDir $name)).Hash -ne
-                (Get-FileHash -LiteralPath (Join-Path $loose $name)).Hash) {
+            if ((Get-FileHash -LiteralPath (Join-Path $installedDir $name)).Hash -ne $expectedHashes[$name]) {
               throw "confirmed loose APK install did not preserve $name"
             }
           }
