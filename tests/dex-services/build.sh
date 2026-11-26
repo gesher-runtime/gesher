@@ -69,6 +69,7 @@ printf '%s\n' "$here/../net/HttpEngineDeviceSmoke.java" "$here/../net/Http2Devic
   "$here/../net/HttpEngineProtocolPolicyTest.java" "$here/../net/Http2SessionContracts.java" \
   "$here/../net/Http2CreditContracts.java" "$here/../net/HttpEngineCacheTest.java" \
   "$here/../net/HttpEngineConnectionLifetimeTest.java" "$here/../net/HttpEngineReadBufferTest.java" \
+  "$here/../net/HttpBrotliFixtures.java" "$here/../net/HttpEngineBrotliTest.java" \
   "$here/../net/HttpEngineAdmissionTest.java" >> "$work/sources.txt"
 native_list "$work/sources.txt"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \

@@ -21,18 +21,25 @@ STUBS = {
       private static final ThreadLocal<Integer> UID=ThreadLocal.withInitial(() -> 1000);
       public static int getCallingUid(){return UID.get();}
       public static void setCallingUid(int uid){UID.set(uid);}
+      private static final ThreadLocal<Integer> PID=ThreadLocal.withInitial(() -> 1);
+      public static int getCallingPid(){return PID.get();}
+      public static void setCallingPid(int pid){PID.set(pid);}
     }''',
     'android/os/Process.java': '''package android.os; public class Process {
       public static final int SYSTEM_UID=1000,ROOT_UID=0,SHELL_UID=2000;
-      public static int myUid(){return SYSTEM_UID;} }''',
+      public static int uid=SYSTEM_UID;
+      public static int myUid(){return uid;} }''',
     'android/os/Environment.java': 'package android.os; public class Environment { public static java.io.File getDataDirectory(){return new java.io.File(".");} }',
     'android/os/ParcelableException.java': 'package android.os; public class ParcelableException extends RuntimeException { public ParcelableException(Throwable cause){super(cause);} }',
     'android/os/storage/StorageManager.java': '''package android.os.storage; public class StorageManager {
       public static final String UUID_PRIMARY_PHYSICAL="primary_physical";
       public static final java.util.UUID UUID_DEFAULT=new java.util.UUID(0,0); }''',
     'android/content/pm/PackageManager.java': '''package android.content.pm; public class PackageManager {
+      public static final int PERMISSION_GRANTED=0, PERMISSION_DENIED=-1;
       public static class NameNotFoundException extends Exception { public NameNotFoundException(String n){super(n);} } }''',
     'android/content/pm/ParceledListSlice.java': 'package android.content.pm; public class ParceledListSlice { public static ParceledListSlice emptyList(){return new ParceledListSlice();} }',
+    'android/app/AppOpsManager.java': '''package android.app; public class AppOpsManager {
+      public static final int OP_GET_USAGE_STATS=43, MODE_ALLOWED=0, MODE_IGNORED=1, MODE_DEFAULT=3; }''',
     'android/app/usage/StorageStats.java': 'package android.app.usage; public class StorageStats { public long codeBytes,apkBytes,dataBytes,cacheBytes,externalCacheBytes; }',
     'android/app/usage/ExternalStorageStats.java': 'package android.app.usage; public class ExternalStorageStats { public long totalBytes,audioBytes,videoBytes,imageBytes,appBytes,obbBytes; }',
     'com/gesher/server/ApkPackage.java': '''package com.gesher.server; final class ApkPackage {
@@ -47,6 +54,29 @@ STUBS = {
       synchronized void put(ApkPackage p){java.util.Map<String,ApkPackage> m=new java.util.LinkedHashMap<>(packages);m.put(p.packageName,p);packages=m;}
       ApkPackage get(String n){return packages.get(n);} boolean isRemovalPending(String n){return removing.contains(n);}
       java.util.Collection<ApkPackage> packages(){return packages.values();}
+      private final AppOps ops=new AppOps();
+      private final Permissions permissions=new Permissions();
+      AppOps appOps(){return ops;}
+      Permissions permissions(){return permissions;}
+      static final class AppOps {
+        volatile int mode=android.app.AppOpsManager.MODE_DEFAULT;
+        int checkRawMode(int op,int uid,String pkg){return mode;}
+        NotedOperation noteOperation(int op,int uid,String pkg,String tag,boolean async,String message,boolean collect){
+          return new NotedOperation(checkRawMode(op,uid,pkg));
+        }
+      }
+      static final class NotedOperation {
+        private final int mode;
+        NotedOperation(int mode){this.mode=mode;}
+        int getOpMode(){return mode;}
+      }
+      final class Permissions {
+        int checkUidPermission(int uid,String permission,int user){
+          return packages.values().stream().anyMatch(p -> p.uid()==uid && p.parsed.permissions.contains(permission))
+              ? android.content.pm.PackageManager.PERMISSION_GRANTED
+              : android.content.pm.PackageManager.PERMISSION_DENIED;
+        }
+      }
       String[] getPackagesForUid(int uid){return packages.values().stream().filter(p->p.uid()==uid).map(p->p.packageName).toArray(String[]::new);} }''',
 }
 
