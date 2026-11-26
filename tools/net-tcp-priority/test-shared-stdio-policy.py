@@ -28,7 +28,7 @@ read_bytes = Path.read_bytes
 manifest = json.loads((ROOT / MANIFEST).read_bytes())
 transition_patch = (ROOT / PATCH).read_bytes()
 checks = 0
-normalized = policy.preceding_composed_stdio_sources()
+normalized = policy.preceding_stdio_feature_sources()
 shared_input = {name: normalized[name] if name in normalized else read_bytes(ROOT / name)
                 for name in manifest["paths"]}
 
