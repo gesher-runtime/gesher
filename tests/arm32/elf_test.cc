@@ -263,6 +263,29 @@ void ValidImages() {
   CHECK(image.relro.size() == 1 && image.relro[0].address == 0x10600 && image.relro[0].size == 0x280);
   CHECK(R32(image.bytes, 0x600) == 0x10640);  // Relocated before protection is published.
 
+  // Standard and legacy Android RELR share one four-byte bitmap encoding.
+  // Three positions have no DT_REL records, so this checks actual expansion.
+  for (bool android : {false, true}) {
+    Fixture packed;
+    const uint32_t base = android ? 0x6fffe000 : 36;
+    const uint32_t size = android ? 0x6fffe001 : 35;
+    const uint32_t entry = android ? 0x6fffe003 : 37;
+    W32(packed.file, 0x628, 0x640);
+    W32(packed.file, 0x62c, 0x201);
+    W32(packed.file, 0x630, 0x205);
+    W32(packed.file, 0x4a0, 0x628);  // direct relocation
+    W32(packed.file, 0x4a4, 7);      // 0x62c and 0x630
+    packed.Tag(base, 0x4a0);
+    packed.Tag(size, 8);
+    packed.Tag(entry, 4);
+    if (android) packed.Tag(0x6fffe005, 3);  // historical optional hint
+    CHECK(LoadElf32(packed.file.data(), packed.file.size(), Options(), &image, &error));
+    CHECK(R32(image.bytes, 0x628) == 0x10640);
+    CHECK(R32(image.bytes, 0x62c) == 0x10201);
+    CHECK(R32(image.bytes, 0x630) == 0x10205);
+    CHECK(R32(image.bytes, 0x600) == 0x10640);  // Existing RELs still apply.
+  }
+
   Fixture linux;
   linux.file[7] = 3;
   CHECK(LoadElf32(linux.file.data(), linux.file.size(), Options(), &image, &error));
@@ -323,7 +346,39 @@ void HostileImages() {
   bad([](auto& f) { W32(f.file, 0x620, 0x600); }, "constructor/finalizer");
   bad([](auto& f) { f.Tag(1, 34); }, "DT_NEEDED 'fixture.so'");
   bad([](auto& f) { f.Tag(7, 0x400); }, "DT_RELA");
-  bad([](auto& f) { f.Tag(36, 0x400); }, "DT_RELR");
+  bad([](auto& f) { f.Tag(36, 0x400); }, "incomplete RELR");
+  bad([](auto& f) {
+    f.Tag(36, 0x4a0); f.Tag(35, 4); f.Tag(37, 8);
+  }, "RELR entry size");
+  bad([](auto& f) {
+    f.Tag(36, 0x4a0); f.Tag(35, 3); f.Tag(37, 4);
+  }, "RELR table size");
+  bad([](auto& f) {
+    f.Tag(36, 0x5f0); f.Tag(35, 4); f.Tag(37, 4);
+  }, "RELR table exceeds");
+  bad([](auto& f) {
+    f.Tag(36, 0x4a0); f.Tag(35, 4); f.Tag(37, 4);
+    W32(f.file, 0x4a0, 3);
+  }, "RELR bitmap has no preceding address");
+  bad([](auto& f) {
+    f.Tag(36, 0x4a0); f.Tag(35, 4); f.Tag(37, 4);
+    W32(f.file, 0x4a0, 0x200);
+  }, "RELR target is not in a writable");
+  bad([](auto& f) {
+    f.Tag(36, 0x4a0); f.Tag(35, 4); f.Tag(37, 4);
+    W32(f.file, 0x4a0, 0x600);
+  }, "duplicate relocation");
+  bad([](auto& f) {
+    f.Tag(36, 0x4a0); f.Tag(35, 4); f.Tag(37, 4);
+    f.Tag(0x6fffe000, 0x4a0);
+  }, "mixed RELR");
+  bad([](auto& f) { f.Tag(0x6fffe005, 2); }, "Android RELR count");
+  bad([](auto& f) {
+    f.Tag(36, 0x4a0); f.Tag(35, 8); f.Tag(37, 4);
+    W32(f.file, 0x4a0, 0xfffffff8);
+    W32(f.file, 0x4a4, 3);
+  }, "RELR target is unaligned or outside");
+
   bad([](auto& f) { f.Tag(0x6000000f, 0x400); }, "packed relocations");
   bad([](auto& f) { f.Tag(0x6ffffff0, 0x400); }, "versioned");
   bad([](auto& f) { f.Tag(0x12345678, 0); }, "unsupported dynamic tag");
