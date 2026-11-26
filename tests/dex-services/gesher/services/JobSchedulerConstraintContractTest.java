@@ -29,6 +29,7 @@ import android.os.SystemClock;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import com.gesher.server.ConnectivityService;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -192,17 +193,21 @@ public final class JobSchedulerConstraintContractTest {
 
     static final class Harness implements AutoCloseable {
         final Object pm, atm, am, scheduler;
+        final ConnectivityService connectivity;
         final Class<?> schedulerType, jobType, runType;
         final PackageImpl parsed;
 
-        Harness() throws Exception { this(true); }
-
+        Harness() throws Exception { this(true, false); }
         Harness(boolean networkPermission) throws Exception { this(networkPermission, false); }
+
+        Harness(boolean networkPermission, boolean bootPermission) throws Exception {
+            this(networkPermission, bootPermission, false);
+        }
 
         // The parsed package is sealed by hideAsFinal(), so permissions such as
         // RECEIVE_BOOT_COMPLETED must be declared here rather than added later.
         @SuppressWarnings("unchecked")
-        Harness(boolean networkPermission, boolean bootPermission) throws Exception {
+        Harness(boolean networkPermission, boolean bootPermission, boolean observeConnectivity) throws Exception {
             parsed = (PackageImpl) PackageImpl.forTesting(PACKAGE, "/fixture/" + PACKAGE + "/base.apk");
             ParsedServiceImpl service = new ParsedServiceImpl();
             service.setName(PACKAGE + ".TestJobService");
@@ -244,6 +249,9 @@ public final class JobSchedulerConstraintContractTest {
             Class<?> callersType = type("CallerIdentity");
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Unsafe skips these normal defaults used by real controller transitions.
+            set(am, "mShortcutEvaluation", make(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+            set(am, "mShortcutAwake", (java.util.function.BooleanSupplier) () -> false);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions);
             invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
@@ -261,9 +269,20 @@ public final class JobSchedulerConstraintContractTest {
             userInitiatedDefinition.protectionLevel = android.content.pm.PermissionInfo.PROTECTION_NORMAL;
             ((Map<String, android.content.pm.PermissionInfo>) get(catalog, "mFramework"))
                     .put(userInitiatedDefinition.name, userInitiatedDefinition);
+            if (bootPermission) {
+                android.content.pm.PermissionInfo boot = new android.content.pm.PermissionInfo();
+                boot.name = android.Manifest.permission.RECEIVE_BOOT_COMPLETED;
+                boot.packageName = "android";
+                boot.protectionLevel = android.content.pm.PermissionInfo.PROTECTION_NORMAL;
+                ((Map<String, android.content.pm.PermissionInfo>) get(catalog, "mFramework")).put(boot.name, boot);
+            }
             Object notifications = make(notifType, new Class<?>[]{pmType, amType, java.util.function.ToIntBiFunction.class},
                     pm, am, (java.util.function.ToIntBiFunction<Object, Boolean>) (n, u) -> 0);
             set(am, "mServices", make(type("ActiveServices"), new Class<?>[]{atmType, pmType, notifType}, atm, pm, notifications));
+            // This fixture has no provider connections; preserve the normal empty topology.
+            Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
+            set(am, "mProviders", providers);
             invoke(atm, "setActivityManager", new Class<?>[]{amType}, am);
 
             Class<?> processType = type("ActivityTaskManagerService$ProcessRecord");
@@ -280,7 +299,10 @@ public final class JobSchedulerConstraintContractTest {
             jobType = type("JobSchedulerService$Job");
             runType = type("JobSchedulerService$Run");
 
-            scheduler = make(schedulerType, new Class<?>[]{amType, atmType, pmType}, am, atm, pm);
+            connectivity = observeConnectivity ? (ConnectivityService)make(type("ConnectivityService"),
+                    new Class<?>[]{pmType, atmType}, pm, atm) : null;
+            scheduler = make(schedulerType, new Class<?>[]{amType, atmType, pmType, ConnectivityService.class},
+                    am, atm, pm, connectivity);
             // Replace background thread so scheduler acts under deterministic test control.
             set(scheduler, "mThread", new Thread());
         }
@@ -386,6 +408,86 @@ public final class JobSchedulerConstraintContractTest {
             ((java.util.concurrent.ScheduledThreadPoolExecutor) get(scheduler, "mTimeouts")).shutdownNow();
             ((List<?>) field(type("DeviceWork"), "sSources").get(null)).remove(scheduler);
             field(type("NotificationManagerService"), "sLast").set(null, null);
+        }
+    }
+
+    private static int networkObservers(ConnectivityService connectivity) throws Exception {
+        synchronized (connectivity) { return ((List<?>)get(connectivity, "mSystemListeners")).size(); }
+    }
+
+    /** Same ownership path on a controlled host, with real persisted Parcels on Windows/ART. */
+    public static void connectivityOwnershipContracts(boolean realParcel) throws Exception {
+        try (Harness h = new Harness(true, true, true)) {
+            check(networkObservers(h.connectivity) == 0, "Empty scheduler acquired network observation");
+            h.schedule(new JobInfo.Builder(201, serviceComponent()).setMinimumLatency(3_600_000).build());
+            check(networkObservers(h.connectivity) == 0, "A latency-only job acquired network observation");
+            h.schedule(new JobInfo.Builder(202, serviceComponent()).setMinimumLatency(3_600_000)
+                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build());
+            check(networkObservers(h.connectivity) == 1, "Pending network work has no connectivity observer");
+            h.schedule(new JobInfo.Builder(203, serviceComponent()).setPeriodic(900_000)
+                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_UNMETERED).build());
+            check(networkObservers(h.connectivity) == 1, "Multiple network jobs created duplicate observers");
+            h.cancel(202);
+            check(networkObservers(h.connectivity) == 1, "Cancellation dropped a periodic job's network observer");
+            h.schedule(new JobInfo.Builder(203, serviceComponent()).setMinimumLatency(3_600_000).build());
+            check(networkObservers(h.connectivity) == 0, "Replacing the final network job kept its observer");
+            h.setNetworkState(2);
+            h.schedule(new JobInfo.Builder(204, serviceComponent()).setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build());
+            TestService running = new TestService();
+            TestRunHandle run = h.start(204, running);
+            check(networkObservers(h.connectivity) == 1 && running.starts == 1,
+                    "Running network work lost its observer");
+            ((IJobCallback)run.run).jobFinished(204, false);
+            check(networkObservers(h.connectivity) == 0, "One-shot completion retained a network observer");
+            h.schedule(new JobInfo.Builder(205, serviceComponent()).setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build());
+            run = h.start(205, new TestService());
+            ((IJobCallback)run.run).jobFinished(205, true);
+            check(networkObservers(h.connectivity) == 1, "A requested retry lost its network observer");
+            h.cancel(205);
+            check(networkObservers(h.connectivity) == 0, "Canceled retry retained its network observer");
+
+            h.schedule(new JobInfo.Builder(206, serviceComponent()).setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                    .setMinimumLatency(3_600_000).build());
+            invoke(h.scheduler, "packageRemoved", new Class<?>[]{String.class}, PACKAGE);
+            check(networkObservers(h.connectivity) == 0, "Package removal retained network ownership");
+
+            if (realParcel) {
+                JobInfo persisted = new JobInfo.Builder(207, serviceComponent()).setPersisted(true)
+                        .setMinimumLatency(3_600_000).setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY).build();
+                h.schedule(persisted);
+                Object job = h.findJob(207);
+                java.io.File file = (java.io.File)invoke(h.scheduler, "persistFile", new Class<?>[]{h.jobType}, job);
+                check(file.isFile(), "Persisted network job was not written by the production scheduler");
+                byte[] bytes = java.nio.file.Files.readAllBytes(file.toPath());
+                h.cancel(207);
+                check(!file.exists() && networkObservers(h.connectivity) == 0,
+                        "Persisted cancellation kept disk state or observation");
+                // Simulate reboot by restoring the bytes written by persist(), then
+                // use a fresh scheduler's actual start()/loadPersisted() path.
+                java.nio.file.Files.write(file.toPath(), bytes);
+                Object restored = make(h.schedulerType, new Class<?>[]{type("ActivityManagerService"),
+                        type("ActivityTaskManagerService"), type("PackageManagerService"), ConnectivityService.class},
+                        h.am, h.atm, h.pm, h.connectivity);
+                try {
+                    invoke(restored, "start", new Class<?>[0]);
+                    JobInfo loaded = (JobInfo)invoke(restored, "getPendingJob",
+                            new Class<?>[]{String.class, int.class}, NAMESPACE, 207);
+                    check(loaded != null && loaded.isPersisted() && loaded.getRequiredNetwork() != null,
+                            "Boot did not restore the persisted network requirement");
+                    check(networkObservers(h.connectivity) == 1,
+                            "Restored job did not acquire connectivity observation before scheduling");
+                    invoke(restored, "cancelAllInNamespace", new Class<?>[]{String.class}, NAMESPACE);
+                    check(networkObservers(h.connectivity) == 0 && !file.exists(),
+                            "Final restored-job cancellation did not release observation and persistence");
+                } finally {
+                    Thread worker = (Thread)get(restored, "mThread");
+                    if (worker != null) { worker.interrupt(); worker.join(3_000); }
+                    com.gesher.server.WindowsHost.removeListener((com.gesher.server.WindowsHost.Listener)restored);
+                    ((java.util.concurrent.ScheduledThreadPoolExecutor)get(restored, "mTimeouts")).shutdownNow();
+                    ((List<?>)field(type("DeviceWork"), "sSources").get(null)).remove(restored);
+                }
+            }
+            System.out.println("JobScheduler connectivity ownership passed; persisted_parcel=" + realParcel);
         }
     }
 
@@ -820,7 +922,7 @@ public final class JobSchedulerConstraintContractTest {
         check(service.starts == 1, "Job 107 did not start");
 
         // User interacts with device: idle time drops to 0.
-        h.setDeviceIdleMillis(0L);
+        h.setDeviceIdleMillis(-1L); // DeviceConstraints.NOT_OFF: the display is on
 
         check(service.stops == 1, "Job 107 was not stopped when device became active");
         check(service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_DEVICE_IDLE,
@@ -920,7 +1022,7 @@ public final class JobSchedulerConstraintContractTest {
         h.schedule(new JobInfo.Builder(122, serviceComponent()).setRequiresBatteryNotLow(true).build());
         check(h.reason(122) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW, "Unknown battery accepted as not low");
         h.cancel(122);
-        h.setDeviceIdleMillis(0L);
+        h.setDeviceIdleMillis(-1L); // NOT_OFF
         h.schedule(new JobInfo.Builder(123, serviceComponent()).setRequiresDeviceIdle(true).build());
         check(h.reason(123) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_DEVICE_IDLE, "Unknown/active device accepted as idle");
         h.cancel(123);
@@ -1609,6 +1711,7 @@ public final class JobSchedulerConstraintContractTest {
         android.system.Os.unsetenv("GESHER_BINDER_UID");
         android.system.Os.setenv("GESHER_MICROG_SPOOF", "1", true);
         contracts();
+        connectivityOwnershipContracts(true);
         JobSchedulerAdmissionTest.contracts(true);
         JobSchedulerContentTriggerTest.contracts(true);
         System.out.println("JobSchedulerConstraintContractTest all passed: " + checks + " checks");

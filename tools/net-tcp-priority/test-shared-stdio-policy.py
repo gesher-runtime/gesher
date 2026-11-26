@@ -28,6 +28,9 @@ read_bytes = Path.read_bytes
 manifest = json.loads((ROOT / MANIFEST).read_bytes())
 transition_patch = (ROOT / PATCH).read_bytes()
 checks = 0
+normalized = policy.preceding_stdio_feature_sources()
+shared_input = {name: normalized[name] if name in normalized else read_bytes(ROOT / name)
+                for name in manifest["paths"]}
 
 
 def sha(data):
@@ -54,12 +57,10 @@ def rejected(label, changes, expected, repinned_manifest=None, normalized_bounda
             contextlib.redirect_stdout(io.StringIO()):
         try:
             if normalized_boundary:
-                # Preserve the original PR73 endpoint guard below the newer,
-                # independently pinned snprintf transition. The full composed
-                # path is also tested; this call isolates that existing guard.
                 qualification = json.loads(read_bytes(ROOT / (FOLDER + "ofd-stream-source.json")))
-                policy.preceding_shared_stdio_sources(qualification,
-                    {name: mutated(ROOT / name) for name in manifest["paths"]})
+                current = dict(shared_input)
+                current.update({name: data for name, data in changes.items() if name in current})
+                policy.preceding_shared_stdio_sources(qualification, current)
             else:
                 policy.check()
         except AssertionError as error:
@@ -88,17 +89,14 @@ for name in ("compat/bionic/stdio_bionic.cc", "compat/posix/include/gesher/stdio
     mutated = (ROOT / name).read_bytes() + b'\n#include "unqualified_stream_owner.h"\n'
     changed = copy.deepcopy(manifest)
     changed["after_sha256"][name] = sha(mutated)
-    if name == policy.SNPRINTF_BOUNDS_SOURCE:
-        rejected("an undeclared include through the full composed formatter transition",
+    if name in policy.COMPOSED_STDIO_PATHS:
+        rejected("an undeclared include through the full composed stdio transition: " + name,
                  {name: mutated}, name, changed)
-        # A caller cannot refresh PR73's endpoint to bypass the earlier
-        # formatter transition. Also retain PR73's own reverse-endpoint test
-        # using its exact normalized input, without changing the tracked manifest.
-        mutated = policy.preceding_snprintf_bounds_source() + b'\n#include "unqualified_stream_owner.h"\n'
+        mutated = normalized[name] + b'\n#include "unqualified_stream_owner.h"\n'
         changed["after_sha256"][name] = sha(mutated)
     rejected("an undeclared include even with a repinned endpoint: " + name,
              {name: mutated}, "shared-stdio reverse endpoint", changed,
-             normalized_boundary=name == policy.SNPRINTF_BOUNDS_SOURCE)
+             normalized_boundary=name in policy.COMPOSED_STDIO_PATHS)
 
 extra_path = "compat/posix/src/ofd.cc"
 changed = copy.deepcopy(manifest)

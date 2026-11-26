@@ -7,6 +7,7 @@
 #include <gesher/timerfd.h>
 #include <gesher/clocks.h>
 #include <gesher/resume.h>
+#include <gesher/fork.h>
 
 #include <errno.h>
 #include <string.h>
@@ -193,6 +194,8 @@ std::shared_ptr<TimerFd> CheckedTimer(int fd) {
 int TimerFdCreate(int clockid, int flags) {
   if ((clockid != kRealtime && clockid != kMonotonic && clockid != kBoottime) ||
       (flags & ~(kNonblock | kCloexec)) != 0) return errno = EINVAL, -1;
+  // Its expirations come from the thread pool, which a forked child has not.
+  if (InForkedChild()) return errno = ENOSYS, -1;
   auto timer = std::make_shared<TimerFd>();
   timer->clockid = clockid;
   timer->readiness = NewReadiness((flags & kNonblock) != 0);

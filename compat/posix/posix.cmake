@@ -28,9 +28,12 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/netdb.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/network_dns.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/ofd.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/fifo.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/path.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/pipe_io.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/process.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/fork_locks.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/spawn_broker.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_descriptors.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_duplicate.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_liveness.cc
@@ -38,6 +41,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_registry.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/record_lock_wait.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/procfs.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/ptrace_state.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/resume.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/revocable_file.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/pthread.cc
@@ -48,9 +52,11 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/unix_rights.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/stat.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/stdio_output.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/storage_policy.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/syscall.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/sysv_shims.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/system.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/system_linker.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/system_properties.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/thread_register.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/timerfd.cc
@@ -82,6 +88,9 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_crash_reporter_anchor)
 # Every process keeps a signal mailbox for kill() from other processes
 # (src/process.cc), which nothing calls either.
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_signal_mailbox_anchor)
+# ... and a ptrace state with the guard that stops it for a tracer
+# (src/ptrace_state.cc, ADR 0093).
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_ptrace_state_anchor_v1)
 # DLL callers resolve the futex queue in the executable. Force a private anchor:
 # an import library can satisfy the public owner symbol without extracting it.
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_futex_owner_anchor_v1)
@@ -91,6 +100,7 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_ofd_owner_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_descriptor_transaction_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_stdio_output_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_storage_policy_anchor_v1)
 # GNU scanf's parser uses public getc/ungetc; retain one stream lock around
 # its complete conversion sequence, including ANSI-mode assembly aliases.
 target_link_options(gesher_posix INTERFACE -Wl,--wrap=__mingw_vfscanf -Wl,--wrap=__mingw_vfwscanf)

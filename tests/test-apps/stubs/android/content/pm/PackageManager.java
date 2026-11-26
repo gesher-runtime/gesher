@@ -13,4 +13,15 @@ public class PackageManager {
     public static final long GET_SIGNING_CERTIFICATES = 134217728;
     public static final int COMPONENT_ENABLED_STATE_DEFAULT = 0;
     public static final int COMPONENT_ENABLED_STATE_ENABLED = 1;
+
+    public static class NameNotFoundException extends Exception {
+        public NameNotFoundException(String name) {
+            super(name);
+        }
+    }
+
+    /** No package is installed in this host fixture. */
+    public PackageInfo getPackageInfo(String packageName, int flags) throws NameNotFoundException {
+        throw new NameNotFoundException(packageName);
+    }
 }

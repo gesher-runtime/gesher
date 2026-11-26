@@ -203,5 +203,11 @@ GraphicsDex 'android.graphics (Bitmap, Canvas, Paint text, codecs) and a Surface
 # drawing a RenderNode tree into the window's Surface.
 GraphicsDex 'HardwareRenderer: a RenderNode tree into the Win32 window (CPU pipeline)' HardwareRendererTest
 
+# Legacy RenderScript (docs/renderscript.md): librs_jni.so over libRS's CPU
+# runtime; each intrinsic against an independent Java computation, and ScriptC
+# (no bitcode compiler), BLAS and USAGE_IO failing as Android fails.
+GraphicsDex 'RenderScript: intrinsics (Blur on a Bitmap, ColorMatrix, Convolve, LUT, 3DLUT, Blend, Histogram, Resize, YuvToRGB) on the CPU runtime; ScriptC/BLAS/IO fail honestly' `
+  RenderScriptTest @((NoDrive $env:RUNNER_TEMP))
+
 
 # An app's UI in a Win32 window: 34-windows.ps1 (after the fonts are installed).

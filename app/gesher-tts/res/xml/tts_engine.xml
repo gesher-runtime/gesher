@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TextToSpeech.Engine.SERVICE_META_DATA: no settings activity; Windows' voice settings
+     belong to Windows. -->
+<tts-engine xmlns:android="http://schemas.android.com/apk/res/android" />
