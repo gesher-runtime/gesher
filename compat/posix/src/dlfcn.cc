@@ -21,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "internal.h"
@@ -84,18 +85,23 @@ BuiltinLibrary* AsBuiltin(void* handle) {
 
 std::atomic<const gesher_elf_dlopen_ops*> elf_ops{nullptr};
 
-// Handles the ELF loader returned, under builtins_mutex.
-std::vector<void*>& ElfHandles() {
-  static std::vector<void*> handles;
+// Record one count per ELF handle returned through this dlfcn entry point.
+std::unordered_map<void*, size_t>& ElfHandles() {
+  static std::unordered_map<void*, size_t> handles;
   return handles;
 }
 
-bool IsElfHandle(void* handle) {
+enum class ElfHandleState { kUnknown, kLive, kClosed };
+
+ElfHandleState FindElfHandle(void* handle, bool release) {
   std::lock_guard<std::mutex> lock(builtins_mutex);
-  for (void* h : ElfHandles()) {
-    if (h == handle) return true;
-  }
-  return false;
+  auto entry = ElfHandles().find(handle);
+  if (entry == ElfHandles().end()) return ElfHandleState::kUnknown;
+  if (entry->second == 0) return ElfHandleState::kClosed;
+  // Drop the registry lock before calling into the loader. A finalizer can
+  // re-enter dlopen or dlclose and must see this reference already claimed.
+  if (release) --entry->second;
+  return ElfHandleState::kLive;
 }
 
 // Whether the file at `path` starts with the ELF magic.
@@ -181,7 +187,7 @@ void* OpenElf(const char* filename, int flags) {
     return nullptr;
   }
   std::lock_guard<std::mutex> lock(builtins_mutex);
-  ElfHandles().push_back(handle);
+  ++ElfHandles()[handle];
   return handle;
 }
 
@@ -258,7 +264,13 @@ void* dlsym(void* handle, const char* symbol) {
     has_error = true;
     return nullptr;
   }
-  if (IsElfHandle(handle)) {
+  ElfHandleState state = FindElfHandle(handle, false);
+  if (state == ElfHandleState::kClosed) {
+    last_error = "dlsym: closed ELF handle";
+    has_error = true;
+    return nullptr;
+  }
+  if (state == ElfHandleState::kLive) {
     void* p = elf_ops.load()->sym(handle, symbol);
     if (p == nullptr) {
       last_error = "dlsym " + std::string(symbol) + ": not found in the ELF object";
@@ -291,7 +303,13 @@ void* dlsym(void* handle, const char* symbol) {
 
 int dlclose(void* handle) {
   if (handle == GetModuleHandleW(nullptr) || AsBuiltin(handle) != nullptr) return 0;
-  if (IsElfHandle(handle)) return elf_ops.load()->close(handle);
+  ElfHandleState state = FindElfHandle(handle, true);
+  if (state != ElfHandleState::kUnknown) {
+    if (state == ElfHandleState::kLive && elf_ops.load()->close(handle) == 0) return 0;
+    last_error = "dlclose: invalid or closed ELF handle";
+    has_error = true;
+    return -1;
+  }
   if (!FreeLibrary(static_cast<HMODULE>(handle))) {
     SetError("dlclose", nullptr);
     return -1;

@@ -1214,15 +1214,12 @@ int BIONIC_SYSV gesher_bionic_cxa_thread_atexit_impl(void (BIONIC_SYSV* dtor)(vo
 // (process_bionic.cc, ADR 0092), as bionic runs them: prepare handlers last
 // registered first, parent and child handlers in registration order.
 int BIONIC_SYSV gesher_bionic_register_atfork(void* prepare, void* parent, void* child, void* dso) {
-  int result = gesher::bionic::RegisterAtfork(prepare, parent, child);
-  if (result == 0) {
-    // Gesher's fork hook table retains callbacks for the process lifetime.
-    elf::KeepResidentForAddress(dso);
-    elf::KeepResidentForAddress(prepare);
-    elf::KeepResidentForAddress(parent);
-    elf::KeepResidentForAddress(child);
-  }
-  return result;
+  // The fork hook table retains callbacks for the process lifetime.
+  elf::KeepResidentForAddress(dso);
+  elf::KeepResidentForAddress(prepare);
+  elf::KeepResidentForAddress(parent);
+  elf::KeepResidentForAddress(child);
+  return gesher::bionic::RegisterAtfork(prepare, parent, child);
 }
 
 }  // extern "C"
