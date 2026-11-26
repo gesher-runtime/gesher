@@ -3340,11 +3340,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 : mPm.getPackageUid(verifiedCaller, 0, 0);
         if (info.applicationInfo == null || mPm.permissions().checkComponentPermission(info.permission,
                 componentCallerUid, info.applicationInfo.uid, info.exported) != PackageManager.PERMISSION_GRANTED) {
-            if (info.applicationInfo == null || info.exported || info.permission != null || mAccounts == null
-                    || !mAccounts.consumeAuthenticatorIntent(componentCallerUid,
-                            new ComponentName(info.packageName, info.name))) {
-                throw new SecurityException(info.exported ? "Activity permission denied" : "Activity is not exported");
-            }
+            throw new SecurityException(info.exported ? "Activity permission denied" : "Activity is not exported");
         }
         final String attributedCaller = verifiedCaller;
         final boolean systemCreator = internalCreator && "android".equals(attributedCaller)

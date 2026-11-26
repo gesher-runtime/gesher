@@ -56,6 +56,16 @@ public class TestAuthenticator extends Service {
         @Override
         public Bundle addAccount(AccountAuthenticatorResponse response, String accountType,
                 String authTokenType, String[] requiredFeatures, Bundle options) {
+            if ("fixture-exported-continuation".equals(authTokenType)
+                    || "fixture-private-continuation".equals(authTokenType)) {
+                Class<?> target = "fixture-exported-continuation".equals(authTokenType)
+                        ? AccountContinuationActivity.class : AccountContinuationActivity.Private.class;
+                Intent intent = new Intent(mContext, target);
+                intent.putExtra(AccountManager.KEY_ACCOUNT_AUTHENTICATOR_RESPONSE, response);
+                Bundle continuation = new Bundle();
+                continuation.putParcelable(AccountManager.KEY_INTENT, intent);
+                return continuation;
+            }
             String name = options.getString("name");
             Account account = new Account(name, accountType);
             Bundle data = new Bundle();
