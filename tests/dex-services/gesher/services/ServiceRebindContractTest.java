@@ -335,15 +335,24 @@ public final class ServiceRebindContractTest {
         h.unbind(last); h.acknowledge(2, false); h.stop();
     }
 
-    private static void independentIntents() throws Exception {
+    private static void independentIntents(boolean nullBinding) throws Exception {
         Harness h = new Harness();
         Connection one = new Connection(Runnable::run), keeper = new Connection(Runnable::run);
-        h.bind(one, "one", Context.BIND_AUTO_CREATE); IBinder first = new Binder(); h.publish(0, first);
-        h.bind(keeper, "keeper", Context.BIND_AUTO_CREATE); IBinder other = new Binder(); h.publish(1, other);
+        h.bind(one, "one", Context.BIND_AUTO_CREATE);
+        IBinder first = nullBinding ? null : new Binder();
+        h.publish(0, first);
+        if (nullBinding) one.nullOnce();
+        h.bind(keeper, "keeper", Context.BIND_AUTO_CREATE);
+        IBinder other = new Binder();
+        h.publish(1, other);
         h.unbind(one); h.acknowledge(0, true);
         Connection next = new Connection(Runnable::run); h.bind(next, "one", 0);
-        check(next.value == first && keeper.value == other && h.thread.binds.size() == 3
-                        && h.thread.binds.get(2).rebind && h.thread.stops == 0,
+        if (nullBinding) next.nullOnce();
+        else check(next.value == first && next.connected == 1,
+                "Rebind did not receive the retained Binder for its Intent");
+        check(keeper.value == other && keeper.connected == 1 && keeper.nulls == 0
+                        && h.thread.binds.size() == 3 && h.thread.binds.get(2).rebind
+                        && h.thread.stops == 0,
                 "An independent auto-create binding did not preserve the service and per-intent Binder");
         h.unbind(next); h.acknowledge(1, false); h.unbind(keeper);
         check(h.thread.stops == 1 && h.connections() == 0, "Last independent binding did not destroy service");
@@ -652,7 +661,10 @@ public final class ServiceRebindContractTest {
         if (scenario.equals("all") || scenario.equals("declined")) declined();
         if (scenario.equals("all") || scenario.equals("delayed")) delayed(false);
         if (scenario.equals("all") || scenario.equals("null")) delayed(true);
-        if (scenario.equals("all") || scenario.equals("intents")) independentIntents();
+        if (scenario.equals("all") || scenario.equals("intents")) {
+            independentIntents(false);
+            independentIntents(true);
+        }
         if (scenario.equals("all") || scenario.equals("reentrant")) reentrant();
         if (scenario.equals("all") || scenario.equals("ordered")) orderedCalls();
         if (scenario.equals("all") || scenario.equals("ordered-destroyed")) orderedDestruction();
