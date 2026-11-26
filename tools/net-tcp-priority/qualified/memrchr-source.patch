@@ -1,8 +1,8 @@
 diff --git a/compat/bionic/posix_bionic.cc b/compat/bionic/posix_bionic.cc
-index e45a98dfbb479f1c768d9bf15fcf17e1bc3f2f19..119e965361472f0e99f47b31be32acf4ddc3eea3 100644
+index 248fc567d3c26825bf6b465b8ae75fb4ef9c7a71..d15afe81d441981a5c711ecab5aff57a2e656ba4 100644
 --- a/compat/bionic/posix_bionic.cc
 +++ b/compat/bionic/posix_bionic.cc
-@@ -701,8 +701,42 @@ char* BIONIC_SYSV StpncpyChk(char* d, const char* s, size_t n, size_t dn) {
+@@ -716,8 +716,42 @@ char* BIONIC_SYSV StpncpyChk(char* d, const char* s, size_t n, size_t dn) {
    if (n > dn) FortifyFailure("stpncpy");
    return Stpncpy(d, s, n);
  }

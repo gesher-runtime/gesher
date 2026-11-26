@@ -26,11 +26,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <new>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include <gesher/elf_loader.h>
+#include <gesher/fork.h>
 
 namespace gesher::bionic {
 
@@ -42,11 +44,12 @@ using Word = std::atomic<int32_t>;
 
 Word* W(void* object, int index) { return reinterpret_cast<Word*>(object) + index; }
 
-// Waits while *w == expected, up to `ms`. Returns false on timeout.
+// Waits while *w == expected, up to `ms`. Returns false on timeout. A signal
+// another thread directs at this one ends the wait after its handler ran (a
+// spurious wake to the caller, who rechecks), as Linux interrupts a futex.
 bool FutexWait(Word* w, int32_t expected, DWORD ms = INFINITE) {
   int32_t cmp = expected;
-  if (WaitOnAddress(reinterpret_cast<volatile void*>(w), &cmp, sizeof(int32_t), ms)) return true;
-  return GetLastError() != ERROR_TIMEOUT;
+  return InterruptibleAddressWait(reinterpret_cast<volatile void*>(w), &cmp, sizeof(int32_t), ms);
 }
 void FutexWake(Word* w, bool all) {
   if (all) {
@@ -65,7 +68,11 @@ constexpr int kDestructorPasses = 4;  // PTHREAD_DESTRUCTOR_ITERATIONS
 
 std::mutex g_keys_mutex;
 void (BIONIC_SYSV* g_key_dtors[kKeysMax])(void*) = {};
-bool g_key_used[kKeysMax] = {};
+// Zero means unused; a live slot publishes its complete generation in one
+// observation. Access to a calling thread's value needs no process-wide lock.
+// Creation, deletion and destructor selection remain serialized.
+static_assert(std::atomic<uint64_t>::is_always_lock_free);
+std::atomic<uint64_t> g_key_live_generations[kKeysMax] = {};
 // A reused key slot must not expose another generation's thread-local value.
 // Retire a slot at UINT64_MAX rather than letting its generation wrap.
 uint64_t g_key_generations[kKeysMax] = {};
@@ -99,12 +106,13 @@ bool RunKeyRound() {
     void* value = t_key_values[k];
     if (value == nullptr) continue;
     void (BIONIC_SYSV* dtor)(void*) = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(g_keys_mutex);
-      if (g_key_used[k] && t_key_generations[k] == g_key_generations[k]) {
-        dtor = g_key_dtors[k];
-      }
-    }
+    // A host thread leaving runs this under ntdll's loader lock, which a
+    // fork's clone waits for: while a fork holds the whole fork set
+    // (gesher/fork.h) nothing can change the keys, so read them as they are.
+    const bool locked = gesher::LockUnlessForkHolds(g_keys_mutex);
+    if (g_key_live_generations[k].load(std::memory_order_relaxed) != 0 &&
+        t_key_generations[k] == g_key_generations[k]) dtor = g_key_dtors[k];
+    if (locked) g_keys_mutex.unlock();
     t_key_values[k] = nullptr;
     t_key_generations[k] = 0;
     if (dtor != nullptr) {
@@ -343,6 +351,7 @@ DWORD WINAPI ThreadTrampoline(void* raw) {
   gesher::elf::SetupThreadTls();  // the thread's TLS block for loaded code
   void* ret = sa.start(sa.arg);
   FinishThread(ret);
+  gesher::ThreadLeaving();  // before its exit callbacks (gesher/fork.h)
   return 0;
 }
 
@@ -669,6 +678,7 @@ int BIONIC_SYSV gesher_bionic_pthread_equal(bionic_pthread_t a, bionic_pthread_t
 
 void BIONIC_SYSV gesher_bionic_pthread_exit(void* retval) {
   FinishThread(retval);
+  gesher::ThreadLeaving();  // before its exit callbacks (gesher/fork.h)
   ExitThread(0);
 }
 
@@ -969,10 +979,11 @@ int BIONIC_SYSV gesher_bionic_pthread_key_create(bionic_pthread_key_t* key,
                                                 void (BIONIC_SYSV* dtor)(void*)) {
   std::lock_guard<std::mutex> lock(g_keys_mutex);
   for (int i = 0; i < kKeysMax; ++i) {
-    if (!g_key_used[i] && g_key_generations[i] != UINT64_MAX) {
+    if (g_key_live_generations[i].load(std::memory_order_relaxed) == 0 &&
+        g_key_generations[i] != UINT64_MAX) {
       ++g_key_generations[i];
-      g_key_used[i] = true;
       g_key_dtors[i] = dtor;
+      g_key_live_generations[i].store(g_key_generations[i], std::memory_order_release);
       *key = i;
       return 0;
     }
@@ -983,16 +994,16 @@ int BIONIC_SYSV gesher_bionic_pthread_key_create(bionic_pthread_key_t* key,
 int BIONIC_SYSV gesher_bionic_pthread_key_delete(bionic_pthread_key_t key) {
   if (key < 0 || key >= kKeysMax) return kEINVAL;
   std::lock_guard<std::mutex> lock(g_keys_mutex);
-  if (!g_key_used[key]) return kEINVAL;
-  g_key_used[key] = false;
+  if (g_key_live_generations[key].load(std::memory_order_relaxed) == 0) return kEINVAL;
+  g_key_live_generations[key].store(0, std::memory_order_release);
   g_key_dtors[key] = nullptr;
   return 0;
 }
 
 void* BIONIC_SYSV gesher_bionic_pthread_getspecific(bionic_pthread_key_t key) {
   if (key < 0 || key >= kKeysMax) return nullptr;
-  std::lock_guard<std::mutex> lock(g_keys_mutex);
-  if (!g_key_used[key] || t_key_generations[key] != g_key_generations[key]) {
+  const uint64_t generation = g_key_live_generations[key].load(std::memory_order_acquire);
+  if (generation == 0 || t_key_generations[key] != generation) {
     t_key_values[key] = nullptr;
     t_key_generations[key] = 0;
     return nullptr;
@@ -1002,12 +1013,12 @@ void* BIONIC_SYSV gesher_bionic_pthread_getspecific(bionic_pthread_key_t key) {
 
 int BIONIC_SYSV gesher_bionic_pthread_setspecific(bionic_pthread_key_t key, const void* value) {
   if (key < 0 || key >= kKeysMax) return kEINVAL;
-  {
-    std::lock_guard<std::mutex> lock(g_keys_mutex);
-    if (!g_key_used[key]) return kEINVAL;
-    t_key_values[key] = const_cast<void*>(value);
-    t_key_generations[key] = g_key_generations[key];
-  }
+  const uint64_t generation = g_key_live_generations[key].load(std::memory_order_acquire);
+  if (generation == 0) return kEINVAL;
+  // Stamp the observed live generation, even if deletion/reuse overlaps this
+  // assignment. A later read or exit round then rejects the obsolete value.
+  t_key_values[key] = const_cast<void*>(value);
+  t_key_generations[key] = generation;
   if (value != nullptr) ArmHostExit();
   return 0;
 }
@@ -1022,11 +1033,117 @@ int BIONIC_SYSV gesher_bionic_cxa_thread_atexit_impl(void (BIONIC_SYSV* dtor)(vo
   return 0;
 }
 
-int BIONIC_SYSV gesher_bionic_register_atfork(void*, void*, void*, void*) { return 0; }
+// pthread_atfork/__register_atfork: run by fork in translated arm64 code
+// (process_bionic.cc, ADR 0092), as bionic runs them: prepare handlers last
+// registered first, parent and child handlers in registration order.
+int BIONIC_SYSV gesher_bionic_register_atfork(void* prepare, void* parent, void* child, void*) {
+  return gesher::bionic::RegisterAtfork(prepare, parent, child);
+}
 
 }  // extern "C"
 
 uint64_t PthreadSelfId() { return SelfId(); }
+
+// --- fork (ADR 0092) ----------------------------------------------------------
+
+namespace {
+struct AtforkHandlers {
+  void* prepare;
+  void* parent;
+  void* child;
+};
+std::mutex g_atfork_mutex;
+std::vector<AtforkHandlers> g_atfork;
+
+std::vector<AtforkHandlers> AtforkSnapshot() {
+  std::lock_guard<std::mutex> lock(g_atfork_mutex);
+  return g_atfork;
+}
+void CallHandler(void* handler) {
+  if (handler != nullptr) reinterpret_cast<void(BIONIC_SYSV*)()>(handler)();
+}
+
+}  // namespace
+
+int RegisterAtfork(void* prepare, void* parent, void* child) {
+  std::lock_guard<std::mutex> lock(g_atfork_mutex);
+  g_atfork.push_back({prepare, parent, child});
+  return 0;
+}
+
+void RunAtforkPrepare() {
+  std::vector<AtforkHandlers> handlers = AtforkSnapshot();
+  for (auto it = handlers.rbegin(); it != handlers.rend(); ++it) CallHandler(it->prepare);
+}
+void RunAtforkParent() {
+  for (const AtforkHandlers& h : AtforkSnapshot()) CallHandler(h.parent);
+}
+void RunAtforkChild() {
+  for (const AtforkHandlers& h : AtforkSnapshot()) CallHandler(h.child);
+}
+
+void PthreadForkPrepare() {
+  SelfId();  // the forking thread's identity exists before the registry is held
+}
+
+// Only the forking thread exists in the child. The parent's other threads
+// are no threads of the child: their records are dropped and their pthread_t
+// values report ESRCH, as their descriptors' tids are cleared. The forking
+// thread keeps its pthread_t, with the child's thread id and pid.
+void PthreadForkChild() {
+  const bionic_pthread_t self = t_self;
+  HANDLE current = nullptr;
+  DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &current,
+                  THREAD_QUERY_LIMITED_INFORMATION | THREAD_SET_LIMITED_INFORMATION | SYNCHRONIZE,
+                  FALSE, 0);
+  for (auto it = g_threads.begin(); it != g_threads.end();) {
+    if (it->first == self) {
+      if (it->second->handle != nullptr) CloseHandle(it->second->handle);
+      it->second->handle = current;
+      it->second->tid = static_cast<int32_t>(GetCurrentThreadId());
+      current = nullptr;
+      ++it;
+      continue;
+    }
+    if (it->second->handle != nullptr) CloseHandle(it->second->handle);
+    SetDescriptorTid(it->first, 0);
+    delete it->second;
+    it = g_threads.erase(it);
+  }
+  for (auto it = g_external_threads.begin(); it != g_external_threads.end();) {
+    if (it->first == self) {
+      if (it->second.handle != nullptr) CloseHandle(it->second.handle);
+      it->second.handle = current;
+      current = nullptr;
+      ++it;
+      continue;
+    }
+    if (it->second.handle != nullptr) CloseHandle(it->second.handle);
+    SetDescriptorTid(it->first, 0);
+    it = g_external_threads.erase(it);
+  }
+  if (current != nullptr) CloseHandle(current);
+  for (CpuClock& clock : g_cpu_clocks) {
+    if (clock.thread == self || clock.handle == nullptr) continue;
+    CloseHandle(clock.handle);
+    clock = CpuClock{};
+  }
+  if (self != 0) {
+    auto* descriptor = reinterpret_cast<ThreadDescriptor*>(self);
+    __atomic_store_n(&descriptor->tid, static_cast<int32_t>(GetCurrentThreadId()), __ATOMIC_RELEASE);
+    descriptor->cached_pid = static_cast<uint32_t>(GetCurrentProcessId()) & 0x7fffffffu;
+  }
+}
+
+bool OnlyProgramThread() {
+  const bionic_pthread_t self = SelfId();
+  std::lock_guard<std::mutex> lock(g_threads_mutex);
+  for (const auto& [id, record] : g_threads) {
+    if (id == self || record->handle == nullptr) continue;
+    if (WaitForSingleObject(record->handle, 0) == WAIT_TIMEOUT) return false;
+  }
+  return true;
+}
 
 namespace {
 // g_threads_mutex protects the retained objects through Get/SetThreadDescription.
@@ -1231,3 +1348,12 @@ void RegisterPthread(SymbolTable& t) {
 }
 
 }  // namespace gesher::bionic
+
+// fork (gesher/fork.h): the thread registry, descriptor slabs, keys and
+// pthread_atfork list in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::g_atfork_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::g_threads_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::g_descriptor_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, gesher::bionic::g_keys_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::condition_variable,
+                 gesher::bionic::g_thread_attributes_changed);

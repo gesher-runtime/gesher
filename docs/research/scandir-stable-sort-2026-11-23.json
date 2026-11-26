@@ -11267,5 +11267,12 @@
       "bytes": 307024,
       "members": 53
     }
+  },
+  "draft_consolidation": {
+    "version": 1,
+    "reviewed_feature": "3a309b747fc604f84fa20a42bbd875d706116d6d",
+    "manifest_sha256": "55f0641e0b0d9c3a741661fab88734ed17aed9960676e5741a19115ec2f8d728",
+    "adapter_sha256": "ece8903f441a8d569b84cf459a6287af49c104e0c70652da7176c29a4f345aad",
+    "native_runtime_approval": false
   }
 }

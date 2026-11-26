@@ -122,6 +122,9 @@ public final class GesherAppDriver {
         // As handleBindApplication: /proc/self/cmdline names the app's process, which
         // libraries compare with the package name to tell its main process.
         android.os.Process.setArgV0(data.processName);
+        // The zygote's specialisation: not dumpable unless debuggable (ADR 0093).
+        com.gesher.app.ProcessSpecialization.apply(
+                com.gesher.app.ProcessSpecialization.runtimeFlagsFor(appInfo), "gesher-app");
         data.config = config;
         data.compatInfo = compat;
         data.disabledCompatChanges = disabledChanges;
@@ -158,6 +161,9 @@ public final class GesherAppDriver {
         instrumentation.basicInit(thread);
         thread.mInstrumentation = instrumentation;
 
+        // The user's CA directories, as ActivityThread.main sets them (GesherAppProcess).
+        GesherAppProcess.useUserCaCertificates();
+
         // The app's network security config (cleartext policy, trust anchors), installed
         // before any app code runs, as handleBindApplication does (docs/network.md).
         try {
@@ -171,6 +177,8 @@ public final class GesherAppDriver {
         Application app = apk.makeApplicationInner(false /* forceDefaultAppClass */,
                 null /* instrumentation */);
         thread.mInitialApplication = app;
+        // Follow the Activities from the first one (the camera's orientation).
+        GesherActivityWindow.trackActivities();
         instrumentation.onCreate(null);
         instrumentation.callApplicationOnCreate(app);
         log(app.getClass().getName() + " onCreate");

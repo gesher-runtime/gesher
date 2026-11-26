@@ -1,11 +1,11 @@
 diff --git a/compat/bionic/posix_bionic.cc b/compat/bionic/posix_bionic.cc
-index 119e9653..1f3394e9 100644
 --- a/compat/bionic/posix_bionic.cc
 +++ b/compat/bionic/posix_bionic.cc
-@@ -228,6 +228,56 @@ using SysvDirCompare = int(BIONIC_SYSV*)(const BionicDirent**, const BionicDiren
+@@ -233,6 +233,56 @@
+ using SysvDirCompare = int(BIONIC_SYSV*)(const BionicDirent**, const BionicDirent**);
  int BIONIC_SYSV Alphasort(const BionicDirent** a, const BionicDirent** b) {
    return std::strcmp((*a)->d_name, (*b)->d_name);
- }
++}
 +bool MergeDirectoryEntries(BionicDirent** entries, size_t count, SysvDirCompare compare) {
 +  // Optional pointer scratch never changes the C API's allocation-failure
 +  // contract. Keep the comparator's errno even when this allocation fails.
@@ -55,11 +55,10 @@ index 119e9653..1f3394e9 100644
 +      }
 +    }
 +  }
-+}
+ }
  int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
                    SysvDirCompare compare) {
-   if (d == nullptr) return -1;
-@@ -277,7 +327,9 @@ int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
+@@ -283,7 +333,9 @@
      errno = error;
      return -1;  // Leave the caller's output untouched and free the prefix.
    }

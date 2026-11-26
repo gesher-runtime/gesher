@@ -1,5 +1,20 @@
 # Stable sorting work in complete directory scans
 
+## Draft consolidation on 2026-11-26
+
+The measurements below retain their original archived sources and execution
+receipts. They are not new measurements of the consolidated tree. The current
+Scandir directory implementation is byte-for-byte the measured implementation;
+other whole-file changes are admitted only through the exact reversible
+`scandir-consolidation-source.json` and `.patch` transition to reviewed commit
+`3a309b747fc604f84fa20a42bbd875d706116d6d`. The original supplier-CI adapter,
+source pins, archive identity, statistics checks and negative controls still
+execute after that transition. The verifier differs only in its two explicit
+adapter-routing edits. The draft declaration keeps native runtime approval
+false; complete Git-history policy checks and real Windows/ART validation
+remain required before release approval.
+
+
 23 November 2026. Refs #56 T12 and #178. Depends on published [#413](https://github.com/gesher-runtime/gesher/pull/413); this does not close a broad filesystem, Android-compatibility or release-performance requirement.
 
 ## Result and material costs

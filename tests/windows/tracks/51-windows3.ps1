@@ -255,8 +255,26 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
       [void][GesherW3Win32]::ShowWindowAsync($foreignWindow, 5)
       if (-not [ImeInput]::Foreground($foreignWindow)) { throw 'owned foreign window did not become the actual foreground window' }
       $token = [Guid]::NewGuid().ToString('N')
-      Set-Clipboard -Value "background-denial-$token"
-      if ((Get-Clipboard -Raw) -cne "background-denial-$token") { throw 'denial probe needs a real nonempty Windows clipboard' }
+      # PowerShell can exhaust its immediate native clipboard retries without an error.
+      # Bound only fixture preparation; the application denial below is still requested once.
+      $clipboardClock = [Diagnostics.Stopwatch]::StartNew()
+      $clipboardAttempts = 0; $clipboardLength = 0; $clipboardReady = $false
+      do {
+        $clipboardAttempts++
+        Set-Clipboard -Value "background-denial-$token" -ErrorAction Stop
+        $clipboardReadback = [string](Get-Clipboard -Raw -ErrorAction Stop)
+        $clipboardLength = $clipboardReadback.Length
+        $clipboardElapsed = $clipboardClock.ElapsedMilliseconds
+        $clipboardReady = $clipboardReadback -ceq "background-denial-$token" -and $clipboardElapsed -lt 1000
+        if ($clipboardReady) { break }
+        $clipboardRemaining = 1000 - $clipboardElapsed
+        if ($clipboardRemaining -le 0) { break }
+        Start-Sleep -Milliseconds ([Math]::Min(20, $clipboardRemaining))
+      } while ($clipboardClock.ElapsedMilliseconds -lt 1000)
+      if (-not $clipboardReady) {
+        throw "denial probe needs a real nonempty Windows clipboard (attempts $clipboardAttempts, readback length $clipboardLength, elapsed $($clipboardClock.ElapsedMilliseconds) ms)"
+      }
+      Write-Host "CLIPBOARD_READY attempts=$clipboardAttempts readbackLength=$clipboardLength elapsedMs=$clipboardElapsed"
       if ([ImeInput]::GetForegroundWindow() -ne $foreignWindow) { throw 'foreground changed before the application probe' }
       $request = $env:GESHER_WINAPP_CLIPBOARD_PROBE
       if (-not $request -or (Test-Path $request)) { throw 'background request path is absent or reused' }

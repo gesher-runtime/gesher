@@ -1,0 +1,2877 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -80,6 +80,43 @@
+           python3 tools/ci/test_release_workflows.py
+           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
+           python3 -m unittest discover -s tools/ci -p test_prune_caches.py
++  # The hosted Server images can expose NLM without its cost backend. Their
++  # contracts below prove that absence independently and check failed-start
++  # cleanup. This client job unconditionally requires the real subscription.
++  network-cost-client:
++    name: Windows client network cost
++    needs: [source-identity]
++    runs-on: windows-11-arm
++    timeout-minutes: 10
++    steps:
++      - uses: actions/checkout@v4
++      - uses: ilammy/msvc-dev-cmd@v1
++        with:
++          arch: amd64_arm64
++      - name: Verify the compiler targets native ARM64
++        shell: pwsh
++        run: |
++          if ($env:VSCMD_ARG_TGT_ARCH -ne 'arm64') { throw 'Windows client contracts require the ARM64 compiler target' }
++      - name: Build production network cost policy contracts
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
++      - name: Unknown cost never grants unmetered capability
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\cost-policy-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Production cost classification failed' }
++      - name: Build unchanged strict connection cost subscription test
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc /Fe:cost-events-test.exe ole32.lib uuid.lib
++      - name: Require real Windows client subscription and unsubscription
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\cost-events-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Required Windows client cost subscription failed' }
+   # Short Windows host contracts share one runner per OS: separate jobs each
+   # paid for a runner, checkout and queue slot to run a minute of checks.
+   # Every check step runs even after an earlier one fails, so one failure
+@@ -102,14 +139,60 @@
+         with:
+           distribution: temurin
+           java-version: '21.0.13'
++      - name: Launch failure text with native Windows direction classification
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          cl /nologo /std:c++17 /EHsc /W4 /WX tests/native/launch_failure_text_test.cc /Fe:launch-failure-text-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Launch failure text test compilation failed' }
++          & .\launch-failure-text-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Launch failure paragraph direction checks failed' }
++      - name: Shared media log byte snapshots on PowerShell 7
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: tests/windows/test-shared-log-bytes.ps1
++      - name: Shared media log byte snapshots on Windows PowerShell 5.1
++        if: ${{ !cancelled() }}
++        shell: powershell
++        run: tests/windows/test-shared-log-bytes.ps1
++      - name: Build actual UIA query cancellation and lifecycle controls
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\accessibility\query_pool.cc tests\windows\web3\query_pool_test.cc /Fe:query-pool-test.exe
++      - name: Run actual Windows UIA retirement, saturation and worker ownership controls
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\query-pool-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Actual UIA query pool lifecycle controls failed' }
++      - name: Build actual Windows speech recognition contracts (docs/speech-recognition.md)
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\speech\speech_recognition_windows_test.cc compat\devices\speech_recognition_win.cc /Fe:speech-recognition-windows.exe ole32.lib uuid.lib
++      - name: SAPI recognizers enumerate and recognize handed-over PCM without a microphone
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\speech-recognition-windows.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Windows speech recognition contracts failed' }
++      - name: Speech recognition service contracts on Windows' JVM (docs/speech-recognition.md)
++        if: ${{ !cancelled() }}
++        shell: bash
++        run: python tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
+       - name: Java DNS admission and completion ownership on Windows
+         if: ${{ !cancelled() }}
+         shell: bash
+-        run: python tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
++        run: |
++          python tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
++          python tools/test_dns_deadline_retirement_controls.py --java-home "$JAVA_HOME"
+       - name: Durable settings journal, replacement and crash recovery contracts
+         if: ${{ !cancelled() }}
+         shell: bash
+         run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
++      - name: DownloadManager provider, queue and transfer contracts on a Windows JVM
++        if: ${{ !cancelled() }}
++        shell: bash
++        run: python tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
+       - name: Build actual app identity restart implementation
+         shell: cmd
+         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib
+@@ -140,6 +223,55 @@
+         if: ${{ !cancelled() }}
+         shell: pwsh
+         run: tests/windows/clipboard/Publication.ps1
++      - name: Build actual Windows WebAuthn contracts (ADR 0093)
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\credentials\webauthn_windows_test.cc compat\devices\webauthn_win.cc /Fe:webauthn-windows.exe user32.lib
++      - name: WebAuthn API version, cancellation ids, error names and owner refusal without UI
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\webauthn-windows.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Windows WebAuthn contracts failed' }
++      - name: Build actual Windows speech synthesis contracts (docs/tts.md)
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\tts\tts_windows_test.cc compat\devices\speech_win.cc compat\devices\winrt.cc /Fe:tts-windows.exe ole32.lib uuid.lib
++      - name: Windows voices enumerate and synthesize PCM without UI
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\tts-windows.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Windows speech synthesis contracts failed' }
++      - name: Text-to-speech engine contracts on Windows' JVM (docs/tts.md)
++        if: ${{ !cancelled() }}
++        shell: bash
++        run: python tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
++      - name: Print jobs and the PrintDocumentAdapter lifecycle (host harness)
++        if: ${{ !cancelled() }}
++        shell: bash
++        run: python tools/test_print_spooler_contracts.py --java-home "$JAVA_HOME"
++      - name: Build actual Windows printer enumeration, capabilities and PDF printing
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /Icompat\devices compat\print\print_win32.cc compat\devices\winrt.cc tests\print\print_windows_test.cc /Fe:print-windows-test.exe winspool.lib comdlg32.lib gdi32.lib user32.lib ole32.lib
++      - name: Print a generated PDF to Microsoft Print to PDF without UI
++        if: ${{ !cancelled() }}
++        timeout-minutes: 3
++        shell: pwsh
++        run: |
++          & .\print-windows-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Windows print host contracts failed' }
++      - name: Build actual Windows Hello verifier contracts (ADR 0091)
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_windows_test.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:hello-windows.exe ole32.lib user32.lib
++      - name: Windows Hello availability and foreground-owner refusal without UI
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\hello-windows.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Windows Hello verifier contracts failed' }
+       - name: Exact native reader ownership and handle reuse controls
+         if: ${{ !cancelled() }}
+         shell: pwsh
+@@ -168,6 +300,72 @@
+         if: ${{ !cancelled() }}
+         shell: bash
+         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
++      - name: Build actual URI scheme handler lookup (AssocQueryStringW, ASSOCF_IS_PROTOCOL)
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\url_handlers_win.cc tests\uri-handlers\url_handlers_windows_test.cc /Fe:url-handlers-test.exe shlwapi.lib shell32.lib advapi32.lib user32.lib
++      - name: Real Windows associations and cancellable dialing confirmation
++        if: ${{ !cancelled() }}
++        timeout-minutes: 3
++        shell: pwsh
++        run: |
++          & .\url-handlers-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'URI scheme handler lookup checks failed' }
++      - name: Build production network cost policy contracts
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
++      - name: Unknown cost never grants unmetered capability
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\cost-policy-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Production cost classification failed' }
++      - name: Build SDK-verified Server cost capability and lifecycle contracts
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_server_test.cc /Fe:cost-events-server-test.exe ole32.lib uuid.lib
++      - name: Verify actual Server cost support and failed-start handle reclamation
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\cost-events-server-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Windows Server cost capability or lifecycle checks failed' }
++      - name: MediaStore provider over real SQLite and NTFS paths, file-move rollback and crash recovery
++        if: ${{ !cancelled() }}
++        shell: bash
++        run: python tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
++      - name: Build actual Windows caption style reader (ClosedCaptionProperties)
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc compat\devices\winrt.cc tests\captioning\caption_windows_test.cc /Fe:caption-test.exe ole32.lib uuid.lib
++      - name: Caption style values and PropertiesChanged watch lifetime against real Windows
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\caption-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Windows caption style checks failed' }
++      - name: Build production caption reader with scripted Windows SDK properties
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc tests\captioning\caption_read_test.cc /Fe:caption-read-test.exe ole32.lib uuid.lib
++      - name: Caption defaults, required computed colors and failure lifetime contracts
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\caption-read-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Caption Read boundary contracts failed' }
++
++      - name: Build actual Windows Country or region lookup
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\home_region_win.cc tests\country-detector\home_region_windows_test.cc /Fe:home-region-test.exe
++      - name: Country or region agrees with GetUserDefaultGeoName and GetUserGeoID
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          & .\home-region-test.exe
++          if ($LASTEXITCODE -ne 0) { throw 'Windows Country or region checks failed' }
+       - name: Release updater and control panel contracts on Windows PowerShell 5.1
+         if: ${{ !cancelled() }}
+         shell: powershell
+@@ -178,23 +376,44 @@
+           tests/windows/shell/ControlPanelRefreshChecks.ps1
+           tests/windows/shell/ControlPanelRecoveryChecks.ps1
+           tests/windows/shell/ControlPanelIdleChecks.ps1
++          tests/windows/shell/ControlPanelStartupChecks.ps1
++          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
++          tests/windows/shell/ControlPanelPresentationChecks.ps1
+           tests/windows/shell/ControlPanelIconCacheChecks.ps1
+           tests/windows/shell/ControlPanelLaunchChecks.ps1
+           tests/windows/shell/ControlPanelProxyChecks.ps1
++          tests/windows/shell/ControlPanelLogsChecks.ps1
+           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
+           tests/windows/shell/ControlPanelActionChecks.ps1
++          tests/windows/shell/CameraImagePickerChecks.ps1
+           tests/windows/shell/ControlPanelRequestChecks.ps1
++          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
+           tests/windows/shell/UpdateChecks.ps1
+           tests/windows/shell/UpdateTransportChecks.ps1
+           tests/windows/shell/ControlPanelUpdateChecks.ps1
+           tests/windows/shell/RuntimeFileChecks.ps1
+           tests/windows/shell/InstallErrorChecks.ps1
+           tests/windows/shell/NativeStderrChecks.ps1
++      - name: Control panel startup helpers on PowerShell 7
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          tests/windows/shell/UiLocalizationChecks.ps1
++          tests/windows/shell/PreferredLanguagesChecks.ps1
++          tests/windows/shell/ControlPanelStartupChecks.ps1
++          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
+       - name: Production modal dialogs on Windows PowerShell 5.1
+         if: ${{ !cancelled() }}
+         timeout-minutes: 2
+         shell: powershell
+         run: tests/windows/shell/Issue32And33Contracts.ps1
++      - name: Portable profiles, add-on routing and complete package contracts
++        if: ${{ !cancelled() }}
++        shell: powershell
++        run: |
++          tests/windows/shell/PortableModeChecks.ps1
++          python tools/tests/test_portable_package.py
++          if ($LASTEXITCODE -ne 0) { throw 'Portable package contracts failed' }
+       - name: API 37 report gate failure and selection contracts
+         if: ${{ !cancelled() }}
+         shell: bash
+@@ -305,6 +524,9 @@
+       - name: Notification image staging, cache, cancellation and encoder ownership
+         run: python3 tools/test_notification_images.py
+ 
++      - name: Google client-library test fixtures report Play services' absence (#335)
++        run: python3 tools/test_gms_client_fixtures.py
++
+       - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
+         run: |
+           python3 tools/test_hwui_renderer_policy.py --sanitize
+@@ -316,10 +538,13 @@
+           python3 tools/test_bionic_system_contracts.py --sanitize
+           python3 tools/test_environment_contracts.py --sanitize
+           python3 tools/test_environment_lookup_contracts.py
++          python3 tools/test_device_identity.py --sanitize
+           python3 tools/test_bionic_signal_masks.py --sanitize
+           python3 tools/test_socket_control_contract.py --sanitize
+           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
+           python3 tools/test_bionic_directory_contracts.py --sanitize
++          python3 tools/test_search_delete_contracts.py --sanitize --negative-controls
++          python3 tools/test_search_delete_report.py
+           python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts
+           python3 tools/test_scandir_report.py
+           python3 tools/test_bionic_semaphore_contracts.py --sanitize
+@@ -329,18 +554,20 @@
+           python3 tools/test_file_io_contracts.py --sanitize
+           python3 tools/test_pipe_io_contracts.py --sanitize
+           python3 tools/test_revocable_file_contracts.py --sanitize
++          python3 tools/test_record_lock_liveness.py --sanitize
+           python3 tools/test_memfd_contracts.py --sanitize
+           python3 tools/test_memfd_tail_contracts.py
+           python3 tools/test_raw_syscall_contracts.py --sanitize
+           python3 tools/test_deferred_rewrite_failures.py --sanitize
+           python3 tools/test_msync_contracts.py --sanitize
+           python3 tools/test_retriever_frame_contracts.py --sanitize
++          python3 tools/test_i420_crop.py --sanitize --negative-controls
+           python3 tools/test_utc_time_contracts.py --sanitize
+           python3 tools/test_sleep_contracts.py --sanitize
+ 
+       - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
+         run: |
+-          python3 tools/test_bionic_key_contracts.py --sanitize
++          python3 tools/test_bionic_key_contracts.py --sanitize --negative-controls
+           python3 tools/test_pthread_clock_contracts.py --sanitize
+           python3 tools/test_pthread_clock_contracts.py --linux-reference
+           python3 tools/test_pthread_attribute_contracts.py --sanitize
+@@ -361,6 +588,7 @@
+           python3 tools/test_elf_tls_rollback.py --sanitize
+           python3 tools/test_arm64_pending_rollback.py --sanitize
+           python3 tools/test_arm64_native_rollback.py --sanitize
++          python3 tools/test_arm64_tls_lifecycle.py --host-boundary --sanitize --negative-controls
+           python3 tools/test_media_api_contracts.py --sanitize
+           python3 tools/test_aaudio_builder_contracts.py
+           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
+@@ -371,8 +599,12 @@
+           python3 tools/test_boottime_resume.py --sanitize
+           python3 tools/test_timerfd_contracts.py --sanitize
+           python3 tools/test_input_surface_callbacks.py --sanitize
++          python3 tools/test_codec_input_surfaces.py --sanitize
++          python3 tools/test_persistent_input_jni.py
++          python3 tools/test_recorder_persistent_input.py --sanitize
+           python3 tools/test_codec_lifecycle_contracts.py --sanitize
+           python3 tools/test_dns_query_lifecycle.py --sanitize
++          python3 tools/test_uia_query_retirement.py --sanitize
+           python3 tools/test_dns_admission.py --sanitize
+ 
+       - name: Stream device identity across close and reopen
+@@ -387,7 +619,9 @@
+           python3 tools/test_native_metadata_hot_paths.py --thread-sanitize
+ 
+       - name: EGL fence asynchronous creation and ownership contracts
+-        run: python3 tools/test_egl_fence_contracts.py --sanitize
++        run: |
++          python3 tools/test_egl_fence_contracts.py --sanitize
++          python3 tools/test_native_fence_receive.py --sanitize
+ 
+       - name: Freopen contracts against the pinned glibc reference
+         run: bash tools/ci/test-freopen-reference.sh
+@@ -395,7 +629,13 @@
+       - name: Descriptor-backed stdio and stream lifetime contracts
+         run: |
+           python3 tools/test_stdio_contracts.py --sanitize
++          python3 tools/test_stdio_scanning.py --sanitize --negative-controls
+           python3 tools/test_socket_registry_lifetime.py --sanitize
++
++      - name: Guest snprintf bounded accumulation contracts
++        run: |
++          python3 tools/test_snprintf_bounds.py --sanitize --negative-controls
++          python3 tools/test_snprintf_bounds.py --observe-allocations --allocation-contracts
+ 
+       - name: MediaPlayer PCM priming and playback lifecycle contracts
+         run: python3 tools/test_media_player_priming.py --sanitize
+@@ -409,6 +649,7 @@
+           python3 tools/test_fnmatch_performance.py --sanitize
+           python3 tools/test_virtual_path_classification.py --sanitize
+           python3 tools/test_binder_reply_allocations.py --sanitize
++          python3 tools/test_binder_output_ownership.py --sanitize --negative-controls
+           python3 tools/test_binder_receive_views.py --sanitize
+           python3 tools/test_camera_capture_allocations.py --sanitize
+           python3 tools/test_layered_bitmap_cache.py --sanitize
+@@ -421,7 +662,9 @@
+           python3 tools/test_art_jni_dispatch.py --sanitize
+           python3 tools/test_audio_mixer_allocations.py --sanitize
+           python3 tools/test_audio_unity_rate.py --sanitize
++          python3 tools/test_audio_resampler_weights.py --sanitize --negative-controls
+           python3 tools/test_audio_capture_allocations.py --sanitize
++          python3 tools/test_audio_capture_unity.py --sanitize --negative-controls
+           python3 tools/test_capture_stream_selection.py --sanitize
+           python3 tools/test_audio_file_source.py --sanitize
+           python3 tools/test_audio_rate_history.py --sanitize
+@@ -436,6 +679,7 @@
+             tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
+           "$RUNNER_TEMP/event-loop-reference"
+           python3 tools/test_audio_state_contracts.py --sanitize
++          python3 tools/test_audio_blocked_write.py --sanitize --negative-controls
+           python3 tools/test_surface_geometry_contracts.py --sanitize
+           python3 tools/test_video_scaling_contracts.py --sanitize
+           python3 tools/test_native_window_dispatch.py --sanitize
+@@ -466,6 +710,12 @@
+           c++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all tests/mman/noreplace_holes_linux.cc -o "$RUNNER_TEMP/gesher-noreplace-holes"
+           "$RUNNER_TEMP/gesher-noreplace-holes"
+           python3 tools/test_madvise_reference.py
++
++      - name: Actual wide conversion, pinned Android and guard-page contracts
++        run: python3 tools/test_wide_ascii_contracts.py --sanitize
++
++      - name: Validate wide conversion measurement evidence
++        run: python3 tools/test_wide_ascii_performance_evidence.py
+ 
+       - name: Filesystem metadata and media source ownership contracts
+         run: |
+@@ -478,9 +728,13 @@
+           python3 tools/test_media_callback_state.py --sanitize
+           python3 tools/test_media_http_contracts.py --sanitize
+           python3 tools/test_mf_encoder_input.py --sanitize
++          python3 tools/test_mf_video_output.py --sanitize
+           python3 tools/test_media_surface_contracts.py --sanitize
+           python3 tools/test_codec_output_storage.py --sanitize
+           python3 tools/test_codec_reader_delivery.py --sanitize
++          python3 tools/test_nv12_rgba.py --sanitize --negative-controls
++          python3 tools/test_reader_plane_scaling.py --sanitize --negative-controls
++          python3 tools/test_image_reader_rgba.py --sanitize --negative-controls
+           cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
+             tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
+           "$RUNNER_TEMP/filesystem-metadata-reference"
+@@ -501,13 +755,22 @@
+           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
+           python3 tools/test_media_receiver_lifetimes.py
+           python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
++          python3 tools/test_media_session_contracts.py --java-home "$JAVA_HOME"
+           python3 tools/test_media_encoder_selection.py
+ 
+       - name: Android HttpEngine requests over real HTTP sockets
+         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
+ 
++      - name: DownloadManager provider, queue and transfer over real HTTP sockets
++        run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
++
+       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
+-        run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
++        run: |
++          python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
++          python3 tools/test_dns_deadline_retirement_controls.py --java-home "$JAVA_HOME"
++
++      - name: MediaStore provider ownership, pending items, queries and scanning over real SQLite
++        run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
+ 
+       - name: WebStorage origin, owned WebView responses and running-task contracts
+         run: |
+@@ -515,6 +778,8 @@
+           python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
+           python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
+           python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
++          python3 tools/test_webview_document_script.py --sanitize
++          python3 tools/test_webview_popup_script.py --sanitize
+           python3 tools/test_uia_snapshot_contracts.py --sanitize
+           python3 tools/test_running_tasks_contracts.py
+ 
+@@ -523,8 +788,19 @@
+           python3 tools/test_bluetooth_native_contracts.py --sanitize
+           python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
+           python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
++          python3 tools/test_bluetooth_sdp_contracts.py --java-home "$JAVA_HOME"
+           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
+           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
++          python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
++
++      - name: Credential Manager passkey contracts (ADR 0093)
++        run: python3 tools/test_credential_manager_contracts.py --java-home "$JAVA_HOME"
++      - name: Text-to-speech engine contracts (docs/tts.md)
++        run: python3 tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
++      - name: Speech recognition service contracts (docs/speech-recognition.md)
++        run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
++      - name: Biometric and device-credential auth service contracts (ADR 0091)
++        run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
+ 
+       - name: MediaDataSource adapter contracts with checked JNI and UBSan
+         run: python3 tools/test_media_callback_adapter.py
+@@ -537,6 +813,20 @@
+ 
+       - name: APK native library filename contracts
+         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
++
++      - name: Windows mailto/tel/sms/geo handler intent contracts (AOSP android-16 Intent and IntentFilter)
++        run: python3 tools/test_uri_handler_contracts.py --java-home "$JAVA_HOME"
++      - name: Caption style contracts (AOSP android-16 Settings.Secure and CaptionStyle)
++        run: python3 tools/test_captioning_contracts.py --java-home "$JAVA_HOME"
++
++      - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
++        run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
++
++      - name: Portable code relocation, shell ownership and native profile selection
++        run: |
++          python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
++          python3 tools/test_portable_shell.py --java-home "$JAVA_HOME"
++          python3 tools/test_portable_launcher.py
+ 
+       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
+         run: |
+@@ -545,13 +835,16 @@
+           python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
+           python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
+           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
++          python3 tools/test_log_redaction.py --java-home "$JAVA_HOME"
+           python3 tools/test_install_metadata_comparison.py --java-home "$JAVA_HOME"
+           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
+           python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
++          python3 tools/test_camera_image_picker.py --java-home "$JAVA_HOME"
+           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
+           python3 tools/test_capture_permission_flow.py --java-home "$JAVA_HOME"
+           python3 tools/test_camera_callback_admission.py --java-home "$JAVA_HOME"
+           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
++          python3 tools/test_recorder_camera_ready.py --java-home "$JAVA_HOME" --negative-controls
+           python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
+ 
+       - name: Validate user interface translations
+@@ -596,6 +889,36 @@
+           python3 tools/test_media_recorder_rollover.py --sanitize
+           python3 tools/test_mp4_rollover_work.py
+           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
++          python3 tools/test_annexb_scan.py --sanitize --negative-controls
++          python3 tools/test_annexb_report.py
++
++      - name: Real software AVC output ownership and independent decoded pixels
++        run: >-
++          python3 tools/test_soft_avc_output.py
++          --libavc-root third_party/aosp/external/libavc --sanitize
++          --output-dir out/media-avc-output-fixtures
++      - name: Real software AVC ownership and reusable storage
++        run: python3 tools/test_soft_avc_reuse.py --libavc-root third_party/aosp/external/libavc --sanitize
++
++      - name: Real software audio decoder scratch and output ownership
++        run: |
++          python3 tools/test_audio_decoder_scratch.py \
++            --frameworks-av-root third_party/aosp/frameworks/av-media \
++            --tremolo-root third_party/aosp/external/tremolo \
++            --opus-root third_party/aosp/external/libopus \
++            --sanitize --output-dir out/media-audio-scratch-fixtures
++
++      - name: Real software HEVC output ownership and independent decoded pixels
++        run: >-
++          python3 tools/test_soft_hevc_output.py
++          --libhevc-root third_party/aosp/external/libhevc
++          --vpx-root third_party/aosp/external/libvpx
++          --dav1d-root third_party/aosp/external/libdav1d --sanitize --negative-controls
++          --output-dir out/media-hevc-output-fixtures
++
++      - name: Actual RGBA input conversion and real AVC output
++        run: |
++          python3 tools/test_rgba_i420.py --libavc-root third_party/aosp/external/libavc --sanitize --negative-controls
+ 
+       - name: libcore System.nanoTime shares Android awake-time domain
+         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
+@@ -608,6 +931,12 @@
+       - name: Build test apps
+         run: tests/build-test-apps.sh out/test-apps
+ 
++      - name: Incremental Brotli native and real HTTP provider contracts
++        run: >-
++          python3 tools/test_http_brotli.py --java-home "$JAVA_HOME"
++          --brotli-source third_party/aosp/external/brotli
++          --okhttp-source third_party/aosp/external/okhttp
++
+       - name: Build boot class path (core-oj, core-libart)
+         run: tools/build-boot-jars.sh out/boot-jars
+ 
+@@ -617,7 +946,13 @@
+       - name: Collect framework assets
+         run: |
+           mkdir -p framework-assets
++          mkdir -p framework-assets/media-audio-scratch-fixtures
++          cp out/media-audio-scratch-fixtures/*.audt out/media-audio-scratch-fixtures/fixtures.json framework-assets/media-audio-scratch-fixtures/
+           cp out/test-apps/* out/boot-jars/*.jar framework-assets/
++          mkdir -p framework-assets/media-avc-output-fixtures
++          cp out/media-avc-output-fixtures/*.avct out/media-avc-output-fixtures/fixtures.json framework-assets/media-avc-output-fixtures/
++          mkdir -p framework-assets/media-hevc-output-fixtures
++          cp out/media-hevc-output-fixtures/*.hevct out/media-hevc-output-fixtures/fixtures.json framework-assets/media-hevc-output-fixtures/
+           # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
+           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
+           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
+@@ -702,6 +1037,9 @@
+           python3 tools/test_binder_reply_allocations.py --compile-only \
+             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+             --output out/binder_reply_allocations_test.exe
++          python3 tools/test_binder_output_ownership.py --compile-only --aosp-dir third_party/aosp \
++            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
++            --output-dir out/binder-output --output out/binder_output_ownership_test.exe
+           python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
+             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+             --output out/binder_lifetime_test.exe
+@@ -717,6 +1055,14 @@
+           python3 tools/test_arm64_tls_lifecycle.py --compile-only \
+             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+             --output out/arm64_tls_lifecycle_test.exe
++          # Immutable pre-change owner and matching reviewed measurement fixture.
++          # The current fixture additionally checks later signal/fork lifecycle work.
++          git fetch --no-tags --depth=1 https://github.com/gesher-runtime/gesher.git d38b5549dc3963f8d491e9205f9b2743bb6d3745 c65f4b119f79c586aaec043f166efa3afb567e06
++          python3 tools/test_arm64_tls_lifecycle.py --compile-only \
++            --source-ref d38b5549dc3963f8d491e9205f9b2743bb6d3745 \
++            --fixture-ref c65f4b119f79c586aaec043f166efa3afb567e06 \
++            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
++            --output out/arm64_tls_lifecycle_baseline.exe
+ 
+       - name: Build
+         run: |
+@@ -745,9 +1091,10 @@
+           ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
+           ninja -C out native3_unicode_test
+           ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
++          ninja -C out thread_watch_clock_test dlopen_errors_test
+           ninja -C out
+           # Native fixtures are CI-only; none is installed by gesher.iss.
+-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
++          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test window_frame_test
+           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
+           ninja -C out font_environment_test
+ 
+@@ -802,6 +1149,7 @@
+           cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
+           cp out/gesher_shellext.dll dist/
+           cp out/futex_test_module.dll dist/
++          cp -r out/dlopen-fixtures dist/
+           cp out/libgesher_account_crypto.so dist/
+           cp out/libgesher_install_pipe.so dist/
+           cp out/libgesher_webview_bridge.so dist/
+@@ -1130,7 +1478,11 @@
+           tests/windows/shell/ControlPanelRefreshChecks.ps1
+           tests/windows/shell/ControlPanelRecoveryChecks.ps1
+           tests/windows/shell/ControlPanelIdleChecks.ps1
++          tests/windows/shell/ControlPanelStartupChecks.ps1
++          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
++          tests/windows/shell/ControlPanelPresentationChecks.ps1
+           tests/windows/shell/ControlPanelRequestChecks.ps1
++          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
+           tests/windows/shell/UpdateChecks.ps1
+           tests/windows/shell/UpdateTransportChecks.ps1
+           tests/windows/shell/ControlPanelUpdateChecks.ps1
+@@ -1181,6 +1533,11 @@
+           "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
+           Get-ChildItem installer
+ 
++      - name: Build portable ZIP from the same verified runtime
++        shell: pwsh
++        run: |
++          tools/package/package-portable.ps1 -BuildDir "$PWD/dist" -OutDir "$PWD/installer" -Version $env:GESHER_PACKAGE_VERSION
++
+       # Uploaded before the checks below: the e2e job tests this installer even when one
+       # of them fails.
+       - name: Upload tested installer artifact
+@@ -1189,6 +1546,8 @@
+           name: gesher-setup
+           path: |
+             installer/*.exe
++            installer/*-portable.zip
++            installer/*-portable.zip.sha256
+             installer/SHA256SUMS.txt
+ 
+       - name: Install, run Hello, uninstall
+@@ -1205,9 +1564,11 @@
+           if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
+           python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
+           if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
+-          foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1') {
++          foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1', 'gesher-panel-actions.ps1', 'gesher-panel-view.ps1', 'gesher-panel-dashboard.xaml', 'gesher-panel-confirm.xaml', 'gesher-panel-message.xaml') {
+             if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) { throw "The installer left out $file" }
+           }
++          powershell -NoProfile -STA -ExecutionPolicy Bypass -File tests/windows/shell/ControlPanelPresentationChecks.ps1 -PackageDirectory $app
++          if ($LASTEXITCODE -ne 0) { throw 'Installed WPF presentation resource checks failed' }
+           . (Join-Path $app 'gesher-update.ps1')
+           $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
+           if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {
+@@ -1220,6 +1581,9 @@
+             throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
+           }
+           'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          # Test the release ZIP and portable Setup while the standard install
++          # exists, so accidental deletion/overwrite of its registration fails.
++          tests/windows/shell/PortableRuntimeChecks.ps1 -ZipPath "installer/gesher-${env:GESHER_PACKAGE_VERSION}-portable.zip" -InstallerPath $setup -Version $env:GESHER_PACKAGE_VERSION -InstalledRuntimeDirectory $app -ComponentsApk "$PWD/dist/components.apk"
+           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+           if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
+           $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
+@@ -1231,8 +1595,8 @@
+           if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
+           # gesher-app and the framework it runs on are installed, and the
+           # installed copy takes the bundled app to onResume.
+-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
+-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk') {
++          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'android.test.base.jar', 'android.test.mock.jar', 'android.test.runner.jar', 'etc\permissions\android.test.runner.xml', 'licenses\JUNIT-CPL-NOTICES.txt', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
++                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk', 'gesher-tts.apk', 'gesher-stt.apk') {
+             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
+           }
+           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
+@@ -1496,6 +1860,33 @@
+             throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
+           }
+           'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          $bundleExtensions = '.apks', '.xapk', '.apkm', '.apk+'
++          foreach ($ext in $bundleExtensions) {
++            if ((Get-ItemProperty "$cls\$ext").'(default)' -ne 'Gesher.Xapk') { throw "$ext default ProgID is missing" }
++            if ($null -eq (Get-ItemProperty "$cls\$ext\OpenWithProgids").'Gesher.Xapk') {
++              throw "$ext OpenWithProgids lacks Gesher.Xapk"
++            }
++          }
++          $bundleOpen = (Get-ItemProperty "$cls\Gesher.Xapk\shell\open\command").'(default)'
++          if ($bundleOpen -ne $open) { throw "Bundle open command differs from the APK command: $bundleOpen" }
++          Add-Type -AssemblyName System.IO.Compression.FileSystem
++          foreach ($ext in '.apkm', '.apk+') {
++            $bundle = Join-Path $env:RUNNER_TEMP "shell launch$ext"
++            $archive = [IO.Compression.ZipFile]::Open($bundle, 'Create')
++            try {
++              $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$app\lifecycle.apk", 'base.apk')
++            } finally { $archive.Dispose() }
++            $psi.Arguments = '"{0}"' -f $bundle
++            $p = [Diagnostics.Process]::Start($psi)
++            $errors = $p.StandardError.ReadToEndAsync()
++            $out = $p.StandardOutput.ReadToEnd()
++            $p.WaitForExit()
++            $out += $errors.Result
++            if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
++              throw "$ext open command failed (exit $($p.ExitCode)): $out"
++            }
++          }
++          'PASS  installer: split bundle associations and registered APKM/APK+ open commands' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
+           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
+           Write-Host "toast activator: $activator"
+@@ -1839,6 +2230,13 @@
+           if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
+           if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
+           'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          if (Test-Path "$cls\Gesher.Xapk") { throw 'Uninstall left the Gesher.Xapk ProgID' }
++          foreach ($ext in '.apks', '.xapk', '.apkm', '.apk+') {
++            if ((Get-ItemProperty "$cls\$ext" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Xapk' -or
++                $null -ne (Get-ItemProperty "$cls\$ext\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Xapk') {
++              throw "Uninstall left the Gesher bundle association for $ext"
++            }
++          }
+           if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
+           $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
+           if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
+@@ -1850,6 +2248,14 @@
+           Remove-Item $sentinel
+           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++
++      - name: Preserve portable Windows runtime and Setup evidence
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: portable-runtime-windows-2022
++          path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
++          if-no-files-found: warn
+ 
+   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
+   # clean runner runs real, unmodified open-source apps from F-Droid
+@@ -1916,8 +2322,21 @@
+           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+           $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
++          $env:GESHER_TRACE_WEBVIEW_NAVIGATION = '1'
+           pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -BuildTools $env:GESHER_TEST_BUILD_TOOLS
+           exit $LASTEXITCODE
++
++      - name: Show captured WebView navigation event diagnostics
++        if: always()
++        shell: pwsh
++        run: |
++          Get-ChildItem e2e-results -Filter '*.app.log' -ErrorAction SilentlyContinue | ForEach-Object {
++            $trace = @(Select-String -Path $_.FullName -SimpleMatch 'gesher-webview: navigation-trace ')
++            if ($trace.Count) {
++              Write-Host "Navigation trace from $($_.Name)"
++              $trace | ForEach-Object { Write-Host $_.Line }
++            }
++          }
+ 
+       - name: Validate and publish real-app coverage
+         if: always()
+@@ -2025,6 +2444,11 @@
+           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+           & ./dist/binder_reply_allocations_test.exe gate
+           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++          $binderOutput = & ./dist/binder_output_ownership_test.exe gate 2>&1 | Out-String
++          $binderOutput | Write-Host
++          if ($LASTEXITCODE -ne 0 -or $binderOutput -notmatch '(?m)^BINDER_OUTPUT_PASS checks=[1-9][0-9]*\r?$') {
++            throw 'Binder direct output ownership contracts failed'
++          }
+           & ./dist/layered_bitmap_cache_test.exe gate
+           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+           & ./dist/structured_logging_test.exe
+@@ -2042,6 +2466,14 @@
+           & ./dist/sqlite_path_test.exe
+           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+ 
++      - name: Real Windows external storage permissions and live revocation
++        if: matrix.shard == 'native'
++        timeout-minutes: 2
++        shell: pwsh
++        run: |
++          & ./dist/storage_policy_host_test.exe
++          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++
+       - name: Verify and assemble framework artifact
+         shell: pwsh
+         run: |
+@@ -2060,11 +2492,13 @@
+           python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
+           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+ 
+-      - name: ARM64 parked TLS, reuse and actual translator callbacks
++      - name: ARM64 active and parked TLS, baseline commitment and actual translator callbacks
+         if: matrix.shard == 'native'
+         timeout-minutes: 3
+         shell: pwsh
+         run: |
++          & ./dist/arm64_tls_lifecycle_baseline.exe measure
++          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+           & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
+           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+ 
+@@ -2215,6 +2649,8 @@
+           path: |
+             results.txt
+             ci-owners.json
++            ${{ runner.temp }}/gesher-surface-evidence/*.json
++            ${{ runner.temp }}/gesher-surface-evidence/*.log
+             dist/realtime-signals-evidence/**/*.json
+             ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
+             ${{ runner.temp }}/gesher-root/logs/system_server.log
+@@ -2613,7 +3049,7 @@
+   ci-required:
+     name: ci-required
+     if: always()
+-    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
++    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+     runs-on: ubuntu-24.04
+     steps:
+       - name: Require every production CI job
+diff --git a/compat/bionic/posix_bionic.cc b/compat/bionic/posix_bionic.cc
+--- a/compat/bionic/posix_bionic.cc
++++ b/compat/bionic/posix_bionic.cc
+@@ -14,6 +14,7 @@
+ 
+ #include <gesher/reserved_names.h>
+ #include <gesher/file_description.h>
++#include <gesher/procfs_fd.h>
+ #include <gesher/environment.h>
+ 
+ #ifndef WIN32_LEAN_AND_MEAN
+@@ -76,6 +77,11 @@
+   // These callers resolve directory-relative paths. A session capability is
+   // a file, and must not reveal/reopen its private backing pathname here.
+   if (gesher::FileDescriptionIsRevocable(snapshot)) return errno = kENOTDIR, false;
++  // A /proc directory fd: its own path (a /proc file is no directory).
++  bool proc_directory;
++  if (gesher::ProcfsDescriptor(fd, out, &proc_directory)) {
++    return proc_directory || (errno = kENOTDIR, false);
++  }
+   auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, false;
+   wchar_t buf[32768];
+@@ -365,6 +371,11 @@
+ 
+ // --- the *at() calls and other path calls ---------------------------------------
+ 
++// getdents64(2): struct linux_dirent64 is the same on every architecture.
++int64_t BIONIC_SYSV Getdents64(int fd, void* buffer, size_t size) {
++  return getdents64(fd, buffer, size);
++}
++
+ // gesher-base's struct stat with its 32-bit tv_nsec widened (shim.cc's FixStat).
+ void WidenStat(struct stat* st) {
+   for (struct timespec* ts : {&st->st_atim, &st->st_mtim, &st->st_ctim}) {
+@@ -498,6 +509,8 @@
+ char* BIONIC_SYSV Realpath(const char* path, char* resolved) { return realpath(path, resolved); }
+ int64_t BIONIC_SYSV Readlink(const char* path, char* buf, size_t n) { return readlink(path, buf, n); }
+ int64_t BIONIC_SYSV Readlinkat(int dirfd, const char* path, char* buf, size_t n) {
++  // An empty path reads the link the fd itself is open on (O_PATH | O_NOFOLLOW).
++  if (path != nullptr && path[0] == '\0' && dirfd != kAtFdcwd) return readlinkat(dirfd, "", buf, n);
+   std::string p;
+   if (!AtPath(dirfd, path, &p)) return -1;
+   return readlink(p.c_str(), buf, n);
+@@ -520,6 +533,8 @@
+   return gesher_ftruncate(fd, length);
+ }
+ int BIONIC_SYSV Truncate(const char* path, int64_t length) {
++  // Linux refuses a FIFO without opening it (an open would wait for a reader).
++  if (gesher_is_fifo_path(path)) return errno = kEINVAL, -1;
+   int fd = open(path, O_WRONLY);
+   if (fd < 0) return -1;
+   int rc = Ftruncate(fd, length);
+@@ -531,7 +546,7 @@
+ int BIONIC_SYSV Fsync(int fd) { return fsync(fd); }
+ int BIONIC_SYSV Fdatasync(int fd) { return fdatasync(fd); }
+ uint32_t BIONIC_SYSV Umask(uint32_t mask) { return static_cast<uint32_t>(_umask(static_cast<int>(mask & 0777))); }
+-int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return errno = kEPERM, -1; }
++int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return mkfifo(path, static_cast<mode_t>(mode)); }
+ 
+ int64_t BIONIC_SYSV Sendfile(int out_fd, int in_fd, int64_t* offset, size_t count) {
+   return sendfile(out_fd, in_fd, reinterpret_cast<off_t*>(offset), count);
+@@ -866,6 +881,7 @@
+   E("telldir", Telldir);
+   E("seekdir", Seekdir);
+   E("dirfd", Dirfd);
++  E("getdents64", Getdents64);
+   E("scandir", Scandir);
+   E("scandir64", Scandir);
+   E("scandirat", Scandirat);
+diff --git a/compat/bionic/shim_internal.h b/compat/bionic/shim_internal.h
+--- a/compat/bionic/shim_internal.h
++++ b/compat/bionic/shim_internal.h
+@@ -13,6 +13,8 @@
+ 
+ #include <string>
+ #include <unordered_map>
++
++struct gesher_futex_interrupt;  // <gesher/futex_interrupt.h>
+ 
+ namespace gesher::bionic {
+ 
+@@ -139,11 +141,24 @@
+ void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
+ void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
+ void RegisterTime(SymbolTable& table);     // time_bionic.cc
++// libstdc++.so: operator new/delete, static-local guards, __cxa_pure_virtual.
++void RegisterCxx(SymbolTable& table);      // cxx_bionic.cc
+ // x86-64 Linux numeric timerfd syscalls share the libc exports' implementation.
+ bool DispatchTimerfdSyscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
+                            int64_t* result);
+-// ptrace (a process nobody traces) and the POSIX regex functions.
++// The raw system call table and the POSIX regex functions.
+ void RegisterSyscall(SymbolTable& table);  // syscall_bionic.cc
++// ptrace between Gesher processes (ADR 0093).
++void RegisterPtrace(SymbolTable& table);  // ptrace_bionic.cc
++// wait4's hook for this process's tracees (ptrace_bionic.cc): a stop or exit
++// of a tracee `pid` selects (any for -1/0) as a Linux status word, returning
++// its pid; 0 if none is ready. `*matched` says whether `pid` selects any
++// tracee. An exit of a tracee that is also this process's child is left to the
++// child's own wait (`is_child`).
++int PtraceWaitPoll(int pid, int options, int* status, bool* matched, bool (*is_child)(int));
++// In a forked child, with the fork set held: it traces none of the parent's
++// tracees (ADR 0092, 0093).
++void PtraceForkChild();
+ // A raw x86-64 Linux system call, as the kernel takes it: the shim function
+ // that does the same, and the kernel's result or -errno. The ELF loader's
+ // handler for `syscall` instructions in loaded code (ADR 0084), and
+@@ -167,6 +182,11 @@
+ // A nonzero error reports unavailable delivery/registration, never completion.
+ bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
+ 
++// A blocking call's wait (wait4): up to `ms`, running the handlers of signals
++// that arrive. 0, or EINTR when a handler without SA_RESTART ran (one with
++// SA_RESTART returns 0: the call restarts), or a delivery error.
++int InterruptibleWaitPoint(uint32_t ms);
++
+ // As above, observing an interruption before delivering its handlers. The
+ // observer is an internal host callback, never loaded application code; it
+ // runs without the signal-state lock and must only record the wake instant.
+@@ -180,6 +200,42 @@
+ // and sleeps, and wherever the signal mask is lowered. Cheap when none are
+ // pending.
+ void DeliverPendingSignals();
++// Waits a signal directed at the calling thread (pthread_kill, tgkill,
++// tkill from another thread) interrupts, as Linux interrupts a blocked futex:
++// AttachSignalInterrupt makes the thread's futex waits through ::syscall end
++// with EINTR then (nullptr if the thread has no signal state; Detach undoes
++// it); DeliverAfterInterrupt runs the deliverable signals and says which
++// handlers ran (kNoHandler, kHandlersRestart: all with SA_RESTART,
++// kHandlersWithoutRestart: one without).
++// InterruptibleAddressWait is WaitOnAddress (true: woken, false: timed out)
++// that also wakes, after running the signals, for such a signal.
++::gesher_futex_interrupt* AttachSignalInterrupt();
++void DetachSignalInterrupt();
++constexpr int kNoHandler = 0, kHandlersRestart = 1, kHandlersWithoutRestart = 2;
++int DeliverAfterInterrupt();
++bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
++                              unsigned long ms);
++
++// fork for translated arm64 code (process_bionic.cc, ADR 0092). The locks are
++// in gesher-base's fork set (gesher/fork.h); in the child, while they are
++// still held, each part drops what belonged to the parent's other threads.
++// pthread_bionic.cc: the thread registry and pthread_atfork handlers.
++int RegisterAtfork(void* prepare, void* parent, void* child);
++void RunAtforkPrepare();
++void RunAtforkParent();
++void RunAtforkChild();
++void PthreadForkPrepare();  // before the fork set is taken
++void PthreadForkChild();
++// Whether no thread the program made (pthread_create) runs besides the caller.
++bool OnlyProgramThread();
++// signal_bionic.cc: per-thread signal state and the shim's signal thread.
++void SignalForkChild();
++// Whether the loaded program is the whole process (gesher-exec), not a guest
++// of ART's (signal_bionic.cc, InstallSignalHook).
++bool SignalsAuthoritative();
++// Whether children are reaped at their exit: SIGCHLD is SIG_IGN or its
++// action has SA_NOCLDWAIT (signal_bionic.cc).
++bool ChildrenAutoReaped();
+ 
+ // bionic's pthread_t of the calling thread (pthread_bionic.cc).
+ uint64_t PthreadSelfId();
+diff --git a/tests/native/libc_test.c b/tests/native/libc_test.c
+--- a/tests/native/libc_test.c
++++ b/tests/native/libc_test.c
+@@ -82,9 +82,12 @@
+ #include "freopen_mode_contract_test.inc"
+ #include "file_description_contract_test.inc"
+ #include "stdio_ofd_contract.inc"
++#define GESHER_STDIO_SCAN_NO_WIDE 1
++#include "stdio_scan_contract.inc"
+ #include "statvfs_contract_test.inc"
+ #include "sleep_contract_test.inc"
+ #include "bionic_signal_range_contracts.h"
++#include "bionic_tgkill_contracts.h"
+ #include "stream_device_contract_test.inc"
+ #include "regex_scaling_contract.inc"
+ 
+@@ -123,6 +126,16 @@
+   check("mallinfo: allocated fit in mapped, the rest is free",
+         during.hblkhd >= during.uordblks && during.fordblks == during.hblkhd - during.uordblks);
+   free(big);
++  // mallopt: purging unused memory succeeds (1); an option the heap does not
++  // support, or one no allocator knows, fails (0), as malloc.h specifies.
++  check("mallopt(M_PURGE) succeeds", mallopt(M_PURGE, 0) == 1);
++  check("mallopt(M_PURGE_ALL) succeeds", mallopt(M_PURGE_ALL, 0) == 1);
++  check("mallopt(unknown option) fails", mallopt(12345, 0) == 0);
++  // No memory tags: the NONE level holds already; a tagging level fails.
++  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, NONE) succeeds",
++        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE) == 1);
++  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, TBI) fails",
++        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_TBI) == 0);
+ }
+ 
+ static void test_strings(void) {
+@@ -250,6 +263,38 @@
+   int got = sscanf("12 34.5 abc 7000000000", "%d %lf %15s %ld", &i, &f, word, &l);
+   check("sscanf", got == 4 && i == 12 && f == 34.5 && strcmp(word, "abc") == 0 &&
+                       l == 7000000000L);
++}
++
++static void test_snprintf_bounds(void) {
++  // Volatile public entry keeps the real guest ABI call in both ELF targets.
++  int (*volatile print)(char*, size_t, const char*, ...) = snprintf;
++  char input[8193], expected[8206];
++  memset(input, 'x', sizeof(input) - 1);
++  input[0] = 'A'; input[257] = 'Q'; input[8191] = 'Z'; input[8192] = 0;
++  memcpy(expected, input, 8192);
++  memcpy(expected + 8192, ":00000123:2.5", 14);
++  const size_t capacities[] = {0, 1, 2, 15, 16, 17, 127, 128, 129};
++  for (size_t c = 0; c < sizeof(capacities) / sizeof(capacities[0]); ++c) {
++    unsigned char guarded[160]; memset(guarded, 0xa5, sizeof(guarded));
++    char* output = (char*)guarded + 8;
++    size_t capacity = capacities[c], kept = capacity ? capacity - 1 : 0;
++    int result = print(output, capacity, "%s:%08d:%.1f", input, 123, 2.5);
++    check("bounded snprintf complete count", result == 8205);
++    check("bounded snprintf exact retained bytes", memcmp(output, expected, kept) == 0);
++    check("bounded snprintf terminator", capacity == 0 || output[kept] == 0);
++    int intact = 1;
++    for (size_t i = 0; i < sizeof(guarded); ++i) {
++      int written = capacity != 0 && i >= 8 && i <= 8 + kept;
++      if (!written && guarded[i] != 0xa5) intact = 0;
++    }
++    check("bounded snprintf byte guards", intact);
++  }
++  check("sizing snprintf consumes complete guest arguments",
++        print(NULL, 0, "%s:%08d:%.1f", input, 123, 2.5) == 8205);
++  char complete[8207]; memset(complete, 0x5a, sizeof(complete));
++  check("complete snprintf preserves all bytes and final canary",
++        print(complete, 8206, "%s:%08d:%.1f", input, 123, 2.5) == 8205 &&
++        memcmp(complete, expected, sizeof(expected)) == 0 && complete[8206] == 0x5a);
+ }
+ 
+ static int scan_stream(FILE* stream, const char* format, ...) {
+@@ -936,6 +981,7 @@
+ __attribute__((visibility("default"))) int gesher_selftest(void) {
+   printf("libc_test: bionic libc through the shim\n");
+   failures += BionicSignalRangeContracts();
++  failures += BionicTgkillContracts();
+   test_memory();
+   test_allocation_contracts();
+   test_system_contracts();
+@@ -956,6 +1002,7 @@
+   test_freopen_mode_contracts();
+   test_file_description_contracts();
+   test_stdio_ofd_contracts();
++  test_stdio_scan_contracts();
+   test_statvfs_contracts();
+   test_sleep_contracts();
+   test_timerfd_syscalls();
+@@ -969,6 +1016,7 @@
+   test_urandom_stdio();
+   test_stream_device_contracts();
+   test_format();
++  test_snprintf_bounds();
+   test_scan_many_arguments();
+   test_errno_files();
+   test_statfs();
+diff --git a/tools/net-tcp-priority/qualified/memrchr-source.json b/tools/net-tcp-priority/qualified/memrchr-source.json
+--- a/tools/net-tcp-priority/qualified/memrchr-source.json
++++ b/tools/net-tcp-priority/qualified/memrchr-source.json
+@@ -1,13 +1,13 @@
+ {
+   "after_sha256": {
+-    "compat/bionic/posix_bionic.cc": "feefc376c3f19b9fe9de0266f0a24da2ad179af0360000874235da54cd8562ab"
++    "compat/bionic/posix_bionic.cc": "7c1dc12c2ece486b2dcbe50a8148d8050897db4a4f4702592af14ae7b639e3c0"
+   },
+-  "baseline": "e505ad227523aaca566d05b8af6e466495c819cc",
+-  "baseline_policy_sha256": "8ea68df5b79b1ba3a9f0feeb49a9a96d3201264a0275f8b2b49d7b83c570ead0",
++  "baseline": "93c32f6f02521790eaf8936f2ff1fa1a650653f2",
++  "baseline_policy_sha256": "0bd3996d19da51ac828a1d1b5477e2ca1a6c0301a0fe0a3fdf4f0db1df5ebcab",
+   "before_sha256": {
+-    "compat/bionic/posix_bionic.cc": "2c70a33b692e1b4522cf4a686187797e4bc2e37ed01c264410c38e743602c7d8"
++    "compat/bionic/posix_bionic.cc": "540ae77cc2321c8282224cdf279b3f3d0ca7f2c807ccc5c59c656e4f810e53e5"
+   },
+-  "patch_sha256": "93c60441a0a0becdc322617ce6f5492590cba8be762195b63dac96cffdce1f1a",
++  "patch_sha256": "0afc777cf9d9880f0660a34ba581d6e1587de924055ba24aecb19190d09fb045",
+   "paths": [
+     "compat/bionic/posix_bionic.cc"
+   ]
+diff --git a/tools/net-tcp-priority/qualified/memrchr-source.patch b/tools/net-tcp-priority/qualified/memrchr-source.patch
+--- a/tools/net-tcp-priority/qualified/memrchr-source.patch
++++ b/tools/net-tcp-priority/qualified/memrchr-source.patch
+@@ -1,8 +1,8 @@
+ diff --git a/compat/bionic/posix_bionic.cc b/compat/bionic/posix_bionic.cc
+-index e45a98dfbb479f1c768d9bf15fcf17e1bc3f2f19..119e965361472f0e99f47b31be32acf4ddc3eea3 100644
++index 248fc567d3c26825bf6b465b8ae75fb4ef9c7a71..d15afe81d441981a5c711ecab5aff57a2e656ba4 100644
+ --- a/compat/bionic/posix_bionic.cc
+ +++ b/compat/bionic/posix_bionic.cc
+-@@ -701,8 +701,42 @@ char* BIONIC_SYSV StpncpyChk(char* d, const char* s, size_t n, size_t dn) {
++@@ -716,8 +716,42 @@ char* BIONIC_SYSV StpncpyChk(char* d, const char* s, size_t n, size_t dn) {
+    if (n > dn) FortifyFailure("stpncpy");
+    return Stpncpy(d, s, n);
+  }
+diff --git a/tools/net-tcp-priority/qualified/ofd-stream-source.json b/tools/net-tcp-priority/qualified/ofd-stream-source.json
+--- a/tools/net-tcp-priority/qualified/ofd-stream-source.json
++++ b/tools/net-tcp-priority/qualified/ofd-stream-source.json
+@@ -7,48 +7,48 @@
+     "compat/posix/src/system.cc",
+     "compat/posix/src/winsock.cc"
+   ],
+-  "patch_sha256": "9ee2f32e66053405e4b283bbfc5ba1302aa2456d75bbaa1872913bfe6dfc0f33",
++  "patch_sha256": "edfff94a924def1d8897e63378ad1a19bbfcd5fda73e76db35fd235f65bd1bde",
+   "source_sha256": {
+-    "compat/posix/src/ofd.cc": "2cd9960d954105ae987ab8eff7c319b59c6da96a6410c5610c5c0e78e04a2df1",
+-    "compat/posix/src/ofd_internal.h": "fa97f2675731123a03896ed179d73c8cb2701273b5d94d2078c484a1b16b37da",
+-    "compat/posix/include/gesher/file_description.h": "c1ba32ce26a44a8094de09fe848394eacc34a9ed5be9cadc990789190d115187",
+-    "compat/posix/src/pipe_io.cc": "d74ef8ebe28903215ac099b521e6029bcd16bda32bce02b4e00ad681100a5f66",
++    "compat/posix/src/ofd.cc": "d2073d20f63fa22d1fc249cd9aa064df5a2aebafdd02aa34d7b6e3c99f631a6f",
++    "compat/posix/src/ofd_internal.h": "b189ee2fb9170b888cec090804ef5c4d8e53732447cbb3d3d9379bfcbc30f67e",
++    "compat/posix/include/gesher/file_description.h": "3d5b11cf3e48c49944cea84cb1f2b94473fa5912bf806f38b4fffb8cda7b6be8",
++    "compat/posix/src/pipe_io.cc": "bfec6d5952ff21ebc8a29641338b0a6b5c021436bdf048001eab6eae457758a8",
+     "compat/posix/src/pipe_io.h": "60cc9802b04fc60c80a90ffcc3628b3ba510404df8b2fe4ce222c95915d426d3",
+     "compat/posix/src/descriptor_resources.h": "ee7f5c8027576c9126f144f335a9c76a38bc4734d5cdecd3219a292493f48025",
+     "compat/posix/src/stdio_output.cc": "7ed987581cbb4b8449293235d0b0fafa8fd6725b06820a97c23924bff949ba97",
+     "compat/posix/src/stdio_internal.h": "90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17",
+     "compat/posix/src/stdio_stream_buffer.h": "f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d",
+     "compat/posix/src/stdio_output_buffer.h": "1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542",
+-    "compat/posix/src/fsops.cc": "3ac288ac5e9a9d4a229dfd1d2e134f3931b8017359ac6cb65ec56f0dfd4f7d1a",
+-    "compat/posix/src/unistd.cc": "9621754bd7168b30d2b4c3bbe34af21ebe9a8ada42622ec0d3d2707bd0ce7bc7",
+-    "compat/posix/posix.cmake": "9d6c79a4378e1cd6321cab9cbf7bbb9a6198ade5cae8c0518f688355733f3ff0",
++    "compat/posix/src/fsops.cc": "87217542f6dba719ff75de8a446ba019a6d4eb7edf83c04ff28659edf775fd57",
++    "compat/posix/src/unistd.cc": "35187c1cec0c5f851c8d06a5fe791a61a9caa1d39d4d92fe8080de4c3eaa23af",
++    "compat/posix/posix.cmake": "7cfde79fb79b29f244066fb431dfab4c7729549d19b7ad4945bac967de7f56cd",
+     "compat/posix/include/wchar.h": "b4ab6d86bfcffc534eb1a74abdfb13164cc7c51200eacece3f96310873120817",
+     "compat/posix/include/gesher/stdio.h": "981f2e735df34e3ab4ef1086f040cee6fb51a3a80c1f85edccb46865ecea3051",
+     "compat/posix/include/gesher/cancellation.h": "5f56f27a916daf62c5cbd99332cc09cf10d6078f181f2edcffb5ba9a56dd5e02",
+-    "compat/posix/src/procfs.cc": "86742d20b5f94712bd303505be2f27d34219443a4e73d4ce248beee21648431f",
+-    "compat/elf/exec/exec_spawn.cc": "0ce9e8f78a773910d2eeed283f87a29ffc859ea01b799ee30f2aa72518c9e4f7",
+-    "compat/libcore/process.cc": "ab1ababf629840fd93be8a3b648e185cfc5bab0cb68650dbd0507305a76719cc",
++    "compat/posix/src/procfs.cc": "6967ffe4c9644d8279a8436fd058e83893e198d4d3abf4a72b72d27be6deedca",
++    "compat/elf/exec/exec_spawn.cc": "9eede0ff82f9f4a0f4f14bd16ec40ad8214b820beb2a112fece2ade83affce2b",
++    "compat/libcore/process.cc": "ac45a392546ec5a88560b4ac506185af3c44fc0d23fe70898667b11275060415",
+     "compat/bionic/stdio_bionic.cc": "bb8aba18f5794919f0338eb42df7807b89203ffd3371f9e3a53aad40982ecfa1",
+     "compat/posix/src/internal.h": "0d32c3de7e103e2070e8f120cadb9b4aa77f15e3cd3c31a89d372015d950b7ef",
+-    "compat/elf/exec/gesher_shell.cc": "3a0a1a45ef0ad4e7fe43cbc45e8194221379033f02e97de43c4e103e6992d6cf",
+-    "compat/elf/exec/shell_execute.inc": "9e2790e5e217a949dcb093087e4102a8ff4de03eb3dd1281ea8522ae01311af2",
+-    "compat/bionic/process_bionic.cc": "932ffba18b35e4c61838f53634f1da45e1261049bafd672dfe0fe9235eee7dca",
+-    "compat/posix/src/revocable_file.cc": "336971b549052cb1ac3710773c3eae3903bcc6075ac8505039800981414a6c84",
++    "compat/elf/exec/gesher_shell.cc": "96e897ef79a8171c7b8d1dd478b584c4da77de613b304f3e92e9aeab8c19c30a",
++    "compat/elf/exec/shell_execute.inc": "3a83cd101c390f736214b273c8b13d8c286532e32f38ebe46e69ac71c47b81ea",
++    "compat/bionic/process_bionic.cc": "55d93c948d5e19dc94f5799d94c38ac492cee57ba81b991816d512643a8d5e4c",
++    "compat/posix/src/revocable_file.cc": "7ead67dc4e3d351922db165780e119bd744f447d88bb4523509ec9cae18516b0",
+     "compat/posix/src/revocable_internal.h": "cb19a942c0caa10ad314ecb0c9ea123281d33185acaf73a9ff491ce9771e219a",
+     "compat/bionic/stdio_windows_lock.h": "86063fcea2901b3bc3acd57d49cef57880125fc0c9ddee9cc3e70917b2e5671c",
+-    "compat/bionic/extra_bionic.cc": "0e0958142d26aa1dbe87acf44e416507d87969c5ba100e478356ffc9ba942bc3",
++    "compat/bionic/extra_bionic.cc": "aa49741ffb99f4759fc70eecf9557e7c11352e107be330d9d4891aa32ed0d896",
+     "compat/posix/include/stdio.h": "2c269413b37d147d1a6bc9a7b7700a0677d73017a05af98234142c6272f2b9a2",
+     "tests/native/socket_registry_lifetime_host.cc.in": "939a8e839112e3298d1ff49991f317533fc42571303942888c5fd31515454105",
+     "tools/test_socket_registry_lifetime.py": "e48c568a71d2efd28e5df2a6b9631c205295a43f0a0904a58f05939113f7c115",
+     "compat/posix/src/memfd_seals.cc": "058cb8d0cef69da7f7c17952873e234b6ccaec97821dfee32f4770beaf45b831",
+-    "compat/posix/src/mman.cc": "00f5f9e96f3b54e10930226a63783759353733742c64fc3732f73c35b1c89b73",
+-    "compat/posix/src/unix_rights.cc": "28e234d808de7531d86b6af2672f900682797ae20ea562d895cb6a15c638f49e",
+-    "compat/posix/src/binder.cc": "663f3b39fd6f1ef7a92fee01134b42c08a8d96961d3dd43aac6ae965589752b3",
++    "compat/posix/src/mman.cc": "31a5cac2af159fede9ab71853466da95bfb1d4245c01ecba1359761e798cd726",
++    "compat/posix/src/unix_rights.cc": "c958136f7daa28fec51bc338014eaf1bae8df050b6594fa759aa12acc9334a4e",
++    "compat/posix/src/binder.cc": "c2d87ca11170b5131560a688eaa16e6c40c9c09e6b2fa2ccc5f7570fb8df695d",
+     "compat/posix/src/binder_wire.h": "2ebecdafba377c08f6ca2c71604bdfd5ee7fd794169ba1da61e782342a22dae6",
+     "compat/posix/src/binder_file_descriptions.h": "1935913dfac9fba05a2dffebe13ecb294de72b5a0641dbe2bd23521ce97bdf2e",
+     "compat/binder/binderd.cc": "bf09a9ae3dc590806f27951dc8f9d7df3aa468be958cac1ee47e4467e4fef79c",
+     "probes/binder/binder_probe.cc": "7355784bfde616ea8ee44191be549df943b237a44e99fd96204e25b59c23ac35",
+-    "compat/posix/src/environment.cc": "000ae5a26d48f0c1d21cfd7b82d18ff838ff776e0002855e59922dd63c6327dc",
++    "compat/posix/src/environment.cc": "8e38894c76c62628fe9c24e945307e958ca32aa947a463c849a1f7a2b2c50167",
+     "compat/posix/src/environment_internal.h": "48092d848ae2a930fdc2b18fbf704f3f4bca785755793c6dba0f9c8941a25ce1",
+     "compat/posix/include/gesher/environment.h": "4bcf1b0a87f4b2856a65441255a62b093dfe18ee9a7da10afdffd375b44d618a",
+     "compat/posix/include/gesher/environment_utf16.h": "cd6b7e2f8609611ffdd7b2454e48c6e39025df2f4b5bdcc162d0cd66027f11aa",
+@@ -56,12 +56,12 @@
+     "compat/posix/include/errno.h": "71c024de07de3a8f25827080c7c55e81c2f96d6e65b1182a25482b3d70d14305",
+     "compat/posix/src/errno.cc": "879f452166dd191dc62bc670c5829599cd57a2b3d5037033bd7cc1574639bc51",
+     "compat/posix/include/gesher/font_environment.h": "d3e1834350e9b9b79347ad81539c85a203bf333d260094b2d27008cb9c6a9064",
+-    "compat/posix/src/font_environment.cc": "4b7401dd93967ee63de6072f87b4e535627caef888dfb186a71852807fced499",
+-    "compat/posix/src/system_properties.cc": "a7891115d788a0a89745d389325cbe90a0b3b8c940651b2b3940f27693ac9989",
+-    "compat/bionic/posix_bionic.cc": "2c70a33b692e1b4522cf4a686187797e4bc2e37ed01c264410c38e743602c7d8",
+-    "compat/bionic/shim.cc": "fecd77f2d4790089a7636dda40103576536d1e400fb827629007921d217e2e72",
+-    "compat/elf/exec/gesher_exec.cc": "6c86da7c77affc2f18871d4e83adc3175552925c10bdeda3f40523e6e1b2199f",
+-    "compat/elf/exec/exec_spawn.h": "6328b7ecffbb2c7287caff900912aa250c09fce61e9fe7e4694499fa60e315ea",
++    "compat/posix/src/font_environment.cc": "9aad244e7fbb8a91fbd69da65e661163184b871d00c996f5d8d62cd69538eb92",
++    "compat/posix/src/system_properties.cc": "94770834cf6c3f642bf5955190193c6130cad1251d8fe426d3acff2876af7ea0",
++    "compat/bionic/posix_bionic.cc": "540ae77cc2321c8282224cdf279b3f3d0ca7f2c807ccc5c59c656e4f810e53e5",
++    "compat/bionic/shim.cc": "3fcd4d3ac16556ae02e2dec0a273c63de77b11dd5787376cf0d6d25f4575bcc2",
++    "compat/elf/exec/gesher_exec.cc": "4b1f5676cf5426bd1fce246fe30c0b3ac3fd2c2a6491ccf6e28711e3fb0a5a78",
++    "compat/elf/exec/exec_spawn.h": "cf271fd09be08cda61951366ab7bb4b552507a50d663de9647b33786abeacf02",
+     "compat/elf/exec/spawn_actions.h": "b5acb3a95c4e5df7a783e6b16a3b2b02baf401250719a6ad0773a8d6055dc5ff",
+     "compat/art/dalvikvm_main.cc": "72709c45a261a9dc89b714053a4c5b380f2f57604d7269541e614e7b03f36910",
+     "tests/native/environment_owner_host.cc.in": "bd0a0ef3ed0a31462f510835c14f43e93c9769db31d010e44d5e4a684a6878cf",
+@@ -69,9 +69,9 @@
+     "tests/native/font_environment_test.cc": "947b6df6e02c8a52c366844d5a701bb86bb995876cec535510ff9da503d118ce",
+     "tests/native/stdio_tls_exit_contract.inc": "c463a702ea185cfd0f3a12e34a51de88cf1ae50e34b7754a753cdf8dca443ff9",
+     "tests/native/stdio_ofd_contract.inc": "f638b91091ac185e14bde112737baa156fd5254c59f279ee687581e42c1a1e0e",
+-    "tests/native/ofd_transfer_host_test.cc.in": "fc3910b11ad3834f83173a47c71fa3d1a3c67b92cf5a6aaa2af808289017de98",
++    "tests/native/ofd_transfer_host_test.cc.in": "96a54c4cb3ff671b1c98168c2532cdc13cd19f249a40b69eb8eb4a224e4b4ef9",
+     "tests/exec/environment-host-test.cc": "af4c4472bcc29de2f3fdafef11de16ccb5944e3f109943d314fc49f211927da0",
+-    "tests/exec/exec2_child.c": "beded4b7de72fee7f62fefcd9203414b9af1df1a2c74026bb177eec13365caab",
++    "tests/exec/exec2_child.c": "6306d31f2df7db15934edba890f0ec456d1526886aec9745e9a50f325e0c629a",
+     "tests/exec/exec4_environment.c": "8bedcf928bfddbac3d268cf6d9b96ad44ef2b4483be4c4afc12a44c7a7a5a37d",
+     "tools/test_environment_contracts.py": "6ebd0a8ffdeab2be5bd80526398b0d0c68cf0b05fb1dfb3f2dd761489501e023",
+     "tools/test_environment_lookup_contracts.py": "a367388aa45f6aeb60a01ec9d3e32dd2323878c07452741d845da87a41119229",
+diff --git a/tools/net-tcp-priority/qualified/ofd-stream-source.patch b/tools/net-tcp-priority/qualified/ofd-stream-source.patch
+--- a/tools/net-tcp-priority/qualified/ofd-stream-source.patch
++++ b/tools/net-tcp-priority/qualified/ofd-stream-source.patch
+@@ -450,12 +450,12 @@
+ +#include <array>
+ +#include <memory>
+ +#include <new>
+-@@ -36,0 +41,2 @@
++@@ -37,0 +42,2 @@
+ +#include "pipe_io.h"
+ +#include "revocable_internal.h"
+-@@ -337,0 +344 @@ int ioctl(int fd, unsigned long request, ...) {
++@@ -341,0 +348 @@ int ioctl(int fd, unsigned long request, ...) {
+ +    if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
+-@@ -359,2 +366,9 @@ int ioctl(int fd, unsigned long request, ...) {
++@@ -363,2 +370,9 @@ int ioctl(int fd, unsigned long request, ...) {
+ -  HANDLE h = gesher::HandleFromFd(fd);
+ -  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+ +  auto snapshot = gesher::CaptureDescriptor(fd);
+@@ -467,19 +467,19 @@
+ +    if (flags < 0) return -1;
+ +    return gesher::SetFileDescriptionFlags(snapshot, *argp ? flags | O_NONBLOCK : flags & ~O_NONBLOCK);
+ +  }
+-@@ -361,0 +376,2 @@ int ioctl(int fd, unsigned long request, ...) {
++@@ -365,0 +380,2 @@ int ioctl(int fd, unsigned long request, ...) {
+ +  gesher::FileOperationLease operation(snapshot);
+ +  if (operation.Error()) return errno = operation.Error(), -1;
+-@@ -364,4 +380 @@ int ioctl(int fd, unsigned long request, ...) {
++@@ -368,4 +384 @@ int ioctl(int fd, unsigned long request, ...) {
+ -      DWORD avail = 0;
+ -      if (!PeekNamedPipe(h, nullptr, 0, nullptr, &avail, nullptr)) avail = 0;  // writer gone
+ -      *argp = static_cast<int>(avail > 0x7FFFFFFF ? 0x7FFFFFFF : avail);
+ -      return 0;
+ +      return gesher::PipeBytesAvailable(snapshot, argp);
+-@@ -403,2 +415,0 @@ int fcntl(int fd, int cmd, ...) {
++@@ -407,2 +419,0 @@ int fcntl(int fd, int cmd, ...) {
+ -  HANDLE h = gesher::HandleFromFd(fd);
+ -  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+-@@ -414,16 +425,22 @@ int fcntl(int fd, int cmd, ...) {
++@@ -418,16 +429,22 @@ int fcntl(int fd, int cmd, ...) {
+ -  gesher::SocketFd state;
+ -  if (gesher::LookupSocket(fd, &state)) {
+ -    switch (cmd) {
+@@ -518,7 +518,7 @@
+ +                  gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
+ +              state.description->nonblocking.store(on);
+ +            }
+-@@ -431 +448,13 @@ int fcntl(int fd, int cmd, ...) {
++@@ -435 +452,13 @@ int fcntl(int fd, int cmd, ...) {
+ -        }
+ +          return 0;
+ +        case F_GETFD:
+@@ -533,7 +533,7 @@
+ +      if (cmd == F_GETFL) return O_RDWR | (gesher::IsNonBlocking(*e) ? O_NONBLOCK : 0);
+ +      if (cmd == F_SETFL) {
+ +        gesher::SetNonBlocking(*e, (arg & O_NONBLOCK) != 0);
+-@@ -433,2 +462,8 @@ int fcntl(int fd, int cmd, ...) {
++@@ -437,2 +466,8 @@ int fcntl(int fd, int cmd, ...) {
+ -      case F_GETFD:
+ -        return FD_CLOEXEC;  // sockets are never inherited (winsock.cc)
+ +      }
+@@ -544,12 +544,12 @@
+ +        if (!GetHandleInformation(h, &flags)) return gesher::FailWithLastError();
+ +        return (flags & HANDLE_FLAG_INHERIT) != 0 ? 0 : FD_CLOEXEC;
+ +      }
+-@@ -435,0 +471,4 @@ int fcntl(int fd, int cmd, ...) {
++@@ -439,0 +475,4 @@ int fcntl(int fd, int cmd, ...) {
+ +        if (!SetHandleInformation(h, HANDLE_FLAG_INHERIT,
+ +                                  (arg & FD_CLOEXEC) != 0 ? 0 : HANDLE_FLAG_INHERIT)) {
+ +          return gesher::FailWithLastError();
+ +        }
+-@@ -437,21 +476,10 @@ int fcntl(int fd, int cmd, ...) {
++@@ -441,21 +480,10 @@ int fcntl(int fd, int cmd, ...) {
+ -      default:
+ -        break;  // F_DUPFD and the rest below
+ -    }
+@@ -581,7 +581,7 @@
+ +        const int duplicate = gesher::record_locks::DuplicateAtLeast(fd, static_cast<int>(arg), cmd == F_DUPFD_CLOEXEC);
+ +        if (duplicate >= 0) gesher::CopyMemfdRegistration(fd, duplicate);
+ +        return duplicate;
+-@@ -459,10 +487,6 @@ int fcntl(int fd, int cmd, ...) {
++@@ -463,10 +491,6 @@ int fcntl(int fd, int cmd, ...) {
+ -      return 0;
+ -    case F_GETFL:
+ -      return O_RDWR;
+@@ -598,22 +598,22 @@
+ +        return gesher::GetMemfdSeals(fd);
+ +      default:
+ +        return errno = EINVAL, -1;
+-@@ -470,6 +493,0 @@ int fcntl(int fd, int cmd, ...) {
++@@ -474,6 +497,0 @@ int fcntl(int fd, int cmd, ...) {
+ -    case F_ADD_SEALS:
+ -      return gesher::AddMemfdSeals(fd, static_cast<unsigned>(arg));
+ -    case F_GET_SEALS:
+ -      return gesher::GetMemfdSeals(fd);
+ -    default:
+ -      return errno = EINVAL, -1;
+-@@ -476,0 +495,4 @@ int fcntl(int fd, int cmd, ...) {
++@@ -480,0 +499,4 @@ int fcntl(int fd, int cmd, ...) {
+ +  // The snapshot retains the selected object and description across concurrent
+ +  // close/dup2. Native mode operations must not hold the publication lock.
+ +  return cmd == F_GETFL ? gesher::FileDescriptionFlags(status_snapshot)
+ +                       : gesher::SetFileDescriptionFlags(status_snapshot, arg);
+-@@ -557,2 +578,0 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
++@@ -561,2 +582,0 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
+ -    // A memfd sealed with F_SEAL_GROW cannot be extended (memfd_seals.cc).
+ -    if (const int sealed = gesher::MemfdGrowError(fd, static_cast<uint64_t>(end))) return sealed;
+-@@ -560,5 +580,24 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
++@@ -564,5 +584,24 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
+ -    // Keep the descriptor's actual file object stable through inspection and
+ -    // growth. F_GETFL's generic fallback is not evidence of write access.
+ -    gesher::record_locks::DescriptorGuard descriptor_guard;
+@@ -643,7 +643,7 @@
+ +      return 0;
+ +    }
+ +    const HANDLE handle = snapshot->handle;
+-@@ -573 +612,17 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
++@@ -577 +616,17 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
+ -    const long long size = _filelengthi64(fd);
+ +    // Preserve CRT zero-filled growth on the object captured above. The
+ +    // caller's fd may already have been closed or replaced with another file
+@@ -662,10 +662,10 @@
+ +    // Its close must not release the app's process-wide record locks.
+ +    struct CrtSlot { int fd; ~CrtSlot() { _close(fd); } } pinned{pinned_fd};
+ +    const long long size = _filelengthi64(pinned_fd);
+-@@ -580 +635 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
++@@ -584 +639 @@ int posix_fallocate(int fd, off_t offset, off_t len) {
+ -      error = _chsize_s(fd, end);
+ +      error = _chsize_s(pinned_fd, end);
+-@@ -629,0 +685,66 @@ bool BadVector(int fd, int iovcnt) {
++@@ -633,0 +689,66 @@ bool BadVector(int fd, int iovcnt) {
+ +struct FileVectorTransfer {
+ +  gesher::DescriptorSnapshotPtr snapshot;
+ +  std::unique_ptr<unsigned char[]> allocated;
+@@ -732,12 +732,12 @@
+ +  return true;
+ +}
+ +
+-@@ -647,0 +769,2 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
++@@ -651,0 +773,2 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
+ +  ssize_t transferred = 0;
+ +  if (FileWriteVector(fd, iov, iovcnt, false, 0, &transferred)) return transferred;
+-@@ -698,0 +822 @@ ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
++@@ -702,0 +826 @@ ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+ +  if (FileWriteVector(fd, iov, iovcnt, true, offset, &total)) return total;
+-@@ -793,3 +917,5 @@ int memfd_create(const char* name, unsigned int flags) {
++@@ -797,3 +921,5 @@ int memfd_create(const char* name, unsigned int flags) {
+ -  if (fd < 0) {
+ -    CloseHandle(h);
+ -    return fd;
+@@ -746,7 +746,7 @@
+ +    int saved = errno;
+ +    _close(fd);
+ +    return errno = saved, -1;
+-@@ -797 +923 @@ int memfd_create(const char* name, unsigned int flags) {
++@@ -801 +927 @@ int memfd_create(const char* name, unsigned int flags) {
+ -  gesher::RegisterMemfd(fd);
+ +  if (fd >= 0) gesher::RegisterMemfd(fd);
+ diff --git a/compat/posix/src/winsock.cc b/compat/posix/src/winsock.cc
+diff --git a/tools/net-tcp-priority/qualified/scandir-source.json b/tools/net-tcp-priority/qualified/scandir-source.json
+--- a/tools/net-tcp-priority/qualified/scandir-source.json
++++ b/tools/net-tcp-priority/qualified/scandir-source.json
+@@ -1,13 +1,13 @@
+ {
+   "after_sha256": {
+-    "compat/bionic/posix_bionic.cc": "f19fc1689020d73f57fdc6e6cde0baeb863151dfafa405fac23b491288963a0b"
++    "compat/bionic/posix_bionic.cc": "9ba77321ff4a4fedd64b9dfc433a5c93349daf6eef90552bda95763b0ef3a531"
+   },
+-  "baseline": "7e205878cec54dbbd52bbac8a90b22e190798a5e",
+-  "baseline_policy_sha256": "135b693f941de9b14b6410201460f247c390f565a9818d64597b128ae7b06958",
++  "baseline": "5894cea6c2bc35d1ae316f8bb401181689a85424",
++  "baseline_policy_sha256": "18df8aa9ca299769fc2aa5f7f9983ef28d3a19bc68f6454ade9305cdb74f99cb",
+   "before_sha256": {
+-    "compat/bionic/posix_bionic.cc": "feefc376c3f19b9fe9de0266f0a24da2ad179af0360000874235da54cd8562ab"
++    "compat/bionic/posix_bionic.cc": "7c1dc12c2ece486b2dcbe50a8148d8050897db4a4f4702592af14ae7b639e3c0"
+   },
+-  "patch_sha256": "560a12a38870c4e14216e97483af1717a2426363c62c9b2d0438c589f06fc14f",
++  "patch_sha256": "c4e86a35706726bf358e74d49ca171afcf9c4ce32bfc513a400ec25a6fa4f83f",
+   "paths": [
+     "compat/bionic/posix_bionic.cc"
+   ]
+diff --git a/tools/net-tcp-priority/qualified/scandir-source.patch b/tools/net-tcp-priority/qualified/scandir-source.patch
+--- a/tools/net-tcp-priority/qualified/scandir-source.patch
++++ b/tools/net-tcp-priority/qualified/scandir-source.patch
+@@ -1,11 +1,11 @@
+ diff --git a/compat/bionic/posix_bionic.cc b/compat/bionic/posix_bionic.cc
+-index 119e9653..1f3394e9 100644
+ --- a/compat/bionic/posix_bionic.cc
+ +++ b/compat/bionic/posix_bionic.cc
+-@@ -228,6 +228,56 @@ using SysvDirCompare = int(BIONIC_SYSV*)(const BionicDirent**, const BionicDiren
++@@ -233,6 +233,56 @@
++ using SysvDirCompare = int(BIONIC_SYSV*)(const BionicDirent**, const BionicDirent**);
+  int BIONIC_SYSV Alphasort(const BionicDirent** a, const BionicDirent** b) {
+    return std::strcmp((*a)->d_name, (*b)->d_name);
+- }
+++}
+ +bool MergeDirectoryEntries(BionicDirent** entries, size_t count, SysvDirCompare compare) {
+ +  // Optional pointer scratch never changes the C API's allocation-failure
+ +  // contract. Keep the comparator's errno even when this allocation fails.
+@@ -55,11 +55,10 @@
+ +      }
+ +    }
+ +  }
+-+}
++ }
+  int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
+                    SysvDirCompare compare) {
+-   if (d == nullptr) return -1;
+-@@ -277,7 +327,9 @@ int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
++@@ -283,7 +333,9 @@
+      errno = error;
+      return -1;  // Leave the caller's output untouched and free the prefix.
+    }
+diff --git a/tools/net-tcp-priority/qualified/shared-stdio-source.json b/tools/net-tcp-priority/qualified/shared-stdio-source.json
+--- a/tools/net-tcp-priority/qualified/shared-stdio-source.json
++++ b/tools/net-tcp-priority/qualified/shared-stdio-source.json
+@@ -1,9 +1,9 @@
+ {
+   "after_sha256": {
+-    "compat/bionic/stdio_bionic.cc": "4600f47dcfe09898b8bbc5ac3f030f88414c1c905dee772dc97682612dadc514",
++    "compat/bionic/stdio_bionic.cc": "2ff4ba736e9943b07a555e532682ae2e6ddcaffd115e15f3b1be201c4660b15e",
+     "compat/posix/include/gesher/stdio.h": "20e0b97b5333daae70d28bb90190e9e4c4f12921561596bdc94cfee38ee47cd7",
+     "compat/posix/include/stdio.h": "f6c4eda0b038078d19877a172476cf817509d957fe2f110f0c5902406691a029",
+-    "compat/posix/src/stdio_output.cc": "ba5beead2a3e8edb71e67a40fc4ea05f4009fbf8967c4fc5d3d5a5cf9c680984"
++    "compat/posix/src/stdio_output.cc": "b777210b565d8eee802539c2e47c52138159fabe16ca4fdd9fd0c2679118d04f"
+   },
+   "baseline": "6d7638b789e21cba6270c1dbfabe5091680c4100",
+   "baseline_policy_sha256": "a32bc8e65cf655635c04fb86f1ea23d668d125a79a8fef4732c86055b2985ac0",
+@@ -14,7 +14,7 @@
+     "compat/posix/src/stdio_output.cc": "7ed987581cbb4b8449293235d0b0fafa8fd6725b06820a97c23924bff949ba97"
+   },
+   "feature_head": "de1e43c391275137c7b7b25dc170892684d55b5e",
+-  "patch_sha256": "254f0205eaee8cd9d7262bd11e58a52b2e249104b5b158d06223cf46db69632d",
++  "patch_sha256": "ea01987859d3f53e6168db8a40c1e3ed726bdfe3d3e2209eaf00e0d9ab0a4ff0",
+   "paths": [
+     "compat/bionic/stdio_bionic.cc",
+     "compat/posix/include/gesher/stdio.h",
+diff --git a/tools/net-tcp-priority/qualified/shared-stdio-source.patch b/tools/net-tcp-priority/qualified/shared-stdio-source.patch
+--- a/tools/net-tcp-priority/qualified/shared-stdio-source.patch
++++ b/tools/net-tcp-priority/qualified/shared-stdio-source.patch
+@@ -1,5 +1,5 @@
+ diff --git a/compat/bionic/stdio_bionic.cc b/compat/bionic/stdio_bionic.cc
+-index 3848a9a10..0f46ab7c1 100644
++index 3848a9a10..10ce0edbc 100644
+ --- a/compat/bionic/stdio_bionic.cc
+ +++ b/compat/bionic/stdio_bionic.cc
+ @@ -31,7 +31,6 @@
+@@ -409,7 +409,17 @@
+    if (Orient(stderr, -1) == 0) return;
+    if (s != nullptr && *s != 0) {
+      std::fprintf(stderr, "%s: %s\n", s, strerror(errno));
+-@@ -1205,6 +1072,7 @@ int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* a
++@@ -1161,6 +1028,9 @@ const HANDLE logOutput = [] {
++ int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool filter = true) {
++   if (!tag) tag = ::gesher_android_default_log_tag();
++   if (filter && !::__android_log_is_loggable_len(prio, tag, tag ? std::strlen(tag) : 0, 2)) return -1;
+++  // Both sinks persist (the logcat file and the package's .log): no credentials.
+++  std::string redacted;
+++  if (text && logging::RedactCredentials(text, std::strlen(text), &redacted)) text = redacted.c_str();
++   logging::Record(buffer, prio, tag, text);
++   std::string line(1, PriorityLetter(prio));
++   line += '/';
++@@ -1205,6 +1075,7 @@ int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* a
+  int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt, SysvVaList* ap) {
+    FILE* stream = F(f);
+    StreamLock lock(stream);
+@@ -417,7 +427,7 @@
+    if (Orient(stream, -1) == 0) return -1;
+    bool valid;
+    std::string s = Format(fmt, ap, &valid);
+-@@ -1255,6 +1123,7 @@ int BIONIC_SYSV gesher_bionic_vsscanf(const char* str, const char* fmt, SysvVaLi
++@@ -1255,6 +1126,7 @@ int BIONIC_SYSV gesher_bionic_vsscanf(const char* str, const char* fmt, SysvVaLi
+  int BIONIC_SYSV gesher_bionic_vfscanf(void* f, const char* fmt, SysvVaList* ap) {
+    FILE* stream = F(f);
+    StreamLock lock(stream);
+@@ -425,7 +435,7 @@
+    if (Orient(stream, -1) == 0) return EOF;
+    return VFscanfImpl(stream, fmt, ap);
+  }
+-@@ -1297,10 +1166,11 @@ int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t*
++@@ -1297,10 +1169,11 @@ int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t*
+  int BIONIC_SYSV gesher_bionic_vfwprintf(void* f, const uint32_t* fmt, SysvVaList* ap) {
+    FILE* stream = F(f);
+    StreamLock lock(stream);
+@@ -490,10 +500,21 @@
+  FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int* retired);
+  
+ diff --git a/compat/posix/src/stdio_output.cc b/compat/posix/src/stdio_output.cc
+-index 1bbbc5112..83ab9abce 100644
++index 1bbbc5112..966a54384 100644
+ --- a/compat/posix/src/stdio_output.cc
+ +++ b/compat/posix/src/stdio_output.cc
+-@@ -60,6 +60,7 @@ struct State {
++@@ -16,6 +16,10 @@
++ #include "record_lock_descriptors.h"
++ #include "../../bionic/stdio_windows_lock.h"
++ #include <gesher/file_description.h>
+++// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+++#if __has_include(<gesher/fork.h>)
+++#include <gesher/fork.h>
+++#endif
++ 
++ #include <windows.h>
++ #include <fcntl.h>
++@@ -60,6 +64,7 @@ struct State {
+    int fd = -1;
+    bool live = true;
+    std::atomic<bool> line_output{false};
+@@ -501,7 +522,7 @@
+    mbstate_t input_conversion{};
+    mbstate_t output_conversion{};
+  };
+-@@ -125,6 +126,7 @@ int ConfigureDefaults(State& state, FILE* stream, int fd, int flags, bool standa
++@@ -125,6 +130,7 @@ int ConfigureDefaults(State& state, FILE* stream, int fd, int flags, bool standa
+    state.fd = fd;
+    state.live = true;
+    state.line_output.store(false, std::memory_order_relaxed);
+@@ -509,7 +530,7 @@
+    state.input_conversion = {};
+    state.output_conversion = {};
+    const int saved = errno;
+-@@ -275,6 +277,7 @@ int FlushLocal(FILE* stream) {
++@@ -275,6 +281,7 @@ int FlushLocal(FILE* stream) {
+    return state->buffer.FlushOutput(Writer(state->fd));
+  }
+  size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
+@@ -517,7 +538,7 @@
+    if (formatting_stream && formatting_stream->stream == stream) {
+      return formatting_stream->buffer.Write(bytes, size, count, Writer(formatting_stream->fd));
+    }
+-@@ -283,6 +286,7 @@ size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bo
++@@ -283,6 +290,7 @@ size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bo
+    return state->buffer.Write(bytes, size, count, Writer(state->fd));
+  }
+  size_t ReadLocal(void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
+@@ -525,7 +546,7 @@
+    AccessStream state(stream, unlocked);
+    if (!state) return 0;
+    state->line_output.store(false, std::memory_order_release);
+-@@ -352,11 +356,11 @@ int FlagLocal(FILE* stream, bool error, bool unlocked) {
++@@ -352,11 +360,11 @@ int FlagLocal(FILE* stream, bool error, bool unlocked) {
+    // A stream with no shared I/O state has no recorded EOF or error. Queries
+    // must not create metadata or invent an error when allocation is exhausted.
+    AccessStream state(stream, unlocked, false);
+@@ -539,7 +560,7 @@
+  }
+  void ErrorLocal(FILE* stream, int error) {
+    AccessStream state(stream, false);
+-@@ -370,15 +374,24 @@ int BufferLocal(FILE* stream, char* buffer, int mode, size_t size) {
++@@ -370,15 +378,24 @@ int BufferLocal(FILE* stream, char* buffer, int mode, size_t size) {
+    auto buffering = mode == _IONBF ? StreamBuffer::Mode::kNone :
+        mode == _IOLBF ? StreamBuffer::Mode::kLine : StreamBuffer::Mode::kFull;
+    int result = state->buffer.Configure(buffering, buffer, size, Writer(state->fd));
+@@ -567,7 +588,7 @@
+    return result;
+  }
+  int64_t TellLocal(FILE* stream) {
+-@@ -474,6 +487,10 @@ int ScanWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
++@@ -474,6 +491,10 @@ int ScanWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
+    state->buffer.Orient(1);
+    return __real___mingw_vfwscanf(stream, format, arguments);
+  }
+@@ -578,7 +599,7 @@
+  struct Api {
+    std::shared_ptr<void> (*acquire)(FILE*);
+    void (*release)(const std::shared_ptr<void>&);
+-@@ -503,6 +520,7 @@ struct Api {
++@@ -503,6 +524,7 @@ struct Api {
+    int (*print_wide)(FILE*, const wchar_t*, va_list);
+    int (*scan)(FILE*, const char*, va_list);
+    int (*scan_wide)(FILE*, const wchar_t*, va_list);
+@@ -586,7 +607,7 @@
+  };
+  const Api* Owner() {
+    using Factory = const Api* (*)();
+-@@ -519,7 +537,7 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
++@@ -519,7 +541,7 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
+        OpenDescriptorLocal, RegisterLocal, ForgetLocal, FlushLocal, WriteLocal, ReadLocal,
+        LineLocal, UngetLocal, FflushLocal, FlagLocal, ClearLocal, ErrorLocal, BufferLocal,
+        SeekLocal, TellLocal, OrientLocal, PutWideLocal, GetWideLocal, UngetWideLocal,
+@@ -595,7 +616,7 @@
+    return &api;
+  }
+  namespace {
+-@@ -538,6 +556,7 @@ StreamGuard::StreamGuard(FILE* stream)
++@@ -538,6 +560,7 @@ StreamGuard::StreamGuard(FILE* stream)
+      : token_(Owner()->acquire(stream)), cleanup_([](void* raw) { static_cast<StreamGuard*>(raw)->Release(); }, this) {}
+  StreamGuard::~StreamGuard() = default;
+  void StreamGuard::Release() { Owner()->release(token_); token_.reset(); }
+@@ -603,3 +624,48 @@
+  void Lock(FILE* stream) { Owner()->lock(stream); }
+  void Unlock(FILE* stream) { Owner()->unlock(stream); }
+  int TryLock(FILE* stream) { return Owner()->try_lock(stream); }
++@@ -760,3 +783,44 @@ extern "C" {
++ int (*__imp_fseeko64)(FILE*, long long, int) = gesher_fseeko64;
++ long long (*__imp_ftello64)(FILE*) = gesher_ftello64;
++ }
+++
+++#ifdef GESHER_FORK_LOCK
+++// fork (gesher/fork.h): the stream registry. A stream's own lock is not
+++// waited for (another thread may hold it across a blocking read, and Linux's
+++// fork waits for no stream): in the child every stream's lock is made anew,
+++// free, unless the forking thread itself held it (flockfile around fork),
+++// which keeps it at that depth. A stream another thread was writing at that
+++// moment may hold part of that write in the child's copy of its buffer.
+++namespace {
+++DWORD g_stdio_fork_thread = 0;
+++bool StdioTryLock(void*) {
+++  using namespace gesher::stdio;
+++  if (registry == nullptr) return true;
+++  if (!registry->mutex.try_lock()) return false;
+++  g_stdio_fork_thread = GetCurrentThreadId();
+++  return true;
+++}
+++void StdioUnlock(void*) {
+++  using namespace gesher::stdio;
+++  if (registry != nullptr) registry->mutex.unlock();
+++}
+++void StdioChild(void*) {
+++  using namespace gesher::stdio;
+++  if (registry == nullptr) return;
+++  for (auto& entry : registry->streams) {
+++    auto* section = reinterpret_cast<CRITICAL_SECTION*>(&entry.second->mutex);
+++    const bool ours = reinterpret_cast<uintptr_t>(section->OwningThread) == g_stdio_fork_thread;
+++    const LONG depth = ours ? section->RecursionCount : 0;
+++    InitializeCriticalSection(section);
+++    for (LONG i = 0; i < depth; ++i) EnterCriticalSection(section);
+++  }
+++  new (&registry->mutex) std::mutex();
+++}
+++const gesher::ForkLockOps kStdioForkOps = {&StdioTryLock, &StdioUnlock, &StdioChild};
+++// Registered with a non-null object: the registry may be made later.
+++int g_stdio_fork_anchor = 0;
+++const gesher::ForkLockRegistration g_fork_stdio(gesher::kForkOrderSubsystem, "stdio streams",
+++                                                []() -> void* { return &g_stdio_fork_anchor; },
+++                                                &kStdioForkOps);
+++}  // namespace
+++#endif
+diff --git a/tools/net-tcp-priority/test-memrchr-policy.py b/tools/net-tcp-priority/test-memrchr-policy.py
+--- a/tools/net-tcp-priority/test-memrchr-policy.py
++++ b/tools/net-tcp-priority/test-memrchr-policy.py
+@@ -23,9 +23,7 @@
+ MANIFEST = FOLDER + 'memrchr-source.json'
+ PATCH = FOLDER + 'memrchr-source.patch'
+ raw_read_bytes = Path.read_bytes
+-# The outer transition is checked against the real current file first. Keep
+-# every existing Memrchr negative control on that exact reconstructed input;
+-# the separate scandir suite mutates the complete composed chain itself.
++# Validate the outer stage, then exercise each original Memrchr control on its exact predecessor.
+ preceding = policy.preceding_scandir_source(raw_read_bytes(ROOT / policy.SCANDIR_SOURCE))
+ def read_bytes(path):
+     return preceding if path == ROOT / policy.SCANDIR_SOURCE else raw_read_bytes(path)
+@@ -85,8 +83,8 @@
+ for label, before, after, expected in [
+     ('fortify bound', b'if (n > buf_size) FortifyFailure("memrchr");',
+      b'if (n > buf_size + 1) FortifyFailure("memrchr");', 'memrchr reverse endpoint'),
+-    ('unrelated FIFO operation', b'int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return errno = kEPERM, -1; }',
+-     b'int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return 0; }', 'memrchr reverse endpoint'),
++    ('unrelated FIFO operation', b'int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return mkfifo(path, static_cast<mode_t>(mode)); }',
++     b'int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return 0; }', 'memrchr reverse endpoint'),
+     ('word read range', b'while (n >= sizeof(uint64_t)) {',
+      b'while (n > 0) {', 'exact patch application'),
+ ]:
+@@ -145,3 +143,4 @@
+     rejected('unrelated protected bytes in ' + name,
+              {name: (ROOT / name).read_bytes() + b'\n'}, expected)
+ print('MEMRCHR_SOURCE_POLICY_PASS exact_main_round_trip=1 original_protected_digests=71 negative_controls=' + str(checks))
++
+diff --git a/tools/net-tcp-priority/test-scandir-policy.py b/tools/net-tcp-priority/test-scandir-policy.py
+--- a/tools/net-tcp-priority/test-scandir-policy.py
++++ b/tools/net-tcp-priority/test-scandir-policy.py
+@@ -81,8 +81,8 @@
+     ('adaptive work limit', b'size_t remaining_swaps = count * 8;',
+      b'size_t remaining_swaps = count * 9;', 'exact patch application'),
+     ('scratch ownership', b'std::free(scratch);', b'(void)scratch;', 'exact patch application'),
+-    ('unrelated FIFO operation', b'int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return errno = kEPERM, -1; }',
+-     b'int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return 0; }', 'scandir reverse endpoint'),
++    ('unrelated FIFO operation', b'int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return mkfifo(path, static_cast<mode_t>(mode)); }',
++     b'int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return 0; }', 'scandir reverse endpoint'),
+     ('previous Memrchr word bound', b'while (n >= sizeof(uint64_t)) {',
+      b'while (n > 0) {', 'scandir reverse endpoint'),
+     ('public export', b'E("scandir", Scandir);', b'E("scandir", ScandirWrong);', 'scandir reverse endpoint'),
+diff --git a/tools/net-tcp-priority/test-selected-policy.py b/tools/net-tcp-priority/test-selected-policy.py
+--- a/tools/net-tcp-priority/test-selected-policy.py
++++ b/tools/net-tcp-priority/test-selected-policy.py
+@@ -265,7 +265,145 @@
+ # then EVERY earlier preservation assertion below still runs on its result.
+ # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
+ # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
+-OFD_QUALIFICATION_SHA256 = '9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01'
++OFD_QUALIFICATION_SHA256 = 'caeea5f5dd515a2522011a0a1f0dc5271dadfa8929e87ac1393f668bf096e49b'
++# Shared line input changes only these five complete sources. Reverse their
++# exact pinned transition before the original OFD preservation checks below;
++# retain that earlier manifest, all its digests and its runtime approval state.
++# This source admission does not stand in for the Windows/native CI gates.
++STDIO_LINE_QUALIFICATION_SHA256='83c559c6a16a1088013af39dc8938b61d2fb8a66ba9a5cc946956b7622735b31'
++STDIO_LINE_PATHS=['compat/bionic/stdio_bionic.cc','compat/posix/include/gesher/stdio.h',
++                  'compat/posix/src/misc.cc','compat/posix/src/stdio_output.cc',
++                  'compat/posix/src/stdio_stream_buffer.h']
++def preceding_stdio_line_sources(current):
++ folder=ROOT/'tools/net-tcp-priority/qualified'
++ raw=(folder/'stdio-line-source.json').read_bytes()
++ assert hashlib.sha256(raw).hexdigest()==STDIO_LINE_QUALIFICATION_SHA256,'stdio line source qualification changed'
++ qualification=json.loads(raw)
++ assert qualification['baseline']=='6afcb6e671fc4f2d08a4a98220f9d9a906a327bf'
++ assert qualification['native_runtime_approval'] is False
++ assert qualification['paths']==STDIO_LINE_PATHS
++ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==STDIO_LINE_PATHS
++ patch=(folder/'stdio-line-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'stdio line transition patch changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STDIO_LINE_PATHS
++ assert list(current)==STDIO_LINE_PATHS,'stdio line historical paths changed'
++ for path,actual in current.items():
++  assert hashlib.sha256(actual).hexdigest()==qualification['source_sha256'][path],path
++ with tempfile.TemporaryDirectory(prefix='gesher-stdio-line-qualification-') as temporary:
++  work=Path(temporary)
++  for path,actual in current.items():
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(actual)
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous={path:(work/path).read_bytes() for path in STDIO_LINE_PATHS}
++  for path,actual in previous.items():
++   expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
++   assert actual==expected and hashlib.sha256(actual).hexdigest()==qualification['previous_sha256'][path],path
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'stdio line forward reconstruction changed'
++ return previous
++
++# Reverse only the pinned scanner adapter transition before all original OFD
++# checks. This source proof grants no supplier, controller or runtime approval.
++STDIO_SCAN_QUALIFICATION_SHA256='3c08f7f0ea996532377f7d4930ce2d0e84320f3339bd26eed8f7a4b89aad36d0'
++def preceding_stdio_scan_source(current):
++ folder=ROOT/'tools/net-tcp-priority/qualified'
++ raw=(folder/'stdio-scan-source.json').read_bytes()
++ assert hashlib.sha256(raw).hexdigest()==STDIO_SCAN_QUALIFICATION_SHA256,'stdio scan source qualification changed'
++ qualification=json.loads(raw)
++ path='compat/posix/src/stdio_output.cc'
++ assert qualification['baseline']=='d38b5549dc3963f8d491e9205f9b2743bb6d3745'
++ assert qualification['native_runtime_approval'] is False
++ assert qualification['paths']==[path]
++ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==[path]
++ patch=(folder/'stdio-scan-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'stdio scan transition patch changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
++ assert hashlib.sha256(current).hexdigest()==qualification['source_sha256'][path],path
++ with tempfile.TemporaryDirectory(prefix='gesher-stdio-scan-qualification-') as temporary:
++  work=Path(temporary)
++  (work/path).parent.mkdir(parents=True)
++  (work/path).write_bytes(current)
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous=(work/path).read_bytes()
++  expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
++  assert previous==expected and hashlib.sha256(previous).hexdigest()==qualification['previous_sha256'][path],('stdio scan reverse endpoint',path)
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert (work/path).read_bytes()==current,'stdio scan forward reconstruction changed'
++ return previous
++
++# Reverse only the exact broker output transition, including its separately
++# reviewed zero-length input-copy prerequisite, before all original OFD checks.
++# This source proof grants no supplier, controller or native runtime approval.
++BINDER_OUTPUT_QUALIFICATION_SHA256='c221504d110bf48da4dab9577a0fc50f9bd0867a553e3bb9042a2eda82cafe64'
++def preceding_binder_output_source(current=None):
++ folder=ROOT/'tools/net-tcp-priority/qualified'
++ raw=(folder/'binder-output-source.json').read_bytes()
++ assert hashlib.sha256(raw).hexdigest()==BINDER_OUTPUT_QUALIFICATION_SHA256,'Binder output source qualification changed'
++ qualification=json.loads(raw)
++ path='compat/binder/binderd.cc'
++ assert qualification['baseline']=='5aa6b39027e9c38de2781ff9cda066418d25b1ba'
++ assert qualification['native_runtime_approval'] is False
++ assert qualification['paths']==[path]
++ assert list(qualification['source_sha256'])==list(qualification['previous_sha256'])==[path]
++ patch=(folder/'binder-output-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'Binder output transition patch changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
++ if current is None:current=(ROOT/path).read_bytes()
++ assert hashlib.sha256(current).hexdigest()==qualification['source_sha256'][path],path
++ with tempfile.TemporaryDirectory(prefix='gesher-binder-output-qualification-') as temporary:
++  work=Path(temporary)
++  (work/path).parent.mkdir(parents=True)
++  (work/path).write_bytes(current)
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous=(work/path).read_bytes()
++  expected=subprocess.check_output(['git','-C',str(ROOT),'show',qualification['baseline']+':'+path])
++  assert previous==expected and hashlib.sha256(previous).hexdigest()==qualification['previous_sha256'][path],path
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert (work/path).read_bytes()==current,'Binder output forward reconstruction changed'
++ return previous
++
++
++# Main's AppContainer admission changes are outside the original output delta.
++# Keep the original receipt/patch and validate its historical published source,
++# then apply that SAME immutable patch to the separately pinned current-main
++# endpoint. Reverse and forward must reproduce every byte at both endpoints;
++# the new main OFD ledger remains authoritative for the other coupled sources.
++COMPOSED_BINDER_OUTPUT_BASELINE='98215dd7e798090fb5ab6160490ae78f1793ab3a'
++COMPOSED_BINDER_OUTPUT_PRIOR_FEATURE='c61fa022341e38ca2c7e88ce229b0e08ac2170d6'
++COMPOSED_BINDER_OUTPUT_SHA256='1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c'
++COMPOSED_BINDER_OUTPUT_PREVIOUS_SHA256='bf09a9ae3dc590806f27951dc8f9d7df3aa468be958cac1ee47e4467e4fef79c'
++COMPOSED_BINDER_OUTPUT_PATCH_SHA256='1864085a254a4aaee67b3c6fa3fe4f8c3a8012596b5c1fac7fb3d953bcce6d36'
++def preceding_composed_binder_output_source():
++ path='compat/binder/binderd.cc'
++ historical=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_BINDER_OUTPUT_PRIOR_FEATURE+':'+path])
++ preceding_binder_output_source(historical)
++ current=(ROOT/path).read_bytes()
++ assert hashlib.sha256(current).hexdigest()==COMPOSED_BINDER_OUTPUT_SHA256,'composed Binder source changed'
++ expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_BINDER_OUTPUT_BASELINE+':'+path])
++ assert hashlib.sha256(expected).hexdigest()==COMPOSED_BINDER_OUTPUT_PREVIOUS_SHA256,'composed Binder baseline changed'
++ patch=(ROOT/'tools/net-tcp-priority/qualified/binder-output-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==COMPOSED_BINDER_OUTPUT_PATCH_SHA256,'composed Binder original patch changed'
++ with tempfile.TemporaryDirectory(prefix='gesher-composed-binder-output-qualification-') as temporary:
++  work=Path(temporary)
++  (work/path).parent.mkdir(parents=True)
++  (work/path).write_bytes(current)
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous=(work/path).read_bytes()
++  assert previous==expected,'composed Binder reverse endpoint changed'
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert (work/path).read_bytes()==current,'composed Binder forward endpoint changed'
++ return previous
++
++
+ # PR73 unifies Bionic conversion metadata with the existing shared stream
+ # owner. Keep the original OFD receipt and all of its 71 source digests intact.
+ # Only this separately pinned four-file transition may be reversed to main's
+@@ -273,7 +411,7 @@
+ # qualifies Windows execution nor replaces review of the production delta.
+ SHARED_STDIO_BASE = '6d7638b789e21cba6270c1dbfabe5091680c4100'
+ SHARED_STDIO_FEATURE_HEAD = 'de1e43c391275137c7b7b25dc170892684d55b5e'
+-SHARED_STDIO_TRANSITION_SHA256 = '6de1e4d1363de0477e9c89aec4ae4b9b16cd1ee5b2bd1c002d626e5e129dd443'
++SHARED_STDIO_TRANSITION_SHA256 = '8e28669c6d0d077f330d00191846c9b73e40afa12bde0da6ad0bbabd6203f013'
+ SHARED_STDIO_PATHS = (
+  'compat/bionic/stdio_bionic.cc',
+  'compat/posix/include/gesher/stdio.h',
+@@ -281,7 +419,7 @@
+  'compat/posix/src/stdio_output.cc',
+ )
+ 
+-def preceding_shared_stdio_sources(qualification):
++def preceding_shared_stdio_sources(qualification,current_sources):
+  folder=ROOT/'tools/net-tcp-priority/qualified'
+  raw=(folder/'shared-stdio-source.json').read_bytes()
+  assert hashlib.sha256(raw).hexdigest()==SHARED_STDIO_TRANSITION_SHA256,'shared-stdio source transition changed'
+@@ -299,9 +437,10 @@
+  assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'shared-stdio transition patch changed'
+  assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+      ('diff --git a/'+path+' b/'+path).encode() for path in paths],'shared-stdio patch paths changed'
++ assert sorted(current_sources)==paths,'shared-stdio input paths changed'
+  current={};baseline={}
+  for path in paths:
+-  current[path]=(ROOT/path).read_bytes()
++  current[path]=current_sources[path]
+   assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
+   baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':'+path])
+   assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
+@@ -323,17 +462,159 @@
+  return baseline
+ 
+ 
++
++# Compose this leaf with PR73 through a separately pinned current-main delta.
++# The original leaf manifest/patch is still checked against its immutable
++# published ancestor; neither that receipt nor PR73/OFD approval is broadened.
++# Current bytes first reconstruct exact main, then the unchanged PR73 proof
++# reconstructs the original OFD sources. Both historical routes must agree.
++COMPOSED_STDIO_BASELINE='93c32f6f02521790eaf8936f2ff1fa1a650653f2'
++COMPOSED_STDIO_PRIOR_FEATURE='4328a34d04e63f6f3881b34c7dca09ef1fa8ec0b'
++COMPOSED_STDIO_PATHS=['compat/bionic/stdio_bionic.cc', 'compat/posix/include/gesher/stdio.h', 'compat/posix/src/misc.cc', 'compat/posix/src/stdio_output.cc', 'compat/posix/src/stdio_stream_buffer.h']
++COMPOSED_STDIO_SHA256={'compat/bionic/stdio_bionic.cc': '5bb5e959e3a32cbc2ce0ab594724b7207b6fd921c6310e8c28766faf34bad13a', 'compat/posix/include/gesher/stdio.h': '721085722d4253cfdb4c54bce03c79de5815417b05905316589a22a7d076fdc2', 'compat/posix/src/misc.cc': '5b65a38b98964f89a5f9224c4db5ed4655d5a0e22fce5b0c3cd68138f54ffdfa', 'compat/posix/src/stdio_output.cc': '4a82b1d38908aee96ab6e058ac8a4131705f37045e76781a8ef47de328ffb4e2', 'compat/posix/src/stdio_stream_buffer.h': '8f508a1fe0a389cfdb83d54f90690cedf30fbe1112e31526bf5fb5264deeca8d'}
++COMPOSED_STDIO_PREVIOUS_SHA256={'compat/bionic/stdio_bionic.cc': '2ff4ba736e9943b07a555e532682ae2e6ddcaffd115e15f3b1be201c4660b15e', 'compat/posix/include/gesher/stdio.h': '20e0b97b5333daae70d28bb90190e9e4c4f12921561596bdc94cfee38ee47cd7', 'compat/posix/src/misc.cc': '982ff45060b56d1f43cc1580909f9b17ac66889eddf3772f1af52ec763e3648b', 'compat/posix/src/stdio_output.cc': 'b777210b565d8eee802539c2e47c52138159fabe16ca4fdd9fd0c2679118d04f', 'compat/posix/src/stdio_stream_buffer.h': 'f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d'}
++COMPOSED_STDIO_PATCH_SHA256='f2c5d659b406965aaaf65c0f69e03f62a5d09deb140f6db1514cd760164cf9af'
++def preceding_composed_stdio_sources(current_sources=None):
++ current=({path:(ROOT/path).read_bytes() for path in COMPOSED_STDIO_PATHS}
++          if current_sources is None else dict(current_sources))
++ assert list(current)==COMPOSED_STDIO_PATHS,'composed stdio input paths changed'
++ assert list(COMPOSED_STDIO_SHA256)==list(COMPOSED_STDIO_PREVIOUS_SHA256)==COMPOSED_STDIO_PATHS,'composed stdio endpoint paths changed'
++ for path,actual in current.items():
++  assert hashlib.sha256(actual).hexdigest()==COMPOSED_STDIO_SHA256[path],path
++ patch=(ROOT/'tools/net-tcp-priority/qualified/stdio-line-shared-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==COMPOSED_STDIO_PATCH_SHA256,'composed stdio transition changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==COMPOSED_STDIO_PATHS,'composed stdio patch paths changed'
++ with tempfile.TemporaryDirectory(prefix='gesher-composed-stdio-qualification-') as temporary:
++  work=Path(temporary)
++  for path,actual in current.items():
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(actual)
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous={path:(work/path).read_bytes() for path in COMPOSED_STDIO_PATHS}
++  for path,actual in previous.items():
++   expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_BASELINE+':'+path])
++   assert actual==expected and hashlib.sha256(actual).hexdigest()==COMPOSED_STDIO_PREVIOUS_SHA256[path],('composed stdio reverse endpoint',path)
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'composed stdio forward endpoint'
++ return previous
++
++# Compose the scanner with the reviewed line-input integration checkpoint.
++# The original scanner manifest/patch remains checked against its immutable
++# published ancestor, retaining its source proof and runtime approval state.
++# Current bytes reconstruct the exact line-input checkpoint; line/shared-stdio
++# normalization then restores every original OFD source endpoint below.
++COMPOSED_SCAN_BASELINE='dec85ab146a0b95994efa9abd65910693d0019fb'
++COMPOSED_SCAN_PRIOR_FEATURE='d38246cb583b669167909902529cb00f4f63e5eb'
++COMPOSED_SCAN_PATHS=['compat/posix/src/stdio_output.cc']
++COMPOSED_SCAN_SHA256={'compat/posix/src/stdio_output.cc': 'b19de754ba6bf99c122c2ce66418777111ffa3a4e19062a21a3da2145c7d2979'}
++COMPOSED_SCAN_PREVIOUS_SHA256={'compat/posix/src/stdio_output.cc': '4a82b1d38908aee96ab6e058ac8a4131705f37045e76781a8ef47de328ffb4e2'}
++COMPOSED_SCAN_PATCH_SHA256='ac3844172066ad228ec93f5f33c5874ecbc51ca0de9d1486b807eca46d323d00'
++def preceding_composed_scan_sources(current_sources=None):
++ current=({path:(ROOT/path).read_bytes() for path in COMPOSED_SCAN_PATHS}
++          if current_sources is None else dict(current_sources))
++ assert list(current)==COMPOSED_SCAN_PATHS,'composed scan input paths changed'
++ assert list(COMPOSED_SCAN_SHA256)==list(COMPOSED_SCAN_PREVIOUS_SHA256)==COMPOSED_SCAN_PATHS,'composed scan endpoint paths changed'
++ for path,actual in current.items():
++  assert hashlib.sha256(actual).hexdigest()==COMPOSED_SCAN_SHA256[path],path
++ patch=(ROOT/'tools/net-tcp-priority/qualified/stdio-scan-shared-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==COMPOSED_SCAN_PATCH_SHA256,'composed scan transition changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==COMPOSED_SCAN_PATHS,'composed scan patch paths changed'
++ with tempfile.TemporaryDirectory(prefix='gesher-composed-stdio-qualification-') as temporary:
++  work=Path(temporary)
++  for path,actual in current.items():
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(actual)
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous={path:(work/path).read_bytes() for path in COMPOSED_SCAN_PATHS}
++  for path,actual in previous.items():
++   expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_BASELINE+':'+path])
++   assert actual==expected and hashlib.sha256(actual).hexdigest()==COMPOSED_SCAN_PREVIOUS_SHA256[path],('composed scan reverse endpoint',path)
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'composed scan forward endpoint'
++ return previous
++
++# Normalize the scanner before line input; shared-stdio then receives its
++# unchanged complete inputs. Every stage is independently reversible and pinned.
++def current_stdio_line_inputs():
++ scan=preceding_composed_scan_sources()
++ assert SNPRINTF_BOUNDS_SOURCE not in scan,'formatter/scanner source qualifications overlap'
++ current={path:scan[path] if path in scan else (ROOT/path).read_bytes() for path in COMPOSED_STDIO_PATHS}
++ current[SNPRINTF_BOUNDS_SOURCE]=preceding_snprintf_bounds_source()
++ return current
++
++def preceding_stdio_feature_sources():
++ return preceding_composed_stdio_sources(current_stdio_line_inputs())
++
++# The guest snprintf prefix accumulator changes only this formatter source.
++# Reverse its exact transition to the reviewed line-input integration checkpoint.
++# The line-input and original shared-stdio transitions then restore every OFD
++# digest. This grants no supplier, controller or native runtime approval.
++SNPRINTF_BOUNDS_SOURCE='compat/bionic/stdio_bionic.cc'
++SNPRINTF_BOUNDS_BASELINE='dec85ab146a0b95994efa9abd65910693d0019fb'
++SNPRINTF_BOUNDS_SHA256='96a90eb52ad6e4b91e1ee0e16c526894e5426a16f3a65e61e11e001a1caed75f'
++SNPRINTF_BOUNDS_PREVIOUS_SHA256='5bb5e959e3a32cbc2ce0ab594724b7207b6fd921c6310e8c28766faf34bad13a'
++SNPRINTF_BOUNDS_PATCH_SHA256='416b44106f476ea5c4dcd519bb8b0c100cb3d614e0afdcef0be334cfd4ec7208'
++def preceding_snprintf_bounds_source():
++ path=SNPRINTF_BOUNDS_SOURCE
++ current=(ROOT/path).read_bytes()
++ assert hashlib.sha256(current).hexdigest()==SNPRINTF_BOUNDS_SHA256,path
++ patch=(ROOT/'tools/net-tcp-priority/qualified/snprintf-bounds-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==SNPRINTF_BOUNDS_PATCH_SHA256,'snprintf bounds transition changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
++ with tempfile.TemporaryDirectory(prefix='gesher-snprintf-qualification-') as temporary:
++  work=Path(temporary)
++  (work/path).parent.mkdir(parents=True)
++  (work/path).write_bytes(current)
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous=(work/path).read_bytes()
++  expected=subprocess.check_output(['git','-C',str(ROOT),'show',SNPRINTF_BOUNDS_BASELINE+':'+path])
++  assert previous==expected and hashlib.sha256(previous).hexdigest()==SNPRINTF_BOUNDS_PREVIOUS_SHA256,('snprintf bounds reverse endpoint',path)
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert (work/path).read_bytes()==current,'snprintf bounds forward reconstruction changed'
++ return previous
+ # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
+ # property file already qualified with #118's shared environment owner. Reverse
+ # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
+ # the original OFD receipt and every one of its hashes remain unchanged below.
+ # This source qualification grants no supplier, controller or runtime approval.
+-PROPERTY_REVISION_SHA256 = 'fc2e4d97ee02d1f32e49aeccd648ee386cd44debf9092b4eef48b0c7e2f1499a'
++PROPERTY_REVISION_SHA256 = '2a4fd531e6609b7705710c212d7772e1e94c41d3618323f5641852fb62fe4c24'
+ PROPERTY_REVISION_HEADER_SHA256 = '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3'
+ PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27'
++# #421 makes the property area's build.prop loader keep ro.opengles.version only
++# as a version Gesher serves (gesher/gles_version_property.h): one include and
++# one filter line in Initial(). Reverse only that exact transition to the bytes
++# PROPERTY_REVISION_SHA256 pins, then the NATIVE-13 transition below as before.
++# This source qualification grants no supplier, controller or runtime approval.
++GLES_PROPERTY_SHA256 = '4d7926dd316851b91bd45620a967da119b54e2408c44e351303ab937866f440c'
++GLES_PROPERTY_PATCH = 'tools/net-tcp-priority/qualified/gles-property-source.patch'
++GLES_PROPERTY_PATCH_SHA256 = '72a6c1c9ba827072ba13c9aac32774e4dcda74260d54f8853e25ae7971be06f6'
++def preceding_gles_property_source():
++ path='compat/posix/src/system_properties.cc'
++ source=(ROOT/path).read_bytes()
++ assert hashlib.sha256(source).hexdigest()==GLES_PROPERTY_SHA256,path
++ patch=(ROOT/GLES_PROPERTY_PATCH).read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==GLES_PROPERTY_PATCH_SHA256,'gles property transition changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
++ with tempfile.TemporaryDirectory(prefix='gesher-gles-property-qualification-') as temporary:
++  work=Path(temporary)
++  (work/path).parent.mkdir(parents=True)
++  (work/path).write_bytes(source)
++  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous=(work/path).read_bytes()
++  # The transition applied forward to the reversed bytes reproduces every current byte.
++  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert (work/path).read_bytes()==source,'gles property transition does not reproduce: '+path
++ return previous
+ def preceding_logging_property_source():
+  path='compat/posix/src/system_properties.cc'
+- source=(ROOT/path).read_bytes()
++ source=preceding_gles_property_source()
+  assert hashlib.sha256(source).hexdigest()==PROPERTY_REVISION_SHA256,path
+  header='compat/posix/include/gesher/system_properties.h'
+  assert hashlib.sha256((ROOT/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
+@@ -347,6 +628,46 @@
+   subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+   subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+   return (work/path).read_bytes()
++# Releasing a memfd's writable-mapping claim (a LockFileEx lease that lives as
++# long as the writable shared mapping) changes three sources the OFD receipt
++# pins. Reverse only that exact transition to main's bytes at its baseline; the
++# original OFD receipt and every one of its hashes remain unchanged below.
++# This source qualification grants no supplier, controller or runtime approval.
++MEMFD_LEASE_QUALIFICATION='tools/net-tcp-priority/qualified/memfd-lease-source.json'
++MEMFD_LEASE_PATCH='tools/net-tcp-priority/qualified/memfd-lease-source.patch'
++MEMFD_LEASE_QUALIFICATION_SHA256 = '6cf8d4bbad04834885426b63c468f0f7f4b1b64784190ed8cab523bbf082ae8c'
++MEMFD_LEASE_BASELINE='e074b67b2f83ce9128c11713171329e9fbbf6739'
++MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
++def preceding_memfd_lease_sources():
++ raw=(ROOT/MEMFD_LEASE_QUALIFICATION).read_bytes()
++ assert hashlib.sha256(raw).hexdigest()==MEMFD_LEASE_QUALIFICATION_SHA256,'memfd lease source qualification changed'
++ qualification=json.loads(raw)
++ assert qualification['baseline']==MEMFD_LEASE_BASELINE and qualification['native_runtime_approval'] is False
++ assert qualification['paths']==MEMFD_LEASE_PATHS
++ assert sorted(qualification['previous_sha256'])==sorted(qualification['source_sha256'])==sorted(MEMFD_LEASE_PATHS)
++ patch=(ROOT/MEMFD_LEASE_PATCH).read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'memfd lease transition patch changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==MEMFD_LEASE_PATHS
++ current={path:(ROOT/path).read_bytes() for path in MEMFD_LEASE_PATHS}
++ for path in MEMFD_LEASE_PATHS:
++  assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
++ with tempfile.TemporaryDirectory(prefix='gesher-memfd-lease-qualification-') as temporary:
++  work=Path(temporary)
++  for path in MEMFD_LEASE_PATHS:
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(current[path])
++  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous={path:(work/path).read_bytes() for path in MEMFD_LEASE_PATHS}
++  # The reversed bytes are exactly the baseline's, and the transition applied
++  # forward to them reproduces every current byte.
++  for path in MEMFD_LEASE_PATHS:
++   assert hashlib.sha256(previous[path]).hexdigest()==qualification['previous_sha256'][path],'memfd lease reverse transition is not the baseline: '+path
++   assert previous[path]==subprocess.check_output(['git','-C',str(ROOT),'show',MEMFD_LEASE_BASELINE+':'+path]),'memfd lease reverse transition is not the baseline: '+path
++  subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++  for path in MEMFD_LEASE_PATHS:assert (work/path).read_bytes()==current[path],'memfd lease transition does not reproduce: '+path
++ return previous
+ # Bionic's independently reviewed memmem search changes only this include and
+ # complete wrapper. Restore those exact bytes before applying the UNCHANGED
+ # OFD qualification digest. Pin the new pure-search helper separately: no other
+@@ -394,12 +715,77 @@
+         if (!result) waiting_files = true;
+ '''),
+ )
++# Storage policy adds file-path checks and launch initialization to files also
++# covered by the OFD receipt. Reverse this separately pinned transition to the
++# exact main checkpoint before running EVERY original receipt and TCP check.
++# The helper pins bind the new references to their reviewed source bytes only:
++# neither this transition nor a passing source check qualifies native execution.
++STORAGE_POLICY_QUALIFICATION='tools/net-tcp-priority/qualified/storage-policy-source.json'
++STORAGE_POLICY_PATCH='tools/net-tcp-priority/qualified/storage-policy-source.patch'
++STORAGE_POLICY_QUALIFICATION_SHA256='1274a14dce7607f2ea1a6eea833f4036a48a8fe306b58e799cb04080e613cc41'
++STORAGE_POLICY_BASELINE='43e210f4eb7505b8e118044e28d4870433bbb23f'
++STORAGE_POLICY_PATHS=[
++ 'compat/art/dalvikvm_main.cc',
++ 'compat/elf/exec/exec_spawn.cc',
++ 'compat/elf/exec/gesher_exec.cc',
++ 'compat/posix/posix.cmake',
++ 'compat/posix/src/fsops.cc',
++ 'compat/posix/src/socket.cc',
++ 'compat/posix/src/system.cc',
++ 'compat/posix/src/unistd.cc',
++ 'tests/art-temp/entry_test.cc',
++ 'tests/native/ofd_transfer_host_test.cc.in',
++ 'tools/test_temp_directory.py',
++]
++STORAGE_POLICY_HELPERS=[
++ 'compat/posix/include/gesher/storage_policy.h',
++ 'compat/posix/src/storage_policy.cc',
++ 'compat/posix/src/storage_policy.h',
++]
++def preceding_storage_policy_sources():
++ raw=(ROOT/STORAGE_POLICY_QUALIFICATION).read_bytes()
++ assert hashlib.sha256(raw).hexdigest()==STORAGE_POLICY_QUALIFICATION_SHA256,'storage policy source qualification changed'
++ qualification=json.loads(raw)
++ assert set(qualification)=={'baseline','baseline_policy_sha256','paths','previous_sha256',
++                             'source_sha256','helper_sha256','patch_sha256','native_runtime_approval'},'storage policy transition schema changed'
++ assert qualification['baseline']==STORAGE_POLICY_BASELINE and qualification['native_runtime_approval'] is False
++ assert qualification['paths']==STORAGE_POLICY_PATHS
++ assert sorted(qualification['previous_sha256'])==sorted(qualification['source_sha256'])==STORAGE_POLICY_PATHS
++ assert sorted(qualification['helper_sha256'])==STORAGE_POLICY_HELPERS
++ baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':tools/net-tcp-priority/test-selected-policy.py'])
++ assert hashlib.sha256(baseline_policy).hexdigest()==qualification['baseline_policy_sha256'],'storage policy baseline policy changed'
++ for path in STORAGE_POLICY_HELPERS:
++  assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==qualification['helper_sha256'][path],path
++ patch=(ROOT/STORAGE_POLICY_PATCH).read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'storage policy transition patch changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STORAGE_POLICY_PATHS
++ current={path:(ROOT/path).read_bytes() for path in STORAGE_POLICY_PATHS}
++ baseline={path:subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':'+path]) for path in STORAGE_POLICY_PATHS}
++ for path in STORAGE_POLICY_PATHS:
++  assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
++  assert hashlib.sha256(baseline[path]).hexdigest()==qualification['previous_sha256'][path],path
++  assert current[path]!=baseline[path],('empty storage policy transition',path)
++ with tempfile.TemporaryDirectory(prefix='gesher-storage-policy-qualification-') as temporary:
++  work=Path(temporary)
++  for path in STORAGE_POLICY_PATHS:
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(current[path])
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  for path in STORAGE_POLICY_PATHS:
++   assert (work/path).read_bytes()==baseline[path],('storage policy reverse endpoint',path)
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  for path in STORAGE_POLICY_PATHS:
++   assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
++ return baseline
++
+ # Reverse only the reviewed adaptive stable-directory sort before the exact
+ # Memrchr transition and all original OFD checks. It grants no supplier,
+ # controller or runtime approval and admits no other POSIX source change.
+-SCANDIR_BASE = '7e205878cec54dbbd52bbac8a90b22e190798a5e'
++SCANDIR_BASE = '5894cea6c2bc35d1ae316f8bb401181689a85424'
+ SCANDIR_SOURCE = 'compat/bionic/posix_bionic.cc'
+-SCANDIR_TRANSITION_SHA256 = '1040207f618e91aa77ec091700cb31474480f17509e301a195f4f904fa84ba4b'
++SCANDIR_TRANSITION_SHA256 = '30447f7968242481142d2b4ac7cabff7231560210c1be8a5fd67393cef1b8758'
+ def preceding_scandir_source(current):
+  folder=ROOT/'tools/net-tcp-priority/qualified'
+  raw=(folder/'scandir-source.json').read_bytes()
+@@ -436,9 +822,9 @@
+ # Reverse only the reviewed bounded memrchr word-search delta to the exact
+ # public main source before the unchanged OFD digest is checked. This admits
+ # no other POSIX byte and grants no supplier, controller or runtime approval.
+-MEMRCHR_BASE = 'e505ad227523aaca566d05b8af6e466495c819cc'
++MEMRCHR_BASE = '93c32f6f02521790eaf8936f2ff1fa1a650653f2'
+ MEMRCHR_SOURCE = 'compat/bionic/posix_bionic.cc'
+-MEMRCHR_TRANSITION_SHA256 = 'c47d6b869fc5791a64badde4c0c2923ec91771ee1000cb0988533dfbf2cffe92'
++MEMRCHR_TRANSITION_SHA256 = 'f814eed0ce7bee4fe49c0a36415e1fb4343db1930ef18115c5eb3693bd7f2c13'
+ def preceding_memrchr_source(qualification):
+  folder=ROOT/'tools/net-tcp-priority/qualified'
+  raw=(folder/'memrchr-source.json').read_bytes()
+@@ -474,7 +860,96 @@
+   assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
+  return baseline
+ 
++# The receiver-selected fence flag is an exact, separately bounded transition.
++# Restore the original published feature files to the complete main972 bytes
++# in both directions as historical evidence. The original
++# OFD patch, checkpoint, authority, supplier inputs and runtime approval remain
++# unchanged; this is source preservation, not native runtime approval.
++FENCE_RECEIVE_BASE='972c2b42b40c4ac799e147f5e352d07ba615d0fb'
++FENCE_RECEIVE_POLICY_SHA256='a32bc8e65cf655635c04fb86f1ea23d668d125a79a8fef4732c86055b2985ac0'
++FENCE_RECEIVE_QUALIFICATION_SHA256='a34d606deb33143e43d67b6b21eef5eee1ae66780aac8ead055656d1259b1190'
++FENCE_RECEIVE_PATHS=['compat/posix/src/native_fence.cc',
++                     'compat/posix/src/native_fence_internal.h',
++                     'compat/posix/src/unix_rights.cc']
++FENCE_RECEIVE_OFD_QUALIFICATION_SHA256='f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
++def preceding_fence_receive_sources(current):
++ folder=ROOT/'tools/net-tcp-priority/qualified'
++ raw=(folder/'native-fence-receive-source.json').read_bytes()
++ assert hashlib.sha256(raw).hexdigest()==FENCE_RECEIVE_QUALIFICATION_SHA256,'fence receive qualification changed'
++ qualification=json.loads(raw)
++ assert qualification['baseline']==FENCE_RECEIVE_BASE
++ assert qualification['baseline_policy_sha256']==FENCE_RECEIVE_POLICY_SHA256
++ assert qualification['ofd_qualification_sha256']==FENCE_RECEIVE_OFD_QUALIFICATION_SHA256
++ original_ofd=subprocess.check_output(['git','show',FENCE_RECEIVE_BASE+':tools/net-tcp-priority/qualified/ofd-stream-source.json'],cwd=ROOT)
++ assert hashlib.sha256(original_ofd).hexdigest()==FENCE_RECEIVE_OFD_QUALIFICATION_SHA256,'historical fence OFD receipt changed'
++ assert qualification['paths']==FENCE_RECEIVE_PATHS
++ assert list(qualification['before_sha256'])==list(qualification['after_sha256'])==FENCE_RECEIVE_PATHS
++ original_policy=subprocess.check_output(['git','show',FENCE_RECEIVE_BASE+':tools/net-tcp-priority/test-selected-policy.py'],cwd=ROOT)
++ assert hashlib.sha256(original_policy).hexdigest()==FENCE_RECEIVE_POLICY_SHA256,'fence baseline policy changed'
++ patch=(folder/'native-fence-receive-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'fence receive patch changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==FENCE_RECEIVE_PATHS
++ assert list(current)==FENCE_RECEIVE_PATHS,'historical fence input paths changed'
++ previous={path:subprocess.check_output(['git','show',FENCE_RECEIVE_BASE+':'+path],cwd=ROOT) for path in FENCE_RECEIVE_PATHS}
++ for path in FENCE_RECEIVE_PATHS:
++  assert hashlib.sha256(current[path]).hexdigest()==qualification['after_sha256'][path],path
++  assert hashlib.sha256(previous[path]).hexdigest()==qualification['before_sha256'][path],path
++ with tempfile.TemporaryDirectory(prefix='gesher-fence-receive-qualification-') as temporary:
++  work=Path(temporary)
++  for path in FENCE_RECEIVE_PATHS:
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(current[path])
++  for direction,expected in [(['--reverse'],previous),([],current)]:
++   subprocess.run(['git','apply',*direction,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++   subprocess.run(['git','apply',*direction,'-'],input=patch,cwd=work,check=True,capture_output=True)
++   assert {path:(work/path).read_bytes() for path in FENCE_RECEIVE_PATHS}==expected,'fence receive exact roundtrip changed'
++ return previous
++# Compose the original receiver-flag correction with the exact integration
++# checkpoint, retaining current completion timestamps, SyncFileIoctl, fork
++# locks and pipe-client access. The old leaf evidence is independently checked
++# against its published source. Neither OFD receipt is rewritten; all current
++# 71 source hashes and supplier/runtime restrictions remain authoritative.
++COMPOSED_FENCE_BASELINE='3030a5aacfbe7f053fd3811eedfdaedcb2830bff'
++COMPOSED_FENCE_PRIOR_FEATURE='8df95e1cc29e74ef2d0853074bdc5cf6548baf0a'
++COMPOSED_FENCE_BASE_POLICY_SHA256='18df8aa9ca299769fc2aa5f7f9983ef28d3a19bc68f6454ade9305cdb74f99cb'
++COMPOSED_FENCE_PATHS=['compat/posix/src/native_fence.cc', 'compat/posix/src/native_fence_internal.h', 'compat/posix/src/unix_rights.cc']
++COMPOSED_FENCE_SHA256={'compat/posix/src/native_fence.cc': '99f71ad798ae5022c0866d59ab0878b2761b9d63c801bb9330df6f8ef14cc3b2', 'compat/posix/src/native_fence_internal.h': 'd6d6ff6c9e4a756f0127b6fe483943a6bc25a92a2037a8e107262a54b4060555', 'compat/posix/src/unix_rights.cc': 'b30768aa9378375374d9c5a79bad7321071eb13e041d5558db6a8309a4c7ca51'}
++COMPOSED_FENCE_PREVIOUS_SHA256={'compat/posix/src/native_fence.cc': 'ffe3de1c97099bfe2b78a1187609f221b541e8b66fbb4f460c44232efa34ea09', 'compat/posix/src/native_fence_internal.h': '0349e7b0bf9544ffdb429c3650e1bbf681893aebb0b4b3e0a74ed64d2ca346a6', 'compat/posix/src/unix_rights.cc': 'c958136f7daa28fec51bc338014eaf1bae8df050b6594fa759aa12acc9334a4e'}
++COMPOSED_FENCE_PATCH_SHA256='685da84c0981a68cba5aff1765a36edd98a996dc70e982b8f639b1d6a3395643'
++def preceding_composed_fence_receive_sources():
++ assert COMPOSED_FENCE_PATHS==FENCE_RECEIVE_PATHS,'composed fence paths changed'
++ assert list(COMPOSED_FENCE_SHA256)==list(COMPOSED_FENCE_PREVIOUS_SHA256)==COMPOSED_FENCE_PATHS,'composed fence endpoint paths changed'
++ original_policy=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_FENCE_BASELINE+':tools/net-tcp-priority/test-selected-policy.py'])
++ assert hashlib.sha256(original_policy).hexdigest()==COMPOSED_FENCE_BASE_POLICY_SHA256,'composed fence baseline policy changed'
++ historical={path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_FENCE_PRIOR_FEATURE+':'+path]) for path in FENCE_RECEIVE_PATHS}
++ preceding_fence_receive_sources(historical)
++ current={path:(ROOT/path).read_bytes() for path in COMPOSED_FENCE_PATHS}
++ for path,actual in current.items():
++  assert hashlib.sha256(actual).hexdigest()==COMPOSED_FENCE_SHA256[path],path
++ patch=(ROOT/'tools/net-tcp-priority/qualified/native-fence-receive-composed.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==COMPOSED_FENCE_PATCH_SHA256,'composed fence patch changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==COMPOSED_FENCE_PATHS,'composed fence patch paths changed'
++ with tempfile.TemporaryDirectory(prefix='gesher-composed-fence-qualification-') as temporary:
++  work=Path(temporary)
++  for path,actual in current.items():
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(actual)
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous={path:(work/path).read_bytes() for path in COMPOSED_FENCE_PATHS}
++  for path,actual in previous.items():
++   expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_FENCE_BASELINE+':'+path])
++   assert actual==expected and hashlib.sha256(actual).hexdigest()==COMPOSED_FENCE_PREVIOUS_SHA256[path],('composed fence reverse endpoint',path)
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'composed fence forward endpoint'
++ return previous
++
+ def preceding_ofd_sources():
++ fence_main=preceding_composed_fence_receive_sources()
++ stdio_main=preceding_stdio_feature_sources()
++ historical=preceding_stdio_line_sources({path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_PRIOR_FEATURE+':'+path]) for path in COMPOSED_STDIO_PATHS})
++ historical_scan=preceding_stdio_scan_source(subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_PRIOR_FEATURE+':'+COMPOSED_SCAN_PATHS[0]]))
+  folder=ROOT/'tools/net-tcp-priority/qualified'
+  raw=(folder/'ofd-stream-source.json').read_bytes()
+  assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
+@@ -485,9 +960,28 @@
+         'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
+  assert qualification['paths']==paths
+  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
+- shared_stdio=preceding_shared_stdio_sources(qualification)
++ memfd_lease=preceding_memfd_lease_sources()
++ shared_input={path:stdio_main[path] if path in stdio_main else (ROOT/path).read_bytes() for path in SHARED_STDIO_PATHS}
++ shared_stdio=preceding_shared_stdio_sources(qualification,shared_input)
++ assert shared_stdio[COMPOSED_SCAN_PATHS[0]]==historical_scan,'historical scanner and composed shared-stdio normalization disagree'
++ for path,previous in historical.items():
++  current=shared_stdio[path] if path in shared_stdio else stdio_main[path]
++  if path=='compat/posix/src/misc.cc':
++   # Main added real dumpability/ptrace protections after the historical receipt.
++   # Keep both complete immutable endpoints; the reviewed line delta is still
++   # reversed separately above and every current OFD source digest is unchanged.
++   expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_BASELINE+':'+path])
++   assert current==expected,('current main misc endpoint changed',path)
++  else:
++   assert current==previous,('historical stdio and current-main normalization disagree',path)
++ storage_policy=preceding_storage_policy_sources()
++ assert memfd_lease.keys().isdisjoint(shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
++ assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
++ assert fence_main.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()|storage_policy.keys()),'source qualifications overlap'
++ preceding={**memfd_lease,**stdio_main,**shared_stdio,**storage_policy,**fence_main}
+  for path,digest in qualification['source_sha256'].items():
+-  actual=shared_stdio[path] if path in shared_stdio else (ROOT/path).read_bytes()
++  actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
++  if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source()
+   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
+   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
+   if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification)
+@@ -496,7 +990,7 @@
+   work=Path(temporary)
+   for path in paths:
+    (work/path).parent.mkdir(parents=True,exist_ok=True)
+-   (work/path).write_bytes((ROOT/path).read_bytes())
++   (work/path).write_bytes(preceding.get(path,(ROOT/path).read_bytes()))
+   subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+   subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+   previous={path:(work/path).read_bytes() for path in paths}
+@@ -521,6 +1015,32 @@
+      actual=actual.replace(after,before,1)
+    assert actual==expected,(path,marker)
+  return previous
++# Guest fork (ADR 0092) registers two fd.cc locks and one winsock.cc lock in
++# its fork set. Each file's one exact addition at its end, and nothing else, is
++# removed before the reviewed hunks and every byte check below run on the result.
++FORK_LOCK_ADDITIONS={
++ 'compat/posix/src/fd.cc':(b'''
++// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
++#if __has_include(<gesher/fork.h>)
++#include <gesher/fork.h>
++#endif
++#ifdef GESHER_FORK_LOCK
++// fork (gesher/fork.h): the socket table and descriptor waiters.
++GESHER_FORK_LOCK(gesher::kForkOrderDescriptors, std::mutex, gesher::table_mutex);
++GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, waiters_mutex);
++#endif
++''',),
++ 'compat/posix/src/winsock.cc':(b'''
++// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
++#if __has_include(<gesher/fork.h>)
++#include <gesher/fork.h>
++#endif
++#ifdef GESHER_FORK_LOCK
++// fork (gesher/fork.h): the local IPv4 address cache recvmsg's IP_PKTINFO reads.
++GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, gesher::ws::LocalAddressCache().mutex);
++#endif
++''',),
++}
+ # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
+ # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
+ # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
+@@ -529,7 +1049,9 @@
+ # checkpoint's bytes. Any other change fails here as before.
+ REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
+ REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
+-REVIEWED_PATCH_SHA256='5fe00fbb94e27fe5d5b5fe29e035b28f4ab3c3a2ac7fe0318ba3918e325d2433'
++# ADR 0097 replaces system.cc's ENOSYS mkfifo stub with a relocation comment.
++# The reviewed receipt adds exactly that hunk; every byte check below remains.
++REVIEWED_PATCH_SHA256='ee4583db58b83515430b5a4333cb95d3ef037ddc5731f5ad0f7958ba858a8e55'
+ def reviewed(path,actual):
+  raw=(ROOT/REVIEWED_PATCH).read_bytes()
+  assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
+@@ -555,10 +1077,66 @@
+   b"archive = Path('tcp-ndk-archive/android-ndk-r27c-linux.zip')\narchive.parent.mkdir(exist_ok=True)\n",
+   b"# Shares native2's publisher-archive cache entry (same path and key), so one copy is kept.\narchive = Path('dns-ndk.zip')\n"),
+ }
++# The independently reviewed TSF repair gives output-size queries their own
++# metadata-only file objects. Reverse only its exact two-file transition before
++# every original controller/fixture comparison below. The qualified TCP copy,
++# suppliers, deadlines and approval receipts remain unchanged; this is source
++# identity qualification, not proof of Windows execution or runtime approval.
++TSF_METADATA_BASE='3b2eaca95b5ddd9cee3c3db4e430460e512eb355'
++TSF_METADATA_FEATURE_HEAD='8d955bd7b6ec85b84fa31f7df685197ddb963276'
++TSF_METADATA_QUALIFICATION_SHA256='b6f40f75fa20ebfd9e47473c2cd2a2d5dfe697dd4b01e50d2c04f925545d6e22'
++TSF_METADATA_PATHS=('tools/windows4/TsfJobSupervisor.cs','tools/windows4/test-tsf-job-supervisor.ps1')
++TSF_METADATA_ADDITIONAL_SOURCE='tools/windows4/TsfOutputMetadataChecks.cs'
++def preceding_tsf_metadata_sources():
++ folder=ROOT/'tools/net-tcp-priority/qualified'
++ raw=(folder/'tsf-output-metadata-source.json').read_bytes()
++ assert hashlib.sha256(raw).hexdigest()==TSF_METADATA_QUALIFICATION_SHA256,'TSF metadata qualification changed'
++ transition=json.loads(raw)
++ assert set(transition)=={'baseline','feature_head','baseline_policy_sha256','paths',
++                         'before_sha256','after_sha256','additional_sources','patch_sha256'},'TSF metadata schema changed'
++ assert transition['baseline']==TSF_METADATA_BASE,'TSF metadata baseline changed'
++ assert transition['feature_head']==TSF_METADATA_FEATURE_HEAD,'TSF metadata feature checkpoint changed'
++ paths=list(TSF_METADATA_PATHS)
++ assert transition['paths']==paths,'TSF metadata paths changed'
++ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==paths,'TSF metadata endpoint paths changed'
++ assert list(transition['additional_sources'])==[TSF_METADATA_ADDITIONAL_SOURCE],'TSF metadata additional paths changed'
++ baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_BASE+':tools/net-tcp-priority/test-selected-policy.py'])
++ assert hashlib.sha256(baseline_policy).hexdigest()==transition['baseline_policy_sha256'],'TSF metadata baseline policy changed'
++ additional=(ROOT/TSF_METADATA_ADDITIONAL_SOURCE).read_bytes()
++ assert hashlib.sha256(additional).hexdigest()==transition['additional_sources'][TSF_METADATA_ADDITIONAL_SOURCE],TSF_METADATA_ADDITIONAL_SOURCE
++ published=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_FEATURE_HEAD+':'+TSF_METADATA_ADDITIONAL_SOURCE])
++ assert additional==published,'TSF metadata additional source endpoint'
++ patch=(folder/'tsf-output-metadata-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'TSF metadata patch changed'
++ assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
++     ('diff --git a/'+path+' b/'+path).encode() for path in paths],'TSF metadata patch paths changed'
++ current={};baseline={}
++ for path in paths:
++  current[path]=(ROOT/path).read_bytes()
++  assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
++  baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_BASE+':'+path])
++  assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
++  assert current[path]!=baseline[path],('empty TSF metadata transition',path)
++ with tempfile.TemporaryDirectory(prefix='gesher-tsf-metadata-qualification-') as temporary:
++  work=Path(temporary)
++  for path in paths:
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(current[path])
++  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  for path in paths:
++   assert (work/path).read_bytes()==baseline[path],('TSF metadata reverse endpoint',path)
++  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
++  for path in paths:
++   assert (work/path).read_bytes()==current[path],('TSF metadata forward endpoint',path)
++ return baseline
++
+ REVIEWED_PATHS=('compat/posix/src/fd.cc','compat/posix/src/socket.cc','compat/posix/src/socket_internal.h','compat/posix/src/system.cc','compat/posix/src/winsock.cc')
+ def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
+ def check():
+  preceding=preceding_ofd_sources()
++ preceding.update(preceding_tsf_metadata_sources())
+  assert hashlib.sha256((ROOT/OWNER_THREAD_DIAGNOSTIC_PATH).read_bytes()).hexdigest()==OWNER_THREAD_DIAGNOSTIC_SHA256,OWNER_THREAD_DIAGNOSTIC_PATH
+  assert hashlib.sha256((ROOT/FD_POLL_SCRATCH_HEADER).read_bytes()).hexdigest()==FD_POLL_SCRATCH_SHA256,FD_POLL_SCRATCH_HEADER
+  paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
+@@ -570,6 +1148,9 @@
+          CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
+   expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
+   actual=preceding.get(path,(ROOT/path).read_bytes())
++  for addition in FORK_LOCK_ADDITIONS.get(path,()):
++   assert actual.count(addition)==1 and actual.endswith(addition),path
++   actual=actual[:-len(addition)]
+   if path=='compat/posix/src/winsock.cc':
+    assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
+    actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
+@@ -663,7 +1244,90 @@
+  assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
+  for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
+  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
+- print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
++ print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition exact_gles_property_transition exact_memfd_lease_transition exact_storage_policy_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
++
++def storage_policy_negative_controls():
++ # Isolated read substitution only: no source files are changed or executed.
++ # Refreshing this transition's after hash cannot admit an extra byte outside
++ # its exact patch, because the reverse endpoint is still the historical main.
++ from unittest.mock import patch
++ original=Path.read_bytes
++ qualification=json.loads(original(ROOT/STORAGE_POLICY_QUALIFICATION))
++ checked=repinned=0
++ for name in STORAGE_POLICY_PATHS+STORAGE_POLICY_HELPERS+[STORAGE_POLICY_PATCH]:
++  target=ROOT/name
++  source=original(target)
++  data=source.replace(b'@@',b'@x',1) if name==STORAGE_POLICY_PATCH else source+b'\n'
++  assert data!=source,name
++  for repin in (False,True) if name in STORAGE_POLICY_PATHS or name==STORAGE_POLICY_PATCH else (False,):
++   pins={}
++   receipt=None
++   if repin:
++    updated=json.loads(json.dumps(qualification))
++    if name==STORAGE_POLICY_PATCH:updated['patch_sha256']=hashlib.sha256(data).hexdigest()
++    else:updated['source_sha256'][name]=hashlib.sha256(data).hexdigest()
++    receipt=(json.dumps(updated,indent=2)+'\n').encode()
++    pins['STORAGE_POLICY_QUALIFICATION_SHA256']=hashlib.sha256(receipt).hexdigest()
++    repinned+=1
++   def reads(path):
++    if path==target:return data
++    if receipt is not None and path==ROOT/STORAGE_POLICY_QUALIFICATION:return receipt
++    return original(path)
++   rejected=None
++   with patch.object(Path,'read_bytes',reads),patch.dict(globals(),pins):
++    try:preceding_storage_policy_sources()
++    except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
++   assert rejected is not None,'unqualified storage source accepted: '+name+' repin='+str(repin)
++   if repin:
++    message=str(rejected)
++    assert 'qualification changed' not in message and 'transition patch changed' not in message and message!=name,(name,message)
++   checked+=1
++ for field in ('baseline_policy_sha256','previous_sha256'):
++  updated=json.loads(json.dumps(qualification))
++  if field=='previous_sha256':updated[field][STORAGE_POLICY_PATHS[0]]='0'*64
++  else:updated[field]='0'*64
++  receipt=(json.dumps(updated,indent=2)+'\n').encode()
++  def reads(path):return receipt if path==ROOT/STORAGE_POLICY_QUALIFICATION else original(path)
++  rejected=None
++  with patch.object(Path,'read_bytes',reads),patch.dict(globals(),{'STORAGE_POLICY_QUALIFICATION_SHA256':hashlib.sha256(receipt).hexdigest()}):
++   try:preceding_storage_policy_sources()
++   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
++  assert rejected is not None,'storage historical endpoint changed: '+field
++  checked+=1
++ print('TCP_STORAGE_POLICY_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(checked)+' repinned_transition_controls='+str(repinned)+' native_processes_started=0')
++
++STDIO_LINE_NEGATIVE_CASES=[
++  # Reject changes inside each admitted line-input source, including the new
++  # helper and ABI entry, and reject qualification/transition drift itself.
++  ('compat/bionic/stdio_bionic.cc',b'line != nullptr && n != nullptr && Orient(fp, -1)',b'Orient(fp, -1)'),
++  ('compat/posix/include/gesher/stdio.h',b'bool unlocked = false);',b'bool unlocked = true);'),
++  ('compat/posix/src/misc.cc',b'gesher::stdio::ReadDelimited(lineptr, n, delim, stream)',b'gesher::stdio::ReadDelimited(lineptr, n, 0, stream)'),
++  ('compat/posix/src/stdio_output.cc',b'"gesher_stdio_delimited_v1"',b'"gesher_stdio_delimited_v2"'),
++  ('compat/posix/src/stdio_stream_buffer.h',b'static_cast<unsigned char>(delimiter), span.size)',b'0, span.size)'),
++  ('tools/net-tcp-priority/qualified/stdio-line-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
++  ('tools/net-tcp-priority/qualified/stdio-line-source.patch',b'@@',b'@x'),
++  ('tools/net-tcp-priority/qualified/stdio-line-shared-source.patch',b'@@',b'@x'),
++]
++STDIO_SCAN_NEGATIVE_CASES=[
++  ('compat/posix/src/stdio_output.cc',b'thread_local State* scanning_stream = nullptr;',b'State* scanning_stream = nullptr;'),
++  ('compat/posix/src/stdio_output.cc',b'scanning_stream->stream == stream && scanning_stream->live',b'true'),
++  ('compat/posix/src/stdio_output.cc',b'scanning_stream = static_cast<ScanScope*>(raw)->previous_;',b'scanning_stream = nullptr;'),
++  ('compat/posix/src/stdio_output.cc',b'  int fd = -1;',b'  int fd = 0;'),
++  ('tools/net-tcp-priority/qualified/stdio-scan-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
++  ('tools/net-tcp-priority/qualified/stdio-scan-source.patch',b'@@',b'@x'),
++  ('tools/net-tcp-priority/qualified/stdio-scan-shared-source.patch',b'@@',b'@x'),
++]
++
++SNPRINTF_BOUNDS_NEGATIVE_CASES=[
++  (SNPRINTF_BOUNDS_SOURCE,b'return bytes.size() + omitted;',b'return bytes.size();'),
++  (SNPRINTF_BOUNDS_SOURCE,b'size_t kept = count < Remaining() ? count : Remaining();',b'size_t kept = count;'),
++  (SNPRINTF_BOUNDS_SOURCE,b'out->bytes.resize(offset + kept);',b'out->bytes.resize(offset);'),
++  (SNPRINTF_BOUNDS_SOURCE,b'if (!valid) return -1;\n  if (n != 0) {',b'if (!valid) { if (n) buf[0] = 0; return -1; }\n  if (n != 0) {'),
++  # An unrelated unbounded formatter remains protected by the original digest.
++  (SNPRINTF_BOUNDS_SOURCE,b'std::memcpy(buf, s.c_str(), s.size() + 1);\n  return static_cast<int>(s.size());\n}\nint BIONIC_SYSV gesher_bionic_vfprintf',b'std::memcpy(buf, s.c_str(), s.size());\n  return static_cast<int>(s.size());\n}\nint BIONIC_SYSV gesher_bionic_vfprintf'),
++  ('tools/net-tcp-priority/qualified/snprintf-bounds-source.patch',b'@@',b'@x'),
++]
++
+ def transition_negative_controls():
+  from unittest.mock import patch
+  original=Path.read_bytes
+@@ -689,6 +1353,9 @@
+   ('compat/posix/src/system_properties.cc',b'SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str())',b'_wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str())'),
+   ('compat/posix/include/gesher/system_properties.h',b'uint32_t generation = 0;',b'uint64_t generation = 0;'),
+   ('tools/net-tcp-priority/qualified/native13-property-source.patch',b'@@',b'@x'),
++  # #421's build.prop filter admits its exact reviewed delta only.
++  ('compat/posix/src/system_properties.cc',b'if (!ServedBuildProperty(key, value)) continue;',b'if (!ServedBuildProperty(key, value)) {}'),
++  (GLES_PROPERTY_PATCH,b'@@',b'@x'),
+   # The memmem normalization admits its exact reviewed delta only. The old
+   # whole-file digest must still reject any unrelated shim change afterwards.
+   ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
+@@ -696,6 +1363,54 @@
+   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
+   ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
+   (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
++  # The memfd lease transition admits its exact reviewed delta only: the
++  # signature, the seal's exclusive lease probe, the lease's hand-off to split
++  # views, and the pinned reverse transition itself.
++  ('compat/posix/src/internal.h',b'std::shared_ptr<void>* write_lease);',b'std::shared_ptr<void>* lease);'),
++  ('compat/posix/src/memfd_seals.cc',b'LockByte(file, kLeaseByte, true, false)',b'LockByte(file, kLeaseByte, false, false)'),
++  ('compat/posix/src/memfd_seals.cc',b'constexpr int kLockAttempts = 5000;',b'constexpr int kLockAttempts = 50;'),
++  ('compat/posix/src/mman.cc',b'r.write_lease = view.write_lease;',b'r.write_lease.reset();'),
++  ('compat/posix/src/mman.cc',b'if (it->second.kind == Kind::kView) it->second.write_lease = write_lease;',b'if (it->second.kind == Kind::kView) {}'),
++  (MEMFD_LEASE_PATCH,b'@@',b'@x'),
++  (MEMFD_LEASE_PATCH,b'+constexpr int kLockAttempts = 5000;',b'+constexpr int kLockAttempts = 50;'),
++  *STDIO_LINE_NEGATIVE_CASES,
++  *STDIO_SCAN_NEGATIVE_CASES,
++  *SNPRINTF_BOUNDS_NEGATIVE_CASES,
++  ('compat/posix/src/unix_rights.cc',b'AdoptNativeFence(h, metadata, close_on_exec)',b'AdoptNativeFence(h, metadata, true)'),
++  ('compat/posix/src/unix_rights.cc',b'AdoptNativeFence(h, metadata, close_on_exec)',b'AdoptNativeFence(h, metadata, false)'),
++  ('compat/posix/src/native_fence_internal.h',b'bool close_on_exec = true',b'bool close_on_exec = false'),
++  ('compat/posix/src/native_fence_internal.h',b'// Consumes owned on every outcome.',b'// Unqualified header mutation.'),
++  ('compat/posix/src/native_fence.cc',b'if (!close_on_exec &&',b'if (close_on_exec &&'),
++  ('compat/posix/src/native_fence.cc',b'CloseUnpublishedDuplicate(fd);',b'_close(fd);'),
++  ('compat/posix/src/native_fence.cc',b'Register(result, close_on_exec)',b'Register(result)'),
++  ('compat/posix/src/native_fence.cc',b'completed->metadata = kTransferredCompletedFence;',b'completed->metadata = 5;'),
++  ('tools/net-tcp-priority/qualified/native-fence-receive-source.patch',b'@@',b'@x'),
++  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',FENCE_RECEIVE_BASE.encode(),b'0'*40),
++  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',FENCE_RECEIVE_POLICY_SHA256.encode(),b'0'*64),
++  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',b'"compat/posix/src/native_fence_internal.h"',b'"compat/posix/src/unqualified.h"'),
++  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',FENCE_RECEIVE_OFD_QUALIFICATION_SHA256.encode(),b'0'*64),
++  ('tools/net-tcp-priority/qualified/native-fence-receive-composed.patch',b'@@',b'@x'),
++ ]
++ def memfd_lease_repin(name,data):
++  # Refresh only the receipt's digest of the mutated file (and the receipt's
++  # own pin); the reverse transition stays the reviewed one.
++  qualification=json.loads(original(ROOT/MEMFD_LEASE_QUALIFICATION))
++  if name==MEMFD_LEASE_PATCH:qualification['patch_sha256']=hashlib.sha256(data).hexdigest()
++  else:qualification['source_sha256'][name]=hashlib.sha256(data).hexdigest()
++  return (json.dumps(qualification,indent=2)+'\n').encode()
++ repinned_memfd_lease=0
++ binder_cases=[
++  ('compat/binder/binderd.cc',b'  Out& out;',b'  Out out;'),
++  ('compat/binder/binderd.cc',b'command_start(output.bytes.size())',b'command_start(0)'),
++  ('compat/binder/binderd.cc',b'memcpy(reply.bytes.data() + sizeof(uint32_t), &ret, sizeof(int32_t));',
++   b'memcpy(reply.bytes.data(), &ret, sizeof(int32_t));'),
++  ('compat/binder/binderd.cc',b'if (n == 0) return true;',b'if (n == 0) return false;'),
++  ('compat/binder/binderd.cc',b'if (accepted && !thread->pending_buffer_claimed) return -EINVAL;',
++   b'if (false && !thread->pending_buffer_claimed) return -EINVAL;'),
++ ]
++ cases+=binder_cases+[
++  ('tools/net-tcp-priority/qualified/binder-output-source.json',b'"native_runtime_approval": false',b'"native_runtime_approval": true'),
++  ('tools/net-tcp-priority/qualified/binder-output-source.patch',b'@@',b'@x'),
+  ]
+  for name,before,after in cases:
+   target=ROOT/name
+@@ -703,22 +1418,208 @@
+   def changed(path):
+    raw=original(path)
+    return raw.replace(before,after,1) if path==target else raw
+-  # A refreshed new-file hash alone cannot authorize property behavior changes:
+-  # the pinned reverse transition and original OFD receipt must reject them too.
+-  for repin in (False,True) if name=='compat/posix/src/system_properties.cc' else (False,):
+-   digest=hashlib.sha256(changed(target)).hexdigest() if repin else PROPERTY_REVISION_SHA256
+-   rejected=False
+-   with patch.object(Path,'read_bytes',changed), patch.dict(globals(),PROPERTY_REVISION_SHA256=digest):
++  # A refreshed new-file hash alone cannot authorize property or memfd lease
++  # behavior changes: the pinned reverse transition and original OFD receipt
++  # must reject them too.
++  lease=name in MEMFD_LEASE_PATHS or name==MEMFD_LEASE_PATCH
++  for repin in (False,True) if name=='compat/posix/src/system_properties.cc' or lease else (False,):
++   pins={'GLES_PROPERTY_SHA256':GLES_PROPERTY_SHA256,'MEMFD_LEASE_QUALIFICATION_SHA256':MEMFD_LEASE_QUALIFICATION_SHA256}
++   reads=changed
++   # The current file's pin is GLES_PROPERTY_SHA256: refreshing it must leave the
++   # reverse transitions (#421's, then NATIVE-13's) to reject the change.
++   if repin and not lease:pins['GLES_PROPERTY_SHA256']=hashlib.sha256(changed(target)).hexdigest()
++   if repin and lease:
++    receipt=memfd_lease_repin(name,changed(target))
++    pins['MEMFD_LEASE_QUALIFICATION_SHA256']=hashlib.sha256(receipt).hexdigest()
++    reads=lambda path,receipt=receipt,changed=changed:receipt if path==ROOT/MEMFD_LEASE_QUALIFICATION else changed(path)
++    repinned_memfd_lease+=1
++   rejected=None
++   with patch.object(Path,'read_bytes',reads), patch.dict(globals(),pins):
+     try:check()
+-    except (AssertionError,subprocess.CalledProcessError):rejected=True
+-   assert rejected,'unqualified mutation accepted: '+name+' repin='+str(repin)
+- print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4')
++    except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
++   assert rejected is not None,'unqualified mutation accepted: '+name+' repin='+str(repin)
++   # A repinned receipt passes its own digest checks, so the rejection must
++   # come from the reverse transition, not from the stale pin.
++   if repin and lease:
++    message=str(rejected)
++    assert 'qualification changed' not in message and 'transition patch changed' not in message and message!=name,(name,message)
++ # Exercise each original leaf at its exact normalized input, in addition
++ # to the complete-chain mutations above. Repinning an outer-stage digest must
++ # not hide the failure in a different stage before the intended guard executes.
++ line_current=current_stdio_line_inputs()
++ repinned_composed=0
++ for name,before,after in STDIO_LINE_NEGATIVE_CASES:
++  if name not in COMPOSED_STDIO_PATHS:continue
++  changed_source=line_current[name].replace(before,after,1)
++  assert changed_source!=line_current[name],name
++  pins=dict(COMPOSED_STDIO_SHA256);pins[name]=hashlib.sha256(changed_source).hexdigest()
++  rejected=None
++  with patch.dict(globals(),COMPOSED_STDIO_SHA256=pins):
++   try:preceding_composed_stdio_sources({**line_current,name:changed_source})
++   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
++  assert rejected is not None and str(rejected)!=name,'repinned composed line mutation accepted or rejected by stale pin: '+name
++  repinned_composed+=1
++ print('COMPOSED_STDIO_REPINNED_CONTROLS_PASS cases='+str(repinned_composed))
++ scan_path=COMPOSED_SCAN_PATHS[0]
++ scan_current=original(ROOT/scan_path)
++ historical_source=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_PRIOR_FEATURE+':'+scan_path])
++ manifest=ROOT/'tools/net-tcp-priority/qualified/stdio-scan-source.json'
++ for name,before,after in STDIO_SCAN_NEGATIVE_CASES[:4]:
++  assert name==scan_path and scan_current.count(before)==historical_source.count(before)==1
++  changed=scan_current.replace(before,after,1)
++  pins={scan_path:hashlib.sha256(changed).hexdigest()}
++  rejected=None
++  with patch.dict(globals(),COMPOSED_SCAN_SHA256=pins):
++   try:preceding_composed_scan_sources({scan_path:changed})
++   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
++  assert rejected is not None and str(rejected)!=name,'repinned composed scanner mutation accepted or rejected by stale pin: '+before.decode()
++  changed_historical=historical_source.replace(before,after,1)
++  qualification=json.loads(original(manifest));qualification['source_sha256'][name]=hashlib.sha256(changed_historical).hexdigest()
++  raw=(json.dumps(qualification,indent=2)+'\n').encode()
++  rejected=None
++  with patch.object(Path,'read_bytes',lambda path:raw if path==manifest else original(path)),patch.dict(globals(),STDIO_SCAN_QUALIFICATION_SHA256=hashlib.sha256(raw).hexdigest()):
++   try:preceding_stdio_scan_source(changed_historical)
++   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
++  assert rejected is not None and str(rejected)!=name,'repinned historical scanner mutation accepted or rejected by stale pin: '+before.decode()
++ qualification=json.loads(original(manifest));qualification['native_runtime_approval']=True
++ raw=(json.dumps(qualification,indent=2)+'\n').encode();rejected=False
++ with patch.object(Path,'read_bytes',lambda path:raw if path==manifest else original(path)),patch.dict(globals(),STDIO_SCAN_QUALIFICATION_SHA256=hashlib.sha256(raw).hexdigest()):
++  try:preceding_stdio_scan_source(historical_source)
++  except (AssertionError,subprocess.CalledProcessError):rejected=True
++ assert rejected,'repinned scanner runtime approval accepted'
++ print('COMPOSED_SCAN_REPINNED_CONTROLS_PASS current=4 historical=4 runtime_approval=1')
++ # Merely refreshing the new source hash must not admit changed parser,
++ # destination-publication, capacity or unrelated unbounded-formatting bytes.
++ # The exact reverse patch and published baseline independently reject them.
++ target=ROOT/SNPRINTF_BOUNDS_SOURCE
++ for name,before,after in SNPRINTF_BOUNDS_NEGATIVE_CASES[:-1]:
++  assert ROOT/name==target and original(target).count(before)==1
++  changed_source=original(target).replace(before,after,1)
++  def repinned(path):return changed_source if path==target else original(path)
++  rejected=None
++  with patch.object(Path,'read_bytes',repinned), patch.dict(globals(),SNPRINTF_BOUNDS_SHA256=hashlib.sha256(changed_source).hexdigest()):
++   try:preceding_snprintf_bounds_source()
++   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
++  assert rejected is not None and str(rejected)!=name,'repinned snprintf mutation accepted or rejected by stale pin: '+before.decode()
++ print('SNPRINTF_BOUNDS_REPINNED_CONTROLS_PASS cases=5')
++ # Fresh source/manifest digests alone cannot authorize a changed broker:
++ # the reversible patch and exact original OFD bytes must still agree.
++ target=ROOT/'compat/binder/binderd.cc'
++ manifest=ROOT/'tools/net-tcp-priority/qualified/binder-output-source.json'
++ for name,before,after in binder_cases:
++  assert ROOT/name==target and original(target).count(before)==1
++  changed_source=original(target).replace(before,after,1)
++  qualification=json.loads(original(manifest))
++  qualification['source_sha256'][name]=hashlib.sha256(changed_source).hexdigest()
++  changed_manifest=(json.dumps(qualification,indent=2)+'\n').encode()
++  def repinned(path):
++   return changed_source if path==target else changed_manifest if path==manifest else original(path)
++  rejected=False
++  with patch.object(Path,'read_bytes',repinned), patch.dict(globals(),BINDER_OUTPUT_QUALIFICATION_SHA256=hashlib.sha256(changed_manifest).hexdigest()):
++   try:check()
++   except (AssertionError,subprocess.CalledProcessError):rejected=True
++  assert rejected,'repinned Binder output mutation accepted: '+before.decode()
++ qualification=json.loads(original(manifest))
++ qualification['native_runtime_approval']=True
++ changed_manifest=(json.dumps(qualification,indent=2)+'\n').encode()
++ def elevated(path):return changed_manifest if path==manifest else original(path)
++ rejected=False
++ with patch.object(Path,'read_bytes',elevated), patch.dict(globals(),BINDER_OUTPUT_QUALIFICATION_SHA256=hashlib.sha256(changed_manifest).hexdigest()):
++  try:check()
++  except (AssertionError,subprocess.CalledProcessError):rejected=True
++ assert rejected,'repinned Binder output runtime approval accepted'
++ # A changed modern source hash cannot admit a modified output operation or
++ # unrelated main admission code: the same original patch must still restore
++ # the exact published main endpoint after the historical receipt is checked.
++ composed_cases=binder_cases+[
++  ('compat/binder/binderd.cc',b'if (g_sandbox && ClientIsRestricted(pipe)) {',
++   b'if (false && ClientIsRestricted(pipe)) {'),
++  ('compat/binder/binderd.cc',b'if (uid < 10000 || !known || actual != pid) {',
++   b'if (uid < 10000 || !known) {'),
++ ]
++ for name,before,after in composed_cases:
++  assert ROOT/name==target and original(target).count(before)==1
++  altered=original(target).replace(before,after,1)
++  def changed_current(path):return altered if path==target else original(path)
++  rejected=False
++  with patch.object(Path,'read_bytes',changed_current), patch.dict(globals(),COMPOSED_BINDER_OUTPUT_SHA256=hashlib.sha256(altered).hexdigest()):
++   try:check()
++   except (AssertionError,subprocess.CalledProcessError):rejected=True
++  assert rejected,'repinned composed Binder mutation accepted: '+before.decode()
++ for name,value in [('FENCE_RECEIVE_BASE','0'*40),
++                    ('FENCE_RECEIVE_POLICY_SHA256','0'*64),
++                    ('FENCE_RECEIVE_QUALIFICATION_SHA256','0'*64),
++                    ('FENCE_RECEIVE_PATHS',FENCE_RECEIVE_PATHS[:-1])]:
++  rejected=False
++  with patch.dict(globals(),{name:value}):
++   try:check()
++   except (AssertionError,subprocess.CalledProcessError):rejected=True
++  assert rejected,'fence receive authority pin mutation accepted: '+name
++ print('FENCE_RECEIVE_PIN_NEGATIVE_CONTROLS_PASS cases=4')
++ # Updating a current-source digest together with the manifest pin must still
++ # fail the independently pinned baseline and exact reverse/forward patch.
++ manifest_path=ROOT/'tools/net-tcp-priority/qualified/native-fence-receive-source.json'
++ for name,before,after in [
++   ('compat/posix/src/native_fence.cc',b'if (!close_on_exec &&',b'if (close_on_exec &&'),
++   ('compat/posix/src/native_fence_internal.h',b'bool close_on_exec = true',b'bool close_on_exec = false')]:
++  target=ROOT/name
++  current=original(target)
++  assert current.count(before)==1,name
++  modified=current.replace(before,after,1)
++  manifest=json.loads(original(manifest_path))
++  manifest['after_sha256'][name]=hashlib.sha256(modified).hexdigest()
++  forged=(json.dumps(manifest,indent=2)+'\n').encode()
++  def changed(path):
++   if path==manifest_path:return forged
++   if path==target:return modified
++   return original(path)
++  rejected=False
++  with patch.object(Path,'read_bytes',changed),patch.dict(globals(),{'FENCE_RECEIVE_QUALIFICATION_SHA256':hashlib.sha256(forged).hexdigest()}):
++   try:check()
++   except (AssertionError,subprocess.CalledProcessError):rejected=True
++  assert rejected,'fence receive current-digest repin accepted: '+name
++ print('FENCE_RECEIVE_REPIN_NEGATIVE_CONTROLS_PASS cases=2')
++ # Check the new layer directly so an unrelated outer qualification cannot
++ # mask whether coherent current-source repinning is rejected here.
++ composed_controls=0
++ for name,before,after in [
++   ('compat/posix/src/native_fence.cc',b'if (!close_on_exec &&',b'if (close_on_exec &&'),
++   ('compat/posix/src/native_fence_internal.h',b'bool close_on_exec = true',b'bool close_on_exec = false'),
++   ('compat/posix/src/unix_rights.cc',b'AdoptNativeFence(h, metadata, close_on_exec)',b'AdoptNativeFence(h, metadata, true)')]:
++  target=ROOT/name
++  current=original(target)
++  assert current.count(before)==1,name
++  modified=current.replace(before,after,1)
++  repinned=dict(COMPOSED_FENCE_SHA256)
++  repinned[name]=hashlib.sha256(modified).hexdigest()
++  def changed(path):
++   return modified if path==target else original(path)
++  rejected=False
++  with patch.object(Path,'read_bytes',changed),patch.dict(globals(),{'COMPOSED_FENCE_SHA256':repinned}):
++   try:preceding_composed_fence_receive_sources()
++   except (AssertionError,subprocess.CalledProcessError):rejected=True
++  assert rejected,'repinned composed fence mutation accepted: '+name
++  composed_controls+=1
++ for name,value in [('COMPOSED_FENCE_BASELINE','0'*40),
++                    ('COMPOSED_FENCE_PRIOR_FEATURE','0'*40),
++                    ('COMPOSED_FENCE_BASE_POLICY_SHA256','0'*64),
++                    ('COMPOSED_FENCE_PATCH_SHA256','0'*64),
++                    ('COMPOSED_FENCE_PATHS',COMPOSED_FENCE_PATHS[:-1])]:
++  rejected=False
++  with patch.dict(globals(),{name:value}):
++   try:preceding_composed_fence_receive_sources()
++   except (AssertionError,subprocess.CalledProcessError):rejected=True
++  assert rejected,'composed fence authority mutation accepted: '+name
++ print('COMPOSED_FENCE_REPINNED_CONTROLS_PASS cases='+str(composed_controls)+' authority_cases=5')
++ print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease)+' repinned_binder_output_controls=6 repinned_composed_binder_controls='+str(len(composed_cases)))
+ if __name__=='__main__':
+  import sys
+  check()
+  if '--selftest' in sys.argv:
++  storage_policy_negative_controls()
+   transition_negative_controls()
+   import runpy
+   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')
+   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
++  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-tsf-metadata-policy.py'),run_name='__main__')
+   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
+diff --git a/tools/test_memrchr_report.py b/tools/test_memrchr_report.py
+--- a/tools/test_memrchr_report.py
++++ b/tools/test_memrchr_report.py
+@@ -10,6 +10,7 @@
+ import math
+ from pathlib import Path
+ import statistics
++import subprocess
+ import tarfile
+ import test_memrchr_contracts as contracts
+ 
+@@ -65,16 +66,21 @@
+ def main() -> None:
+     report = json.loads((ROOT / "docs/research/memrchr-word-search-2026-11-23.json").read_text())
+     current = (ROOT / contracts.SOURCE).read_bytes()
+-    # The recorded whole-TU receipts remain historical. Reconstruct that exact
+-    # source through the independently pinned directory-only transition before
+-    # every original comparison; also prove the measured component is unchanged.
+     spec = importlib.util.spec_from_file_location("scandir_source_policy",
+         ROOT / "tools/net-tcp-priority/test-selected-policy.py")
+     policy = importlib.util.module_from_spec(spec)
+     spec.loader.exec_module(policy)
+-    source = policy.preceding_scandir_source(current)
++    predecessor = policy.preceding_scandir_source(current)
++    check(contracts.production(current.decode()) == contracts.production(predecessor.decode()),
++          "measured Memrchr component unchanged by exact directory transition")
++    # Whole-translation-unit receipts remain attached to their immutable original
++    # source. Later procfs/FIFO changes are protected by the exact current source
++    # qualification; this archived campaign establishes only the same search code.
++    source = subprocess.check_output([
++        "git", "-C", str(ROOT), "show",
++        "7e205878cec54dbbd52bbac8a90b22e190798a5e:" + contracts.SOURCE])
+     check(contracts.production(current.decode()) == contracts.production(source.decode()),
+-          "measured Memrchr component unchanged by exact directory transition")
++          "current measured Memrchr component matches the immutable historical source")
+     check(sha(source) == report["production_source_sha256"], "reviewed production source")
+     archive = report["evidence_archive"]
+     packed = base64.b64decode(archive["data"], validate=True)
+@@ -131,3 +137,4 @@
+ 
+ if __name__ == "__main__":
+     main()
++

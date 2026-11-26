@@ -1,0 +1,1103 @@
+{
+  "baseline_commit": "6afcb6e671fc4f2d08a4a98220f9d9a906a327bf",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "compiler": "g++ (Debian 14.2.0-19) 14.2.0",
+  "boundary": "Linux real descriptors and production shared stdio adapter; Windows owner/FILE allocation and Bionic metadata orientation are declared host boundaries; no Windows or product timing claim.",
+  "operations": [
+    "native getdelim",
+    "Bionic getdelim",
+    "native fgets",
+    "Bionic fgets_unlocked"
+  ],
+  "runs": [
+    {
+      "label": "baseline",
+      "command": [
+        "python3",
+        "tools/test_stdio_contracts.py",
+        "--line-benchmark",
+        "--source-ref",
+        "6afcb6e6"
+      ],
+      "stdout": "STDIO_ADAPTER SHA256 76ad9b250d1ecf9615501a3f0d08121e318e0432e61448faa87c33d9ee4b2e94\nNATIVE_DELIMITED SHA256 1c6d07fe9a4052b9324a4066174225efed4aaed69bd44960ef87f4ccf131a7ad\nGUEST_DELIMITED SHA256 44534bb6ceaac10acfadab03ed844e9a65a35f2bf77885ef3b2b47e8f6822e99\nGUEST_LINE SHA256 6e0f069869f9f134e738c47290d7918c533274e80b63bd371f8cb169d681e7d2\nPARSE_MODE SHA256 ec635bd2c881a1cb9c34eea5f31cacfc8677e490c10fc1de304ac5d305f81605\nOPEN_CLOSE SHA256 bd6d2d2f3407a8a4538e8e2a179db58e43bfabdf65f628ea23f69be6bb0987bf\nstdio_internal.h SHA256 90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17\nstdio_stream_buffer.h SHA256 f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d\nstdio_output_buffer.h SHA256 1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542\nline-benchmark operation=0 sample=0 bytes=4194304 registry_visits=4194368 reallocations=11 microseconds=132831 checksum=7232\nline-benchmark operation=0 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=180998 checksum=7232\nline-benchmark operation=0 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=150367 checksum=7232\nline-benchmark operation=0 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=131518 checksum=7232\nline-benchmark operation=0 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=128244 checksum=7232\nline-benchmark operation=1 sample=0 bytes=4194304 registry_visits=4194368 reallocations=11 microseconds=136297 checksum=7232\nline-benchmark operation=1 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=131573 checksum=7232\nline-benchmark operation=1 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=133588 checksum=7232\nline-benchmark operation=1 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=136172 checksum=7232\nline-benchmark operation=1 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=137534 checksum=7232\nline-benchmark operation=2 sample=0 bytes=4194304 registry_visits=64 reallocations=0 microseconds=25205 checksum=7232\nline-benchmark operation=2 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=26435 checksum=7232\nline-benchmark operation=2 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=25247 checksum=7232\nline-benchmark operation=2 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=25618 checksum=7232\nline-benchmark operation=2 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=25449 checksum=7232\nline-benchmark operation=3 sample=0 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=129916 checksum=7232\nline-benchmark operation=3 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=132765 checksum=7232\nline-benchmark operation=3 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=130984 checksum=7232\nline-benchmark operation=3 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=141415 checksum=7232\nline-benchmark operation=3 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=129765 checksum=7232\n",
+      "samples": [
+        {
+          "operation": 0,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 11,
+          "microseconds": 132831,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 180998,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 150367,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 131518,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 128244,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 11,
+          "microseconds": 136297,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 131573,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 133588,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 136172,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 137534,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 25205,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 26435,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 25247,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 25618,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 25449,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 129916,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 132765,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 130984,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 141415,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 129765,
+          "checksum": 7232
+        }
+      ]
+    },
+    {
+      "label": "candidate",
+      "command": [
+        "python3",
+        "tools/test_stdio_contracts.py",
+        "--line-benchmark"
+      ],
+      "stdout": "STDIO_ADAPTER SHA256 caae12393427650d4d42c635f5cc2daa94a05d33e0c095beaf4a566b6998d67d\nNATIVE_DELIMITED SHA256 4acf63dba8206413b3fb7660bc196f74487711bb3ca5bd28785cdf0848130453\nGUEST_DELIMITED SHA256 88d421038161a43b2fc6b5e415fa2cf757f23652496dab5f68d84f9af27bd7bf\nGUEST_LINE SHA256 43d02d59aa48950ff9ba149d36fde289a688672a1adc15d177ef2a47ed2a6ed5\nPARSE_MODE SHA256 ec635bd2c881a1cb9c34eea5f31cacfc8677e490c10fc1de304ac5d305f81605\nOPEN_CLOSE SHA256 bd6d2d2f3407a8a4538e8e2a179db58e43bfabdf65f628ea23f69be6bb0987bf\nstdio_internal.h SHA256 90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17\nstdio_stream_buffer.h SHA256 8f508a1fe0a389cfdb83d54f90690cedf30fbe1112e31526bf5fb5264deeca8d\nstdio_output_buffer.h SHA256 1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542\nline-benchmark operation=0 sample=0 bytes=4194304 registry_visits=64 reallocations=5 microseconds=1005 checksum=7232\nline-benchmark operation=0 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=825 checksum=7232\nline-benchmark operation=0 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=634 checksum=7232\nline-benchmark operation=0 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=648 checksum=7232\nline-benchmark operation=0 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=631 checksum=7232\nline-benchmark operation=1 sample=0 bytes=4194304 registry_visits=128 reallocations=5 microseconds=797 checksum=7232\nline-benchmark operation=1 sample=1 bytes=4194304 registry_visits=128 reallocations=0 microseconds=722 checksum=7232\nline-benchmark operation=1 sample=2 bytes=4194304 registry_visits=128 reallocations=0 microseconds=879 checksum=7232\nline-benchmark operation=1 sample=3 bytes=4194304 registry_visits=128 reallocations=0 microseconds=585 checksum=7232\nline-benchmark operation=1 sample=4 bytes=4194304 registry_visits=128 reallocations=0 microseconds=618 checksum=7232\nline-benchmark operation=2 sample=0 bytes=4194304 registry_visits=64 reallocations=0 microseconds=912 checksum=7232\nline-benchmark operation=2 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=603 checksum=7232\nline-benchmark operation=2 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=615 checksum=7232\nline-benchmark operation=2 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=651 checksum=7232\nline-benchmark operation=2 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=618 checksum=7232\nline-benchmark operation=3 sample=0 bytes=4194304 registry_visits=128 reallocations=0 microseconds=753 checksum=7232\nline-benchmark operation=3 sample=1 bytes=4194304 registry_visits=128 reallocations=0 microseconds=657 checksum=7232\nline-benchmark operation=3 sample=2 bytes=4194304 registry_visits=128 reallocations=0 microseconds=583 checksum=7232\nline-benchmark operation=3 sample=3 bytes=4194304 registry_visits=128 reallocations=0 microseconds=606 checksum=7232\nline-benchmark operation=3 sample=4 bytes=4194304 registry_visits=128 reallocations=0 microseconds=681 checksum=7232\n",
+      "samples": [
+        {
+          "operation": 0,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 5,
+          "microseconds": 1005,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 825,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 634,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 648,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 631,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 5,
+          "microseconds": 797,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 722,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 879,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 585,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 618,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 912,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 603,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 615,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 651,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 618,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 753,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 657,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 583,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 606,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 681,
+          "checksum": 7232
+        }
+      ]
+    },
+    {
+      "label": "candidate",
+      "command": [
+        "python3",
+        "tools/test_stdio_contracts.py",
+        "--line-benchmark"
+      ],
+      "stdout": "STDIO_ADAPTER SHA256 caae12393427650d4d42c635f5cc2daa94a05d33e0c095beaf4a566b6998d67d\nNATIVE_DELIMITED SHA256 4acf63dba8206413b3fb7660bc196f74487711bb3ca5bd28785cdf0848130453\nGUEST_DELIMITED SHA256 88d421038161a43b2fc6b5e415fa2cf757f23652496dab5f68d84f9af27bd7bf\nGUEST_LINE SHA256 43d02d59aa48950ff9ba149d36fde289a688672a1adc15d177ef2a47ed2a6ed5\nPARSE_MODE SHA256 ec635bd2c881a1cb9c34eea5f31cacfc8677e490c10fc1de304ac5d305f81605\nOPEN_CLOSE SHA256 bd6d2d2f3407a8a4538e8e2a179db58e43bfabdf65f628ea23f69be6bb0987bf\nstdio_internal.h SHA256 90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17\nstdio_stream_buffer.h SHA256 8f508a1fe0a389cfdb83d54f90690cedf30fbe1112e31526bf5fb5264deeca8d\nstdio_output_buffer.h SHA256 1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542\nline-benchmark operation=0 sample=0 bytes=4194304 registry_visits=64 reallocations=5 microseconds=1249 checksum=7232\nline-benchmark operation=0 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=802 checksum=7232\nline-benchmark operation=0 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=678 checksum=7232\nline-benchmark operation=0 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=762 checksum=7232\nline-benchmark operation=0 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=709 checksum=7232\nline-benchmark operation=1 sample=0 bytes=4194304 registry_visits=128 reallocations=5 microseconds=826 checksum=7232\nline-benchmark operation=1 sample=1 bytes=4194304 registry_visits=128 reallocations=0 microseconds=652 checksum=7232\nline-benchmark operation=1 sample=2 bytes=4194304 registry_visits=128 reallocations=0 microseconds=603 checksum=7232\nline-benchmark operation=1 sample=3 bytes=4194304 registry_visits=128 reallocations=0 microseconds=626 checksum=7232\nline-benchmark operation=1 sample=4 bytes=4194304 registry_visits=128 reallocations=0 microseconds=672 checksum=7232\nline-benchmark operation=2 sample=0 bytes=4194304 registry_visits=64 reallocations=0 microseconds=763 checksum=7232\nline-benchmark operation=2 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=674 checksum=7232\nline-benchmark operation=2 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=604 checksum=7232\nline-benchmark operation=2 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=642 checksum=7232\nline-benchmark operation=2 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=674 checksum=7232\nline-benchmark operation=3 sample=0 bytes=4194304 registry_visits=128 reallocations=0 microseconds=808 checksum=7232\nline-benchmark operation=3 sample=1 bytes=4194304 registry_visits=128 reallocations=0 microseconds=645 checksum=7232\nline-benchmark operation=3 sample=2 bytes=4194304 registry_visits=128 reallocations=0 microseconds=680 checksum=7232\nline-benchmark operation=3 sample=3 bytes=4194304 registry_visits=128 reallocations=0 microseconds=610 checksum=7232\nline-benchmark operation=3 sample=4 bytes=4194304 registry_visits=128 reallocations=0 microseconds=742 checksum=7232\n",
+      "samples": [
+        {
+          "operation": 0,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 5,
+          "microseconds": 1249,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 802,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 678,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 762,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 709,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 5,
+          "microseconds": 826,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 652,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 603,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 626,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 672,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 763,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 674,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 604,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 642,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 674,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 808,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 645,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 680,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 610,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 128,
+          "reallocations": 0,
+          "microseconds": 742,
+          "checksum": 7232
+        }
+      ]
+    },
+    {
+      "label": "baseline",
+      "command": [
+        "python3",
+        "tools/test_stdio_contracts.py",
+        "--line-benchmark",
+        "--source-ref",
+        "6afcb6e6"
+      ],
+      "stdout": "STDIO_ADAPTER SHA256 76ad9b250d1ecf9615501a3f0d08121e318e0432e61448faa87c33d9ee4b2e94\nNATIVE_DELIMITED SHA256 1c6d07fe9a4052b9324a4066174225efed4aaed69bd44960ef87f4ccf131a7ad\nGUEST_DELIMITED SHA256 44534bb6ceaac10acfadab03ed844e9a65a35f2bf77885ef3b2b47e8f6822e99\nGUEST_LINE SHA256 6e0f069869f9f134e738c47290d7918c533274e80b63bd371f8cb169d681e7d2\nPARSE_MODE SHA256 ec635bd2c881a1cb9c34eea5f31cacfc8677e490c10fc1de304ac5d305f81605\nOPEN_CLOSE SHA256 bd6d2d2f3407a8a4538e8e2a179db58e43bfabdf65f628ea23f69be6bb0987bf\nstdio_internal.h SHA256 90fec8b949f3109b0ff44e6f1bd70d8f4f48fed1defd523d8458cc29ce949c17\nstdio_stream_buffer.h SHA256 f1a990222b0cf289d45c3ee747623368394647d19a221ed1f85ec706b04ce62d\nstdio_output_buffer.h SHA256 1a818bd0c0da9d7f782aacdaebfcf17af58571b3db05c1d9e48661acc0f96542\nline-benchmark operation=0 sample=0 bytes=4194304 registry_visits=4194368 reallocations=11 microseconds=134199 checksum=7232\nline-benchmark operation=0 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=132979 checksum=7232\nline-benchmark operation=0 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=130341 checksum=7232\nline-benchmark operation=0 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=127930 checksum=7232\nline-benchmark operation=0 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=130988 checksum=7232\nline-benchmark operation=1 sample=0 bytes=4194304 registry_visits=4194368 reallocations=11 microseconds=133842 checksum=7232\nline-benchmark operation=1 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=166792 checksum=7232\nline-benchmark operation=1 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=136324 checksum=7232\nline-benchmark operation=1 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=135212 checksum=7232\nline-benchmark operation=1 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=134201 checksum=7232\nline-benchmark operation=2 sample=0 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24963 checksum=7232\nline-benchmark operation=2 sample=1 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24351 checksum=7232\nline-benchmark operation=2 sample=2 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24252 checksum=7232\nline-benchmark operation=2 sample=3 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24975 checksum=7232\nline-benchmark operation=2 sample=4 bytes=4194304 registry_visits=64 reallocations=0 microseconds=24843 checksum=7232\nline-benchmark operation=3 sample=0 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=139223 checksum=7232\nline-benchmark operation=3 sample=1 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=133424 checksum=7232\nline-benchmark operation=3 sample=2 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=135973 checksum=7232\nline-benchmark operation=3 sample=3 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=131392 checksum=7232\nline-benchmark operation=3 sample=4 bytes=4194304 registry_visits=4194368 reallocations=0 microseconds=134793 checksum=7232\n",
+      "samples": [
+        {
+          "operation": 0,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 11,
+          "microseconds": 134199,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 132979,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 130341,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 127930,
+          "checksum": 7232
+        },
+        {
+          "operation": 0,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 130988,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 11,
+          "microseconds": 133842,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 166792,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 136324,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 135212,
+          "checksum": 7232
+        },
+        {
+          "operation": 1,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 134201,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24963,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24351,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24252,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24975,
+          "checksum": 7232
+        },
+        {
+          "operation": 2,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 64,
+          "reallocations": 0,
+          "microseconds": 24843,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 0,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 139223,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 1,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 133424,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 2,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 135973,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 3,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 131392,
+          "checksum": 7232
+        },
+        {
+          "operation": 3,
+          "sample": 4,
+          "bytes": 4194304,
+          "registry_visits": 4194368,
+          "reallocations": 0,
+          "microseconds": 134793,
+          "checksum": 7232
+        }
+      ]
+    }
+  ],
+  "current_main_integration": {
+    "merge_first_parent": "4328a34d04e63f6f3881b34c7dca09ef1fa8ec0b",
+    "merge_second_parent": "8f53b6045e26f0bb4a482c69099d084db3e94963",
+    "unchanged_production_main_reference": "fdf4861b608d7a5fe8c0fa6c8a285dfbdf573d91",
+    "production_sha256": {
+      "compat/bionic/stdio_bionic.cc": "62e54981ad902ca48fdfd4e52f57876620772e7138ed2e1689b84834ff0600ad",
+      "compat/posix/include/gesher/stdio.h": "721085722d4253cfdb4c54bce03c79de5815417b05905316589a22a7d076fdc2",
+      "compat/posix/src/misc.cc": "c2d92bf468ba6bb52087c7d436a84a8acfe5d039c3f3c4d26925a921a38c8146",
+      "compat/posix/src/stdio_output.cc": "80a3b2e705cc57a31d4614b7c27e308897f15909c5106a64c787bb332c0b4947",
+      "compat/posix/src/stdio_stream_buffer.h": "8f508a1fe0a389cfdb83d54f90690cedf30fbe1112e31526bf5fb5264deeca8d"
+    },
+    "qualification": {
+      "route": "exact current leaf delta -> fdf main -> unchanged PR73 -> original OFD; original leaf receipt checked on immutable first-parent bytes; both routes agree",
+      "new_patch_sha256": "9c334331173a6e05ca3601ea4034fae883aac945ebc1b2794202f1dcfceb4048",
+      "original_leaf_and_shared_and_ofd_manifests_unchanged": true,
+      "runtime_approval": false,
+      "new_patch_path": "tools/net-tcp-priority/qualified/stdio-line-shared-source.patch"
+    },
+    "windows_compile": [
+      {
+        "lane": "stdio",
+        "arch": "x86_64",
+        "name": "production",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fexceptions",
+          "-fno-builtin",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/posix/include",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/bionic/stdio_bionic.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-stdio-main-windows/stdio-x86_64-bionic.o",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/bionic/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/elf/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/arm64/include"
+        ],
+        "source_sha256": "80a3b2e705cc57a31d4614b7c27e308897f15909c5106a64c787bb332c0b4947",
+        "returncode": 0
+      },
+      {
+        "lane": "stdio",
+        "arch": "x86_64",
+        "name": "bionic",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fexceptions",
+          "-fno-builtin",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/posix/include",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/bionic/stdio_bionic.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-stdio-main-windows/stdio-x86_64-bionic.o",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/bionic/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/elf/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/arm64/include"
+        ],
+        "source_sha256": "62e54981ad902ca48fdfd4e52f57876620772e7138ed2e1689b84834ff0600ad",
+        "returncode": 0
+      },
+      {
+        "lane": "stdio",
+        "arch": "x86_64",
+        "name": "public-contract",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/posix/include",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/tests/native/stdio_ofd_test.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-stdio-main-windows/stdio-x86_64-public-contract.o"
+        ],
+        "source_sha256": "db01fefb4601f48eefecd74d92084084874c894d512fc362ba524f5534c3be3d",
+        "returncode": 0
+      },
+      {
+        "lane": "stdio",
+        "arch": "aarch64",
+        "name": "production",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fexceptions",
+          "-fno-builtin",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/posix/include",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/bionic/stdio_bionic.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-stdio-main-windows/stdio-aarch64-bionic.o",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/bionic/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/elf/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/arm64/include"
+        ],
+        "source_sha256": "80a3b2e705cc57a31d4614b7c27e308897f15909c5106a64c787bb332c0b4947",
+        "returncode": 0
+      },
+      {
+        "lane": "stdio",
+        "arch": "aarch64",
+        "name": "bionic",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fexceptions",
+          "-fno-builtin",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/posix/include",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/bionic/stdio_bionic.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-stdio-main-windows/stdio-aarch64-bionic.o",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/bionic/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/elf/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/arm64/include"
+        ],
+        "source_sha256": "62e54981ad902ca48fdfd4e52f57876620772e7138ed2e1689b84834ff0600ad",
+        "returncode": 0
+      },
+      {
+        "lane": "stdio",
+        "arch": "aarch64",
+        "name": "public-contract",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/compat/posix/include",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-stdio-fdf/tests/native/stdio_ofd_test.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/native-stdio-main-windows/stdio-aarch64-public-contract.o"
+        ],
+        "source_sha256": "db01fefb4601f48eefecd74d92084084874c894d512fc362ba524f5534c3be3d",
+        "returncode": 0
+      }
+    ],
+    "historical_timing_observations_unchanged": true,
+    "integrated_timing_claim": false,
+    "validation_receipts": [
+      {
+        "log": "native-pr337-main-stdio-final.log",
+        "sha256": "034cbb228f6088c36d5e69f906979a3df366973162181fdcddb55e2f5a87e85e",
+        "command": "ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 python3 tools/test_stdio_contracts.py --sanitize",
+        "result": "pass"
+      },
+      {
+        "log": "native-pr337-main-lifetime.log",
+        "sha256": "a2317b7b42ba5ebb7f10b26be386c858381d40afb0edafc95b2cfc80c05dc62e",
+        "command": "ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 python3 tools/test_stdio_lifetime_contracts.py --sanitize",
+        "result": "pass"
+      },
+      {
+        "log": "native-pr337-main-policy-final.log",
+        "sha256": "49f2a94579745f6b43ea860611e985c2af34be63b716308a6f81aa1a9c44c296",
+        "command": "python3 tools/net-tcp-priority/test-selected-policy.py --selftest",
+        "result": "pass"
+      },
+      {
+        "log": "native-pr337-main-supplier.log",
+        "sha256": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120",
+        "command": "python3 tools/net-tcp-priority/test-selected-supplier.py",
+        "result": "pass"
+      }
+    ],
+    "executed_fixture_sha256": {
+      "tools/test_stdio_contracts.py": "d6f06501a61cfb86996066865abd8f03e3514a057e22ac596a05df2e74515c75",
+      "tests/native/stdio_adapter_host.cc.in": "ba09e51914439b701c1a1f8d3e4aa63cced17e7c38a23616d804bc45f912a274",
+      "tests/native/stdio_lifetime_host_test.cc.in": "6e9a0e436f61d59ba4cfdb31898829e5e076ee360738167d6c111e56934b69ae"
+    },
+    "owner_admission_negative": {
+      "mutation": "Delete only the Getdelim StreamLock acquisition failure return, keeping the real source, allocation failure and all fixture assertions.",
+      "expected_failure": "failed guest line guard does not retry admission or consume input",
+      "adapter_checks": 1606,
+      "adapter_failures": 1,
+      "process_exit_code": 1,
+      "sanitizer_crash": false,
+      "log_sha256": "7af14a730aae26f64c93772b07e72a4e9cefc009e291884ca3ab9b51a6a7291d"
+    }
+  }
+}

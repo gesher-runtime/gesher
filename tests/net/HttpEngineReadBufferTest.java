@@ -220,17 +220,25 @@ public final class HttpEngineReadBufferTest {
         common.getMethod("setThreadCpuTimeEnabled", boolean.class).invoke(bean, true);
         for (long id : (long[]) common.getMethod("getAllThreadIds").invoke(bean)) {
             Object info = common.getMethod("getThreadInfo", long.class).invoke(bean, id);
-            if (info != null && "Gesher-HttpEngine".equals(Class.forName("java.lang.management.ThreadInfo")
-                    .getMethod("getThreadName").invoke(info))) {
+            String name = info == null ? "" : (String) Class.forName("java.lang.management.ThreadInfo")
+                    .getMethod("getThreadName").invoke(info);
+            if (name.equals("Gesher-HttpEngine") || name.equals("Gesher-HttpEngine-unary")
+                    || name.equals("Gesher-HttpEngine-retire") || name.equals("Gesher-HttpEngine-complete")) {
                 result.put(id, (Long) (cpu ? common.getMethod("getThreadCpuTime", long.class)
                         : extended.getMethod("getThreadAllocatedBytes", long.class)).invoke(bean, id));
             }
         }
+        check(!result.isEmpty(), "Host measurement did not observe an HTTP worker");
         return result;
     }
     private static long delta(Map<Long, Long> before, Map<Long, Long> after, boolean host) {
-        if (!host) return -1;
-        long value = 0; for (Map.Entry<Long, Long> e : after.entrySet()) value += e.getValue() - before.getOrDefault(e.getKey(), 0L);
+        if (!host || after.isEmpty() || !after.keySet().containsAll(before.keySet())) return -1;
+        long value = 0;
+        for (Map.Entry<Long, Long> e : after.entrySet()) {
+            long start = before.getOrDefault(e.getKey(), 0L), end = e.getValue();
+            if (start < 0 || end < start) return -1; // Unavailable/retired counters are not zero work.
+            value += end - start;
+        }
         return value;
     }
     public static void main(String[] args) throws Exception {

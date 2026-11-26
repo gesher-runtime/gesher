@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 import statistics
+import subprocess
 import tarfile
 import test_memrchr_contracts as contracts
 
@@ -65,16 +66,21 @@ def campaign(raw: dict, summary: dict) -> None:
 def main() -> None:
     report = json.loads((ROOT / "docs/research/memrchr-word-search-2026-11-23.json").read_text())
     current = (ROOT / contracts.SOURCE).read_bytes()
-    # The recorded whole-TU receipts remain historical. Reconstruct that exact
-    # source through the independently pinned directory-only transition before
-    # every original comparison; also prove the measured component is unchanged.
     spec = importlib.util.spec_from_file_location("scandir_source_policy",
         ROOT / "tools/net-tcp-priority/test-selected-policy.py")
     policy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(policy)
-    source = policy.preceding_scandir_source(current)
-    check(contracts.production(current.decode()) == contracts.production(source.decode()),
+    predecessor = policy.preceding_scandir_source(current)
+    check(contracts.production(current.decode()) == contracts.production(predecessor.decode()),
           "measured Memrchr component unchanged by exact directory transition")
+    # Whole-translation-unit receipts remain attached to their immutable original
+    # source. Later procfs/FIFO changes are protected by the exact current source
+    # qualification; this archived campaign establishes only the same search code.
+    source = subprocess.check_output([
+        "git", "-C", str(ROOT), "show",
+        "7e205878cec54dbbd52bbac8a90b22e190798a5e:" + contracts.SOURCE])
+    check(contracts.production(current.decode()) == contracts.production(source.decode()),
+          "current measured Memrchr component matches the immutable historical source")
     check(sha(source) == report["production_source_sha256"], "reviewed production source")
     archive = report["evidence_archive"]
     packed = base64.b64decode(archive["data"], validate=True)
@@ -131,3 +137,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
