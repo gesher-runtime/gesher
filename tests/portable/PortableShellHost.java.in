@@ -1,0 +1,127 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.ShortcutInfo;
+import com.gesher.server.ApkPackage;
+
+/** Declared I/O boundaries; the publication and cleanup bodies below are production code. */
+final class Device {
+    static String dataDir() { return System.getenv("ANDROID_DATA"); }
+    static Properties read(File file) throws IOException {
+        if (!file.isFile()) return null;
+        Properties result = new Properties();
+        try (InputStream input = new FileInputStream(file)) { result.load(input); }
+        return result;
+    }
+    static void write(File file, Properties value) throws IOException {
+        Files.createDirectories(file.toPath().getParent());
+        try (OutputStream out = new FileOutputStream(file)) { value.store(out, "fixture"); }
+    }
+}
+final class Zygote { static String windowsPath(String value) { return value; } }
+final class UiText { static String language() { return "en"; } }
+final class UiMessages {
+    static String[] supportedLanguages() { return new String[]{"en"}; }
+    static String text(String key, String language) { return "Gesher Apps"; }
+}
+final class AppIcon {
+    static int loads;
+    String label = "Fixture label", source = "explicit icon fixture";
+    static AppIcon load(String path, Object info, ActivityInfo launcher) { ++loads; return new AppIcon(); }
+    boolean hasImages() { return true; }
+    void writeIco(File file) throws IOException { Files.write(file.toPath(), new byte[]{1,2,3}); }
+}
+final class Shell {
+    static int calls, links, deleted, registered, unregistered;
+    static final int ALREADY_EXISTS = 10;
+    static boolean exists(String path) { ++calls; return true; }
+    static String programsFolder() { ++calls; return "C:\\Programs"; }
+    static boolean makeDirectories(String path) { ++calls; return true; }
+    static boolean removeFile(String path) { ++calls; ++deleted; return true; }
+    static boolean removeEmptyDirectory(String path) { ++calls; return true; }
+    static int createShortcut(String... values) { ++calls; ++links; return 0; }
+    static int registerUrlProtocol(String... values) { ++calls; ++registered; return 0; }
+    static int unregisterUrlProtocol(String... values) { ++calls; ++unregistered; return 0; }
+    static String urlProtocolOwner(String scheme) { ++calls; return null; }
+}
+final class AppShell {
+    static final String FOLDER = "Gesher Apps", ENV_SHORTCUTS = "GESHER_SHORTCUTS";
+    static final String RECORD = "shortcut.properties", ICON = "icon.ico";
+    static final String PROTOCOLS = "url-protocols.properties", NO_LAUNCHER = "no-launcher-activity";
+    static final List<String> errors = new ArrayList<>();
+    static void log(String value) { if (value.startsWith("no ")) errors.add(value); }
+    static String text(String key, Object... args) { return key; }
+    static String installDir() { return "C:\\Runtime"; }
+    static ActivityInfo launcherActivity(ApkPackage pkg) { return new ActivityInfo(); }
+    static void writeWindowIcon(ApkPackage pkg, String name, boolean changed) { }
+    static String linkPath(String folder, String label, String pkg, String old) { return folder + "\\fixture.lnk"; }
+    static Set<String> customSchemes(ApkPackage pkg) { return Set.of("fixture"); }
+    static boolean ownedDynamicLink(String pkg, String id, String link) { return true; }
+    static Intent dynamicIntent(String pkg, Intent intent) { return intent; }
+    static String dynamicFolder() { return "C:\\Programs\\Gesher Apps"; }
+    static String dynamicLabel(String label) { return label; }
+    static String dynamicArguments(String pkg, String id) { return "launch " + pkg; }
+@PRODUCTION_METHODS@
+    static void removeCopied(Properties props) { removeShortcut(props); }
+}
+public final class PortableShellHost {
+    private static int checks;
+    static void check(boolean value, String message) {
+        if (!value) throw new AssertionError(message);
+        ++checks;
+    }
+    public static void main(String[] args) throws Exception {
+        boolean portable = "1".equals(System.getenv("GESHER_PORTABLE"));
+        String pkg = "fixture.portable", code = "/current/data/app/fixture.portable-1";
+        Path shellDir = Path.of(Device.dataDir(), "data", pkg, "gesher-shell");
+        Files.createDirectories(shellDir);
+        Properties copied = new Properties();
+        copied.setProperty("link", "C:\\Programs\\Gesher Apps\\original.lnk");
+        copied.setProperty("label", "Original label");
+        Device.write(shellDir.resolve("shortcut.properties").toFile(), copied);
+        AppShell.registerQuietly(pkg, code, true);
+        check(AppShell.errors.isEmpty(), "Registration reached its expected publication path: " + AppShell.errors);
+        Properties record = AppShell.shortcutOf(pkg);
+        check("Fixture label".equals(record.getProperty("label")), "Real publication writes local label");
+        check(Files.isRegularFile(shellDir.resolve("icon.ico")), "Icon boundary wrote inside profile");
+        if (portable) {
+            check(!record.containsKey("link"), "Copied host-link authority is not retained");
+            check("portable".equals(record.getProperty("target")), "Local record identifies portable target");
+            int loaded = AppIcon.loads;
+            AppShell.registerQuietly(pkg, code, false);
+            check(AppIcon.loads == loaded, "Unchanged portable launch reuses existing icon metadata");
+        } else check(Shell.links == 1, "Normal mode still creates its Start-menu link");
+        AppShell.registerUrlProtocolsQuietly(pkg, code, true);
+        Properties protocols = new Properties(); protocols.setProperty("schemes", "fixture");
+        Device.write(shellDir.resolve("url-protocols.properties").toFile(), protocols);
+        AppShell.unregisterUrlProtocolsQuietly(pkg, protocols);
+        check(!Files.exists(shellDir.resolve("url-protocols.properties")), "Protocol metadata is cleaned locally");
+        AppShell.removeCopied(copied);
+        String key = AppShell.dynamicKey(pkg, "id");
+        Properties dynamic = new Properties();
+        dynamic.setProperty("publisher", "owner"); dynamic.setProperty(key + ".id", "id");
+        dynamic.setProperty(key + ".payload", "AQID");
+        dynamic.setProperty(key + ".link", "C:\\Programs\\Gesher Apps\\old.lnk");
+        File dynamicFile = Path.of(Device.dataDir(), "system/dynamic-shortcuts",
+                AppShell.dynamicKey(pkg, "") + ".properties").toFile();
+        Device.write(dynamicFile, dynamic);
+        check(AppShell.syncDynamicShortcuts(pkg, List.of(new ShortcutInfo()), "owner"),
+                "Dynamic shortcut snapshot publishes");
+        Properties published = AppShell.dynamicShortcutsOf(pkg);
+        check("AQID".equals(published.getProperty(key + ".payload")), "Android payload persists locally");
+        check("owner".equals(published.getProperty("publisher")), "Publisher identity persists");
+        if (portable) check(!published.containsKey(key + ".link"), "Copied dynamic host-link authority is retired locally");
+        AppShell.removeAllDynamicShortcuts(pkg);
+        check(!dynamicFile.exists(), "Removing dynamic shortcuts revokes local snapshot");
+        if (portable) check(Shell.calls == 0, "Portable operations made no Windows shell calls: " + Shell.calls);
+        else {
+            check(Shell.links == 2, "Normal dynamic shortcut still creates host link");
+            check(Shell.registered == 1 && Shell.unregistered == 1, "Normal URL protocol integration remains active");
+            check(Shell.deleted >= 3, "Normal copied-link/dynamic cleanup remains active");
+        }
+        System.out.println("PASS: production AppShell portable=" + portable + " (" + checks + " checks)");
+    }
+}

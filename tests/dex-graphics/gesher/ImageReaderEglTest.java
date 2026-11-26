@@ -29,7 +29,6 @@ public final class ImageReaderEglTest {
     private static final int GL_PACK_REVERSE_ROW_ORDER_ANGLE = 0x93A4;
     private static final int GL_PIXEL_PACK_BUFFER = 0x88EB;
     private static final int GL_PIXEL_PACK_BUFFER_BINDING = 0x88ED;
-    private static final int GL_STREAM_READ = 0x88E1;
 
     private static boolean hasExtension(String list, String name) {
         return list != null && (" " + list + " ").contains(" " + name + " ");
@@ -38,7 +37,7 @@ public final class ImageReaderEglTest {
 
     // GLES3 child readback uses glGetStringi/GL_NUM_EXTENSIONS rather than
     // the GLES2 extension-string API. Run on ANGLE's ES3-capable adapters.
-    private static void gles3ImageReader(EGLDisplay display) {
+    private static boolean gles3ImageReader(EGLDisplay display) {
         final int EGL_OPENGL_ES3_BIT_KHR = 0x40;
         EGLConfig[] configs = new EGLConfig[1];
         int[] count = new int[1];
@@ -49,14 +48,14 @@ public final class ImageReaderEglTest {
                         EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
                         EGL14.EGL_NONE}, 0, configs, 0, 1, count, 0) && count[0] == 1;
         if (!chosen) {
-            System.out.println("INFO GLES3 ImageReader skipped (no GLES3 window config)");
-            return;
+            System.out.println("INFO GLES3 ImageReader: no GLES3 window config on this display");
+            return false;
         }
         EGLContext context = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT,
                 new int[] {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE}, 0);
         if (context == EGL14.EGL_NO_CONTEXT) {
-            System.out.println("INFO GLES3 ImageReader skipped (no GLES3 context)");
-            return;
+            System.out.println("INFO GLES3 ImageReader: no GLES3 context on this display");
+            return false;
         }
         try (ImageReader reader = ImageReader.newInstance(8, 6, PixelFormat.RGBA_8888, 2)) {
             EGLSurface surface = EGL14.eglCreateWindowSurface(display, configs[0], reader.getSurface(),
@@ -96,6 +95,54 @@ public final class ImageReaderEglTest {
         } finally {
             EGL14.eglDestroyContext(display, context);
         }
+        return true;
+    }
+
+    /**
+     * The default display gives ES 3.0, never more (docs/system-features.md): an ES 3.1
+     * context requested through EGL14 (the Java bindings' eglCreateContext) is refused
+     * with EGL_BAD_MATCH, as a 3.0 driver refuses it.
+     */
+    private static void es31Refused(EGLDisplay display) {
+        EGLConfig[] configs = new EGLConfig[1];
+        int[] count = new int[1];
+        check(EGL14.eglChooseConfig(display, new int[] {EGL14.EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT_KHR */,
+                        EGL14.EGL_NONE}, 0, configs, 0, 1, count, 0) && count[0] == 1,
+                "an ES 3 config on the default display");
+        EGLContext context = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT,
+                new int[] {EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, 0x30FB /* EGL_CONTEXT_MINOR_VERSION */, 1,
+                        EGL14.EGL_NONE}, 0);
+        int error = EGL14.eglGetError();
+        if (context != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(display, context);
+        if (context != EGL14.EGL_NO_CONTEXT || error != 0x3009) {
+            throw new AssertionError("an ES 3.1 context on the default ES 3.0 display: "
+                    + (context != EGL14.EGL_NO_CONTEXT ? "created" : "refused with 0x" + Integer.toHexString(error)));
+        }
+        System.out.println("ImageReaderEglTest PASS an ES 3.1 context refused with EGL_BAD_MATCH on the default ES 3.0 display");
+    }
+
+    /**
+     * Test-only: ANGLE's own WARP display, uncapped (ES 3), through EGL15's
+     * eglGetPlatformDisplay pass-through; never what an app gets by default.
+     */
+    private static EGLDisplay angleWarpDisplay() {
+        EGLDisplay warp = android.opengl.EGL15.eglGetPlatformDisplay(0x3202 /* EGL_PLATFORM_ANGLE_ANGLE */,
+                0L /* EGL_DEFAULT_DISPLAY */,
+                // D3D11, WARP, no feature level cap; a display key of its own (with the
+                // device id ANGLE requires beside it, ignored for WARP): ANGLE keys
+                // displays by platform type and key, so without one this would be
+                // Android's default display itself.
+                new long[] {0x3203, 0x3208, 0x3209, 0x320B, 0x34D7, 0x8c, 0x34DC, 0x7e57,
+                        EGL14.EGL_NONE}, 0);
+        check(warp != EGL14.EGL_NO_DISPLAY && EGL14.eglInitialize(warp, new int[2], 0, new int[2], 0),
+                "ANGLE's uncapped WARP display (test-only)");
+        // Uncapped, so it has ES 3 configs (the default display has none here).
+        EGLConfig[] configs = new EGLConfig[1];
+        int[] count = new int[1];
+        check(EGL14.eglChooseConfig(warp, new int[] {EGL14.EGL_RENDERABLE_TYPE, 0x40 /* EGL_OPENGL_ES3_BIT_KHR */,
+                        EGL14.EGL_NONE}, 0, configs, 0, 1, count, 0) && count[0] == 1,
+                "ANGLE's uncapped WARP display has ES 3 configs");
+        return warp;
     }
 
     static void check(boolean value, String label) {
@@ -115,7 +162,10 @@ public final class ImageReaderEglTest {
         EGLContext context = EGL14.eglCreateContext(display, configs[0], EGL14.EGL_NO_CONTEXT,
                 new int[] { EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE }, 0);
         check(context != EGL14.EGL_NO_CONTEXT, "context");
-        try (ImageReader reader = ImageReader.newInstance(16, 12, PixelFormat.RGBA_8888, 2)) {
+        // GPU_SAMPLED_IMAGE: the reader's HardwareBuffers are wrapped as Bitmaps below, and an
+        // RGBA reader without that usage has CPU-only ones (as on Android).
+        try (ImageReader reader = new ImageReader.Builder(16, 12).setMaxImages(2)
+                .setImageFormat(PixelFormat.RGBA_8888).setUsage(HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE).build()) {
             check(reader.getSurface().isValid(), "native reader surface");
             EGLSurface surface = EGL14.eglCreateWindowSurface(display, configs[0], reader.getSurface(),
                     new int[] { EGL14.EGL_NONE }, 0);
@@ -142,7 +192,9 @@ public final class ImageReaderEglTest {
             if (pbo) {
                 GLES20.glGenBuffers(1, packBuffer, 0);
                 GLES20.glBindBuffer(GL_PIXEL_PACK_BUFFER, packBuffer[0]);
-                GLES20.glBufferData(GL_PIXEL_PACK_BUFFER, 16 * 12 * 4, null, GL_STREAM_READ);
+                // GL_STREAM_READ is an ES 3.0 usage; an ES 2 context on a device
+                // without ES 3 (WARP, capped at ES 2.0) accepts only the *_DRAW ones.
+                GLES20.glBufferData(GL_PIXEL_PACK_BUFFER, 16 * 12 * 4, null, GLES20.GL_STREAM_DRAW);
                 check(packBuffer[0] != 0 && GLES20.glGetError() == GLES20.GL_NO_ERROR,
                         "PBO can be bound before child surface swap");
             }
@@ -258,7 +310,20 @@ public final class ImageReaderEglTest {
                         && (image.getPlanes()[0].getBuffer().get(0) & 255) == 128, "direct camera YUV pixels");
             }
         }
-        gles3ImageReader(display);
+        // "declared-es3": this process's boot declared ES 3.0 (ro.opengles.version in its
+        // build.prop; track 31 runs it so under GESHER_EGL_DEVICE=warp), so the default
+        // display must give ES 3.0, and the ES 3.1 refusal runs even without a GPU.
+        boolean declaredEs3 = args.length > 0 && "declared-es3".equals(args[0]);
+        if (gles3ImageReader(display)) {
+            es31Refused(display);
+        } else if (declaredEs3) {
+            throw new AssertionError("the boot declared ES 3.0, but the default display gives no ES 3");
+        } else {
+            // No ES 3 on the default display (no GPU, as on the CI runners): the
+            // GLES3 child readback on ANGLE's uncapped WARP display, so it stays covered.
+            System.out.println("INFO GLES3 ImageReader on ANGLE's uncapped WARP display (test-only)");
+            check(gles3ImageReader(angleWarpDisplay()), "GLES3 ImageReader on ANGLE's uncapped WARP display");
+        }
         System.out.println("ImageReaderEglTest all passed");
     }
 }
