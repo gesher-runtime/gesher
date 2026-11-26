@@ -3523,7 +3523,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 reusedTaskTop = top;
                 if ((launchFlags & Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED) != 0) {
                     resetTaskRoot = taskRoot;
-                    collectTaskLaunchFinishesLocked(taskRoot, clearTop);
+                    collectTaskLaunchFinishesLocked(taskRoot,
+                            (info.flags & ActivityInfo.FLAG_CLEAR_TASK_ON_LAUNCH) != 0, clearTop);
                 }
             } else {
                 if (below != null) {
@@ -3863,20 +3864,25 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return null;
     }
 
-    /** Collect finishOnTaskLaunch records and their reply chains above the retained root. */
-    private void collectTaskLaunchFinishesLocked(ActivityRecord root, List<ActivityRecord> selected) {
+    /** Collect launch-reset finishes above the retained root. Guarded by this. */
+    private void collectTaskLaunchFinishesLocked(ActivityRecord root, boolean clearTaskOnLaunch,
+            List<ActivityRecord> selected) {
         List<ActivityRecord> replies = new ArrayList<>();
         for (int i = mActivities.size() - 1; i >= 0; i--) {
             ActivityRecord activity = mActivities.get(i);
             if (activity == root) break;
             if (activity.taskId != root.taskId || activity.finishing || activity.state == State.DESTROYED) continue;
-            if ((activity.info.flags & ActivityInfo.FLAG_FINISH_ON_TASK_LAUNCH) != 0) {
-                selected.addAll(replies);
-                selected.add(activity);
-            } else if (activity.resultTo != null) {
-                // Android's task reset groups consecutive activities that still owe a result.
+            boolean finishOnLaunch = (activity.info.flags & ActivityInfo.FLAG_FINISH_ON_TASK_LAUNCH) != 0;
+            if (!finishOnLaunch && activity.resultTo != null) {
+                // Reset follows the reply chain to its owner. A chain owned by the root stays.
                 replies.add(activity);
                 continue;
+            }
+            boolean reparentOnLaunch = (activity.info.flags & ActivityInfo.FLAG_ALLOW_TASK_REPARENTING) != 0
+                    && activity.info.taskAffinity != null && !activity.info.taskAffinity.equals(root.info.taskAffinity);
+            if (finishOnLaunch || (clearTaskOnLaunch && !reparentOnLaunch)) {
+                selected.addAll(replies);
+                selected.add(activity);
             }
             replies.clear();
         }
