@@ -1,8 +1,10 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 # Native RGBA ImageReader contract fixture
 
 The fixture uses public Android APIs to post distinct RGBA pixels through the
 reader's `ANativeWindow`. It exercises library and symbol lookup, image metadata
-and bytes, maxImages admission, acquire-next and acquire-latest behavior, the
+and bytes, maxImages admission, synchronous and asynchronous acquisition, the
 listener's dedicated thread, and a native `AHardwareBuffer` retained past reader
 close. The Windows builds of the fixture load through ART, so the actual
 `libmediandk.so` and `libandroid.so` guest exports are required.
@@ -31,8 +33,9 @@ The `AImageReader` implementation in this slice provides CPU-read-often
 RGBA_8888 via the native window's CPU lock/post path. Producer pixels are
 copied synchronously into the existing CPU-accessible native hardware buffer
 before the reader publishes them. An acquired image keeps its own buffer
-reference. Further formats, other consumer usages, GPU buffer dequeue, sync
-fence APIs, and camera/codec integration are outside this fixture.
+reference. Async acquisition returns the completed CPU pixels with no fence.
+Further formats, other consumer usages, GPU buffer dequeue, release fences, and
+camera/codec integration are outside this fixture.
 
 The contract follows the Android 16 public
 [ImageReader and Image API](https://developer.android.com/ndk/reference/group/media).

@@ -227,7 +227,7 @@ media_status_t BIONIC_SYSV GetReaderFormat(const AImageReader* reader, int32_t* 
   return AMEDIA_OK;
 }
 
-media_status_t Acquire(AImageReader* reader, AImage** out, bool latest) {
+media_status_t Acquire(AImageReader* reader, AImage** out, bool latest, int* fence_fd = nullptr) {
   if (reader == nullptr || out == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   *out = nullptr;
   const auto state = reader->state;
@@ -245,6 +245,8 @@ media_status_t Acquire(AImageReader* reader, AImage** out, bool latest) {
   state->pending.pop_front();
   state->acquired.insert(image.get());
   *out = image.release();
+  // Publication copied the producer pixels before making this image ready.
+  if (fence_fd != nullptr) *fence_fd = -1;
   return AMEDIA_OK;
 }
 
@@ -254,6 +256,14 @@ media_status_t BIONIC_SYSV AcquireNext(AImageReader* reader, AImage** out) {
 
 media_status_t BIONIC_SYSV AcquireLatest(AImageReader* reader, AImage** out) {
   return Acquire(reader, out, true);
+}
+
+media_status_t BIONIC_SYSV AcquireNextAsync(AImageReader* reader, AImage** out, int* fence_fd) {
+  return Acquire(reader, out, false, fence_fd);
+}
+
+media_status_t BIONIC_SYSV AcquireLatestAsync(AImageReader* reader, AImage** out, int* fence_fd) {
+  return Acquire(reader, out, true, fence_fd);
 }
 
 void* RunListener(void* context) {
@@ -378,6 +388,8 @@ bool Register() {
   ENTRY(AImageReader_getFormat, GetReaderFormat);
   ENTRY(AImageReader_acquireNextImage, AcquireNext);
   ENTRY(AImageReader_acquireLatestImage, AcquireLatest);
+  ENTRY(AImageReader_acquireNextImageAsync, AcquireNextAsync);
+  ENTRY(AImageReader_acquireLatestImageAsync, AcquireLatestAsync);
   ENTRY(AImageReader_setImageListener, SetImageListener);
   ENTRY(AImage_delete, DeleteImage);
   ENTRY(AImage_getWidth, GetImageField<int32_t, &ImageFrame::width>);

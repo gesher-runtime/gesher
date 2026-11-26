@@ -5,12 +5,14 @@
 #include <android/native_window.h>
 #include <dlfcn.h>
 #include <media/NdkImageReader.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #ifndef IMAGE_READER_STANDALONE
 #include <jni.h>
@@ -49,6 +51,15 @@ static void post(ANativeWindow* window, uint32_t color) {
         }
     }
     CHECK(ANativeWindow_unlockAndPost(window) == 0);
+}
+
+static void wait_for_pixels(int fence) {
+    CHECK(fence >= -1);
+    if (fence >= 0) {
+        struct pollfd poll_fd = {fence, POLLIN, 0};
+        CHECK(poll(&poll_fd, 1, 5000) == 1 && (poll_fd.revents & POLLIN) != 0);
+        CHECK(close(fence) == 0);
+    }
 }
 
 static void expect_image(AImage* image, uint32_t color) {
@@ -145,6 +156,8 @@ static int run_test(void) {
     CHECK(library != NULL);
     CHECK(dlsym(library, "AImageReader_new") != NULL);
     CHECK(dlsym(library, "AImage_getHardwareBuffer") != NULL);
+    CHECK(dlsym(library, "AImageReader_acquireNextImageAsync") != NULL);
+    CHECK(dlsym(library, "AImageReader_acquireLatestImageAsync") != NULL);
     CHECK(dlclose(library) == 0);
 
     AImageReader* reader = NULL;
@@ -166,7 +179,9 @@ static int run_test(void) {
     const uint32_t green = 0xff350000u;
     const uint32_t blue = 0xffa10000u;
     post(window, red);
-    CHECK(AImageReader_acquireNextImage(reader, &first) == AMEDIA_OK);
+    int fence = -2;
+    CHECK(AImageReader_acquireNextImageAsync(reader, &first, &fence) == AMEDIA_OK);
+    wait_for_pixels(fence);
     expect_image(first, red);
 
     post(window, green);
@@ -190,7 +205,9 @@ static int run_test(void) {
     post(window, fourth);
     post(window, fifth);
     AImage* latest = NULL;
-    CHECK(AImageReader_acquireLatestImage(reader, &latest) == AMEDIA_OK);
+    fence = -2;
+    CHECK(AImageReader_acquireLatestImageAsync(reader, &latest, &fence) == AMEDIA_OK);
+    wait_for_pixels(fence);
     expect_image(latest, fifth);
     AHardwareBuffer* retained = NULL;
     CHECK(AImage_getHardwareBuffer(latest, &retained) == AMEDIA_OK && retained != NULL);
