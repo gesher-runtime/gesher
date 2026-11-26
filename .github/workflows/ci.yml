@@ -2986,7 +2986,8 @@ jobs:
             -DARM32_GUEST_FIXTURES="$PWD/out-fixtures/fixture-arm.so;$PWD/out-fixtures/fixture-thumb.so" \
             -DARM32_GUEST_BIONIC_FIXTURES="$PWD/out-fixtures/bionic-arm.so;$PWD/out-fixtures/bionic-thumb.so" \
             -DARM32_GUEST_JNI_FIXTURES="$PWD/out-fixtures/jni-arm.so;$PWD/out-fixtures/jni-thumb.so" \
-            -DARM32_GUEST_DEPENDENCY_DIR="$PWD/out-fixtures"
+            -DARM32_GUEST_DEPENDENCY_DIR="$PWD/out-fixtures" \
+            -DARM32_ALIGNED_FIXTURE_DIR="$PWD/out-fixtures"
           cmake --build out-arm32 --parallel 4
       - name: Execute component and compiler-generated ELF32 tests
         run: ctest --test-dir out-arm32 --output-on-failure
