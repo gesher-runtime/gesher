@@ -525,8 +525,9 @@ final class ActiveServices {
         synchronized (this) {
             // A prior callback can unbind another client or replace the service process.
             // Revalidate each ordinary publication, including a published null.
+            List<ConnectionRecord> registered = mConnections.get(connection.conn.asBinder());
             if (service.bindingGeneration != generation || mServices.get(service.name) != service
-                    || !serviceCurrent(service) || !binding.connections.contains(connection)) return;
+                    || registered == null || !registered.contains(connection) || !serviceCurrent(service)) return;
         }
         connected(connection, binder);
     }
