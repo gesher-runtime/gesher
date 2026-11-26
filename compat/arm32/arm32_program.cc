@@ -58,6 +58,14 @@ const Program::Module* Program::Find(std::string_view name) const {
   return nullptr;
 }
 
+bool Program::HostSymbolAddress(std::string_view name, uint32_t* guest_address) const {
+  if (!guest_address) return false;
+  const auto symbol = host_symbols_.find(name);
+  if (symbol == host_symbols_.end()) return false;
+  *guest_address = symbol->second;
+  return true;
+}
+
 bool Program::Resolve(std::string_view name, uint32_t* result) const {
   if (!result) return false;
   // We only expose already-relocated dependency symbols and explicit typed
