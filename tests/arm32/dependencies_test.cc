@@ -54,6 +54,12 @@ void Run(const char* consumer_path, const char* dependency_path,
                            &returned, &error) &&
         static_cast<int32_t>(returned.bits) == 12,
         "dependency exports available by own library name");
+  // The dependency's finalizer deliberately traps if the consumer's finalizer
+  // has not called dependency_mark_shutdown first. A successful shutdown is
+  // therefore proof of actual guest finalizer ordering, not a state mock.
+  if (!program.Shutdown(&error))
+    std::cerr << "ARM32 reverse finalization: " << error << '\n';
+  Check(error.empty(), "guest dependency finalizers run consumer before dependency");
 
   Program missing([&](std::string_view name, std::vector<uint8_t>* out,
                       std::string*) {
