@@ -490,7 +490,8 @@ uint64_t GESHER_SYSV GuestGetauxval(uint64_t type) {
 
 // --- syscall(2) ------------------------------------------------------------------
 // arm64 (generic) syscall number -> the shim function that does the same,
-// with how its result is returned. 'i': int (-1/errno), 'l': long/pointer.
+// with how its result is returned. 'i': int (-1/errno), 'l': long/pointer,
+// 'e': an int that is zero on success or the error number itself.
 struct SyscallMap {
   uint32_t nr;
   const char* fn;
@@ -506,11 +507,14 @@ const SyscallMap kSyscalls[] = {
     {32, "flock", 'i'},
     {25, "fcntl", 'i'},       {29, "ioctl", 'i'},        {34, "mkdirat", 'i'},
     {35, "unlinkat", 'i'},    {38, "renameat", 'i'},     {43, "statfs", 'i'},
-    {44, "fstatfs", 'i'},     {46, "ftruncate", 'i'},    {61, "getdents64", 'l'},
+    {44, "fstatfs", 'i'},     {46, "ftruncate", 'i'},    {47, "fallocate", 'i'},
     {48, "faccessat", 'i'},   {56, "openat", 'i'},       {57, "close", 'i'},
-    {59, "pipe2", 'i'},       {62, "lseek", 'l'},        {63, "read", 'l'},
+    {59, "pipe2", 'i'},       {61, "getdents64", 'l'},   {62, "lseek", 'l'},
+    {63, "read", 'l'},
     {64, "write", 'l'},       {65, "readv", 'l'},        {66, "writev", 'l'},
-    {67, "pread64", 'l'},     {68, "pwrite64", 'l'},     {78, "readlinkat", 'l'},
+    {67, "pread64", 'l'},     {68, "pwrite64", 'l'},
+    // On LP64 the full offset is in a[3]; the shim ignores the fifth word.
+    {69, "preadv64", 'l'},    {70, "pwritev64", 'l'},    {78, "readlinkat", 'l'},
     {82, "fsync", 'i'},       {83, "fdatasync", 'i'},    {94, "_exit", 'i'},
     {85, "timerfd_create", 'i'}, {86, "timerfd_settime", 'i'}, {87, "timerfd_gettime", 'i'},
     {101, "nanosleep", 'i'},  {113, "clock_gettime", 'i'}, {114, "clock_getres", 'i'},
@@ -523,7 +527,8 @@ const SyscallMap kSyscalls[] = {
     {172, "getpid", 'i'},     {173, "getppid", 'i'},     {174, "getuid", 'i'},
     {175, "geteuid", 'i'},    {176, "getgid", 'i'},      {177, "getegid", 'i'},
     {179, "sysinfo", 'i'},    {198, "socket", 'i'},      {203, "connect", 'i'},
-    {215, "munmap", 'i'},     {222, "mmap", 'l'},        {226, "mprotect", 'i'},
+    {215, "munmap", 'i'},     {222, "mmap", 'l'},        {223, "posix_fadvise64", 'e'},
+    {226, "mprotect", 'i'},
     {228, "mlock", 'i'},      {229, "munlock", 'i'},     {230, "mlockall", 'i'},
     {231, "munlockall", 'i'},  {233, "madvise", 'i'},     {278, "getrandom", 'l'},
     {279, "memfd_create", 'i'}, {284, "mlock2", 'i'},
@@ -771,6 +776,12 @@ int64_t DoSyscall(uint64_t nr, const int64_t a[6]) {
       if (it == g_syscalls.end() || it->second.first == nullptr) break;
       int64_t r = reinterpret_cast<HostFn6>(it->second.first)(a[0], a[1], a[2], a[3], a[4], a[5]);
       if (it->second.second == 'i') return static_cast<int32_t>(r);
+      if (it->second.second == 'e') {
+        const int error = static_cast<int32_t>(r);
+        if (error == 0) return 0;
+        SetErrno(error);
+        return -1;
+      }
       if (it->second.second == 'p') return r == 0 ? -1 : static_cast<int64_t>(std::strlen(reinterpret_cast<const char*>(r)) + 1);
       return r;
     }
@@ -994,12 +1005,17 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
   if (nr == 220) return GuestClone(args);  // clone: raw result already
   int64_t a[6];
   for (int i = 0; i < 6; ++i) a[i] = static_cast<int64_t>(args[i]);
-  int64_t r = DoSyscall(nr, a);
-  if (r == -1) {
-    int* e = HostErrno();
-    return -(e != nullptr && *e != 0 ? *e : kEFAULT);
+  // Only the named syscall() wrapper publishes an errno value to guest libc.
+  int* e = HostErrno();
+  int saved_errno = 0;
+  if (e != nullptr) {
+    saved_errno = *e;
+    *e = 0;
   }
-  return r;
+  const int64_t result = DoSyscall(nr, a);
+  const int error = (e != nullptr && *e != 0) ? *e : kEFAULT;
+  if (e != nullptr) *e = saved_errno;
+  return result == -1 ? -error : result;
 }
 
 bool InitGuestLibc() {
