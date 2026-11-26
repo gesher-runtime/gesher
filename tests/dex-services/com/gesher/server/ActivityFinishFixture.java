@@ -21,6 +21,7 @@ import android.app.servertransaction.ActivityTransactionItem;
 import android.app.servertransaction.ClientTransaction;
 import android.app.servertransaction.ClientTransactionItem;
 import android.app.servertransaction.DestroyActivityItem;
+import android.app.servertransaction.LaunchActivityItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
 import android.app.servertransaction.StopActivityItem;
@@ -35,6 +36,7 @@ import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Parcel;
@@ -160,6 +162,7 @@ public final class ActivityFinishFixture {
         boolean autoAck = true;
         boolean rejectNextResult;
         Operation beforeTransaction;
+        Operation onRejectedResult;
         int exits;
         @Override public IBinder asBinder() { return binder; }
         @Override public void scheduleExit() { exits++; }
@@ -167,13 +170,16 @@ public final class ActivityFinishFixture {
             if (rejectNextResult && transaction.getTransactionItems().stream()
                     .anyMatch(ActivityResultItem.class::isInstance)) {
                 rejectNextResult = false;
+                try { if (onRejectedResult != null) onRejectedResult.run(); }
+                catch (Exception failure) { throw new AssertionError("Failed transaction fixture failed", failure); }
                 throw new RemoteException("Fixture recipient disconnected before result delivery");
             }
             try {
                 if (beforeTransaction != null) beforeTransaction.run();
                 for (ClientTransactionItem item : transaction.getTransactionItems()) {
                     Event event = new Event(item instanceof ActivityTransactionItem activity
-                            ? activity.getActivityToken() : null, item);
+                            ? activity.getActivityToken() : item instanceof LaunchActivityItem launch
+                                    ? launch.getActivityToken() : null, item);
                     events.add(event);
                     if (autoAck) acknowledge(event); else pending.addLast(event);
                 }
@@ -451,6 +457,79 @@ public final class ActivityFinishFixture {
             check(!grants.canAccess(recipient, item, read, 0), "Up result grant outlived the second recipient");
         } finally { Binder.restoreCallingIdentity(old); }
         System.out.println("Activity finish URI grants passed: result data, ClipData, delegation and recipient lifetime");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void resumeResultRecovery() throws Exception {
+        for (boolean replaceDuringFailure : List.of(false, true)) {
+            Harness h = new Harness();
+            int receiverTask = 76;
+            Object receiver = h.record("Receiver", receiverTask, "receiver", "STOPPED");
+            Object source = h.record("Child", 77, "sender", "STOPPED", receiver, "resume-result", 45);
+            Bundle saved = new Bundle();
+            saved.putString("state", "saved before the result");
+            Intent data = new Intent("fixture.finish.resume");
+            h.asApp(() -> {
+                h.controller.activityStopped(token(receiver), saved, null, null, null);
+                check(h.controller.finishActivity(token(source), Activity.RESULT_OK, data, 0),
+                        "Could not queue result for stopped activity");
+            });
+            List<ResultInfo> pending = (List<ResultInfo>) get(receiver, "pendingResults");
+            check(pending.size() == 1, "Expected one pending result before resume");
+            ResultInfo expected = pending.get(0);
+            ActivityTaskManagerService atm = (ActivityTaskManagerService) h.atm;
+            AppThread replacement = new AppThread();
+            replacement.autoAck = false;
+            if (replaceDuringFailure) {
+                h.thread.onRejectedResult = () -> {
+                    long identity = Binder.clearCallingIdentity();
+                    try {
+                        var died = h.atmType.getDeclaredMethod("processDied", h.processType);
+                        died.setAccessible(true);
+                        died.invoke(h.atm, h.process);
+                        Binder.restoreCallingIdentity(((long) UID << 32) | (PID + 1));
+                        Object newProcess = construct(h.processType, new Class<?>[]{h.atmType, int.class,
+                                IApplicationThread.class}, h.atm, PID + 1, replacement);
+                        Binder.clearCallingIdentity();
+                        set(newProcess, "packageName", OWNER);
+                        set(newProcess, "processName", OWNER);
+                        set(newProcess, "ready", true);
+                        ((List<Object>) get(h.atm, "mProcesses")).add(newProcess);
+                        replacement.controller = h.controller;
+                        atm.moveTaskToFront(null, OWNER, receiverTask, 0, null);
+                        check(replacement.count(receiver, LaunchActivityItem.class) == 0,
+                                "Replacement launched before the in-flight result was settled");
+                    } finally { Binder.restoreCallingIdentity(identity); }
+                };
+            }
+            h.thread.rejectNextResult = true;
+            h.asApp(() -> atm.moveTaskToFront(h.thread, OWNER, receiverTask, 0, null));
+            check(h.thread.results(receiver).isEmpty(), "Rejected transaction delivered a result");
+            if (replaceDuringFailure) {
+                LaunchActivityItem launch = (LaunchActivityItem) replacement.events.stream()
+                        .map(event -> event.item).filter(LaunchActivityItem.class::isInstance)
+                        .findFirst().orElseThrow(() -> new AssertionError("Replacement launch was stranded"));
+                List<ResultInfo> delivered = (List<ResultInfo>) field(LaunchActivityItem.class,
+                        "mPendingResults").get(launch);
+                Bundle restored = (Bundle) field(LaunchActivityItem.class, "mState").get(launch);
+                check(List.of(expected).equals(delivered) && restored != null
+                                && "saved before the result".equals(restored.getString("state")),
+                        "Replacement launch lost the result or saved activity state");
+                long identity = Binder.clearCallingIdentity();
+                try {
+                    Binder.restoreCallingIdentity(((long) UID << 32) | (PID + 1));
+                    replacement.drain();
+                } finally { Binder.restoreCallingIdentity(identity); }
+                check(get(receiver, "state") == state("RESUMED"), "Replacement did not acknowledge resume");
+            } else {
+                check(get(receiver, "state") == state("STOPPED") && pending.equals(List.of(expected)),
+                        "Failed resume consumed the result or stranded the activity");
+                h.asApp(() -> atm.moveTaskToFront(h.thread, OWNER, receiverTask, 0, null));
+                check(h.thread.results(receiver).equals(List.of(expected)), "Resume retry lost or duplicated the result");
+            }
+            check(pending.isEmpty(), "Delivered result remained queued");
+        }
+        System.out.println("Activity resume result recovery passed: failed send, retry, and replacement launch");
     }
 
     private static void affinity() throws Exception {
@@ -1387,6 +1466,7 @@ public final class ActivityFinishFixture {
         binder = realBinder; checks = 0;
         if (group.equals("all") || group.equals("task")) removeTask();
         if (group.equals("all") || group.equals("uri")) activityResultUriGrants();
+        if (group.equals("all") || group.equals("resume")) resumeResultRecovery();
         if (group.equals("all") || group.equals("affinity")) affinity();
         if (group.equals("all") || group.equals("sub")) subActivities();
         if (group.equals("all")) externalUrlResults();

@@ -469,6 +469,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean stopWhenIdle;
         /** Results for it (ActivityResultItem), sent when it is resumed. */
         final List<ResultInfo> pendingResults = new ArrayList<>();
+        /** A replacement launch waits for an outstanding resume's result dispatch. */
+        boolean resumeDispatching;
         /** Intents delivered to a history record before its first client launch. */
         final List<ReferrerIntent> pendingNewIntents = new ArrayList<>();
         /** The state it saved when it was last stopped. */
@@ -5306,6 +5308,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             if (r.state != State.INITIALIZING || r.launchScheduled || r.finishing || r.deferredHistory
                     || r.waitingFor != null || r.app == null || !r.app.ready || r.nativeUiCount > 0) return;
+            if (r.resumeDispatching) return;
             if (r.app.exiting || r.app.dead
                     || r.app.enabledProcessLifetime != null && !r.app.enabledProcessLifetime.getAsBoolean()) return;
             if (r.historyEntry && !isVisible(r)) {
@@ -5756,9 +5759,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private void resume(ActivityRecord r) {
         if (!activityEnabled(r)) { finishDisabledActivity(r); return; }
+        final ProcessRecord app;
+        final State previousState;
+        final boolean previousStopWhenIdle, previousIdle, previousConfigPending;
+        final Configuration previousConfig;
+        final List<ResultInfo> results;
         synchronized (this) {
             if (!mActivities.contains(r) || r.finishing || r.app == null || !r.app.ready
-                    || r.nativeUiCount > 0
+                    || r.resumeDispatching || r.nativeUiCount > 0
                     || r.app.exiting || r.app.dead
                     || r.app.enabledProcessLifetime != null && !r.app.enabledProcessLifetime.getAsBoolean()
                     || !activityCodeCurrent(r) || r.waitingFor != null
@@ -5766,26 +5774,62 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || mHiddenTasks.contains(r.taskId) || topOf(r.taskId) != r
                     || (r.state != State.PAUSED && r.state != State.STARTED
                         && r.state != State.STOPPING && r.state != State.STOPPED)) return;
+            app = r.app;
+            previousState = r.state;
+            previousStopWhenIdle = r.stopWhenIdle;
+            previousIdle = r.idle;
+            previousConfig = r.config;
+            previousConfigPending = r.configPending;
+            results = takeResults(r);
+            r.resumeDispatching = true;
             r.state = State.RESUMING;
             r.stopWhenIdle = false;
             r.idle = false;
             notifyAll();
         }
-        List<ResultInfo> results = takeResults(r);
-        ClientTransaction t = new ClientTransaction(r.app.thread);
-        // The configuration changed while it was not in front (ActivityRecord's
-        // ensureActivityConfiguration as it becomes visible): relaunched with its results,
-        // or told, before it resumes.
-        String config = configurationItem(r, t, results);
-        boolean relaunch = config != null && config.startsWith("ActivityRelaunchItem");
-        if (results != null && !relaunch) {
-            t.addTransactionItem(new ActivityResultItem(r.token, results));
+        boolean accepted = false;
+        try {
+            Configuration global = LocaleManagerService.configurationFor(r.info.packageName);
+            ClientTransaction t = new ClientTransaction(app.thread);
+            String what;
+            synchronized (this) {
+                if (r.app != app || app.exiting || app.dead || r.finishing
+                        || r.state != State.RESUMING || isActivityRetired(r)) return;
+                // Apply changes made while it was covered, with results in the
+                // relaunch transaction when the Activity must be recreated.
+                String config = configurationItem(r, t, results, global);
+                boolean relaunch = config != null && config.startsWith("ActivityRelaunchItem");
+                if (results != null && !relaunch) {
+                    t.addTransactionItem(new ActivityResultItem(r.token, results));
+                }
+                t.addTransactionItem(new ResumeActivityItem(r.token, false /* isForward */,
+                        false /* shouldSendCompatFakeFocus */));
+                what = (config != null ? config + ", " : "")
+                        + (results != null && !relaunch ? "ActivityResultItem, " : "")
+                        + "ResumeActivityItem";
+            }
+            accepted = schedule(app, r, t, what);
+        } finally {
+            boolean launchReplacement;
+            synchronized (this) {
+                if (!accepted && !isActivityRetired(r) && !r.finishing) {
+                    // A failed IPC must not consume the results. Older results
+                    // precede any that arrived while the app was disconnecting.
+                    if (results != null) r.pendingResults.addAll(0, results);
+                    if (r.app == app && r.state == State.RESUMING) {
+                        r.state = previousState;
+                        r.stopWhenIdle = previousStopWhenIdle;
+                        r.idle = previousIdle;
+                        r.config = previousConfig;
+                        r.configPending |= previousConfigPending;
+                        notifyAll();
+                    }
+                }
+                r.resumeDispatching = false;
+                launchReplacement = r.app != app && r.app != null && r.state == State.INITIALIZING;
+            }
+            if (launchReplacement) realStartActivity(r);
         }
-        t.addTransactionItem(new ResumeActivityItem(r.token, false /* isForward */,
-                false /* shouldSendCompatFakeFocus */));
-        schedule(r, t, (config != null ? config + ", " : "")
-                + (results != null && !relaunch ? "ActivityResultItem, " : "")
-                + "ResumeActivityItem");
     }
 
     /** ActivityRecord.deliverNewIntentLocked: onNewIntent, around a pause if resumed. */
@@ -6313,12 +6357,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private void schedule(ActivityRecord r, ClientTransaction t, String what) {
-        if (r.app == null || r.app.thread == null) return;
-        SystemServer.log("scheduleTransaction " + what + " to " + r.name() + " in " + r.app);
+        schedule(r.app, r, t, what);
+    }
+
+    private boolean schedule(ProcessRecord target, ActivityRecord r, ClientTransaction t, String what) {
+        if (target == null || target.thread == null) return false;
+        SystemServer.log("scheduleTransaction " + what + " to " + r.name() + " in " + target);
         try {
-            r.app.thread.scheduleTransaction(t);
+            target.thread.scheduleTransaction(t);
+            return true;
         } catch (RemoteException e) {
-            SystemServer.log("scheduleTransaction to " + r.app + " failed: " + e);
+            SystemServer.log("scheduleTransaction to " + target + " failed: " + e);
+            return false;
         }
     }
 
@@ -7096,9 +7146,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
      */
     private String configurationItem(ActivityRecord r, ClientTransaction t,
             List<ResultInfo> results) {
-        // One configuration for both tracks: the package's (locales, formats: locale track)
-        // with the task's size override (a resized window: lifecycle track).
-        Configuration global = LocaleManagerService.configurationFor(r.info.packageName);
+        return configurationItem(r, t, results, LocaleManagerService.configurationFor(r.info.packageName));
+    }
+
+    private String configurationItem(ActivityRecord r, ClientTransaction t,
+            List<ResultInfo> results, Configuration global) {
         Configuration config;
         Rect task;
         int rotation;
