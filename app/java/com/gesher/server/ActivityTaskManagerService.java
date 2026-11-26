@@ -1984,6 +1984,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final WindowContainerToken token;
         Intent baseIntent;
         ComponentName baseComponent;
+        String affinity;
         IBinder handle;
         long lastActiveTime;
 
@@ -2002,6 +2003,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 baseIntent.addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
             }
             baseComponent = root.component();
+            affinity = root.info.taskAffinity;
+        }
+
+        boolean matchesAffinity(int uid, String candidate) {
+            return owner.uid() == uid && candidate.equals(affinity);
         }
 
         boolean available(PackageManagerService packages) {
@@ -6164,6 +6170,30 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 return;
             default:
                 return;  // on its way
+        }
+    }
+
+    /** Select whether Up navigation should build its parent stack in another task. */
+    boolean shouldUpRecreateTask(ActivityRecord activity, String destinationAffinity) {
+        synchronized (this) {
+            if (destinationAffinity == null || isActivityRetired(activity) || activity.finishing) return false;
+            AppTaskRecord task = mAppTasks.get(activity.taskId);
+            if (task == null || !task.available(mPm)) return false;
+            int uid = activity.targetCode.uid();
+            if (!task.matchesAffinity(uid, destinationAffinity)) return true;
+            if (!task.baseIntent.isDocument() || rootOf(task.id) != activity) return false;
+
+            // A document root can finish into a preceding task of the same
+            // affinity. A manually minimized window will not take its place.
+            for (int i = mTaskOrder.indexOf(task.id) - 1; i >= 0; i--) {
+                int behindId = mTaskOrder.get(i);
+                if (mHiddenTasks.contains(behindId) && !mAppHiddenTasks.contains(behindId)) continue;
+                AppTaskRecord behind = mAppTasks.get(behindId);
+                if (behind != null && behind.available(mPm) && rootOf(behindId) != null) {
+                    return !behind.matchesAffinity(uid, destinationAffinity);
+                }
+            }
+            return true;
         }
     }
 

@@ -467,6 +467,20 @@ public final class TaskStackContractTest {
                 && "LAUNCHING".equals(missing.state(missing.record("Other"))), "Failure leaked publication scope");
     }
 
+    private static void expectUpRecreation(Harness h, Object record, String destinationAffinity,
+            boolean expected, String reason) throws Exception {
+        long identity = Binder.clearCallingIdentity();
+        try {
+            Binder.restoreCallingIdentity(((long)UID << 32) | PID);
+            IBinder activity = record == null ? new Binder() : (IBinder)get(record, "token");
+            if (h.api.getActivityClientController().shouldUpRecreateTask(activity, destinationAffinity) != expected) {
+                throw new AssertionError(reason);
+            }
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
     private static void taskFlags() throws Exception {
         Harness h = new Harness();
         h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -525,14 +539,24 @@ public final class TaskStackContractTest {
         document.start(doc, launch("Top"));
         Object docRoot = document.record("Doc"), docTop = document.record("Top");
         document.acknowledge("activityResumed", docTop);
+        expectUpRecreation(document, docTop, PKG, false,
+                "A child in a document task can navigate within that task");
         document.start(doc);
         check(document.record("Doc") == docRoot && (Boolean)get(docTop, "finishing"),
                 "document intoExisting did not clear to its existing root");
         document.acknowledge("activityPaused", docTop);
         check(document.thread.launches(docRoot) == 1, "Document root was not realized after foreground pause");
+        expectUpRecreation(document, docRoot, PKG, true,
+                "A document root with no preceding task must rebuild the parent stack");
         document.start(new Intent(doc).setData(android.net.Uri.parse("content://fixture/document/2")));
         check(document.api.getTasks(10, false, true, Display.DEFAULT_DISPLAY).size() == 2,
                 "Different document data reused the previous document task");
+        Object nextDocRoot = document.records().get(document.records().size() - 1);
+        expectUpRecreation(document, nextDocRoot, PKG, false,
+                "A document root above a task of the same affinity can return to it");
+        expectUpRecreation(document, nextDocRoot, PKG + ".other", true,
+                "A different destination affinity must rebuild even with a same-affinity predecessor");
+        System.out.println("TaskStack Up recreation contracts passed");
         Harness single = new Harness();
         single.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launch("Single"), launch("Top"));
         Object unique = single.record("Single"), above = single.record("Top");
@@ -1454,6 +1478,11 @@ public final class TaskStackContractTest {
         int task = (Integer) get(root, "taskId");
         check(backOnRoot(h, root) && !hidden.contains(task),
                 "Back on a task root another app started did not finish it");
+        expectUpRecreation(h, root, PKG, false, "Same-affinity Up must stay in an ordinary task");
+        expectUpRecreation(h, root, PKG + ".other", true,
+                "A different destination affinity must rebuild the parent stack");
+        expectUpRecreation(h, root, null, false, "An affinity-less destination does not request recreation");
+        expectUpRecreation(h, null, PKG + ".other", false, "An unknown token cannot recreate a task");
 
         Harness home = new Harness();
         home.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
