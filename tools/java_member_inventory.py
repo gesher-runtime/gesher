@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 import hashlib
 import json
@@ -21,6 +21,9 @@ import java_api_inventory as base
 
 PUBLIC, PRIVATE, PROTECTED, STATIC, FINAL = 1, 2, 4, 8, 16
 INTERFACE, ABSTRACT, NATIVE = 0x200, 0x400, 0x100
+CONSTANT_POOL_TAG_BY_DESCRIPTOR = {
+    "B": 3, "C": 3, "I": 3, "S": 3, "Z": 3, "F": 4, "J": 5, "D": 6, "Ljava/lang/String;": 8,
+}
 InvalidInput = base.InvalidInput
 fail, checked, u16, u32, read_uleb = base.fail, base.checked, base.u16, base.u32, base.read_uleb
 
@@ -51,6 +54,7 @@ class Class:
     superclass: str | None
     interfaces: tuple[str, ...]
     members: dict[tuple[str, str, str], Member]
+    constant_values: dict[tuple[str, str, str], int | str] = field(default_factory=dict)
 
 
 def modified_utf8(raw: bytes, expected_units: int | None = None) -> str:
@@ -136,7 +140,7 @@ def add_member(members, item):
     members[item.key] = item
 
 
-def class_members(data: bytes, limits=Limits()) -> Class:
+def class_members(data: bytes, limits=Limits(), *, include_constants=False) -> Class:
     name, _, _ = base.class_file(data, limits)
     def be16(at):
         checked(data, at, 2)
@@ -161,6 +165,8 @@ def class_members(data: bytes, limits=Limits()) -> Class:
             if size is None:
                 fail("invalid_class_pool_tag")
             checked(data, at, size)
+            if include_constants and tag in (3, 4, 5, 6, 8):
+                pool[index] = (tag, data[at:at + size])
             at += size
             index += tag in (5, 6)
         index += 1
@@ -178,13 +184,31 @@ def class_members(data: bytes, limits=Limits()) -> Class:
     at += 6
     interfaces = tuple(cname(be16(at + 2 + 2*i)) for i in range(be16(at)))
     at += 2 + 2*len(interfaces)
-    def attributes(position):
+    def constant_value(signature, index):
+        entry = pool.get(index)
+        if entry is None or entry[0] != CONSTANT_POOL_TAG_BY_DESCRIPTOR.get(signature):
+            fail("invalid_constant_value_pool_entry")
+        tag, raw = entry
+        if tag == 8:
+            return text(int.from_bytes(raw, "big"), 65535)
+        if tag in (4, 6):
+            return "0x" + raw.hex()
+        value = int.from_bytes(raw, "big", signed=True)
+        return str(value) if tag == 5 else value
+
+    constants = {}
+
+    def attributes(position, constant_field=None):
         size = be16(position)
         position += 2
         for _ in range(size):
-            text(be16(position))
+            attribute = text(be16(position))
             length = be32(position + 2)
             checked(data, position + 6, length)
+            if constant_field is not None and attribute == "ConstantValue":
+                if length != 2 or constant_field.key in constants:
+                    fail("invalid_constant_value_attribute")
+                constants[constant_field.key] = constant_value(constant_field.descriptor, be16(position + 6))
             position += 6 + length
         return position
     members = {}
@@ -193,12 +217,14 @@ def class_members(data: bytes, limits=Limits()) -> Class:
         at += 2
         for _ in range(count):
             item = Member(kind, text(be16(at + 2)), text(be16(at + 4), limits.max_member_descriptor_bytes), be16(at))
-            at = attributes(at + 6)
             add_member(members, item)
+            include_field = (include_constants and kind == "field" and item.flags & (PUBLIC | PROTECTED)
+                             and item.flags & STATIC and item.flags & FINAL)
+            at = attributes(at + 6, item if include_field else None)
     at = attributes(at)
     if at != len(data):
         fail("class_trailing_data")
-    return Class(name, flags, cname(parent) if parent else None, interfaces, members)
+    return Class(name, flags, cname(parent) if parent else None, interfaces, members, constants)
 
 
 def dex_members(data: bytes, limits=Limits()) -> dict[str, Class]:
@@ -323,13 +349,13 @@ def dex_members(data: bytes, limits=Limits()) -> dict[str, Class]:
     return classes
 
 
-def archive_members(path: Path, role: str, source_id: str, limits=Limits()):
+def archive_members(path: Path, role: str, source_id: str, limits=Limits(), *, include_constants=False):
     names, _, manifest = base.archive_inventory(path, role, source_id, limits)
     classes = {}
     with zipfile.ZipFile(path) as archive:
         for info in archive.infolist():
             if role == "sdk" and info.filename.endswith(".class") and info.filename != "module-info.class" and not info.filename.startswith("META-INF/"):
-                cls = class_members(archive.read(info), limits)
+                cls = class_members(archive.read(info), limits, include_constants=include_constants)
                 parsed = {cls.name: cls}
             elif role == "boot" and base.DEX_ENTRY.fullmatch(info.filename):
                 parsed = dex_members(archive.read(info), limits)
