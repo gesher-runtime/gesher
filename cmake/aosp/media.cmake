@@ -125,6 +125,7 @@ target_compile_options(media_muxer_verify PRIVATE -Wall -Wextra -Werror -Wno-unu
 set_target_properties(media_muxer_verify PROPERTIES CXX_STANDARD 23)
 
 add_library(gesher_media_player OBJECT
+  ${_media}/ndk/image_reader.cc
   ${_media}/jni/java_data_source.cc
   ${_media}/jni/media_codec_jni.cc
   ${_media}/jni/persistent_input_surface.cc
