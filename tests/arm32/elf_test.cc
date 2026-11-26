@@ -183,6 +183,7 @@ void Rejected(Fixture fixture, std::string_view message,
   ElfImage image;
   image.guest_base = 123;
   image.soname = "unchanged";
+  image.dependencies = {"existing.so"};
   image.bytes = {1, 9, 3};
   image.constructors = {456};
   const auto before = fixture.file;
@@ -194,6 +195,7 @@ void Rejected(Fixture fixture, std::string_view message,
     std::exit(1);
   }
   CHECK(image.guest_base == 123 && image.soname == "unchanged");
+  CHECK((image.dependencies == std::vector<std::string>{"existing.so"}));
   CHECK((image.bytes == std::vector<uint8_t>{1, 9, 3}));
   CHECK((image.constructors == std::vector<uint32_t>{456}));
   CHECK(fixture.file == before);
