@@ -83,6 +83,44 @@ def main() -> None:
                 raise RuntimeError(
                     f"{bionic_output}: unexpected guest libc imports {sorted(imports)}")
         print(f"Verified {mode} ARM32 libc fixture: {bionic_output}")
+        # A genuine two-DSO DT_NEEDED graph. It exercises the Program loader,
+        # cross-module PLT fixups and dependency-first guest constructors.
+        dependency = (args.out_dir / f"dependency-{mode}.so").resolve()
+        consumer = (args.out_dir / f"consumer-{mode}.so").resolve()
+        common_flags = [
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-builtin",
+            "-shared", "-fPIC", "-nostdlib", "-fno-stack-protector",
+            "-Wl,--hash-style=both",
+        ]
+        subprocess.run(compiler + common_flags + [
+            f"-Wl,-soname,dependency-{mode}.so",
+            str(source.with_name("guest_linked_dependency.c")),
+            "-o", str(dependency),
+        ], check=True, timeout=120)
+        subprocess.run(compiler + common_flags + [
+            f"-Wl,-soname,consumer-{mode}.so",
+            str(source.with_name("guest_linked_consumer.c")),
+            "-L", str(args.out_dir.resolve()),
+            f"-l:dependency-{mode}.so",
+            "-o", str(consumer),
+        ], check=True, timeout=120)
+        with consumer.open("rb") as stream:
+            elf = ELFFile(stream)
+            if elf.elfclass != 32 or elf["e_machine"] != "EM_ARM":
+                raise RuntimeError(f"{consumer}: not ARM ELF32")
+            dynamic = elf.get_section_by_name(".dynamic")
+            dependencies = [tag.needed for tag in dynamic.iter_tags()
+                            if tag.entry.d_tag == "DT_NEEDED"]
+            if dependencies != [f"dependency-{mode}.so"]:
+                raise RuntimeError(f"{consumer}: missing real DT_NEEDED: {dependencies}")
+            undefined = {symbol.name for symbol in
+                         elf.get_section_by_name(".dynsym").iter_symbols()
+                         if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
+            if undefined != {"dependency_increment"}:
+                raise RuntimeError(f"{consumer}: unexpected import {undefined}")
+        print(f"Verified {mode} guest dependency graph: {consumer}")
+
 
 
 if __name__ == "__main__":
