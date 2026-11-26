@@ -31,3 +31,17 @@ and [device dispatch](https://docs.vulkan.org/refpages/latest/refpages/source/vk
 contracts. The Android ARM64 emulator on Android 16
 `BE2A.250530.026.D1/13818094` passed 103 checks and verified all 64 words
 through SwiftShader. This exercises real Vulkan commands on a software ICD.
+
+On Windows 11 ARM64 under Parallels, the locally built x64 Windows ART
+runtime at `20f0bd85f` ran the public ELF/JNI probe for both guest ABIs. The
+stock Windows Vulkan loader returned `VK_ERROR_INCOMPATIBLE_DRIVER` for each
+guest, and each passed all 13 checks for this outcome. No compatible x64
+ICD was registered in the VM.
+
+A separate native ARM64 Windows component linked the same production Vulkan
+thunks and used the installed Microsoft-signed ARM64 SwiftShader ICD. It
+created a real device, submitted the buffer fill, and read all 64 expected
+words back from mapped memory. The test selected the software ICD for that
+process only with the [Khronos driver override](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#overriding-the-default-driver-discovery).
+The Windows ARM64 software result covers core dispatch. Windows guest ELF
+queue execution and Android surface presentation remain unqualified.
