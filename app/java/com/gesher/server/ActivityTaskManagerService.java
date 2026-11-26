@@ -6328,6 +6328,21 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private void stop(ActivityRecord r) {
+        boolean finishNoHistory;
+        synchronized (this) {
+            finishNoHistory = !r.finishing
+                    && ((r.intent.getFlags() & Intent.FLAG_ACTIVITY_NO_HISTORY) != 0
+                        || (r.info.flags & ActivityInfo.FLAG_NO_HISTORY) != 0)
+                    && !isVisible(r);
+        }
+        if (finishNoHistory) {
+            // A no-history activity that becomes invisible leaves the task while
+            // its client completes stop and destroy. Recheck visibility before
+            // committing in case the user brought it back in the meantime.
+            finishTogether(r, List.of(r), "stop-no-history", android.app.Activity.RESULT_CANCELED, null,
+                    () -> !r.finishing && !isVisible(r));
+            return;
+        }
         if (r.app == null || r.app.thread == null) {
             synchronized (this) {
                 r.state = State.STOPPED;

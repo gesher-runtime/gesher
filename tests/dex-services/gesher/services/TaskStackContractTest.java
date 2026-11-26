@@ -123,7 +123,7 @@ public final class TaskStackContractTest {
         parsed.setEnabled(true);
         parsed.setTargetSdkVersion(36);
         for (String name : List.of("Root", "Middle", "Top", "Other", "Private", "Guarded", "Single",
-                "Instance", "Doc", "DocNever", "DocAlways")) {
+                "Instance", "Doc", "DocNever", "DocAlways", "NoHistory")) {
             ParsedActivityImpl activity = new ParsedActivityImpl();
             activity.setPackageName(pkg);
             activity.setName(pkg + "." + name);
@@ -133,6 +133,7 @@ public final class TaskStackContractTest {
             if (name.equals("Guarded")) activity.setPermission("fixture.permission.NOT_GRANTED");
             if (name.equals("Single")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_TASK);
             if (name.equals("Instance")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_INSTANCE);
+            if (name.equals("NoHistory")) activity.setFlags(ActivityInfo.FLAG_NO_HISTORY);
             if (name.equals("Doc")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_INTO_EXISTING);
             if (name.equals("DocNever")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_NEVER);
             if (name.equals("DocAlways")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_ALWAYS);
@@ -1524,6 +1525,46 @@ public final class TaskStackContractTest {
                 "Back on an activity above a root home launched moved its task to the back");
     }
 
+    private static void noHistoryOnOpaqueCover() throws Exception {
+        for (int scenario = 0; scenario < 3; scenario++) {
+            Harness h = new Harness();
+            h.startOne(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null);
+            Object root = h.record("Root");
+            h.acknowledge("activityResumed", root);
+            boolean declared = scenario == 1;
+            String name = declared ? "NoHistory" : "Middle";
+            Intent ephemeral = launch(name);
+            if (!declared) ephemeral.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
+            h.startOne(ephemeral, root);
+            Object middle = h.record(name);
+            h.acknowledge("activityPaused", root);
+            h.acknowledge("activityResumed", middle);
+            h.acknowledgeStopped(root);
+            h.startOne(launch("Top"), middle);
+            Object top = h.record("Top");
+            boolean translucent = scenario == 2;
+            if (translucent) set(top, "translucent", true);
+            h.acknowledge("activityPaused", middle);
+            h.acknowledge("activityResumed", top);
+            if (translucent) {
+                check(!(Boolean)get(middle, "finishing") && h.thread.items(StopActivityItem.class, middle) == 0,
+                        "A visible no-history activity finished under a translucent child");
+                h.finish(top);
+                check("RESUMING".equals(h.state(middle)) && h.thread.launches(middle) == 1,
+                        "Back could not resume the still-visible no-history activity");
+                continue;
+            }
+            check((Boolean)get(middle, "finishing") && h.thread.items(StopActivityItem.class, middle) == 1,
+                    "A fully covered no-history activity remained in task history");
+            h.acknowledgeStopped(middle);
+            h.acknowledge("activityDestroyed", middle);
+            int resumes = h.thread.items(ResumeActivityItem.class, root);
+            h.finish(top);
+            check(!h.records().contains(middle) && h.thread.items(ResumeActivityItem.class, root) == resumes + 1,
+                    "Back did not return directly to the root below the removed no-history activity");
+        }
+    }
+
     private static void restoreTaskWhilePausing() throws Exception {
         for (int scenario = 0; scenario < 3; scenario++) {
             Harness h = new Harness();
@@ -2263,7 +2304,7 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("permissions")) permissions();
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
         if (selected.equals("all") || selected.equals("back")) {
-            backOnTaskRoot(); restoreTaskWhilePausing();
+            backOnTaskRoot(); restoreTaskWhilePausing(); noHistoryOnOpaqueCover();
         }
         if (selected.equals("all") || selected.equals("windowclose")) {
             closeMinimizedAppTasks(); conditionalCloseOwnership(); conditionalCloseProtocol();
