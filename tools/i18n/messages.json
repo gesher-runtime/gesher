@@ -8,19 +8,37 @@
     }
   },
   "messages": {
-    "intent_chooser_title": {"en": "Gesher — choose an app", "he": "גשר — בחירת יישום"},
-    "chooser_title": {"en": "Gesher accounts", "he": "גשר — בחירת חשבון"},
-    "chooser_prompt": {"en": "Choose an account for this application:", "he": "בחר חשבון עבור יישום זה:"},
-    "chooser_select": {"en": "Select", "he": "בחירה"},
-    "chooser_cancel": {"en": "Cancel", "he": "ביטול"},
-    "chooser_add": {"en": "Add account", "he": "הוספת חשבון"},
+    "intent_chooser_title": {
+      "en": "Gesher — choose an app",
+      "he": "גשר — בחירת יישום"
+    },
+    "chooser_title": {
+      "en": "Gesher accounts",
+      "he": "גשר — בחירת חשבון"
+    },
+    "chooser_prompt": {
+      "en": "Choose an account for this application:",
+      "he": "בחר חשבון עבור יישום זה:"
+    },
+    "chooser_select": {
+      "en": "Select",
+      "he": "בחירה"
+    },
+    "chooser_cancel": {
+      "en": "Cancel",
+      "he": "ביטול"
+    },
+    "chooser_add": {
+      "en": "Add account",
+      "he": "הוספת חשבון"
+    },
     "install_request": {
-      "en": "Install or update Android application \u2068{0}\u2069 (version \u2068{1}\u2069)?\nThis approval applies to this installation only.",
-      "he": "להתקין או לעדכן את יישום Android \u2068{0}\u2069 (גרסה \u2068{1}\u2069)?\nהאישור חל על התקנה זו בלבד."
+      "en": "Install or update Android application ⁨{0}⁩ (version ⁨{1}⁩)?\nThis approval applies to this installation only.",
+      "he": "להתקין או לעדכן את יישום Android ⁨{0}⁩ (גרסה ⁨{1}⁩)?\nהאישור חל על התקנה זו בלבד."
     },
     "removal_request": {
-      "en": "Remove Android application \u2068{0}\u2069 (version \u2068{1}\u2069)?\nIts app data will be deleted. This approval applies to this removal only.",
-      "he": "להסיר את יישום Android \u2068{0}\u2069 (גרסה \u2068{1}\u2069)?\nגם נתוני היישום יימחקו. האישור חל על הסרה זו בלבד."
+      "en": "Remove Android application ⁨{0}⁩ (version ⁨{1}⁩)?\nIts app data will be deleted. This approval applies to this removal only.",
+      "he": "להסיר את יישום Android ⁨{0}⁩ (גרסה ⁨{1}⁩)?\nגם נתוני היישום יימחקו. האישור חל על הסרה זו בלבד."
     },
     "starting": {
       "en": "Starting…",
@@ -46,11 +64,26 @@
       "en": "Gesher permission request",
       "he": "גשר — בקשת הרשאה"
     },
-    "permission_heading": {"en": "Allow app access?", "he": "לאפשר גישה ליישום?"},
-    "permission_app": {"en": "Android application", "he": "יישום Android"},
-    "permission_requested": {"en": "This app is requesting the following permissions:", "he": "היישום מבקש את ההרשאות הבאות:"},
-    "permission_allow": {"en": "Allow", "he": "לאפשר"},
-    "permission_deny": {"en": "Don't allow", "he": "לא לאפשר"},
+    "permission_heading": {
+      "en": "Allow app access?",
+      "he": "לאפשר גישה ליישום?"
+    },
+    "permission_app": {
+      "en": "Android application",
+      "he": "יישום Android"
+    },
+    "permission_requested": {
+      "en": "This app is requesting the following permissions:",
+      "he": "היישום מבקש את ההרשאות הבאות:"
+    },
+    "permission_allow": {
+      "en": "Allow",
+      "he": "לאפשר"
+    },
+    "permission_deny": {
+      "en": "Don't allow",
+      "he": "לא לאפשר"
+    },
     "permission_prefix": {
       "en": "Allow the Android application ",
       "he": "לאפשר ליישום Android ‏"
@@ -119,10 +152,22 @@
       "en": "failed: {0}",
       "he": "הפעולה נכשלה: {0}"
     },
-    "app_crash_generic": {"en": "The application ⁨{0}⁩ closed because of an error.\n\nDetails are in the log:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה עקב שגיאה.\n\nפרטים מופיעים בלוג:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
-    "app_crash_bluetooth": {"en": "The application ⁨{0}⁩ closed after trying to use a missing Bluetooth adapter. Windows currently reports no Bluetooth adapter.\n\nConnect or enable a Bluetooth adapter in Windows, then try again.\n\nDetails are in the log:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שניסתה להשתמש במתאם Bluetooth שאינו זמין. Windows מדווח כרגע שאין מתאם Bluetooth.\n\nחבר או הפעל מתאם Bluetooth ב־Windows ונסה שוב.\n\nפרטים מופיעים בלוג:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
-    "app_crash_security": {"en": "The application ⁨{0}⁩ closed after a security or permission check rejected an operation.\n\nCheck the application permissions in the Gesher control center. The log may explain other security restrictions:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שבדיקת אבטחה או הרשאות דחתה פעולה.\n\nבדוק את הרשאות האפליקציה בלוח הבקרה של גשר. הלוג עשוי להסביר מגבלות אבטחה אחרות:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
-    "app_crash_compatibility": {"en": "The application ⁨{0}⁩ closed after a class, method or native library could not be linked.\n\nThis may require a compatibility fix. Include the log when reporting the problem:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩", "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שלא ניתן היה לקשר מחלקה, מתודה או ספרייה מקומית.\n\nייתכן שנדרש תיקון תאימות. צרף את הלוג לדיווח על התקלה:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"},
+    "app_crash_generic": {
+      "en": "The application ⁨{0}⁩ closed because of an error.\n\nDetails are in the log:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩",
+      "he": "האפליקציה ⁨{0}⁩ נסגרה עקב שגיאה.\n\nפרטים מופיעים בלוג:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"
+    },
+    "app_crash_bluetooth": {
+      "en": "The application ⁨{0}⁩ closed after trying to use a missing Bluetooth adapter. Windows currently reports no Bluetooth adapter.\n\nConnect or enable a Bluetooth adapter in Windows, then try again.\n\nDetails are in the log:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩",
+      "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שניסתה להשתמש במתאם Bluetooth שאינו זמין. Windows מדווח כרגע שאין מתאם Bluetooth.\n\nחבר או הפעל מתאם Bluetooth ב־Windows ונסה שוב.\n\nפרטים מופיעים בלוג:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"
+    },
+    "app_crash_security": {
+      "en": "The application ⁨{0}⁩ closed after a security or permission check rejected an operation.\n\nCheck the application permissions in the Gesher control center. The log may explain other security restrictions:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩",
+      "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שבדיקת אבטחה או הרשאות דחתה פעולה.\n\nבדוק את הרשאות האפליקציה בלוח הבקרה של גשר. הלוג עשוי להסביר מגבלות אבטחה אחרות:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"
+    },
+    "app_crash_compatibility": {
+      "en": "The application ⁨{0}⁩ closed after a class, method or native library could not be linked.\n\nThis may require a compatibility fix. Include the log when reporting the problem:\n⁨{1}⁩\n\nEvent: ⁨{2}⁩",
+      "he": "האפליקציה ⁨{0}⁩ נסגרה לאחר שלא ניתן היה לקשר מחלקה, מתודה או ספרייה מקומית.\n\nייתכן שנדרש תיקון תאימות. צרף את הלוג לדיווח על התקלה:\n⁨{1}⁩\n\nמזהה אירוע: ⁨{2}⁩"
+    },
     "launch_failed": {
       "en": "The Android application could not be opened.\n\n{0}",
       "he": "לא ניתן לפתוח את יישום ה־Android.\n\n{0}"
@@ -334,6 +379,14 @@
     "setup_configuring_microg": {
       "en": "Setting up Google Play services and applications...",
       "he": "מגדיר שירותי Google Play ויישומים..."
+    },
+    "setup_license_required": {
+      "en": "The license agreement must be accepted before installation. Run Setup interactively to read the complete agreement, or, after reviewing this release's LICENSE, pass /ACCEPTLICENSE=<SHA256 of that LICENSE> for an unattended installation.",
+      "he": "יש לאשר את הסכם הרישיון לפני ההתקנה. יש להפעיל את ההתקנה במצב רגיל כדי לקרוא את ההסכם המלא, או, לאחר עיון בקובץ LICENSE של גרסה זו, להעביר /ACCEPTLICENSE=<SHA256 של קובץ LICENSE זה> להתקנה ללא ממשק."
+    },
+    "setup_license_receipt_failed": {
+      "en": "Gesher was installed, but acceptance of the license agreement could not be saved. Check that the installation folder is writable. Setup will ask for acceptance again on the next update.",
+      "he": "גשר הותקן, אך לא ניתן היה לשמור את אישור הסכם הרישיון. יש לוודא שניתן לכתוב לתיקיית ההתקנה. ההתקנה תבקש אישור נוסף בעדכון הבא."
     },
     "cp_title": {
       "en": "Gesher Control Center",
@@ -700,8 +753,8 @@
       "he": "לא ידועה"
     },
     "cp_update_installed": {
-      "en": "Installed version: \u2068{0}\u2069",
-      "he": "גרסה מותקנת: \u2068{0}\u2069"
+      "en": "Installed version: ⁨{0}⁩",
+      "he": "גרסה מותקנת: ⁨{0}⁩"
     },
     "cp_update_ready": {
       "en": "Updates come from stable GitHub releases.",
@@ -716,8 +769,8 @@
       "he": "לא ניתן לבדוק עדכונים. בדוק את החיבור ונסה שוב."
     },
     "cp_update_available": {
-      "en": "Version \u2068{0}\u2069 is available.",
-      "he": "גרסה \u2068{0}\u2069 זמינה לעדכון."
+      "en": "Version ⁨{0}⁩ is available.",
+      "he": "גרסה ⁨{0}⁩ זמינה לעדכון."
     },
     "cp_update_current": {
       "en": "Gesher is up to date.",
@@ -732,16 +785,16 @@
       "he": "לא נמצאה גרסת הפצה להתקנה זו. התקן גרסה שפורסמה כדי לאפשר עדכונים."
     },
     "cp_update_downloading": {
-      "en": "Downloading version \u2068{0}\u2069…",
-      "he": "מוריד את גרסה \u2068{0}\u2069…"
+      "en": "Downloading version ⁨{0}⁩…",
+      "he": "מוריד את גרסה ⁨{0}⁩…"
     },
     "cp_update_download_failed": {
       "en": "The update could not be downloaded or verified. Please try again.",
       "he": "לא ניתן להוריד או לאמת את העדכון. נסה שוב."
     },
     "cp_update_download_ready": {
-      "en": "Version \u2068{0}\u2069 is ready to install.",
-      "he": "גרסה \u2068{0}\u2069 מוכנה להתקנה."
+      "en": "Version ⁨{0}⁩ is ready to install.",
+      "he": "גרסה ⁨{0}⁩ מוכנה להתקנה."
     },
     "cp_update_cancelling": {
       "en": "Canceling…",
@@ -752,8 +805,8 @@
       "he": "פעולת העדכון בוטלה."
     },
     "cp_update_confirm": {
-      "en": "Install Gesher \u2068{0}\u2069 now?\nSetup will close running Gesher applications. Installed apps and their data will be kept.",
-      "he": "להתקין עכשיו את גשר \u2068{0}\u2069?\nההתקנה תסגור יישומי גשר פעילים. היישומים המותקנים והנתונים שלהם יישמרו."
+      "en": "Install Gesher ⁨{0}⁩ now?\nSetup will close running Gesher applications. Installed apps and their data will be kept.",
+      "he": "להתקין עכשיו את גשר ⁨{0}⁩?\nההתקנה תסגור יישומי גשר פעילים. היישומים המותקנים והנתונים שלהם יישמרו."
     },
     "cp_update_installing": {
       "en": "Preparing or installing the update… Complete the setup window when it opens.",
@@ -772,8 +825,8 @@
       "he": "ההתקנה הסתיימה, אך לא ניתן לאמת את הגרסה המותקנת. פתח מחדש את לוח הבקרה ובדוק שוב."
     },
     "cp_update_installed_success": {
-      "en": "Version \u2068{0}\u2069 is installed. Reopen the control center to finish.",
-      "he": "גרסה \u2068{0}\u2069 מותקנת. פתח מחדש את לוח הבקרה לסיום."
+      "en": "Version ⁨{0}⁩ is installed. Reopen the control center to finish.",
+      "he": "גרסה ⁨{0}⁩ מותקנת. פתח מחדש את לוח הבקרה לסיום."
     },
     "cp_update_exit_code": {
       "en": "Setup exit code: {0}",

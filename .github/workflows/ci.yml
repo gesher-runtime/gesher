@@ -152,6 +152,14 @@ jobs:
         timeout-minutes: 2
         shell: powershell
         run: tests/windows/shell/Issue32And33Contracts.ps1
+      - name: Compile production installer and exercise license wizard with inert payload
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $inno = "${env:ProgramFiles(x86)}\Inno Setup 6"
+          if (-not (Test-Path "$inno\ISCC.exe") -or -not (Test-Path "$inno\Languages\Hebrew.isl")) { choco upgrade innosetup --no-progress -y | Out-Null }
+          tests/windows/shell/InstallerLicenseChecks.ps1 -BuildFixture -InnoDirectory $inno
       - name: API 37 report gate failure and selection contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -1106,6 +1114,13 @@ jobs:
             installer/*.exe
             installer/SHA256SUMS.txt
 
+      - name: Verify the packaged license agreement and consent gate
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
+          tests/windows/shell/InstallerLicenseChecks.ps1 -InstallerPath $setup
+
       - name: Install, run Hello, uninstall
         shell: pwsh
         run: |
@@ -1114,8 +1129,15 @@ jobs:
           # image (docs/boot-image.md): without it the runtime fails instead of
           # falling back to imageless running, and it says what it loaded.
           $env:GESHER_REQUIRE_BOOT_IMAGE = '1'
-          Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+          # Explicit consent for this test deployment, bound to the exact terms
+          # built into Setup. The later same-terms upgrade supplies no consent flag.
+          $licenseHash = (Get-FileHash -LiteralPath LICENSE -Algorithm SHA256).Hash
+          $installation = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/ACCEPTLICENSE=$licenseHash" -Wait -PassThru
+          if ($installation.ExitCode -ne 0) { throw "Setup exit $($installation.ExitCode)" }
           $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
+          if ((Get-FileHash -LiteralPath "$app\LICENSE" -Algorithm SHA256).Hash -cne $licenseHash) { throw 'Installed agreement differs from the source agreement' }
+          $licenseReceipt = Get-Content -LiteralPath "$app\gesher-license.ini" -Raw
+          if ($licenseReceipt -notmatch ('(?im)^SHA256=' + [regex]::Escape($licenseHash) + '\r?$')) { throw 'Successful installation did not record the accepted agreement' }
           python tools/test_app_crash_diagnostics.py --launcher "$app\gesher-launch.exe"
           if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
           python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art

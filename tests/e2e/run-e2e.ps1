@@ -475,7 +475,11 @@ if (-not $SkipInstall) {
   $script:E2eEvidence.runtime.installation_mode = 'installer'
   $script:E2eEvidence.runtime.installer_sha256 = (Get-FileHash -LiteralPath $setupExe -Algorithm SHA256).Hash.ToLowerInvariant()
   Write-E2eEvidence
-  Start-Process $setupExe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+  # This test deployment explicitly accepts the agreement from the same source
+  # revision as its installer; silent mode by itself does not grant consent.
+  $licenseHash = (Get-FileHash -LiteralPath (Join-Path $root 'LICENSE') -Algorithm SHA256).Hash
+  $installation = Start-Process $setupExe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/ACCEPTLICENSE=$licenseHash" -Wait -PassThru
+  if ($installation.ExitCode -ne 0) { throw "Gesher installation failed: $($installation.ExitCode)" }
 } else {
   $script:E2eEvidence.runtime.installation_mode = 'existing_install'
   Write-E2eEvidence

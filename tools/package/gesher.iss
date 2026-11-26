@@ -17,6 +17,8 @@
 ; gesher-app-microg.ps1 -AutoDownload; keep them together). gesher-app-microg.ps1
 ; records it in MicrogVersionFile, so a later update offers the newer release.
 #define MicrogRelease "v0.3.17.252432"
+; Consent identifies the exact canonical agreement embedded in this installer.
+#define LicenseSHA256 GetSHA256OfFile(AddBackslash(SourcePath) + "..\..\LICENSE")
 
 [Setup]
 AppId={{6A1F3C2E-5B7D-4E8A-9C0F-1D2E3F4A5B6C}
@@ -53,6 +55,7 @@ CloseApplicationsFilter=*.exe,*.chm
 LanguageDetectionMethod=uilanguage
 ShowLanguageDialog=no
 UsePreviousLanguage=no
+LicenseFile=..\..\LICENSE
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
@@ -61,6 +64,7 @@ Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"
 #include "ui-messages.iss"
 
 [Files]
+Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\dalvikvm.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_account_crypto.so"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_install_pipe.so"; DestDir: "{app}"; Flags: ignoreversion
@@ -222,6 +226,7 @@ Filename: "{cmd}"; Parameters: "/d /c """"{app}\gesher-app.cmd"" shutdown"""; Fl
 
 [UninstallDelete]
 Type: files; Name: "{app}\gesher-version.ini"
+Type: files; Name: "{app}\gesher-license.ini"
 ; The runtime's directories (gesher.ps1), the installed packages and the logs.
 Type: filesandordirs; Name: "{localappdata}\Gesher"
 ; The installed apps' Start menu shortcuts (gesher-app install; their icons are
@@ -238,6 +243,97 @@ const
   ApkKey = 'Software\Classes\.apk';
   ApkProgId = 'Gesher.Apk';
   BundleProgId = 'Gesher.Xapk';
+
+function LicenseGetWindowLong(Wnd: HWND; Index: Integer): Longint;
+  external 'GetWindowLongW@user32.dll stdcall';
+function LicenseSetWindowLong(Wnd: HWND; Index: Integer; Value: Longint): Longint;
+  external 'SetWindowLongW@user32.dll stdcall';
+
+var
+  LicenseAgreementPage: TWizardPage;
+  LicenseChoiceDirectory: String;
+  LicenseReceiptFailed: Boolean;
+  InstallationFinalized: Boolean;
+
+function LicenseReceiptPath(): String;
+begin
+  Result := ExpandConstant('{app}\gesher-license.ini');
+end;
+
+function HasAcceptedLicense(): Boolean;
+begin
+  Result := CompareText(GetIniString('License', 'SHA256', '', LicenseReceiptPath()),
+    '{#LicenseSHA256}') = 0;
+end;
+
+function LicenseConsentGranted(): Boolean;
+begin
+  Result := HasAcceptedLicense();
+  if Result then
+    Exit;
+  if WizardSilent() then
+    // Unattended deployments must affirm the exact terms they reviewed.
+    Result := CompareText(ExpandConstant('{param:ACCEPTLICENSE|}'), '{#LicenseSHA256}') = 0
+  else
+    // A choice made for a different destination cannot authorize this one.
+    Result := (CompareText(LicenseChoiceDirectory, ExpandConstant('{app}')) = 0) and
+      WizardForm.LicenseAcceptedRadio.Checked;
+end;
+
+procedure LicenseChoiceChanged(Sender: TObject);
+begin
+  if WizardForm.CurPageID = LicenseAgreementPage.ID then
+    WizardForm.NextButton.Enabled := WizardSilent() or WizardForm.LicenseAcceptedRadio.Checked;
+end;
+
+// Inno's RichEdit viewer inherits Hebrew's RTL styles. Keep the canonical
+// English agreement left-to-right, without changing any of its text. RTF's
+// Unicode escapes preserve characters outside the current Windows code page.
+function LicenseTextAsRtf(const Text: String): AnsiString;
+var
+  I, Code: Integer;
+begin
+  Result := '{\rtf1\ansi\deff0{\fonttbl{\f0 Segoe UI;}}\uc1\pard\ltrpar\ql\f0\fs' +
+    AnsiString(IntToStr(WizardForm.LicenseMemo.Font.Size * 2)) + ' ';
+  for I := 1 to Length(Text) do
+  begin
+    Code := Ord(Text[I]);
+    case Code of
+      9: Result := Result + '\tab ';
+      10:
+        begin
+          if I = 1 then
+            Result := Result + '\par '
+          else if Text[I - 1] <> #13 then
+            Result := Result + '\par ';
+        end;
+      13: Result := Result + '\par ';
+      92, 123, 125: Result := Result + '\' + AnsiString(Text[I]);
+    else
+      if Code < 128 then
+        Result := Result + AnsiString(Text[I])
+      else
+      begin
+        if Code > 32767 then
+          Code := Code - 65536;
+        Result := Result + '\u' + AnsiString(IntToStr(Code)) + '?';
+      end;
+    end;
+  end;
+  Result := Result + '}';
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  // The complete embedded agreement follows destination resolution, even
+  // though this release keeps its normal directory-selection page hidden.
+  if PageID = wpLicense then
+    Result := True
+  else if PageID = LicenseAgreementPage.ID then
+    Result := HasAcceptedLicense()
+  else
+    Result := False;
+end;
 
 // True when `.apk` has no default ProgID, or Gesher's: HKCR is the merged
 // per-user and per-machine view, so another app's machine-wide association
@@ -328,8 +424,22 @@ begin
 end;
 
 procedure InitializeWizard();
+var
+  LicenseText: String;
 begin
   DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
+
+  LicenseAgreementPage := CreateCustomPage(wpSelectDir,
+    SetupMessage(msgWizardLicense), SetupMessage(msgLicenseLabel));
+  LicenseText := WizardForm.LicenseMemo.Text;
+  WizardForm.LicenseLabel1.Parent := LicenseAgreementPage.Surface;
+  WizardForm.LicenseMemo.Parent := LicenseAgreementPage.Surface;
+  WizardForm.LicenseAcceptedRadio.Parent := LicenseAgreementPage.Surface;
+  WizardForm.LicenseNotAcceptedRadio.Parent := LicenseAgreementPage.Surface;
+  WizardForm.LicenseAcceptedRadio.OnClick := @LicenseChoiceChanged;
+  WizardForm.LicenseNotAcceptedRadio.OnClick := @LicenseChoiceChanged;
+  if WizardForm.RightToLeft then
+    WizardForm.LicenseMemo.RTFText := LicenseTextAsRtf(LicenseText);
 end;
 
 var
@@ -340,6 +450,22 @@ var
 // still clear it.
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  if CurPageID = LicenseAgreementPage.ID then
+  begin
+    // Clear WS_EX_RIGHT, RTLREADING, LEFTSCROLLBAR and LAYOUTRTL after the
+    // wizard has created/flipped controls; keep the surrounding Hebrew UI RTL.
+    LicenseSetWindowLong(WizardForm.LicenseMemo.Handle, -20,
+      LicenseGetWindowLong(WizardForm.LicenseMemo.Handle, -20) and not $00407000);
+    if CompareText(LicenseChoiceDirectory, ExpandConstant('{app}')) <> 0 then
+    begin
+      LicenseChoiceDirectory := ExpandConstant('{app}');
+      WizardForm.LicenseNotAcceptedRadio.Checked := True;
+    end;
+    // Command-line consent never preselects an interactive acceptance.
+    // Inno simulates clicks only on enabled buttons in silent mode. The
+    // NextButtonClick guard validates the hash before allowing that click.
+    WizardForm.NextButton.Enabled := WizardSilent() or WizardForm.LicenseAcceptedRadio.Checked;
+  end;
   // Silent runs keep /TASKS, /MERGETASKS and the previous choice as given.
   if (CurPageID = wpSelectTasks) and not MicrogUpdateOffered and not WizardSilent() then
   begin
@@ -354,6 +480,17 @@ var
   DownloadsNeeded: Integer;
 begin
   Result := True;
+  if ((CurPageID = LicenseAgreementPage.ID) or (CurPageID = wpReady)) and
+     not LicenseConsentGranted() then
+  begin
+    Result := False;
+    if WizardSilent() then
+    begin
+      Log(CustomMessage('setup_license_required'));
+      SuppressibleMsgBox(CustomMessage('setup_license_required'), mbError, MB_OK, IDOK);
+    end;
+    Exit;
+  end;
   if CurPageID = wpReady then
   begin
     DownloadPage.Clear;
@@ -483,6 +620,13 @@ var
   Launcher: String;
   Code: Integer;
 begin
+  Result := '';
+  // Recheck the final destination before stopping a device or changing files.
+  if not LicenseConsentGranted() then
+  begin
+    Result := CustomMessage('setup_license_required');
+    Exit;
+  end;
   Launcher := ExpandConstant('{app}\gesher-app.cmd');
   if FileExists(Launcher) then
     Exec(ExpandConstant('{cmd}'), '/d /c ""' + Launcher + '" shutdown"', '', SW_HIDE,
@@ -555,7 +699,35 @@ begin
         Path := Path + ';';
       RegWriteExpandStringValue(HKEY_CURRENT_USER, EnvKey, 'Path', Path + Dir);
     end;
+    InstallationFinalized := True;
   end;
+  if (CurStep = ssDone) and InstallationFinalized then
+  begin
+    // ssDone can also follow a preparation-time restart. Require successful
+    // installation/finalization so a failed or cancelled run records nothing.
+    LicenseReceiptFailed := True;
+    try
+      LicenseReceiptFailed := not SetIniString('License', 'SHA256',
+        '{#LicenseSHA256}', LicenseReceiptPath());
+    except
+      Log(GetExceptionMessage);
+    end;
+    if LicenseReceiptFailed then
+    begin
+      Log(CustomMessage('setup_license_receipt_failed'));
+      SuppressibleMsgBox(CustomMessage('setup_license_receipt_failed'), mbError, MB_OK, IDOK);
+    end;
+  end;
+end;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  // An exception after installation does not make Inno's exit status fail.
+  // Report a missing acceptance receipt to silent callers and the updater.
+  if LicenseReceiptFailed then
+    Result := 1
+  else
+    Result := 0;
 end;
 
 // The apps' AppUserModelIDs (Gesher.App.<package>, registered for their toasts by

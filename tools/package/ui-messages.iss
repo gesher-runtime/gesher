@@ -11,6 +11,8 @@ en.setup_aurora=Install App Store (Aurora Store)
 en.setup_control_panel=Gesher Control Center
 en.setup_installing_webview2=Installing Microsoft Edge WebView2...
 en.setup_configuring_microg=Setting up Google Play services and applications...
+en.setup_license_required=The license agreement must be accepted before installation. Run Setup interactively to read the complete agreement, or, after reviewing this release's LICENSE, pass /ACCEPTLICENSE=<SHA256 of that LICENSE> for an unattended installation.
+en.setup_license_receipt_failed=Gesher was installed, but acceptance of the license agreement could not be saved. Check that the installation folder is writable. Setup will ask for acceptance again on the next update.
 he.setup_webview=התקנת Microsoft Edge WebView2 (נדרש להצגת תוכן אינטרנט ביישומי Android)
 he.setup_readme=גשר — מידע והוראות
 he.setup_apk=יישום Android (גשר)
@@ -22,6 +24,8 @@ he.setup_aurora=התקנת חנות אפליקציות (Aurora Store)
 he.setup_control_panel=לוח הבקרה של גשר
 he.setup_installing_webview2=מתקין את Microsoft Edge WebView2...
 he.setup_configuring_microg=מגדיר שירותי Google Play ויישומים...
+he.setup_license_required=יש לאשר את הסכם הרישיון לפני ההתקנה. יש להפעיל את ההתקנה במצב רגיל כדי לקרוא את ההסכם המלא, או, לאחר עיון בקובץ LICENSE של גרסה זו, להעביר /ACCEPTLICENSE=<SHA256 של קובץ LICENSE זה> להתקנה ללא ממשק.
+he.setup_license_receipt_failed=גשר הותקן, אך לא ניתן היה לשמור את אישור הסכם הרישיון. יש לוודא שניתן לכתוב לתיקיית ההתקנה. ההתקנה תבקש אישור נוסף בעדכון הבא.
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{userprograms}\Gesher Apps"

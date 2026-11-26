@@ -380,6 +380,14 @@
       "en": "Setting up Google Play services and applications...",
       "he": "מגדיר שירותי Google Play ויישומים..."
     },
+    "setup_license_required": {
+      "en": "The license agreement must be accepted before installation. Run Setup interactively to read the complete agreement, or, after reviewing this release's LICENSE, pass /ACCEPTLICENSE=<SHA256 of that LICENSE> for an unattended installation.",
+      "he": "יש לאשר את הסכם הרישיון לפני ההתקנה. יש להפעיל את ההתקנה במצב רגיל כדי לקרוא את ההסכם המלא, או, לאחר עיון בקובץ LICENSE של גרסה זו, להעביר /ACCEPTLICENSE=<SHA256 של קובץ LICENSE זה> להתקנה ללא ממשק."
+    },
+    "setup_license_receipt_failed": {
+      "en": "Gesher was installed, but acceptance of the license agreement could not be saved. Check that the installation folder is writable. Setup will ask for acceptance again on the next update.",
+      "he": "גשר הותקן, אך לא ניתן היה לשמור את אישור הסכם הרישיון. יש לוודא שניתן לכתוב לתיקיית ההתקנה. ההתקנה תבקש אישור נוסף בעדכון הבא."
+    },
     "cp_title": {
       "en": "Gesher Control Center",
       "he": "לוח הבקרה של גשר"
