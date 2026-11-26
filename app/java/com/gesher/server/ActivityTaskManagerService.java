@@ -3867,11 +3867,27 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Collect launch-reset finishes above the retained root. Guarded by this. */
     private void collectTaskLaunchFinishesLocked(ActivityRecord root, boolean clearTaskOnLaunch,
             List<ActivityRecord> selected) {
-        List<ActivityRecord> replies = new ArrayList<>();
+        List<ActivityRecord> history = new ArrayList<>();
+        int clearCount = 0;
         for (int i = mActivities.size() - 1; i >= 0; i--) {
             ActivityRecord activity = mActivities.get(i);
             if (activity == root) break;
             if (activity.taskId != root.taskId || activity.finishing || activity.state == State.DESTROYED) continue;
+            history.add(activity);
+            // CLEAR_WHEN_TASK_RESET shares NEW_DOCUMENT's bit. A document launched
+            // for a result can stay in its caller's task; Android clears it and
+            // every activity above it when that task is reset.
+            if ((activity.intent.getFlags() & Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET) != 0) {
+                clearCount = history.size();
+            }
+        }
+        List<ActivityRecord> replies = new ArrayList<>();
+        for (int i = 0; i < history.size(); i++) {
+            ActivityRecord activity = history.get(i);
+            if (i < clearCount) {
+                selected.add(activity);
+                continue;
+            }
             boolean finishOnLaunch = (activity.info.flags & ActivityInfo.FLAG_FINISH_ON_TASK_LAUNCH) != 0;
             if (!finishOnLaunch && activity.resultTo != null) {
                 // Reset follows the reply chain to its owner. A chain owned by the root stays.
