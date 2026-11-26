@@ -43,7 +43,10 @@ Program::Program(LibraryProvider provider, size_t budget)
   stack_ok_ = memory_.Map(kStackBase, kStackSize, kReadWrite);
 }
 
-Program::~Program() { Rollback(0, 0x10000000); }
+Program::~Program() {
+  Shutdown(nullptr);
+  Rollback(0, 0x10000000);
+}
 
 const Program::Module* Program::Find(std::string_view name) const {
   for (const auto& module : modules_) {
@@ -71,7 +74,7 @@ bool Program::BindHostSymbol(std::string name, std::vector<ValueKind> arguments,
                              std::string* error) {
   if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
   ActiveProgram active{&busy_};
-  if (!stack_ok_ || name.empty() || !callback || host_symbols_.contains(name) ||
+  if (!stack_ok_ || closed_ || name.empty() || !callback || host_symbols_.contains(name) ||
       next_thunk_ >= kStackBase)
     return Fail(error, "invalid or duplicate ARM32 host symbol binding");
   const uint32_t address = static_cast<uint32_t>(next_thunk_);
@@ -200,8 +203,8 @@ void Program::Rollback(size_t count, uint64_t next_address) noexcept {
 bool Program::LoadLibrary(std::string_view name, std::string* error) {
   if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
   ActiveProgram active{&busy_};
-  if (!stack_ok_ || name.empty())
-    return Fail(error, "ARM32 program stack unavailable or empty library name");
+  if (!stack_ok_ || closed_ || name.empty())
+    return Fail(error, "ARM32 program stack unavailable, closed or empty library name");
   const size_t before = modules_.size();
   const uint64_t old_next = next_image_;
   try {
@@ -222,8 +225,8 @@ bool Program::LoadLibrary(std::string_view name, std::string* error) {
 bool Program::Initialize(std::string* error) {
   if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
   ActiveProgram active{&busy_};
-  if (!stack_ok_ || initialization_failed_)
-    return Fail(error, "ARM32 program initialization unavailable after a failure");
+  if (!stack_ok_ || closed_ || initialization_failed_)
+    return Fail(error, "ARM32 program initialization unavailable after shutdown or failure");
   for (auto& module : modules_) {
     if (module.initialized) continue;
     for (uint32_t address : module.image.constructors) {
@@ -240,13 +243,37 @@ bool Program::Initialize(std::string* error) {
   return true;
 }
 
+bool Program::Shutdown(std::string* error) {
+  if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
+  ActiveProgram active{&busy_};
+  if (closed_) { if (error) error->clear(); return true; }
+  // A guest finalizer is allowed to call already loaded dependencies, but
+  // may not recursively load objects or reenter the Program host API.
+  closed_ = true;
+  bool okay = true;
+  std::string first_error;
+  for (auto it = modules_.rbegin(); it != modules_.rend(); ++it) {
+    if (!it->initialized) continue;
+    for (uint32_t address : it->image.finalizers) {
+      const auto result = executor_.Call(address, {}, kStackTop);
+      if (!result.returned()) {
+        okay = false;
+        if (first_error.empty()) first_error = "ARM32 finalizer failed: " + result.error;
+      }
+    }
+    it->initialized = false;
+  }
+  if (error) *error = std::move(first_error);
+  return okay;
+}
+
 bool Program::CallExport(std::string_view library, std::string_view symbol,
                          const std::vector<Value>& arguments, ValueKind result_kind,
                          Value* result, std::string* error, uint64_t budget) {
   if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
   ActiveProgram active{&busy_};
-  if (!stack_ok_ || initialization_failed_ || !result)
-    return Fail(error, "ARM32 program not callable");
+  if (!stack_ok_ || closed_ || initialization_failed_ || !result)
+    return Fail(error, "ARM32 program is closed, failed or not callable");
   const Module* module = Find(library);
   uint32_t entry = 0;
   if (!module || !module->image.Lookup(symbol, &entry))
