@@ -541,6 +541,58 @@ public final class AppOpsContractTest {
         h.ops.resetAllModes(0, NAME); awaitCount(watcher.calls, 2);
         h.service.stopWatchingMode(watcher); check(watcher.token.recipients.isEmpty(), "Unwatch releases the death recipient");
     }
+    private static void watcherAdmission(Harness h) throws Exception {
+        Token activeToken = new Token(), startedToken = new Token(), notedToken = new Token();
+        AtomicInteger active = new AtomicInteger(), started = new AtomicInteger(), noted = new AtomicInteger();
+        var activeCallback = new com.android.internal.app.IAppOpsActiveCallback.Default() {
+            @Override public IBinder asBinder() { return activeToken; }
+            @Override public void opActiveChanged(int op, int uid, String name, String tag, int device,
+                    boolean running, int attributionFlags, int chain) { active.incrementAndGet(); }
+        };
+        var startedCallback = new com.android.internal.app.IAppOpsStartedCallback.Default() {
+            @Override public IBinder asBinder() { return startedToken; }
+            @Override public void opStarted(int op, int uid, String name, String tag, int device, int flags,
+                    int mode, int type, int attributionFlags, int chain) { started.incrementAndGet(); }
+        };
+        var notedCallback = new com.android.internal.app.IAppOpsNotedCallback.Default() {
+            @Override public IBinder asBinder() { return notedToken; }
+            @Override public void opNoted(int op, int uid, String name, String tag, int device, int flags,
+                    int mode) { noted.incrementAndGet(); }
+        };
+        for (int[] invalid : new int[][]{null, new int[0]}) {
+            rejects(IllegalArgumentException.class, () -> h.service.startWatchingStarted(invalid, startedCallback));
+            rejects(IllegalArgumentException.class, () -> h.service.startWatchingNoted(invalid, notedCallback));
+        }
+        rejects(NullPointerException.class, () -> h.ops.stopWatchingStarted(null));
+        rejects(NullPointerException.class, () -> h.ops.stopWatchingNoted(null));
+        h.ops.startWatchingActive(new int[]{OP_VIBRATE}, null);
+        h.ops.stopWatchingActive(null);
+        h.service.startWatchingActive(new int[0], activeCallback);
+        check(activeToken.links == 0 && startedToken.links == 0 && notedToken.links == 0,
+                "No callback or death registration is created for an empty operation set");
+
+        int[] ops = {OP_VIBRATE};
+        h.service.startWatchingActive(ops, activeCallback);
+        h.service.startWatchingStarted(ops, startedCallback);
+        h.service.startWatchingNoted(ops, notedCallback);
+        Token client = new Token();
+        try {
+            check(start(h.ops, client, "one", false).getOpMode() == MODE_ALLOWED, "Valid start for admitted callbacks");
+            check(h.ops.noteOperation(OP_VIBRATE, UID, NAME, "one", false, null, false).getOpMode() == MODE_ALLOWED,
+                    "Valid note for admitted callbacks");
+            h.ops.finishOperation(client, OP_VIBRATE, UID, NAME, "one");
+            drain(h);
+            check(active.get() == 2 && started.get() == 1 && noted.get() == 1,
+                    "Admitted watchers receive one start and note plus both active transitions");
+        } finally {
+            h.service.stopWatchingActive(activeCallback);
+            h.service.stopWatchingStarted(startedCallback);
+            h.service.stopWatchingNoted(notedCallback);
+            client.die();
+        }
+        check(activeToken.recipients.isEmpty() && startedToken.recipients.isEmpty() && notedToken.recipients.isEmpty(),
+                "Stopping valid watchers releases their death registrations");
+    }
     private static final class AsyncWatcher extends IAppOpsAsyncNotedCallback.Default {
         final Token token = new Token();
         final List<String> messages = new ArrayList<>();
@@ -1703,6 +1755,7 @@ public final class AppOpsContractTest {
         permissionCheckerEdges();
         foregroundServiceExit();
         asyncWatchers(h);
+        watcherAdmission(new Harness());
         return checks;
     }
     public static void main(String[] args) throws Exception {

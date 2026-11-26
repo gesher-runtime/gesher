@@ -1075,7 +1075,14 @@ public final class AppOpsService extends IAppOpsService.Default {
         }
     }
     private void watchEvents(int kind, int[] ops, android.os.IInterface callback) {
-        Objects.requireNonNull(callback); Objects.requireNonNull(ops); validateOps(ops);
+        if (kind != 0 && (ops == null || ops.length == 0)) {
+            throw new IllegalArgumentException("Ops cannot be null or empty");
+        }
+        validateOps(ops);
+        if (kind == 0 && callback == null) return;
+        Objects.requireNonNull(callback, "Callback cannot be null");
+        Objects.requireNonNull(ops);
+        if (ops.length == 0) return;
         for (int op : ops) verifyReadableOp(op);
         int uid = hasPermission(Manifest.permission.WATCH_APPOPS) ? -1 : callers().callerUid();
         if (uid != -1) callers().callerPackage();
@@ -1095,7 +1102,8 @@ public final class AppOpsService extends IAppOpsService.Default {
         }
     }
     private void stopEvents(int kind, android.os.IInterface callback) {
-        if (callback == null) return;
+        if (kind == 0 && callback == null) return;
+        Objects.requireNonNull(callback, "Callback cannot be null");
         synchronized (mClientRegistration) {
             EventWatcher watcher;
             boolean empty;
