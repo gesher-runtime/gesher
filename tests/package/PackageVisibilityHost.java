@@ -2,6 +2,12 @@
 public final class PackageVisibilityHost {
     public static void main(String[] args) throws Throwable {
         System.load(args[0]);
+        // Existing UID-policy host boundary: exercise real grants/invalidation
+        // without the platform's cross-process shared-memory nonce transport.
+        android.app.PropertyInvalidatedCache.setTestMode(true);
+        var cache = android.content.pm.PackageManager.class.getDeclaredField("sPackageInfoCache");
+        cache.setAccessible(true);
+        ((android.app.PropertyInvalidatedCache<?, ?>)cache.get(null)).testPropertyName();
         String name = "gesher.services.PackageVisibilityContractTest";
         try (var loader = new java.net.URLClassLoader(
                 new java.net.URL[]{PackageVisibilityHost.class.getProtectionDomain().getCodeSource().getLocation()},
@@ -20,7 +26,11 @@ public final class PackageVisibilityHost {
                 throw new AssertionError("Fixture must use a separate runtime loader");
             }
             int checks;
-            try { checks = (int)fixture.getMethod("run", boolean.class).invoke(null, false); }
+            try {
+                checks = args.length > 1 && args[1].equals("--uid-semantics")
+                        ? (int)fixture.getMethod("verifyUidSemantics").invoke(null)
+                        : (int)fixture.getMethod("run", boolean.class).invoke(null, false);
+            }
             catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
             System.out.println("Package visibility host all passed: " + checks + " checks; protected="
                     + com.gesher.server.GmsSignatureSpoofing.isEnabled());

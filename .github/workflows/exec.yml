@@ -12,6 +12,7 @@ on:
     paths:
       - 'tests/exec/exec4_actions.c'
       - 'tests/exec/exec4_spawn.c'
+      - 'tests/exec/ptrace_contract.c'
       - '.github/workflows/exec.yml'
   workflow_dispatch:
   workflow_call:
@@ -87,7 +88,7 @@ jobs:
           "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
             -o dist-exec/libexec2child.so tests/exec/exec2_child.c -ldl
           "$bin/x86_64-linux-android29-clang" -O2 -fstack-protector-strong -Wall -Werror \
-            -o dist-exec/libexec2test.so tests/exec/exec2_test.c
+            -o dist-exec/libexec2test.so tests/exec/exec2_test.c -ldl
           "$bin/x86_64-linux-android29-clang" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -Wl,-soname,libexec3jni.so -o dist-exec/libexec3jni.so tests/exec/app/jni/exec3_jni.c -ldl
           "$bin/x86_64-linux-android29-clang" -shared -fPIC -O2 -fstack-protector-strong -Wall -Wextra -Werror \
@@ -102,6 +103,11 @@ jobs:
             -o dist-exec/exec4-spawn-x86_64 tests/exec/exec4_spawn.c
           "$bin/aarch64-linux-android34-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
             -o dist-exec/exec4-spawn-arm64-v8a tests/exec/exec4_spawn.c
+          # ptrace between real processes (ADR 0093), x86_64 and translated arm64.
+          "$bin/x86_64-linux-android34-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-exec/ptrace-contract-x86_64 tests/exec/ptrace_contract.c
+          "$bin/aarch64-linux-android34-clang" -O2 -fstack-protector-strong -Wall -Wextra -Werror \
+            -o dist-exec/ptrace-contract-arm64-v8a tests/exec/ptrace_contract.c
           # Same public-API fixture as Linux and native Windows, loaded as ELF.
           "$bin/x86_64-linux-android34-clang" -std=c11 -O2 -g -Wall -Wextra -Werror \
             -o dist-exec/realtime-signals-x86_64 tests/exec/realtime_signals_contract.c

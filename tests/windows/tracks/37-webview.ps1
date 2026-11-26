@@ -116,20 +116,25 @@ public static class GesherWebViewWin32 {
 
 $webviewFailedBefore = $failed
 
-# Real COM marshal/unmarshal and retained-body lifetime, without a browser.
-if (Test-Path "$Dir/webview_owned_stream_test.exe") {
-  $streamProbe = Start-Process "$Dir/webview_owned_stream_test.exe" -NoNewWindow -PassThru
-  if (-not $streamProbe.WaitForExit(60000)) {
-    $streamProbe.Kill($true); $streamProbe.WaitForExit()
-    Write-Host 'FAIL  webview owned stream COM gate timed out'
+# Real COM marshal/unmarshal and retained-body lifetime; document script
+# ordering, cancellation and failures on the real STA. Neither creates a browser.
+foreach ($comTest in 'webview_owned_stream_test', 'webview_document_script_test') {
+  if (-not (Test-Path "$Dir/$comTest.exe")) {
+    Write-Host "FAIL  $comTest.exe is missing"
     $script:failed++
-  } elseif ($streamProbe.ExitCode -ne 0) {
-    Write-Host "FAIL  webview owned stream COM gate exit $($streamProbe.ExitCode)"
-    $script:failed++
+    continue
   }
-} else {
-  Write-Host 'FAIL  webview_owned_stream_test.exe is missing'
-  $script:failed++
+  $comProbe = Start-Process "$Dir/$comTest.exe" -NoNewWindow -PassThru
+  if (-not $comProbe.WaitForExit(60000)) {
+    $comProbe.Kill($true); $comProbe.WaitForExit()
+    Write-Host "FAIL  $comTest COM gate timed out"
+    $script:failed++
+  } elseif ($comProbe.ExitCode -ne 0) {
+    Write-Host "FAIL  $comTest COM gate exit $($comProbe.ExitCode)"
+    $script:failed++
+  } else {
+    Write-Host "PASS  $comTest COM gate"
+  }
 }
 
 # --- 1. The probe -------------------------------------------------------------
@@ -299,7 +304,7 @@ $webAppExpect = @(
   'WebActivity progress 100',
   'gesher-webview: preview of file:///android_asset/index.html: 400x300, center #00ff00',
   'WebActivity setCookie: true',
-  'WebActivity cookie: gesher=1',
+  'WebActivity cookies read back: gesher=1',
   'view(s) over the WebView cut out of its window: rect 360,220-400,260',
   'WebActivity onDestroy')
 $webAppName = 'webapp.apk''s WebViews on WebView2 (child windows of its Win32 window at the views'' bounds, moved and hidden with them, a view over one cut out of it): an asset page whose script calls a @JavascriptInterface method, console, alert through WebChromeClient, shouldInterceptRequest and shouldOverrideUrlLoading, evaluateJavascript returns values, onPageFinished; a remote https page; cookies; the window read back with PW_RENDERFULLCONTENT'
