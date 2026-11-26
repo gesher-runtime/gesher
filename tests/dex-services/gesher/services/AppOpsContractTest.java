@@ -595,16 +595,15 @@ public final class AppOpsContractTest {
 
         // Pause the event executor, change the installed generation and register
         // its observer before allowing the old generation's queued event to run.
-        Harness generations = new Harness();
         AsyncWatcher old = new AsyncWatcher(), replacement = new AsyncWatcher();
-        generations.service.startWatchingAsyncNoted(NAME, old);
+        h.service.startWatchingAsyncNoted(NAME, old);
         old.fail = true;
-        asyncNote(generations, "old backlog");
-        drain(generations);
+        asyncNote(h, "old backlog");
+        drain(h);
         old.fail = false;
         java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
-        var executor = (java.util.concurrent.ScheduledThreadPoolExecutor)get(generations.service, "mEvents");
+        var executor = (java.util.concurrent.ScheduledThreadPoolExecutor)get(h.service, "mEvents");
         var blocker = executor.submit(() -> {
             entered.countDown();
             if (!release.await(5, TimeUnit.SECONDS)) throw new AssertionError("Async note fixture timed out");
@@ -612,30 +611,30 @@ public final class AppOpsContractTest {
         });
         try {
             requireAsync(entered.await(5, TimeUnit.SECONDS), "Could not pause the event executor");
-            asyncNote(generations, "old queued note");
+            asyncNote(h, "old queued note");
             ApkPackage replacementCode = pkg(NAME, UID, (byte)7);
             call(replacementCode, "setRestrictedPermissionAllowlist",
                     new Class<?>[]{Collection.class}, (Object)null);
-            call(generations.pm, "add", new Class<?>[]{ApkPackage.class}, replacementCode);
-            requireAsync(generations.pm.get(NAME) == replacementCode
-                    && generations.ops.extractAsyncOps(NAME) == null,
+            call(h.pm, "add", new Class<?>[]{ApkPackage.class}, replacementCode);
+            requireAsync(h.pm.get(NAME) == replacementCode
+                    && h.ops.extractAsyncOps(NAME) == null,
                     "The new generation must not inherit undelivered notes even before registering");
-            generations.asApp(() -> {
+            h.asApp(() -> {
                 try {
-                    generations.service.startWatchingAsyncNoted(NAME, new AsyncWatcher());
+                    h.service.startWatchingAsyncNoted(NAME, new AsyncWatcher());
                     throw new AssertionError("The old process registered as the replacement's observer");
                 } catch (SecurityException expected) { }
             });
-            generations.service.startWatchingAsyncNoted(NAME, replacement);
-            asyncNote(generations, "new queued note");
+            h.service.startWatchingAsyncNoted(NAME, replacement);
+            asyncNote(h, "new queued note");
         } finally {
             release.countDown();
         }
         blocker.get(5, TimeUnit.SECONDS);
-        drain(generations);
+        drain(h);
         requireAsync(replacement.messages.equals(List.of("new queued note")) && old.messages.isEmpty(),
                 "An async note scheduled for the old generation must not reach the replacement");
-        generations.service.stopWatchingAsyncNoted(NAME, replacement);
+        h.service.stopWatchingAsyncNoted(NAME, replacement);
         System.out.println("AppOps async watcher lifecycle contracts passed");
     }
 
