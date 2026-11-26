@@ -57,6 +57,10 @@ add_executable(pipe_write_readiness_probe EXCLUDE_FROM_ALL
   "${GESHER_ROOT}/tests/native/pipe_write_readiness_probe.cc")
 target_compile_options(pipe_write_readiness_probe PRIVATE -Wall -Wextra -Werror)
 
+add_executable(pipe_epoll_alias_probe EXCLUDE_FROM_ALL
+  "${GESHER_ROOT}/tests/native/pipe_epoll_alias_probe.cc")
+target_compile_options(pipe_epoll_alias_probe PRIVATE -Wall -Wextra -Werror)
+
 add_executable(pipe_capacity_reference EXCLUDE_FROM_ALL
   "${GESHER_ROOT}/tests/native/pipe_capacity_reference.c")
 target_compile_options(pipe_capacity_reference PRIVATE -Wall -Wextra -Werror)

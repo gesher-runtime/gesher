@@ -70,6 +70,11 @@ int ReadTimerFd(TimerFd& timer, void* buf, unsigned int count);
 // Virtual registrations instead belong to their shared event object: aliases
 // and actual in-flight I/O retain them, while epoll observations do not.
 void ForgetEpollEntries(int fd);
+struct OpenFileDescription;
+std::shared_ptr<OpenFileDescription> LookupPipeDescription(int fd);
+// Descriptor publication/replacement is locked by the caller. The returned
+// numeric alias is borrowed and never extends the native pipe's lifetime.
+int FindPipeAlias(int fd);
 
 // A pipe has no handle to wait for, and WSAPoll waits for sockets only, so a
 // poll over a pipe, or over sockets and eventfds, would see a write only on

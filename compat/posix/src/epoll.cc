@@ -24,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -175,10 +176,15 @@ struct ObjectOwner;
 struct EntryKey {
   int fd;
   std::weak_ptr<ObjectOwner> owner;
-  EntryKey(int descriptor = -1, std::weak_ptr<ObjectOwner> description = {})
-      : fd(descriptor), owner(std::move(description)) {}
+  std::weak_ptr<OpenFileDescription> pipe_description;
+  EntryKey(int descriptor = -1, std::weak_ptr<ObjectOwner> description = {},
+           std::weak_ptr<OpenFileDescription> pipe = {})
+      : fd(descriptor), owner(std::move(description)), pipe_description(std::move(pipe)) {}
   bool operator<(const EntryKey& other) const {
-    return fd < other.fd || (fd == other.fd && owner.owner_before(other.owner));
+    if (fd != other.fd) return fd < other.fd;
+    if (owner.owner_before(other.owner)) return true;
+    if (other.owner.owner_before(owner)) return false;
+    return pipe_description.owner_before(other.pipe_description);
   }
   bool IsVirtual() const {
     return owner.owner_before(std::weak_ptr<ObjectOwner>{}) ||
@@ -210,6 +216,9 @@ struct Entry {
   uint64_t read_generation = 0;
   uint64_t write_generation = 0;
   bool edge_initial = true;
+  // The registration key remains the original number and pipe description.
+  // A live local alias supplies I/O readiness after that number closes.
+  int pipe_alias = -1;
 };
 
 std::atomic<size_t> epoll_count{0};
@@ -217,11 +226,22 @@ std::atomic<size_t> epoll_count{0};
 struct Epoll {
   std::mutex mutex;
   std::map<EntryKey, Entry> entries;
+  // Indexed only after an open pipe registration moves to another local fd.
+  // Ordinary close keeps the registered number's direct lookup.
+  std::map<int, std::set<EntryKey>> pipe_aliases;
   uint64_t next_id = 1;
   // Shared by all aliases and waiters. A descriptor number survives removal
   // without retaining an invalidated iterator or a stale Entry generation.
   EntryKey last_ready;
   std::shared_ptr<EpollWakeChannels> wake = std::make_shared<EpollWakeChannels>();
+
+  void ForgetPipeAlias(const EntryKey& key, const Entry& entry) {
+    if (entry.pipe_alias < 0) return;
+    auto aliases = pipe_aliases.find(entry.pipe_alias);
+    if (aliases == pipe_aliases.end()) return;
+    aliases->second.erase(key);
+    if (aliases->second.empty()) pipe_aliases.erase(aliases);
+  }
 
   void NotifyLocked() {
     wake->Notify();
@@ -535,7 +555,8 @@ bool SnapshotEpoll(const std::shared_ptr<Epoll>& ep, EpollPollScratch& scratch) 
     if (entry.edge_source && EventFdEdgeReady(entry, false) != 0) ready = true;
     scratch.keys.push_back(key);
     scratch.ids.push_back(entry.id);
-    scratch.fds.push_back({key.fd, EpollPollInterest(entry), 0});
+    const int fd = entry.pipe_alias >= 0 ? entry.pipe_alias : key.fd;
+    scratch.fds.push_back({fd, EpollPollInterest(entry), 0});
   }
   return ready;
 }
@@ -797,11 +818,12 @@ void DupEventObject(int fd, int fd2) {
   if (auto owner = Lookup(fd)) Insert(fd2, owner);
 }
 
-// Virtual registrations retire with their shared owner, independently of the
-// original number. Other descriptor backends retain their existing retirement.
+// Virtual registrations retire with their shared owner. Pipe registrations
+// keep their original key as long as a local alias can observe the pipe.
 void ForgetEpollEntries(int fd) {
-  if (Lookup(fd)) return;
-  if (epoll_count.load(std::memory_order_acquire) == 0) return;
+  if (epoll_count.load(std::memory_order_acquire) == 0 || Lookup(fd)) return;
+  const auto pipe = LookupPipeDescription(fd);
+  std::optional<int> replacement;  // find a live sibling only for a sampled pipe
   std::vector<std::shared_ptr<Epoll>> live;
   {
     std::lock_guard<std::mutex> lock(epolls_mutex);
@@ -816,7 +838,33 @@ void ForgetEpollEntries(int fd) {
   }
   for (auto& ep : live) {
     std::lock_guard<std::mutex> lock(ep->mutex);
-    if (ep->entries.erase(EntryKey(fd)) != 0) ep->NotifyLocked();
+    if (!pipe) {
+      if (ep->entries.erase(EntryKey(fd)) != 0) ep->NotifyLocked();
+      continue;
+    }
+    auto retire_sample = [&](auto it) {
+      if (it == ep->entries.end() || it->first.pipe_description.lock() != pipe) return false;
+      if (!replacement) replacement = FindPipeAlias(fd);
+      if (*replacement < 0) {
+        ep->entries.erase(it);
+      } else {
+        auto& [key, entry] = *it;
+        entry.pipe_alias = *replacement == key.fd ? -1 : *replacement;
+        if (entry.pipe_alias >= 0) ep->pipe_aliases[entry.pipe_alias].insert(key);
+        entry.id = ep->next_id++;  // discard any wait snapshot of the old slot
+      }
+      return true;
+    };
+    auto original = ep->entries.find(EntryKey(fd, {}, pipe));
+    bool changed = original != ep->entries.end() && original->second.pipe_alias < 0 &&
+                   retire_sample(original);
+    auto aliases = ep->pipe_aliases.extract(fd);
+    if (!aliases.empty()) {
+      for (const auto& key : aliases.mapped()) {
+        if (retire_sample(ep->entries.find(key))) changed = true;
+      }
+    }
+    if (changed) ep->NotifyLocked();
   }
 }
 
@@ -885,7 +933,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
                                  EPOLLWAKEUP | EPOLLET | EPOLLEXCLUSIVE;
     if ((events & ~allowed) != 0) return errno = EINVAL, -1;
   }
-  gesher::EntryKey key(fd, owner);
+  gesher::EntryKey key(fd, owner, owner ? nullptr : gesher::LookupPipeDescription(fd));
   std::lock_guard<std::mutex> graph(gesher::epoll_graph_mutex);
   if (op == EPOLL_CTL_ADD && child) {
     {
@@ -908,6 +956,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
       case EPOLL_CTL_MOD:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
         if ((it->second.events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
+        ep->ForgetPipeAlias(it->first, it->second);
         it->second = {events, event->data, ep->next_id++, true, child};
         gesher::ConfigureOwnerEntry(it->second, key, owner, ep);
         gesher::ConfigureEventFdEntry(it->second, owner ? owner->object.eventfd : nullptr,
@@ -915,6 +964,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
         break;
       case EPOLL_CTL_DEL:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
+        ep->ForgetPipeAlias(it->first, it->second);
         ep->entries.erase(it);
         break;
     }
@@ -978,6 +1028,7 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
         if ((fds[i].revents & POLLNVAL) != 0) {
           // Closed behind gesher-base's back (_close): Linux would have
           // dropped the entry with the file.
+          ep->ForgetPipeAlias(it->first, it->second);
           ep->entries.erase(it);
           continue;
         }

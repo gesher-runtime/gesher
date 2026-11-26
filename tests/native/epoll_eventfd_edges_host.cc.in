@@ -87,6 +87,11 @@ static std::shared_ptr<NativeFence> LookupNativeFence(int) { return nullptr; }
 // registry itself is covered by the Windows fence fixture.
 static std::atomic<int> native_fence_forgets{0}, last_native_fence_forget{-1};
 static void ForgetNativeFence(int fd) { ++native_fence_forgets; last_native_fence_forget = fd; }
+// This corpus covers virtual sources. Local kernel pipe alias readiness has
+// its own component fixture using the real Windows descriptor registry.
+struct OpenFileDescription;
+static std::shared_ptr<OpenFileDescription> LookupPipeDescription(int) { return nullptr; }
+static int FindPipeAlias(int) { return -1; }
 struct SocketFd {};
 static bool LookupSocket(int, SocketFd*) { return false; }
 static HANDLE HandleFromFd(int fd) { return HostValid(fd) ? reinterpret_cast<HANDLE>(intptr_t(fd + 1)) : INVALID_HANDLE_VALUE; }
