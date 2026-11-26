@@ -34,7 +34,12 @@ for a running video encoder. [Android NDK parameter contract](https://developer.
 
 A second decode sends the same AVC access units to a YUV ImageReader surface.
 The test compares each submitted render timestamp and luma with the acquired
-image and verifies the first image remains readable after the decoder stops.
+image. It switches the output while the second decoded buffer is held and
+checks that frame reaches the successor reader. It then attempts to replace
+the output with a native window whose reader has been deleted. The call
+returns an error, the successor still gets the last frame, and the first image
+remains readable after decoder stop. The original reader receives no additional
+images. [Android NDK surface contract](https://developer.android.com/ndk/reference/group/media#amediacodec_setoutputsurface).
 The frame-rendered callback carries that frame’s presentation time and a guest
 monotonic timestamp. The fixture also checks callback unregistration.
 

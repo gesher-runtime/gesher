@@ -4,6 +4,7 @@
 #include <media/NdkMediaFormat.h>
 #ifndef CODEC_BUFFER_COMPONENT
 #include <android/hardware_buffer.h>
+#include <android/native_window.h>
 #include <media/NdkImageReader.h>
 #ifdef _WIN32
 #include <gesher/awake_clock.h>
@@ -253,6 +254,10 @@ static bool VerifyRenderedCallback(struct RenderEvents* events) {
 static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFrames]) {
   AMediaCodec* codec = AMediaCodec_createDecoderByType("video/avc");
   AImageReader* reader = NULL;
+  AImageReader* replacement = NULL;
+  AImageReader* abandoned = NULL;
+  ANativeWindow* replacement_window = NULL;
+  ANativeWindow* abandoned_window = NULL;
   AImage* first = NULL;
   ANativeWindow* window = NULL;
   int64_t first_time = -1;
@@ -270,6 +275,18 @@ static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFr
     puts("NDK codec surface could not start a decoder on its YUV reader");
     goto cleanup;
   }
+  if (AImageReader_newWithUsage(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888,
+                                AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2, &replacement) != AMEDIA_OK ||
+      AImageReader_getWindow(replacement, &replacement_window) != AMEDIA_OK ||
+      AImageReader_newWithUsage(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888,
+                                AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2, &abandoned) != AMEDIA_OK ||
+      AImageReader_getWindow(abandoned, &abandoned_window) != AMEDIA_OK) goto cleanup;
+  // The window outlives its consumer so the call can receive a valid pointer
+  // to an abandoned producer. The borrowed getWindow reference stays owned by the reader.
+  ANativeWindow_acquire(abandoned_window);
+  AImageReader_delete(abandoned);
+  abandoned = NULL;
+
   for (int i = 0; i < kFrames; ++i) {
     if (!Feed(codec, packets[i].data, packets[i].size, packets[i].time, 0)) goto cleanup;
   }
@@ -294,10 +311,20 @@ static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFr
       if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) goto cleanup;
       const int64_t timestamp = (int64_t)now.tv_sec * INT64_C(1000000000) + now.tv_nsec;
 #endif
-      if (count == 0) atomic_store(&events.submitted_at, timestamp);
+      if (count == 0) {
+        atomic_store(&events.submitted_at, timestamp);
+      } else if (count == 1) {
+        const media_status_t status = AMediaCodec_setOutputSurface(codec, replacement_window);
+        printf("NDK codec replace live surface: status=%d\n", status);
+        if (status != AMEDIA_OK) goto cleanup;
+      } else {
+        const media_status_t status = AMediaCodec_setOutputSurface(codec, abandoned_window);
+        printf("NDK codec replace abandoned surface: status=%d\n", status);
+        if (status != AMEDIA_ERROR_UNKNOWN) goto cleanup;
+      }
       if (AMediaCodec_releaseOutputBufferAtTime(codec, (size_t)index, timestamp) != AMEDIA_OK)
         goto cleanup;
-      AImage* image = WaitForImage(reader);
+      AImage* image = WaitForImage(count == 0 ? reader : replacement);
       if (image == NULL) goto cleanup;
       const bool valid = CheckSurfaceImage(image, count, timestamp);
       if (count == 0) {
@@ -314,13 +341,19 @@ static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFr
       goto cleanup;
     }
   }
-  passed = eos && count == kFrames && AMediaCodec_stop(codec) == AMEDIA_OK &&
-           CheckSurfaceImage(first, 0, first_time);
+  AImage* extra = NULL;
+  const media_status_t stale = AImageReader_acquireNextImage(reader, &extra);
+  if (extra != NULL) AImage_delete(extra);
+  passed = eos && count == kFrames && stale == AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE &&
+           AMediaCodec_stop(codec) == AMEDIA_OK && CheckSurfaceImage(first, 0, first_time);
 
 cleanup:
   if (first != NULL) AImage_delete(first);
   if (codec != NULL) AMediaCodec_delete(codec);
   if (reader != NULL) AImageReader_delete(reader);
+  if (replacement != NULL) AImageReader_delete(replacement);
+  if (abandoned != NULL) AImageReader_delete(abandoned);
+  if (abandoned_window != NULL && abandoned == NULL) ANativeWindow_release(abandoned_window);
   passed = passed && atomic_load(&events.valid) <= 1 && atomic_load(&events.invalid) == 0;
   if (passed) puts("NDK codec surface: all passed");
   return passed;

@@ -27,6 +27,8 @@ foreach ($codecAbi in @(@{ Name = 'x86_64'; Triple = 'x86_64' },
         'NDK codec parameter keys: all passed',
         'NDK codec live controls: idr=1 output-bitrate=360000',
         'NDK codec frame rendered: valid=1 invalid=0',
+        'NDK codec replace live surface: status=0',
+        'NDK codec replace abandoned surface: status=-10000',
         'NDK codec surface: all passed', 'NDK codec AVC: all passed') 45 -Publish
   } finally {
     $env:GESHER_VIDEO_ENCODERS = $codecPreviousEncoders

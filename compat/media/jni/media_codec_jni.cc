@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cerrno>
 #include <condition_variable>
 #include <cstddef>
@@ -57,6 +58,7 @@
 #include "../player/decoder.h"
 #include "../player/extractor.h"
 #include "../encode/encoder.h"
+#include "../surface/queue_surface.h"
 #include "../video/input_surface.h"
 #include "../video/video_decoder.h"
 #include "../../devices/camera_frames.h"
@@ -679,6 +681,12 @@ class Codec {
     std::lock_guard<std::mutex> lock(mu_);
     if (released_ || fatal_ || !configured_ || window_ == nullptr)
       return android::INVALID_OPERATION;
+    if (const auto* surface = gesher::media::QueueSurface::From(window)) {
+      // An abandoned consumer cannot take over from the current output.
+      int valid = 1;
+      if (surface->query(NATIVE_WINDOW_IS_VALID, &valid) == 0 && valid == 0)
+        return android::NO_INIT;
+    }
     ANativeWindow_acquire(window);
     ANativeWindow_release(window_);
     window_ = window;
