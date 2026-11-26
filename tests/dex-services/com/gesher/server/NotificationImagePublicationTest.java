@@ -52,13 +52,23 @@ public final class NotificationImagePublicationTest {
         final AtomicReference<StatusBarNotification> lastShown = new AtomicReference<>();
         final Map<Integer, Runnable> encoders = new ConcurrentHashMap<>();
 
-        @SuppressWarnings("unchecked") Fixture(boolean codec) throws Exception {
+        Fixture(boolean codec) throws Exception {
+            this(codec, EditionPolicy.LEGACY);
+        }
+
+        @SuppressWarnings("unchecked") Fixture(boolean codec, EditionPolicy edition) throws Exception {
             pm = (PackageManagerService)UNSAFE.allocateInstance(PackageManagerService.class);
             set(pm, "mPackages", packages); set(pm, "mRemoving", new LinkedHashMap<>());
             packages.put(a, code(a)); packages.put(b, code(b));
-            service = new NotificationManagerService(pm, null, (n, update) -> {
+            ToIntBiFunction<StatusBarNotification, Boolean> toast = (n, update) -> {
                 shown.incrementAndGet(); lastShown.set(n); return 0;
-            });
+            };
+            // The cancellation-only comparison also compiles this fixture with the
+            // historical service, which predates the edition constructor.
+            service = edition == EditionPolicy.LEGACY ? new NotificationManagerService(pm, null, toast)
+                    : NotificationManagerService.class.getDeclaredConstructor(PackageManagerService.class,
+                            ActivityManagerService.class, ToIntBiFunction.class, EditionPolicy.class)
+                            .newInstance(pm, null, toast, edition);
             Map<String, NotificationChannel> channels = (Map<String, NotificationChannel>)field(NotificationManagerService.class, "mChannels").get(service);
             Set<String> loaded = (Set<String>)field(NotificationManagerService.class, "mLoadedChannelPackages").get(service);
             for (String pkg : packages.keySet()) {
@@ -244,6 +254,35 @@ public final class NotificationImagePublicationTest {
         f.service.cancel(f.a, null, 73);
     }
 
+    private static void editionTrial() throws Exception {
+        check(EditionPolicy.forSystemServer(null, false, null) == EditionPolicy.LEGACY,
+                "ordinary startup must keep legacy behavior");
+        try {
+            EditionPolicy.forSystemServer("free", false, "internet-only");
+            throw new AssertionError("uncontained startup allowed an edition trial");
+        } catch (IllegalStateException expected) { checks++; }
+        try {
+            EditionPolicy.forSystemServer("free", true, null);
+            throw new AssertionError("unrestricted network allowed an edition trial");
+        } catch (IllegalStateException expected) { checks++; }
+        try {
+            EditionPolicy.forSystemServer("paid", true, "internet-only");
+            throw new AssertionError("environment selected paid entitlement");
+        } catch (IllegalArgumentException expected) { checks++; }
+        EditionPolicy policy = EditionPolicy.forSystemServer("free", true, "internet-only");
+        Fixture fixture = new Fixture(false, policy);
+        set(fixture.service, "mTestImagePreparation",
+                (BiFunction<StatusBarNotification, Object, NotificationImageStore.Prepared>) (notification, owner) -> {
+                    throw new AssertionError("trial reached Windows image preparation");
+                });
+        fixture.post(fixture.a, 101);
+        check(fixture.shown.get() == 0, "trial reached Windows toast publication");
+        check(fixture.active() == 1, "trial suppressed the Android notification");
+        check(fixture.preparing() == 0, "trial retained publication preparation");
+        fixture.service.cancel(fixture.a, null, 101);
+        check(fixture.active() == 0, "Android cancellation is preserved");
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
             System.loadLibrary("android_runtime");
@@ -257,6 +296,7 @@ public final class NotificationImagePublicationTest {
         check(!GmsSignatureSpoofing.isEnabled(), "host fixture must use declared legacy permission boundary");
         cancellationProbe();
         if (args.length <= 1) {
+            editionTrial();
             codecProgress(); generationAndFailure(); cancelAndReplace(); failedNativeRemoval(); reentrantLifecycle();
             pendingUijDetach(false, true); pendingUijDetach(true, true); pendingUijDetach(false, false);
         }

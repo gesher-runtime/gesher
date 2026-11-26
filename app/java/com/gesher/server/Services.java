@@ -87,6 +87,10 @@ public final class Services {
         return create(packages, true);
     }
 
+    static Map<String, IBinder> create(Collection<ApkPackage> packages, EditionPolicy edition) {
+        return create(new PackageManagerService(packages, true), true, edition).services;
+    }
+
     /** Stand-in services share no persistent account or enabled-state policy with the real device. */
     public static Map<String, IBinder> createInProcess(Collection<ApkPackage> packages) {
         return create(packages, false);
@@ -103,10 +107,14 @@ public final class Services {
     }
 
     static Created create(PackageManagerService pm, boolean persistentAccounts) {
+        return create(pm, persistentAccounts, EditionPolicy.LEGACY);
+    }
+
+    private static Created create(PackageManagerService pm, boolean persistentAccounts, EditionPolicy edition) {
         Map<String, IBinder> services = new LinkedHashMap<>();
         ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
         pm.attachInstallSourceCallers(atm);
-        NotificationManagerService notifications = new NotificationManagerService();
+        NotificationManagerService notifications = new NotificationManagerService(edition);
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         ClipboardService clipboard = new ClipboardService(atm, pm);
         Created created = new Created(pm, atm, am, clipboard, services);
@@ -254,7 +262,7 @@ public final class Services {
         services.put(Context.VIBRATOR_MANAGER_SERVICE, StandIn.of(
                 android.os.IVibratorManagerService.class, new VibratorManagerService()).asBinder());
         // Devices (docs/devices.md): location over Windows' location service.
-        LocationManagerService location = new LocationManagerService(pm, am);
+        LocationManagerService location = new LocationManagerService(pm, am, edition);
         services.put(Context.LOCATION_SERVICE, StandIn.of(android.location.ILocationManager.class,
                 location).asBinder());
         // CountryDetector: Windows' "Country or region" as the locale source

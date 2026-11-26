@@ -29,9 +29,42 @@ Run the verification from a process with the distribution's effective package id
 | 0 | `ExpectedAddOnPresent` | The supplied package identity, SKU and offer token match a current Windows license entry |
 | 2 | `PackageIdentityMismatch` | Process identity is absent or differs from the expected package family |
 | 2 | `ExpectedAddOnAbsent` | Current license result had no matching valid add-on entry |
+| 3 | `AddOnIdentityMismatch` | The selected SKU returned a license with a different SKU or offer token |
 | 3 | `Unavailable` | The probe could not determine the result. Inspect `Stage` and `HResult` |
 
 ## Store and installer experiment
+
+The diagnostic calls the same license query as the in-process
+`Get-GesherStoreEntitlement` provider in
+`tools/store/GesherStoreEntitlement.psm1`. The provider's release catalog is
+unconfigured until Partner Center assigns a package family, add-on SKU Store
+ID and offer token. A configured provider returns `Active` on an exact
+currently valid match, `Inactive` on a completed lookup without a match, and
+`Unavailable` when the catalog, process identity or lookup is unavailable.
+Each call asks Windows for the current state, including its own offline
+cache. Diagnostic overrides only affect that diagnostic call.
+
+The provider is currently a first implementation stage. Future packaged
+callers must query on a background worker in the correct Windows user and
+package context, handle Store license-change invalidation, and authenticate
+the result at the server boundary. The PowerShell diagnostic's JSON and exit
+status remain observations for the experiment.
+
+Restore calls `Get-GesherStoreEntitlement` on the worker to query Windows
+again. To prepare purchase testing, also supply the add-on's `StoreProduct`
+Store ID. `Get-GesherStorePurchaseOffer` looks up the associated durable
+product in the background and requires the exact product Store ID, offer
+token and a unique matching SKU without trial or recurring billing.
+Verify the configured lifetime is `Forever` in Partner Center before
+publishing. `Start-GesherStorePurchase` runs
+on the owning non-elevated STA window thread. It associates that HWND with
+the offer's `StoreContext` and starts checkout for the verified `StoreSku`.
+The caller can poll the returned operation on the dispatcher
+without blocking it. `Complete-GesherStorePurchase` runs on a worker. A
+successful or already-owned Store outcome triggers a new entitlement query.
+Only an active matching license yields `Verified`. If Store reports a
+purchase but the license has yet to be confirmed, the worker returns
+`PendingVerification`. [Store SKU purchase](https://learn.microsoft.com/en-us/uwp/api/windows.services.store.storesku) · [Desktop window ownership](https://learn.microsoft.com/en-us/windows/apps/develop/ui/display-ui-objects)
 
 1. Obtain the Gesher MSIX package family, exact add-on SKU and offer token from Partner Center for the same Free application and `Durable` add-on. Publish to an appropriate test audience and acquire the add-on in one test Store account. Keep a separate account without the add-on for controls.
 2. On a fresh Windows test profile, run the Store build first. Record `ExpectedAddOnAbsent` before acquisition, `ExpectedAddOnPresent` after acquisition and `ExpectedAddOnPresent` when offline while Windows returns an active cached entitlement. Repeat acquisition on a clean account using a single-use Store promo code. Take note of the Windows build and package version for each observation.
@@ -51,3 +84,9 @@ The Windows PowerShell 5.1 session inherited the Codex package identity. No Gesh
 | Matching current process family with a deliberately absent SKU | `ExpectedAddOnAbsent`, `BaseLicenseActive=true`, `HasExpectedAddOn=false`, exit 2 |
 
 The local checks validate diagnostic execution and rejection of an unrelated active base license. There is no observed Gesher purchase, positive add-on lookup, offline cache test or direct cross-channel restore result yet.
+
+Windows PowerShell 5.1 also compiled the desktop bridge and attached a real
+`StoreContext` to a hidden WPF owner HWND on the calling STA. It rejected an
+empty HWND. The separate provider test checks the unconfigured purchase guard
+and the requirement to re-query entitlement after successful Store statuses.
+No purchase UI or transaction was started during these checks.

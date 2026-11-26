@@ -212,6 +212,8 @@ public final class SystemServer {
             throw new IllegalStateException("$GESHER_BINDER is not set: the system server"
                     + " registers its services with servicemanager over binderd");
         }
+        EditionPolicy edition = EditionPolicy.forSystemServer(System.getenv(EditionPolicy.TRIAL_ENV),
+                AppSandbox.enabled(), System.getenv(AppSandbox.NETWORK_ENV));
         StandIn.setTag(TAG);
         // Binder calls from this process carry the system uid, as system_server's do
         // (gesher-base's /dev/binder reads it when the process opens the driver, below):
@@ -300,7 +302,7 @@ public final class SystemServer {
         }
 
         // The services, published with servicemanager.
-        Map<String, IBinder> services = Services.create(packages);
+        Map<String, IBinder> services = Services.create(packages, edition);
         Services.Created created = Services.sLast;
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.

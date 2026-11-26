@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--apksig-jar", required=True, type=Path)
     parser.add_argument("--java-home", required=True, type=Path)
     parser.add_argument("--source-ref", help="Use old production service source as a negative control")
-    parser.add_argument("--case", default="all", choices=["all", "listeners", "pending", "failures", "deaths", "current", "terminal", "concurrent", "expiry", "current-deaths", "disabled", "initial-disabled", "mode", "late", "duration"])
+    parser.add_argument("--case", default="all", choices=["all", "listeners", "pending", "failures", "deaths", "current", "terminal", "concurrent", "expiry", "current-deaths", "disabled", "initial-disabled", "mode", "late", "duration", "edition-trial"])
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:
@@ -46,6 +46,7 @@ def main() -> None:
                                              cwd=ROOT, capture_output=True, check=True).stdout)
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), str(source),
+                        str(ROOT / "app/java/com/gesher/server/EditionPolicy.java"),
                         str(ROOT / "tests/location/LocationRegistrationHost.java"),
                         str(ROOT / "tests/dex-services/gesher/services/LocationRegistrationContractTest.java")], check=True)
         # Use the supplied Android Cleaner classes for real NativeAllocationRegistry,
@@ -63,7 +64,8 @@ def main() -> None:
         subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData",
                         "--patch-module", "jdk.unsupported=" + str(work / "cleaner"),
                         "-cp", str(classes) + os.pathsep + classpath,
-                        "LocationRegistrationHost", str(library), args.case],
+                        "LocationRegistrationHost", str(library), args.case,
+                        *(["historical"] if args.source_ref else [])],
                        check=True, env=environment, timeout=60)
 
 

@@ -79,6 +79,7 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     private final PackageManagerService mPm;
     private final ActivityManagerService mAm;
+    private final EditionPolicy mEdition;
     private final Object mLock = new Object();
     private final Map<String, TestProvider> mTestProviders = new LinkedHashMap<>();
     private final Map<String, Location> mLast = new HashMap<>();
@@ -113,15 +114,25 @@ public final class LocationManagerService extends ILocationManager.Default {
     private final Object mModeLock = new Object();
 
     public LocationManagerService(PackageManagerService pm, ActivityManagerService am) {
+        this(pm, am, EditionPolicy.LEGACY);
+    }
+
+    LocationManagerService(PackageManagerService pm, ActivityManagerService am, EditionPolicy edition) {
         mPm = pm;
         mAm = am;
+        mEdition = Objects.requireNonNull(edition);
         installSettingsState();
+        if (!permitsHostLocation()) return;
         // Windows' answer may take a moment: asked now, off the binder threads.
         mExecutor.execute(() -> {
             WindowsLocation.refreshAccess();
             log("Windows location: " + WindowsLocation.describe());
             checkEnabledChanges();
         });
+    }
+
+    private boolean permitsHostLocation() {
+        return mEdition.permits(EditionPolicy.Capability.HOST_LOCATION);
     }
 
     /**
@@ -191,7 +202,7 @@ public final class LocationManagerService extends ILocationManager.Default {
         if (test != null) return test.enabled;
         if (!isReal(provider)) return false;
         if (LocationManager.PASSIVE_PROVIDER.equals(provider)) return isLocationEnabled();
-        return WindowsLocation.enabled() || isIpFallbackEnabled(provider);
+        return permitsHostLocation() && (WindowsLocation.enabled() || isIpFallbackEnabled(provider));
     }
 
     /** Location is on when Windows gives it to this program, or a test provider is on. */
@@ -201,7 +212,7 @@ public final class LocationManagerService extends ILocationManager.Default {
                 if (t.enabled) return true;
             }
         }
-        return WindowsLocation.enabled() || isIpFallbackEnabled(null);
+        return permitsHostLocation() && (WindowsLocation.enabled() || isIpFallbackEnabled(null));
     }
 
     private static ProviderProperties realProperties(String provider) {
@@ -427,7 +438,8 @@ public final class LocationManagerService extends ILocationManager.Default {
         synchronized (mLock) {
             last = mLast.get(provider);
         }
-        if (last == null && !isTest(provider) && !LocationManager.PASSIVE_PROVIDER.equals(provider)) {
+        if (last == null && permitsHostLocation() && !isTest(provider)
+                && !LocationManager.PASSIVE_PROVIDER.equals(provider)) {
             if (WindowsLocation.enabled()) {
                 // Windows keeps a last position too: a cached one, if any, quickly.
                 try {
@@ -848,6 +860,7 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     /** Polls Windows for the registrations on its providers, at their shortest interval. */
     private void updatePolling() {
+        if (!permitsHostLocation()) return;
         long interval = Long.MAX_VALUE;
         synchronized (mLock) {
             for (Registration r : mRegistrations) {
@@ -872,6 +885,7 @@ public final class LocationManagerService extends ILocationManager.Default {
     }
 
     private void poll() {
+        if (!permitsHostLocation()) return;
         checkEnabledChanges();
         boolean windowsEnabled = WindowsLocation.enabled();
         boolean high = false;
@@ -1258,7 +1272,7 @@ public final class LocationManagerService extends ILocationManager.Default {
             CallerIdentity callers = mAm != null ? mAm.callers() : new CallerIdentity(mPm, null);
             if (!callers.isSystem()) throw new SecurityException("Only the host can inject location");
         }
-        if (location != null && location.isComplete()) {
+        if (permitsHostLocation() && location != null && location.isComplete()) {
             report(LocationManager.PASSIVE_PROVIDER, location, false);
         }
     }

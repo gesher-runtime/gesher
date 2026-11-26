@@ -28,10 +28,10 @@ def main():
     java = str(a.java_home / 'bin/java')
     cp = os.pathsep.join(str(x.resolve()) for x in (a.app_classes, a.framework_classes, a.core_classes))
     sources = []
-    for name in ('NotificationIdentity', 'NotificationDelegates', 'NotificationStore', 'NotificationIcons', 'NotificationManagerService', 'WindowsHost'):
+    for name in ('EditionPolicy', 'NotificationIdentity', 'NotificationDelegates', 'NotificationStore', 'NotificationIcons', 'NotificationManagerService', 'WindowsHost'):
         path = 'app/java/com/gesher/server/' + name + '.java'
         source = ROOT / path
-        if a.source_ref and name not in ('NotificationIdentity', 'NotificationDelegates'):
+        if a.source_ref and name not in ('EditionPolicy', 'NotificationIdentity', 'NotificationDelegates'):
             source = work / (name + '.java')
             source.write_bytes(subprocess.check_output(['git', 'show', a.source_ref + ':' + path], cwd=ROOT))
         sources.append(source)

@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = ["NotificationManagerService.java", "NotificationStore.java",
+SOURCES = ["EditionPolicy.java", "NotificationManagerService.java", "NotificationStore.java",
            "ActiveServices.java", "ActivityManagerService.java", "JobSchedulerService.java"]
 
 
@@ -50,7 +50,7 @@ def main() -> None:
         for name in SOURCES:
             relative = "app/java/com/gesher/server/" + name
             source = ROOT / relative
-            if args.source_ref:
+            if args.source_ref and name != "EditionPolicy.java":
                 source = work / name
                 before = subprocess.run(["git", "show", args.source_ref + ":" + relative],
                                         cwd=ROOT, capture_output=True, check=True)

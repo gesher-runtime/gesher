@@ -91,6 +91,33 @@ purchase or redeemed code.
 
 Coverage should include separate APKs for Free-only workflows, a known paid mandatory requirement, an optional paid capability, native code and WebView. Include camera permission denial even with paid entitlement, missing camera hardware, notification and background behavior, already running app processes, upgrade in the middle of an operation, and attempts to resolve restricted resources through other app or host components. Host fixtures can exercise classification and state transitions. Only packaged Windows runs can establish actual Store commerce and OS-level isolation. Use the existing compatibility inventory to select workflows and API families, then qualify the selected workflows on the Free profile.
 
+### Follow-on implementation
+
+- The Store entitlement provider and diagnostic share the live Windows Store
+  query. The release provider uses a packaged catalog and reports unavailable
+  until a real catalog is assigned. Windows PowerShell checks cover the
+  unconfigured provider, package-family mismatch and unrelated base licenses.
+  The checkout preparation selects the exact one-time durable SKU. Checkout
+  requires the owning desktop UI thread, and a Store purchase result is
+  followed by a fresh entitlement query. The real checkout, package identity
+  and installer restore still require the Store test product.
+- A server-local Free trial can restrict the Windows notification delivery
+  capability in the AppContainer internet-only development profile. Ordinary
+  Android permission, posting, active notification and cancellation behavior
+  remains in that trial. The installed launcher strips the trial selector.
+  The Windows ART publication fixture exercises the production service with
+  explicit Windows toast and image test boundaries.
+- The Free trial's Android location broker returns real providers as
+  unavailable, keeps Android permission checks and authorized mock
+  behavior, and skips host and IP-based position acquisition. The
+  independent WebView2 geolocation permission path needs its own enforcement
+  and validation before claiming complete host-location restriction.
+- Production activation still requires verified Store entitlement,
+  authenticated tier delivery to the running server, and production
+  containment. Scope a downgrade to new launches, already active brokers and
+  persisted Windows notification activations. Complete the remaining app
+  capability checks and upgrade presentation before publishing either offer.
+
 ### Representative app workflows
 
 The maintainer named these examples. Pin the tested APK build and signing identity when obtaining the package. The following are proposed acceptance scenarios to qualify with that build. Apply the same capability policy to all apps.

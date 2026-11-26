@@ -68,6 +68,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # AppContainer M1 is a developer probe. Installed app launches use the ordinary runtime.
 Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
+Remove-Item Env:GESHER_EDITION_TRIAL -ErrorAction SilentlyContinue
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
 . (Join-Path $scriptRoot 'gesher-runtime-files.ps1')

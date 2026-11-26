@@ -400,6 +400,11 @@ jobs:
           tests/windows/shell/PreferredLanguagesChecks.ps1
           tests/windows/shell/ControlPanelStartupChecks.ps1
           tests/windows/shell/ControlPanelNativeCacheChecks.ps1
+      - name: Store entitlement classification on Windows PowerShell 5.1
+        timeout-minutes: 2
+        shell: powershell
+        run: tools/store/Test-StoreEntitlementProvider.ps1
+
       - name: Production modal dialogs on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         timeout-minutes: 2

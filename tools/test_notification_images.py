@@ -44,7 +44,7 @@ def main() -> None:
         cp = os.pathsep.join(str(x.resolve()) for x in (*inputs, args.apksig))
         service = work / "service"; service.mkdir()
         sources = []
-        for name in ("NotificationImageStore", "NotificationIcons", "NotificationManagerService", "NotificationStore"):
+        for name in ("EditionPolicy", "NotificationImageStore", "NotificationIcons", "NotificationManagerService", "NotificationStore"):
             relative = f"app/java/com/gesher/server/{name}.java"
             source = ROOT / relative
             if args.service_source_ref and name in ("NotificationIcons", "NotificationManagerService"):

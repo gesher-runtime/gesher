@@ -195,6 +195,9 @@ public final class LocationRegistrationContractTest {
         final List<Token> tokens = new ArrayList<>();
         final Scheduler executor = new Scheduler();
         Harness() throws Exception {
+            this("LEGACY");
+        }
+        Harness(String edition) throws Exception {
             // Supply declared package/provider metadata directly, avoiding Windows access
             // initialization and an unrelated APK install. Permission checks remain real.
             PackageImpl parsed = (PackageImpl)PackageImpl.forTesting(PKG, "/fixture/location/base.apk");
@@ -227,6 +230,12 @@ public final class LocationRegistrationContractTest {
             set(service, "mReportedEnabled", new HashMap<>());
             try { set(service, "mModeLock", new Object()); }
             catch (NoSuchFieldException baseline) { }
+            Field mode = Class.forName("com.gesher.server.EditionPolicy").getField(edition);
+            mode.setAccessible(true);
+            try { set(service, "mEdition", mode.get(null)); }
+            catch (NoSuchFieldException baseline) {
+                if (!"LEGACY".equals(edition)) throw baseline;
+            }
             Class<?> type = Class.forName("com.gesher.server.LocationManagerService$TestProvider");
             Constructor<?> constructor = type.getDeclaredConstructor(String.class, ProviderProperties.class);
             constructor.setAccessible(true);
@@ -769,7 +778,44 @@ public final class LocationRegistrationContractTest {
                     "public current callback receives its null terminal result after expiry");
         }
     }
-    public static void contracts(String selected, boolean binder) throws Exception {
+    private static void editionTrial() throws Exception {
+        try (Harness h = new Harness("FREE_TRIAL")) {
+            check(h.service.isProviderEnabledForUser(GPS, 0),
+                    "an authorized mock provider retains its explicit state");
+            h.report(GPS);
+            Location mock = h.service.getLastLocation(GPS, null, PKG, null);
+            check(mock != null && mock.isMock(), "explicit mock data remains distinguishable");
+        }
+        try (Harness h = new Harness("FREE_TRIAL")) {
+            ((Map<?, ?>) get(h.service, "mTestProviders")).clear();
+            check(!h.service.isLocationEnabledForUser(0), "blocked host location reports location mode off");
+            for (String provider : List.of(GPS, NETWORK, "fused", LocationManager.PASSIVE_PROVIDER)) {
+                check(h.service.hasProvider(provider) && !h.service.isProviderEnabledForUser(provider, 0),
+                        "real provider remains discoverable as disabled: " + provider);
+                check(h.service.getLastLocation(provider, null, PKG, null) == null,
+                        "last location is unavailable: " + provider);
+                Current current = new Current(h.token());
+                h.service.getCurrentLocation(provider, request(), current, PKG, null, "trial-current");
+                check(current.calls.get() == 1 && current.nulls.get() == 1 && h.count() == 0,
+                        "disabled provider completes once without a fix: " + provider);
+            }
+            rejects(SecurityException.class,
+                    () -> h.service.getLastLocation(GPS, null, "fixture.no.location.grant", null),
+                    "trial retains location permission errors");
+            h.register(GPS, new Listener(h.token()));
+            check(get(h.service, "mPoll") == null,
+                    "disabled real provider does not start the Windows or IP poller");
+            Location injected = new Location(GPS);
+            injected.setLatitude(31); injected.setLongitude(35);
+            injected.setAccuracy(3); injected.setTime(System.currentTimeMillis());
+            injected.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+            h.service.injectLocation(injected);
+            check(((Map<?, ?>) get(h.service, "mLast")).isEmpty(),
+                    "host injection cannot populate a trial position cache");
+        }
+    }
+
+    public static void contracts(String selected, boolean binder, boolean historicalComparison) throws Exception {
         checks.set(0);
         long identity = Binder.clearCallingIdentity();
         try {
@@ -786,6 +832,9 @@ public final class LocationRegistrationContractTest {
             if (selected.equals("all") || selected.equals("disabled")) disabled();
             if (selected.equals("all") || selected.equals("initial-disabled")) initialDisabledNotifications();
             if (selected.equals("all") || selected.equals("mode")) locationMode();
+            if (selected.equals("edition-trial") || selected.equals("all") && !historicalComparison) {
+                editionTrial();
+            }
             if (selected.equals("late")) lateCurrent();
             if (selected.equals("duration")) durationLimits();
             if (binder && (selected.equals("all") || selected.equals("binder"))) binderAndManager();
@@ -794,6 +843,6 @@ public final class LocationRegistrationContractTest {
     }
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
-        contracts(args.length == 0 ? "all" : args[0], true);
+        contracts(args.length == 0 ? "all" : args[0], true, false);
     }
 }

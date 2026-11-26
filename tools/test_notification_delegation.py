@@ -31,7 +31,7 @@ def main() -> None:
                         "-I" + str(args.java_home / "include"), "-I" + str(args.java_home / "include/linux"),
                         str(ROOT / "tests/uri/intent_framework_host.c"), "-o", str(library)], check=True)
         sources = []
-        for name in ("NotificationManagerService", "NotificationDelegates", "NotificationStore"):
+        for name in ("EditionPolicy", "NotificationManagerService", "NotificationDelegates", "NotificationStore"):
             relative = "app/java/com/gesher/server/" + name + ".java"
             source = ROOT / relative
             if name == "NotificationManagerService" and args.service_source_ref:

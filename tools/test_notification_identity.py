@@ -33,10 +33,10 @@ def main():
             str(ROOT / 'tests/notification-identity/framework_host.c'), '-o', str(library),
             *(['-lwinpthread', '-static'] if windows else [])], check=True)
         sources = []
-        for name in ('NotificationIdentity', 'NotificationDelegates', 'NotificationManagerService', 'NotificationStore', 'NotificationIcons', 'WindowsHost'):
+        for name in ('EditionPolicy', 'NotificationIdentity', 'NotificationDelegates', 'NotificationManagerService', 'NotificationStore', 'NotificationIcons', 'WindowsHost'):
             path = 'app/java/com/gesher/server/' + name + '.java'
             source = ROOT / path
-            if a.source_ref and name not in ('NotificationIdentity', 'NotificationDelegates'):
+            if a.source_ref and name not in ('EditionPolicy', 'NotificationIdentity', 'NotificationDelegates'):
                 source = work / (name + '.java')
                 source.write_bytes(subprocess.check_output(['git', 'show', a.source_ref + ':' + path], cwd=ROOT))
             sources.append(str(source))

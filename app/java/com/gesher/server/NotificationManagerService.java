@@ -132,6 +132,7 @@ public final class NotificationManagerService extends INotificationManager.Defau
     private boolean mListenersBound;
     private final PackageManagerService mPackageManager;
     private final ActivityManagerService mActivityManager;
+    private final EditionPolicy mEdition;
     private final java.util.function.ToIntBiFunction<StatusBarNotification, Boolean> mTestToast;
     // Server-local removal boundary for migration tests; never a Binder option.
     private java.util.function.ToIntBiFunction<String, String> mTestToastRemoval;
@@ -143,15 +144,26 @@ public final class NotificationManagerService extends INotificationManager.Defau
     static volatile NotificationManagerService sLast;
 
     public NotificationManagerService() {
-        this(null, null, null);
+        this(EditionPolicy.LEGACY);
+    }
+
+    NotificationManagerService(EditionPolicy edition) {
+        this(null, null, null, edition);
     }
 
     /** Server-local injection for tests; never exposed through Binder. */
     NotificationManagerService(PackageManagerService pm, ActivityManagerService am,
             java.util.function.ToIntBiFunction<StatusBarNotification, Boolean> testToast) {
+        this(pm, am, testToast, EditionPolicy.LEGACY);
+    }
+
+    NotificationManagerService(PackageManagerService pm, ActivityManagerService am,
+            java.util.function.ToIntBiFunction<StatusBarNotification, Boolean> testToast,
+            EditionPolicy edition) {
         mPackageManager = pm;
         mActivityManager = am;
         mTestToast = testToast;
+        mEdition = java.util.Objects.requireNonNull(edition);
         Properties loaded = Device.read(mListenerFile);
         if (loaded != null) mListenerGrants.putAll(loaded);
         sLast = this;
@@ -489,7 +501,11 @@ public final class NotificationManagerService extends INotificationManager.Defau
             Record r, String channelKey, NotificationChannel capturedChannel, boolean authenticate) {
         Notification notification = r.n();
         synchronized (mPublicationLock) { if (!mPreparingImages.contains(r)) return; }
-        try (NotificationImageStore.Prepared image = mTestImagePreparation == null
+        // Android notifications and foreground-service state retain their existing lifecycle.
+        // Only the publication bridge for an APK is classified here.
+        boolean deliverToWindows = captured == null
+                || mEdition.permits(EditionPolicy.Capability.WINDOWS_NOTIFICATION_DELIVERY);
+        try (NotificationImageStore.Prepared image = !deliverToWindows ? null : mTestImagePreparation == null
                 ? NotificationIcons.prepareLargeIcon(pkg, r.sbn.getKey(), captured, notification.getLargeIcon())
                 : mTestImagePreparation.apply(r.sbn, captured)) {
             Runnable beforePublication = mBeforePostPublication;
@@ -513,6 +529,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
                 String shown;
                 if (importance == NotificationManager.IMPORTANCE_NONE) {
                     shown = "not shown: its channel is blocked";
+                } else if (!deliverToWindows) {
+                    shown = "not shown on Windows: Free trial";
                 } else {
                     // Its intents outlive this system server, as its toast does (ADR 0051).
                     if (WindowsHost.inSystemServer()) {
