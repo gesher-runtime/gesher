@@ -883,6 +883,14 @@ jobs:
             --opus-root third_party/aosp/external/libopus \
             --sanitize --output-dir out/media-audio-scratch-fixtures
 
+      - name: Real software HEVC output ownership and independent decoded pixels
+        run: >-
+          python3 tools/test_soft_hevc_output.py
+          --libhevc-root third_party/aosp/external/libhevc
+          --vpx-root third_party/aosp/external/libvpx
+          --dav1d-root third_party/aosp/external/libdav1d --sanitize --negative-controls
+          --output-dir out/media-hevc-output-fixtures
+
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
 
@@ -914,6 +922,8 @@ jobs:
           cp out/test-apps/* out/boot-jars/*.jar framework-assets/
           mkdir -p framework-assets/media-avc-output-fixtures
           cp out/media-avc-output-fixtures/*.avct out/media-avc-output-fixtures/fixtures.json framework-assets/media-avc-output-fixtures/
+          mkdir -p framework-assets/media-hevc-output-fixtures
+          cp out/media-hevc-output-fixtures/*.hevct out/media-hevc-output-fixtures/fixtures.json framework-assets/media-hevc-output-fixtures/
           # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).

@@ -253,6 +253,9 @@ Check 'media: actual AVC output preserves reordered pixels and owned storage thr
 Check 'media: software AVC retains only returned inputs and reuses bounded encode storage' {
   & "$Dir/media_soft_avc_reuse_test.exe"
 } @('real codec packets, owned inputs and bounded scratch passed')
+Check 'media: actual HEVC output preserves reordered pixels and owned storage through drain and reset' {
+  & "$Dir/media_soft_hevc_output_test.exe" gate "$Dir/media-hevc-output-fixtures"
+} @('real reordered pixels and owned output storage passed')
 
 # Clips of 2 s at 320x240, red, lime, blue and white for 0.5 s each: each decoded frame's
 # color says which frame it is.
