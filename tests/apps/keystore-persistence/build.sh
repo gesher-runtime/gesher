@@ -17,7 +17,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir "$work/classes" "$work/dex"
 "$tools/aapt2" link -I "$platform" --manifest "$here/AndroidManifest.xml" -o "$work/raw.apk"
 javac -source 17 -target 17 -Xlint:-options -XDstringConcat=inline -cp "$platform" \
-    -d "$work/classes" "$here/PersistenceActivity.java"
+    -d "$work/classes" "$here/PersistenceActivity.java" "$here/ConcurrentActivity.java"
 jar --create --file "$work/classes.jar" --no-manifest -C "$work/classes" .
 if [[ -n ${R8_JAR:-} ]]; then
     dex=(java -cp "$R8_JAR" com.android.tools.r8.D8)
