@@ -195,3 +195,28 @@ int jni32_invalid_registration(JNIEnv32* env) {
   };
   return API(env, 215, RegisterNatives32)(env, klass, &entry, 1);
 }
+
+typedef jobject32 (*NewByteArray32)(JNIEnv32*, int);
+typedef int (*GetArrayLength32)(JNIEnv32*, jobject32);
+typedef void (*ByteRegion32)(JNIEnv32*, jobject32, int, int, char*);
+int jni32_byte_array(JNIEnv32* env) {
+  jobject32 bytes = API(env, 176, NewByteArray32)(env, 4);
+  if (!bytes || API(env, 171, GetArrayLength32)(env, bytes) != 4)
+    return -1;
+  char source[4] = {4, 7, 8, 9};
+  char destination[4] = {0, 0, 0, 0};
+  API(env, 208, ByteRegion32)(env, bytes, 0, 4, source);
+  API(env, 200, ByteRegion32)(env, bytes, 0, 4, destination);
+  int sum = destination[0] + destination[1] +
+            destination[2] + destination[3];
+  API(env, 23, DeleteRef)(env, bytes);
+  return sum;
+}
+int jni32_byte_bad_pointer(JNIEnv32* env) {
+  jobject32 bytes = API(env, 176, NewByteArray32)(env, 4);
+  if (!bytes) return -1;
+  // Must fail explicitly before executing host JNI on an unmapped pointer.
+  API(env, 208, ByteRegion32)(env, bytes, 0, 4, (char*)0xfffff100);
+  API(env, 23, DeleteRef)(env, bytes);
+  return 1;
+}
