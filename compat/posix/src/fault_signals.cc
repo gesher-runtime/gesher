@@ -220,7 +220,7 @@ bool GrowStack(uintptr_t addr) {
 }
 
 #if defined(__x86_64__)
-void ToUcontext(const CONTEXT* c, const EXCEPTION_RECORD* rec, ucontext_t* uc) {
+void ToUcontext(const CONTEXT* c, const siginfo_t& si, ucontext_t* uc) {
   greg_t* g = uc->uc_mcontext.gregs;
   g[REG_R8] = c->R8;
   g[REG_R9] = c->R9;
@@ -243,10 +243,10 @@ void ToUcontext(const CONTEXT* c, const EXCEPTION_RECORD* rec, ucontext_t* uc) {
   g[REG_CSGSFS] = static_cast<greg_t>(c->SegCs) | (static_cast<greg_t>(c->SegGs) << 16) |
                   (static_cast<greg_t>(c->SegFs) << 32);
   g[REG_ERR] = 0;
-  g[REG_TRAPNO] = rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ? 14 : 0;
-  g[REG_CR2] = rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2
-                   ? static_cast<greg_t>(rec->ExceptionInformation[1])
-                   : 0;
+  if (si.si_signo == SIGSEGV) {
+    g[REG_TRAPNO] = 14;
+    g[REG_CR2] = reinterpret_cast<greg_t>(si.si_addr);
+  }
   // CONTEXT.FltSave is an FXSAVE image, as _libc_fpstate is.
   static_assert(sizeof(uc->__fpregs_mem) == sizeof(c->FltSave), "FXSAVE layout");
   memcpy(&uc->__fpregs_mem, &c->FltSave, sizeof(uc->__fpregs_mem));
@@ -279,16 +279,17 @@ void FromUcontext(const ucontext_t* uc, CONTEXT* c) {
   }
 }
 #elif defined(__aarch64__)
-void ToUcontext(const CONTEXT* c, const EXCEPTION_RECORD* rec, ucontext_t* uc) {
+void ToUcontext(const CONTEXT* c, const siginfo_t& si, ucontext_t* uc) {
   for (int i = 0; i < 29; ++i) uc->uc_mcontext.regs[i] = c->X[i];
   uc->uc_mcontext.regs[29] = c->Fp;
   uc->uc_mcontext.regs[30] = c->Lr;
   uc->uc_mcontext.sp = c->Sp;
   uc->uc_mcontext.pc = c->Pc;
   uc->uc_mcontext.pstate = c->Cpsr;
-  uc->uc_mcontext.fault_address = rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2
-                                      ? static_cast<uint64_t>(rec->ExceptionInformation[1])
-                                      : 0;
+  // ART's ARM64 stack overflow handler compares this address with its probe.
+  if (si.si_signo == SIGSEGV) {
+    uc->uc_mcontext.fault_address = reinterpret_cast<uintptr_t>(si.si_addr);
+  }
   uc->uc_mcontext.fpregs = &uc->__fpregs_mem;
   uc->__fpregs_mem.fpcr = c->Fpcr;
   uc->__fpregs_mem.fpsr = c->Fpsr;
@@ -392,7 +393,7 @@ LONG CALLBACK Dispatch(EXCEPTION_POINTERS* info) {
   si.si_addr = addr;
   ucontext_t uc;
   memset(&uc, 0, sizeof(uc));
-  ToUcontext(info->ContextRecord, rec, &uc);
+  ToUcontext(info->ContextRecord, si, &uc);
   pthread_sigmask(SIG_SETMASK, nullptr, &uc.uc_sigmask);
   sigset_t mask = uc.uc_sigmask | act.sa_mask;
   if ((act.sa_flags & SA_NODEFER) == 0) sigaddset(&mask, signo);
