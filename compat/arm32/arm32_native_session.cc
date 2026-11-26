@@ -84,8 +84,9 @@ bool NativeLibrarySession::Supply(std::string_view name,
   }
 }
 
-bool NativeLibrarySession::Open(std::string_view soname, bool require_jni_onload,
-                                std::string* error) {
+bool NativeLibrarySession::Open(
+    std::string_view soname, bool require_jni_onload, std::string* error,
+    NativeRegistrationHandler registration_handler) {
   if (state_ != State::Fresh)
     return Fail(error, "ARM32 native library session can only be opened once");
   // Even failed sessions are deliberately single-use. A partially bound host
