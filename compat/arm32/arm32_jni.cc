@@ -616,6 +616,26 @@ bool Jni32::CallOnLoad(std::string_view library, jint* version,
   if (error) error->clear();
   return true;
 }
+bool Jni32::CallOnUnload(std::string_view library,
+                         std::string* error, uint64_t instruction_budget) {
+  if (!state_ || !state_->CheckThread(error))
+    return Fail(error, "JNI32 JNI_OnUnload requires an attached owning Java thread");
+  Value returned;
+  std::string failure;
+  const bool called = state_->program.CallExport(
+      library, "JNI_OnUnload",
+      {Value::GuestPointer(GuestJavaVM()), Value::GuestPointer(0)},
+      ValueKind::Void, &returned, &failure, instruction_budget);
+  std::string cleanup;
+  const bool cleaned = ReleaseLocals(&cleanup);
+  if (!called || !cleaned) {
+    if (error) *error = !failure.empty() ? failure : cleanup;
+    return false;
+  }
+  if (error) error->clear();
+  return true;
+}
+
 bool Jni32::ReleaseLocals(std::string* error) {
   if (!state_ || !state_->CheckThread(error)) return false;
   const bool leaked = !state_->utf_copies.empty();
