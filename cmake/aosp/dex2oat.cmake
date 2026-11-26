@@ -110,6 +110,9 @@ add_executable(dex2oat ${_d2o}/dex2oat.cc ${_d2o}/dex2oat_options.cc
 target_link_libraries(dex2oat PRIVATE art_dex2oat bcrypt)
 # A linker map, for tools/symbolize.py (the executable is stripped).
 target_link_options(dex2oat PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dex2oat.map)
+if(GESHER_HARDEN)
+  target_link_options(dex2oat PRIVATE -Wl,--exclude-all-symbols)
+endif()
 
 # --- profman ----------------------------------------------------------------
 # art/profman/Android.bp: profiles from text (the boot image profile,
@@ -121,6 +124,9 @@ add_executable(profman ${_pm}/profman.cc ${_pm}/boot_image_profile.cc
   ${_pm}/profile_assistant.cc ${_pm}/inline_cache_format_util.cc)
 target_include_directories(profman PRIVATE ${_pm} ${_pm}/include)
 target_link_libraries(profman PRIVATE art_profile)
+if(GESHER_HARDEN)
+  target_link_options(profman PRIVATE -Wl,--exclude-all-symbols)
+endif()
 
 # --- oatdump ---------------------------------------------------------------
 # The pinned host oatdump uses ART's real disassembler and inspects the same
@@ -135,3 +141,6 @@ target_link_libraries(art_disassembler PUBLIC art_runtime)
 add_executable(oatdump ${_art}/oatdump/oatdump.cc)
 target_link_libraries(oatdump PRIVATE art_compiler art_disassembler)
 target_link_options(oatdump PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/oatdump.map)
+if(GESHER_HARDEN)
+  target_link_options(oatdump PRIVATE -Wl,--exclude-all-symbols)
+endif()

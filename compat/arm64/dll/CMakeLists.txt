@@ -55,7 +55,35 @@ target_link_libraries(gesher_arm64 PRIVATE dynarmic synchronization)
 target_compile_options(gesher_arm64 PRIVATE -Wall -Wextra -Werror -mcx16)
 # A self-contained DLL: the CRT and libunwind are linked statically, as Gesher's
 # executables are, so it loads next to dalvikvm with no extra runtime files.
+option(GESHER_STRIP "Strip executables and DLLs" ON)
+option(GESHER_HARDEN "Harden binaries against reverse engineering" ON)
 target_link_options(gesher_arm64 PRIVATE -static -Wl,--kill-at)
+if(GESHER_STRIP)
+  target_link_options(gesher_arm64 PRIVATE -s)
+endif()
+if(GESHER_HARDEN)
+  # Clang matches prefix-map paths literally; normalize the repository root
+  # before passing it rather than leaving /compat/arm64/dll/../../.. in it.
+  get_filename_component(_gesher_source_root "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+  target_compile_options(gesher_arm64 PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+    $<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>
+    -fvisibility=hidden
+    -ffunction-sections
+    -fdata-sections
+    -fno-ident
+    # Preserve distinct constant objects and per-call local object identity.
+    "-ffile-prefix-map=${_gesher_source_root}=."
+    $<$<CONFIG:Release>:-g0>)
+  target_link_options(gesher_arm64 PRIVATE
+    -Wl,--exclude-all-symbols
+    -Wl,--gc-sections
+    -Wl,--icf=safe
+    -Wl,--nxcompat
+    -Wl,--dynamicbase
+    -Wl,--high-entropy-va
+    -Wl,--no-insert-timestamp)
+endif()
 
 # A standalone smoke test (step 1): loads the DLL like the real loader and runs
 # hand-assembled guest functions. Built here, run by tracks/47-arm64.ps1.

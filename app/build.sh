@@ -10,9 +10,9 @@
 #   in, which is enough to compile but not a check against Android's libcore.
 #
 # Writes <out-dir>/gesher-app.jar (classes.dex), gesher-app-classes.jar (compile-only),
-# and <out-dir>/build.prop. gesher-app.jar
+# <out-dir>/gesher-app-mapping.txt (R8 builds), and <out-dir>/build.prop. gesher-app.jar
 # goes on -Xbootclasspath after framework.jar (see app/README.md). Needs a JDK 17+ and
-# curl; d8 comes from Google's Maven repository (R8_JAR to use a local copy). Runs on
+# Python 3 and curl; R8/D8 comes from Google's Maven repository (R8_JAR to use a local copy). Runs on
 # Linux and in Git Bash on Windows.
 set -euo pipefail
 
@@ -217,10 +217,39 @@ if [[ -n $core ]]; then linkcheck+=("$(native "$core")"); fi
 java "$(native "$root/app/gen/BootLinkCheck.java")" "${linkcheck[@]}" \
   --allow "$(native "$root/app/gen/boot-link-allow.txt")"
 
-# One dex for all, into a jar.
-( cd "$work" && find classes compat location ext apksig/com/android/apksig -name '*.class' ) > "$work/dex.txt"
-(cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
-  --output "$(native "$out/gesher-app.jar")" @dex.txt)
+# One dex for all, into a jar. Use R8 shrinking & obfuscation by default
+# (GESHER_R8=0 falls back to plain D8 for local debugging).
+if [[ ${GESHER_R8:-1} == 1 ]]; then
+  jar --create --file "$(native "$work/r8-input.jar")" --no-manifest \
+    -C "$(native "$work/classes")" . -C "$(native "$work/compat")" . \
+    -C "$(native "$work/location")" . -C "$(native "$work/ext")" . \
+    -C "$(native "$work/apksig")" com/android/apksig
+  r8_libs=(--lib "$(native "$framework")")
+  if [[ -n $core ]]; then
+    r8_libs+=(--lib "$(native "$core")")
+  else
+    java_home_dir=$(java -XshowSettings:properties -version 2>&1 | tr -d '\r' | sed -n 's/^[[:space:]]*java\.home = //p' | head -n1)
+    if [[ -n $java_home_dir ]]; then
+      r8_libs+=(--lib "$(native "$java_home_dir")")
+    fi
+  fi
+  java -cp "$(native "$r8")" com.android.tools.r8.R8 --release --min-api 36 \
+    "${r8_libs[@]}" \
+    --pg-conf "$(native "$root/app/proguard-rules.pro")" \
+    --pg-conf "$(native "$root/app/proguard-fixture-contracts.pro")" \
+    --pg-map-output "$(native "$out/gesher-app-mapping.txt")" \
+    --output "$(native "$out/gesher-app.jar")" \
+    "$(native "$work/r8-input.jar")"
+  # The pre-shrink BootLinkCheck cannot see removed or renamed runtime members.
+  # Verify the actual DEX against the separately compiled API before packaging it.
+  python3 "$root/app/gen/R8ContractCheck.py" \
+    --classes "$out/gesher-app-classes.jar" --dex "$out/gesher-app.jar"
+else
+  rm -f "$out/gesher-app-mapping.txt"
+  ( cd "$work" && find classes compat location ext apksig/com/android/apksig -name '*.class' ) > "$work/dex.txt"
+  (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
+    --output "$(native "$out/gesher-app.jar")" @dex.txt)
+fi
 cp "$root/app/build.prop" "$out/build.prop"
 echo "gesher-app written to $out"
 

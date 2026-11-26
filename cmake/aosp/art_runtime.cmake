@@ -167,3 +167,6 @@ target_link_libraries(dalvikvm PRIVATE art_runtime)
 # A linker map, for tools/symbolize.py (the executable is stripped).
 # Link-only: the pinned MinGW driver selects crt2u.o and wmain.
 target_link_options(dalvikvm PRIVATE -Wl,-Map,${CMAKE_BINARY_DIR}/dalvikvm.map -municode)
+if(GESHER_HARDEN)
+  target_link_options(dalvikvm PRIVATE -Wl,--exclude-all-symbols)
+endif()

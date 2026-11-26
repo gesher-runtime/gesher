@@ -7,7 +7,8 @@
 #
 # aapt2 compiles the resources and links them with the manifest against
 # framework-res.apk, which also writes R.java; javac compiles the app against
-# framework.jar's classes (and libcore's java.base, as app/build.sh does); d8 dexes it;
+# framework.jar's classes (and libcore's java.base, as app/build.sh does); R8 shrinks
+# apps with proguard-rules.pro (GESHER_R8=0 opts out), otherwise D8 dexes them;
 # the dex is added to the APK and the APK is zip-aligned. SIGN_TEST_APK=1 also signs
 # the fixture with a disposable real certificate for verified-identity contracts.
 # Other callers retain the existing unsigned fixture output.
@@ -89,6 +90,7 @@ fi
 mkdir -p "$work/gen"
 "$aapt2" link -o "$(native "$work/unaligned.apk")" -I "$(native "$framework_res")" \
   --manifest "$(native "$app/AndroidManifest.xml")" --java "$(native "$work/gen")" \
+  --proguard "$(native "$work/aapt-rules.pro")" \
   --min-sdk-version 36 --target-sdk-version 36 "$(native "$work/res.zip")"
 
 # Code.
@@ -101,9 +103,31 @@ native_list "$work/sources.txt"
 mkdir -p "$work/classes" "$work/dex"
 javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-options -XDstringConcat=inline \
   -cp "$(native "$framework")" -d "$(native "$work/classes")" @"$(native "$work/sources.txt")"
-(cd "$work" && find classes -name '*.class' > dex.txt &&
-  java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
+(cd "$work" && find classes -name '*.class' > dex.txt)
+if [[ ${GESHER_R8:-1} == 1 && -f "$app/proguard-rules.pro" ]]; then
+  jar --create --file "$(native "$work/r8-input.jar")" --no-manifest \
+    -C "$(native "$work/classes")" .
+  r8_libs=(--lib "$(native "$framework")")
+  if [[ -n $core ]]; then
+    r8_libs+=(--lib "$(native "$core")")
+  else
+    java_home_dir=$(java -XshowSettings:properties -version 2>&1 | tr -d '\r' | sed -n 's/^[[:space:]]*java\.home = //p' | head -n1)
+    if [[ -n $java_home_dir ]]; then
+      r8_libs+=(--lib "$(native "$java_home_dir")")
+    fi
+  fi
+  java -cp "$(native "$r8")" com.android.tools.r8.R8 --release --min-api 36 \
+    "${r8_libs[@]}" \
+    --pg-conf "$(native "$work/aapt-rules.pro")" \
+    --pg-conf "$(native "$app/proguard-rules.pro")" \
+    --pg-map-output "$(native "$out/$name-mapping.txt")" \
+    --output "$(native "$work/dex")" \
+    "$(native "$work/r8-input.jar")"
+else
+  rm -f "$out/$name-mapping.txt"
+  (cd "$work" && java -cp "$(native "$r8")" com.android.tools.r8.D8 --release --min-api 36 \
     --output dex @dex.txt)
+fi
 
 # The dex into the APK, then 4-byte alignment.
 (cd "$work/dex" && jar -u -M -f "$(native "$work/unaligned.apk")" classes.dex)

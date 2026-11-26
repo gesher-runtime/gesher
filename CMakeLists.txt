@@ -18,7 +18,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)    # AOSP builds with -std=gnu++20
 set(CMAKE_C_STANDARD 17)
 if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE RelWithDebInfo)
+  set(CMAKE_BUILD_TYPE Release)
 endif()
 
 # Flags Soong applies to every Windows host module.
@@ -30,12 +30,34 @@ add_compile_definitions(
 add_compile_options(-mno-ms-bitfields -fno-exceptions
   $<$<COMPILE_LANGUAGE:CXX>:-fsized-deallocation>)
 # Everything links statically: one self-contained .exe per tool. Executables
-# are stripped by default; objects keep their debug info. Local builds that
-# need symbols (addr2line on crash reports) turn GESHER_STRIP off.
+# are stripped by default; objects keep their debug info unless Release/hardened.
+# Local builds that need line information (addr2line on crash reports) use
+# -DCMAKE_BUILD_TYPE=RelWithDebInfo -DGESHER_STRIP=OFF. Hardening can remain on:
+# it removes debug information only in Release configurations.
 option(GESHER_STRIP "Strip executables" ON)
+option(GESHER_HARDEN "Harden binaries against reverse engineering" ON)
 add_link_options(-static)
 if(GESHER_STRIP)
   add_link_options(-s)
+endif()
+if(GESHER_HARDEN)
+  add_compile_options(
+    $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
+    $<$<COMPILE_LANGUAGE:CXX>:-fvisibility-inlines-hidden>
+    -fvisibility=hidden
+    -ffunction-sections
+    -fdata-sections
+    -fno-ident
+    # Preserve distinct constant objects and per-call local object identity.
+    "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+    $<$<CONFIG:Release>:-g0>)
+  add_link_options(
+    -Wl,--gc-sections
+    -Wl,--icf=safe
+    -Wl,--nxcompat
+    -Wl,--dynamicbase
+    -Wl,--high-entropy-va
+    -Wl,--no-insert-timestamp)
 endif()
 
 # gesher-base: POSIX/Linux interfaces implemented on Win32.

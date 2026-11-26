@@ -395,12 +395,41 @@ tests/apps/lifecycle/build.sh <out> --framework-res <framework-res.apk> \
 
 `app/build.sh` generates the service stubs (`app/gen/StubGen.java`, run on the
 JDK with framework.jar's classes on the class path) and writes
-`gesher-app.jar` (one `classes.dex`) and `build.prop`;
+`gesher-app.jar` (DEX), the compile-only `gesher-app-classes.jar`, and `build.prop`;
 the test app's script writes `lifecycle.apk` (aapt2 against
 framework-res.apk, javac, d8, zipalign; unsigned, as gesher-app does not
-verify signatures). Both download d8 9.5.26 (or use `R8_JAR`); the test app's
+verify signatures). Both download R8/D8 9.5.26 (or use `R8_JAR`); the test app's
 also downloads build-tools r36.1 for aapt2 and zipalign (or uses
 `BUILD_TOOLS_DIR`).
+
+R8 shrinking and obfuscation are enabled by default for `gesher-app.jar` and
+APKs with their own `proguard-rules.pro` (the camera app in this release). Set
+`GESHER_R8=0` for the D8 debugging path. The compiler's keep rules
+preserve boot-class-path overlays, JNI callbacks, Binder stubs,
+AndroidX WebView reflection and JCA provider constructors.
+`app/gen/R8ContractCheck.py` compares these contracts in the final DEX with the
+unoptimized compile-time JAR, after the existing pre-shrink `BootLinkCheck`.
+This checks definitions and descriptors; the Windows/ART tests still establish
+runtime behavior.
+
+The separately compiled device probes also call and reflect Gesher internals.
+`app/proguard-fixture-contracts.pro` retains those declared class families in
+the production R8 output, including the server APIs used by the service probes.
+This deliberately limits their obfuscation so the probes exercise the shipped
+runtime. Other internal classes and members remain eligible for optimization.
+The fixture ABI check resolves their compiled DEX references against that same
+runtime; it does not switch the tests to an unoptimized copy.
+
+R8 writes `<name>-mapping.txt` beside each optimized JAR/APK. CI retains these as
+the separate `r8-mappings` artifact for retracing crashes; they are not included
+in the runtime or installer package. A D8 rebuild removes stale mapping files.
+Keep the mapping from the exact failing build when diagnosing obfuscated traces.
+
+This is the PR #607 backport for the 0.2.0 source baseline. Its separate speech
+APKs and portable packager are absent, so their configurations and CI checks
+are not imported. The actual-output DEX contract and fixture checks, and the
+reflection checks for APIs present in this release, remain enabled. Native
+hardening keeps this baseline's existing entry points and link dependencies.
 
 ## The test app
 

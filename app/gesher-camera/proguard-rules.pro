@@ -1,0 +1,6 @@
+-optimizationpasses 3
+-allowaccessmodification
+-overloadaggressively
+-repackageclasses 'c'
+-dontwarn **
+-keep class com.gesher.camera.CaptureActivity { *; }

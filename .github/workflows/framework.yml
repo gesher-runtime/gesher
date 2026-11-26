@@ -414,6 +414,10 @@ jobs:
           printf '%s  %s\n' 3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad "$R8_JAR.download" | sha256sum --check --strict
           mv "$R8_JAR.download" "$R8_JAR"
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
+          # This release has no separate TTS/STT APKs; verify its existing
+          # JCA, WebView and boot API reflection contracts after actual R8.
+          python3 tests/r8/reflection_api.py --java-home "$JAVA_HOME" --r8 "$R8_JAR" \
+            --framework-classes out/framework/classes --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_uia_cache.py --java-home "$JAVA_HOME" \
             --framework-classes out/framework/classes --core-classes out/coremod \
             --app-classes out/app/gesher-app-classes.jar
@@ -421,6 +425,8 @@ jobs:
           tests/dex-services/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
           python3 tools/test_role_manager_contracts.py --framework-classes out/framework/classes --app-classes out/app/gesher-app-classes.jar
           tests/dex-graphics/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+          python3 tests/r8/fixture_api.py --classes out/app/gesher-app-classes.jar \
+            --dex out/app/gesher-app.jar --consumers out/app/services-tests.dex out/app/graphics-tests.dex
           tests/web3-query/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/exitstatusapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
@@ -847,6 +853,15 @@ jobs:
           python3 tools/test_wifi_network_specifier_contracts.py --java-home "$JAVA_HOME" \
             --sdk-jar work/sdk-36/android.jar --framework-classes out/framework/classes \
             --core-classes out/coremod --app-classes out/app/gesher-app-classes.jar
+
+      # Retain retrace inputs for this exact build without shipping deobfuscation
+      # maps in the runtime/package artifact consumed by the installer.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r8-mappings
+          path: out/app/*-mapping.txt
+          if-no-files-found: warn
 
       - name: Collect framework artifacts
         run: |
