@@ -4,8 +4,10 @@ package com.gesher.server;
 import android.hardware.ICameraService;
 import android.hardware.camera2.*;
 import android.hardware.camera2.impl.*;
+import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.utils.SubmitInfo;
 import android.os.*;
+import android.view.Surface;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -260,7 +262,69 @@ public final class CameraAdmissionHost {
         clean();
     }
 
+    private static void expectBusyStream(CameraDeviceUser camera, int stream) {
+        try {
+            camera.deleteStream(stream);
+            throw new AssertionError("stream with pending targets was deleted");
+        } catch (ServiceSpecificException e) {
+            check(e.errorCode == ICameraService.ERROR_INVALID_OPERATION,
+                    "deleting a busy stream reports ERROR_INVALID_OPERATION");
+        }
+    }
+
+    private static void retainPendingSurfaces() throws Exception {
+        Target callbacks = new Target();
+        CameraDeviceUser camera = camera(callbacks, true);
+        Surface first = new Surface();
+        Surface unused = new Surface();
+        Surface selected = new Surface();
+        int stream = camera.createStream(new OutputConfiguration(first, unused, selected));
+        CaptureRequest target = indexedRequest(stream, 2);
+        WindowsCamera.readEntered = new CountDownLatch(1);
+        WindowsCamera.readRelease = new CountDownLatch(1);
+        CountDownLatch readRelease = WindowsCamera.readRelease;
+        try {
+            camera.submitRequestList(new CaptureRequest[] {target, target}, false);
+            check(WindowsCamera.readEntered.await(5, TimeUnit.SECONDS),
+                    "active capture is held at its native read boundary");
+            expectInvalidTarget(() -> camera.updateOutputConfiguration(stream,
+                    new OutputConfiguration(first, unused)));
+            expectBusyStream(camera, stream);
+
+            camera.updateOutputConfiguration(stream, new OutputConfiguration(first, selected));
+            readRelease.countDown();
+            camera.waitUntilIdle();
+            until(() -> callbacks.terminals.get() == 2, "both admitted requests complete");
+            check(CameraFrames.lastDelivery == selected,
+                    "removing an earlier unused surface does not redirect capture to index zero");
+            camera.updateOutputConfiguration(stream, new OutputConfiguration(first));
+            expectInvalidTarget(() -> camera.submitRequest(indexedRequest(stream, 1), false));
+            camera.deleteStream(stream);
+        } finally {
+            readRelease.countDown();
+            camera.disconnect();
+            WindowsCamera.readRelease = null;
+        }
+        clean();
+
+        CameraDeviceUser repeating = camera(new Target(), false);
+        int repeatingStream = repeating.createStream(new OutputConfiguration(first, selected));
+        try {
+            SubmitInfo info = repeating.submitRequest(indexedRequest(repeatingStream, 1), true);
+            expectInvalidTarget(() -> repeating.updateOutputConfiguration(repeatingStream,
+                    new OutputConfiguration(first)));
+            expectBusyStream(repeating, repeatingStream);
+            repeating.cancelRequest(info.getRequestId());
+            repeating.updateOutputConfiguration(repeatingStream, new OutputConfiguration(first));
+            repeating.deleteStream(repeatingStream);
+        } finally {
+            repeating.disconnect();
+        }
+        clean();
+    }
+
     public static void main(String[] args)throws Exception{
+        retainPendingSurfaces();
         validateSurfaceIndices();
         flushDuringImageDelivery();
         admissionAndFlush();bytesAndAtomicBurst();repeatingBackpressure();controlsAndFailure();reentrantAndReopen();progressAndFailureRegressions();

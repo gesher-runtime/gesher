@@ -116,12 +116,14 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         }
     }
 
+    /** The producer selected for an admitted request, independent of later list indices. */
+    private record Target(int streamId, Surface surface, int format, Size size) {}
+
     /** A submitted request, copied (the app may reuse its own). */
     private static final class Request {
         final int requestId;
         final CameraMetadataNative settings;
-        final int[] streamIds;
-        final int[] surfaceIds;
+        final Target[] targets;
         final long retainedBytes;
         final long frameBytes;
 
@@ -133,31 +135,44 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     || (surfaces != null && surfaces.length > CameraCallbacks.MAX_TARGETS)) {
                 throw CameraCallbacks.full();
             }
-            this.streamIds = streams != null ? streams.clone() : new int[0];
-            this.surfaceIds = surfaces != null ? surfaces.clone() : new int[0];
-            if (streamIds.length != surfaceIds.length) {
+            int count = streams != null ? streams.length : 0;
+            if (count != (surfaces != null ? surfaces.length : 0)) {
                 throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
                         "each request target requires a stream and surface index");
             }
-            for (int i = 0; i < streamIds.length; i++) {
-                Stream stream = configuredStreams.get(streamIds[i]);
+            targets = new Target[count];
+            for (int i = 0; i < count; i++) {
+                int streamId = streams[i];
+                int surfaceId = surfaces[i];
+                Stream stream = configuredStreams.get(streamId);
                 if (stream == null) {
                     throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
-                            "request targets stream " + streamIds[i] + ", not configured");
+                            "request targets stream " + streamId + ", not configured");
                 }
-                if (surfaceIds[i] < 0 || surfaceIds[i] >= stream.surfaces.size()) {
+                if (surfaceId < 0 || surfaceId >= stream.surfaces.size()) {
                     throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
-                            "request targets invalid surface index " + surfaceIds[i]
-                                    + " for stream " + streamIds[i]);
+                            "request targets invalid surface index " + surfaceId
+                                    + " for stream " + streamId);
                 }
+                targets[i] = new Target(streamId, stream.surfaces.get(surfaceId),
+                        stream.format, stream.size);
             }
             this.settings = request.getNativeCopy();
             long metadata = CameraCallbacks.metadataBytes(settings);
-            retainedBytes = metadata + 4L * (streamIds.length + surfaceIds.length) + 256;
+            retainedBytes = metadata + 48L * targets.length + 256;
             // Result metadata clones the request and adds a fixed set of tags.
             // The native buffer grows geometrically; reserve its doubled capacity,
             // new tags, callback nodes and the retained source before capture starts.
-            frameBytes = retainedBytes + 2 * metadata + 4096 + 256L * streamIds.length;
+            frameBytes = retainedBytes + 2 * metadata + 4096 + 256L * targets.length;
+        }
+
+        boolean usesSurface(int streamId, Surface surface) {
+            for (Target target : targets) {
+                if (target.streamId == streamId && (surface == null || target.surface == surface)) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
@@ -279,18 +294,52 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     @Override
     public void deleteStream(int streamId) {
         synchronized (mLock) {
+            checkConnected();
+            if (!mStreams.containsKey(streamId)) {
+                throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                        "unknown camera stream " + streamId);
+            }
+            if (hasPendingTarget(streamId, null)) {
+                throw new ServiceSpecificException(ICameraService.ERROR_INVALID_OPERATION,
+                        "stream " + streamId + " has pending requests");
+            }
             mStreams.remove(streamId);
         }
     }
 
     @Override
     public void updateOutputConfiguration(int streamId, OutputConfiguration config) {
+        List<Surface> updated = List.copyOf(config.getSurfaces());
         synchronized (mLock) {
+            checkConnected();
             Stream s = mStreams.get(streamId);
-            if (s == null) return;
+            if (s == null) {
+                throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                        "unknown camera stream " + streamId);
+            }
+            for (Surface surface : s.surfaces) {
+                if (!updated.contains(surface) && hasPendingTarget(streamId, surface)) {
+                    throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                            "cannot remove a surface with pending requests");
+                }
+            }
             s.surfaces.clear();
-            s.surfaces.addAll(config.getSurfaces());
+            s.surfaces.addAll(updated);
         }
+    }
+
+    /** Called under mLock, which also serializes admission, frame selection and completion. */
+    private boolean hasPendingTarget(int streamId, Surface surface) {
+        if (mActive != null && mActive.request.usesSurface(streamId, surface)) return true;
+        for (Frame frame : mQueue) {
+            if (frame.request.usesSurface(streamId, surface)) return true;
+        }
+        if (mRepeating != null) {
+            for (Request request : mRepeating) {
+                if (request.usesSurface(streamId, surface)) return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -656,36 +705,28 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 try {
                     f.callbacks.onCaptureStarted(extras, timestamp);
                     if (timing != null) timing.advance(CaptureTiming.DELIVERY);
-                    for (int i = 0; i < f.request.streamIds.length; i++) {
+                    for (Target target : f.request.targets) {
                         if (f.callbacks.terminal()) break;
-                        Stream s;
-                        synchronized (mLock) {
-                            s = mStreams.get(f.request.streamIds[i]);
-                        }
-                        if (s == null) continue;
-                        int surfaceId = i < f.request.surfaceIds.length ? f.request.surfaceIds[i] : 0;
-                        Surface surface = surfaceId < s.surfaces.size() ? s.surfaces.get(surfaceId)
-                                : s.surfaces.get(0);
                         byte[] jpeg = null;
-                        if (s.format == CameraService.HAL_BLOB) {
+                        if (target.format == CameraService.HAL_BLOB) {
                             Byte quality = f.request.settings.get(CaptureRequest.JPEG_QUALITY);
                             jpeg = CameraFrames.jpeg(nv12, mCapture.width, mCapture.height,
-                                    s.size.getWidth(), s.size.getHeight(),
+                                    target.size.getWidth(), target.size.getHeight(),
                                     quality != null ? quality & 0xff : 95);
                         }
                         if (timing != null) ++timing.deliveries;
-                        int delivered = CameraFrames.deliver(surface, nv12, mCapture.width,
+                        int delivered = CameraFrames.deliver(target.surface, nv12, mCapture.width,
                                 mCapture.height, timestamp, jpeg);
                         if (delivered != CameraFrames.OK) {
                             if (timing != null) ++timing.deliveryErrors;
                             CameraService.log("frame " + f.frameNumber + ": stream "
-                                    + f.request.streamIds[i] + " (format 0x"
-                                    + Integer.toHexString(s.format) + ") took no frame"
-                                    + (s.format == CameraService.HAL_BLOB ? ", JPEG "
+                                    + target.streamId + " (format 0x"
+                                    + Integer.toHexString(target.format) + ") took no frame"
+                                    + (target.format == CameraService.HAL_BLOB ? ", JPEG "
                                     + (jpeg == null ? "none" : jpeg.length + " bytes") : ""));
                             f.callbacks.onDeviceError(ICameraDeviceCallbacks.ERROR_CAMERA_BUFFER,
                                     extras(f.request.requestId, f.subsequenceId, f.frameNumber,
-                                            f.request.streamIds[i]));
+                                            target.streamId));
                         }
                     }
                     if (f.callbacks.terminal()) continue;
