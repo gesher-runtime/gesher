@@ -280,8 +280,8 @@ static void PendingDelivery() {
           state.mask == (timer_bit | still_blocked) && input == (low_bit | high_bit));
     check("one delivery point consumes both queues including signal64",
           deliveries == 1 && dispatched.size() == 5);
-    const int signals[] = {10, 10, 64, 64, 64};
-    const uint64_t values[] = {301, 304, 302, 303, 305};
+    const int signals[] = {10, 64, 64, 10, 64};
+    const uint64_t values[] = {301, 302, 303, 304, 305};
     if (dispatched.size() == 5) for (unsigned i = 0; i < 5; ++i) {
       check("production selection preserves priority, thread ownership and RT FIFO",
             dispatched[i].sig == signals[i] && IsRecord(dispatched[i].info, signals[i], values[i]) &&
@@ -460,8 +460,8 @@ static void TranslatedReceiver() {
         rc == kENOSYS && state.pending.Mask() == Bit(10) && state.any_pending &&
         S().process_pending.Mask() == 0 && queued_records == 1);
   check("it does not hold back the higher-numbered signals behind it",
-        dispatched.size() == 2 && dispatched[0].sig == 12 && IsRecord(dispatched[0].info, 12, 803) &&
-        dispatched[1].sig == 64 && IsRecord(dispatched[1].info, 64, 804));
+        dispatched.size() == 2 && dispatched[0].sig == 64 && IsRecord(dispatched[0].info, 64, 804) &&
+        dispatched[1].sig == 12 && IsRecord(dispatched[1].info, 12, 803));
   CheckRetained(false, 10, 802);
 }
 
@@ -517,7 +517,7 @@ static void WaitSets() {
   errno = ERANGE;
   int rc = Sigtimedwait(&set, &info, &zero);
   check("a runtime-reserved signal is removed from the wait set",
-        rc == -1 && errno == EAGAIN && set == Bit(33));
+        rc == -1 && errno == kEAGAIN && set == Bit(33));
   CheckRetained(false, 33, 901);
 
   variation = 1;
@@ -550,6 +550,23 @@ static void WaitSets() {
   check("sigwait takes a blocked public signal and preserves errno",
         rc == 0 && sig == 10 && errno == ERANGE && S().process_pending.Mask() == 0 &&
         state.mask == (timer_bit | low_bit) && dispatched.empty());
+
+  phase = "sigwait thread and process priority";
+  const int sigsys = 31;
+  set = low_bit | high_bit | Bit(sigsys);
+  Reset(timer_bit | set);
+  Queue(true, 10, 907);
+  Queue(false, 10, 908);
+  Queue(false, 64, 909);
+  Queue(false, sigsys, 910);
+  const int expected[] = {sigsys, 10, 64, 10};
+  const uint64_t payloads[] = {910, 908, 909, 907};
+  for (int i = 0; i < 4; ++i) {
+    info = {};
+    rc = Sigtimedwait(&set, &info, &zero);
+    check("sigwait takes its own queue before shared process signals, with synchronous priority",
+          rc == expected[i] && IsRecord(info, expected[i], payloads[i]));
+  }
 
   phase = "null signal sets";
   variation = 0;

@@ -556,15 +556,21 @@ int Run(ThreadState* self, int sig, const BionicSiginfo& info) {
 int TakeDeliverable(ThreadState* self, BionicSiginfo* info, BionicSigaction* act) {
   std::lock_guard<std::mutex> lock(S().mutex);
   bool unsupported = false;
-  for (int sig = 1; sig < kNsig; ++sig) {
-    if ((self->mask & Bit(sig)) != 0) continue;
-    if ((self->pending.Mask() & Bit(sig)) != 0) {
+  const uint64_t unblocked = ~self->mask.load(std::memory_order_relaxed);
+  uint64_t own = self->pending.Mask() & unblocked;
+  uint64_t shared = S().process_pending.Mask() & unblocked;
+  while (own != 0 || shared != 0) {
+    const bool thread_directed = own != 0;
+    uint64_t& eligible = thread_directed ? own : shared;
+    const int sig = gesher::signals::NextPendingSignal(eligible);
+    eligible &= ~Bit(sig);
+    if (thread_directed) {
       if (!ClaimActionLocked(self, sig, act)) { unsupported = true; continue; }
       Pop(self->pending, sig, info);
       self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
       return sig;
     }
-    if ((S().process_pending.Mask() & Bit(sig)) != 0) {
+    if (!thread_directed) {
       if (!ClaimActionLocked(self, sig, act)) { unsupported = true; continue; }
       Pop(S().process_pending, sig, info);
       return sig;
@@ -905,9 +911,11 @@ int TakeWaiting(ThreadState* self, uint64_t want, BionicSiginfo* info,
                 BionicSigaction* act = nullptr) {
   std::unique_lock<std::mutex> lock(S().mutex);
   for (;;) {
-    for (int sig = 1; sig < kNsig; ++sig) {
-      if ((want & Bit(sig)) == 0) continue;
-      if ((self->pending.Mask() & Bit(sig)) != 0) {
+    const uint64_t own = self->pending.Mask() & want;
+    const uint64_t shared = S().process_pending.Mask() & want;
+    if (own != 0 || shared != 0) {
+      const int sig = gesher::signals::NextPendingSignal(own != 0 ? own : shared);
+      if (own != 0) {
         if (act != nullptr && !ClaimActionLocked(self, sig, act)) {
           self->waiting_for = 0;
           return -kENOSYS;
@@ -917,7 +925,7 @@ int TakeWaiting(ThreadState* self, uint64_t want, BionicSiginfo* info,
         self->waiting_for = 0;
         return sig;
       }
-      if ((S().process_pending.Mask() & Bit(sig)) != 0) {
+      if (shared != 0) {
         if (act != nullptr && !ClaimActionLocked(self, sig, act)) {
           self->waiting_for = 0;
           return -kENOSYS;

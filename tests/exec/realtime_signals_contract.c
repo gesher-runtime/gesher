@@ -147,6 +147,24 @@ static void priority(void) {
   }
   check(ordered, "lowest RT signal number first and FIFO within each number");
   pthread_sigmask(SIG_SETMASK, &old, NULL);
+
+  sigset_t directed = one(SIGUSR1);
+  sigaddset(&directed, SIGSYS);
+  sigaddset(&directed, SIGRTMIN);
+  int masking = pthread_sigmask(SIG_BLOCK, &directed, &old);
+  check(masking == 0, "block signals for private and shared queue priority");
+  if (masking != 0) return;
+  check(kill(getpid(), SIGUSR1) == 0, "enqueue lower-numbered process signal");
+  check(pthread_kill(pthread_self(), SIGRTMIN) == 0, "enqueue higher-numbered thread signal");
+  check(pthread_kill(pthread_self(), SIGUSR1) == 0, "enqueue lower-numbered thread signal");
+  check(pthread_kill(pthread_self(), SIGSYS) == 0, "enqueue synchronous-priority thread signal");
+  const int expected[] = {SIGSYS, SIGUSR1, SIGRTMIN, SIGUSR1};
+  for (int i = 0; i < 4; ++i) {
+    check(sigtimedwait(&directed, NULL, &zero) == expected[i],
+          "thread-directed queue is drained before process queue with synchronous priority");
+  }
+  while (sigtimedwait(&directed, NULL, &zero) > 0) {}
+  pthread_sigmask(SIG_SETMASK, &old, NULL);
 }
 
 static void timeout_errors(void) {
