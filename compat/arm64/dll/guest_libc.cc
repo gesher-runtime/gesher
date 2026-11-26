@@ -510,7 +510,8 @@ const SyscallMap kSyscalls[] = {
     {48, "faccessat", 'i'},   {56, "openat", 'i'},       {57, "close", 'i'},
     {59, "pipe2", 'i'},       {62, "lseek", 'l'},        {63, "read", 'l'},
     {64, "write", 'l'},       {65, "readv", 'l'},        {66, "writev", 'l'},
-    {67, "pread64", 'l'},     {68, "pwrite64", 'l'},     {78, "readlinkat", 'l'},
+    {67, "pread64", 'l'},     {68, "pwrite64", 'l'},
+    {69, "preadv", 'l'},      {70, "pwritev", 'l'},      {78, "readlinkat", 'l'},
     {82, "fsync", 'i'},       {83, "fdatasync", 'i'},    {94, "_exit", 'i'},
     {85, "timerfd_create", 'i'}, {86, "timerfd_settime", 'i'}, {87, "timerfd_gettime", 'i'},
     {101, "nanosleep", 'i'},  {113, "clock_gettime", 'i'}, {114, "clock_getres", 'i'},
@@ -994,12 +995,14 @@ int64_t GuestRawSyscall(uint64_t nr, const uint64_t args[6]) {
   if (nr == 220) return GuestClone(args);  // clone: raw result already
   int64_t a[6];
   for (int i = 0; i < 6; ++i) a[i] = static_cast<int64_t>(args[i]);
-  int64_t r = DoSyscall(nr, a);
-  if (r == -1) {
-    int* e = HostErrno();
-    return -(e != nullptr && *e != 0 ? *e : kEFAULT);
-  }
-  return r;
+  int* guest_errno = HostErrno();
+  const int saved_errno = guest_errno != nullptr ? *guest_errno : 0;
+  const int64_t result = DoSyscall(nr, a);
+  const int error = guest_errno != nullptr ? *guest_errno : 0;
+  // svc reports a negative kernel error in X0. Only syscall(2)'s separate
+  // libc path writes the thread's errno after a failure.
+  if (guest_errno != nullptr) *guest_errno = saved_errno;
+  return result == -1 ? -(error != 0 ? error : kEFAULT) : result;
 }
 
 bool InitGuestLibc() {
