@@ -169,6 +169,9 @@ BOOL GetFileSizeEx(HANDLE, LARGE_INTEGER*) { return FALSE; }
 void GetSystemInfo(SYSTEM_INFO* info) { info->dwAllocationGranularity = 65536; }
 extern "C" int gesher_mmap_placeholders() { return 0; }
 extern "C" int gesher_mmap_replaced_private_pages() { return 0; }
+// The host keeps no gesher-base mapping records, so no span is known to be
+// one of its mappings that MAP_FIXED replaces in place (mman.cc).
+extern "C" int gesher_mmap_fixed_replaces(const void*, size_t) { return 0; }
 namespace elf_host_platform {
 void FailNextVirtualProtect() { fail_next_protection = true; }
 size_t LiveReservations() { std::lock_guard<std::mutex> lock(platform_mutex); return reservations.size(); }

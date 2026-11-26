@@ -2,8 +2,8 @@
 //
 // Every recorder an app opens (AudioRecord, AAudio and OpenSL ES input,
 // MediaRecorder's audio) is a CaptureStream of this process's capture engine.
-// The engine's thread takes what the input source gives, every 10 ms, and
-// hands it to each started stream, converted to the stream's rate (linear
+// The engine's thread waits for the input source's data signal (or a bounded
+// timed fallback), then hands it to each started stream, converted to its rate (linear
 // interpolation), channels and PCM format. Normal builds use the actual
 // default WASAPI capture endpoint. Initialization/start failure is reported;
 // device loss becomes a terminal error, without substituting another input.
@@ -189,6 +189,17 @@ class CaptureSource {
   // What arrived since the last call, as float frames, appended to `out`.
   // False when the source is gone.
   virtual bool Pull(std::vector<float>* out) = 0;
+  // Between pulls the capture thread waits here until data may be waiting. A source
+  // with a signal of its own (WASAPI's sample event) blocks until that signal,
+  // Interrupt() or `timeout_ms` (a bound for a signal that never comes) and
+  // returns true; one without returns false at once, and the thread waits its own
+  // period instead.
+  virtual bool WaitForData(int timeout_ms) {
+    (void)timeout_ms;
+    return false;
+  }
+  // From any thread: ends a WaitForData in progress, or else the next one.
+  virtual void Interrupt() {}
 };
 
 // WASAPI shared mode on the default capture endpoint, or (loopback) the

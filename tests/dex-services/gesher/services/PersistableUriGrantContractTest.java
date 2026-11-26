@@ -169,6 +169,7 @@ public final class PersistableUriGrantContractTest {
             set(pm, "mPackages", new LinkedHashMap<>(records));
             set(pm, "mRemoving", new LinkedHashMap<String, ApkPackage>());
             set(pm, "mPackageRemoval", new ArrayList<>());
+            set(pm, "mPackageChanges", new java.util.concurrent.CopyOnWriteArrayList<>());
             set(pm, "mPackageEventExecutor", (java.util.concurrent.Executor)packageEvents::addLast);
             Class<?> policy = Class.forName("com.gesher.server.PermissionPolicy");
             Constructor<?> policyConstructor = policy.getDeclaredConstructor(PackageManagerService.class);

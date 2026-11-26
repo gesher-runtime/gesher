@@ -29,13 +29,16 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cfenv>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <shared_mutex>
 #include <unordered_map>
 #include <vector>
@@ -43,6 +46,7 @@
 #include "dynarmic/interface/A64/a64.h"
 #include "dynarmic/interface/A64/config.h"
 #include "dynarmic/interface/exclusive_monitor.h"
+#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 
 namespace A64 = Dynarmic::A64;
 
@@ -62,6 +66,7 @@ extern "C" void gesher_guest_entry_shim();  // host_entry stubs jump here
 namespace gesher_arm64 {
 
 const gesher_arm64_host* g_host = nullptr;
+unsigned (GESHER_SYSV* g_signal_exit_code)(int) = nullptr;
 
 namespace {
 
@@ -95,14 +100,269 @@ std::vector<CodeRegion> g_regions;
 // Each classifier and Jit independently observes pending-load retirement.
 std::atomic<uint64_t> g_code_generation{1};
 
+// --- guest instruction cache maintenance -----------------------------------
+// A guest that writes instructions (an inline hook a packer places on a
+// function, a JIT's code) makes them visible to execution as on ARM: with
+// IC IVAU for each cache line written, then ISB. Each Jit has translated
+// copies of guest code: an invalidation goes to every live Jit at once, as
+// IC IVAU is broadcast to every PE on ARM. dynarmic's InvalidateCacheRange is
+// thread-safe and halts a Jit running guest code at its next block boundary
+// (the halt check of a linked block included), so a thread spinning in guest
+// code drops the copies promptly; a Jit that is not running (an outer Jit
+// paused under a host call, a pooled Env's) drops them when it next runs.
+//
+// Only a Jit that has translated code from the range gets it: each Jit keeps
+// the guest pages it read code from (a superset of what its cache holds), so
+// a range no translation came from neither halts a running Jit (a Run exit
+// and a reset return stack buffer) nor accumulates in a paused one. A page is
+// recorded under the Jit's mutex before its code is read, and an invalidation
+// checks the record under the same mutex after the guest wrote the code:
+// either the invalidation sees the page, or the translation reads the new
+// code.
+class JitCode {
+ public:
+  explicit JitCode(A64::Jit* jit) : jit_(jit) {}
+  A64::Jit* jit() const { return jit_; }
+
+  // The owning thread, inside Run (MemoryReadCode), before it reads code at
+  // `page`. The last page recorded needs no lock: Clear() resets it.
+  void MarkTranslated(uintptr_t page) {
+    if (page == last_page_) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    InsertPage(page);
+    last_page_ = page;
+  }
+
+  // The owning thread, outside Run: the whole cache goes (and the pages with
+  // it) before the Jit next translates anything.
+  void Clear() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      pages_.clear();
+    }
+    last_page_ = kNoPage;
+    posted_.store(0, std::memory_order_relaxed);
+    jit_->ClearCache();
+  }
+
+  // The owning thread, before Run: Run applies the ranges posted so far.
+  void Dispatched() { posted_.store(0, std::memory_order_relaxed); }
+
+  // A guest fork (ADR 0092) holds every Jit's page record while it clones, so
+  // the child's copy is consistent; the child makes the lock anew.
+  bool TryLockForFork() { return mutex_.try_lock(); }
+  void UnlockForFork() { mutex_.unlock(); }
+  void RenewForChild() { new (&mutex_) std::mutex(); }
+
+  // Any thread. Line-precise while few ranges wait for the Jit's next
+  // dispatch; then page-granular, so a paused Jit's pending set (dynarmic
+  // coalesces it) stays bounded by the pages it translated, instead of
+  // growing with every range or costing it its whole cache.
+  void Invalidate(uintptr_t start, uintptr_t end) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!Overlaps(start, end)) return;
+    if (posted_.fetch_add(1, std::memory_order_relaxed) >= kMaxPreciseRanges) {
+      start &= ~uintptr_t{0xFFF};
+      end = end > UINTPTR_MAX - 0xFFF ? UINTPTR_MAX & ~uintptr_t{0xFFF}
+                                      : (end + 0xFFF) & ~uintptr_t{0xFFF};
+    }
+    jit_->InvalidateCacheRange(start, end - start);
+  }
+
+ private:
+  static constexpr uintptr_t kNoPage = 1;  // not page-aligned
+  static constexpr uint32_t kMaxPreciseRanges = 256;
+
+  // pages_: disjoint, coalesced [start, end) page ranges.
+  void InsertPage(uintptr_t page) {
+    const uintptr_t end = page + 0x1000;
+    auto next = pages_.upper_bound(page);
+    if (next != pages_.begin()) {
+      auto prev = std::prev(next);
+      if (prev->second > page) return;  // already there
+      if (prev->second == page) {
+        prev->second = end;
+        if (next != pages_.end() && next->first == end) {
+          prev->second = next->second;
+          pages_.erase(next);
+        }
+        return;
+      }
+    }
+    if (next != pages_.end() && next->first == end) {
+      const uintptr_t next_end = next->second;
+      pages_.erase(next);
+      pages_.emplace(page, next_end);
+      return;
+    }
+    pages_.emplace(page, end);
+  }
+
+  bool Overlaps(uintptr_t start, uintptr_t end) const {
+    auto it = pages_.lower_bound(end);  // the first range starting at or past end
+    if (it == pages_.begin()) return false;
+    return std::prev(it)->second > start;
+  }
+
+  A64::Jit* const jit_;
+  std::mutex mutex_;
+  std::map<uintptr_t, uintptr_t> pages_;
+  uintptr_t last_page_ = kNoPage;
+  std::atomic<uint32_t> posted_{0};  // ranges posted since its last dispatch
+};
+
+std::mutex g_live_jits_mutex;
+std::vector<JitCode*> g_live_jits;
+
+// Memory another process wrote here: a ptrace tracer's POKEs (ADR 0093), as
+// the host's ptrace guard publishes them before this process runs on (the
+// layout of gesher::ptrace::PublishedCodeWrites).
+struct ExternalWrite {
+  volatile int64_t epoch;
+  volatile int64_t address;
+  volatile int64_t size;
+};
+constexpr int64_t kExternalWrites = 64;
+struct ExternalWrites {
+  volatile int64_t epoch;
+  ExternalWrite writes[kExternalWrites];
+};
+std::atomic<const ExternalWrites*> g_external_writes{nullptr};
+
+int64_t ExternalEpoch() {
+  const ExternalWrites* external = g_external_writes.load(std::memory_order_acquire);
+  return external != nullptr ? external->epoch : 0;
+}
+
 // Called outside Jit::Run on every dispatch, also after a nested host call.
-// Pooled Envs retain their generations and invalidate on their next dispatch.
-void RefreshCodeCache(A64::Jit* jit, uint64_t* seen) {
+// Pooled Envs retain their generations and invalidate on their next dispatch:
+// everything when this process's code changed, the written ranges when a
+// tracer wrote memory (everything if more were written than the ring keeps).
+void RefreshCodeCache(JitCode* code, uint64_t* seen, int64_t* seen_external) {
   const uint64_t generation = g_code_generation.load(std::memory_order_acquire);
   if (*seen != generation) {
-    jit->ClearCache();
+    code->Clear();
     *seen = generation;
+    *seen_external = ExternalEpoch();
+    return;
   }
+  const ExternalWrites* external = g_external_writes.load(std::memory_order_acquire);
+  if (external == nullptr) return;
+  const int64_t epoch = external->epoch;
+  if (epoch == *seen_external) return;
+  if (epoch < *seen_external || epoch - *seen_external > kExternalWrites) {
+    code->Clear();
+  } else {
+    for (int64_t k = *seen_external + 1; k <= epoch; ++k) {
+      const ExternalWrite& write = external->writes[k % kExternalWrites];
+      if (write.epoch != k) {  // overwritten meanwhile
+        code->Clear();
+        break;
+      }
+      const uintptr_t start = static_cast<uintptr_t>(write.address);
+      const uintptr_t size = static_cast<uintptr_t>(write.size);
+      code->Invalidate(start, size > UINTPTR_MAX - start ? UINTPTR_MAX : start + size);
+    }
+  }
+  *seen_external = epoch;
+}
+
+// The Jit each live Env is running, for the ptrace guard's halt: a fixed,
+// lock-free table, since the guard reads it with every other thread of the
+// process suspended (one may hold any lock).
+constexpr size_t kRunningSlots = 4096;
+std::atomic<std::atomic<A64::Jit*>*> g_running_slots[kRunningSlots];
+// The halt that guard asks for when a tracer wrote guest code (a signal's
+// halt is UserDefined3, Env::kSignalHalt).
+constexpr Dynarmic::HaltReason kExternalWritesHalt = Dynarmic::HaltReason::UserDefined4;
+
+size_t AddRunningSlot(std::atomic<A64::Jit*>* running) {
+  for (size_t i = 0; i < kRunningSlots; ++i) {
+    std::atomic<A64::Jit*>* expected = nullptr;
+    if (g_running_slots[i].compare_exchange_strong(expected, running)) return i;
+  }
+  return kRunningSlots;  // full: this Env sees writes at its next dispatch only
+}
+
+void RegisterJit(JitCode* code) {
+  std::lock_guard<std::mutex> lock(g_live_jits_mutex);
+  g_live_jits.push_back(code);
+}
+
+void UnregisterJit(JitCode* code) {
+  std::lock_guard<std::mutex> lock(g_live_jits_mutex);
+  std::erase(g_live_jits, code);
+}
+
+void InvalidateEveryJit(uintptr_t start, uintptr_t end) {
+  if (end <= start) return;
+  std::lock_guard<std::mutex> lock(g_live_jits_mutex);
+  for (JitCode* code : g_live_jits) code->Invalidate(start, end);
+}
+
+// --- guest page protection ---------------------------------------------------
+// The pages the guest mapped executable and not writable (mmap or mprotect),
+// whose translations are therefore current: page-aligned, disjoint, coalesced
+// [start, end) ranges. An mprotect that makes a range executable drops the
+// translations of every page outside them (written while writable, or not
+// guest code before), not of a range that stays R-X.
+std::mutex g_clean_exec_mutex;
+std::map<uintptr_t, uintptr_t> g_clean_exec;  // start -> end
+
+void EraseCleanExec(uintptr_t first, uintptr_t end) {
+  auto it = g_clean_exec.upper_bound(first);
+  if (it != g_clean_exec.begin()) --it;
+  while (it != g_clean_exec.end() && it->first < end) {
+    const uintptr_t s = it->first, e = it->second;
+    if (e <= first) {
+      ++it;
+      continue;
+    }
+    it = g_clean_exec.erase(it);
+    if (s < first) g_clean_exec.emplace(s, first);
+    if (e > end) {
+      g_clean_exec.emplace(end, e);
+      break;
+    }
+  }
+}
+
+void InsertCleanExec(uintptr_t first, uintptr_t end) {
+  EraseCleanExec(first, end);
+  auto next = g_clean_exec.lower_bound(first);
+  if (next != g_clean_exec.end() && next->first == end) {
+    end = next->second;
+    g_clean_exec.erase(next);
+  }
+  auto prev = g_clean_exec.lower_bound(first);
+  if (prev != g_clean_exec.begin() && std::prev(prev)->second == first) {
+    std::prev(prev)->second = end;
+    return;
+  }
+  g_clean_exec.emplace(first, end);
+}
+
+// The parts of [first, end) outside g_clean_exec.
+std::vector<CodeRegion> UncleanParts(uintptr_t first, uintptr_t end) {
+  std::vector<CodeRegion> parts;
+  uintptr_t cursor = first;
+  auto it = g_clean_exec.upper_bound(first);
+  if (it != g_clean_exec.begin()) --it;
+  for (; it != g_clean_exec.end() && it->first < end && cursor < end; ++it) {
+    if (it->second <= cursor) continue;
+    if (it->first > cursor) parts.push_back({cursor, it->first});
+    cursor = std::max(cursor, it->second);
+  }
+  if (cursor < end) parts.push_back({cursor, end});
+  return parts;
+}
+
+bool PageRange(const void* start, size_t size, uintptr_t* first, uintptr_t* end) {
+  const uintptr_t s = reinterpret_cast<uintptr_t>(start);
+  if (size == 0 || s > UINTPTR_MAX - size - 0xFFF) return false;
+  *first = s & ~uintptr_t{0xFFF};
+  *end = (s + size + 0xFFF) & ~uintptr_t{0xFFF};
+  return true;
 }
 
 void AddRegion(uintptr_t start, size_t size) {
@@ -620,6 +880,41 @@ struct ThreadCounters {
 class Env;
 std::mutex g_envs_mutex;
 std::vector<Env*> g_envs;  // every Env with a live thread (for the profiler)
+// Every Env with a live thread, by thread ID, for thread-directed signals
+// (gesher_arm64_interrupt_thread). Under g_attached_mutex.
+std::mutex g_attached_mutex;
+std::unordered_map<DWORD, Env*> g_attached;
+
+// The shim's delivery of this thread's pending signals (signal_bionic.cc),
+// called where the translator stopped guest code for a signal.
+using DeliverSignalsFn = void(GESHER_SYSV*)();
+DeliverSignalsFn DeliverSignals() {
+  static DeliverSignalsFn fn = reinterpret_cast<DeliverSignalsFn>(
+      g_host != nullptr && g_host->resolve != nullptr ? g_host->resolve("__gesher_deliver_signals")
+                                                      : nullptr);
+  return fn;
+}
+
+// The kernel's arm64 struct sigcontext (asm/sigcontext.h) and the FPSIMD
+// record at the start of its __reserved area, for an SA_SIGINFO handler's
+// ucontext (uc_mcontext); signal_bionic.cc places it in Bionic's ucontext_t.
+struct alignas(16) A64Sigcontext {
+  uint64_t fault_address;
+  uint64_t regs[31];
+  uint64_t sp;
+  uint64_t pc;
+  uint64_t pstate;
+  alignas(16) uint8_t reserved[4096];
+};
+static_assert(offsetof(A64Sigcontext, reserved) == 288);
+struct A64FpsimdContext {
+  uint32_t magic;  // FPSIMD_MAGIC
+  uint32_t size;
+  uint32_t fpsr;
+  uint32_t fpcr;
+  uint64_t vregs[64];  // V0..V31, low half first
+};
+static_assert(sizeof(A64FpsimdContext) == 528);
 
 class Env final : public A64::UserCallbacks {
  public:
@@ -639,6 +934,9 @@ class Env final : public A64::UserCallbacks {
   }
 
   ~Env() override {
+    for (auto& code : code_) UnregisterJit(code.get());
+    code_.clear();
+    if (running_slot_ < kRunningSlots) g_running_slots[running_slot_].store(nullptr);
     jits_.clear();
     for (size_t id : ids_) ReleaseProcessorId(id);
     VirtualFree(tls_block_, 0, MEM_RELEASE);
@@ -670,6 +968,14 @@ class Env final : public A64::UserCallbacks {
     event_ = false;
     wait_pc_ = 0;
     tid_ = GetCurrentThreadId();
+    signal_interrupt_.store(false, std::memory_order_relaxed);
+    {
+      // unordered_map's load-factor arithmetic must not leave flags in the
+      // caller's (native or guest) floating-point environment.
+      HostFenvScope fenv;
+      std::lock_guard<std::mutex> lock(g_attached_mutex);
+      g_attached.insert_or_assign(tid_, this);
+    }
     // This private guest allocation differs from the native callback stack.
     // Only values cross the boundary; the host registry owns pthread lifetime.
     using PublishStack = int(GESHER_SYSV*)(void*, uint64_t, uint64_t);
@@ -690,6 +996,12 @@ class Env final : public A64::UserCallbacks {
 
   // The thread is exiting. Afterwards the Env may be pooled for another thread.
   void Detach() {
+    {
+      HostFenvScope fenv;  // as in Attach()
+      std::lock_guard<std::mutex> lock(g_attached_mutex);
+      auto found = g_attached.find(tid_);
+      if (found != g_attached.end() && found->second == this) g_attached.erase(found);
+    }
     if (thread_ != nullptr) {
       {
         std::lock_guard<std::mutex> lock(g_envs_mutex);  // not while being sampled
@@ -706,6 +1018,15 @@ class Env final : public A64::UserCallbacks {
     for (auto& jit : jits_) jit->ClearExclusiveState();
     for (size_t id : ids_) Monitor().ClearProcessor(id);
   }
+
+  // In a forked child (ForkChild): the same Env goes on with the child's
+  // thread, which has another id; the profiler's handle was the parent's.
+  void AfterFork() {
+    tid_ = GetCurrentThreadId();
+    if (thread_ != nullptr) CloseHandle(thread_);
+    thread_ = nullptr;
+  }
+  const uint8_t* tls_block() const { return tls_block_; }
 
   // Whether another thread may reuse this Env: not if its thread left in the
   // middle of guest code (a Jit still marked running).
@@ -746,6 +1067,9 @@ class Env final : public A64::UserCallbacks {
       // would scan all kMaxProcessors slots, not the ids in use.
       conf.fastmem_exclusive_access = false;
       conf.enable_cycle_counting = false;
+      // ISB applies the IC IVAU lines this thread collected (FlushIcache).
+      conf.hook_isb = true;
+      icache_line_ = uint64_t{4} << (conf.ctr_el0 & 0xF);  // CTR_EL0.IminLine, log2 words
       conf.optimizations = Dynarmic::all_safe_optimizations;
       if (ProfilePreciseEnabled()) {
         conf.optimizations &= ~(Dynarmic::OptimizationFlag::BlockLinking |
@@ -770,6 +1094,9 @@ class Env final : public A64::UserCallbacks {
       conf.code_cache_size = (jits_.empty() ? 32 : 8) * 1024 * 1024;
       jits_.push_back(std::make_unique<A64::Jit>(conf));
       code_generations_.push_back(g_code_generation.load(std::memory_order_acquire));
+      code_.push_back(std::make_unique<JitCode>(jits_.back().get()));
+      RegisterJit(code_.back().get());
+      code_epochs_.push_back(ExternalEpoch());
     }
     return jits_[depth].get();
   }
@@ -795,6 +1122,8 @@ class Env final : public A64::UserCallbacks {
 
   std::optional<std::uint32_t> MemoryReadCode(uint64_t a) override {
     if (!InGuestCode(a)) return std::nullopt;
+    // Before the read: an invalidation of this page from now on reaches the Jit.
+    code_[depth_ - 1]->MarkTranslated(static_cast<uintptr_t>(a) & ~uintptr_t{0xFFF});
     uint32_t v;
     std::memcpy(&v, reinterpret_cast<void*>(a), 4);
     return v;
@@ -857,6 +1186,40 @@ class Env final : public A64::UserCallbacks {
     GuestCrash(kSigIll, 1, "ILL_ILLOPC", pc, detail);
   }
 
+  // IC IVAU: the line (CTR_EL0's IminLine) joins this thread's pending range,
+  // which every Jit drops at the next ISB (as __builtin___clear_cache ends),
+  // or before a line that does not extend it, a hint or the next host call
+  // or syscall. A range is applied once, not a Run exit for each line.
+  // IC IALLU and IC IALLUIS are EL1 instructions, UNDEFINED at EL0: SIGILL.
+  void InstructionCacheOperationRaised(A64::InstructionCacheOperation op, uint64_t va) override {
+    if (op != A64::InstructionCacheOperation::InvalidateByVAToPoU) {
+      pending_call_.undefined = true;
+      CurrentJit()->HaltExecution(Dynarmic::HaltReason::UserDefined2);
+      return;
+    }
+    const uintptr_t start = static_cast<uintptr_t>(va & ~(icache_line_ - 1));
+    const uintptr_t end = start + icache_line_;
+    if (icache_end_ != 0 && (end < icache_start_ || start > icache_end_)) FlushIcache();
+    if (icache_end_ == 0) {
+      icache_start_ = start;
+      icache_end_ = end;
+    } else {
+      icache_start_ = std::min(icache_start_, start);
+      icache_end_ = std::max(icache_end_, end);
+    }
+  }
+
+  void InstructionSynchronizationBarrierRaised() override { FlushIcache(); }
+
+  // The pending IC IVAU range goes to every Jit, this thread's too (one that
+  // is running halts at the end of the current block and continues at its PC).
+  void FlushIcache() {
+    if (icache_end_ == 0) return;
+    const uintptr_t start = icache_start_, end = icache_end_;
+    icache_start_ = icache_end_ = 0;
+    InvalidateEveryJit(start, end);
+  }
+
   void CallSVC(std::uint32_t swi) override {
     A64::Jit* jit = CurrentJit();
     if (swi == kReturnSvc) {  // the guest returned to the host
@@ -901,6 +1264,7 @@ class Env final : public A64::UserCallbacks {
       case A64::Exception::WaitForInterrupt:
       case A64::Exception::WaitForEvent:
         counters_.hints.Bump();
+        FlushIcache();
         WaitForEvent(pc);
         return;
       case A64::Exception::SendEvent:
@@ -914,6 +1278,7 @@ class Env final : public A64::UserCallbacks {
         return;
       case A64::Exception::Yield:
         counters_.hints.Bump();
+        FlushIcache();
         YieldProcessor();
         return;
       default: {
@@ -1067,6 +1432,7 @@ class Env final : public A64::UserCallbacks {
     int va_index = -1;
     bool syscall = false;
     int pointer_variadic_fixed = -1;
+    bool undefined = false;  // IC IALLU(IS) at EL0
   };
 
   void QueueHostCall(A64::Jit* jit, const Trampoline& signature) {
@@ -1079,36 +1445,103 @@ class Env final : public A64::UserCallbacks {
     for (;;) {
       // A host call can abort a nested load while this outer Jit is paused.
       // Nested Jit creation may grow the vector: keep no reference across Run.
-      RefreshCodeCache(jit, &code_generations_[depth_ - 1]);
+      // The ptrace guard halts the Jit published here (kExternalWritesHalt)
+      // after a tracer wrote memory. Publish it first (a full barrier), then
+      // clear old halts (not a signal's, kSignalHalt, handled after Run), then
+      // refresh: a write published before the refresh is seen by it, and one
+      // published after it halts this Run.
+      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_seq_cst);
+      jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2 |
+                     kExternalWritesHalt);
+      RefreshCodeCache(code_[depth_ - 1].get(), &code_generations_[depth_ - 1],
+                       &code_epochs_[depth_ - 1]);
+      // Run drops the ranges posted so far before it dispatches.
+      code_[depth_ - 1]->Dispatched();
       pending_call_ = {};
-      jit->ClearHalt(Dynarmic::HaltReason::UserDefined1 | Dynarmic::HaltReason::UserDefined2);
       int saved_running = t_guest_running;
       t_guest_running = 1;
       counters_.runs.Bump();
-      A64::Jit* saved_jit = running_jit_.exchange(jit, std::memory_order_relaxed);
-      jit->Run();
+      // A signal queued while this thread was not running guest code: stop
+      // at once. (Interrupt() sets the flag, then halts the running Jit.)
+      if (signal_interrupt_.load(std::memory_order_seq_cst)) {
+        jit->HaltExecution(kSignalHalt);
+      }
+      const Dynarmic::HaltReason halt = jit->Run();
       running_jit_.store(saved_jit, std::memory_order_relaxed);
       t_guest_running = saved_running;
+      // Lines this thread invalidated without an ISB yet: before it leaves
+      // guest code (the host function may wait for another guest thread).
+      FlushIcache();
       // SVC saves its following PC; NoExecuteFault saves X30. Returning from
       // Run restores host MXCSR before executing arbitrary native host code.
       // A fresh dispatch then uses the actual (possibly changed) guest FPCR.
-      PendingHostCall pending = pending_call_;
+      // Taken before a signal handler runs: its nested guest code reuses
+      // pending_call_, and the call this block queued must still be made.
+      const PendingHostCall pending = pending_call_;
+      if (pending.undefined) {
+        // The SYS instruction is at PC - 4 (dynarmic set PC past it). Checked
+        // before queued signals: the kernel takes a synchronous fault first.
+        const uint64_t pc = jit->GetPC() - 4;
+        uint32_t insn = 0;
+        if (InGuestCode(pc)) std::memcpy(&insn, reinterpret_cast<void*>(pc), 4);
+        char detail[112];
+        std::snprintf(detail, sizeof(detail),
+                      "undefined instruction 0x%08x (IC IALLU/IALLUIS: EL1 only, UNDEFINED at EL0)",
+                      insn);
+        GuestCrash(kSigIll, 1, "ILL_ILLOPC", pc, detail);
+      }
+      if (Dynarmic::Has(halt, kSignalHalt)) {
+        jit->ClearHalt(kSignalHalt);
+        if (signal_interrupt_.exchange(false, std::memory_order_seq_cst)) TakeSignals(jit);
+        pending_call_ = pending;
+        // Stopped only for the signal: carry on with the guest code.
+        if (halt == kSignalHalt && pending.fn == nullptr && !pending.syscall) continue;
+      }
       if (pending.syscall) {
         HostFenvScope host_fenv;
         uint64_t args[6];
         for (int i = 0; i < 6; ++i) args[i] = jit->GetRegister(i);
         counters_.syscalls.Bump();
         last_syscall_.store(jit->GetRegister(8), std::memory_order_relaxed);
-        int64_t result = GuestRawSyscall(jit->GetRegister(8), args);
+        const uint64_t nr = jit->GetRegister(8);
+        int64_t result = GuestRawSyscall(nr, args);
         jit->SetRegister(0, static_cast<uint64_t>(result));
+        // A fork-like clone's child starts on the stack it was given, if any.
+        if (nr == 220 && result == 0 && args[1] != 0) jit->SetSP(args[1]);
       } else if (pending.fn != nullptr) {
         CallHost(jit, pending.fn, pending.va_index, pending.pointer_variadic_fixed);
+      } else if (Dynarmic::Has(halt, Dynarmic::HaltReason::CacheInvalidation) &&
+                 !Dynarmic::Has(halt, Dynarmic::HaltReason::UserDefined1)) {
+        // Stopped only to drop translations an IC IVAU (of this thread or
+        // another) invalidated (Run has dropped them): the guest carries on.
+        continue;
+      } else if (Dynarmic::Has(halt, kExternalWritesHalt) &&
+                 !Dynarmic::Has(halt, Dynarmic::HaltReason::UserDefined1)) {
+        continue;  // a tracer wrote memory: refresh, then run on
       } else {
         return;
       }
     }
   }
 
+  // Runs this thread's pending signals where its guest code was stopped (at
+  // a block boundary, every register in `jit`): as for a host call, a handler
+  // runs below the guest's live frames, and its frame's machine context is
+  // this state (gesher_arm64_guest_context).
+  void TakeSignals(A64::Jit* jit) {
+    DeliverSignalsFn deliver = DeliverSignals();
+    if (deliver == nullptr) return;
+    HostFenvScope host_fenv;
+    uint64_t saved_stack_cur = stack_cur_;
+    stack_cur_ = jit->GetSP();
+    int saved_running = t_guest_running;
+    t_guest_running = 0;
+    deliver();
+    t_guest_running = saved_running;
+    stack_cur_ = saved_stack_cur;
+  }
+
+  static constexpr Dynarmic::HaltReason kSignalHalt = Dynarmic::HaltReason::UserDefined3;
   static constexpr size_t kStackSize = 8 << 20;
   static constexpr size_t kGuardSize = 0x10000;
 
@@ -1190,6 +1623,11 @@ class Env final : public A64::UserCallbacks {
 
   std::vector<std::unique_ptr<A64::Jit>> jits_;
   std::vector<uint64_t> code_generations_;  // one generation for each jits_ entry
+  // jits_[i]'s translated pages and the ranges posted to it (registered).
+  std::vector<std::unique_ptr<JitCode>> code_;
+  uint64_t icache_line_ = 64;
+  uintptr_t icache_start_ = 0, icache_end_ = 0;  // pending IC IVAU lines; end 0: none
+  std::vector<int64_t> code_epochs_;        // the external writes each has seen
   PendingHostCall pending_call_;
   uint32_t fpcr_ = 0;
   uint32_t fpsr_ = 0;
@@ -1215,9 +1653,60 @@ class Env final : public A64::UserCallbacks {
   // For the profiler (another thread reads these while this one runs).
   ThreadCounters counters_;
   std::atomic<A64::Jit*> running_jit_{nullptr};  // the Jit in Run(), if any
+  std::atomic<bool> signal_interrupt_{false};    // a signal was queued for this thread
+
+  // Another thread queued a signal for this one: its guest code stops at the
+  // next block boundary (or before it next runs) and takes it.
+  void Interrupt() {
+    signal_interrupt_.store(true, std::memory_order_seq_cst);
+    A64::Jit* jit = running_jit_.load(std::memory_order_seq_cst);
+    if (jit != nullptr) jit->HaltExecution(kSignalHalt);
+  }
+
+  // Saves (restore = false) or restores the FPCR/FPSR of the guest code
+  // GuestContext describes, around a signal handler: Enter() hands a nested
+  // call's FP mode back to its caller, which sigreturn does not.
+  bool GuestFp(bool restore, uint32_t* state) {
+    A64::Jit* jit = CurrentJit();
+    if (jit == nullptr || t_guest_running) return false;
+    if (restore) {
+      jit->SetFpcr(state[0]);
+      jit->SetFpsr(state[1]);
+      fpcr_ = state[0];
+      fpsr_ = state[1];
+    } else {
+      state[0] = jit->GetFpcr();
+      state[1] = jit->GetFpsr();
+    }
+    return true;
+  }
+
+  // The guest registers of the code running on this thread, or that called
+  // the host function it is in: false if there is none.
+  bool GuestContext(A64Sigcontext* sc) {
+    A64::Jit* jit = CurrentJit();
+    if (jit == nullptr || t_guest_running) return false;
+    if (sc == nullptr) return true;
+    sc->fault_address = 0;
+    for (int r = 0; r < 31; ++r) sc->regs[r] = jit->GetRegister(r);
+    sc->sp = jit->GetSP();
+    sc->pc = jit->GetPC();
+    sc->pstate = jit->GetPstate();
+    A64FpsimdContext fp{0x46508001u, sizeof(A64FpsimdContext), jit->GetFpsr(), jit->GetFpcr(), {}};
+    for (int v = 0; v < 32; ++v) {
+      const A64::Vector vector = jit->GetVector(v);
+      fp.vregs[2 * v] = vector[0];
+      fp.vregs[2 * v + 1] = vector[1];
+    }
+    std::memcpy(sc->reserved, &fp, sizeof(fp));
+    std::memset(sc->reserved + sizeof(fp), 0, 8);  // the terminating null record
+    return true;
+  }
+  size_t running_slot_ = AddRunningSlot(&running_jit_);
   std::atomic<void*> sampled_host_fn_{nullptr};  // the host function called from guest code
   std::atomic<uint64_t> last_syscall_{~uint64_t{0}};
   HANDLE thread_ = nullptr;  // only while profiling
+  Env* retired_next_ = nullptr;  // in g_retired_envs (ReleaseRetiredEnvs)
   DWORD tid_ = 0;
 };
 
@@ -1240,24 +1729,66 @@ size_t EnvPoolLimit() {
   return limit;
 }
 
+// Set while a guest fork holds every translator lock (TryForkPrepare until
+// ForkParent/ForkChild), and so is cloning or about to.
+std::atomic<bool> g_fork_holds_all{false};
+
+// With g_env_pool_mutex held: detaches `env`, then pools it parked or frees
+// it. While the pool lock is held no fork can hold every translator lock, so
+// the locks Detach takes come free.
+void ReleaseEnvLocked(Env* env) {
+  env->Detach();
+  if (env->Reusable() && g_env_pool.size() < EnvPoolLimit()) {
+    env->Park();
+    g_env_pool.push_back(env);
+    return;
+  }
+  delete env;
+}
+
+void ReleaseEnv(Env* env) {
+  std::lock_guard<std::mutex> lock(g_env_pool_mutex);
+  ReleaseEnvLocked(env);
+}
+
+// A leaving thread's thread_local destructor runs under ntdll's loader lock,
+// which a guest fork's clone waits for while it holds the translator's locks
+// (ADR 0092). So it releases its Env at once unless a fork holds them all;
+// then it only retires the Env here, without a lock, and the next thread that
+// takes an Env (or the next fork) releases it.
+std::atomic<Env*> g_retired_envs{nullptr};
+
+void ReleaseRetiredEnvs() {
+  Env* env = g_retired_envs.exchange(nullptr, std::memory_order_acq_rel);
+  while (env != nullptr) {
+    Env* next = env->retired_next_;
+    ReleaseEnv(env);
+    env = next;
+  }
+}
+
 struct EnvRelease {
   void operator()(Env* env) const {
-    env->Detach();
-    if (env->Reusable()) {
-      std::lock_guard<std::mutex> lock(g_env_pool_mutex);
-      if (g_env_pool.size() < EnvPoolLimit()) {
-        env->Park();
-        g_env_pool.push_back(env);
+    if (t_env_raw == env) t_env_raw = nullptr;
+    while (!g_env_pool_mutex.try_lock()) {
+      if (g_fork_holds_all.load(std::memory_order_acquire)) {
+        env->retired_next_ = g_retired_envs.load(std::memory_order_relaxed);
+        while (!g_retired_envs.compare_exchange_weak(env->retired_next_, env, std::memory_order_release,
+                                                     std::memory_order_relaxed)) {
+        }
         return;
       }
+      SwitchToThread();
     }
-    delete env;
+    ReleaseEnvLocked(env);
+    g_env_pool_mutex.unlock();
   }
 };
 thread_local std::unique_ptr<Env, EnvRelease> t_env;
 
 Env* ThreadEnv() {
   if (!t_env) {
+    ReleaseRetiredEnvs();
     Env* env = nullptr;
     {
       std::lock_guard<std::mutex> lock(g_env_pool_mutex);
@@ -1764,19 +2295,105 @@ void StartProfiler() {
   });
 }
 
+// The memory at an address no module or guest library claims: its region
+// (VirtualQuery) and, where the translator can tell, what owns it. Only
+// lock-free checks besides InGuestCode (which the vectored handler already
+// uses): a fault while this thread holds another translator lock must not
+// deadlock the note.
+void PrintRegion(const char* label, uint64_t addr) {
+  MEMORY_BASIC_INFORMATION mbi;
+  if (VirtualQuery(reinterpret_cast<const void*>(addr), &mbi, sizeof(mbi)) == 0) {
+    std::fprintf(stderr, "%sVirtualQuery failed (%lu)\n", label, GetLastError());
+    return;
+  }
+  const char* type = mbi.Type == MEM_IMAGE    ? "image"
+                     : mbi.Type == MEM_MAPPED ? "mapped"
+                     : mbi.Type == MEM_PRIVATE ? "private"
+                                               : "none";
+  const char* state = mbi.State == MEM_COMMIT    ? "commit"
+                      : mbi.State == MEM_RESERVE ? "reserve"
+                                                 : "free";
+  std::fprintf(stderr,
+               "%sregion 0x%llx+0x%llx, allocation 0x%llx, %s %s, protect 0x%lx (allocated 0x%lx)\n",
+               label, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(mbi.BaseAddress)),
+               static_cast<unsigned long long>(mbi.RegionSize),
+               static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(mbi.AllocationBase)),
+               state, type, mbi.Protect, mbi.AllocationProtect);
+  if (mbi.State != MEM_COMMIT) return;
+  const char* owner = nullptr;
+  if (InGuestCode(addr)) {
+    owner = "guest code or a guest trampoline page (the host never runs these)";
+  } else if (mbi.Type == MEM_PRIVATE && mbi.AllocationProtect == PAGE_EXECUTE_READWRITE &&
+             (mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)) != 0 &&
+             (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) == 0) {
+    // A host_entry stub (MakeHostEntry): 24-byte slots from the start of a
+    // 64 KiB PAGE_EXECUTE_READWRITE allocation, each "mov r10, fn; mov rax,
+    // gesher_guest_entry_shim; jmp rax".
+    auto alloc = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
+    auto region = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+    uintptr_t start = alloc + (addr - alloc) / kEntryStub * kEntryStub;
+    uint64_t shim = 0;
+    // Read the slot only inside the committed region that holds `addr`.
+    if (start + kEntryStub <= alloc + 0x10000 && start >= region &&
+        start + kEntryStub <= region + mbi.RegionSize) {
+      const auto* slot = reinterpret_cast<const uint8_t*>(start);
+      if (slot[0] == 0x49 && slot[1] == 0xBA && slot[10] == 0x48 && slot[11] == 0xB8) {
+        std::memcpy(&shim, slot + 12, 8);
+      }
+    }
+    owner = shim == reinterpret_cast<uint64_t>(&gesher_guest_entry_shim)
+                ? "a translator host_entry stub (a host call of a guest function)"
+                : "anonymous executable memory: JIT code (the translator's code cache or ART's "
+                  "JIT) or a stub";
+  }
+  if (owner != nullptr) std::fprintf(stderr, "%s%s\n", label, owner);
+}
+
+// Set while this thread writes a note: describe() or the CRT may fault in
+// turn, and a nested fault must not write a note of its own (it would end
+// without the host pc lines and use up the notes).
+thread_local bool t_noting_host_fault = false;
+
 // A fault in host code during a guest -> host call: ART's fatal-signal report
 // that may follow has no registers or backtrace on Windows, so say where the
-// guest was. A note only (ART may still handle the fault); the first few.
+// guest was. A note only (ART may still handle the fault). The first 8 in the
+// process: the limit is per process, not per thread, because a fault storm
+// (a fault ART handles and the code retries) can come from any number of
+// threads, and an app with dozens of threads would otherwise flood stderr;
+// nested faults no longer count, so the first real faults are the ones noted.
 void NoteHostCallFault(const EXCEPTION_RECORD* r, const CONTEXT* c) {
   static std::atomic<int> notes{0};
-  Env* env = t_env_raw;
-  if (env == nullptr || env->host_fn() == nullptr || notes.fetch_add(1) >= 8) return;
   const char* op = r->ExceptionInformation[0] == 0   ? "reading"
                    : r->ExceptionInformation[0] == 1 ? "writing"
                                                      : "executing";
-  std::fprintf(stderr, "gesher arm64: tid %lu: host fault %s 0x%llx in a call from guest code\n",
-               GetCurrentThreadId(), op,
-               static_cast<unsigned long long>(r->ExceptionInformation[1]));
+  if (t_noting_host_fault) {
+    std::fprintf(stderr,
+                 "gesher arm64: tid %lu: (a further host fault %s 0x%llx at host pc 0x%llx while "
+                 "describing the fault above)\n",
+                 GetCurrentThreadId(), op, static_cast<unsigned long long>(r->ExceptionInformation[1]),
+                 static_cast<unsigned long long>(c->Rip));
+    return;
+  }
+  Env* env = t_env_raw;
+  if (env == nullptr || env->host_fn() == nullptr || notes.fetch_add(1) >= 8) return;
+  struct Noting {
+    Noting() { t_noting_host_fault = true; }
+    ~Noting() { t_noting_host_fault = false; }
+  } noting;
+  std::fprintf(stderr,
+               "gesher arm64: tid %lu: host fault %s 0x%llx in a call from guest code, host pc "
+               "0x%llx\n",
+               GetCurrentThreadId(), op, static_cast<unsigned long long>(r->ExceptionInformation[1]),
+               static_cast<unsigned long long>(c->Rip));
+  // What needs no lookup first, so the note says where the fault was even
+  // when a lookup below faults or blocks.
+  HMODULE module = nullptr;
+  if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          reinterpret_cast<LPCSTR>(c->Rip), &module)) {
+    PrintRegion("    host pc        ", c->Rip);
+  }
+  std::fflush(stderr);
   PrintWhere("    host pc        ", c->Rip);
   PrintWhere("    host function  ", reinterpret_cast<uint64_t>(env->host_fn()));
   PrintWhere("    called from    ", env->host_caller());
@@ -1855,6 +2472,7 @@ LONG CALLBACK VectoredHandler(EXCEPTION_POINTERS* info) {
 
 // --- the API table -----------------------------------------------------------
 void ApiAddCode(const void* start, size_t size, const char* /*name*/) {
+  ForgetGuestProtection(start, size);  // the loader's mapping, not the guest's
   AddRegion(reinterpret_cast<uintptr_t>(start), size);
 }
 
@@ -1862,6 +2480,7 @@ void ApiRemoveCode(const void* mapping_base, size_t mapping_size) {
   const uintptr_t first = reinterpret_cast<uintptr_t>(mapping_base);
   if (mapping_size == 0 || first > UINTPTR_MAX - mapping_size) return;
   const uintptr_t end = first + mapping_size;
+  ForgetGuestProtection(mapping_base, mapping_size);
   {
     std::unique_lock<std::shared_mutex> lock(g_regions_mutex);
     // A guest mprotect registration may span more than the aborted mapping.
@@ -1965,6 +2584,149 @@ gesher_arm64_api g_api = {
 
 }  // namespace
 
+void SetExternalCodeWrites(const void* writes) {
+  g_external_writes.store(static_cast<const ExternalWrites*>(writes), std::memory_order_release);
+}
+
+void GESHER_SYSV HaltForExternalWrites() {
+  for (auto& slot : g_running_slots) {
+    std::atomic<A64::Jit*>* running = slot.load(std::memory_order_acquire);
+    if (running == nullptr) continue;
+    if (A64::Jit* jit = running->load(std::memory_order_acquire)) {
+      jit->HaltExecution(kExternalWritesHalt);
+    }
+  }
+}
+
+// --- fork (ADR 0092) ------------------------------------------------------------
+// The bionic shim clones the process for a guest fork with gesher-base's
+// fork set held (gesher/fork.h) and these hooks: every translator lock is
+// held across the clone (only tried: when one is busy the shim releases
+// everything and starts again), and the exclusive monitor's spin lock last.
+// No thread is then inside them, so the child's copies of the tables they
+// guard are consistent.
+namespace {
+DWORD g_fork_thread = 0;  // the forking thread's id in the parent
+
+bool TryLockMonitor() {
+  return __atomic_exchange_n(Dynarmic::GetExclusiveMonitorLockPointer(&Monitor()), 1, __ATOMIC_ACQUIRE) == 0;
+}
+void UnlockMonitor() {
+  __atomic_store_n(Dynarmic::GetExclusiveMonitorLockPointer(&Monitor()), 0, __ATOMIC_RELEASE);
+}
+
+template <typename Lock>
+void Renew(Lock& lock) {
+  new (&lock) Lock();
+}
+
+// Taken in this order; each only tried (the shim's fork set retries the
+// whole round when one is busy, gesher/fork.h).
+int g_fork_held = 0;  // how many of them the current round holds
+template <typename Lock>
+bool TryHold(Lock& lock) {
+  if (!lock.try_lock()) return false;
+  ++g_fork_held;
+  return true;
+}
+// The live Jits' page records the current round holds (g_live_jits_mutex is
+// held while they are, so the list does not change).
+size_t g_fork_jits_held = 0;
+bool TryHoldJits() {
+  g_fork_jits_held = 0;
+  for (JitCode* code : g_live_jits) {
+    if (!code->TryLockForFork()) return false;
+    ++g_fork_jits_held;
+  }
+  ++g_fork_held;
+  return true;
+}
+void ReleaseHeld() {
+  // Reverse order of TryForkPrepare.
+  int n = g_fork_held;
+  if (n > 13) UnlockMonitor();
+  for (size_t i = g_fork_jits_held; i-- > 0;) g_live_jits[i]->UnlockForFork();
+  g_fork_jits_held = 0;
+  if (n > 11) g_live_jits_mutex.unlock();
+  if (n > 10) g_clean_exec_mutex.unlock();
+  if (n > 9) g_ids_mutex.unlock();
+  if (n > 8) g_tls_mutex.unlock();
+  if (n > 7) g_host_pages_mutex.unlock();
+  if (n > 6) g_regions_mutex.unlock();
+  if (n > 5) g_code_mutex.unlock();
+  if (n > 4) g_tramp_mutex.unlock();
+  if (n > 3) g_va_mutex.unlock();
+  if (n > 2) g_entry_mutex.unlock();
+  if (n > 1) g_envs_mutex.unlock();
+  if (n > 0) g_env_pool_mutex.unlock();
+  g_fork_held = 0;
+}
+}  // namespace
+
+// Before a fork takes its locks: release what threads that left retired.
+void ReleaseRetiredForFork() { ReleaseRetiredEnvs(); }
+
+int GESHER_SYSV TryForkPrepare() {
+  g_fork_thread = GetCurrentThreadId();
+  g_fork_held = 0;
+  const bool held = TryHold(g_env_pool_mutex) && TryHold(g_envs_mutex) && TryHold(g_entry_mutex) &&
+                    TryHold(g_va_mutex) && TryHold(g_tramp_mutex) && TryHold(g_code_mutex) &&
+                    TryHold(g_regions_mutex) && TryHold(g_host_pages_mutex) &&
+                    TryHold(g_tls_mutex) && TryHold(g_ids_mutex) &&
+                    // The guest pages' protection record and the live Jits
+                    // with their page records (instruction-cache maintenance).
+                    TryHold(g_clean_exec_mutex) && TryHold(g_live_jits_mutex) && TryHoldJits() &&
+                    (TryLockMonitor() ? (++g_fork_held, true) : false);
+  if (!held) ReleaseHeld();
+  else g_fork_holds_all.store(true, std::memory_order_release);
+  return held ? 1 : 0;
+}
+
+void GESHER_SYSV ForkParent() {
+  g_fork_holds_all.store(false, std::memory_order_release);
+  ReleaseHeld();
+}
+
+// The child has the forking thread only. Its Env (guest stack, TLS block,
+// Jits and their code) goes on as it was; the other threads' guest TLS
+// blocks and profiler entries are not the child's, and their exclusive
+// reservations are gone (a store-exclusive of the child's that spans the
+// fork fails and is retried, as after any clearing of the monitor). The
+// locks are made anew: releasing one a parent's thread waits for would wake
+// a thread the child does not have.
+void GESHER_SYSV ForkChild() {
+  Env* self = t_env_raw;
+  const DWORD tid = GetCurrentThreadId();
+  if (self != nullptr) self->AfterFork();
+  std::erase_if(g_tls_blocks, [self](const TlsBlock& block) {
+    return self == nullptr || block.base != self->tls_block();
+  });
+  for (TlsBlock& block : g_tls_blocks) block.owner_thread = tid;
+  for (TlsImage& image : g_tls_images) {
+    if (image.owner_thread == g_fork_thread) image.owner_thread = tid;
+  }
+  g_envs.clear();
+  UnlockMonitor();
+  Monitor().Clear();
+  // Every live Jit's page record stays (the other threads' Jits are never
+  // run again here, but an invalidation still reaches them harmlessly).
+  for (JitCode* code : g_live_jits) code->RenewForChild();
+  g_fork_jits_held = 0;
+  Renew(g_live_jits_mutex);
+  Renew(g_clean_exec_mutex);
+  Renew(g_ids_mutex);
+  Renew(g_tls_mutex);
+  Renew(g_host_pages_mutex);
+  Renew(g_regions_mutex);
+  Renew(g_code_mutex);
+  Renew(g_tramp_mutex);
+  Renew(g_va_mutex);
+  Renew(g_entry_mutex);
+  Renew(g_envs_mutex);
+  Renew(g_env_pool_mutex);
+  g_fork_holds_all.store(false, std::memory_order_relaxed);
+}
+
 bool InGuestCode(uintptr_t addr) {
   static thread_local CodeRegion last{0, 0};
   static thread_local uint64_t seen = 0;
@@ -2050,6 +2812,69 @@ bool InTranslatorCode(const void* start, size_t size) {
     if (first < page + kCodePage && first + size > page) return true;
   }
   return false;
+}
+
+void GuestProtectionChanged(const void* start, size_t size, bool exec, bool write, bool mapped) {
+  uintptr_t first, end;
+  if (!PageRange(start, size, &first, &end)) return;
+  std::vector<CodeRegion> stale;
+  {
+    std::lock_guard<std::mutex> lock(g_clean_exec_mutex);
+    if (exec) {
+      if (mapped) stale.push_back({first, end});
+      else stale = UncleanParts(first, end);
+    }
+    if (exec && !write) InsertCleanExec(first, end);
+    else EraseCleanExec(first, end);
+  }
+  if (stale.empty()) return;
+  {
+    // Only registered guest code can have been translated (MemoryReadCode).
+    std::shared_lock<std::shared_mutex> lock(g_regions_mutex);
+    std::erase_if(stale, [](const CodeRegion& part) {
+      for (const CodeRegion& r : g_regions) {
+        if (r.start < part.end && part.start < r.end) return false;
+      }
+      return true;
+    });
+  }
+  for (const CodeRegion& r : stale) InvalidateEveryJit(r.start, r.end);
+}
+
+void ForgetGuestProtection(const void* start, size_t size) {
+  uintptr_t first, end;
+  if (!PageRange(start, size, &first, &end)) return;
+  std::lock_guard<std::mutex> lock(g_clean_exec_mutex);
+  EraseCleanExec(first, end);
+}
+
+void GuestMappingMoved(const void* from, size_t from_size, const void* to, size_t to_size) {
+  uintptr_t from_first, from_end, to_first, to_end;
+  const bool has_from = PageRange(from, from_size, &from_first, &from_end);
+  if (!PageRange(to, to_size, &to_first, &to_end)) return;
+  bool clean_source = false;
+  {
+    std::lock_guard<std::mutex> lock(g_clean_exec_mutex);
+    clean_source = has_from && UncleanParts(from_first, from_end).empty();
+    if (has_from) EraseCleanExec(from_first, from_end);
+    if (clean_source) InsertCleanExec(to_first, to_end);
+    else EraseCleanExec(to_first, to_end);
+  }
+  std::vector<CodeRegion> stale;
+  if (has_from) stale.push_back({from_first, from_end});
+  stale.push_back({to_first, to_end});
+  {
+    std::shared_lock<std::shared_mutex> lock(g_regions_mutex);
+    std::erase_if(stale, [](const CodeRegion& part) {
+      for (const CodeRegion& r : g_regions) {
+        if (r.start < part.end && part.start < r.end) return false;
+      }
+      return true;
+    });
+  }
+  for (const CodeRegion& r : stale) InvalidateEveryJit(r.start, r.end);
+  // Code moved from R-X pages stays guest code at its new address.
+  if (clean_source) AddGuestCode(to, to_size);
 }
 
 void AddGuestCode(const void* start, size_t size) {
@@ -2167,7 +2992,10 @@ void PrintGuestState() {
   PrintGuestState();
   std::fflush(stderr);
   std::fflush(stdout);
-  TerminateProcess(GetCurrentProcess(), 128 + signo);
+  // A forked child's exit code for a death by a signal is the shim's
+  // (gesher/fork.h); 128 + the signal elsewhere.
+  TerminateProcess(GetCurrentProcess(),
+                   g_signal_exit_code != nullptr ? g_signal_exit_code(signo) : 128 + static_cast<UINT>(signo));
   for (;;) Sleep(INFINITE);
 }
 
@@ -2242,6 +3070,31 @@ extern "C" __declspec(dllexport) void* gesher_arm64_bind(void* fn) { return Bind
 // For the host's abort report (signal_bionic.cc): the calling thread's guest
 // state, if it is a guest thread.
 extern "C" __declspec(dllexport) void gesher_arm64_print_guest_state() { PrintGuestState(); }
+
+// For signal_bionic.cc's SA_SIGINFO frame of a guest handler: the kernel's
+// arm64 struct sigcontext of the calling thread's guest code (`sc` may be
+// nullptr to ask). 0 if no guest code is under way on this thread.
+extern "C" __declspec(dllexport) int gesher_arm64_guest_context(void* sc) {
+  Env* env = t_env_raw;
+  return env != nullptr && env->GuestContext(static_cast<A64Sigcontext*>(sc)) ? 1 : 0;
+}
+
+// For signal_bionic.cc, around a guest signal handler: saves (restore = 0)
+// or restores the FPCR/FPSR of the calling thread's interrupted guest code.
+extern "C" __declspec(dllexport) int gesher_arm64_guest_fp(int restore, uint32_t* state) {
+  Env* env = t_env_raw;
+  return env != nullptr && env->GuestFp(restore != 0, state) ? 1 : 0;
+}
+
+// For signal_bionic.cc: a signal was queued for thread `tid`; if it runs
+// guest code, that code stops at its next block boundary and takes it.
+extern "C" __declspec(dllexport) int gesher_arm64_interrupt_thread(uint32_t tid) {
+  std::lock_guard<std::mutex> lock(g_attached_mutex);
+  auto found = g_attached.find(static_cast<DWORD>(tid));
+  if (found == g_attached.end()) return 0;
+  found->second->Interrupt();
+  return 1;
+}
 
 extern "C" __declspec(dllexport) const gesher_arm64_api* gesher_arm64_init(
     const gesher_arm64_host* host) {

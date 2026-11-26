@@ -283,11 +283,11 @@ public final class UriGrantRetirementContractTest {
     }
 
     private static void clearPublicationIdentity(PackageManagerService pm) throws Exception {
-        // Unsafe-created prepublication fixtures have no token. The unchanged
+        // Unsafe-created prepublication fixtures have no generation. The unchanged
         // baseline has no such field at all and already performs every sweep.
         try {
             Field generation = field(PackageManagerService.class, "mPackageGeneration");
-            synchronized (pm) { generation.set(pm, null); }
+            synchronized (pm) { generation.setLong(pm, 0); }
         } catch (NoSuchFieldException baselineWithoutIdentity) { }
     }
 
@@ -298,7 +298,7 @@ public final class UriGrantRetirementContractTest {
             f.as(CLIENT, () -> check(f.explicit(CLIENT, uri(0), READ), "Prepublication fixture lost a current grant"));
             f.replace(OWNER);
             clearPublicationIdentity(f.pm);
-            f.as(CLIENT, () -> check(!f.explicit(CLIENT, uri(0), READ), "Null publication identity suppressed retirement"));
+            f.as(CLIENT, () -> check(!f.explicit(CLIENT, uri(0), READ), "Unpublished generation suppressed retirement"));
             check(f.grantCount(CLIENT) == 0, "Prepublication fallback retained old owners");
         }
     }

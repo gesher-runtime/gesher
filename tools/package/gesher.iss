@@ -27,10 +27,13 @@ VersionInfoProductVersion={#AppVersion}
 VersionInfoProductTextVersion={#AppVersion}
 AppPublisher=Gesher
 DefaultDirName={localappdata}\Programs\Gesher
-DisableDirPage=yes
+DisableDirPage=no
 DefaultGroupName=Gesher
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
+; Portable extraction must never create or remove a normal installation's uninstall registration.
+Uninstallable=not IsPortableInstall
+CreateUninstallRegKey=not IsPortableInstall
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -82,6 +85,16 @@ Source: "{#BuildDir}\org.apache.http.legacy.jar"; DestDir: "{app}"; Flags: ignor
 Source: "etc\permissions\org.apache.http.legacy.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "{#BuildDir}\com.android.location.provider.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "etc\permissions\com.android.location.provider.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+; Android's android.test.base, android.test.mock and android.test.runner shared
+; libraries (frameworks/base/test-*; JUnit 3 under the CPL, JUNIT-CPL-NOTICES.txt),
+; with their declarations: gesher-app.ps1 installs them under $ANDROID_ROOT.
+Source: "{#BuildDir}\android.test.base.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "etc\permissions\android.test.base.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+Source: "{#BuildDir}\android.test.mock.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "etc\permissions\android.test.mock.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+Source: "{#BuildDir}\android.test.runner.jar"; DestDir: "{app}"; Flags: ignoreversion
+Source: "etc\permissions\android.test.runner.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
+Source: "licenses\JUNIT-CPL-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "etc\permissions\privapp-permissions-microg.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -103,6 +116,10 @@ Source: "{#BuildDir}\oatdump.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\lifecycle.apk"; DestDir: "{app}"; Flags: ignoreversion
 ; Gesher Camera (ADR 0051): ACTION_IMAGE_CAPTURE's app, installed by the Gesher device when the PC has a camera.
 Source: "{#BuildDir}\gesher-camera.apk"; DestDir: "{app}"; Flags: ignoreversion
+; Gesher Text-to-speech (docs/tts.md): the TextToSpeechService engine, installed by the Gesher device when Windows has voices.
+Source: "{#BuildDir}\gesher-tts.apk"; DestDir: "{app}"; Flags: ignoreversion
+; Gesher Speech Recognition (docs/speech-recognition.md): the RecognitionService, installed by the Gesher device when Windows has speech recognizers.
+Source: "{#BuildDir}\gesher-stt.apk"; DestDir: "{app}"; Flags: ignoreversion
 ; The boot image (docs/boot-image.md): the boot class path's classes, verified
 ; and linked by dex2oat, which dalvikvm maps instead of loading them one by one.
 Source: "{#BuildDir}\framework\x86_64\*"; DestDir: "{app}\framework\x86_64"; Flags: ignoreversion
@@ -138,6 +155,11 @@ Source: "gesher-app.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-app-microg.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-control-panel.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-actions.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-view.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-dashboard.xaml"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-confirm.xaml"; DestDir: "{app}"; Flags: ignoreversion
+Source: "gesher-panel-message.xaml"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-panel-native.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-update.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "gesher-runtime-files.ps1"; DestDir: "{app}"; Flags: ignoreversion
@@ -169,12 +191,12 @@ Name: "microgupdate"; Description: "{cm:setup_microg_update}"; Check: MicrogOutd
 Name: "aurora"; Description: "{cm:setup_aurora}"; Flags: unchecked
 
 [Icons]
-Name: "{autoprograms}\{cm:setup_control_panel}"; Filename: "{app}\gesher-launch.exe"; Parameters: "control-panel"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"
-Name: "{autoprograms}\{cm:setup_readme}"; Filename: "{app}\README.txt"
+Name: "{autoprograms}\{cm:setup_control_panel}"; Filename: "{app}\gesher-launch.exe"; Parameters: "control-panel"; WorkingDir: "{app}"; IconFilename: "{app}\gesher.ico"; Check: not IsPortableInstall
+Name: "{autoprograms}\{cm:setup_readme}"; Filename: "{app}\README.txt"; Check: not IsPortableInstall
 
 [InstallDelete]
-Type: files; Name: "{autoprograms}\Gesher Hello.lnk"
-Type: files; Name: "{autoprograms}\גשר — דוגמה.lnk"
+Type: files; Name: "{autoprograms}\Gesher Hello.lnk"; Check: not IsPortableInstall
+Type: files; Name: "{autoprograms}\גשר — דוגמה.lnk"; Check: not IsPortableInstall
 
 [Registry]
 ; The `.apk` association, per user (HKCU\Software\Classes). Gesher.Apk opens
@@ -182,40 +204,44 @@ Type: files; Name: "{autoprograms}\גשר — דוגמה.lnk"
 ; becomes the default only when no other ProgID owns `.apk` (ApkUnclaimed), and
 ; never touches Explorer's UserChoice. The uninstaller removes `.apk`'s default
 ; only while it still names Gesher.Apk (CurUninstallStepChanged).
-Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: ApkUnclaimed
-Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_apk}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\.apk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Apk"; Check: (not IsPortableInstall) and ApkUnclaimed
+Root: HKCU; Subkey: "Software\Classes\.apk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Apk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_apk}"; Flags: uninsdeletekey; Check: not IsPortableInstall
 ; The APKs Explorer opens go to the recent list of Gesher.Installer, not of every
 ; app whose shortcut runs gesher-launch.exe (each app's taskbar jump list).
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"; Check: not IsPortableInstall
 ; Each APK's icon comes from Gesher's icon handler (DefaultIcon %1): its app's
 ; for an APK Gesher installed, gesher.ico for any other.
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; ValueType: string; ValueName: ""; ValueData: "Gesher APK icon handler"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher_shellext.dll"
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; ValueType: string; ValueName: ""; ValueData: "Gesher APK icon handler"; Flags: uninsdeletekey; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: ""; ValueData: "{app}\gesher_shellext.dll"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}\InprocServer32"; ValueType: string; ValueName: "ThreadingModel"; ValueData: "Apartment"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"; Check: not IsPortableInstall
 ; gesher-launch.exe: no console window flashes (compat/shell/gesher_launch.cc).
-Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
-; Split APK bundles (.xapk, .apks: base.apk with its config.*.apk), the same way
-; as `.apk`, including per-file icons drawn from the base APK and resource splits.
-Root: HKCU; Subkey: "Software\Classes\.xapk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.xapk')
-Root: HKCU; Subkey: "Software\Classes\.xapk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKCU; Subkey: "Software\Classes\.apks"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: BundleUnclaimed('.apks')
-Root: HKCU; Subkey: "Software\Classes\.apks\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_bundle}"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"
-Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\Gesher.Apk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""; Check: not IsPortableInstall
+; Split APK bundles use the same integration as `.apk`, including per-file
+; icons drawn from the base APK and resource splits.
+Root: HKCU; Subkey: "Software\Classes\.xapk"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: (not IsPortableInstall) and BundleUnclaimed('.xapk')
+Root: HKCU; Subkey: "Software\Classes\.xapk\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\.apks"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: (not IsPortableInstall) and BundleUnclaimed('.apks')
+Root: HKCU; Subkey: "Software\Classes\.apks\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\.apkm"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: (not IsPortableInstall) and BundleUnclaimed('.apkm')
+Root: HKCU; Subkey: "Software\Classes\.apkm\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\.apk+"; ValueType: string; ValueName: ""; ValueData: "Gesher.Xapk"; Check: (not IsPortableInstall) and BundleUnclaimed('.apk+')
+Root: HKCU; Subkey: "Software\Classes\.apk+\OpenWithProgids"; ValueType: string; ValueName: "Gesher.Xapk"; ValueData: ""; Flags: uninsdeletevalue uninsdeletekeyifempty; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_bundle}"; Flags: uninsdeletekey; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk"; ValueType: string; ValueName: "AppUserModelID"; ValueData: "Gesher.Installer"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "%1"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shellex\IconHandler"; ValueType: string; ValueName: ""; ValueData: "{{6B0C3C9E-2D1B-4E57-9B7A-3F2C8E4D1A50}"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open"; ValueType: string; ValueName: ""; ValueData: "{cm:setup_run}"; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\Gesher.Xapk\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" ""%1"""; Check: not IsPortableInstall
 ; Gesher's toast activator (ADR 0051): the CustomActivator of every app's
 ; AppUserModelID. A click on an app's toast when no Gesher device runs makes COM
 ; start `gesher-app toast-activated`, which starts the device and hands it the
 ; click (the notification's intent is sent).
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}"; ValueType: string; ValueName: ""; ValueData: "Gesher toast activator"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" toast-activated"
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}"; ValueType: string; ValueName: ""; ValueData: "Gesher toast activator"; Flags: uninsdeletekey; Check: not IsPortableInstall
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32"; ValueType: string; ValueName: ""; ValueData: """{app}\gesher-launch.exe"" toast-activated"; Check: not IsPortableInstall
 
 [UninstallRun]
 ; The Gesher device (binderd, servicemanager, the system server and app
@@ -242,6 +268,54 @@ const
   ApkProgId = 'Gesher.Apk';
   BundleProgId = 'Gesher.Xapk';
 
+var
+  InstallTypePage: TInputOptionWizardPage;
+  PortableFinalizeFailed: Boolean;
+
+function IsPortableInstall(): Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), '/PORTABLE') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+  if InstallTypePage <> nil then
+    Result := (InstallTypePage.SelectedValueIndex = 1)
+  else
+    Result := False;
+end;
+
+// Fresh portable installs use a flat folder. Updating a portable ZIP keeps
+// its runtime in App while the marker, data and public launcher stay above it.
+function PortableRoot(): String;
+var
+  Dir, Parent: String;
+begin
+  Dir := ExpandConstant('{app}');
+  Result := Dir;
+  if FileExists(Dir + '\portable.marker') then
+    Exit;
+  Parent := ExtractFileDir(Dir);
+  if (CompareText(ExtractFileName(Dir), 'App') = 0) and
+     FileExists(Parent + '\portable.marker') then
+    Result := Parent;
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  if PageID = wpSelectDir then
+    Result := not IsPortableInstall()
+  else if (PageID = wpSelectTasks) and IsPortableInstall() then
+    Result := True
+  else
+    Result := False;
+end;
+
 // True when `.apk` has no default ProgID, or Gesher's: HKCR is the merged
 // per-user and per-machine view, so another app's machine-wide association
 // counts too.
@@ -254,7 +328,7 @@ begin
   Result := (ProgId = '') or (CompareText(ProgId, ApkProgId) = 0);
 end;
 
-// The same for a bundle extension (.xapk, .apks) and Gesher.Xapk.
+// The same for a bundle extension and Gesher.Xapk.
 function BundleUnclaimed(Ext: String): Boolean;
 var
   ProgId: String;
@@ -331,8 +405,30 @@ begin
 end;
 
 procedure InitializeWizard();
+var
+  I: Integer;
 begin
   DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), SetupMessage(msgPreparingDesc), @OnDownloadProgress);
+
+  InstallTypePage := CreateInputOptionPage(
+    wpWelcome,
+    CustomMessage('setup_install_type_title'),
+    CustomMessage('setup_install_type_desc'),
+    '',
+    True,
+    False
+  );
+  InstallTypePage.Add(CustomMessage('setup_install_standard') + #13#10 + '   ' + CustomMessage('setup_install_standard_desc'));
+  InstallTypePage.Add(CustomMessage('setup_install_portable') + #13#10 + '   ' + CustomMessage('setup_install_portable_desc'));
+  InstallTypePage.SelectedValueIndex := 0;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), '/PORTABLE') = 0 then
+    begin
+      InstallTypePage.SelectedValueIndex := 1;
+      Break;
+    end;
+  end;
 end;
 
 var
@@ -343,6 +439,12 @@ var
 // still clear it.
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  if (CurPageID = wpFinished) and PortableFinalizeFailed then
+  begin
+    // Inno catches ssPostInstall exceptions and otherwise shows its success page.
+    WizardForm.FinishedHeadingLabel.Caption := SetupMessage(msgErrorTitle);
+    WizardForm.FinishedLabel.Caption := CustomMessage('setup_portable_write_failed');
+  end;
   // Silent runs keep /TASKS, /MERGETASKS and the previous choice as given.
   if (CurPageID = wpSelectTasks) and not MicrogUpdateOffered and not WizardSilent() then
   begin
@@ -393,7 +495,7 @@ var
   Error, Skipped: String;
 begin
   Result := True;
-  if CurPageID <> wpReady then
+  if (CurPageID <> wpReady) or IsPortableInstall() then
     Exit;
   WebView2Skipped := False;
   MicrogSkipped := False;
@@ -535,6 +637,17 @@ var
   Launcher: String;
   Code: Integer;
 begin
+  Result := '';
+  if IsPortableInstall() and FileExists(ExpandConstant('{app}\unins000.exe')) then
+  begin
+    Result := CustomMessage('setup_portable_existing_install');
+    Exit;
+  end;
+  if not IsPortableInstall() and FileExists(PortableRoot() + '\portable.marker') then
+  begin
+    Result := CustomMessage('setup_standard_existing_portable');
+    Exit;
+  end;
   Launcher := ExpandConstant('{app}\gesher-app.cmd');
   if FileExists(Launcher) then
     Exec(ExpandConstant('{cmd}'), '/d /c ""' + Launcher + '" shutdown"', '', SW_HIDE,
@@ -594,24 +707,51 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  Path, Dir: String;
+  Path, Dir, MarkerPath, DataPath, LaunchPath, GesherExePath: String;
 begin
   if CurStep = ssPostInstall then
   begin
-    if WizardIsTaskSelected('webview2') and not WebView2Skipped then
-      InstallWebView2();
-    if (MicrogSelected() and not MicrogSkipped) or
-       (WizardIsTaskSelected('aurora') and not AuroraSkipped) then
-      InstallMicrogAndStore();
-    Path := PathEntries();
-    Dir := ExpandConstant('{app}');
-    if not HasEntry(Path, Dir) then
+    if not IsPortableInstall() then
     begin
-      if (Path <> '') and (Copy(Path, Length(Path), 1) <> ';') then
-        Path := Path + ';';
-      RegWriteExpandStringValue(HKEY_CURRENT_USER, EnvKey, 'Path', Path + Dir);
+      if WizardIsTaskSelected('webview2') and not WebView2Skipped then
+        InstallWebView2();
+      if (MicrogSelected() and not MicrogSkipped) or
+         (WizardIsTaskSelected('aurora') and not AuroraSkipped) then
+        InstallMicrogAndStore();
+      Path := PathEntries();
+      Dir := ExpandConstant('{app}');
+      if not HasEntry(Path, Dir) then
+      begin
+        if (Path <> '') and (Copy(Path, Length(Path), 1) <> ';') then
+          Path := Path + ';';
+        RegWriteExpandStringValue(HKEY_CURRENT_USER, EnvKey, 'Path', Path + Dir);
+      end;
+    end
+    else
+    begin
+      // Keep failure sticky if a helper raises before it can return False.
+      PortableFinalizeFailed := True;
+      Dir := PortableRoot();
+      MarkerPath := Dir + '\portable.marker';
+      DataPath := Dir + '\Data';
+      LaunchPath := ExpandConstant('{app}\gesher-launch.exe');
+      GesherExePath := Dir + '\Gesher.exe';
+      if not SaveStringToFile(MarkerPath, '', False) or not ForceDirectories(DataPath) or
+         not FileCopy(LaunchPath, GesherExePath, False) then
+        RaiseException(CustomMessage('setup_portable_write_failed'));
+      PortableFinalizeFailed := False;
     end;
   end;
+end;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  // An exception after installation does not make Inno's exit status fail.
+  // Report the incomplete portable layout to silent callers and the updater.
+  if PortableFinalizeFailed then
+    Result := 1
+  else
+    Result := 0;
 end;
 
 // The apps' AppUserModelIDs (Gesher.App.<package>, registered for their toasts by
@@ -654,6 +794,8 @@ begin
     RemoveDefault(ApkKey, ApkProgId);
     RemoveDefault('Software\Classes\.xapk', BundleProgId);
     RemoveDefault('Software\Classes\.apks', BundleProgId);
+    RemoveDefault('Software\Classes\.apkm', BundleProgId);
+    RemoveDefault('Software\Classes\.apk+', BundleProgId);
     Path := PathEntries();
     Dir := ExpandConstant('{app}');
     if HasEntry(Path, Dir) then

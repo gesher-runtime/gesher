@@ -59,6 +59,8 @@ def main() -> int:
     window_boundary = (ROOT / 'tests/media/surface_geometry_host.cc.in').read_text().split('@PRODUCTION@')[0]
     window_boundary = window_boundary.replace('@CONSTANTS@',
         'enum { ' + ', '.join(sorted(constants)) + ' };\n')
+    window_boundary = window_boundary.replace('@DAMAGE_TYPES@',
+        portable((ROOT / 'compat/hwui/window/surface_damage.h').read_text()))
     window_boundary = window_boundary.replace('  sp() = default;',
         '  sp() = default;\n  explicit sp(T* ptr) : ptr_(ptr, [](T*) {}) {}')
     image_boundary = (ROOT / 'tests/media/surface_image_cache_host.cc.in').read_text()

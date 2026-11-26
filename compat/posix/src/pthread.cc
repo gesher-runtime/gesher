@@ -16,6 +16,10 @@
 #include <utility>
 
 #include "internal.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 // The real winpthreads calls; <pthread.h> routes everyone else here.
 #undef pthread_key_create
@@ -199,3 +203,8 @@ int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(vo
 }
 
 }  // extern "C"
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, slot_lock);
+#endif

@@ -9,10 +9,7 @@ import com.gesher.server.UriRetirementCaller;
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
 import java.util.ArrayDeque;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.Map;
-import java.util.Set;
 import static gesher.services.UriGrantRetirementContractTest.*;
 
 /** Whole service calls with mandatory results/retirement; no measured reference oracle. */
@@ -190,26 +187,24 @@ public final class UriRetirementBenchmark {
 
     private static void storagePhase(Fixture f, String phase) throws Exception {
         Map<?, ?> tables = (Map<?, ?>) get(f.grants, "mGrants");
-        Set<Object> tokens = Collections.newSetFromMap(new IdentityHashMap<>());
+        checkPrimitiveGeneration(f.pm, "mPackageGeneration");
         long tableBytes = 0;
         for (Object table : tables.values()) {
+            checkPrimitiveGeneration(table, "retiredPackageGeneration");
             tableBytes += UriRetirementSizeAgent.size(table);
-            try { tokens.add(get(table, "retiredPackageGeneration")); }
-            catch (NoSuchFieldException baseline) { }
         }
-        Object current = null;
-        try { current = get(f.pm, "mPackageGeneration"); } catch (NoSuchFieldException baseline) { }
-        if (current != null) tokens.add(current);
-        tokens.remove(null);
-        long tokenBytes = 0;
-        for (Object token : tokens) {
-            check(token.getClass() == Object.class, "Publication token retained a metadata-bearing object");
-            tokenBytes += UriRetirementSizeAgent.size(token);
-        }
-        check(tokens.size() <= tables.size() + 1, "Publication state retained more than one identity per table/current registry");
         System.out.println("URI_RETIREMENT_STORAGE {\"phase\":\"" + phase
                 + "\",\"pm_bytes\":" + UriRetirementSizeAgent.size(f.pm)
-                + ",\"tables\":" + tables.size() + ",\"table_bytes\":" + tableBytes
-                + ",\"distinct_tokens\":" + tokens.size() + ",\"token_bytes\":" + tokenBytes + "}");
+                + ",\"tables\":" + tables.size() + ",\"table_bytes\":" + tableBytes + "}");
+    }
+
+    private static void checkPrimitiveGeneration(Object owner, String name) {
+        Field field;
+        try {
+            field = owner.getClass().getDeclaredField(name);
+        } catch (NoSuchFieldException baseline) {
+            return;
+        }
+        check(field.getType() == long.class, name + " must not retain an object");
     }
 }

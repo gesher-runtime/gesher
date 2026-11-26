@@ -28,14 +28,14 @@ def digest(path: Path) -> str:
 def transform(source: bytes, name: str, args: argparse.Namespace) -> bytes:
     text = source.decode()
     if name == "PackageManagerService.java" and args.mutation == "no-generation-rotation":
-        old = "        mPackageGeneration = new Object();"
+        old = "        ++mPackageGeneration;"
         assert text.count(old) == 1
-        text = text.replace(old, "        if (mPackageGeneration == null) mPackageGeneration = new Object();")
+        text = text.replace(old, "        if (mPackageGeneration == 0) ++mPackageGeneration;")
     if name == "UriGrants.java":
         mutations = {
-            "global-retirement-token": ("        Object retiredPackageGeneration;", "        static Object retiredPackageGeneration;"),
+            "global-retirement-token": ("        long retiredPackageGeneration;", "        static long retiredPackageGeneration;"),
             "ignore-hosted": ("\n                && !grants.hasHostedTransientSource", ""),
-            "skip-null": ("generation != null && generation == grants.retiredPackageGeneration", "generation == grants.retiredPackageGeneration"),
+            "skip-null": ("generation != 0 && generation == grants.retiredPackageGeneration", "generation == grants.retiredPackageGeneration"),
         }
         if args.mutation in mutations:
             old, new = mutations[args.mutation]

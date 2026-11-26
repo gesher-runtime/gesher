@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Authenticate the complete frozen URI evidence and its current source boundary."""
+"""Authenticate the historical object-token URI retirement evidence."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import itertools
 import json
 import math
 from pathlib import Path
 import statistics
+import subprocess
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +41,10 @@ def percentile(values: list[float], percent: float) -> float:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--historical-source-ref',
+                        help='also verify the integrated source blobs at the archived Git revision')
+    args = parser.parse_args()
     report = json.loads((ROOT / 'docs/research/uri-grant-retirement-2026-11-23.json').read_text())
     archive = ROOT / report['archive']['path']
     require(archive.stat().st_size == report['archive']['bytes'], 'Archive byte length changed')
@@ -63,8 +69,11 @@ def main() -> None:
     def read(name: str):
         return json.loads(members[name])
 
-    for path, expected in report['integrated_sources'].items():
-        require(sha((ROOT / path).read_bytes()) == expected, 'Current source identity changed: ' + path)
+    if args.historical_source_ref:
+        for path, expected in report['integrated_sources'].items():
+            source = subprocess.check_output(
+                ['git', 'show', f'{args.historical_source_ref}:{path}'], cwd=ROOT)
+            require(sha(source) == expected, 'Historical source identity changed: ' + path)
     require(sha((ROOT / report['markdown']['path']).read_bytes()) == report['markdown']['sha256'],
             'Narrative report identity changed')
     declaration = read('uri-grants-final-combined/declaration.json')
@@ -210,7 +219,7 @@ def main() -> None:
     require(report['release_budget_accepted'] is False and report['windows_art_performance_measured'] is False,
             'Unsupported performance acceptance')
     print(f'URI retirement evidence passed: {CHECKS} checks; all 312 JVMs/1248 records, '
-          'first/steady/paired/tails, complete archive/classes and current-source identity; '
+          'first/steady/paired/tails and complete historical archive/classes; '
           'release budget and Windows/ART acceptance remain open.')
 
 

@@ -77,7 +77,7 @@ public final class UriGrants {
 
     /** The existing ordered per-UID table, with no separate permission index. */
     private static final class GrantTable extends LinkedHashMap<GrantIdentity, Permission> {
-        Object retiredPackageGeneration;
+        long retiredPackageGeneration;
         // A hosted registration's ProviderInfo can be changed independently of the
         // package registry. Keep the original retirement walk for any table that
         // has admitted such a transient source, until the whole table is removed.
@@ -264,8 +264,8 @@ public final class UriGrants {
 
     /** Runtime object generations retire transient state; durable owner epochs survive updates. */
     private void retireStaleTransientsLocked(GrantTable grants) {
-        Object generation = mPm.packageGeneration();
-        if (generation != null && generation == grants.retiredPackageGeneration
+        long generation = mPm.packageGeneration();
+        if (generation != 0 && generation == grants.retiredPackageGeneration
                 && !grants.hasHostedTransientSource) return;
         for (Iterator<Permission> it = grants.values().iterator(); it.hasNext();) {
             Permission permission = it.next();

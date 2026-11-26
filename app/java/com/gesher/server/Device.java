@@ -75,6 +75,14 @@ public final class Device {
         return Integer.toHexString(dataDir().toLowerCase(java.util.Locale.ROOT).hashCode());
     }
 
+    /**
+     * This device's tag in names it leaves outside $ANDROID_DATA (WLAN profiles): the
+     * same key as its Windows objects, as eight hex digits.
+     */
+    public static String profileTag() {
+        return String.format(java.util.Locale.ROOT, "%08x", dataDir().toLowerCase(java.util.Locale.ROOT).hashCode());
+    }
+
     /** The mutex launchers hold while they find or start the device. */
     public static String lockName() {
         return "Local\\gesher-" + key() + "-device";

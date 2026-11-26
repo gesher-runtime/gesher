@@ -14,7 +14,7 @@ $source = if ($SourceRef) { (& git -C $repo show "${SourceRef}:tools/package/ges
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in 'Get-FileStamp', 'Get-AppFilesStamp', 'Get-PanelAppIcon', 'Update-AppsView', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes', 'Get-ProxySettings', 'Get-ProxyDisplayText') {
+foreach ($name in 'Get-FileStamp', 'Get-AppFilesStamp', 'Get-PanelAppIcon', 'Update-AppsView', 'Update-AppsFilter', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes', 'Get-ProxySettings', 'Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name

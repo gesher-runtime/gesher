@@ -125,12 +125,16 @@ def _sleep(delay):
         delay -= chunk
 
 
-def _transient(stderr):
+def _transient(stderr, http_status):
     # The status reported by gh takes precedence over transport-looking text in
     # an error message. In particular, never turn a 401/403/404 into a retry.
     statuses = _HTTP_STATUS.findall(stderr) + _GH_HTTP_STATUS.findall(stderr)
     if statuses:
         return all(status in ('502', '503', '504') for status in statuses)
+    # gh can exit before passing on a job page when its own JSON decoder hits
+    # the end of the response. Discard that output and repeat only the GET.
+    if stderr.strip() == 'unexpected end of JSON input':
+        return http_status is None or 200 <= http_status < 300
     # Go's HTTPS dial timeout precedes any response. Require its single
     # diagnostic so it cannot override an additional error from gh.
     return bool(_DIAL_TIMEOUT.fullmatch(stderr.strip())) or any(
@@ -200,7 +204,7 @@ def get_json(endpoint, *, retry_transient=True):
             rate_failures += 1
             # The quota wait is not transport time: extend the envelope by it.
             deadline += delay
-        elif _transient(stderr):
+        elif _transient(stderr, status):
             if not retry_transient:
                 raise GitHubTransientError(
                     f'GitHub GET transient failure (gh exit {result.returncode})')
@@ -208,7 +212,8 @@ def get_json(endpoint, *, retry_transient=True):
         if delay is None or time.monotonic() + delay >= deadline:
             raise GitHubReadError(
                 f'GitHub GET failed after {attempt + 1} attempt(s) '
-                f'(gh exit {result.returncode})')
+                f'(gh exit {result.returncode}, '
+                f'http_status={status if status is not None else "unavailable"})')
         print(f'CI_GITHUB_READ_RETRY attempt={attempt + 1}/4 delay={delay}s',
               file=sys.stderr, flush=True)
         _sleep(delay)
