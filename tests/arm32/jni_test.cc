@@ -281,6 +281,26 @@ void Run(const char* path) {
         "JNI32 recovers after rejected guest operations");
   Check(bridge.ReleaseLocals(&error), "guest local reference frame complete");
   Check(program.Shutdown(&error), "close guest JNI module");
+
+  for (uint32_t occupied : {0xd0005000u, 0xd0006000u}) {
+    Program collision([](std::string_view, std::vector<uint8_t>*, std::string*) {
+      return false;
+    });
+    constexpr auto rw = MemoryPermission::kRead | MemoryPermission::kWrite;
+    Check(collision.Memory().Map(occupied, 4096, rw) &&
+          collision.Memory().Write32(occupied, 0xfeedface),
+          "set up pre-existing guest JavaVM page");
+    Jni32 cannot_install(collision, &env);
+    Check(!cannot_install.Install(&error) &&
+          cannot_install.GuestEnvironment() == 0,
+          "JNI32 refuses occupied guest JavaVM pages");
+    uint32_t preserved = 0;
+    Check(collision.Memory().Read32(occupied, &preserved) &&
+          preserved == 0xfeedface &&
+          !collision.Memory().IsMapped(0xd0003000, 4096) &&
+          !collision.Memory().IsMapped(0xd0004000, 4096),
+          "failed JNI32 installation preserves foreign page and rolls back own");
+  }
   state = nullptr;
 }
 }  // namespace
