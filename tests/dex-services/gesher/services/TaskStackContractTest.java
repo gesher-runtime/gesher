@@ -123,7 +123,7 @@ public final class TaskStackContractTest {
         parsed.setEnabled(true);
         parsed.setTargetSdkVersion(36);
         for (String name : List.of("Root", "Middle", "Top", "Other", "Private", "Guarded", "Single",
-                "Instance", "Doc", "DocNever", "DocAlways", "NoHistory")) {
+                "Instance", "Doc", "DocNever", "DocAlways", "NoHistory", "ResetChild")) {
             ParsedActivityImpl activity = new ParsedActivityImpl();
             activity.setPackageName(pkg);
             activity.setName(pkg + "." + name);
@@ -134,6 +134,7 @@ public final class TaskStackContractTest {
             if (name.equals("Single")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_TASK);
             if (name.equals("Instance")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_INSTANCE);
             if (name.equals("NoHistory")) activity.setFlags(ActivityInfo.FLAG_NO_HISTORY);
+            if (name.equals("ResetChild")) activity.setFlags(ActivityInfo.FLAG_FINISH_ON_TASK_LAUNCH);
             if (name.equals("Doc")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_INTO_EXISTING);
             if (name.equals("DocNever")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_NEVER);
             if (name.equals("DocAlways")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_ALWAYS);
@@ -745,6 +746,57 @@ public final class TaskStackContractTest {
         check(h.records().size() == 3 && h.api.getTasks(10, false, true, Display.DEFAULT_DISPLAY).size() == 2
                 && h.thread.launches(null) == 3 && live(h, root) && live(h, top),
                 "Task reuse consumed MULTIPLE_TASK or retired the original task");
+    }
+
+    private static void launcherResetTask() throws Exception {
+        Intent launcher = Intent.makeMainActivity(new ComponentName(PKG, PKG + ".Root"));
+        launcher.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent reset = new Intent(launcher).addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        for (boolean replyChain : new boolean[]{false, true}) {
+            Harness h = new Harness();
+            h.startOne(launcher, null);
+            Object root = h.record("Root"); h.acknowledge("activityResumed", root);
+            h.startOne(launch("Middle"), root);
+            Object middle = h.record("Middle"); h.acknowledge("activityPaused", root);
+            h.acknowledge("activityResumed", middle); h.acknowledge("activityIdle", middle);
+            h.acknowledgeStopped(root);
+            h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("ResetChild"), null,
+                    (IBinder)get(middle, "token"), "reset-owner", 75, 0, null, null)
+                    == ActivityManager.START_SUCCESS, "Could not start finishOnTaskLaunch Activity"));
+            Object child = h.record("ResetChild"); h.acknowledge("activityPaused", middle);
+            h.acknowledge("activityResumed", child); h.acknowledge("activityIdle", child);
+            h.acknowledgeStopped(middle);
+            Object top = child;
+            if (replyChain) {
+                h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("Top"), null,
+                        (IBinder)get(child, "token"), "child-reply", 76, 0, null, null)
+                        == ActivityManager.START_SUCCESS, "Could not start reset child's reply Activity"));
+                top = h.record("Top"); h.acknowledge("activityPaused", child);
+                h.acknowledge("activityResumed", top); h.acknowledge("activityIdle", top);
+                h.acknowledgeStopped(child);
+            }
+            int resumes = h.thread.items(ResumeActivityItem.class, middle);
+            int launches = h.thread.launches(null);
+            check(h.startOne(launcher, null) == ActivityManager.START_TASK_TO_FRONT && live(h, top)
+                    && live(h, child), "Matching NEW_TASK without RESET finished launch history");
+            check(h.startOne(reset, null) == ActivityManager.START_TASK_TO_FRONT && !live(h, child)
+                    && !live(h, top), "Matching launcher reset retained finishOnTaskLaunch history");
+            check("PAUSING".equals(h.state(top)) && h.thread.items(ResumeActivityItem.class, middle) == resumes
+                    && h.thread.items(NewIntentItem.class, root) == 0,
+                    "Launcher reset skipped the outgoing pause or redelivered the root Intent");
+            h.acknowledge("activityPaused", top);
+            check(live(h, root) && live(h, middle) && "RESUMING".equals(h.state(middle))
+                    && h.thread.items(ResumeActivityItem.class, middle) == resumes + 1
+                    && h.thread.launches(null) == launches, "Launcher reset recreated retained history");
+            ActivityResultItem cancellation = h.thread.last(ActivityResultItem.class, middle);
+            check(cancellation != null, "Reset did not send a result to the retained recipient");
+            List<?> results = (List<?>)get(cancellation, "mResultInfoList");
+            check(results != null && results.size() == 1, "Reset lost the retained recipient's result route");
+            android.app.ResultInfo result = (android.app.ResultInfo)results.get(0);
+            check(result.mResultCode == android.app.Activity.RESULT_CANCELED && result.mRequestCode == 75
+                    && "reset-owner".equals(result.mResultWho) && result.mData == null,
+                    "Reset did not cancel the pending Activity result");
+        }
     }
 
     /** A NEW_TASK result request is canceled; its new/reused destination owns no result route. */
@@ -2292,7 +2344,7 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("validation")) invalidBatch();
         if (selected.equals("all") || selected.equals("tasks")) { taskFlags(); reorderedUriOwner(); abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris(); }
         if (selected.equals("all") || selected.equals("ordinary")) {
-            ordinaryTaskReuse(); ordinaryWaitReuse(); ordinaryClearTop(); ordinaryRootAndMultipleTasks();
+            ordinaryTaskReuse(); ordinaryWaitReuse(); ordinaryClearTop(); ordinaryRootAndMultipleTasks(); launcherResetTask();
             ordinaryNewTaskResult(); ordinaryDocumentResult(); ordinaryReuseAdmission(); ordinaryAuthenticatorCompletion();
         }
         if (selected.equals("all") || selected.equals("recents")) {

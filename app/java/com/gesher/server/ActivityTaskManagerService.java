@@ -3404,6 +3404,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ActivityRecord r = null;
         ActivityRecord deliverTo = null;
         ActivityRecord reusedTaskTop = null;
+        ActivityRecord resetTaskRoot = null;
         List<ActivityRecord> clearTop = new ArrayList<>();
         ActivityRecord pause = null;
         ProcessRecord bind = null;
@@ -3520,6 +3521,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 // ActivityStarter.complyActivityFlags: a matching NEW_TASK root
                 // brings its existing task forward; it does not duplicate the root.
                 reusedTaskTop = top;
+                if ((launchFlags & Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED) != 0) {
+                    resetTaskRoot = taskRoot;
+                    collectTaskLaunchFinishesLocked(taskRoot, clearTop);
+                }
             } else {
                 if (below != null) {
                     // Standard-mode CLEAR_TOP recreates the matching instance as
@@ -3609,8 +3614,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     android.app.Activity.RESULT_CANCELED, null, null), null, null, resultProcess);
         }
         if (reusedTaskTop != null) {
+            int taskId = reusedTaskTop.taskId;
+            if (!clearTop.isEmpty()) {
+                finishTogether(resetTaskRoot, clearTop, "reset-task", android.app.Activity.RESULT_CANCELED, null);
+                synchronized (this) { reusedTaskTop = topOf(taskId); }
+            }
             started[0] = reusedTaskTop;
-            if (!publishHistory) moveTaskToFront(reusedTaskTop.taskId, requiredTask, false, true);
+            if (!publishHistory) moveTaskToFront(taskId, requiredTask, false, true);
             applyAppWindows();
             return ActivityManager.START_TASK_TO_FRONT;
         }
@@ -3851,6 +3861,25 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (a.component().equals(component)) return a;
         }
         return null;
+    }
+
+    /** Collect finishOnTaskLaunch records and their reply chains above the retained root. */
+    private void collectTaskLaunchFinishesLocked(ActivityRecord root, List<ActivityRecord> selected) {
+        List<ActivityRecord> replies = new ArrayList<>();
+        for (int i = mActivities.size() - 1; i >= 0; i--) {
+            ActivityRecord activity = mActivities.get(i);
+            if (activity == root) break;
+            if (activity.taskId != root.taskId || activity.finishing || activity.state == State.DESTROYED) continue;
+            if ((activity.info.flags & ActivityInfo.FLAG_FINISH_ON_TASK_LAUNCH) != 0) {
+                selected.addAll(replies);
+                selected.add(activity);
+            } else if (activity.resultTo != null) {
+                // Android's task reset groups consecutive activities that still owe a result.
+                replies.add(activity);
+                continue;
+            }
+            replies.clear();
+        }
     }
 
     /** The task's top activity that is not finishing, or null. Guarded by this. */
