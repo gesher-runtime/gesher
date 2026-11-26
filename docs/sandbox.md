@@ -1,11 +1,14 @@
 # App isolation (AppContainer)
 
-**Today Android apps in Gesher are not isolated from Windows.** Each app process
-runs with the Windows user's full token. Android's permissions govern what an
+**Ordinary Android app launches in Gesher are not isolated from Windows.** An
+app launched this way runs with the Windows user's full token. Android's permissions govern what an
 app does through Android's APIs; they do not stop its code, native code above
 all, from reading and changing the user's files, using the network or starting
 programs. Treat an `.apk` like a downloaded `.exe`: install only apps you trust.
-The README, the installed README and the installer say so.
+The optional [protected USB runtime](../tools/package/usb-broker-setup.md)
+uses a separate Windows service identity and AppContainers for its explicit
+`protected-launch` flow. It has a separate data tree and its own compatibility
+and validation requirements.
 
 This document is the implementation map for isolating every package in a
 Windows AppContainer of its own ([ADR 0090](decisions/0090-appcontainer-app-isolation.md),

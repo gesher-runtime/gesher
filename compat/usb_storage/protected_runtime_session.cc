@@ -1576,9 +1576,7 @@ DWORD SelectDisk(std::wstring_view application, std::wstring* selected_path, boo
   if (status != ERROR_SUCCESS) return status;
   if (choice == 101) {
     std::unique_ptr<HostDisk> writable;
-    status = HostDisk::Open(available[index], Access::kOfflineReadWrite, &writable);
-    if (status != ERROR_SUCCESS) return status;
-    status = disks[index]->Validate();
+    status = disks[index]->OpenSelectedForWrite(&writable);
     if (status != ERROR_SUCCESS) return status;
     disks[index] = std::move(writable);
   }

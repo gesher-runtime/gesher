@@ -49,6 +49,9 @@ class HostDisk {
  public:
   static DWORD Open(const std::wstring& path, Access access,
                     std::unique_ptr<HostDisk>* disk);
+  // Upgrade a chooser selection through its retained device handle. Call
+  // only after the user approves write access to this particular medium.
+  DWORD OpenSelectedForWrite(std::unique_ptr<HostDisk>* disk);
   // The elevated, installed chooser keeps the selected object live while
   // obtaining consent. The authority duplicates this exact object from that
   // authenticated chooser, never reopens a path after the dialog.
@@ -75,6 +78,8 @@ class HostDisk {
 
  private:
   explicit HostDisk(HANDLE handle) : handle_(handle) {}
+  DWORD Inspect();
+  DWORD PrepareWriteAccess();
   DWORD CheckMedia();
   DWORD VerifyWriteAccess();
   DWORD VerifyExclusion();

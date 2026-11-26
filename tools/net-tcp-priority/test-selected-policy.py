@@ -587,7 +587,8 @@ def qualified_usb_main513_endpoints():
  return after
 
 
-USB_BLOCK_TRANSITION_SHA256 = 'c8c90d866ab6ccb5e6f3c8730fa0d61dc2c2cc9e3e1ebbe40c3d43a211a10ddd'
+USB_BLOCK_TRANSITION_SHA256 = 'f401d73d1d864eeb05ae55169eb2b4f74889236bc39d35f09598fe9788a1a073'
+USB_BLOCK_PATH_BASES['compat/posix/include/gesher/file_description.h'] = '82bb674a00ed50fcfa5c234fcd7f9830d08d443e'
 USB_BLOCK_TRANSITION_PATHS = (
  'compat/art/dalvikvm_main.cc',
  'compat/binder/binderd.cc',
@@ -598,6 +599,7 @@ USB_BLOCK_TRANSITION_PATHS = (
  'compat/elf/exec/gesher_shell.cc',
  'compat/elf/exec/shell_execute.inc',
  'compat/libcore/process.cc',
+ 'compat/posix/include/gesher/file_description.h',
  'compat/posix/posix.cmake',
  'compat/posix/src/binder.cc',
  'compat/posix/src/binder_file_descriptions.h',

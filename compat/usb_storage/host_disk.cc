@@ -366,31 +366,72 @@ DWORD HostDisk::Open(const std::wstring& path, Access access,
   const bool writable = access == Access::kOfflineReadWrite;
   auto handle = OpenDisk(match, GENERIC_READ | (writable ? GENERIC_WRITE : 0));
   if (!handle) return GetLastError();
-  auto selected = std::unique_ptr<HostDisk>(new HostDisk(handle.get()));
-  handle.release();
-  DWORD status = DescribeUsb(selected->handle_, &selected->info_);
-  if (status != ERROR_SUCCESS) return status;
-  status = DiskNumber(selected->handle_, &selected->disk_number_);
-  if (status == ERROR_SUCCESS) status = RejectSystemDisk(selected->disk_number_);
-  if (status != ERROR_SUCCESS) return status;
-  if (writable) {
-    if (!selected->info_.removable) return ERROR_NOT_SUPPORTED;
-    status = VerifyOffline(selected->handle_);
-    if (status != ERROR_SUCCESS) status = selected->LockVolumes();
-    if (status != ERROR_SUCCESS) return status;
-    status = SetMediaLock(selected->handle_, true);
-    if (status != ERROR_SUCCESS && status != ERROR_INVALID_FUNCTION && status != ERROR_NOT_SUPPORTED) return status;
-    selected->prevent_removal_ = status == ERROR_SUCCESS;
+  auto selected = std::unique_ptr<HostDisk>(new HostDisk(handle.release()));
+  DWORD status = selected->Inspect();
+  if (status == ERROR_SUCCESS && writable) status = selected->PrepareWriteAccess();
+  if (status == ERROR_SUCCESS && !writable) {
+    const DWORD media_write = PhysicallyWritable(selected->handle_);
+    if (media_write != ERROR_WRITE_PROTECT) status = media_write;
   }
-  status = GetMediaGeneration(selected->handle_, &selected->media_generation_);
-  if (selected->info_.removable && status != ERROR_SUCCESS) return status;
-  selected->track_media_ = status == ERROR_SUCCESS;
-  status = Geometry(selected->handle_, &selected->info_);
+  if (status == ERROR_SUCCESS) status = selected->Validate();
   if (status != ERROR_SUCCESS) return status;
-  selected->info_.write_consented = writable;
-  const DWORD media_write = PhysicallyWritable(selected->handle_);
+  *disk = std::move(selected);
+  return ERROR_SUCCESS;
+}
+
+DWORD HostDisk::Inspect() {
+  DWORD status = DescribeUsb(handle_, &info_);
+  if (status == ERROR_SUCCESS) status = DiskNumber(handle_, &disk_number_);
+  if (status == ERROR_SUCCESS) status = RejectSystemDisk(disk_number_);
+  if (status != ERROR_SUCCESS) return status;
+  status = GetMediaGeneration(handle_, &media_generation_);
+  if (info_.removable && status != ERROR_SUCCESS) return status;
+  track_media_ = status == ERROR_SUCCESS;
+  return Geometry(handle_, &info_);
+}
+
+DWORD HostDisk::PrepareWriteAccess() {
+  if (!info_.removable || !track_media_) return ERROR_NOT_SUPPORTED;
+  DWORD status = CheckMedia();
+  if (status != ERROR_SUCCESS) return status;
+  status = SetMediaLock(handle_, true);
+  if (status != ERROR_SUCCESS && status != ERROR_INVALID_FUNCTION && status != ERROR_NOT_SUPPORTED) return status;
+  prevent_removal_ = status == ERROR_SUCCESS;
+  status = CheckMedia();
+  if (status != ERROR_SUCCESS) return status;
+  status = VerifyOffline(handle_);
+  if (status != ERROR_SUCCESS) status = LockVolumes();
+  if (status != ERROR_SUCCESS) return status;
+  const DWORD media_write = PhysicallyWritable(handle_);
   if (media_write != ERROR_SUCCESS && media_write != ERROR_WRITE_PROTECT) return media_write;
-  selected->info_.writable = writable && media_write == ERROR_SUCCESS;
+  info_.write_consented = true;
+  info_.writable = media_write == ERROR_SUCCESS;
+  return ERROR_SUCCESS;
+}
+
+DWORD HostDisk::OpenSelectedForWrite(std::unique_ptr<HostDisk>* disk) {
+  if (!disk || *disk) return ERROR_INVALID_PARAMETER;
+  std::lock_guard lock(mutex_);
+  if (info_.write_consented || !info_.removable || !track_media_) return ERROR_NOT_SUPPORTED;
+  DWORD status = CheckMedia();
+  if (status != ERROR_SUCCESS) return status;
+  // ReOpenFile follows the retained handle, so a change to the enumerated
+  // interface path cannot substitute another reader. No pathname fallback.
+  HANDLE reopened = ReOpenFile(handle_, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, 0);
+  if (reopened == INVALID_HANDLE_VALUE) return GetLastError();
+  DiskHandle handle(reopened);
+  auto selected = std::unique_ptr<HostDisk>(new HostDisk(handle.release()));
+  status = selected->Inspect();
+  if (status != ERROR_SUCCESS) return status;
+  if (!selected->info_.removable || !selected->track_media_ ||
+      selected->disk_number_ != disk_number_ || selected->media_generation_ != media_generation_ ||
+      selected->info_.bytes != info_.bytes || selected->info_.sector_bytes != info_.sector_bytes) {
+    return ERROR_MEDIA_CHANGED;
+  }
+  status = CheckMedia();
+  if (status != ERROR_SUCCESS) return status;
+  status = selected->PrepareWriteAccess();
+  if (status != ERROR_SUCCESS) return status;
   status = selected->Validate();
   if (status != ERROR_SUCCESS) return status;
   *disk = std::move(selected);
@@ -546,6 +587,8 @@ DWORD HostDisk::LockVolumes() {
     error = VolumeIdentity(volume.get(), disk_number_, &identity);
     if (error) return error;
     if (identity != item.identity) return ERROR_MEDIA_CHANGED;
+    error = CheckMedia();
+    if (error != ERROR_SUCCESS) return error;
     // LOCK fails if a program still has files open. Do not forcibly dismount
     // a busy volume: preserve that application's data and return its real
     // sharing error to the chooser. A successful lock excludes future opens.
@@ -554,6 +597,8 @@ DWORD HostDisk::LockVolumes() {
     }
     // FSCTL_LOCK_VOLUME flushes the filesystem's cache before granting the
     // exclusive lock, including a read-only volume opened to clear its flag.
+    error = CheckMedia();
+    if (error != ERROR_SUCCESS) return error;
     if (!DeviceIoControl(volume.get(), FSCTL_DISMOUNT_VOLUME, nullptr, 0, nullptr, 0, &received, nullptr)) {
       return GetLastError();
     }

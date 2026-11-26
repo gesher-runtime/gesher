@@ -47,8 +47,12 @@ writes for that session. Cancel leaves the application without a media grant.
 Use a card expressly allocated for testing before approving destructive test
 operations. A selected device name alone is not write consent.
 
-The authority retains the exact selected Windows disk object and any volume
-locks across the consent handoff. It rejects internal/system media and ambiguous
+The consent dialog retains the selected reader's Windows handle. After write
+consent, the chooser opens the same object with write access through that
+handle and checks its disk number, media generation, and geometry before
+requesting media or volume locks. If the driver rejects the reopen or the
+medium has changed, the write grant fails. The authority retains the verified
+write handle and any volume locks across the handoff. It rejects internal/system media and ambiguous
 volume mappings. Writes require both the user's write grant and actual writable
 media. Windows or hardware protection, failed locks, removal, changed media,
 expired authorization, and process termination produce errors or revoke access;

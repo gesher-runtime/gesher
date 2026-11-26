@@ -768,6 +768,17 @@ index e2968332dbb..7155e09ae3f 100644
 +    creation = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
 +  }
 +  if (creation) gesher::usb_storage::ProtectedSignal(static_cast<uint32_t>(pid), creation, kSigkill);
+diff --git a/compat/posix/include/gesher/file_description.h b/compat/posix/include/gesher/file_description.h
+index b2d4c09ab6b900e6a54f3231a303648396255882..b1428283797d7b51e028fb74f7cb35b8b6c6e059 100644
+--- a/compat/posix/include/gesher/file_description.h
++++ b/compat/posix/include/gesher/file_description.h
+@@ -27,0 +28,6 @@ struct DescriptorSnapshot {
++
++  // Only private duplicates made while capturing a descriptor are linked.
++  // Their owner is the thread running the operation that requested the pin.
++  DWORD capture_thread = 0;
++  DescriptorSnapshot* previous_capture = nullptr;
++  DescriptorSnapshot* next_capture = nullptr;
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
 index 869d3d90bc3..7c7cb1f91c9 100644
 --- a/compat/posix/posix.cmake
@@ -1004,12 +1015,92 @@ index 92fc0c24d3b..b65ab5ac265 100644
 +// A contained process can receive a private anonymous pipe's read end.
 +HANDLE OpenFdPlaceholder(bool* pipe = nullptr);
 diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
-index c1495ced562..2142c6826c7 100644
+index c1495ced56217f9f42564fad8ef1e3823b89f04d..3e16f60fd53b77a1d6eba9289c711cdbf17ac85d 100644
 --- a/compat/posix/src/ofd.cc
 +++ b/compat/posix/src/ofd.cc
-@@ -614,0 +615 @@ int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
+@@ -141,0 +142,62 @@ bool OpenFileDescription::Adopt(HANDLE inherited) {
++namespace {
++#ifdef GESHER_FORK_LOCK
++SRWLOCK capture_lock = SRWLOCK_INIT;
++DescriptorSnapshot* first_capture = nullptr;
++DWORD forking_thread = 0;
++
++struct CaptureLock {
++  CaptureLock() { AcquireSRWLockExclusive(&capture_lock); }
++  ~CaptureLock() { ReleaseSRWLockExclusive(&capture_lock); }
++};
++
++void LinkCapture(DescriptorSnapshot& snapshot) {
++  snapshot.capture_thread = GetCurrentThreadId();
++  snapshot.next_capture = first_capture;
++  if (first_capture) first_capture->previous_capture = &snapshot;
++  first_capture = &snapshot;
++}
++
++void UnlinkCapture(DescriptorSnapshot& snapshot) {
++  if (snapshot.previous_capture) {
++    snapshot.previous_capture->next_capture = snapshot.next_capture;
++  } else {
++    first_capture = snapshot.next_capture;
++  }
++  if (snapshot.next_capture) snapshot.next_capture->previous_capture = snapshot.previous_capture;
++  snapshot.previous_capture = nullptr;
++  snapshot.next_capture = nullptr;
++  snapshot.capture_thread = 0;
++}
++
++bool TryCaptureForkLock(void* lock) {
++  if (!TryAcquireSRWLockExclusive(static_cast<SRWLOCK*>(lock))) return false;
++  forking_thread = GetCurrentThreadId();
++  return true;
++}
++
++void CaptureForkChild(void* lock) {
++  const DWORD child_thread = GetCurrentThreadId();
++  for (auto* snapshot = first_capture; snapshot != nullptr;) {
++    auto* next = snapshot->next_capture;
++    if (snapshot->capture_thread == forking_thread) {
++      snapshot->capture_thread = child_thread;
++    } else {
++      // The operation owning this duplicate will never resume here. Other
++      // owners of the file (including the real descriptor) keep their handles.
++      if (InheritedAtFork(snapshot->handle)) CloseHandle(snapshot->handle);
++      snapshot->handle = nullptr;
++      UnlinkCapture(*snapshot);
++    }
++    snapshot = next;
++  }
++  InitializeSRWLock(static_cast<SRWLOCK*>(lock));
++}
++
++const ForkLockOps capture_fork_ops{
++    TryCaptureForkLock, ForkLockTraits<SRWLOCK>::Unlock, CaptureForkChild};
++const ForkLockRegistration capture_fork_lock(
++    kForkOrderLeaf, "descriptor captures", []() -> void* { return &capture_lock; },
++    &capture_fork_ops);
++#endif
++}  // namespace
++
+@@ -142,0 +205,8 @@ DescriptorSnapshot::~DescriptorSnapshot() {
++#ifdef GESHER_FORK_LOCK
++  if (capture_thread) {
++    CaptureLock lock;
++    UnlinkCapture(*this);
++    CloseHandle(handle);
++    return;
++  }
++#endif
+@@ -395,0 +466,3 @@ DescriptorSnapshotPtr Snapshot(HANDLE file, const std::shared_ptr<OpenFileDescri
++#ifdef GESHER_FORK_LOCK
++  CaptureLock lock;
++#endif
+@@ -398,0 +472,3 @@ DescriptorSnapshotPtr Snapshot(HANDLE file, const std::shared_ptr<OpenFileDescri
++#ifdef GESHER_FORK_LOCK
++  LinkCapture(*snapshot);
++#endif
+@@ -614,0 +691 @@ int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
 +  if (snapshot->kind == DescriptorKind::kUnshareable) return snapshot->description->Flags();
-@@ -677 +678,2 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
+@@ -677 +754,2 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
 -    const DWORD type = GetFileType(file);
 +    const DWORD type = snapshot->kind == DescriptorKind::kUnshareable
 +        ? FILE_TYPE_CHAR : GetFileType(file);

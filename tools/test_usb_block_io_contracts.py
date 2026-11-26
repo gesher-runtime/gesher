@@ -81,6 +81,22 @@ def main():
                 print(f"FAIL {case}: exit={result.returncode}\n{result.stderr[:6000]}", flush=True)
             else:
                 print("PASS " + case, flush=True)
+        if args.source_ref:
+            return 1 if failures else 0
+        disk = source_at("compat/usb_storage/host_disk.cc", None)
+        selection = between(disk, "DWORD HostDisk::OpenSelectedForWrite(",
+                            "\nDWORD HostDisk::DuplicateForAuthority(")
+        selection_fixture = (ROOT / "tests/native/usb_selection_host_test.cc.in").read_text()
+        if selection_fixture.count("@SELECTION@") != 1:
+            raise ValueError("USB selection host-template boundary changed")
+        generated.write_text(selection_fixture.replace("@SELECTION@", selection))
+        subprocess.run(command, check=True, timeout=120)
+        result = subprocess.run([str(executable)], env=environment, cwd=folder, timeout=45)
+        if result.returncode:
+            failures.append("selection")
+            print(f"FAIL selection: exit={result.returncode}", flush=True)
+        else:
+            print("PASS selection before write preparation", flush=True)
         return 1 if failures else 0
 
 
