@@ -42,9 +42,9 @@ DWORD HostDisk::Describe(DiskInfo* info) {
 }
 
 DWORD HostDisk::SetReadOnly(bool readonly) {
+  if (!info_.write_consented) return ERROR_ACCESS_DENIED;
   const DWORD error = Validate();
   if (error != ERROR_SUCCESS) return error;
-  if (!readonly && !info_.write_consented) return ERROR_ACCESS_DENIED;
   info_.writable = !readonly;
   return ERROR_SUCCESS;
 }
@@ -52,8 +52,8 @@ DWORD HostDisk::SetReadOnly(bool readonly) {
 DWORD HostDisk::Flush() { return Validate(); }
 
 bool HostDisk::ValidRange(uint64_t offset, size_t size) const {
-  return offset <= media.size() && size <= media.size() - offset &&
-      offset % kSectorBytes == 0 && size % kSectorBytes == 0;
+  return size != 0 && size <= kMaxTransfer &&
+      offset <= media.size() && size <= media.size() - offset;
 }
 
 DWORD HostDisk::Read(uint64_t offset, std::span<std::byte> output) {
@@ -65,6 +65,7 @@ DWORD HostDisk::Read(uint64_t offset, std::span<std::byte> output) {
 }
 
 DWORD HostDisk::Write(uint64_t offset, std::span<const std::byte> input) {
+  if (!info_.write_consented) return ERROR_ACCESS_DENIED;
   const DWORD error = Validate();
   if (error != ERROR_SUCCESS) return error;
   if (!info_.writable) return ERROR_WRITE_PROTECT;
@@ -111,17 +112,28 @@ bool Run(Access access) {
                "describe simulated media") ||
         !Check(client.Read(0, observed) == ERROR_SUCCESS && observed.front() == std::byte{0x27},
                "read existing sector") ||
-        !Check(client.Write(kSectorBytes, given) == (writable ? ERROR_SUCCESS : ERROR_WRITE_PROTECT),
+        !Check(client.Write(kSectorBytes, given) == (writable ? ERROR_SUCCESS : ERROR_ACCESS_DENIED),
                "enforce write consent") ||
         !Check(client.Read(kSectorBytes, observed) == ERROR_SUCCESS &&
                    (writable ? given == observed : observed.front() == std::byte{0x27}),
                "read after write attempt") ||
         !Check(client.Read(kDiskBytes, observed) == ERROR_INVALID_PARAMETER, "reject outside disk") ||
-        !Check(client.SetReadOnly(true) == ERROR_SUCCESS &&
-                   client.Write(kSectorBytes, given) == ERROR_WRITE_PROTECT &&
-                   client.SetReadOnly(false) == (writable ? ERROR_SUCCESS : ERROR_ACCESS_DENIED),
-               "preserve write consent across mode changes") ||
         !Check(client.Flush() == ERROR_SUCCESS, "flush")) return false;
+    if (writable) {
+      const std::array partial{std::byte{0x12}, std::byte{0x34}};
+      if (!Check(client.Write(5, partial) == ERROR_SUCCESS && client.Read(0, observed) == ERROR_SUCCESS &&
+                     observed[4] == std::byte{0x27} && observed[5] == partial[0] &&
+                     observed[6] == partial[1] && observed[7] == std::byte{0x27},
+                 "unaligned write retains adjacent bytes") ||
+          !Check(client.SetReadOnly(true) == ERROR_SUCCESS &&
+                     client.Write(kSectorBytes, given) == ERROR_WRITE_PROTECT &&
+                     client.SetReadOnly(false) == ERROR_SUCCESS,
+                 "preserve write consent across mode changes")) return false;
+    } else if (!Check(client.SetReadOnly(true) == ERROR_ACCESS_DENIED &&
+                          client.SetReadOnly(false) == ERROR_ACCESS_DENIED,
+                      "read-only grant cannot change disk attributes")) {
+      return false;
+    }
     media_changed = true;
     return Check(client.Read(0, observed) != ERROR_SUCCESS &&
                      client.Read(0, observed) != ERROR_SUCCESS,
