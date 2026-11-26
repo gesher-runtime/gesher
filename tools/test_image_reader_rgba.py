@@ -85,13 +85,13 @@ def run(work, args):
 
 def negative_controls(work, source, args):
     controls = [
-        ("disabled_copy", "if (width == r->width && height == r->height && !image->data.empty())",
-         "if (false && width == r->width && height == r->height && !image->data.empty())",
+        ("disabled_copy", "if (width == r->width && height == r->height && width > 0 && height > 0)",
+         "if (false && width == r->width && height == r->height && width > 0 && height > 0)",
          "matching extent uses one bounded bulk copy"),
-        ("wrong_extent", "height == r->height && !image->data.empty()",
-         "height >= r->height && !image->data.empty()", "RGBA pixels match independent scaling oracle"),
-        ("partial_copy", "memcpy(image->data.data(), pixels, image->data.size());",
-         "memcpy(image->data.data(), pixels, image->data.size() - sizeof(uint32_t));",
+        ("wrong_extent", "height == r->height && width > 0 && height > 0",
+         "height <= r->height && width > 0 && height > 0", "RGBA pixels match independent scaling oracle"),
+        ("partial_copy", "memcpy(output, pixels, static_cast<size_t>(width) * height * 4);",
+         "memcpy(output, pixels, static_cast<size_t>(width) * height * 4 - sizeof(uint32_t));",
          "RGBA pixels match independent scaling oracle"),
         ("close_publication", "if (r->closed) { delete image; return NO_INIT; }",
          "if (false && r->closed) { delete image; return NO_INIT; }",

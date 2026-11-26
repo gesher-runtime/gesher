@@ -80,6 +80,43 @@ jobs:
           python3 tools/ci/test_release_workflows.py
           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
           python3 -m unittest discover -s tools/ci -p test_prune_caches.py
+  # The hosted Server images can expose NLM without its cost backend. Their
+  # contracts below prove that absence independently and check failed-start
+  # cleanup. This client job unconditionally requires the real subscription.
+  network-cost-client:
+    name: Windows client network cost
+    needs: [source-identity]
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+      - name: Verify the compiler targets native ARM64
+        shell: pwsh
+        run: |
+          if ($env:VSCMD_ARG_TGT_ARCH -ne 'arm64') { throw 'Windows client contracts require the ARM64 compiler target' }
+      - name: Build production network cost policy contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
+      - name: Unknown cost never grants unmetered capability
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-policy-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Production cost classification failed' }
+      - name: Build unchanged strict connection cost subscription test
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_windows_test.cc /Fe:cost-events-test.exe ole32.lib uuid.lib
+      - name: Require real Windows client subscription and unsubscription
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-events-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Required Windows client cost subscription failed' }
   # Short Windows host contracts share one runner per OS: separate jobs each
   # paid for a runner, checkout and queue slot to run a minute of checks.
   # Every check step runs even after an earlier one fails, so one failure
@@ -102,6 +139,46 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Launch failure text with native Windows direction classification
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 /WX tests/native/launch_failure_text_test.cc /Fe:launch-failure-text-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch failure text test compilation failed' }
+          & .\launch-failure-text-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Launch failure paragraph direction checks failed' }
+      - name: Shared media log byte snapshots on PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: tests/windows/test-shared-log-bytes.ps1
+      - name: Shared media log byte snapshots on Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: tests/windows/test-shared-log-bytes.ps1
+      - name: Build actual UIA query cancellation and lifecycle controls
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\accessibility\query_pool.cc tests\windows\web3\query_pool_test.cc /Fe:query-pool-test.exe
+      - name: Run actual Windows UIA retirement, saturation and worker ownership controls
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\query-pool-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Actual UIA query pool lifecycle controls failed' }
+      - name: Build actual Windows speech recognition contracts (docs/speech-recognition.md)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\speech\speech_recognition_windows_test.cc compat\devices\speech_recognition_win.cc /Fe:speech-recognition-windows.exe ole32.lib uuid.lib
+      - name: SAPI recognizers enumerate and recognize handed-over PCM without a microphone
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\speech-recognition-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech recognition contracts failed' }
+      - name: Speech recognition service contracts on Windows' JVM (docs/speech-recognition.md)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Java DNS admission and completion ownership on Windows
         if: ${{ !cancelled() }}
         shell: bash
@@ -110,6 +187,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_java_performance_contracts.py --java-home "$JAVA_HOME" --component settings
+      - name: DownloadManager provider, queue and transfer contracts on a Windows JVM
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
       - name: Build actual app identity restart implementation
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib
@@ -140,6 +221,55 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: tests/windows/clipboard/Publication.ps1
+      - name: Build actual Windows WebAuthn contracts (ADR 0093)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\credentials\webauthn_windows_test.cc compat\devices\webauthn_win.cc /Fe:webauthn-windows.exe user32.lib
+      - name: WebAuthn API version, cancellation ids, error names and owner refusal without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\webauthn-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows WebAuthn contracts failed' }
+      - name: Build actual Windows speech synthesis contracts (docs/tts.md)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\tts\tts_windows_test.cc compat\devices\speech_win.cc compat\devices\winrt.cc /Fe:tts-windows.exe ole32.lib uuid.lib
+      - name: Windows voices enumerate and synthesize PCM without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\tts-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech synthesis contracts failed' }
+      - name: Text-to-speech engine contracts on Windows' JVM (docs/tts.md)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
+      - name: Print jobs and the PrintDocumentAdapter lifecycle (host harness)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_print_spooler_contracts.py --java-home "$JAVA_HOME"
+      - name: Build actual Windows printer enumeration, capabilities and PDF printing
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /Icompat\devices compat\print\print_win32.cc compat\devices\winrt.cc tests\print\print_windows_test.cc /Fe:print-windows-test.exe winspool.lib comdlg32.lib gdi32.lib user32.lib ole32.lib
+      - name: Print a generated PDF to Microsoft Print to PDF without UI
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          & .\print-windows-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows print host contracts failed' }
+      - name: Build actual Windows Hello verifier contracts (ADR 0091)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_windows_test.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:hello-windows.exe ole32.lib user32.lib
+      - name: Windows Hello availability and foreground-owner refusal without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\hello-windows.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Hello verifier contracts failed' }
       - name: Exact native reader ownership and handle reuse controls
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -168,6 +298,72 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
+      - name: Build actual URI scheme handler lookup (AssocQueryStringW, ASSOCF_IS_PROTOCOL)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\url_handlers_win.cc tests\uri-handlers\url_handlers_windows_test.cc /Fe:url-handlers-test.exe shlwapi.lib shell32.lib advapi32.lib user32.lib
+      - name: Real Windows associations and cancellable dialing confirmation
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          & .\url-handlers-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'URI scheme handler lookup checks failed' }
+      - name: Build production network cost policy contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX tests\metered-network\cost_policy_test.cc /Fe:cost-policy-test.exe
+      - name: Unknown cost never grants unmetered capability
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-policy-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Production cost classification failed' }
+      - name: Build SDK-verified Server cost capability and lifecycle contracts
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /DNOGDI /DWIN32_LEAN_AND_MEAN /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\net\cost_events_win.cc tests\metered-network\cost_events_server_test.cc /Fe:cost-events-server-test.exe ole32.lib uuid.lib
+      - name: Verify actual Server cost support and failed-start handle reclamation
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\cost-events-server-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Server cost capability or lifecycle checks failed' }
+      - name: MediaStore provider over real SQLite and NTFS paths, file-move rollback and crash recovery
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
+      - name: Build actual Windows caption style reader (ClosedCaptionProperties)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc compat\devices\winrt.cc tests\captioning\caption_windows_test.cc /Fe:caption-test.exe ole32.lib uuid.lib
+      - name: Caption style values and PropertiesChanged watch lifetime against real Windows
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\caption-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows caption style checks failed' }
+      - name: Build production caption reader with scripted Windows SDK properties
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /Icompat\devices compat\devices\caption_win.cc tests\captioning\caption_read_test.cc /Fe:caption-read-test.exe ole32.lib uuid.lib
+      - name: Caption defaults, required computed colors and failure lifetime contracts
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\caption-read-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Caption Read boundary contracts failed' }
+
+      - name: Build actual Windows Country or region lookup
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 compat\devsvc\home_region_win.cc tests\country-detector\home_region_windows_test.cc /Fe:home-region-test.exe
+      - name: Country or region agrees with GetUserDefaultGeoName and GetUserGeoID
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\home-region-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Country or region checks failed' }
       - name: Release updater and control panel contracts on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         shell: powershell
@@ -178,22 +374,44 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
+          tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelIconCacheChecks.ps1
           tests/windows/shell/ControlPanelLaunchChecks.ps1
+          tests/windows/shell/ControlPanelProxyChecks.ps1
+          tests/windows/shell/ControlPanelLogsChecks.ps1
           tests/windows/shell/ControlPanelVirtualizationChecks.ps1
           tests/windows/shell/ControlPanelActionChecks.ps1
+          tests/windows/shell/CameraImagePickerChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
           tests/windows/shell/RuntimeFileChecks.ps1
           tests/windows/shell/InstallErrorChecks.ps1
           tests/windows/shell/NativeStderrChecks.ps1
+      - name: Control panel startup helpers on PowerShell 7
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          tests/windows/shell/UiLocalizationChecks.ps1
+          tests/windows/shell/PreferredLanguagesChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
       - name: Production modal dialogs on Windows PowerShell 5.1
         if: ${{ !cancelled() }}
         timeout-minutes: 2
         shell: powershell
         run: tests/windows/shell/Issue32And33Contracts.ps1
+      - name: Portable profiles, add-on routing and complete package contracts
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          tests/windows/shell/PortableModeChecks.ps1
+          python tools/tests/test_portable_package.py
+          if ($LASTEXITCODE -ne 0) { throw 'Portable package contracts failed' }
       - name: API 37 report gate failure and selection contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -276,6 +494,7 @@ jobs:
           python3 -m unittest discover -s .github/actions/local-build-cache -p test_cache.py
           python3 -m unittest discover -s tools/ci -p 'test_github*.py'
           python3 -m unittest discover -s tools/ci -p test_artifact_batch.py
+          python3 -m unittest discover -s tools/ci -p test_supplier_bundle.py
           python3 -m unittest discover -s tools/ci -p test_producer_context.py
           python3 -m unittest discover -s tools/ci -p test_binder_modes.py
           python3 -m unittest discover -s tools/ci -p test_native2_producer_context.py
@@ -309,13 +528,18 @@ jobs:
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
           python3 tools/test_memmem_performance.py --sanitize
+          python3 tools/test_memrchr_contracts.py --sanitize --negative-controls
+          python3 tools/test_memrchr_report.py
           python3 tools/test_bionic_system_contracts.py --sanitize
           python3 tools/test_environment_contracts.py --sanitize
           python3 tools/test_environment_lookup_contracts.py
+          python3 tools/test_device_identity.py --sanitize
           python3 tools/test_bionic_signal_masks.py --sanitize
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
           python3 tools/test_bionic_directory_contracts.py --sanitize
+          python3 tools/test_search_delete_contracts.py --sanitize --negative-controls
+          python3 tools/test_search_delete_report.py
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
@@ -323,12 +547,14 @@ jobs:
           python3 tools/test_file_io_contracts.py --sanitize
           python3 tools/test_pipe_io_contracts.py --sanitize
           python3 tools/test_revocable_file_contracts.py --sanitize
+          python3 tools/test_record_lock_liveness.py --sanitize
           python3 tools/test_memfd_contracts.py --sanitize
           python3 tools/test_memfd_tail_contracts.py
           python3 tools/test_raw_syscall_contracts.py --sanitize
           python3 tools/test_deferred_rewrite_failures.py --sanitize
           python3 tools/test_msync_contracts.py --sanitize
           python3 tools/test_retriever_frame_contracts.py --sanitize
+          python3 tools/test_i420_crop.py --sanitize --negative-controls
           python3 tools/test_utc_time_contracts.py --sanitize
           python3 tools/test_sleep_contracts.py --sanitize
 
@@ -355,6 +581,7 @@ jobs:
           python3 tools/test_elf_tls_rollback.py --sanitize
           python3 tools/test_arm64_pending_rollback.py --sanitize
           python3 tools/test_arm64_native_rollback.py --sanitize
+          python3 tools/test_arm64_tls_lifecycle.py --host-boundary --sanitize --negative-controls
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
@@ -365,8 +592,12 @@ jobs:
           python3 tools/test_boottime_resume.py --sanitize
           python3 tools/test_timerfd_contracts.py --sanitize
           python3 tools/test_input_surface_callbacks.py --sanitize
+          python3 tools/test_codec_input_surfaces.py --sanitize
+          python3 tools/test_persistent_input_jni.py
+          python3 tools/test_recorder_persistent_input.py --sanitize
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
+          python3 tools/test_uia_query_retirement.py --sanitize
           python3 tools/test_dns_admission.py --sanitize
 
       - name: Stream device identity across close and reopen
@@ -415,7 +646,9 @@ jobs:
           python3 tools/test_art_jni_dispatch.py --sanitize
           python3 tools/test_audio_mixer_allocations.py --sanitize
           python3 tools/test_audio_unity_rate.py --sanitize
+          python3 tools/test_audio_resampler_weights.py --sanitize --negative-controls
           python3 tools/test_audio_capture_allocations.py --sanitize
+          python3 tools/test_audio_capture_unity.py --sanitize --negative-controls
           python3 tools/test_capture_stream_selection.py --sanitize
           python3 tools/test_audio_file_source.py --sanitize
           python3 tools/test_audio_rate_history.py --sanitize
@@ -461,6 +694,12 @@ jobs:
           "$RUNNER_TEMP/gesher-noreplace-holes"
           python3 tools/test_madvise_reference.py
 
+      - name: Actual wide conversion, pinned Android and guard-page contracts
+        run: python3 tools/test_wide_ascii_contracts.py --sanitize
+
+      - name: Validate wide conversion measurement evidence
+        run: python3 tools/test_wide_ascii_performance_evidence.py
+
       - name: Filesystem metadata and media source ownership contracts
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
@@ -472,9 +711,12 @@ jobs:
           python3 tools/test_media_callback_state.py --sanitize
           python3 tools/test_media_http_contracts.py --sanitize
           python3 tools/test_mf_encoder_input.py --sanitize
+          python3 tools/test_mf_video_output.py --sanitize
           python3 tools/test_media_surface_contracts.py --sanitize
           python3 tools/test_codec_output_storage.py --sanitize
           python3 tools/test_codec_reader_delivery.py --sanitize
+          python3 tools/test_nv12_rgba.py --sanitize --negative-controls
+          python3 tools/test_reader_plane_scaling.py --sanitize --negative-controls
           python3 tools/test_image_reader_rgba.py --sanitize --negative-controls
           cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
             tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
@@ -496,13 +738,20 @@ jobs:
           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_receiver_lifetimes.py
           python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
+          python3 tools/test_media_session_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_media_encoder_selection.py
 
       - name: Android HttpEngine requests over real HTTP sockets
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
 
+      - name: DownloadManager provider, queue and transfer over real HTTP sockets
+        run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
+
       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
         run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+
+      - name: MediaStore provider ownership, pending items, queries and scanning over real SQLite
+        run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
 
       - name: WebStorage origin, owned WebView responses and running-task contracts
         run: |
@@ -510,6 +759,8 @@ jobs:
           python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
+          python3 tools/test_webview_document_script.py --sanitize
+          python3 tools/test_webview_popup_script.py --sanitize
           python3 tools/test_uia_snapshot_contracts.py --sanitize
           python3 tools/test_running_tasks_contracts.py
 
@@ -518,8 +769,19 @@ jobs:
           python3 tools/test_bluetooth_native_contracts.py --sanitize
           python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_bluetooth_sdp_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_scan_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_bluetooth_watch_contracts.py --java-home "$JAVA_HOME"
+          python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
+
+      - name: Credential Manager passkey contracts (ADR 0093)
+        run: python3 tools/test_credential_manager_contracts.py --java-home "$JAVA_HOME"
+      - name: Text-to-speech engine contracts (docs/tts.md)
+        run: python3 tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
+      - name: Speech recognition service contracts (docs/speech-recognition.md)
+        run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
+      - name: Biometric and device-credential auth service contracts (ADR 0091)
+        run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
 
       - name: MediaDataSource adapter contracts with checked JNI and UBSan
         run: python3 tools/test_media_callback_adapter.py
@@ -533,6 +795,20 @@ jobs:
       - name: APK native library filename contracts
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
 
+      - name: Windows mailto/tel/sms/geo handler intent contracts (AOSP android-16 Intent and IntentFilter)
+        run: python3 tools/test_uri_handler_contracts.py --java-home "$JAVA_HOME"
+      - name: Caption style contracts (AOSP android-16 Settings.Secure and CaptionStyle)
+        run: python3 tools/test_captioning_contracts.py --java-home "$JAVA_HOME"
+
+      - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
+        run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
+
+      - name: Portable code relocation, shell ownership and native profile selection
+        run: |
+          python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
+          python3 tools/test_portable_shell.py --java-home "$JAVA_HOME"
+          python3 tools/test_portable_launcher.py
+
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
         run: |
           python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
@@ -540,12 +816,16 @@ jobs:
           python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
           python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
+          python3 tools/test_log_redaction.py --java-home "$JAVA_HOME"
           python3 tools/test_install_metadata_comparison.py --java-home "$JAVA_HOME"
           python3 tools/test_legacy_camera_buffers.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_selection_and_orientation.py --java-home "$JAVA_HOME"
+          python3 tools/test_camera_image_picker.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_capture_lifetime.py --java-home "$JAVA_HOME"
+          python3 tools/test_capture_permission_flow.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_callback_admission.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
+          python3 tools/test_recorder_camera_ready.py --java-home "$JAVA_HOME" --negative-controls
           python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
 
       - name: Validate user interface translations
@@ -590,6 +870,36 @@ jobs:
           python3 tools/test_media_recorder_rollover.py --sanitize
           python3 tools/test_mp4_rollover_work.py
           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
+          python3 tools/test_annexb_scan.py --sanitize --negative-controls
+          python3 tools/test_annexb_report.py
+
+      - name: Real software AVC output ownership and independent decoded pixels
+        run: >-
+          python3 tools/test_soft_avc_output.py
+          --libavc-root third_party/aosp/external/libavc --sanitize
+          --output-dir out/media-avc-output-fixtures
+      - name: Real software AVC ownership and reusable storage
+        run: python3 tools/test_soft_avc_reuse.py --libavc-root third_party/aosp/external/libavc --sanitize
+
+      - name: Real software audio decoder scratch and output ownership
+        run: |
+          python3 tools/test_audio_decoder_scratch.py \
+            --frameworks-av-root third_party/aosp/frameworks/av-media \
+            --tremolo-root third_party/aosp/external/tremolo \
+            --opus-root third_party/aosp/external/libopus \
+            --sanitize --output-dir out/media-audio-scratch-fixtures
+
+      - name: Real software HEVC output ownership and independent decoded pixels
+        run: >-
+          python3 tools/test_soft_hevc_output.py
+          --libhevc-root third_party/aosp/external/libhevc
+          --vpx-root third_party/aosp/external/libvpx
+          --dav1d-root third_party/aosp/external/libdav1d --sanitize --negative-controls
+          --output-dir out/media-hevc-output-fixtures
+
+      - name: Actual RGBA input conversion and real AVC output
+        run: |
+          python3 tools/test_rgba_i420.py --libavc-root third_party/aosp/external/libavc --sanitize --negative-controls
 
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
@@ -602,6 +912,12 @@ jobs:
       - name: Build test apps
         run: tests/build-test-apps.sh out/test-apps
 
+      - name: Incremental Brotli native and real HTTP provider contracts
+        run: >-
+          python3 tools/test_http_brotli.py --java-home "$JAVA_HOME"
+          --brotli-source third_party/aosp/external/brotli
+          --okhttp-source third_party/aosp/external/okhttp
+
       - name: Build boot class path (core-oj, core-libart)
         run: tools/build-boot-jars.sh out/boot-jars
 
@@ -611,7 +927,13 @@ jobs:
       - name: Collect framework assets
         run: |
           mkdir -p framework-assets
+          mkdir -p framework-assets/media-audio-scratch-fixtures
+          cp out/media-audio-scratch-fixtures/*.audt out/media-audio-scratch-fixtures/fixtures.json framework-assets/media-audio-scratch-fixtures/
           cp out/test-apps/* out/boot-jars/*.jar framework-assets/
+          mkdir -p framework-assets/media-avc-output-fixtures
+          cp out/media-avc-output-fixtures/*.avct out/media-avc-output-fixtures/fixtures.json framework-assets/media-avc-output-fixtures/
+          mkdir -p framework-assets/media-hevc-output-fixtures
+          cp out/media-hevc-output-fixtures/*.hevct out/media-hevc-output-fixtures/fixtures.json framework-assets/media-hevc-output-fixtures/
           # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
@@ -711,6 +1033,14 @@ jobs:
           python3 tools/test_arm64_tls_lifecycle.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/arm64_tls_lifecycle_test.exe
+          # Immutable pre-change owner and matching reviewed measurement fixture.
+          # The current fixture additionally checks later signal/fork lifecycle work.
+          git fetch --no-tags --depth=1 https://github.com/gesher-runtime/gesher.git d38b5549dc3963f8d491e9205f9b2743bb6d3745 c65f4b119f79c586aaec043f166efa3afb567e06
+          python3 tools/test_arm64_tls_lifecycle.py --compile-only \
+            --source-ref d38b5549dc3963f8d491e9205f9b2743bb6d3745 \
+            --fixture-ref c65f4b119f79c586aaec043f166efa3afb567e06 \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/arm64_tls_lifecycle_baseline.exe
 
       - name: Build
         run: |
@@ -739,9 +1069,10 @@ jobs:
           ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
           ninja -C out native3_unicode_test
           ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
+          ninja -C out thread_watch_clock_test dlopen_errors_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test window_frame_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
           ninja -C out font_environment_test
 
@@ -796,6 +1127,7 @@ jobs:
           cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
           cp out/futex_test_module.dll dist/
+          cp -r out/dlopen-fixtures dist/
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
@@ -917,8 +1249,9 @@ jobs:
       matrix:
         os: [windows-2022, windows-2025]
     runs-on: ${{ matrix.os }}
-    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
-    timeout-minutes: 23
+    # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
+    # published hourly reset instead of failing the job.
+    timeout-minutes: 69
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -963,8 +1296,10 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     needs: [source-identity]
-    # Keep the complete reviewed recipe immutable and use hosted build runners.
-    uses: gesher-runtime/gesher/.github/workflows/framework.yml@a31f1cdcc0c515905a4faa9bd3bf51e906e1c80b
+    # A local call runs the framework.yml of the commit under test, so a
+    # framework.yml change takes effect in the same PR. Hosted build runners;
+    # see docs/self-hosted-ci.md before routing it to the restricted group.
+    uses: ./.github/workflows/framework.yml
     with:
       local-runner: false
 
@@ -1121,7 +1456,11 @@ jobs:
           tests/windows/shell/ControlPanelRefreshChecks.ps1
           tests/windows/shell/ControlPanelRecoveryChecks.ps1
           tests/windows/shell/ControlPanelIdleChecks.ps1
+          tests/windows/shell/ControlPanelStartupChecks.ps1
+          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
+          tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
+          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
@@ -1172,6 +1511,11 @@ jobs:
           "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
           Get-ChildItem installer
 
+      - name: Build portable ZIP from the same verified runtime
+        shell: pwsh
+        run: |
+          tools/package/package-portable.ps1 -BuildDir "$PWD/dist" -OutDir "$PWD/installer" -Version $env:GESHER_PACKAGE_VERSION
+
       # Uploaded before the checks below: the e2e job tests this installer even when one
       # of them fails.
       - name: Upload tested installer artifact
@@ -1180,6 +1524,8 @@ jobs:
           name: gesher-setup
           path: |
             installer/*.exe
+            installer/*-portable.zip
+            installer/*-portable.zip.sha256
             installer/SHA256SUMS.txt
 
       - name: Install, run Hello, uninstall
@@ -1196,9 +1542,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
           python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
           if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
-          foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1') {
+          foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1', 'gesher-panel-actions.ps1', 'gesher-panel-view.ps1', 'gesher-panel-dashboard.xaml', 'gesher-panel-confirm.xaml', 'gesher-panel-message.xaml') {
             if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) { throw "The installer left out $file" }
           }
+          powershell -NoProfile -STA -ExecutionPolicy Bypass -File tests/windows/shell/ControlPanelPresentationChecks.ps1 -PackageDirectory $app
+          if ($LASTEXITCODE -ne 0) { throw 'Installed WPF presentation resource checks failed' }
           . (Join-Path $app 'gesher-update.ps1')
           $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
           if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {
@@ -1211,6 +1559,9 @@ jobs:
             throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
           }
           'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Test the release ZIP and portable Setup while the standard install
+          # exists, so accidental deletion/overwrite of its registration fails.
+          tests/windows/shell/PortableRuntimeChecks.ps1 -ZipPath "installer/gesher-${env:GESHER_PACKAGE_VERSION}-portable.zip" -InstallerPath $setup -Version $env:GESHER_PACKAGE_VERSION -InstalledRuntimeDirectory $app -ComponentsApk "$PWD/dist/components.apk"
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
           $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
@@ -1222,8 +1573,8 @@ jobs:
           if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
           # gesher-app and the framework it runs on are installed, and the
           # installed copy takes the bundled app to onResume.
-          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
-                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk') {
+          foreach ($f in 'gesher-app.cmd', 'framework.jar', 'framework-res.apk', 'gesher-app.jar', 'org.apache.http.legacy.jar', 'etc\permissions\org.apache.http.legacy.xml', 'android.test.base.jar', 'android.test.mock.jar', 'android.test.runner.jar', 'etc\permissions\android.test.runner.xml', 'licenses\JUNIT-CPL-NOTICES.txt', 'libEGL.dll', 'libGLESv2.dll', 'licenses\ANGLE-NOTICES.txt', 'gesher-exec.exe', 'dex2oat.exe', 'profman.exe', 'oatdump.exe',
+                      'tzdata\etc\tz\versioned\9\tzdata', 'tzdata\etc\tz\versioned\9\icu\zoneinfo64.res', 'licenses\TZDATA-NOTICES.txt', 'licenses\BIONIC-GDTOA-NOTICES.txt', 'gesher-camera.apk', 'gesher-tts.apk', 'gesher-stt.apk') {
             if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
           }
           $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
@@ -1487,6 +1838,33 @@ jobs:
             throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
           }
           'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $bundleExtensions = '.apks', '.xapk', '.apkm', '.apk+'
+          foreach ($ext in $bundleExtensions) {
+            if ((Get-ItemProperty "$cls\$ext").'(default)' -ne 'Gesher.Xapk') { throw "$ext default ProgID is missing" }
+            if ($null -eq (Get-ItemProperty "$cls\$ext\OpenWithProgids").'Gesher.Xapk') {
+              throw "$ext OpenWithProgids lacks Gesher.Xapk"
+            }
+          }
+          $bundleOpen = (Get-ItemProperty "$cls\Gesher.Xapk\shell\open\command").'(default)'
+          if ($bundleOpen -ne $open) { throw "Bundle open command differs from the APK command: $bundleOpen" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          foreach ($ext in '.apkm', '.apk+') {
+            $bundle = Join-Path $env:RUNNER_TEMP "shell launch$ext"
+            $archive = [IO.Compression.ZipFile]::Open($bundle, 'Create')
+            try {
+              $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$app\lifecycle.apk", 'base.apk')
+            } finally { $archive.Dispose() }
+            $psi.Arguments = '"{0}"' -f $bundle
+            $p = [Diagnostics.Process]::Start($psi)
+            $errors = $p.StandardError.ReadToEndAsync()
+            $out = $p.StandardOutput.ReadToEnd()
+            $p.WaitForExit()
+            $out += $errors.Result
+            if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
+              throw "$ext open command failed (exit $($p.ExitCode)): $out"
+            }
+          }
+          'PASS  installer: split bundle associations and registered APKM/APK+ open commands' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
           Write-Host "toast activator: $activator"
@@ -1830,6 +2208,13 @@ jobs:
           if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
           if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
           'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path "$cls\Gesher.Xapk") { throw 'Uninstall left the Gesher.Xapk ProgID' }
+          foreach ($ext in '.apks', '.xapk', '.apkm', '.apk+') {
+            if ((Get-ItemProperty "$cls\$ext" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Xapk' -or
+                $null -ne (Get-ItemProperty "$cls\$ext\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Xapk') {
+              throw "Uninstall left the Gesher bundle association for $ext"
+            }
+          }
           if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
           $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
           if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
@@ -1841,6 +2226,14 @@ jobs:
           Remove-Item $sentinel
           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Preserve portable Windows runtime and Setup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-runtime-windows-2022
+          path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
+          if-no-files-found: warn
 
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
   # clean runner runs real, unmodified open-source apps from F-Droid
@@ -1927,9 +2320,39 @@ jobs:
           name: e2e-results-${{ matrix.os }}
           path: e2e-results/
 
+  # The fourteen test shards consume the same core supplier batch. Receiving
+  # it once here (run, job and artifact reads plus fourteen archive requests)
+  # and publishing the verified tree as one bundle replaces 14 batch receipts
+  # (20 API requests each) with one bundle receipt per shard (7 requests).
+  # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
+  core-suppliers:
+    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    runs-on: ubuntu-24.04
+    # Room for a reachable wait on the shared hourly API quota.
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tools/ci
+            tools/surface
+      - name: Verify and stage the complete core supplier batch with its ledger
+        run: python3 tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core --ledger
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-suppliers
+          path: ci-suppliers/core/
+          if-no-files-found: error
+          # Every ledgered file must arrive; consumers reject any difference.
+          include-hidden-files: true
+          # Default retention, like the producers' artifacts: a rerun of a
+          # failed shard reuses this job's bundle for as long as it can rerun.
+
   test-shards:
     name: test-${{ matrix.shard }} (${{ matrix.os }})
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
+    needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
     strategy:
       fail-fast: false
       matrix:
@@ -1965,10 +2388,10 @@ jobs:
             tools/fonts
             tools/binder
 
-      - name: Verify and stage the complete core supplier batch
+      - name: Verify and stage the complete core supplier bundle
         shell: pwsh
         run: |
-          python tools/ci/artifact_receipt.py --batch tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
+          python tools/ci/artifact_receipt.py --name core-suppliers --producer core-suppliers --bundle-of tools/ci/test_shard_artifacts.json --destination ci-suppliers/core
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify and assemble windows-x64 artifact
@@ -2003,6 +2426,14 @@ jobs:
           & ./dist/sqlite_path_test.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Real Windows external storage permissions and live revocation
+        if: matrix.shard == 'native'
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          & ./dist/storage_policy_host_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify and assemble framework artifact
         shell: pwsh
         run: |
@@ -2021,11 +2452,13 @@ jobs:
           python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: ARM64 parked TLS, reuse and actual translator callbacks
+      - name: ARM64 active and parked TLS, baseline commitment and actual translator callbacks
         if: matrix.shard == 'native'
         timeout-minutes: 3
         shell: pwsh
         run: |
+          & ./dist/arm64_tls_lifecycle_baseline.exe measure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -2496,8 +2929,9 @@ jobs:
   supplier-correlation:
     needs: [source-identity, build, compile]
     runs-on: ubuntu-24.04
-    # +15 minutes: a quota-exhausted GitHub read may wait up to 15 minutes for reset.
-    timeout-minutes: 25
+    # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
+    # published hourly reset instead of failing the job.
+    timeout-minutes: 71
     env:
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
@@ -2573,7 +3007,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job
