@@ -1,6 +1,7 @@
 // gesher-base: <linux/ioctl.h>, Linux's ioctl request encoding (x86-64,
 // asm-generic), for uapi headers that define requests. The requests reach
-// gesher-base's ioctl, which fails them with ENOTTY (<sys/ioctl.h>).
+// gesher-base's ioctl (<sys/ioctl.h>), which answers the few it implements,
+// such as SYNC_IOC_FILE_INFO on a native fence, and fails the rest with ENOTTY.
 #pragma once
 
 #define _IOC_NRBITS 8

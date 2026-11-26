@@ -1,6 +1,7 @@
 // Generated from the production memory implementation and symbol registrations.
 // The host adaptations are Windows' _msize -> glibc's malloc_usable_size and
-// the Windows heap walk behind mallinfo, which finds no heap on the host.
+// the Windows heap walk behind mallinfo and compaction behind mallopt, which
+// find no heap on the host.
 #include "shim_internal.h"
 
 #include <atomic>
@@ -36,6 +37,16 @@ static intptr_t _get_heap_handle() { return 0; }
 static bool HeapLock(HANDLE) { return false; }
 static bool HeapWalk(HANDLE, PROCESS_HEAP_ENTRY*) { return false; }
 static bool HeapUnlock(HANDLE) { return true; }
+// mallopt's purge compacts the same Windows heap; on the host the compaction
+// fails as for a heap that does not exist (it is not checked here).
+constexpr unsigned long ERROR_SUCCESS = 0, ERROR_INVALID_HANDLE = 6;
+static unsigned long host_last_error = ERROR_SUCCESS;
+static void SetLastError(unsigned long error) { host_last_error = error; }
+static unsigned long GetLastError() { return host_last_error; }
+static size_t HeapCompact(HANDLE, unsigned long) {
+  SetLastError(ERROR_INVALID_HANDLE);
+  return 0;
+}
 
 namespace gesher::bionic {
 namespace {

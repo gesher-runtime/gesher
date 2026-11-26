@@ -64,8 +64,9 @@ def build(args, folder: Path, read_source, parser_objects=None):
     for name in ("stdio_internal.h", "stdio_stream_buffer.h", "stdio_output_buffer.h"):
         (include / name).write_bytes(read_source("compat/posix/src/" + name))
     template = adapter_source(read_source)
-    for name in ("stdio_internal.h", "stdio_stream_buffer.h"):
-        template = replace_once(template, str(ROOT / "compat/posix/src" / name), str(include / name))
+    for name, marker in (("stdio_internal.h", "@RESOLVED_INTERNAL_HEADER@"),
+                         ("stdio_stream_buffer.h", "@RESOLVED_STREAM_HEADER@")):
+        template = replace_once(template, marker, str(include / name))
     # Replace only the declared glibc parser envelope, retaining the complete
     # production adapter and its actual public callback entry points.
     first = template.index("static ssize_t HostScanRead(")
@@ -118,7 +119,7 @@ static thread_local uint64_t scan_state_locks = 0;
     executable = folder / "stdio-scanning"
     subprocess.run(shlex.split(args.cxx) + flags + ["-std=c++17", "-Wall", "-Wextra", "-Werror",
                    "-DGESHER_SCAN_MEASURE=" + ("1" if args.measure else "0"), "-I", str(include),
-                   "-I", str(ROOT / "tests/native"), str(generated), *objects, "-o", str(executable)],
+                   "-I", str(ROOT / "tests/native"), str(generated), *objects, "-Wl,--wrap=realloc", "-o", str(executable)],
                    check=True, timeout=120)
     return executable, objects
 

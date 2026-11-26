@@ -74,7 +74,7 @@ import java.util.concurrent.TimeUnit;
 final class JobSchedulerService extends IJobScheduler.Default
         implements DeviceWork.Source, WindowsHost.Listener {
     private static final long EXECUTION_LIMIT_MS = 10 * 60_000;
-    private static final long IDLE_AFTER_MS = 31 * 60_000; // AOSP config_jobSchedulerInactivityIdleThreshold
+    private static final long IDLE_AFTER_MS = DeviceConstraints.IDLE_AFTER_MS;
     private static final long BIND_TIMEOUT_MS = 18_000;
     private static final long CALLBACK_TIMEOUT_MS = 8_000;
     private static final int SYSTEM_STOP_TO_FAILURE_RATIO = 3;
@@ -102,6 +102,8 @@ final class JobSchedulerService extends IJobScheduler.Default
     private final NotificationManagerService mNotifications;
     private final double mTimeScale;
     private final ConnectivityService mConnectivity;
+    private final Runnable mNetworkChanged = () -> constraintsChanged(OBSERVE_NETWORK);
+    private boolean mObservingNetwork; // Guarded by this.
     private final ScheduledThreadPoolExecutor mTimeouts = new ScheduledThreadPoolExecutor(1, task -> {
         Thread thread = new Thread(task, "job-timeouts");
         thread.setDaemon(true);
@@ -645,11 +647,9 @@ final class JobSchedulerService extends IJobScheduler.Default
             addJobLocked(j);
             SystemServer.log("jobscheduler: persisted " + j + " scheduled again");
         }
+        updateNetworkObservationLocked();
         WindowsHost.addListener(this);
         mAtm.setTopResumedPackageListener(() -> constraintsChanged(OBSERVE_TOP));
-        if (mConnectivity != null) {
-            mConnectivity.addSystemListener(() -> constraintsChanged(OBSERVE_NETWORK));
-        }
         mThread = new Thread(this::run, "jobs");
         mThread.setDaemon(true);
         mThread.start();
@@ -741,6 +741,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                     // are admitted, then ordinary replacements/new jobs fail too.
                     // The identical-info enqueue fast path above bypasses this check.
                     if (!attributed && mJobsPerUid.getOrDefault(callingUid, 0) > MAX_JOBS_PER_APP) {
+                        if (stale != null) updateNetworkObservationLocked();
                         throw new IllegalStateException("Apps may not schedule more than "
                                 + MAX_JOBS_PER_APP + " distinct jobs");
                     }
@@ -770,6 +771,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                     work.setWorkId(job.nextWorkId++);
                     job.work.add(work);
                 }
+                updateNetworkObservationLocked();
                 notifyAll();
             }
         } finally {
@@ -793,6 +795,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 if (j.same(pkg, namespace, jobId)) cancelled.add(j);
             }
             removeJobsLocked(cancelled);
+            updateNetworkObservationLocked();
             notifyAll();
         }
         cancelled(cancelled, "cancelled");
@@ -818,6 +821,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 }
             }
             removeJobsLocked(cancelled);
+            updateNetworkObservationLocked();
             notifyAll();
         }
         cancelled(cancelled, "cancelled");
@@ -991,6 +995,9 @@ final class JobSchedulerService extends IJobScheduler.Default
         boolean resumed = (events & WindowsHost.EVENT_RESUMED) != 0;
         if (resumed) inputs |= OBSERVE_POWER | OBSERVE_IDLE | OBSERVE_STORAGE | OBSERVE_NETWORK;
         if (inputs == 0) return;
+        // The scheduler may precede ConnectivityService in WindowsHost's listener
+        // order. Do not admit a job using the pre-suspend cache during that interval.
+        if (resumed && mConnectivity != null) mConnectivity.invalidateSnapshot();
         synchronized (this) {
             mCheckExecutionAfterResume |= resumed && mRunning != 0;
             constraintsChanged(inputs);
@@ -1084,6 +1091,21 @@ final class JobSchedulerService extends IJobScheduler.Default
         int inputs = 0;
         for (Job job : mJobs) inputs |= job.hostInputs;
         return inputs;
+    }
+
+    /**
+     * Every job-list publication/removal updates ownership under the same monitor,
+     * including persisted jobs, retries and active runs. Connectivity's ownership
+     * methods never invoke listeners inline and its dispatcher holds no monitor over
+     * callbacks, so this does not invert the scheduler/observer lock order.
+     */
+    private void updateNetworkObservationLocked() {
+        if (mConnectivity == null) return;
+        boolean required = (hostInputsLocked() & OBSERVE_NETWORK) != 0;
+        if (required == mObservingNetwork) return;
+        if (required) mConnectivity.addSystemListener(mNetworkChanged);
+        else mConnectivity.removeSystemListener(mNetworkChanged);
+        mObservingNetwork = required;
     }
 
     private void run() {
@@ -1180,7 +1202,7 @@ final class JobSchedulerService extends IJobScheduler.Default
     private static long hostPollAt(long now, int inputs, ConstraintState state) {
         if (inputs == 0) return Long.MAX_VALUE;
         long delay = CONSTRAINT_POLL_MS;
-        if (state.idleMillis > 0 && state.idleMillis < IDLE_AFTER_MS) {
+        if (state.idleMillis >= 0 && state.idleMillis < IDLE_AFTER_MS) {
             delay = Math.min(delay, IDLE_AFTER_MS - state.idleMillis);
         }
         return now + delay;
@@ -1303,26 +1325,24 @@ final class JobSchedulerService extends IJobScheduler.Default
     }
 
     private static boolean batteryNotLow(int[] power) {
-        return power != null && power.length >= 3 && power[1] >= 0 && power[1] != 255
-                && (power[1] & (2 | 4)) == 0;
+        return DeviceConstraints.batteryNotLow(power);
     }
 
     private static boolean charging(Job job, ConstraintState state) {
         int[] power = state.power;
-        if (power == null || power.length < 3 || power[0] != 1) return false;
+        if (!DeviceConstraints.powerConnected(power)) return false;
         // BatteryController retains the top-app power exemption for that run.
         Run run = job.run;
         if ((job.packageName.equals(state.topPackage) || run != null && run.topStarted)
                 && job.effectivePriority() >= JobInfo.PRIORITY_DEFAULT) return true;
-        return batteryNotLow(power)
-                && ((power[1] & (128 | 8)) != 0 || power[2] == 100);
+        return DeviceConstraints.stablePower(power);
     }
 
     private static final class ConstraintState {
         com.gesher.net.WindowsNetworks.Snapshot networks;
         Map<android.net.NetworkRequest, android.net.Network> networkMatches;
         int[] power;
-        long idleMillis;
+        long idleMillis = DeviceConstraints.NOT_OFF;
         boolean storageNotLow;
         String topPackage;
     }
@@ -1355,7 +1375,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
         if ((inputs & OBSERVE_IDLE) != 0) {
             Long idle = mIdleMillisOverride;
-            state.idleMillis = idle != null ? idle : WindowsHost.jobIdleMillis();
+            state.idleMillis = idle != null ? idle : WindowsHost.jobIdleReading();
         }
         if ((inputs & OBSERVE_TOP) != 0) state.topPackage = mAtm.topResumedPackage();
         if ((inputs & OBSERVE_STORAGE) != 0) {
@@ -1792,6 +1812,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             j.work.clear();
             j.delivered.clear();
         }
+        updateNetworkObservationLocked();
         notifyAll();
         return keep ? 1 : 0;
     }
@@ -1971,6 +1992,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             mRemovalEpochs.put(name, mRemovalEpochs.getOrDefault(name, 0L) + 1);
             for (Job job : mJobs) if (name.equals(job.packageName)) cancelled.add(job);
             removeJobsLocked(cancelled);
+            updateNetworkObservationLocked();
             notifyAll();
             File[] persisted = persistDir().listFiles();
             if (persisted != null) for (File file : persisted) {

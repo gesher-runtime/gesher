@@ -10,7 +10,17 @@ static ssize_t unsupported_pread(int fd, void* data, size_t count, off_t offset)
 }
 #define pread unsupported_pread
 #endif
+#ifdef GESHER_CONNECTIVITY_DEMAND
+/* Receiver delivery also uses the existing write-size-only Parcel boundary.
+ * Persisted-job serialization is tested only by the Windows ART fixture. */
+#include "../scheduler/framework_host.c"
+JNIEXPORT jlong JNICALL Java_android_os_SystemClock_elapsedRealtimeNanos(JNIEnv* env, jclass type) {
+    struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+    return (jlong)now.tv_sec * 1000000000 + now.tv_nsec;
+}
+#else
 #include "../location/framework_host.c"
+#endif
 
 /* Tracing is disabled at this host boundary; Handler/MessageQueue Java removal
  * is real and needs no native poller. */
@@ -24,9 +34,24 @@ JNIEXPORT jboolean JNICALL Java_android_os_PerfettoTrace_00024Category_native_1i
  * deterministic host fixture supplies successive adapter snapshots; no Windows
  * discovery, change notification, or interface implementation is substituted. */
 JNIEXPORT jstring JNICALL Java_com_gesher_net_WindowsNetworks_nativeSnapshot(JNIEnv* env, jclass type) {
-    jclass fixture = (*env)->FindClass(env, "ConnectivityServiceSnapshotHost");
+    jclass fixture = (*env)->FindClass(env,
+#ifdef GESHER_CONNECTIVITY_DEMAND
+            "ConnectivityDemandHost"
+#else
+            "ConnectivityServiceSnapshotHost"
+#endif
+    );
     if (!fixture) return NULL;
     jmethodID read = (*env)->GetStaticMethodID(env, fixture, "readSnapshot", "()Ljava/lang/String;");
     if (!read) return NULL;
     return (jstring)(*env)->CallStaticObjectMethod(env, fixture, read);
 }
+
+#ifdef GESHER_CONNECTIVITY_DEMAND
+JNIEXPORT jboolean JNICALL Java_com_gesher_net_WindowsNetworks_nativeWaitForChange(JNIEnv* env, jclass type, jint timeout) {
+    jclass fixture = (*env)->FindClass(env, "ConnectivityDemandHost");
+    if (!fixture) return JNI_FALSE;
+    jmethodID wait = (*env)->GetStaticMethodID(env, fixture, "waitForChange", "(I)Z");
+    return wait ? (*env)->CallStaticBooleanMethod(env, fixture, wait, timeout) : JNI_FALSE;
+}
+#endif

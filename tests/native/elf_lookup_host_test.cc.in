@@ -9,11 +9,14 @@
 #include <string>
 #include <vector>
 
-std::recursive_mutex g_mutex;
+// The loader's recursive lock; its held-by-this-thread count is not used by lookup.
+using LoaderMutex = std::recursive_mutex;
+LoaderMutex g_mutex;
 struct Elf64_Sym { int value; };
 struct Library {
   std::vector<Library*> dependencies;
   std::map<std::string, Elf64_Sym> symbols;
+  bool retired = false;
 };
 static std::vector<Library*> visited;
 static Library* resolved;
@@ -71,6 +74,11 @@ int main() {
         visited == std::vector<Library*>{&root, &left, &right, &leaf, &shared, &tail});
   Check("no resolver call for missing symbol", resolutions == 0 && hashes == 2);
   Check("null handle", Find(nullptr, "root") == nullptr && visited.empty());
+  root.retired = true;
+  Check("retired handle names nothing",
+        Find(&root, "root") == nullptr && visited.empty() && hashes == 0 && resolutions == 0);
+  root.retired = false;
+  Check("handle found again once not retired", Find(&root, "root") == &root.symbols["root"]);
   std::vector<Library> deep(1024);
   for (size_t i = 1; i < deep.size(); ++i) deep[i - 1].dependencies = {&deep[i]};
   deep.back().dependencies = {&deep.front()};
