@@ -104,10 +104,15 @@ def main() -> None:
                          if symbol.name.startswith("jni32_")}
             expected = {"jni32_version", "jni32_contract", "jni32_stale",
                         "jni32_wrong_env", "jni32_unsupported"}
-            if set(functions) != expected or any(
+            named = {symbol.name: symbol for symbol in symbols
+                     if symbol.name.startswith("Java_gesher_Test_")}
+            expected_named = {"Java_gesher_Test_add", "Java_gesher_Test_length",
+                              "Java_gesher_Test_echo", "Java_gesher_Test_critical"}
+            all_functions = list(functions.values()) + list(named.values())
+            if set(functions) != expected or set(named) != expected_named or any(
                     bool(symbol["st_value"] & 1) != (mode == "thumb")
-                    for symbol in functions.values()):
-                raise RuntimeError(f"{jni_output}: JNI function exports lost ARM/Thumb state")
+                    for symbol in all_functions):
+                raise RuntimeError(f"{jni_output}: JNI functions lost ARM/Thumb entry state")
             imported = {symbol.name for symbol in symbols
                         if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
             if imported:
