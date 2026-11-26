@@ -3,7 +3,7 @@
 $mfDir = Join-Path (Resolve-Path $Dir).Path 'media/ndk-format'
 $mfHost = (Resolve-Path $Dir).Path
 $mfExpected = @(
-  'media4 format exports: ok; 21 functions through bare/system/default handles; no dummy codec',
+  'media4 format exports: ok; 21 functions through bare/system/default handles',
   'media4 format data: ok; 152 actual pointer objects and pinned AOSP values; ELF data indirection',
   'media4 format typed: ok; int32/int64/float/double/LP64 size/rectangle; direct and dlsym calls',
   'media4 format ownership: ok; UTF-8 and binary input copies; copied values survive source deletion',

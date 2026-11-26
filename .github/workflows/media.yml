@@ -151,6 +151,11 @@ jobs:
       - name: Build Media4 NDK muxer fixtures
         run: bash tests/media/ndk-muxer/build.sh out android-ndk-r27c
 
+      - name: Build NDK codec contract fixtures
+        run: |
+          chmod +x work/build-tools-36.1/d8
+          bash tests/media/ndk-codec/build.sh out android-ndk-r27c "$PWD/work/build-tools-36.1/d8"
+
       - name: Build NDK extractor contract fixtures
         run: bash tests/media/ndk-extractor/build.sh out android-ndk-r27c
 

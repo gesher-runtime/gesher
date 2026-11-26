@@ -22,9 +22,11 @@
 // where they are, with the output format's csd-0 (and csd-1) set.
 
 #include <jni.h>
+#include <gesher/bionic_shim.h>
 #include <gesher/clocks.h>
 #include <gesher/perf_trace.h>
 
+#include <media/NdkMediaError.h>
 #include <media/NdkMediaFormat.h>
 #include <utils/Errors.h>
 
@@ -33,8 +35,11 @@
 #include <chrono>
 #include <cerrno>
 #include <condition_variable>
+#include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -43,6 +48,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <sys/types.h>
 
 #include "../audio/log.h"
 #include "../player/decoder.h"
@@ -233,6 +239,14 @@ struct JavaMap {
   std::map<std::string, int32_t> ints;
   std::map<std::string, int64_t> longs;
   std::map<std::string, std::string> strings;
+
+  Format ToFormat() const {
+    Format format;
+    for (const auto& [k, v] : ints) AMediaFormat_setInt32(format.get(), k.c_str(), v);
+    for (const auto& [k, v] : longs) AMediaFormat_setInt64(format.get(), k.c_str(), v);
+    for (const auto& [k, v] : strings) AMediaFormat_setString(format.get(), k.c_str(), v.c_str());
+    return format;
+  }
 
   jobject Make(JNIEnv* env) const {
     jobject map = env->NewObject(gJ.hash_map, gJ.hash_map_ctor);
@@ -431,7 +445,7 @@ uint8_t* CpuOutputBytes(JNIEnv* env, Slot& slot) {
     // existing vector allocation, a lazy accessor must report Java OOM.
     slot.deferred_mem.reset(new (std::nothrow) uint8_t[OutputFrameBytes(*slot.frame)]);
     if (slot.deferred_mem == nullptr) {
-      jniThrow(env, "java/lang/OutOfMemoryError", "MediaCodec output frame");
+      if (env != nullptr) jniThrow(env, "java/lang/OutOfMemoryError", "MediaCodec output frame");
       return nullptr;
     }
     CopyOutputFramePixels(*slot.frame, slot.deferred_mem.get());
@@ -441,6 +455,7 @@ uint8_t* CpuOutputBytes(JNIEnv* env, Slot& slot) {
 
 class Codec {
  public:
+  explicit Codec(const CodecEntry& entry) : entry_(entry) {}
   Codec(JNIEnv* env, jobject thiz, const CodecEntry& entry)
       : entry_(entry), self_(std::make_shared<WeakRef>(env, thiz)) {}
   ~Codec() {
@@ -472,7 +487,7 @@ class Codec {
   const CodecEntry& entry() const { return entry_; }
 
   bool Configure(JNIEnv* env, Format format, jobject surface, std::string* error,
-                 int* status = nullptr) {
+                 int* status = nullptr, ANativeWindow* native_window = nullptr) {
     if (status != nullptr) *status = android::BAD_VALUE;
     std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     std::lock_guard<std::mutex> lock(mu_);
@@ -496,6 +511,10 @@ class Codec {
       return true;
     }
     SetSurfaceLocked(env, surface);
+    if (native_window != nullptr) {
+      ANativeWindow_acquire(native_window);
+      window_ = native_window;
+    }
     int32_t max_input = 0;
     if (!input_format_.GetInt32("max-input-size", &max_input) || max_input <= 0) {
       int32_t w = 0, h = 0;
@@ -537,6 +556,18 @@ class Codec {
   }
 
   bool has_surface() const { return window_ != nullptr || reader_ != nullptr; }
+
+  int SetNativeOutputSurface(ANativeWindow* window) {
+    if (window == nullptr) return android::BAD_VALUE;
+    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
+    std::lock_guard<std::mutex> lock(mu_);
+    if (released_ || fatal_ || !configured_ || window_ == nullptr)
+      return android::INVALID_OPERATION;
+    ANativeWindow_acquire(window);
+    ANativeWindow_release(window_);
+    window_ = window;
+    return android::OK;
+  }
 
   // --- Encoders: the input Surface, the end of its stream, parameters.
 
@@ -711,12 +742,12 @@ class Codec {
     return true;
   }
 
-  void Stop(int* status = nullptr) {
+  void Stop(int* status = nullptr, bool require_configured = false) {
     if (status != nullptr) *status = android::OK;
     std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     {
       std::lock_guard<std::mutex> lock(mu_);
-      if (fatal_) {
+      if (fatal_ || (require_configured && (!configured_ || released_))) {
         if (status != nullptr) *status = android::INVALID_OPERATION;
         return;
       }
@@ -862,7 +893,8 @@ class Codec {
     return true;
   }
 
-  int DequeueOutput(JNIEnv* env, jobject info, int64_t timeout_us, int* status = nullptr) {
+  int DequeueOutput(JNIEnv* env, jobject info, int64_t timeout_us, int* status = nullptr,
+                    int* size = nullptr, int64_t* time_us = nullptr, uint32_t* flags = nullptr) {
     if (status != nullptr) *status = android::OK;
     std::unique_lock<std::mutex> lock(mu_);
     const uint64_t generation = wait_generation_;
@@ -887,12 +919,20 @@ class Codec {
       format_pending_ = false;
       return kInfoOutputFormatChanged;
     }
-    if (ready_.empty()) return kInfoTryAgainLater;
+    if (ready_.empty()) {
+      if (size != nullptr && status != nullptr && failed_) *status = android::UNKNOWN_ERROR;
+      return kInfoTryAgainLater;
+    }
     int i = ready_.front();
     ready_.pop_front();
     Slot& s = outputs_[i];
     s.client = true;
-    env->CallVoidMethod(info, gJ.buffer_info_set, 0, s.size, static_cast<jlong>(s.time_us), s.flags);
+    if (env != nullptr) {
+      env->CallVoidMethod(info, gJ.buffer_info_set, 0, s.size, static_cast<jlong>(s.time_us), s.flags);
+    }
+    if (size != nullptr) *size = s.size;
+    if (time_us != nullptr) *time_us = s.time_us;
+    if (flags != nullptr) *flags = static_cast<uint32_t>(s.flags);
     return i;
   }
 
@@ -1112,6 +1152,34 @@ class Codec {
     return image;
   }
 
+  uint8_t* NativeBuffer(size_t index, size_t* size, bool input) {
+    if (size != nullptr) *size = 0;
+    std::lock_guard<std::mutex> lock(mu_);
+    if (released_ || fatal_ || !started_ || index >= kSlots) return nullptr;
+    Slot& slot = input ? inputs_[index] : outputs_[index];
+    if (!slot.client || (input ? input_surface_ != nullptr : has_surface())) return nullptr;
+    uint8_t* bytes = input ? slot.mem.data() : CpuOutputBytes(nullptr, slot);
+    if (bytes != nullptr && size != nullptr)
+      *size = input ? slot.mem.size() : static_cast<size_t>(slot.size);
+    return bytes;
+  }
+
+  AMediaFormat* NativeFormat(bool input, std::optional<size_t> index = std::nullopt) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (released_ || fatal_ || !configured_) return nullptr;
+    if (index && (*index >= kSlots || !outputs_[*index].client)) return nullptr;
+    if (!input) {
+      if (entry_.encoder) return EncoderOutputFormatLocked().Release();
+      if (output_known_) {
+        const auto* frame = index ? outputs_[*index].frame.get() : nullptr;
+        return OutputFormatLocked(frame).ToFormat().Release();
+      }
+    }
+    Format copy;
+    if (AMediaFormat_copy(copy.get(), input_format_.get()) != AMEDIA_OK) return nullptr;
+    return copy.Release();
+  }
+
   jobject InputFormatMap(JNIEnv* env) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!CheckInitializedLocked(env)) return nullptr;
@@ -1136,18 +1204,20 @@ class Codec {
     return std::find(work_.begin(), work_.end(), index) != work_.end();
   }
 
-  JavaMap OutputFormatLocked() const {
+  JavaMap OutputFormatLocked(const VideoFrame* frame = nullptr) const {
     JavaMap m;
     if (entry_.video) {
+      const int width = frame != nullptr ? frame->visible_width() : out_width_;
+      const int height = frame != nullptr ? frame->visible_height() : out_height_;
       m.strings["mime"] = "video/raw";
-      m.ints["width"] = out_width_;
-      m.ints["height"] = out_height_;
-      m.ints["stride"] = out_width_;
-      m.ints["slice-height"] = out_height_;
+      m.ints["width"] = width;
+      m.ints["height"] = height;
+      m.ints["stride"] = width;
+      m.ints["slice-height"] = height;
       m.ints["crop-left"] = 0;
       m.ints["crop-top"] = 0;
-      m.ints["crop-right"] = out_width_ - 1;
-      m.ints["crop-bottom"] = out_height_ - 1;
+      m.ints["crop-right"] = width - 1;
+      m.ints["crop-bottom"] = height - 1;
       m.ints["color-format"] = has_surface() ? kColorFormatSurface : kColorFormatYuv420Planar;
     } else {
       m.strings["mime"] = "audio/raw";
@@ -1869,6 +1939,210 @@ class Codec {
   std::vector<std::vector<uint8_t>> csd_;
   int64_t last_out_us_ = 0;
 };
+
+// Native codec handles use the same provider list, worker and buffer slots as
+// MediaCodec. No Java MediaCodec object or Java callback state is needed.
+namespace ndk_codec {
+
+struct BufferInfo {
+  int32_t offset;
+  int32_t size;
+  int64_t presentation_time_us;
+  uint32_t flags;
+};
+static_assert(sizeof(BufferInfo) == 24 && offsetof(BufferInfo, flags) == 16);
+static_assert(sizeof(size_t) == 8 && sizeof(ssize_t) == 8);
+
+// AMediaCodec in Android 16 maps codec state and slot errors to UNKNOWN.
+// TRY_AGAIN_LATER and FORMAT_CHANGED are returned separately by dequeues.
+media_status_t ToMediaStatus(int status) {
+  return status == android::OK ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
+}
+
+Codec* Create(const CodecEntry* entry) {
+  return entry != nullptr ? new (std::nothrow) Codec(*entry) : nullptr;
+}
+Codec* CreateByName(const char* name) { return name != nullptr ? Create(FindByName(name)) : nullptr; }
+Codec* CreateDecoder(const char* mime) { return mime != nullptr ? Create(FindByType(mime, false)) : nullptr; }
+Codec* CreateEncoder(const char* mime) { return mime != nullptr ? Create(FindByType(mime, true)) : nullptr; }
+media_status_t Delete(Codec* codec) {
+  delete codec;
+  return AMEDIA_OK;
+}
+
+media_status_t Configure(Codec* codec, const AMediaFormat* format, ANativeWindow* window,
+                         const void* crypto, uint32_t flags) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (format == nullptr || flags != static_cast<uint32_t>(codec->entry().encoder) ||
+      (window != nullptr && (codec->entry().encoder || !codec->entry().video))) {
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  }
+  if (crypto != nullptr) return AMEDIA_ERROR_UNSUPPORTED;
+  Format copy;
+  const media_status_t copied = AMediaFormat_copy(copy.get(), const_cast<AMediaFormat*>(format));
+  if (copied != AMEDIA_OK) return copied;
+  // Bound the slot allocation before the shared worker multiplies dimensions
+  // or reserves an app-controlled number of bytes. Current providers declare
+  // no video dimensions beyond this bound.
+  constexpr int kMaxVideoDimension = 8192;
+  constexpr int kMaxInputCapacity = 64 * 1024 * 1024;
+  int32_t max_input = 0;
+  if (copy.GetInt32("max-input-size", &max_input) && max_input > kMaxInputCapacity)
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (codec->entry().video) {
+    int32_t width = 0, height = 0;
+    if (!copy.GetInt32("width", &width) || !copy.GetInt32("height", &height) ||
+        width <= 0 || height <= 0 || width > kMaxVideoDimension || height > kMaxVideoDimension)
+      return AMEDIA_ERROR_INVALID_PARAMETER;
+  }
+  std::string error;
+  int status;
+  return codec->Configure(nullptr, std::move(copy), nullptr, &error, &status, window)
+      ? AMEDIA_OK : ToMediaStatus(status);
+}
+
+media_status_t Start(Codec* codec) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  std::string error;
+  return codec->Start(&error) ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
+}
+media_status_t Stop(Codec* codec) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  int status;
+  codec->Stop(&status, true);
+  return ToMediaStatus(status);
+}
+media_status_t Flush(Codec* codec) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  int status;
+  codec->Flush(&status);
+  return ToMediaStatus(status);
+}
+
+uint8_t* GetInputBuffer(Codec* codec, size_t index, size_t* size) {
+  return codec != nullptr ? codec->NativeBuffer(index, size, true) : nullptr;
+}
+uint8_t* GetOutputBuffer(Codec* codec, size_t index, size_t* size) {
+  return codec != nullptr ? codec->NativeBuffer(index, size, false) : nullptr;
+}
+
+ssize_t DequeueInput(Codec* codec, int64_t timeout_us) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  int status;
+  const int index = codec->DequeueInput(timeout_us, &status);
+  return status == android::OK ? index : ToMediaStatus(status);
+}
+ssize_t DequeueOutput(Codec* codec, BufferInfo* info, int64_t timeout_us) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (info == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  int status;
+  BufferInfo next{};
+  const int index = codec->DequeueOutput(nullptr, nullptr, timeout_us, &status, &next.size,
+                                        &next.presentation_time_us, &next.flags);
+  if (status != android::OK) return ToMediaStatus(status);
+  if (index >= 0) *info = next;
+  return index;
+}
+
+media_status_t QueueInput(Codec* codec, size_t index, int64_t offset, size_t size,
+                          uint64_t time_us, uint32_t flags) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (index > static_cast<size_t>(std::numeric_limits<int>::max()) || offset < 0 ||
+      offset > std::numeric_limits<int>::max() || size > static_cast<size_t>(std::numeric_limits<int>::max()))
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  if ((flags & ~(kFlagKeyFrame | kFlagCodecConfig | kFlagEndOfStream)) != 0)
+    return AMEDIA_ERROR_UNSUPPORTED;
+  std::string error;
+  return codec->QueueInput(static_cast<int>(index), static_cast<int>(offset), static_cast<int>(size),
+                           static_cast<int64_t>(time_us), static_cast<int>(flags), &error)
+      ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
+}
+
+AMediaFormat* GetInputFormat(Codec* codec) {
+  return codec != nullptr ? codec->NativeFormat(true) : nullptr;
+}
+AMediaFormat* GetOutputFormat(Codec* codec) {
+  return codec != nullptr ? codec->NativeFormat(false) : nullptr;
+}
+AMediaFormat* GetBufferFormat(Codec* codec, size_t index) {
+  return codec != nullptr ? codec->NativeFormat(false, index) : nullptr;
+}
+
+media_status_t Release(Codec* codec, size_t index, bool render, bool has_timestamp, int64_t timestamp_ns) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (index > static_cast<size_t>(std::numeric_limits<int>::max())) return AMEDIA_ERROR_INVALID_PARAMETER;
+  int status;
+  std::string error;
+  codec->ReleaseOutput(static_cast<int>(index), render, has_timestamp, timestamp_ns, &error, &status);
+  return ToMediaStatus(status);
+}
+media_status_t ReleaseOutput(Codec* codec, size_t index, bool render) {
+  return Release(codec, index, render, false, 0);
+}
+media_status_t ReleaseOutputAtTime(Codec* codec, size_t index, int64_t timestamp_ns) {
+  return Release(codec, index, true, true, timestamp_ns);
+}
+media_status_t SetOutputSurface(Codec* codec, ANativeWindow* window) {
+  return codec != nullptr ? ToMediaStatus(codec->SetNativeOutputSurface(window))
+                          : AMEDIA_ERROR_INVALID_OBJECT;
+}
+
+media_status_t GetName(Codec* codec, char** name) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (name == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  const std::string& component = codec->entry().name;
+  *name = static_cast<char*>(std::malloc(component.size() + 1));
+  if (*name == nullptr) return AMEDIACODEC_ERROR_INSUFFICIENT_RESOURCE;
+  memcpy(*name, component.c_str(), component.size() + 1);
+  return AMEDIA_OK;
+}
+void ReleaseName(Codec*, char* name) { std::free(name); }
+
+#if defined(__x86_64__)
+#define CODEC_ELF_ABI __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define CODEC_ELF_ABI
+#endif
+template <auto F>
+struct ElfCall;
+template <class R, class... A, R (*F)(A...)>
+struct ElfCall<F> {
+  static R CODEC_ELF_ABI Call(A... args) { return F(args...); }
+};
+#undef CODEC_ELF_ABI
+
+bool Register() {
+  using gesher::bionic::AddBionicSymbol;
+#define CODEC_ENTRY(name, implementation) \
+  AddBionicSymbol("AMediaCodec_" #name, reinterpret_cast<void*>(&ElfCall<&implementation>::Call))
+  CODEC_ENTRY(createCodecByName, CreateByName);
+  CODEC_ENTRY(createDecoderByType, CreateDecoder);
+  CODEC_ENTRY(createEncoderByType, CreateEncoder);
+  CODEC_ENTRY(delete, Delete);
+  CODEC_ENTRY(configure, Configure);
+  CODEC_ENTRY(start, Start);
+  CODEC_ENTRY(stop, Stop);
+  CODEC_ENTRY(flush, Flush);
+  CODEC_ENTRY(getInputBuffer, GetInputBuffer);
+  CODEC_ENTRY(getOutputBuffer, GetOutputBuffer);
+  CODEC_ENTRY(dequeueInputBuffer, DequeueInput);
+  CODEC_ENTRY(dequeueOutputBuffer, DequeueOutput);
+  CODEC_ENTRY(queueInputBuffer, QueueInput);
+  CODEC_ENTRY(getInputFormat, GetInputFormat);
+  CODEC_ENTRY(getOutputFormat, GetOutputFormat);
+  CODEC_ENTRY(getBufferFormat, GetBufferFormat);
+  CODEC_ENTRY(releaseOutputBuffer, ReleaseOutput);
+  CODEC_ENTRY(releaseOutputBufferAtTime, ReleaseOutputAtTime);
+  CODEC_ENTRY(setOutputSurface, SetOutputSurface);
+  CODEC_ENTRY(getName, GetName);
+  CODEC_ENTRY(releaseName, ReleaseName);
+#undef CODEC_ENTRY
+  return true;
+}
+
+[[maybe_unused]] const bool gRegistered = Register();
+
+}  // namespace ndk_codec
 
 // Protect the Java field and its heap holder only. Never stop a worker, wait
 // for a callback, or invoke Java while holding this context mutex.

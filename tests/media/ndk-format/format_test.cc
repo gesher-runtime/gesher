@@ -84,11 +84,7 @@ std::string Run() {
     exports.Check(entry != nullptr && entry == dlsym(system, name) &&
                       entry == dlsym(RTLD_DEFAULT, name), name);
   }
-  // Library availability must describe its real subset, not add a dummy codec.
-  exports.Check(dlsym(RTLD_DEFAULT, "AMediaCodec_createDecoderByType") == nullptr &&
-                    (library == nullptr || dlsym(library, "AMediaCodec_createDecoderByType") == nullptr),
-                "unimplemented codec stays absent");
-  exports.End("21 functions through bare/system/default handles; no dummy codec");
+  exports.End("21 functions through bare/system/default handles");
 
   Format format;
   if (format.value == nullptr) {
