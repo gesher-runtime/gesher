@@ -14,6 +14,7 @@ import android.content.IOnPrimaryClipChangedListener;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Binder;
+import android.os.IBinder;
 import android.os.Process;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
@@ -21,7 +22,9 @@ import android.provider.Settings;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -86,8 +89,18 @@ public final class ClipboardService extends IClipboard.Default
         }
     }
 
+    // Guarded by mListeners. Use the identity of its cookie to distinguish a
+    // callback re-registered with the same Binder and attribution information.
+    private final Map<IBinder, ListenerInfo> mListenerRegistrations = new HashMap<>();
     private final RemoteCallbackList<IOnPrimaryClipChangedListener> mListeners =
-            new RemoteCallbackList<>();
+            new RemoteCallbackList<>() {
+                @Override public void onCallbackDied(IOnPrimaryClipChangedListener listener, Object cookie) {
+                    synchronized (this) {
+                        IBinder binder = listener.asBinder();
+                        if (mListenerRegistrations.get(binder) == cookie) mListenerRegistrations.remove(binder);
+                    }
+                }
+            };
     private final ActivityTaskManagerService mAtm;
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
@@ -278,9 +291,20 @@ public final class ClipboardService extends IClipboard.Default
         synchronized (mListeners) {
             // Keep a concurrent re-registration from being removed for an older cookie.
             for (Callback callback : listenerSnapshot()) {
-                if (!current(callback.identity)) mListeners.unregister(callback.listener);
+                if (!current(callback.identity)) unregisterLocked(callback.listener);
             }
         }
+    }
+
+    private boolean registered(Callback callback) {
+        synchronized (mListeners) {
+            return !mClosed && mListenerRegistrations.get(callback.listener.asBinder()) == callback.identity;
+        }
+    }
+
+    private void unregisterLocked(IOnPrimaryClipChangedListener listener) {
+        mListenerRegistrations.remove(listener.asBinder());
+        mListeners.unregister(listener);
     }
 
     private void notifyListeners() {
@@ -292,8 +316,9 @@ public final class ClipboardService extends IClipboard.Default
                 try {
                     // AOSP rechecks the saved UID/package/tag and notes a read for callbacks.
                     // Device lock gates getters, not the clipboard-change notification.
-                    if (current(callback.identity) && access(callback.identity,
-                            AppOpsManager.OP_READ_CLIPBOARD, true)) {
+                    if (registered(callback) && current(callback.identity)
+                            && access(callback.identity, AppOpsManager.OP_READ_CLIPBOARD, true)
+                            && registered(callback) && current(callback.identity)) {
                         callback.listener.dispatchPrimaryClipChanged();
                     }
                 } catch (RemoteException | RuntimeException failure) {
@@ -459,14 +484,17 @@ public final class ClipboardService extends IClipboard.Default
         ListenerInfo identity = caller(packageName, tag);
         start();
         synchronized (mListeners) {
-            if (!mClosed && current(identity)) mListeners.register(listener, identity);
+            if (mClosed || !current(identity)) return;
+            IBinder binder = listener.asBinder();
+            if (mListeners.register(listener, identity)) mListenerRegistrations.put(binder, identity);
+            else mListenerRegistrations.remove(binder);
         }
     }
 
     @Override public void removePrimaryClipChangedListener(IOnPrimaryClipChangedListener listener,
             String packageName, String tag, int userId, int deviceId) {
         caller(packageName, tag);
-        mListeners.unregister(listener);
+        synchronized (mListeners) { unregisterLocked(listener); }
     }
 
     @Override public boolean areClipboardAccessNotificationsEnabledForUser(int userId) { return false; }
@@ -477,7 +505,10 @@ public final class ClipboardService extends IClipboard.Default
             mClosed = true;
             if (mStarted) mHost.removeListener(this);
         }
-        synchronized (mListeners) { mListeners.kill(); }
+        synchronized (mListeners) {
+            mListenerRegistrations.clear();
+            mListeners.kill();
+        }
         try { mPackageChanges.close(); } catch (Exception failure) { throw new IllegalStateException(failure); }
         try { mPackageRemovals.close(); } catch (Exception failure) { throw new IllegalStateException(failure); }
         synchronized (mClipboardLock) { replaceLocked(null, null, null); }
