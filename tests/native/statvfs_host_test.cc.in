@@ -149,6 +149,10 @@ static bool GetDiskFreeSpaceExW(const wchar_t* input, ULARGE_INTEGER* avail,
 }
 namespace gesher {
 enum class PathKind { kFile, kVirtual, kMissing };
+enum class AccessKind { kStat, kRead, kWrite };
+// This fixture exercises volume/path contracts as a trusted system process;
+// storage identity/policy decisions have their own production-source tests.
+static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 static std::wstring Widen(const char* input) { return widen(input); }
 [[maybe_unused]] static PathKind MapPath(const char* input, std::wstring* output) {
   mapped_paths.emplace_back(input);

@@ -1,0 +1,14 @@
+{
+  "after_sha256": {
+    "compat/bionic/posix_bionic.cc": "7c1dc12c2ece486b2dcbe50a8148d8050897db4a4f4702592af14ae7b639e3c0"
+  },
+  "baseline": "93c32f6f02521790eaf8936f2ff1fa1a650653f2",
+  "baseline_policy_sha256": "0bd3996d19da51ac828a1d1b5477e2ca1a6c0301a0fe0a3fdf4f0db1df5ebcab",
+  "before_sha256": {
+    "compat/bionic/posix_bionic.cc": "540ae77cc2321c8282224cdf279b3f3d0ca7f2c807ccc5c59c656e4f810e53e5"
+  },
+  "patch_sha256": "0afc777cf9d9880f0660a34ba581d6e1587de924055ba24aecb19190d09fb045",
+  "paths": [
+    "compat/bionic/posix_bionic.cc"
+  ]
+}
