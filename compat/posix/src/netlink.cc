@@ -301,13 +301,13 @@ bool AppendAddrDump(uint8_t req_family, uint32_t seq, uint32_t pid, PacketBatche
         memcpy(reinterpret_cast<char*>(&sin) + sizeof(sa_family_t), entry.address.data, tail);
 
         const int prefix = std::clamp(entry.prefix_len, 0, 32);
-        std::vector<uint8_t> msg(sizeof(nlmsghdr) + sizeof(ifaddrmsg), 0);
+        std::vector<uint8_t> msg(NLMSG_LENGTH(sizeof(ifaddrmsg)), 0);
         ifaddrmsg ifa = {};
         ifa.ifa_family = AF_INET;
         ifa.ifa_prefixlen = static_cast<uint8_t>(prefix);
         ifa.ifa_scope = Ipv4Scope(iface.flags, sin.sin_addr);
         ifa.ifa_index = iface.index;
-        memcpy(msg.data() + sizeof(nlmsghdr), &ifa, sizeof(ifa));
+        memcpy(msg.data() + NLMSG_HDRLEN, &ifa, sizeof(ifa));
 
         AppendAttr(&msg, IFA_ADDRESS, &sin.sin_addr, sizeof(sin.sin_addr));
         AppendAttr(&msg, IFA_LOCAL, &sin.sin_addr, sizeof(sin.sin_addr));
@@ -331,13 +331,13 @@ bool AppendAddrDump(uint8_t req_family, uint32_t seq, uint32_t pid, PacketBatche
         memcpy(reinterpret_cast<char*>(&sin6) + sizeof(sa_family_t), entry.address.data, tail);
 
         const int prefix = std::clamp(entry.prefix_len, 0, 128);
-        std::vector<uint8_t> msg(sizeof(nlmsghdr) + sizeof(ifaddrmsg), 0);
+        std::vector<uint8_t> msg(NLMSG_LENGTH(sizeof(ifaddrmsg)), 0);
         ifaddrmsg ifa = {};
         ifa.ifa_family = AF_INET6;
         ifa.ifa_prefixlen = static_cast<uint8_t>(prefix);
         ifa.ifa_scope = Ipv6Scope(iface.flags, sin6.sin6_addr);
         ifa.ifa_index = iface.index;
-        memcpy(msg.data() + sizeof(nlmsghdr), &ifa, sizeof(ifa));
+        memcpy(msg.data() + NLMSG_HDRLEN, &ifa, sizeof(ifa));
 
         AppendAttr(&msg, IFA_ADDRESS, &sin6.sin6_addr, sizeof(sin6.sin6_addr));
         FinalizeNlmsg(&msg, RTM_NEWADDR, NLM_F_MULTI, seq, pid);
