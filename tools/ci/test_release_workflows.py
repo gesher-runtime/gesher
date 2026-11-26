@@ -284,6 +284,19 @@ class PublisherTests(unittest.TestCase):
         self.api.tag['object'] = {'sha': HEAD, 'type': 'commit'}
         self.assertIn('Publication confirmed', self.publish())
 
+    def test_runtime_provenance_stays_inside_ci_artifact(self):
+        downloader = self.api.download
+
+        def with_receipt(identity, digest, directory):
+            downloader(identity, digest, directory)
+            (directory / pub.RUNTIME_PROVENANCE_NAME).write_text('{}', encoding='utf-8')
+
+        self.api.download = with_receipt
+        self.assertIn('Publication confirmed', self.publish())
+        self.assertEqual({asset['name'] for asset in self.api.own['assets']},
+                         {installer_name(SOURCE.version), portable_name(SOURCE.version),
+                          portable_name(SOURCE.version) + '.sha256', pub.CHECKSUM_NAME})
+
     def test_untrusted_or_wrong_workflow_event_and_attempt_fail_without_mutation(self):
         for change in [{'run_attempt': 3}, {'event': 'workflow_dispatch'}, {'event': 'pull_request'},
                        {'workflow_id': 45}, {'head_repository': {'id': 42, 'full_name': 'fork/gesher'}},

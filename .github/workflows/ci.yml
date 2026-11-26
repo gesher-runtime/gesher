@@ -1373,6 +1373,7 @@ jobs:
             tools/web3
             tests/windows/shell
             tests/windows/graphics
+            tests/e2e
             tools/toolchain
             tools/host-pthread-authority
             .github/workflows
@@ -1439,6 +1440,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "GESHER_PACKAGE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $installer = Get-Item -LiteralPath "installer\gesher-setup-$version.exe"
+          python tests/e2e/runtime_provenance.py capture --dist dist --package tools/package --installer $installer.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
           Get-ChildItem installer
@@ -1459,6 +1462,7 @@ jobs:
             installer/*-portable.zip
             installer/*-portable.zip.sha256
             installer/SHA256SUMS.txt
+            installer/gesher-runtime-provenance.json
 
       - name: Install, run Hello, uninstall
         shell: pwsh
@@ -2230,16 +2234,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/e2e/test_evidence_process.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/e2e/test_runtime_provenance.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
-          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -BuildTools $env:GESHER_TEST_BUILD_TOOLS
+          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -RequireRuntimeProvenance -BuildTools $env:GESHER_TEST_BUILD_TOOLS
           exit $LASTEXITCODE
 
       - name: Validate and publish real-app coverage
         if: always()
         shell: pwsh
         run: |
-          python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results --require-apk-identity
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
+          python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results --require-apk-identity --installer-dir installer --installed-runtime $app
           $result = $LASTEXITCODE
           if (Test-Path e2e-results/coverage.md) {
             Get-Content e2e-results/coverage.md | Add-Content $env:GITHUB_STEP_SUMMARY
