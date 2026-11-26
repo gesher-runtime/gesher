@@ -21,6 +21,8 @@ namespace gesher::arm32 {
 namespace {
 constexpr uint32_t kGuestEnv = 0xd0003000;
 constexpr uint32_t kGuestTable = 0xd0004000;
+constexpr uint32_t kGuestVm = 0xd0005000;
+constexpr uint32_t kGuestVmTable = 0xd0006000;
 constexpr uint64_t kStringStart = 0xd0100000;
 constexpr uint64_t kStringEnd = 0xd1000000;
 constexpr uint32_t kMaxUtfBytes = 1024 * 1024;
@@ -248,6 +250,36 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
                                     address, error);
   }
 
+  bool VmArgs(const std::vector<Value>& a, size_t n,
+              std::string* error) const {
+    if (!CheckThread(error)) return false;
+    if (a.size() != n || a.empty() || a[0].bits != kGuestVm)
+      return Fail(error, "JNI32 invalid guest JavaVM pointer or argument count");
+    return true;
+  }
+
+  bool RegisterVm(const char* name, size_t slot,
+                  std::vector<ValueKind> kinds, ValueKind result,
+                  HostCallback callback, std::string* error) {
+    constexpr size_t slots = sizeof(JNIInvokeInterface_) / sizeof(void*);
+    if (slot >= slots || slot >= kPage / 4)
+      return Fail(error, "JNI32 JavaVM slot exceeds guest invoke table");
+    const std::string symbol = std::string("jni32.vm.") + name;
+    HostCallback retained = [self = shared_from_this(),
+                             callback = std::move(callback)](
+                                 const std::vector<Value>& a,
+                                 Value* out, std::string* failure) {
+      return callback(a, out, failure);
+    };
+    if (!program.BindHostSymbol(symbol, std::move(kinds),
+                                result, std::move(retained), error)) return false;
+    uint32_t address = 0;
+    if (!program.HostSymbolAddress(symbol, &address))
+      return Fail(error, "JNI32 JavaVM host thunk address is absent");
+    return program.Memory().Write32(kGuestVmTable +
+                   static_cast<uint32_t>(slot) * 4, address, error);
+  }
+
   bool Install(std::string* error) {
     if (attempted) return Fail(error, "JNI32 installation may run only once");
     attempted = true;
@@ -259,9 +291,17 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
       memory.Unmap(kGuestEnv, kPage);
       return false;
     }
-    if (!memory.Write32(kGuestEnv, kGuestTable, error)) {
-      memory.Unmap(kGuestEnv, kPage);
-      memory.Unmap(kGuestTable, kPage);
+    // All four pages are needed before any thunk is published. An error
+    // leaves no guest JNIEnv or JavaVM pointer reachable.
+    if (!memory.Map(kGuestVm, kPage, kRW, error) ||
+        !memory.Map(kGuestVmTable, kPage, kRW, error) ||
+        !memory.Write32(kGuestEnv, kGuestTable, error) ||
+        !memory.Write32(kGuestVm, kGuestVmTable, error)) {
+      (void)memory.Unmap(kGuestEnv, kPage);
+      (void)memory.Unmap(kGuestTable, kPage);
+      if (memory.IsMapped(kGuestVm, kPage)) (void)memory.Unmap(kGuestVm, kPage);
+      if (memory.IsMapped(kGuestVmTable, kPage))
+        (void)memory.Unmap(kGuestVmTable, kPage);
       return false;
     }
     active = true;
