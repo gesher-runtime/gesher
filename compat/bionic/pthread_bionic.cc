@@ -484,36 +484,34 @@ int WaitPthreadWord(Word* word, int32_t expected, const LinuxTimespec* abstime,
   return error == kEAGAIN || error == kEINTR ? 0 : error;
 }
 
-// Barriers. Keep the count of the cohort until it has left, so a fast
-// participant returning to the same barrier cannot enroll in the old round.
+// Nonnegative progress counts arrivals. Negative progress counts the members
+// leaving a completed round. One word prevents an arrival from joining a
+// round that advanced from collecting to releasing while that caller waited.
 struct Barrier {
   uint32_t count;
   bool shared;
-  std::atomic<uint32_t> present;
-  Word releasing;
+  Word progress;
 };
 static_assert(sizeof(Barrier) <= sizeof(bionic_pthread_barrier_t));
 static_assert(alignof(Barrier) <= alignof(bionic_pthread_barrier_t));
-static_assert(std::atomic<uint32_t>::is_always_lock_free);
+static_assert(Word::is_always_lock_free);
 
 Barrier& AsBarrier(bionic_pthread_barrier_t* barrier) {
   return *reinterpret_cast<Barrier*>(barrier);
 }
 
-void WaitBarrierPhase(Word* phase, int32_t observed, bool shared) {
-  while (phase->load(std::memory_order_acquire) == observed) {
-    if (!shared) {
-      FutexWait(phase, observed);
-      continue;
-    }
-    // A bounded wait also lets us observe progress if opening the Windows
-    // wake queue fails. The barrier state itself is in the shared memory.
-    const int64_t now = gesher::MonotonicNanos();
-    constexpr int64_t kSecond = 1000000000;
-    const LinuxTimespec deadline{now / kSecond + 1, now % kSecond};
-    const int error = WaitPthreadWord(phase, observed, &deadline, true, true);
-    if (error != 0 && error != kETIMEDOUT) Sleep(1);
+void WaitBarrierProgress(Word* progress, int32_t observed, bool shared) {
+  if (!shared) {
+    FutexWait(progress, observed);
+    return;
   }
+  // A bounded wait also lets us observe progress if opening the Windows
+  // wake queue fails. The barrier state itself is in the shared memory.
+  const int64_t now = gesher::MonotonicNanos();
+  constexpr int64_t kSecond = 1000000000;
+  const LinuxTimespec deadline{now / kSecond + 1, now % kSecond};
+  const int error = WaitPthreadWord(progress, observed, &deadline, true, true);
+  if (error != 0 && error != kETIMEDOUT) Sleep(1);
 }
 
 // Check the deadline after the uncontended acquisition attempt, as Android does.
@@ -1078,14 +1076,17 @@ int BIONIC_SYSV gesher_bionic_pthread_barrierattr_setpshared(
 int BIONIC_SYSV gesher_bionic_pthread_barrier_init(
     bionic_pthread_barrier_t* storage, const bionic_pthread_barrierattr_t* a, unsigned count) {
   if (count == 0) return kEINVAL;
-  new (storage) Barrier{count, a != nullptr && (*a & 1) != 0, 0, 0};
+  new (storage) Barrier{count, a != nullptr && (*a & 1) != 0, 0};
   return 0;
 }
 int BIONIC_SYSV gesher_bionic_pthread_barrier_destroy(bionic_pthread_barrier_t* storage) {
   auto& barrier = AsBarrier(storage);
   if (barrier.count == 0) return kEINVAL;
-  WaitBarrierPhase(&barrier.releasing, 1, barrier.shared);
-  if (barrier.present.load(std::memory_order_acquire) != 0) return kEBUSY;
+  int32_t progress;
+  while ((progress = barrier.progress.load(std::memory_order_acquire)) < 0) {
+    WaitBarrierProgress(&barrier.progress, progress, barrier.shared);
+  }
+  if (progress != 0) return kEBUSY;
   barrier.count = 0;
   return 0;
 }
@@ -1098,26 +1099,33 @@ int BIONIC_SYSV gesher_bionic_pthread_barrier_wait(bionic_pthread_barrier_t* sto
     return -1;  // PTHREAD_BARRIER_SERIAL_THREAD
   }
   const bool shared = barrier.shared;
-  auto* phase = &barrier.releasing;
-  WaitBarrierPhase(phase, 1, shared);
-
-  uint32_t arrived = barrier.present.load(std::memory_order_relaxed);
-  do {
-    if (arrived >= count) return kEINVAL;
-  } while (!barrier.present.compare_exchange_weak(arrived, arrived + 1,
-             std::memory_order_acq_rel, std::memory_order_relaxed));
-
-  const bool serial = arrived == count - 1;
-  if (serial) {
-    // The arrival RMWs collect every participant's writes before release.
-    phase->store(1, std::memory_order_release);
-    WakePthreadWord(phase, true, shared);
-  } else {
-    WaitBarrierPhase(phase, 0, shared);
+  auto* progress = &barrier.progress;
+  bool serial;
+  int32_t current = progress->load(std::memory_order_acquire);
+  for (;;) {
+    if (current < 0) {
+      WaitBarrierProgress(progress, current, shared);
+      current = progress->load(std::memory_order_acquire);
+      continue;
+    }
+    if (current == INT_MAX) return kEAGAIN;
+    const int32_t arrived = current + 1;
+    serial = static_cast<uint32_t>(arrived) == count;
+    if (progress->compare_exchange_weak(current, serial ? -arrived : arrived,
+          std::memory_order_acq_rel, std::memory_order_acquire)) break;
   }
-  if (barrier.present.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-    phase->store(0, std::memory_order_release);
-    WakePthreadWord(phase, true, shared);
+
+  if (serial) {
+    // The acquire/release arrival chain publishes each participant's writes
+    // when the last arrival switches the counter to the departing phase.
+    WakePthreadWord(progress, true, shared);
+  } else {
+    while ((current = progress->load(std::memory_order_acquire)) >= 0) {
+      WaitBarrierProgress(progress, current, shared);
+    }
+  }
+  if (progress->fetch_add(1, std::memory_order_acq_rel) == -1) {
+    WakePthreadWord(progress, true, shared);
   }
   return serial ? -1 : 0;
 }

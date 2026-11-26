@@ -279,6 +279,16 @@ void TestPshared(Shared* view, const wchar_t* child_path) {
   puts("N29 Bionic pshared synchronization across processes PASS");
 }
 
+DWORD WINAPI BarrierContender(void* raw) {
+  auto* view = static_cast<Shared*>(raw);
+  for (int round = 0; round < kBarrierRounds; ++round) {
+    const int result = Pthread("pthread_barrier_wait", &view->barrier);
+    Require(result == 0 || result == -1, "participant joins a complete cohort", result);
+    if (result == -1) InterlockedIncrement(&view->barrier_serial);
+  }
+  return 0;
+}
+
 void TestBarrier(Shared* view, const wchar_t* child_path) {
   bionic_pthread_barrierattr_t attr = -1;
   int mode = -1;
@@ -308,6 +318,29 @@ void TestBarrier(Shared* view, const wchar_t* child_path) {
           Pthread("pthread_barrier_destroy", &view->barrier) == EINVAL,
           "barrier destruction and reuse contract");
   printf("N29 Bionic pshared barrier: %d two-party publication rounds PASS\n", kBarrierRounds);
+
+  // More than two contenders are outside Android's required contract. The
+  // extra callers must never corrupt an already departing Gesher cohort.
+  Require(Pthread("pthread_barrierattr_init", &attr) == 0 &&
+          Pthread("pthread_barrierattr_setpshared", &attr, 1) == 0 &&
+          Pthread("pthread_barrier_init", &view->barrier, const_attr, 2u) == 0,
+          "reinitialize shared barrier for the cohort overlap control");
+  constexpr int kContenders = 8;
+  HANDLE workers[kContenders];
+  view->barrier_serial = 0;
+  for (HANDLE& worker : workers) {
+    worker = CreateThread(nullptr, 0, BarrierContender, view, 0, nullptr);
+    Require(worker != nullptr, "start overlapping participant");
+  }
+  Require(WaitForMultipleObjects(kContenders, workers, TRUE, 6000) == WAIT_OBJECT_0,
+          "all overlapping contenders leave their cohorts");
+  for (HANDLE worker : workers) CloseHandle(worker);
+  Require(view->barrier_serial == kContenders * kBarrierRounds / 2,
+          "one serial participant per overlapping cohort", view->barrier_serial);
+  Require(Pthread("pthread_barrier_destroy", &view->barrier) == 0,
+          "destroy barrier after overlapping cohorts complete");
+  printf("N29 Bionic pshared barrier: %d overlapping two-participant cohorts PASS\n",
+         kContenders * kBarrierRounds / 2);
 }
 }  // namespace
 
