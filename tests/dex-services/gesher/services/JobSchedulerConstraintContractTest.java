@@ -244,6 +244,9 @@ public final class JobSchedulerConstraintContractTest {
             Class<?> callersType = type("CallerIdentity");
             Object callers = make(callersType, new Class<?>[]{pmType, atmType}, pm, atm);
             set(am, "mPm", pm); set(am, "mAtm", atm); set(am, "mCallers", callers);
+            // Unsafe skips these normal defaults used by real controller transitions.
+            set(am, "mShortcutEvaluation", make(type("ShortcutProcessState$Evaluation"), new Class<?>[0]));
+            set(am, "mShortcutAwake", (java.util.function.BooleanSupplier) () -> false);
             Object permissions = invoke(pm, "permissions", new Class<?>[0]);
             set(am, "mPermissions", permissions);
             invoke(permissions, "attach", new Class<?>[]{callersType}, callers);
@@ -264,6 +267,10 @@ public final class JobSchedulerConstraintContractTest {
             Object notifications = make(notifType, new Class<?>[]{pmType, amType, java.util.function.ToIntBiFunction.class},
                     pm, am, (java.util.function.ToIntBiFunction<Object, Boolean>) (n, u) -> 0);
             set(am, "mServices", make(type("ActiveServices"), new Class<?>[]{atmType, pmType, notifType}, atm, pm, notifications));
+            // This fixture has no provider connections; preserve the normal empty topology.
+            Object providers = UNSAFE.allocateInstance(type("ContentProviders"));
+            set(providers, "mShortcutSnapshot", field(type("ShortcutProcessState$Snapshot"), "EMPTY").get(null));
+            set(am, "mProviders", providers);
             invoke(atm, "setActivityManager", new Class<?>[]{amType}, am);
 
             Class<?> processType = type("ActivityTaskManagerService$ProcessRecord");
@@ -820,7 +827,7 @@ public final class JobSchedulerConstraintContractTest {
         check(service.starts == 1, "Job 107 did not start");
 
         // User interacts with device: idle time drops to 0.
-        h.setDeviceIdleMillis(0L);
+        h.setDeviceIdleMillis(-1L); // DeviceConstraints.NOT_OFF: the display is on
 
         check(service.stops == 1, "Job 107 was not stopped when device became active");
         check(service.lastStopReason == JobParameters.STOP_REASON_CONSTRAINT_DEVICE_IDLE,
@@ -920,7 +927,7 @@ public final class JobSchedulerConstraintContractTest {
         h.schedule(new JobInfo.Builder(122, serviceComponent()).setRequiresBatteryNotLow(true).build());
         check(h.reason(122) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_BATTERY_NOT_LOW, "Unknown battery accepted as not low");
         h.cancel(122);
-        h.setDeviceIdleMillis(0L);
+        h.setDeviceIdleMillis(-1L); // NOT_OFF
         h.schedule(new JobInfo.Builder(123, serviceComponent()).setRequiresDeviceIdle(true).build());
         check(h.reason(123) == JobScheduler.PENDING_JOB_REASON_CONSTRAINT_DEVICE_IDLE, "Unknown/active device accepted as idle");
         h.cancel(123);

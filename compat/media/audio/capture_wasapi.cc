@@ -1,7 +1,9 @@
 // Gesher media: WASAPI shared mode capture (capture.h; ADR 0059): the default
 // capture endpoint (the PC's microphone), or the default render endpoint's
-// loopback. The mix format (float, the endpoint's rate and channels), polled
-// by the capture thread every 10 ms.
+// loopback. The mix format (float, the endpoint's rate and channels). The
+// capture thread waits for the endpoint's sample event (event callback mode), with
+// a bounded timeout; an endpoint that rejects that mode is polled every period
+// instead (the engine's timed wait).
 
 // mmreg.h needs what NOGDI (the build's default) leaves out.
 #undef NOGDI
@@ -39,6 +41,9 @@ const GUID kSubtypePcm = {0x00000001, 0x0000, 0x0010,
                           {0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71}};
 const PROPERTYKEY kKeyFriendlyName = {{0xA45C254E, 0xDF1C, 0x4EFD,
                                        {0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0}}, 14};
+
+// The endpoint's buffer: 200 ms (100 ns units).
+constexpr REFERENCE_TIME kBufferDuration = 2000000;
 
 template <typename T>
 void SafeRelease(T*& p) {
@@ -94,6 +99,7 @@ class WasapiCapture : public CaptureSource {
     SafeRelease(client_);
     SafeRelease(device_);
     if (format_ != nullptr) CoTaskMemFree(format_);
+    CloseEvents();
   }
 
   bool Open(bool loopback, std::string* error) {
@@ -128,9 +134,7 @@ class WasapiCapture : public CaptureSource {
       *error = "WASAPI capture: unsupported mix format";
       return false;
     }
-    // 200 ms buffered, shared mode, polled.
-    hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, loopback ? AUDCLNT_STREAMFLAGS_LOOPBACK : 0,
-                             2000000, 0, format_, nullptr);
+    hr = InitializeStream();
     if (SUCCEEDED(hr)) {
       hr = client_->GetService(kIidIAudioCaptureClient, reinterpret_cast<void**>(&capture_));
     }
@@ -151,6 +155,8 @@ class WasapiCapture : public CaptureSource {
   std::string DeviceName() const override { return name_; }
   bool Start() override {
     if (started_) return true;
+    // A wake meant for the capture of before this start has been acted on.
+    if (stop_event_ != nullptr) ResetEvent(stop_event_);
     // WASAPI Stop preserves queued endpoint packets. A new capture activation
     // must discard them before Start resumes the stopped stream. Reset is
     // valid after initialization, including before the first Start.
@@ -161,6 +167,20 @@ class WasapiCapture : public CaptureSource {
   void Stop() override {
     if (started_) client_->Stop();
     started_ = false;
+    Interrupt();  // a thread waiting for samples returns now
+  }
+
+  bool WaitForData(int timeout_ms) override {
+    if (!events_) return false;  // polled: the caller waits its period
+    const HANDLE handles[2] = {stop_event_, sample_event_};
+    const DWORD result = WaitForMultipleObjects(2, handles, FALSE, static_cast<DWORD>(timeout_ms));
+    if (result == WAIT_OBJECT_0) ResetEvent(stop_event_);  // the wake is consumed
+    // A failed wait must not become a busy loop: the caller waits its period.
+    return result != WAIT_FAILED;
+  }
+
+  void Interrupt() override {
+    if (stop_event_ != nullptr) SetEvent(stop_event_);
   }
 
   bool Pull(std::vector<float>* out) override {
@@ -205,8 +225,46 @@ class WasapiCapture : public CaptureSource {
   }
 
  private:
+  void CloseEvents() {
+    events_ = false;
+    if (sample_event_ != nullptr) CloseHandle(sample_event_);
+    if (stop_event_ != nullptr) CloseHandle(stop_event_);
+    sample_event_ = stop_event_ = nullptr;
+  }
+
+  // Initializes client_ for event callbacks with the sample event set, or, if the
+  // endpoint rejects that (loopback before Windows 10 1703, a driver that cannot),
+  // for polling on a new client: one whose Initialize failed, or whose event
+  // handle was not set, cannot be initialized again.
+  HRESULT InitializeStream() {
+    const DWORD loopback = loopback_ ? AUDCLNT_STREAMFLAGS_LOOPBACK : 0;
+    sample_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);  // auto-reset
+    stop_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);     // manual-reset: sticky until consumed
+    if (sample_event_ != nullptr && stop_event_ != nullptr) {
+      HRESULT hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, loopback | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                       0, 0, format_, nullptr);
+      if (SUCCEEDED(hr)) hr = client_->SetEventHandle(sample_event_);
+      if (SUCCEEDED(hr)) {
+        events_ = true;
+        return hr;
+      }
+      MEDIA_LOGW("capture: %s rejects event callbacks (%s); polling", name_.c_str(), Hr(hr).c_str());
+    }
+    CloseEvents();
+    SafeRelease(capture_);
+    SafeRelease(client_);
+    HRESULT hr = device_->Activate(kIidIAudioClient, CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&client_));
+    if (SUCCEEDED(hr)) {
+      hr = client_->Initialize(AUDCLNT_SHAREMODE_SHARED, loopback, kBufferDuration, 0, format_, nullptr);
+    }
+    return hr;
+  }
+
   bool loopback_ = false;
   bool started_ = false;
+  bool events_ = false;  // event callback mode: WaitForData waits on the handles below
+  HANDLE sample_event_ = nullptr;  // signalled by the endpoint when a packet is ready
+  HANDLE stop_event_ = nullptr;    // signalled by Interrupt and Stop
   IMMDevice* device_ = nullptr;
   IAudioClient* client_ = nullptr;
   IAudioCaptureClient* capture_ = nullptr;

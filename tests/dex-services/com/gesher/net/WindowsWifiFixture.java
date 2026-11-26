@@ -225,8 +225,172 @@ public final class WindowsWifiFixture {
         publish(WindowsWifi.parse("ok\t1\n",10_000_000));
         check(WindowsWifi.wifiState()==WifiManager.WIFI_STATE_DISABLED && !WindowsWifi.startScan(ok -> {}), "No adapter does not accept scans");
     }
+    private static final class Recorder implements WindowsWifi.Events {
+        final List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        @Override public void onWifiStateChanged(int previous, int current) { events.add("state " + previous + ">" + current); }
+        @Override public void onScanResultsAvailable() { events.add("scan"); }
+        @Override public void onConnectionChanged() { events.add("connection"); }
+    }
+    private static void await(List<String> events, int size) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (events.size() < size && System.nanoTime() < deadline) Thread.sleep(5);
+    }
+    @SuppressWarnings("unchecked")
+    public static void events() throws Exception {
+        WindowsWifi.Hardware hardware = WindowsWifi.parseHardware("hw\t2\ncap\t80\t640\t16\ncap\t1024\t128\t2147483648\n");
+        check(hardware != null && hardware.interfaces == 2 && hardware.phy(4) && hardware.phy(6) && hardware.phy(10)
+                && hardware.auth(7) && hardware.auth(9) && hardware.cipher(4) && hardware.cipher(31) && !hardware.auth(10),
+                "Census unions every adapter's PHY, auth and cipher bits");
+        check(WindowsWifi.parseHardware("hw\t0\n").interfaces == 0 && !WindowsWifi.parseHardware("hw\t0\n").present(),
+                "Zero adapters is real absence");
+        check(WindowsWifi.parseHardware(null) == null && WindowsWifi.parseHardware("hw\t2\ncap\t1\t1\t1\n") == null
+                && WindowsWifi.parseHardware("hw\t1\ncap\t-1\t0\t0\n") == null
+                && WindowsWifi.parseHardware("hw\t65\n") == null, "Malformed census is not hardware");
+        // Per-interface profile listing: an unreadable interface or list is unknown (null).
+        java.util.Map<Integer, List<String>> listing = WindowsWifi.parseInterfaceProfiles(
+                "12\t1\tGesher-s-a\tOther\n14\t1\n15\t0\n0\t0\n", "Gesher-");
+        check(listing.get(12).equals(List.of("Gesher-s-a")) && listing.get(14).isEmpty()
+                && listing.containsKey(15) && listing.get(15) == null && listing.containsKey(0) && listing.get(0) == null,
+                "Each interface's list is read, empty or unknown");
+        check(WindowsWifi.parseInterfaceProfiles(null, "Gesher-") == null
+                && WindowsWifi.parseInterfaceProfiles("x\t1\n", "Gesher-") == null
+                && WindowsWifi.parseInterfaceProfiles("12\n", "Gesher-") == null
+                && WindowsWifi.parseInterfaceProfiles("", "Gesher-").isEmpty(),
+                "No enumeration or a malformed listing is unknown; no interfaces is empty");
+        // A WLAN service that hangs in its census does not hold the caller (boot) past the bound.
+        CountDownLatch hung = new CountDownLatch(1);
+        AtomicInteger reads = new AtomicInteger();
+        WindowsWifi.Census census = new WindowsWifi.Census(() -> {
+            reads.incrementAndGet();
+            try { hung.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return hardware;
+        });
+        long started = System.nanoTime();
+        check(census.get(100) == WindowsWifi.NO_HARDWARE && System.nanoTime() - started < TimeUnit.SECONDS.toNanos(2),
+                "A census past its bound is no hardware, without waiting for Windows");
+        // Only the first (boot) caller waits: later callers are not held by the hung probe.
+        started = System.nanoTime();
+        check(census.get(5_000) == WindowsWifi.NO_HARDWARE && System.nanoTime() - started < TimeUnit.SECONDS.toNanos(1),
+                "A later caller does not wait for a hung census again");
+        // The probe thread may not have run yet on a loaded host: wait until it is in the census.
+        long probing = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (reads.get() == 0 && System.nanoTime() < probing) Thread.sleep(1);
+        check(census.get(50) == WindowsWifi.NO_HARDWARE && reads.get() == 1, "A hung census is not started twice");
+        hung.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (census.get(50) != hardware && System.nanoTime() < deadline) Thread.sleep(5);
+        check(census.get(0) == hardware && reads.get() == 1, "The late census result is kept for later callers");
+        check(new WindowsWifi.Census(() -> hardware).get(1_000) == hardware, "A prompt census is reported");
+        // A caller arriving while a healthy census still runs (within the first bound) gets its result.
+        CountDownLatch slow = new CountDownLatch(1);
+        AtomicInteger slowReads = new AtomicInteger();
+        WindowsWifi.Census healthy = new WindowsWifi.Census(() -> {
+            slowReads.incrementAndGet();
+            try { slow.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return hardware;
+        });
+        WindowsWifi.Hardware[] boot = new WindowsWifi.Hardware[1];
+        Thread first = new Thread(() -> boot[0] = healthy.get(5_000));
+        first.start();
+        while (slowReads.get() == 0) Thread.sleep(1);
+        Thread finisher = new Thread(() -> {
+            try { Thread.sleep(200); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            slow.countDown();
+        });
+        finisher.start();
+        check(healthy.get(5_000) == hardware, "A caller during a healthy census gets its result, not no hardware");
+        first.join(5_000);
+        check(boot[0] == hardware && slowReads.get() == 1, "The healthy census runs once for both callers");
+        // A later caller waits only for the rest of the first caller's bound.
+        CountDownLatch stuck = new CountDownLatch(1);
+        WindowsWifi.Census hanging = new WindowsWifi.Census(() -> {
+            try { stuck.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            return hardware;
+        });
+        Thread bootCaller = new Thread(() -> hanging.get(400));
+        long bootStarted = System.nanoTime();
+        bootCaller.start();
+        Thread.sleep(100);
+        check(hanging.get(5_000) == WindowsWifi.NO_HARDWARE
+                && System.nanoTime() - bootStarted < TimeUnit.MILLISECONDS.toNanos(1_500),
+                "A caller during a hung census waits no longer than the first bound");
+        stuck.countDown();
+        bootCaller.join(5_000);
+        Recorder recorder = new Recorder();
+        ((List<WindowsWifi.Events>) get("EVENTS")).add(recorder);
+        set("sWatching", true);
+        String enabled = "ok\t1\n" + IFACE + "4e6574" + END + BSS;
+        answer = enabled; idle();
+        publish(WindowsWifi.parse(enabled, 10_000_000));
+        set("sPublishedState", WifiManager.WIFI_STATE_DISABLED);
+        set("sOwnScanNanos", 0L);
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_STATE), "Watcher continues after a state event");
+        idle(); await(recorder.events, 2);
+        check(recorder.events.contains("state 1>3") && recorder.events.contains("connection")
+                && !recorder.events.contains("scan"), "Radio event re-reads and reports the observed transition only");
+        recorder.events.clear();
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_STATE), "Repeated state event accepted"); idle(); Thread.sleep(50);
+        check(!recorder.events.toString().contains("state"), "An unchanged state is not a transition");
+        recorder.events.clear();
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_SCAN), "External scan event accepted"); idle(); await(recorder.events, 1);
+        check(recorder.events.equals(List.of("scan")), "Windows-initiated scan completion is published once after a fresh read");
+        recorder.events.clear();
+        set("sOwnScanNanos", System.nanoTime());
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_SCAN), "Own scan echo accepted"); idle(); Thread.sleep(50);
+        check(recorder.events.isEmpty(), "The completion of a requested scan is not published twice");
+        set("sOwnScanNanos", 0L);
+        answer = "error";
+        check(WindowsWifi.onEvents(WindowsWifi.EVENT_SCAN | WindowsWifi.EVENT_STATE), "Event before failed read"); idle(); Thread.sleep(50);
+        check(!recorder.events.contains("scan") && !recorder.events.toString().contains("state"),
+                "A failed read reports neither fresh results nor a state change");
+        answer = enabled;
+        publish(WindowsWifi.parse(enabled, 10_000_000));
+        check(WindowsWifi.bandObserved(4900, 5900) && !WindowsWifi.bandObserved(5925, 7125),
+                "Band evidence comes from observed BSS frequencies only");
+        check(WindowsWifi.onEvents(0), "Idle poll keeps watching");
+        WindowsWifi.stopWatching();
+        check(!WindowsWifi.onEvents(WindowsWifi.EVENT_STATE), "Stopped watcher declines further deliveries");
+        ((List<WindowsWifi.Events>) get("EVENTS")).remove(recorder);
+    }
+    public static void profiles() {
+        byte[] ssid = "<Net>&\u05e9".getBytes(StandardCharsets.UTF_8);
+        String psk = WlanProfiles.xml("Gesher-r-1", ssid, false,
+                android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK, "\"pa<ss>&'\"word\"", false);
+        check(psk != null && psk.contains("<hex>3C4E65743E26D7A9</hex>") && psk.contains("<authentication>WPA2PSK</authentication>")
+                && psk.contains("<keyMaterial>pa&lt;ss&gt;&amp;&apos;&quot;word</keyMaterial>")
+                && psk.contains("<connectionMode>manual</connectionMode>") && !psk.contains("<Net>"),
+                "SSID bytes as hex, escaped passphrase, manual mode");
+        String sae = WlanProfiles.xml("Gesher-s-1", ssid, true, android.net.wifi.WifiConfiguration.SECURITY_TYPE_SAE,
+                "\"long-sae-password\"", true);
+        check(sae != null && sae.contains("WPA3SAE") && sae.contains("<nonBroadcast>true</nonBroadcast>")
+                && sae.contains("<connectionMode>auto</connectionMode>"), "SAE, hidden and auto-connect");
+        check(WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_OWE, null, false)
+                .contains("<authentication>OWE</authentication>"), "OWE profile");
+        check(WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_EAP, null, false) == null
+                && WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_WEP, "\"k\"", false) == null,
+                "Enterprise and WEP are not expressed");
+        check(WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK, "\"short\"", false) == null
+                && WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK, "\"ok\u0001password\"", false) == null
+                && WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_OPEN, "\"secret\"", false) == null,
+                "Invalid passphrases and open networks with keys are refused");
+        check(WlanProfiles.xml("Other", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_OPEN, null, false) == null
+                && WlanProfiles.xml("Gesher-r-1", new byte[33], false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_OPEN, null, false) == null,
+                "Only Gesher profile names and valid SSID lengths");
+        check(WlanProfiles.xml("Gesher-r-1", ssid, false, android.net.wifi.WifiConfiguration.SECURITY_TYPE_PSK,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false).contains("networkKey"),
+                "A 64-hex PSK is a raw network key");
+    }
     public static void run(boolean nativeBoundary) throws Exception {
-        parser(); if (nativeBoundary) host();
+        parser(); profiles(); if (nativeBoundary) { host(); events(); }
+        // IP provisioning for a specifier connection: a DHCP-style IPv4 address, never an
+        // automatic 169.254/16 address or IPv6 alone.
+        try {
+            check(WindowsWifi.provisioned(java.net.InetAddress.getByName("192.168.4.20")), "A DHCP IPv4 address is provisioning");
+            check(!WindowsWifi.provisioned(java.net.InetAddress.getByName("169.254.10.20")), "An APIPA address is not provisioning");
+            check(!WindowsWifi.provisioned(java.net.InetAddress.getByName("fe80::1")), "IPv6 link-local is not IPv4 provisioning");
+        } catch (java.net.UnknownHostException impossible) {
+            throw new AssertionError(impossible);
+        }
         System.out.println("WindowsWifiFixture all passed: " + checks + "; nativeBoundary=" + nativeBoundary);
     }
 }

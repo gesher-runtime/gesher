@@ -30,6 +30,10 @@
 #include "native_fence_internal.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 namespace {
@@ -94,7 +98,7 @@ HANDLE Connect() {
   const std::wstring name = std::wstring(wire::kPipePrefix) + Widen(device.c_str());
   HANDLE pipe = INVALID_HANDLE_VALUE;
   for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt) {
-    pipe = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0,
+    pipe = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING, 0,
                        nullptr);
     if (pipe == INVALID_HANDLE_VALUE) {
       if (GetLastError() != ERROR_PIPE_BUSY) return INVALID_HANDLE_VALUE;
@@ -340,3 +344,8 @@ bool RightsDue(uint16_t port, uint64_t end) {
 }
 
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_mutex);
+#endif

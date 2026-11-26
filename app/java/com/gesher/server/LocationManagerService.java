@@ -107,10 +107,15 @@ public final class LocationManagerService extends ILocationManager.Default {
     private long mPollInterval;
     /** The enabled state each provider last reported to the registrations. */
     private final Map<String, Boolean> mReportedEnabled = new HashMap<>();
+    /** isLocationEnabled's last reported answer (MODE_CHANGED, location_mode); null: none yet. */
+    private Boolean mReportedLocationEnabled;
+    /** Serializes location-mode checks, so an older answer is never reported last. */
+    private final Object mModeLock = new Object();
 
     public LocationManagerService(PackageManagerService pm, ActivityManagerService am) {
         mPm = pm;
         mAm = am;
+        installSettingsState();
         // Windows' answer may take a moment: asked now, off the binder threads.
         mExecutor.execute(() -> {
             WindowsLocation.refreshAccess();
@@ -119,8 +124,51 @@ public final class LocationManagerService extends ILocationManager.Default {
         });
     }
 
+    /**
+     * Settings.Secure location_mode answers this service's state, as Android's location
+     * service keeps it (react-native-wifi-reborn reads it before every Wi-Fi scan).
+     */
+    void installSettingsState() {
+        SettingsProvider.setLocationState(() -> {
+            boolean enabled = isLocationEnabled();
+            Boolean reported;
+            synchronized (mLock) {
+                reported = mReportedLocationEnabled;
+            }
+            // A change a reader saw first: observers and receivers learn of it too.
+            if (reported != null && reported != enabled) {
+                try {
+                    mExecutor.execute(this::checkEnabledChanges);
+                } catch (java.util.concurrent.RejectedExecutionException shutDown) {
+                }
+            }
+            return enabled;
+        });
+    }
+
     static void log(String message) {
         SystemServer.log(TAG + ": " + message);
+    }
+
+    private void maybePromptWindowsLocation(String packageName) {
+        if (WindowsLocation.enabled() || isIpFallbackEnabled(null)) return;
+        int uid = Binder.getCallingUid();
+        if (uid < android.os.Process.FIRST_APPLICATION_UID || mPm == null) return;
+        String target = null;
+        if (packageName != null && grantedLocationLevel(packageName, false) != PERMISSION_NONE) {
+            target = packageName;
+        } else {
+            String[] packages = mPm.getPackagesForUid(uid);
+            if (packages != null) {
+                for (String p : packages) {
+                    if (grantedLocationLevel(p, false) != PERMISSION_NONE) {
+                        target = p;
+                        break;
+                    }
+                }
+            }
+        }
+        if (target != null) WindowsLocation.maybePromptEnable(target, target);
     }
 
     // --- providers -----------------------------------------------------------------------
@@ -265,12 +313,18 @@ public final class LocationManagerService extends ILocationManager.Default {
 
     @Override
     public boolean isProviderEnabledForUser(String provider, int userId) {
-        return provider != null && exists(provider) && isEnabled(provider);
+        boolean enabled = provider != null && exists(provider) && isEnabled(provider);
+        if (!enabled && provider != null && exists(provider) && !isTest(provider)) {
+            maybePromptWindowsLocation(null);
+        }
+        return enabled;
     }
 
     @Override
     public boolean isLocationEnabledForUser(int userId) {
-        return isLocationEnabled();
+        boolean enabled = isLocationEnabled();
+        if (!enabled) maybePromptWindowsLocation(null);
+        return enabled;
     }
 
     @Override
@@ -395,7 +449,10 @@ public final class LocationManagerService extends ILocationManager.Default {
             String packageName, String attributionTag) {
         int level = enforceLocationPermission(packageName);
         checkProvider(provider);
-        if (!isEnabled(provider)) return null;
+        if (!isEnabled(provider)) {
+            if (!isTest(provider)) maybePromptWindowsLocation(packageName);
+            return null;
+        }
         Location last;
         synchronized (mLock) {
             last = mLast.get(provider);
@@ -994,8 +1051,43 @@ public final class LocationManagerService extends ILocationManager.Default {
         }
     }
 
-    /** Tells registrations about providers turned on or off since the last check. */
+    /**
+     * Tells everyone about location turned on or off (location_mode's observers, then
+     * MODE_CHANGED, as Android does), then registrations and receivers about providers
+     * turned on or off, since the last check. Windows' state is seen when a request polls
+     * it, a test provider changes or location_mode is read (WindowsLocation re-asks Windows
+     * at most every 10 s); there is no Windows notification to wait on.
+     */
     private void checkEnabledChanges() {
+        checkLocationModeChange();
+        checkProviderChanges();
+    }
+
+    private void checkLocationModeChange() {
+        synchronized (mModeLock) {
+            boolean location = isLocationEnabled();
+            Boolean before;
+            synchronized (mLock) {
+                before = mReportedLocationEnabled;
+                mReportedLocationEnabled = location;
+            }
+            // A first observation initializes the state; it is not a change.
+            if (before == null || before == location) return;
+            log("location " + (location ? "enabled" : "disabled"));
+            SettingsProvider.locationStateChanged();
+            Intent changed = new Intent(LocationManager.MODE_CHANGED_ACTION);
+            changed.putExtra(LocationManager.EXTRA_LOCATION_ENABLED, location);
+            changed.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY | Intent.FLAG_RECEIVER_FOREGROUND);
+            try {
+                mAm.sendBroadcastFor("android", changed, null);
+            } catch (RuntimeException e) {
+                log("MODE_CHANGED broadcast failed: " + e);
+            }
+        }
+    }
+
+    /** The provider part of checkEnabledChanges. */
+    private void checkProviderChanges() {
         List<String> providers = getAllProviders();
         for (String p : providers) {
             boolean enabled = isEnabled(p);

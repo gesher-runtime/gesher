@@ -1128,9 +1128,13 @@ public class RecordActivity extends Activity {
         AtomicInteger captureFailed = new AtomicInteger(), buffersLost = new AtomicInteger();
         AtomicLong firstSourceNs = new AtomicLong(), lastSourceNs = new AtomicLong();
         AtomicLong firstFrame = new AtomicLong(-1), lastFrame = new AtomicLong(-1);
+        CameraCaptureSession recordingSession = session[0];
+        CaptureRequest recordingRequest = b.build();
+        CountDownLatch firstCaptureCompleted = new CountDownLatch(1);
+        AtomicInteger firstCompletedSequence = new AtomicInteger(-1);
         r.start();
-        long collectStartNs = System.nanoTime();
-        int requestId = session[0].setRepeatingRequest(b.build(), new CameraCaptureSession.CaptureCallback() {
+        long requestStartNs = System.nanoTime();
+        int requestId = recordingSession.setRepeatingRequest(recordingRequest, new CameraCaptureSession.CaptureCallback() {
             @Override
             public void onCaptureStarted(CameraCaptureSession s, CaptureRequest request, long timestamp, long frameNumber) {
                 captureStarted.incrementAndGet();
@@ -1143,6 +1147,11 @@ public class RecordActivity extends Activity {
             @Override
             public void onCaptureCompleted(CameraCaptureSession s, CaptureRequest request, TotalCaptureResult result) {
                 captureCompleted.incrementAndGet();
+                if (s == recordingSession && request == recordingRequest
+                        && result.getRequest() == recordingRequest
+                        && firstCompletedSequence.compareAndSet(-1, result.getSequenceId())) {
+                    firstCaptureCompleted.countDown();
+                }
             }
 
             @Override
@@ -1155,12 +1164,18 @@ public class RecordActivity extends Activity {
                 buffersLost.incrementAndGet();
             }
         }, h);
-        Thread.sleep(2000);
+        // A cold source reader can finish opening before its first ReadSample is ready.
+        // Measure two seconds of the real recording, after this request completes a frame.
+        // The callback may precede setRepeatingRequest's return; validate its sequence here.
+        boolean captureReady = firstCaptureCompleted.await(10, TimeUnit.SECONDS)
+                && firstCompletedSequence.get() == requestId;
+        long collectStartNs = System.nanoTime();
+        if (captureReady) Thread.sleep(2000);
         long collectStopNs = System.nanoTime();
         session[0].stopRepeating();
         session[0].close();
         long drainStartNs = System.nanoTime();
-        r.stop();
+        if (captureReady) r.stop();
         long drainStopNs = System.nanoTime();
         r.release();
         device[0].close();
@@ -1171,12 +1186,19 @@ public class RecordActivity extends Activity {
         closedBeforeQuit &= closeCallbacks.get() == 1;
         say("recorder camera close: onClosed exactly once before callback thread quit "
                 + closedBeforeQuit + ", callback thread stopped " + !ht.isAlive());
+        say("recorder camera ready: completed recording sequence " + captureReady
+                + "; request " + requestId + ", first result " + firstCompletedSequence.get()
+                + ", startup ns " + requestStartNs + ".." + collectStartNs);
         say("recorder camera trace: request " + requestId + ", started " + captureStarted.get()
                 + ", completed " + captureCompleted.get() + ", failed " + captureFailed.get()
                 + ", buffers lost " + buffersLost.get() + ", source ns " + firstSourceNs.get() + ".." + lastSourceNs.get()
                 + ", source frame numbers " + firstFrame.get() + ".." + lastFrame.get()
                 + ", collection ns " + collectStartNs + ".." + collectStopNs
                 + ", stop/drain ns " + drainStartNs + ".." + drainStopNs);
+        if (!captureReady) {
+            throw new IllegalStateException("recorder camera: no completed frame for recording sequence "
+                    + requestId + " within 10 seconds");
+        }
         // The test camera's picture: Y = x + y (at its own size: the recorder's 320x240 takes
         // every other pixel of 640x480, so Y = 2 (x + y)), gray chroma, away from the square.
         Video v = decodeVideo(file, null, 60, 40);
