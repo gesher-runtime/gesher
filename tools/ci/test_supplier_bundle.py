@@ -245,7 +245,8 @@ class SupplierBundleWiring(unittest.TestCase):
     def test_core_suppliers_receives_the_batch_once_and_uploads_the_published_tree(self):
         job = self.jobs['core-suppliers']
         specs = receipt.batch_manifest((ROOT / self.MANIFEST).read_text(encoding='utf-8'))
-        self.assertEqual(set(job['needs']), {spec['producer'].split(' / ', 1)[0] for spec in specs})
+        producers = {spec['producer'].split(' / ', 1)[0] for spec in specs}
+        self.assertEqual(set(job['needs']), producers | {'plan'})
         self.assertIn(f'artifact_receipt.py --batch {self.MANIFEST} --destination ci-suppliers/core --ledger',
                       self.runs('core-suppliers'))
         uploads = [step for step in job['steps'] if str(step.get('uses', '')).startswith('actions/upload-artifact@')]
