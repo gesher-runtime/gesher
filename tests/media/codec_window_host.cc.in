@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <deque>
 #include <memory>
@@ -34,6 +35,22 @@ void Check(bool ok, const char* reason) {
   if (!ok) { ++failures; std::fprintf(stderr, "FAIL codec window: %s\n", reason); }
 }
 struct ANativeWindow { int references = 0, acquisitions = 0, releases = 0; bool retired = false; };
+// This fixture runs Java's window delivery path. The real NDK dispatcher is tested separately.
+[[maybe_unused]] constexpr int AMEDIA_ERROR_UNKNOWN = -10000;
+struct AsyncInput { int index; };
+struct AsyncError { int status, action; std::string message; };
+struct NativeCodecCallbacks {
+  uint64_t RetireAsync() { std::abort(); }
+  uint64_t DiscardAsync() { std::abort(); }
+  void DiscardPending() { std::abort(); }
+  void WaitForAsync(uint64_t) { std::abort(); }
+  void PostFrame(int64_t, int64_t) { std::abort(); }
+  void PostAsync(AsyncInput) { std::abort(); }
+  void PostAsync(AsyncError) { std::abort(); }
+};
+namespace gesher {
+inline int64_t MonotonicNanos() { std::abort(); }
+}
 struct JavaSurface { ANativeWindow* window = nullptr; bool reader = false; };
 namespace android {
 constexpr int OK = 0, NO_INIT = -19, BAD_VALUE = -22, INVALID_OPERATION = -38;
@@ -125,6 +142,7 @@ struct FakeInput { int abandonments = 0; void Abandon() { ++abandonments; } };
 using InputSurface = FakeInput;
 class Codec {
  public:
+  NativeCodecCallbacks* native_callbacks_ = nullptr;
   std::mutex lifecycle_mu_;
   std::mutex mu_;
   bool released_ = false;
@@ -184,6 +202,7 @@ class Codec {
   @DEQUEUE_INPUT@
   @DEQUEUE_OUTPUT@
   @POST_FATAL@
+  @POST_INPUT@
   @SET_SURFACE@
   bool has_surface() const { return window_ != nullptr || reader_ != nullptr; }
   @SET_VIDEO_SCALING@

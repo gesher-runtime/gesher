@@ -98,6 +98,18 @@ JNIEnv* AttachedEnv(const char*) { thread_local JNIEnv env; return &env; }
 bool CheckException(JNIEnv*, const char*) { return false; }
 struct ANativeWindow { int releases = 0; };
 void ANativeWindow_release(ANativeWindow* window) { ++window->releases; }
+// These lifecycle checks enter through Java; the separate NDK fixture uses the real dispatcher.
+[[maybe_unused]] constexpr int AMEDIA_ERROR_UNKNOWN = -10000;
+struct AsyncInput { int index; };
+struct AsyncError { int status, action; std::string message; };
+struct NativeCodecCallbacks {
+  uint64_t RetireAsync() { std::abort(); }
+  uint64_t DiscardAsync() { std::abort(); }
+  void DiscardPending() { std::abort(); }
+  void WaitForAsync(uint64_t) { std::abort(); }
+  void PostAsync(AsyncInput) { std::abort(); }
+  void PostAsync(AsyncError) { std::abort(); }
+};
 struct FakeInput {
   explicit FakeInput(int& count) : abandonments(count) {}
   ~FakeInput() {
@@ -119,6 +131,7 @@ struct Slot {
 };
 class Codec {
  public:
+  NativeCodecCallbacks* native_callbacks_ = nullptr;
   @DESTRUCTOR@
   @RELEASE@
   @START@
@@ -131,6 +144,7 @@ class Codec {
   @STOP_WORKER@
   @RETIRE_SURFACE@
   @POST_FATAL@
+  @POST_INPUT@
   bool InWork(int index) const {
     return std::find(work_.begin(), work_.end(), index) != work_.end();
   }

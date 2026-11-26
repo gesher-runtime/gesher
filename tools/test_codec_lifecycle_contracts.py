@@ -64,11 +64,14 @@ def generate(component: str, ref: str | None) -> str:
         }
         replacements = {name: method(source, marker) for name, marker in markers.items()}
         replacements["RELEASE"] = method(source, "  void Release()") if has_release else ""
-        replacements["STOP_LOCKED"] = method(source, "  void StopLocked()") if has_release else ""
+        stop_locked = ("  std::optional<uint64_t> StopLocked(" if
+                       "  std::optional<uint64_t> StopLocked(" in source else "  void StopLocked(")
+        replacements["STOP_LOCKED"] = method(source, stop_locked) if has_release else ""
         definitions["STOP_REQUIRES_CONFIGURE"] = ref is None or any(
             "configured_ = false;" in replacements[name] for name in ("STOP", "STOP_LOCKED"))
         replacements["RETIRE_SURFACE"] = method(source, "  void RetireSurfaceFailure(") if "  void RetireSurfaceFailure(" in source else ""
         replacements["POST_FATAL"] = method(source, "  void PostFatalErrorLocked(") if "  void PostFatalErrorLocked(" in source else ""
+        replacements["POST_INPUT"] = method(source, "  void PostInputAvailable(") if "  void PostInputAvailable(" in source else ""
     template = (ROOT / ("tests/media/codec_" + component + "_host.cc.in")).read_text()
     for name, body in replacements.items():
         marker = "@" + name + "@"

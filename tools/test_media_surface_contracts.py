@@ -55,9 +55,11 @@ def generate(component: str, ref: str | None) -> str:
                                         "  jobject InputBuffer(JNIEnv* env, int index)"),
             "@JNI_RELEASE_OUTPUT@": section(source, "void JNICALL MC_releaseOutputBuffer(JNIEnv* env,",
                                             "void JNICALL MC_signalEndOfInputStream(")}
+        stop_locked = ("  std::optional<uint64_t> StopLocked(" if
+                       "  std::optional<uint64_t> StopLocked(" in source else "  void StopLocked(")
         for name, marker in {
             "START": "  bool Start(", "STOP": "  void Stop(",
-            "STOP_LOCKED": "  void StopLocked(", "STOP_WORKER": "  void StopWorker(",
+            "STOP_LOCKED": stop_locked, "STOP_WORKER": "  void StopWorker(",
             "RESET": "  void Reset(", "FLUSH": "  void Flush(",
             "RELEASE": "  void Release(", "POST_FATAL": "  void PostFatalErrorLocked(",
             "DEQUEUE_INPUT": "  int DequeueInput(", "DEQUEUE_OUTPUT": "  int DequeueOutput(",
@@ -71,6 +73,8 @@ def generate(component: str, ref: str | None) -> str:
             replacements["@" + name + "@"] = method(source, marker)
         replacements["@SET_VIDEO_SCALING@"] = (method(source, "  bool SetVideoScalingMode(")
                 if "  bool SetVideoScalingMode(" in source else "")
+        replacements["@POST_INPUT@"] = (method(source, "  void PostInputAvailable(")
+                if "  void PostInputAvailable(" in source else "")
     else:
         source = source_text("compat/media/surface/queue_surface.cc", ref)
         header = source_text("compat/media/surface/queue_surface.h", ref)
