@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <windows.h>
 
+#include <barrier>
 #include <tuple>
 #include "revocable_internal.h"
 #include "shim_internal.h"
@@ -279,9 +280,20 @@ void TestPshared(Shared* view, const wchar_t* child_path) {
   puts("N29 Bionic pshared synchronization across processes PASS");
 }
 
+constexpr int kBarrierContenders = 8;
+
+struct BarrierContention {
+  Shared* view;
+  std::barrier<> start_round{kBarrierContenders};
+};
+
 DWORD WINAPI BarrierContender(void* raw) {
-  auto* view = static_cast<Shared*>(raw);
+  auto& fixture = *static_cast<BarrierContention*>(raw);
+  auto* view = fixture.view;
   for (int round = 0; round < kBarrierRounds; ++round) {
+    // Offer eight calls at each step. If contenders could finish independently,
+    // one might have several calls left after all its peers already exited.
+    fixture.start_round.arrive_and_wait();
     const int result = Pthread("pthread_barrier_wait", &view->barrier);
     Require(result == 0 || result == -1, "participant joins a complete cohort", result);
     if (result == -1) InterlockedIncrement(&view->barrier_serial);
@@ -325,22 +337,22 @@ void TestBarrier(Shared* view, const wchar_t* child_path) {
           Pthread("pthread_barrierattr_setpshared", &attr, 1) == 0 &&
           Pthread("pthread_barrier_init", &view->barrier, const_attr, 2u) == 0,
           "reinitialize shared barrier for the cohort overlap control");
-  constexpr int kContenders = 8;
-  HANDLE workers[kContenders];
+  BarrierContention overlap{view};
+  HANDLE workers[kBarrierContenders];
   view->barrier_serial = 0;
   for (HANDLE& worker : workers) {
-    worker = CreateThread(nullptr, 0, BarrierContender, view, 0, nullptr);
+    worker = CreateThread(nullptr, 0, BarrierContender, &overlap, 0, nullptr);
     Require(worker != nullptr, "start overlapping participant");
   }
-  Require(WaitForMultipleObjects(kContenders, workers, TRUE, 6000) == WAIT_OBJECT_0,
+  Require(WaitForMultipleObjects(kBarrierContenders, workers, TRUE, 10000) == WAIT_OBJECT_0,
           "all overlapping contenders leave their cohorts");
   for (HANDLE worker : workers) CloseHandle(worker);
-  Require(view->barrier_serial == kContenders * kBarrierRounds / 2,
+  Require(view->barrier_serial == kBarrierContenders * kBarrierRounds / 2,
           "one serial participant per overlapping cohort", view->barrier_serial);
   Require(Pthread("pthread_barrier_destroy", &view->barrier) == 0,
           "destroy barrier after overlapping cohorts complete");
   printf("N29 Bionic pshared barrier: %d overlapping two-participant cohorts PASS\n",
-         kContenders * kBarrierRounds / 2);
+         kBarrierContenders * kBarrierRounds / 2);
 }
 }  // namespace
 
