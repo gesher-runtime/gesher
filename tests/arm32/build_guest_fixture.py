@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Build and verify real ARM and Thumb ELF32 fixtures (not Android APKs).
+
+Requires ziglang==0.17.1 and pyelftools==0.33, installed separately. This script
+does not download dependencies. Each output deliberately imports only the
+explicit host_adjust test adapter; no Bionic/JNI implementation is implied.
+"""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import subprocess
+import sys
+
+from elftools.elf.elffile import ELFFile
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--zig", help="Path to a Zig executable; default uses python -m ziglang")
+    args = parser.parse_args()
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    source = Path(__file__).with_name("guest_fixture.c")
+    compiler = [args.zig] if args.zig else [sys.executable, "-m", "ziglang"]
+    for mode in ("arm", "thumb"):
+        output = (args.out_dir / f"fixture-{mode}.so").resolve()
+        subprocess.run(compiler + [
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-sanitize=all",
+            "-shared", "-fPIC", "-nostdlib", "-fno-stack-protector",
+            "-Wl,--hash-style=both", "-Wl,-soname,gesher_arm32_fixture.so",
+            str(source), "-o", str(output),
+        ], check=True, timeout=120)
+        with output.open("rb") as stream:
+            elf = ELFFile(stream)
+            if elf.elfclass != 32 or not elf.little_endian or elf["e_machine"] != "EM_ARM":
+                raise RuntimeError(f"{output}: compiler did not produce little-endian ARM ELF32")
+            symbols = list(elf.get_section_by_name(".dynsym").iter_symbols())
+            functions = [symbol for symbol in symbols if symbol.name.startswith("fixture_")]
+            if len(functions) != 6 or any(bool(symbol["st_value"] & 1) != (mode == "thumb")
+                                          for symbol in functions):
+                raise RuntimeError(f"{output}: compiler did not emit the requested {mode} state")
+            imports = {symbol.name for symbol in symbols
+                       if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
+            if imports != {"host_adjust"}:
+                raise RuntimeError(f"{output}: unexpected runtime dependencies: {sorted(imports)}")
+            tags = {tag.entry.d_tag for tag in elf.get_section_by_name(".dynamic").iter_tags()}
+            if not {"DT_INIT_ARRAY", "DT_REL", "DT_JMPREL"}.issubset(tags):
+                raise RuntimeError(f"{output}: fixture lost its constructor or relocation coverage")
+        print(f"Verified {mode} ELF32 fixture: {output}")
+
+
+if __name__ == "__main__":
+    main()
