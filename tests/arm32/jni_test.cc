@@ -208,6 +208,11 @@ void Run(const char* path) {
           &vm_result, &error) &&
         static_cast<int32_t>(vm_result.bits) == 88,
         "guest JNIEnv GetJavaVM and JavaVM GetEnv round-trip");
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_get_created_vm",
+          {Value::GuestPointer(bridge.GuestEnvironment())}, ValueKind::I32,
+          &vm_result, &error) &&
+        static_cast<int32_t>(vm_result.bits) == 99,
+        "guest ELF import JNI_GetCreatedJavaVMs resolves a typed 32-bit host thunk");
 
   auto call = [&](const char* name, Value* value) {
     return program.CallExport("gesher_arm32_jni_fixture.so", name,
