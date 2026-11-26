@@ -87,9 +87,9 @@ class QueueSurface : public android::Surface {
   void UpdateFrameGeometry();  // with mutex_ held; drops obsolete reusable pixels
   void EnsureBuffer();  // with mutex_ held
   int UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_scaling_mode = 1);
-  // Copies buffer_ as the latest frame with mutex_ held. Invoke the returned
+  // Copies the returned producer's buffer with mutex_ held. Invoke the returned
   // listener after unlocking, so it can read back the published frame.
-  std::function<void()> PublishLocked(std::optional<int64_t> timestamp_ns,
+  std::function<void()> PublishLocked(const Buffer& buffer, std::optional<int64_t> timestamp_ns,
                                        int video_scaling_mode = 1);
 
   static int HookSetSwapInterval(ANativeWindow* window, int interval);
@@ -98,7 +98,9 @@ class QueueSurface : public android::Surface {
 
   mutable std::mutex mutex_;
   android::sp<Buffer> buffer_;
-  std::vector<android::sp<Buffer>> dequeued_;
+  // One native dequeue may be outstanding. CPU drawing during that dequeue
+  // uses separate storage, so neither producer can overwrite the other's data.
+  android::sp<Buffer> dequeued_;
   int format_ = 1;  // PIXEL_FORMAT_RGBA_8888
   int requested_width_ = 0, requested_height_ = 0;
   int user_width_ = 0, user_height_ = 0;
