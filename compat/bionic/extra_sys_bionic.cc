@@ -1,6 +1,6 @@
 // gesher bionic shim: system-level functions beyond the core files
 // (docs/native-libs.md, ADR 0057): POSIX semaphores, scheduling parameters,
-// pthread spinlocks/barriers and the timed and attribute forms the core lacks,
+// pthread spinlocks and the timed and attribute forms the core lacks,
 // resource usage, utime/utimes, clock_nanosleep, sysinfo, prctl, getrandom,
 // memfd_create, madvise, dup3, flock and lockf, statfs, the xattr
 // family, the mount table and mount. Registered (from
@@ -299,11 +299,7 @@ int BIONIC_SYSV PthreadMutexattrGetprotocol(const int64_t*, int* v) {
   *v = 0;
   return 0;
 }
-int BIONIC_SYSV PthreadAttrPsharedGet(const void*, int* v) {
-  *v = 0;
-  return 0;
-}
-int BIONIC_SYSV PthreadAttrPsharedSet(void*, int) { return 0; }
+int BIONIC_SYSV PthreadRwlockattrSetkind(void*, int) { return 0; }
 int BIONIC_SYSV PthreadRwlockattrGetkind(const int64_t*, int* v) {
   *v = 0;
   return 0;
@@ -334,32 +330,6 @@ int BIONIC_SYSV SpinUnlock(void* l) {
   Word(l)->store(0, std::memory_order_release);
   return 0;
 }
-
-// Barriers (32 bytes): word 0 the count, 1 the waiters so far, 2 the generation.
-int BIONIC_SYSV BarrierInit(void* b, const void*, unsigned count) {
-  if (count == 0) return kEINVAL;
-  Word(b, 0)->store(count);
-  Word(b, 1)->store(0);
-  Word(b, 2)->store(0);
-  return 0;
-}
-int BIONIC_SYSV BarrierDestroy(void*) { return 0; }
-int BIONIC_SYSV BarrierWait(void* b) {
-  uint32_t gen = Word(b, 2)->load();
-  if (Word(b, 1)->fetch_add(1) + 1 == Word(b, 0)->load()) {
-    Word(b, 1)->store(0);
-    Word(b, 2)->fetch_add(1);
-    WakeByAddressAll(Word(b, 2));
-    return -1;  // PTHREAD_BARRIER_SERIAL_THREAD
-  }
-  while (Word(b, 2)->load() == gen) WaitOnAddress(Word(b, 2), &gen, 4, INFINITE);
-  return 0;
-}
-int BIONIC_SYSV BarrierattrInit(int* a) {
-  *a = 0;
-  return 0;
-}
-int BIONIC_SYSV BarrierattrDestroy(int*) { return 0; }
 
 // --- resource usage and time --------------------------------------------------------
 
@@ -1191,19 +1161,12 @@ void RegisterExtraSys(SymbolTable& t) {
   E("pthread_mutexattr_setprotocol", PthreadMutexattrSetprotocol);
   E("pthread_mutexattr_getprotocol", PthreadMutexattrGetprotocol);
   E("pthread_rwlockattr_getkind_np", PthreadRwlockattrGetkind);
-  E("pthread_rwlockattr_setkind_np", PthreadAttrPsharedSet);
+  E("pthread_rwlockattr_setkind_np", PthreadRwlockattrSetkind);
   E("pthread_spin_init", SpinInit);
   E("pthread_spin_destroy", SpinDestroy);
   E("pthread_spin_lock", SpinLock);
   E("pthread_spin_trylock", SpinTrylock);
   E("pthread_spin_unlock", SpinUnlock);
-  E("pthread_barrier_init", BarrierInit);
-  E("pthread_barrier_destroy", BarrierDestroy);
-  E("pthread_barrier_wait", BarrierWait);
-  E("pthread_barrierattr_init", BarrierattrInit);
-  E("pthread_barrierattr_destroy", BarrierattrDestroy);
-  E("pthread_barrierattr_getpshared", PthreadAttrPsharedGet);
-  E("pthread_barrierattr_setpshared", PthreadAttrPsharedSet);
   E("getrusage", Getrusage);
   E("times", Times);
   E("utime", Utime);

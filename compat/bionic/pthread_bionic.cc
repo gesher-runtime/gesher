@@ -33,6 +33,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <gesher/clocks.h>
 #include <gesher/elf_loader.h>
 #include <gesher/fork.h>
 
@@ -481,6 +482,38 @@ int WaitPthreadWord(Word* word, int32_t expected, const LinuxTimespec* abstime,
   // The pthread callers recheck their state after a changed word or signal.
   // A condition variable may return successfully after a spurious wake.
   return error == kEAGAIN || error == kEINTR ? 0 : error;
+}
+
+// Barriers. Keep the count of the cohort until it has left, so a fast
+// participant returning to the same barrier cannot enroll in the old round.
+struct Barrier {
+  uint32_t count;
+  bool shared;
+  std::atomic<uint32_t> present;
+  Word releasing;
+};
+static_assert(sizeof(Barrier) <= sizeof(bionic_pthread_barrier_t));
+static_assert(alignof(Barrier) <= alignof(bionic_pthread_barrier_t));
+static_assert(std::atomic<uint32_t>::is_always_lock_free);
+
+Barrier& AsBarrier(bionic_pthread_barrier_t* barrier) {
+  return *reinterpret_cast<Barrier*>(barrier);
+}
+
+void WaitBarrierPhase(Word* phase, int32_t observed, bool shared) {
+  while (phase->load(std::memory_order_acquire) == observed) {
+    if (!shared) {
+      FutexWait(phase, observed);
+      continue;
+    }
+    // A bounded wait also lets us observe progress if opening the Windows
+    // wake queue fails. The barrier state itself is in the shared memory.
+    const int64_t now = gesher::MonotonicNanos();
+    constexpr int64_t kSecond = 1000000000;
+    const LinuxTimespec deadline{now / kSecond + 1, now % kSecond};
+    const int error = WaitPthreadWord(phase, observed, &deadline, true, true);
+    if (error != 0 && error != kETIMEDOUT) Sleep(1);
+  }
 }
 
 // Check the deadline after the uncontended acquisition attempt, as Android does.
@@ -1022,6 +1055,73 @@ int BIONIC_SYSV gesher_bionic_pthread_rwlock_unlock(bionic_pthread_rwlock_t* rw)
   return 0;
 }
 
+int BIONIC_SYSV gesher_bionic_pthread_barrierattr_init(bionic_pthread_barrierattr_t* a) {
+  *a = 0;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrierattr_destroy(bionic_pthread_barrierattr_t* a) {
+  *a = 0;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrierattr_getpshared(
+    const bionic_pthread_barrierattr_t* a, int* value) {
+  *value = *a & 1;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrierattr_setpshared(
+    bionic_pthread_barrierattr_t* a, int value) {
+  // Android treats values other than PTHREAD_PROCESS_SHARED as private.
+  *a = (*a & ~1) | (value == 1 ? 1 : 0);
+  return 0;
+}
+
+int BIONIC_SYSV gesher_bionic_pthread_barrier_init(
+    bionic_pthread_barrier_t* storage, const bionic_pthread_barrierattr_t* a, unsigned count) {
+  if (count == 0) return kEINVAL;
+  new (storage) Barrier{count, a != nullptr && (*a & 1) != 0, 0, 0};
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrier_destroy(bionic_pthread_barrier_t* storage) {
+  auto& barrier = AsBarrier(storage);
+  if (barrier.count == 0) return kEINVAL;
+  WaitBarrierPhase(&barrier.releasing, 1, barrier.shared);
+  if (barrier.present.load(std::memory_order_acquire) != 0) return kEBUSY;
+  barrier.count = 0;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrier_wait(bionic_pthread_barrier_t* storage) {
+  auto& barrier = AsBarrier(storage);
+  const uint32_t count = barrier.count;
+  if (count == 0) return kEINVAL;
+  if (count == 1) {
+    // A single participant has no peers to synchronize with.
+    return -1;  // PTHREAD_BARRIER_SERIAL_THREAD
+  }
+  const bool shared = barrier.shared;
+  auto* phase = &barrier.releasing;
+  WaitBarrierPhase(phase, 1, shared);
+
+  uint32_t arrived = barrier.present.load(std::memory_order_relaxed);
+  do {
+    if (arrived >= count) return kEINVAL;
+  } while (!barrier.present.compare_exchange_weak(arrived, arrived + 1,
+             std::memory_order_acq_rel, std::memory_order_relaxed));
+
+  const bool serial = arrived == count - 1;
+  if (serial) {
+    // The arrival RMWs collect every participant's writes before release.
+    phase->store(1, std::memory_order_release);
+    WakePthreadWord(phase, true, shared);
+  } else {
+    WaitBarrierPhase(phase, 0, shared);
+  }
+  if (barrier.present.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    phase->store(0, std::memory_order_release);
+    WakePthreadWord(phase, true, shared);
+  }
+  return serial ? -1 : 0;
+}
+
 // Once.
 
 int BIONIC_SYSV gesher_bionic_pthread_once(bionic_pthread_once_t* once,
@@ -1409,6 +1509,13 @@ void RegisterPthread(SymbolTable& t) {
   P(pthread_rwlock_clockrdlock);
   P(pthread_rwlock_clockwrlock);
   P(pthread_rwlock_unlock);
+  P(pthread_barrierattr_init);
+  P(pthread_barrierattr_destroy);
+  P(pthread_barrierattr_getpshared);
+  P(pthread_barrierattr_setpshared);
+  P(pthread_barrier_init);
+  P(pthread_barrier_destroy);
+  P(pthread_barrier_wait);
   P(pthread_once);
   P(pthread_key_create);
   P(pthread_key_delete);

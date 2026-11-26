@@ -26,6 +26,9 @@ using bionic_pthread_key_t = int32_t;
 using bionic_pthread_once_t = int32_t;
 
 // bits/pthread_types.h, __LP64__ arms.
+struct bionic_pthread_barrier_t {
+  int64_t __private[4];
+};
 struct bionic_pthread_mutex_t {
   int32_t __private[10];
 };
@@ -44,6 +47,7 @@ struct bionic_pthread_attr_t {
   int32_t sched_priority;
   char __reserved[16];
 };
+using bionic_pthread_barrierattr_t = int32_t;
 using bionic_pthread_mutexattr_t = int64_t;
 using bionic_pthread_condattr_t = int64_t;
 using bionic_pthread_rwlockattr_t = int64_t;

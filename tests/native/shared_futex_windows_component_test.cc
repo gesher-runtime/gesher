@@ -74,6 +74,9 @@ struct Shared {
   bionic_pthread_mutex_t mutex;
   bionic_pthread_cond_t condition;
   bionic_pthread_rwlock_t rwlock;
+  bionic_pthread_barrier_t barrier;
+  int barrier_payload[2];
+  LONG barrier_serial;
 };
 
 void Require(bool ok, const char* description, long actual = 0) {
@@ -139,12 +142,31 @@ void PthreadChild(Shared* view) {
   puts("N29 Bionic pshared mutex, condition, and rwlock waiter PASS");
 }
 
+constexpr int kBarrierRounds = 64;
+
+void BarrierRounds(Shared* view, int role) {
+  for (int round = 1; round <= kBarrierRounds; ++round) {
+    view->barrier_payload[role] = round;
+    const int publish = Pthread("pthread_barrier_wait", &view->barrier);
+    Require(publish == 0 || publish == -1, "shared barrier publishes the round", publish);
+    if (publish == -1) InterlockedIncrement(&view->barrier_serial);
+    Require(view->barrier_payload[1 - role] == round, "read peer's publication", round);
+    const int read = Pthread("pthread_barrier_wait", &view->barrier);
+    Require(read == 0 || read == -1, "shared barrier retires both reads", read);
+  }
+}
+
 void Child(const wchar_t* path, int mask, int mode) {
   auto* base = View(path, PROT_READ | PROT_WRITE, 0, 0x20000000000, kBytes);
   auto* view = reinterpret_cast<Shared*>(reinterpret_cast<char*>(base) + kBytes - kPage);
   if (mode == 2) {
     PthreadChild(view);
     Require(munmap(base, kBytes) == 0, "unmap shared pthread objects");
+    return;
+  }
+  if (mode == 3) {
+    BarrierRounds(view, 1);
+    Require(munmap(base, kBytes) == 0, "unmap child barrier");
     return;
   }
   const bool basic = mode == 1;
@@ -256,6 +278,37 @@ void TestPshared(Shared* view, const wchar_t* child_path) {
   Reap(child, 0);
   puts("N29 Bionic pshared synchronization across processes PASS");
 }
+
+void TestBarrier(Shared* view, const wchar_t* child_path) {
+  bionic_pthread_barrierattr_t attr = -1;
+  int mode = -1;
+  const auto* const_attr = static_cast<const bionic_pthread_barrierattr_t*>(&attr);
+  Require(Pthread("pthread_barrierattr_init", &attr) == 0, "barrier attribute init");
+  Require(Pthread("pthread_barrierattr_getpshared", const_attr, &mode) == 0 && mode == 0,
+          "barrier defaults to private");
+  Require(Pthread("pthread_barrierattr_setpshared", &attr, 1) == 0 &&
+          Pthread("pthread_barrierattr_getpshared", const_attr, &mode) == 0 && mode == 1,
+          "barrier retains process-shared attribute");
+  const auto* no_attr = static_cast<const bionic_pthread_barrierattr_t*>(nullptr);
+  Require(Pthread("pthread_barrier_init", &view->barrier, no_attr, 0u) == EINVAL,
+          "barrier rejects zero participants");
+  Require(Pthread("pthread_barrier_init", &view->barrier, no_attr, 1u) == 0 &&
+          Pthread("pthread_barrier_wait", &view->barrier) == -1 &&
+          Pthread("pthread_barrier_destroy", &view->barrier) == 0,
+          "single participant is serial");
+  Require(Pthread("pthread_barrier_init", &view->barrier, const_attr, 2u) == 0,
+          "initialize two-party shared barrier");
+  Require(Pthread("pthread_barrierattr_destroy", &attr) == 0 && attr == 0,
+          "destroy barrier attribute before participants enter");
+  HANDLE child = Spawn(child_path, 0, 3);
+  BarrierRounds(view, 0);
+  Reap(child, 0);
+  Require(view->barrier_serial == kBarrierRounds, "one serial participant per round", view->barrier_serial);
+  Require(Pthread("pthread_barrier_destroy", &view->barrier) == 0 &&
+          Pthread("pthread_barrier_destroy", &view->barrier) == EINVAL,
+          "barrier destruction and reuse contract");
+  printf("N29 Bionic pshared barrier: %d two-party publication rounds PASS\n", kBarrierRounds);
+}
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -302,6 +355,7 @@ int wmain(int argc, wchar_t** argv) {
   Require(Futex(&view->word, FUTEX_WAKE, 1) == 0, "no remaining dead waiter");
 
   TestPshared(view, hardlink);
+  TestBarrier(view, hardlink);
   Require(munmap(read_only, kPage) == 0 && munmap(view, kPage) == 0, "unmap aliases");
   Require(DeleteFileW(hardlink) && DeleteFileW(path), "delete backing file");
   puts("N29 production Windows mmap and futex process contract PASS");
