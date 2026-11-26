@@ -9,6 +9,7 @@ import json
 import math
 from pathlib import Path
 import statistics
+import subprocess
 import tarfile
 import test_memrchr_contracts as contracts
 
@@ -63,7 +64,15 @@ def campaign(raw: dict, summary: dict) -> None:
 
 def main() -> None:
     report = json.loads((ROOT / "docs/research/memrchr-word-search-2026-11-23.json").read_text())
-    source = (ROOT / contracts.SOURCE).read_bytes()
+    current = (ROOT / contracts.SOURCE).read_bytes()
+    # Whole-translation-unit receipts remain attached to their immutable original
+    # source. Later procfs/FIFO changes are protected by the exact current source
+    # qualification; this archived campaign establishes only the same search code.
+    source = subprocess.check_output([
+        "git", "-C", str(ROOT), "show",
+        "7e205878cec54dbbd52bbac8a90b22e190798a5e:" + contracts.SOURCE])
+    check(contracts.production(current.decode()) == contracts.production(source.decode()),
+          "current measured Memrchr component matches the immutable historical source")
     check(sha(source) == report["production_source_sha256"], "reviewed production source")
     archive = report["evidence_archive"]
     packed = base64.b64decode(archive["data"], validate=True)
@@ -120,3 +129,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

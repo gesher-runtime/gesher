@@ -12,6 +12,10 @@
 $mediaTmp = Join-Path $env:RUNNER_TEMP 'gesher-media'
 New-Item -ItemType Directory -Force $mediaTmp | Out-Null
 
+Check 'media: real MP3, Vorbis and Opus reuse scratch while retaining independent PCM, seek, trim and errors' {
+  & "$Dir/media_audio_decoder_scratch_test.exe" gate "$Dir/media-audio-scratch-fixtures"
+} @('Real audio decoder scratch, retained PCM, seek, trim and error contracts passed:')
+
 # The sounds of a capture, as media_probe analyze measures them.
 function MediaSounds([string] $wav) {
   $out = & "$Dir/media_probe.exe" analyze $wav 2>&1 | Out-String
@@ -64,6 +68,22 @@ Check 'media: the audio engine plays 8/16/24/32-bit and float PCM, mono and ster
 CheckSounds 'media: the engine''s capture has each tone at its frequency, duration and level (resampled to 48000 Hz; volume 0.5 at half the level)' $probeWav @(
   @(440, 0.6, 0.354), @(500, 0.5, 0.354), @(660, 0.5, 0.354), @(880, 0.5, 0.354),
   @(330, 0.5, 0.177), @(1200, 0.4, 0.354), @(750, 0.6, 0.354), @(520, 0.5, 0.354))
+
+$phaseWav = Join-Path $mediaTmp 'resampler-phases.wav'
+$env:GESHER_AUDIO_CAPTURE = $phaseWav
+try {
+  $phaseOut = & "$Dir/media_probe.exe" resampler-phases 2>&1 | Out-String
+  $phaseCode = $LASTEXITCODE
+} finally { Remove-Item Env:GESHER_AUDIO_CAPTURE }
+Check 'media: actual half/integer resampling retains every source frame and marker/period/end callback' {
+  $global:LASTEXITCODE = $phaseCode
+  $phaseOut
+} @('media_probe resampler-phases: all passed', 'resampler-phases output: capture to',
+    'half-speed stereo: exact source position and all real callbacks are delivered',
+    'one-and-half-speed mono: exact source position and all real callbacks are delivered',
+    'integer-rate stereo: exact source position and all real callbacks are delivered')
+CheckSounds 'media: actual half/integer resampling capture retains frequency, duration and level' $phaseWav @(
+  @(375, 0.75, 0.354), @(1125, 0.25, 0.354), @(440, 0.4, 0.354))
 
 # The real output: WASAPI shared mode opens and renders, or there is no
 # endpoint (CI) and that is said, not a crash.
@@ -221,9 +241,24 @@ Check 'media: WASAPI refills the requested group using endpoint padding' {
 Check 'media: I420 rows to RGBA give the reference pixel for every Y, U, V and width (generic and AVX2)' {
   & "$Dir/media_yuv_rgba_test.exe"
 } @('generic rows: every Y, U, V gives the reference pixel', 'yuv_rgba_test all passed')
+Check 'media: full I420 odd/even crops preserve exact pixels, padding, scalar overlap and retained QueueSurface owners' {
+  & "$Dir/media_i420_crop_test.exe"
+} @('I420 cropped rows, exact pixels, guards and retained surfaces passed')
 Check 'media: target-sized retriever pixels match the pinned full-image Skia oracle with bounded row storage' {
   & "$Dir/media_retriever_pixels_test.exe"
 } @('filtered crop/rotation, config and bounded row storage passed')
+Check 'media: actual AVC output preserves reordered pixels and owned storage through drain and reset' {
+  & "$Dir/media_soft_avc_output_test.exe" gate "$Dir/media-avc-output-fixtures"
+} @('real reordered pixels and owned output storage passed')
+Check 'media: software AVC retains only returned inputs and reuses bounded encode storage' {
+  & "$Dir/media_soft_avc_reuse_test.exe"
+} @('real codec packets, owned inputs and bounded scratch passed')
+Check 'media: actual HEVC output preserves reordered pixels and owned storage through drain and reset' {
+  & "$Dir/media_soft_hevc_output_test.exe" gate "$Dir/media-hevc-output-fixtures"
+} @('real reordered pixels and owned output storage passed')
+Check 'media: RGBA conversion preserves every RGB value and actual codec/recorder AVC output' {
+  & "$Dir/media_rgba_i420_test.exe"
+} @('RGBA_ALL_RGB_PASS triples=16777216', 'complete pixels, actual callbacks and real AVC packets passed')
 
 # Clips of 2 s at 320x240, red, lime, blue and white for 0.5 s each: each decoded frame's
 # color says which frame it is.

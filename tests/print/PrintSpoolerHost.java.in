@@ -1,0 +1,509 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+import java.util.function.*;
+
+/**
+ * Host contracts for PrintSpooler, the production class compiled unchanged apart
+ * from its package. The adapter and Windows are scripted stand-ins: an adapter that
+ * answers on its own thread as a oneway IPrintDocumentAdapter does, and a host whose
+ * dialog and printer results each test chooses.
+ */
+public final class PrintSpoolerHost {
+    private static int failures, checks;
+    private static File directory;
+
+    private static void check(boolean condition, String description) {
+        checks++;
+        System.out.println((condition ? "PASS " : "FAIL ") + description);
+        if (!condition) failures++;
+    }
+
+    /** What the scripted adapter does for each call. */
+    static final class Adapter implements PrintSpooler.Document {
+        final List<String> calls = Collections.synchronizedList(new ArrayList<>());
+        volatile PrintSpooler.Session session;
+        volatile int pageCount = 10;
+        volatile int[] pageCounts;              // per layout call, overriding pageCount
+        volatile String layoutFailure;          // onLayoutFailed with this message
+        volatile boolean layoutHangs;           // never answers until canceled
+        volatile int hangOnLayout = -1;         // index of the layout call that hangs
+        volatile boolean answerCancel = true;   // answers a cancellation with onLayoutCanceled
+        volatile String writeFailure;
+        volatile Function<int[], int[]> written = pages -> pages;
+        volatile boolean staleFirst;            // also sends a callback with an old sequence
+        final AtomicInteger cancels = new AtomicInteger();
+        final AtomicInteger layouts = new AtomicInteger();
+        final CountDownLatch layoutCalled = new CountDownLatch(1);
+
+        private void later(Runnable r) {
+            Thread t = new Thread(r, "adapter");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        @Override public void start() { calls.add("start"); }
+
+        @Override public void layout(Object oldAttributes, Object newAttributes, boolean preview,
+                int sequence) {
+            int index = layouts.getAndIncrement();
+            calls.add("layout " + oldAttributes + "->" + newAttributes + " preview=" + preview);
+            layoutCalled.countDown();
+            later(() -> {
+                boolean hang = layoutHangs || index == hangOnLayout;
+                session.started(true, sequence, () -> {
+                    cancels.incrementAndGet();
+                    if (answerCancel) later(() -> session.canceled(true, sequence));
+                });
+                if (staleFirst) session.layoutFinished(sequence - 1, "stale", 99, true);
+                if (hang) return;
+                if (layoutFailure != null) session.failed(true, sequence, layoutFailure);
+                else {
+                    int count = pageCounts != null && index < pageCounts.length
+                            ? pageCounts[index] : pageCount;
+                    session.layoutFinished(sequence, "info" + count, count, true);
+                }
+            });
+        }
+
+        @Override public void write(int[] pages, File destination, int sequence) {
+            calls.add("write " + Arrays.toString(pages));
+            later(() -> {
+                session.started(false, sequence, () -> {
+                    cancels.incrementAndGet();
+                    later(() -> session.canceled(false, sequence));
+                });
+                if (writeFailure != null) { session.failed(false, sequence, writeFailure); return; }
+                try {
+                    Files.write(destination.toPath(), "%PDF-1.4\n".getBytes());
+                } catch (IOException e) {
+                    session.failed(false, sequence, e.toString());
+                    return;
+                }
+                session.writeFinished(sequence, written.apply(pages));
+            });
+        }
+
+        @Override public void finish() { calls.add("finish"); }
+    }
+
+    static final class Host implements PrintSpooler.Host {
+        final List<String> calls = Collections.synchronizedList(new ArrayList<>());
+        volatile boolean printers = true;
+        volatile PrintSpooler.Choice choice = new PrintSpooler.Choice("Printer A", "chosen",
+                null, 2, "devmode");
+        volatile boolean dialogWaitsForInactive;
+        volatile IOException printFailure;
+        volatile boolean printWaitsForCancel;
+        volatile int[] printedPages;
+        volatile File printedFile;
+        volatile boolean printedFileExisted;
+        volatile int dialogPageCount = Integer.MIN_VALUE;
+        final CountDownLatch dialogShown = new CountDownLatch(1);
+        final CountDownLatch printStarted = new CountDownLatch(1);
+
+        @Override public PrintSpooler.Choice defaults(Object requested) {
+            calls.add("defaults " + requested);
+            return printers ? new PrintSpooler.Choice("Printer A", "defaults", null, 1, "dm0") : null;
+        }
+
+        @Override public PrintSpooler.Choice choose(String label, int owner, PrintSpooler.Choice initial,
+                int pageCount, BooleanSupplier active) throws IOException {
+            calls.add("choose " + label);
+            dialogPageCount = pageCount;
+            dialogShown.countDown();
+            if (dialogWaitsForInactive) {
+                long until = System.currentTimeMillis() + 5000;
+                while (active.getAsBoolean() && System.currentTimeMillis() < until) sleep(5);
+                return null;
+            }
+            return choice;
+        }
+
+        @Override public void print(String label, PrintSpooler.Choice choice, File pdf, int[] filePages,
+                BooleanSupplier active) throws IOException {
+            calls.add("print " + choice.printer + " " + Arrays.toString(filePages));
+            printedPages = filePages;
+            printedFile = pdf;
+            printedFileExisted = pdf != null && pdf.isFile();
+            printStarted.countDown();
+            if (printWaitsForCancel) {
+                long until = System.currentTimeMillis() + 5000;
+                while (active.getAsBoolean() && System.currentTimeMillis() < until) sleep(5);
+                if (!active.getAsBoolean()) throw new InterruptedIOException("aborted");
+            }
+            if (printFailure != null) throw printFailure;
+        }
+    }
+
+    static final class States implements PrintSpooler.Listener {
+        final List<Integer> states = Collections.synchronizedList(new ArrayList<>());
+        @Override public void stateChanged(PrintSpooler.Snapshot job) { states.add(job.state); }
+    }
+
+    static void sleep(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException e) { throw new RuntimeException(e); }
+    }
+
+    static final class Run {
+        final Adapter adapter = new Adapter();
+        final Host host = new Host();
+        final States states = new States();
+        final PrintSpooler spooler;
+        PrintSpooler.Session session;
+        Thread thread;
+
+        Run() { this(2000, 500); }
+
+        Run(long timeout, long cancelTimeout) {
+            spooler = new PrintSpooler(host, states, directory, timeout, cancelTimeout);
+        }
+
+        Run start(String id) {
+            session = spooler.create(id, 10042, "Job " + id, "requested", adapter, 1234L);
+            adapter.session = session;
+            thread = new Thread(() -> {
+                if (session.admit()) {
+                    session.run(0);
+                    spooler.printQueued(session.id());
+                }
+            }, "print-" + id);
+            thread.start();
+            return this;
+        }
+
+        Run join() throws InterruptedException {
+            thread.join(10000);
+            check(!thread.isAlive(), "session thread ends");
+            return this;
+        }
+
+        PrintSpooler.Snapshot job() { return spooler.get(session.id(), 10042); }
+    }
+
+    public static void main(String[] args) throws Exception {
+        directory = Files.createTempDirectory("gesher-print-").toFile();
+        constants();
+        pageRanges();
+        completedPrint();
+        dialogCanceled();
+        layoutFailure();
+        destroyedDuringLayout();
+        layoutTimeout();
+        writeFailure();
+        writtenPagesValidation();
+        unknownPageCount();
+        selectionOutsideFinalLayout();
+        selectionPartlyOutsideFinalLayout();
+        staleCallbacks();
+        noPrinters();
+        destroyedDuringDialog();
+        windowsFailureAndRestart();
+        cancelStates();
+        forgetApp();
+        sessionLimit();
+        System.out.println(checks + " checks, " + failures + " failures");
+        if (failures != 0) System.exit(1);
+    }
+
+    static void constants() {
+        // PrintJobInfo.STATE_* are PrintJobInfoProto's values (android-16.0.0_r4).
+        check(PrintSpooler.STATE_CREATED == 1 && PrintSpooler.STATE_QUEUED == 2
+                && PrintSpooler.STATE_STARTED == 3 && PrintSpooler.STATE_BLOCKED == 4
+                && PrintSpooler.STATE_COMPLETED == 5 && PrintSpooler.STATE_FAILED == 6
+                && PrintSpooler.STATE_CANCELED == 7, "job states keep PrintJobInfo values");
+        check(PrintSpooler.PAGE_COUNT_UNKNOWN == -1, "PAGE_COUNT_UNKNOWN is -1");
+        check(Arrays.equals(PrintSpooler.ALL_PAGES, new int[] {0, Integer.MAX_VALUE}),
+                "ALL_PAGES is PageRange.ALL_PAGES");
+    }
+
+    static void pageRanges() {
+        check(Arrays.equals(PrintSpooler.normalize(new int[] {5, 7, 0, 1, 2, 3}), new int[] {0, 3, 5, 7}),
+                "normalize sorts and merges adjacent ranges");
+        check(PrintSpooler.normalize(new int[] {3, 1}) == null, "normalize rejects an inverted range");
+        check(PrintSpooler.normalize(new int[0]) == null, "normalize rejects no pages");
+        check(Arrays.equals(PrintSpooler.selectedPages(new int[] {0, 9}, 10), PrintSpooler.ALL_PAGES),
+                "every page explicitly is ALL_PAGES");
+        check(Arrays.equals(PrintSpooler.selectedPages(new int[] {2, 4, 8, 20}, 10), new int[] {2, 4, 8, 9}),
+                "a range past the end is cut at the last page");
+        check(PrintSpooler.selectedPages(new int[] {12, 14}, 10) == null,
+                "ranges wholly past the end select no page, never all pages");
+        check(PrintSpooler.selectedPages(new int[] {2, 2}, 2) == null,
+                "page 3 of a two-page document selects no page");
+        check(Arrays.equals(PrintSpooler.selectedPages(new int[] {1, 2}, 2), new int[] {1, 1}),
+                "a partly overlapping range keeps only the overlap");
+        check(Arrays.equals(PrintSpooler.selectedPages(new int[] {0, 0, 2, 4}, 2), new int[] {0, 0}),
+                "a range wholly past the end is dropped, earlier ranges are kept");
+        check(Arrays.equals(PrintSpooler.selectedPages(null, 2), PrintSpooler.ALL_PAGES),
+                "no explicit selection is all pages");
+        check(PrintSpooler.contains(new int[] {0, 5}, new int[] {1, 2, 4, 5}, 10), "contains nested ranges");
+        check(!PrintSpooler.contains(new int[] {0, 3}, new int[] {1, 2, 4, 5}, 10), "contains rejects a gap");
+        check(Arrays.equals(PrintSpooler.filePages(new int[] {2, 4}, new int[] {2, 4}, 10), PrintSpooler.ALL_PAGES),
+                "exactly the requested pages print the whole file");
+        check(Arrays.equals(PrintSpooler.filePages(new int[] {2, 4}, PrintSpooler.ALL_PAGES, 10), new int[] {2, 4}),
+                "the whole document prints the requested pages of it");
+        check(Arrays.equals(PrintSpooler.filePages(new int[] {2, 4, 7, 7}, new int[] {1, 5, 7, 8}, 10),
+                new int[] {1, 3, 5, 5}), "a superset prints the requested pages at their file positions");
+        check(PrintSpooler.filePages(new int[] {2, 4}, new int[] {3, 4}, 10) == null,
+                "missing requested pages are invalid");
+        check(Arrays.equals(PrintSpooler.filePages(PrintSpooler.ALL_PAGES, new int[] {0, 9}, 10),
+                PrintSpooler.ALL_PAGES), "all pages written explicitly print the whole file");
+        check(PrintSpooler.filePages(new int[] {0, 1}, null, 10) == null, "no written pages are invalid");
+    }
+
+    static void completedPrint() throws Exception {
+        Run run = new Run().start("complete");
+        run.join();
+        check(run.adapter.calls.equals(List.of("start", "layout null->defaults preview=true",
+                "layout defaults->chosen preview=false", "write [0, 2147483647]", "finish")),
+                "start, preview layout, final layout, write and finish in spooler order: " + run.adapter.calls);
+        check(run.host.calls.equals(List.of("defaults requested", "choose Job complete",
+                "print Printer A [0, 2147483647]")), "defaults, dialog then print: " + run.host.calls);
+        check(run.host.dialogPageCount == 10, "the dialog knows the laid-out page count");
+        check(run.host.printedFileExisted, "Windows prints the written document file");
+        check(run.states.states.equals(List.of(PrintSpooler.STATE_QUEUED, PrintSpooler.STATE_STARTED,
+                PrintSpooler.STATE_COMPLETED)), "QUEUED, STARTED, then COMPLETED after Windows accepted it: "
+                + run.states.states);
+        PrintSpooler.Snapshot job = run.job();
+        check(job.state == PrintSpooler.STATE_COMPLETED && "Printer A".equals(job.printer)
+                && job.copies == 2 && "chosen".equals(job.attributes) && "info10".equals(job.documentInfo),
+                "the job reports its printer, copies, attributes and document");
+        check(!run.host.printedFile.exists(), "the spooled file is removed after completion");
+        check(run.spooler.get("complete", 99) == null, "another app does not see the job");
+        check(run.spooler.jobs(10042).size() == 1, "getPrintJobs lists the app's job");
+    }
+
+    static void dialogCanceled() throws Exception {
+        Run run = new Run();
+        run.host.choice = null;
+        run.start("dismissed").join();
+        check(run.job().state == PrintSpooler.STATE_CANCELED, "a dismissed dialog cancels the job");
+        check(run.adapter.calls.equals(List.of("start", "layout null->defaults preview=true", "finish")),
+                "a dismissed dialog finishes the adapter without writing: " + run.adapter.calls);
+        check(run.host.calls.stream().noneMatch(c -> c.startsWith("print")), "nothing is printed");
+        check(run.states.states.equals(List.of(PrintSpooler.STATE_CANCELED)), "only CANCELED is reported");
+    }
+
+    static void layoutFailure() throws Exception {
+        Run run = new Run();
+        run.adapter.layoutFailure = "no content";
+        run.start("layout-failed").join();
+        PrintSpooler.Snapshot job = run.job();
+        check(job.state == PrintSpooler.STATE_CANCELED && "no content".equals(job.status),
+                "onLayoutFailed cancels the job with the app's message, as onPrintDocumentError");
+        check(run.host.calls.stream().noneMatch(c -> c.startsWith("choose")), "no dialog after a failed layout");
+        check(run.adapter.calls.get(run.adapter.calls.size() - 1).equals("finish"), "the adapter is finished");
+    }
+
+    static void destroyedDuringLayout() throws Exception {
+        Run run = new Run();
+        run.adapter.layoutHangs = true;
+        run.start("destroyed-layout");
+        run.adapter.layoutCalled.await(5, TimeUnit.SECONDS);
+        sleep(50);
+        run.session.destroyed();
+        run.join();
+        check(run.adapter.cancels.get() == 1, "the running layout's cancellation signal is canceled");
+        check(run.job().state == PrintSpooler.STATE_CANCELED && run.job().status == null,
+                "an activity destroyed during layout cancels the job");
+        check(run.adapter.calls.get(run.adapter.calls.size() - 1).equals("finish"), "finish follows");
+    }
+
+    static void layoutTimeout() throws Exception {
+        Run run = new Run(200, 200);
+        run.adapter.hangOnLayout = 1;
+        run.start("timeout").join();
+        check(run.adapter.cancels.get() == 1, "a layout that never ends is canceled");
+        check(run.job().state == PrintSpooler.STATE_CANCELED && "Layout did not finish".equals(run.job().status),
+                "and the job is canceled with the reason");
+        check(run.host.calls.stream().noneMatch(c -> c.startsWith("print")), "nothing is printed");
+    }
+
+    static void writeFailure() throws Exception {
+        Run run = new Run();
+        run.adapter.writeFailure = "disk full";
+        run.start("write-failed").join();
+        check(run.job().state == PrintSpooler.STATE_CANCELED && "disk full".equals(run.job().status),
+                "onWriteFailed cancels the job with the app's message");
+        check(!new File(directory, "write-failed.pdf").exists(), "the partial file is removed");
+        check(run.host.calls.stream().noneMatch(c -> c.startsWith("print")), "nothing is printed");
+    }
+
+    static void writtenPagesValidation() throws Exception {
+        Run run = new Run();
+        run.host.choice = new PrintSpooler.Choice("Printer B", "chosen", new int[] {2, 4}, 1, "dm");
+        run.adapter.written = pages -> PrintSpooler.ALL_PAGES.clone();
+        run.start("pages").join();
+        check(run.adapter.calls.contains("write [2, 4]"), "write asks for the chosen pages");
+        check(Arrays.equals(run.host.printedPages, new int[] {2, 4}),
+                "a whole written document prints only the chosen pages");
+        check(Arrays.equals(run.job().pages, new int[] {2, 4}), "the job reports its pages");
+
+        Run bad = new Run();
+        bad.host.choice = new PrintSpooler.Choice("Printer B", "chosen", new int[] {2, 4}, 1, "dm");
+        bad.adapter.written = pages -> new int[] {3, 4};
+        bad.start("bad-pages").join();
+        check(bad.job().state == PrintSpooler.STATE_CANCELED, "written pages missing a chosen page cancel the job");
+        check(bad.host.calls.stream().noneMatch(c -> c.startsWith("print")), "and nothing is printed");
+    }
+
+    static void selectionOutsideFinalLayout() throws Exception {
+        // Three pages in the preview, two after the final layout, the user chose page 3.
+        Run run = new Run();
+        run.adapter.pageCounts = new int[] {3, 2};
+        run.host.choice = new PrintSpooler.Choice("Printer B", "chosen", new int[] {2, 2}, 1, "dm");
+        run.start("shrunk").join();
+        check(run.host.dialogPageCount == 3, "the dialog offered the preview's three pages");
+        check(run.adapter.calls.stream().noneMatch(c -> c.startsWith("write")),
+                "no page is written when the selection is outside the final layout: " + run.adapter.calls);
+        check(run.host.calls.stream().noneMatch(c -> c.startsWith("print")),
+                "nothing is printed: " + run.host.calls);
+        PrintSpooler.Snapshot job = run.job();
+        check(job.state == PrintSpooler.STATE_CANCELED && job.status != null,
+                "the job is canceled with a reason: state " + job.state + " status " + job.status);
+        check(run.adapter.calls.get(run.adapter.calls.size() - 1).equals("finish"), "the adapter is finished");
+        check(run.states.states.equals(List.of(PrintSpooler.STATE_CANCELED)),
+                "only CANCELED is reported: " + run.states.states);
+    }
+
+    static void selectionPartlyOutsideFinalLayout() throws Exception {
+        Run run = new Run();
+        run.adapter.pageCounts = new int[] {3, 2};
+        run.host.choice = new PrintSpooler.Choice("Printer B", "chosen", new int[] {1, 2}, 1, "dm");
+        run.start("shrunk-partly").join();
+        check(run.adapter.calls.contains("write [1, 1]"),
+                "only the selected page still in the document is written: " + run.adapter.calls);
+        check(Arrays.equals(run.job().pages, new int[] {1, 1}), "the job reports only that page");
+        check(Arrays.equals(run.host.printedPages, PrintSpooler.ALL_PAGES),
+                "the file holding exactly that page is printed whole");
+        check(run.job().state == PrintSpooler.STATE_COMPLETED, "and the job completes");
+    }
+
+    static void unknownPageCount() throws Exception {
+        Run run = new Run();
+        run.adapter.pageCount = PrintSpooler.PAGE_COUNT_UNKNOWN;
+        run.adapter.written = pages -> new int[] {0, 2};
+        run.start("unknown").join();
+        check(run.host.dialogPageCount == PrintSpooler.PAGE_COUNT_UNKNOWN, "the dialog gets an unknown count");
+        check(Arrays.equals(run.host.printedPages, PrintSpooler.ALL_PAGES),
+                "an unknown count requests and prints all written pages");
+    }
+
+    static void staleCallbacks() throws Exception {
+        Run run = new Run();
+        run.adapter.staleFirst = true;
+        run.start("stale").join();
+        check(run.job().state == PrintSpooler.STATE_COMPLETED && "info10".equals(run.job().documentInfo),
+                "callbacks with an old sequence are ignored");
+    }
+
+    static void noPrinters() throws Exception {
+        Run run = new Run();
+        run.host.printers = false;
+        run.host.choice = null;
+        run.start("no-printers").join();
+        check(run.adapter.calls.equals(List.of("start", "finish")), "no default printer: no preview layout");
+        check(run.host.dialogPageCount == PrintSpooler.PAGE_COUNT_UNKNOWN, "Windows' dialog still opens");
+        check(run.job().state == PrintSpooler.STATE_CANCELED, "and its dismissal cancels the job");
+    }
+
+    static void destroyedDuringDialog() throws Exception {
+        Run run = new Run();
+        run.host.dialogWaitsForInactive = true;
+        run.start("destroyed-dialog");
+        run.host.dialogShown.await(5, TimeUnit.SECONDS);
+        run.spooler.cancel("destroyed-dialog", 10042);
+        sleep(50);
+        check(run.thread.isAlive() && run.job().state == PrintSpooler.STATE_CREATED,
+                "PrintJob.cancel() leaves a job in its dialog to the user, as UserState does");
+        run.session.destroyed();
+        run.join();
+        check(run.job().state == PrintSpooler.STATE_CANCELED, "a destroyed activity closes the dialog and cancels");
+    }
+
+    static void windowsFailureAndRestart() throws Exception {
+        Run run = new Run();
+        run.host.printFailure = new IOException("Printer offline");
+        run.start("failed").join();
+        PrintSpooler.Snapshot job = run.job();
+        check(job.state == PrintSpooler.STATE_FAILED && "Printer offline".equals(job.status),
+                "a Windows failure fails the job with its reason");
+        check(run.host.printedFile.isFile(), "a failed job keeps its document for restart");
+        run.host.printFailure = null;
+        check(!run.spooler.restart("failed", 99), "another app cannot restart it");
+        check(run.spooler.restart("failed", 10042), "restartPrintJob queues a failed job");
+        check(run.job().state == PrintSpooler.STATE_QUEUED, "restarted job is QUEUED");
+        run.spooler.printQueued("failed");
+        check(run.job().state == PrintSpooler.STATE_COMPLETED && run.job().status == null,
+                "and completes once Windows accepts it");
+        check(!run.spooler.restart("failed", 10042), "only FAILED jobs restart");
+        check(run.states.states.equals(List.of(PrintSpooler.STATE_QUEUED, PrintSpooler.STATE_STARTED,
+                PrintSpooler.STATE_FAILED, PrintSpooler.STATE_QUEUED, PrintSpooler.STATE_STARTED,
+                PrintSpooler.STATE_COMPLETED)), "listeners see every transition: " + run.states.states);
+    }
+
+    static void cancelStates() throws Exception {
+        Run failed = new Run();
+        failed.host.printFailure = new IOException("jam");
+        failed.start("cancel-failed").join();
+        failed.spooler.cancel("cancel-failed", 10042);
+        check(failed.job().state == PrintSpooler.STATE_CANCELED, "canceling a failed job cancels it");
+        check(!failed.host.printedFile.exists(), "and drops its document");
+
+        Run printing = new Run();
+        printing.host.printWaitsForCancel = true;
+        printing.start("cancel-printing");
+        printing.host.printStarted.await(5, TimeUnit.SECONDS);
+        check(printing.job().state == PrintSpooler.STATE_STARTED, "printing job is STARTED");
+        printing.spooler.cancel("cancel-printing", 99);
+        sleep(50);
+        check(printing.job().state == PrintSpooler.STATE_STARTED, "another app cannot cancel it");
+        printing.spooler.cancel("cancel-printing", 10042);
+        printing.join();
+        check(printing.job().state == PrintSpooler.STATE_CANCELED, "a canceled Windows print is CANCELED");
+
+        Run done = new Run().start("cancel-done");
+        done.join();
+        done.spooler.cancel("cancel-done", 10042);
+        check(done.job().state == PrintSpooler.STATE_COMPLETED, "a completed job stays completed");
+    }
+
+    static void forgetApp() throws Exception {
+        Run run = new Run().start("forget");
+        run.join();
+        run.spooler.forgetApp(10042);
+        check(run.spooler.jobs(10042).isEmpty(), "a dead creator's jobs are forgotten");
+    }
+
+    static void sessionLimit() throws Exception {
+        Host host = new Host();
+        host.dialogWaitsForInactive = true;
+        PrintSpooler spooler = new PrintSpooler(host, null, directory, 2000, 500);
+        List<PrintSpooler.Session> open = new ArrayList<>();
+        List<Thread> threads = new ArrayList<>();
+        for (int i = 0; i < PrintSpooler.MAX_SESSIONS; i++) {
+            Adapter adapter = new Adapter();
+            PrintSpooler.Session session = spooler.create("open" + i, 1, "Job", null, adapter, 0);
+            adapter.session = session;
+            check(session.admit(), "dialog " + i + " is admitted");
+            Thread t = new Thread(() -> session.run(0));
+            t.start();
+            open.add(session);
+            threads.add(t);
+        }
+        Adapter extra = new Adapter();
+        PrintSpooler.Session over = spooler.create("over", 1, "Job", null, extra, 0);
+        extra.session = over;
+        check(!over.admit(), "a dialog beyond the limit is refused");
+        check(spooler.get("over", 1).state == PrintSpooler.STATE_CANCELED, "and its job canceled");
+        check(extra.calls.equals(List.of("start", "finish")), "with its adapter started and finished");
+        for (PrintSpooler.Session session : open) session.destroyed();
+        for (Thread t : threads) t.join(5000);
+        Adapter again = new Adapter();
+        PrintSpooler.Session next = spooler.create("again", 1, "Job", null, again, 0);
+        check(next.admit(), "closed dialogs release their slots");
+    }
+}

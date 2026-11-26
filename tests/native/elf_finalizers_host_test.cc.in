@@ -32,7 +32,9 @@ struct Library {
   const char* symbol_name = nullptr;
   void* symbol_address = nullptr;
 };
-std::recursive_mutex g_mutex;
+// The production recursive loader lock, which knows whether this thread holds it.
+@LOADER_MUTEX_IMPLEMENTATION@
+LoaderMutex g_mutex;
 static std::vector<Library*> loaded;
 static const std::vector<Library*>& Loaded() { return loaded; }
 // The fixture only supplies symbol storage. Visibility and loader locking use
@@ -49,10 +51,12 @@ static void* SymbolAddress(const Library* lib, const Elf64_Sym*) { return lib->s
 }
 using gesher::elf::Library;
 using gesher::elf::Close;
+using gesher::elf::LoaderMutex;
 static int order;
 static Library* reentrant;
 static bool entered;
 static bool visible_during_finalization;
+static bool locked_during_finalization;
 static std::atomic<int> concurrent_calls{0};
 static void SYSV One() { order = order * 10 + 1; }
 static void SYSV Two() { order = order * 10 + 2; }
@@ -60,6 +64,7 @@ static void SYSV Three() { order = order * 10 + 3; }
 static void SYSV Reentrant() {
   order++;
   visible_during_finalization = gesher::elf::LookupGlobal("finalizer_visible") == &order;
+  locked_during_finalization = LoaderMutex::HeldByThisThread();
   if (!entered) { entered = true; Close(reentrant); }
 }
 static void SYSV Concurrent() {
@@ -101,6 +106,8 @@ int main() {
   Close(&recursive);
   Check(order == 1, "recursive close does not repeat finalization");
   Check(visible_during_finalization, "symbol remains visible while finalizers run");
+  Check(locked_during_finalization, "finalizers run under the loader lock");
+  Check(!LoaderMutex::HeldByThisThread(), "Close releases the loader lock");
   Check(gesher::elf::LookupGlobal("finalizer_visible") == nullptr, "symbol hidden after Close");
   Library shared{false, false, nullptr, 0, Concurrent};
   std::vector<std::thread> threads;

@@ -78,8 +78,8 @@ rejected('a repinned undeclared endpoint', {name: changed}, 'memrchr reverse end
 for label, before, after, expected in [
     ('fortify bound', b'if (n > buf_size) FortifyFailure("memrchr");',
      b'if (n > buf_size + 1) FortifyFailure("memrchr");', 'memrchr reverse endpoint'),
-    ('unrelated FIFO operation', b'int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return errno = kEPERM, -1; }',
-     b'int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return 0; }', 'memrchr reverse endpoint'),
+    ('unrelated FIFO operation', b'int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return mkfifo(path, static_cast<mode_t>(mode)); }',
+     b'int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return 0; }', 'memrchr reverse endpoint'),
     ('word read range', b'while (n >= sizeof(uint64_t)) {',
      b'while (n > 0) {', 'exact patch application'),
 ]:
@@ -138,3 +138,4 @@ for name, expected in [
     rejected('unrelated protected bytes in ' + name,
              {name: (ROOT / name).read_bytes() + b'\n'}, expected)
 print('MEMRCHR_SOURCE_POLICY_PASS exact_main_round_trip=1 original_protected_digests=71 negative_controls=' + str(checks))
+

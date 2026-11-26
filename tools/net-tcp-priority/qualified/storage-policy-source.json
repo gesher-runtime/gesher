@@ -1,0 +1,50 @@
+{
+  "baseline": "43e210f4eb7505b8e118044e28d4870433bbb23f",
+  "baseline_policy_sha256": "d8ab1f3b5de6ff8f2354a856e2a4d3bf1a76657084d200df20d5c18bd5546577",
+  "paths": [
+    "compat/art/dalvikvm_main.cc",
+    "compat/elf/exec/exec_spawn.cc",
+    "compat/elf/exec/gesher_exec.cc",
+    "compat/posix/posix.cmake",
+    "compat/posix/src/fsops.cc",
+    "compat/posix/src/socket.cc",
+    "compat/posix/src/system.cc",
+    "compat/posix/src/unistd.cc",
+    "tests/art-temp/entry_test.cc",
+    "tests/native/ofd_transfer_host_test.cc.in",
+    "tools/test_temp_directory.py"
+  ],
+  "previous_sha256": {
+    "compat/art/dalvikvm_main.cc": "72709c45a261a9dc89b714053a4c5b380f2f57604d7269541e614e7b03f36910",
+    "compat/elf/exec/exec_spawn.cc": "9eede0ff82f9f4a0f4f14bd16ec40ad8214b820beb2a112fece2ade83affce2b",
+    "compat/elf/exec/gesher_exec.cc": "4b1f5676cf5426bd1fce246fe30c0b3ac3fd2c2a6491ccf6e28711e3fb0a5a78",
+    "compat/posix/posix.cmake": "7cfde79fb79b29f244066fb431dfab4c7729549d19b7ad4945bac967de7f56cd",
+    "compat/posix/src/fsops.cc": "87217542f6dba719ff75de8a446ba019a6d4eb7edf83c04ff28659edf775fd57",
+    "compat/posix/src/socket.cc": "d106dc2c1039d27b0f21fb70bcff02780df737077f7b1e763271b28d5adcd343",
+    "compat/posix/src/system.cc": "c90291b2c376dd3834d82ef7ea83c391ab98aca904f9528e1648a980a36e4620",
+    "compat/posix/src/unistd.cc": "35187c1cec0c5f851c8d06a5fe791a61a9caa1d39d4d92fe8080de4c3eaa23af",
+    "tests/art-temp/entry_test.cc": "805caa3374d4247cab02fce66b23faac85115806315eb3e6b1c04b5807a0485a",
+    "tests/native/ofd_transfer_host_test.cc.in": "96a54c4cb3ff671b1c98168c2532cdc13cd19f249a40b69eb8eb4a224e4b4ef9",
+    "tools/test_temp_directory.py": "45295aa6d13d235969f2df7ec8763fc8522aa278030dc3ccc34b2657400e78cd"
+  },
+  "source_sha256": {
+    "compat/art/dalvikvm_main.cc": "3920c597673ecfc7800430776533777a12df0a6ef159dfb55959d7418db46c63",
+    "compat/elf/exec/exec_spawn.cc": "5338d750e3a01d4aaa2bd3adf019342403cb4eb8f2e337e4707f4e0e383362d4",
+    "compat/elf/exec/gesher_exec.cc": "5d3dc551f5e1fabafcf6ba4eda3a2cf4a86a6c9268ebdf11fb7aa5979a82dd6e",
+    "compat/posix/posix.cmake": "5f6009b3513d7859c7c53af23c47a3497812b04fa81321efca299307c5d7b276",
+    "compat/posix/src/fsops.cc": "7667720a41e73fe5c508a2742700bef252d50024fa1849cd15f01b509e67edbd",
+    "compat/posix/src/socket.cc": "049354ae6ec312aa487a1d040949a9b366e28c18e770f2ec21653d6a65fec2eb",
+    "compat/posix/src/system.cc": "22ffaa16d319618169c3fe8d01e2af155f4299e232943dc211e4ead9c4ebf1dd",
+    "compat/posix/src/unistd.cc": "e9b18ef29b462cb62435c59300e37bc8c099ea4f4e726ef0da741a5f6139d5b1",
+    "tests/art-temp/entry_test.cc": "53167f5d58aa396f737aa1cf80742ab08967cf9312ef29cd1b01117340024d10",
+    "tests/native/ofd_transfer_host_test.cc.in": "191344661c640fc6d1eaeac09a1dcedf4d56a1b0aad26657865320ed936187b7",
+    "tools/test_temp_directory.py": "d8583073123077066b161dd24d6c77d37f972093f68c0b93cc8b016935f773b6"
+  },
+  "helper_sha256": {
+    "compat/posix/include/gesher/storage_policy.h": "9ef326e6b0783eb88540259aad0b77c4e5832e8bf4b42c640080065ea08fa2b5",
+    "compat/posix/src/storage_policy.cc": "40704f856610896082eac4fe7055ee8634a27860f86504a5874d12ed980cd373",
+    "compat/posix/src/storage_policy.h": "b40df105a58d1c17a3144442b9c3b1cf1f2ce69ff71a3bb7f969c979c1d71770"
+  },
+  "patch_sha256": "d4dde9514b700a42f900d7fb5011aabb6d95303bb52681e65e3fe313568651e3",
+  "native_runtime_approval": false
+}
