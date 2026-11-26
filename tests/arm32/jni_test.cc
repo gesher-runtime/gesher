@@ -186,6 +186,11 @@ void Run(const char* path) {
     std::cerr << "JNI32 OnLoad: " << error << '\n';
   Check(onload_version == JNI_VERSION_1_6 && error.empty(),
         "real guest JNI_OnLoad retrieves JNIEnv through 32-bit JavaVM");
+  Value load_state;
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_onload_state",
+          {}, ValueKind::I32, &load_state, &error) &&
+        load_state.bits == 1,
+        "JNI32 guest JNI_OnLoad ran and updated guest library state");
 
   Value vm_result;
   Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_vm_bad_version",
@@ -280,6 +285,12 @@ void Run(const char* path) {
   Check(call("jni32_version", &result) && result.bits == JNI_VERSION_1_6,
         "JNI32 recovers after rejected guest operations");
   Check(bridge.ReleaseLocals(&error), "guest local reference frame complete");
+  Check(bridge.CallOnUnload("gesher_arm32_jni_fixture.so", &error),
+        "guest JNI_OnUnload executes with JavaVM32 before library teardown");
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_onload_state",
+          {}, ValueKind::I32, &load_state, &error) &&
+        load_state.bits == 0,
+        "guest JNI_OnUnload cleared its actual native state");
   Check(program.Shutdown(&error), "close guest JNI module");
 
   {
