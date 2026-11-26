@@ -826,12 +826,22 @@ ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
   if (offset < 0) return errno = EINVAL, -1;
   if (BadVector(fd, iovcnt)) return -1;
   if (iovcnt == 0) return gesher::CheckEmptyPositionedVector(fd, offset, false);
-  ssize_t total = 0;
+  std::array<iovec, IOV_MAX> copied;
+  if (!gesher::ws::CopyFromUser(copied.data(), iov, static_cast<size_t>(iovcnt) * sizeof(iovec)))
+    return errno = EFAULT, -1;
+  constexpr size_t maximum = 0x7ffff000;  // Linux MAX_RW_COUNT for 4 KiB pages.
   for (int i = 0; i < iovcnt; ++i) {
-    ssize_t n = pread(fd, iov[i].iov_base, iov[i].iov_len, offset + total);
+    if (copied[i].iov_len > static_cast<size_t>(std::numeric_limits<ssize_t>::max()))
+      return errno = EINVAL, -1;
+  }
+  ssize_t total = 0;
+  for (int i = 0; i < iovcnt && static_cast<size_t>(total) < maximum; ++i) {
+    const size_t length = std::min(copied[i].iov_len, maximum - static_cast<size_t>(total));
+    if (offset > std::numeric_limits<off_t>::max() - total) break;
+    const ssize_t n = pread(fd, copied[i].iov_base, length, offset + total);
     if (n < 0) return total > 0 ? total : -1;
     total += n;
-    if (static_cast<size_t>(n) < iov[i].iov_len) break;
+    if (static_cast<size_t>(n) < length) break;
   }
   return total;
 }

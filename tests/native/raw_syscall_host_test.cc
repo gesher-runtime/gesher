@@ -18,6 +18,14 @@ int event_flags = -1, chmod_flags = -1, mask_calls;
 int alt_stack_calls;
 int64_t alt_stack_in, alt_stack_out;
 bool alt_stack_fail;
+int vector_count;
+int64_t vector_offset;
+int64_t BIONIC_SYSV PositionedVector(int64_t, int64_t, int count, int64_t offset, int64_t, int64_t) {
+  vector_count = count;
+  vector_offset = offset;
+  if (count < 0 || offset < 0) return errno = EINVAL, -1;
+  return 3;
+}
 int64_t BIONIC_SYSV Eventfd(int64_t initial, int64_t flags, int64_t, int64_t, int64_t, int64_t) {
   event_flags = static_cast<int>(flags);
   return flags < 0 ? (errno = EINVAL, -1) : initial + 100;
@@ -68,6 +76,8 @@ void* LookupBionicSymbol(const char* name) {
   if (!std::strcmp(name, "sysconf")) return reinterpret_cast<void*>(&Sysconf);
   if (!std::strcmp(name, "sigprocmask")) return reinterpret_cast<void*>(&Sigprocmask);
   if (!std::strcmp(name, "sigaltstack")) return reinterpret_cast<void*>(&Sigaltstack);
+  if (!std::strcmp(name, "preadv") || !std::strcmp(name, "pwritev"))
+    return reinterpret_cast<void*>(&PositionedVector);
   return nullptr;
 }
 }
@@ -99,7 +109,7 @@ int main() {
   Check("affinity returns actual mask byte count", RawSyscallX64(204, args) == 16 && mask[8] == 1);
   args[1] = 8;
   Check("affinity errors stay negative errno", RawSyscallX64(204, args) == -EINVAL);
-  Check("unknown syscall remains ENOSYS", RawSyscallX64(500, args) == -ENOSYS);
+  Check("unknown syscall remains ENOSYS", RawSyscallX64(500, args) == -kENOSYS);
   Check("int error result remains EBADF", RawSyscallX64(3, args) == -EBADF);
   errno = EDOM;
   args[0] = 0x1111;
@@ -111,6 +121,18 @@ int main() {
   errno = EDOM;
   Check("sigaltstack errors stay negative errno",
         RawSyscallX64(131, args) == -EINVAL && alt_stack_calls == 2 && errno == EDOM);
+
+  constexpr int64_t large_offset = (INT64_C(1) << 32) + 7;
+  for (int syscall : {295, 296}) {
+    args[2] = 2;
+    args[3] = large_offset;
+    args[4] = 0x12345678;
+    Check("positioned vector supplies complete LP64 offset", RawSyscallX64(syscall, args) == 3 &&
+          vector_count == 2 && vector_offset == large_offset && errno == EDOM);
+    args[2] = large_offset;
+    Check("positioned vector imports only the low count word", RawSyscallX64(syscall, args) == 3 &&
+          vector_count == 7 && errno == EDOM);
+  }
 
   SymbolTable symbols;
   RegisterSyscall(symbols);

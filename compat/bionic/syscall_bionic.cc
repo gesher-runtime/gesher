@@ -94,7 +94,8 @@ constexpr RawCall kRawCalls[] = {
     {268, "fchmodat", 'i'},    {269, "faccessat", 'i'},    {271, "ppoll", 'i'},
     {281, "epoll_pwait", 'i'}, {284, "eventfd", 'i'},      {288, "accept4", 'i'},
     {290, "eventfd", 'i'},     {291, "epoll_create1", 'i'}, {292, "dup3", 'i'},
-    {293, "pipe2", 'i'},       {294, "inotify_init1", 'i'}, {318, "getrandom", 'l'},
+    {293, "pipe2", 'i'},       {294, "inotify_init1", 'i'},
+    {295, "preadv", 'l'},      {296, "pwritev", 'l'},     {318, "getrandom", 'l'},
     {319, "memfd_create", 'i'}, {325, "mlock2", 'i'},
 };
 
@@ -343,6 +344,8 @@ int64_t RawSyscallX64(int64_t nr, const int64_t a[6]) {
   errno = 0;
   // The older kernel interfaces have fewer arguments than libc's wrappers.
   // Registers beyond the kernel signature are unspecified, not extra flags.
+  // The LP64 positioned vectors also share the libc arguments: pos_l is
+  // the entire 64-bit offset and the kernel imports an unsigned-int count.
   const int64_t r = call.fn(a[0], nr == 284 ? 0 : a[1], a[2],
                            nr == 268 || nr == 269 ? 0 : a[3], a[4], a[5]);
   const int error = errno != 0 ? errno : kEINVAL;

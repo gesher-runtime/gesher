@@ -23,6 +23,7 @@
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -112,6 +113,8 @@ static void check_patched_code(void) {
     check("code written at run time runs again", patched_getpid() == getpid());
 }
 
+#include "positioned_vector_syscall_test.inc"
+
 int gesher_selftest(void) {
     errno = EDOM;
     check("raw success preserves libc errno", raw0(SYS_getpid) == getpid() && errno == EDOM);
@@ -176,6 +179,8 @@ int gesher_selftest(void) {
     } else {
         check("pipe", 0);
     }
+
+    test_positioned_vectors();
 
     long p = raw6(SYS_mmap, 0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     check("raw mmap", p > 0);
