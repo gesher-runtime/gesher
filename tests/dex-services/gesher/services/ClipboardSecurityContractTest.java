@@ -3,10 +3,18 @@ package gesher.services;
 
 import android.Manifest;
 import android.app.AppOpsManager;
+import android.app.ContentProviderHolder;
+import android.content.AttributionSource;
 import android.content.ClipData;
+import android.content.ContentProvider;
+import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
+import android.provider.OpenableColumns;
 import android.os.Binder;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.UriGrants;
@@ -189,10 +197,6 @@ public final class ClipboardSecurityContractTest {
         });
         h.nativeState.external("external", null);
         h.as(h.privileged, () -> check(h.api.getPrimaryClipSource(PRIVILEGED, null, 0, 0) == null, "Windows content retires Android source attribution"));
-        h.nativeState.external(null, new byte[]{'B', 'M', 0, 1});
-        File owned = (File)get(h.service, "mOwnedImage");
-        check(owned != null && owned.isFile(), "Native image cache belongs to this clipboard lifetime");
-        h.write("replace image"); check(!owned.exists(), "Replacing an image releases its cache file");
         File image = File.createTempFile("clipboard-fixture-", ".png");
         try {
             java.nio.file.Files.write(image.toPath(), new byte[]{1, 2, 3});
@@ -209,6 +213,63 @@ public final class ClipboardSecurityContractTest {
         h.as(h.privileged, () -> check(h.api.getPrimaryClipSource(PRIVILEGED, null, 0, 0) == null, "Clear retires source attribution"));
         h.remove(h.privileged, listener);
     }
+    private static void nativeImageGrants(ClipboardFixture h, boolean binder) throws Exception {
+        byte[] image = {'B', 'M', 0, 1};
+        h.nativeState.external("native text", image);
+        h.as(h.privileged, () -> check(h.api.hasPrimaryClip(PRIVILEGED, null, 0, 0),
+                "Image metadata does not consume the clipboard"));
+        Uri uri = (Uri)get(h.service, "mOwnedImage");
+        check(uri != null && "content".equals(uri.getScheme()),
+                "Native image is a content capability with no exposed filesystem path");
+        UriGrants grants = (UriGrants) call(h.atm, "uriGrants", new Class<?>[0]);
+        int read = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        int write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+        check(!grants.canAccess(h.privileged, uri, read, 0), "Metadata queries cannot issue image read grants");
+        Object provider = get(h.service, "mImages");
+        call(provider, "attachTo", new Class<?>[]{Context.class}, new ContextWrapper(null) {
+            @Override public int getUserId() { return 0; }
+            @Override public Object getSystemService(String name) { return null; }
+        });
+        var transport = ((ContentProvider)provider).getIContentProvider();
+        var granted = new AttributionSource(h.privileged.uid(), PRIVILEGED, null);
+        var denied = new AttributionSource(h.peer.uid(), PEER, null);
+        h.as(h.privileged, () -> rejects(SecurityException.class,
+                () -> transport.query(granted, uri, null, new Bundle(), null)));
+        h.as(h.privileged, () -> {
+            ClipData clip = h.api.getPrimaryClip(PRIVILEGED, null, 0, 0);
+            check(clip != null && uri.equals(clip.getItemAt(0).getUri())
+                    && "native text".contentEquals(clip.getItemAt(0).getText())
+                    && clip.getDescription().hasMimeType("image/*")
+                    && clip.getDescription().hasMimeType("text/plain"),
+                    "Native image delivery preserves both real formats");
+            try (var rows = transport.query(granted, uri, null, new Bundle(), null)) {
+                check(rows != null && rows.moveToFirst() && rows.getCount() == 1
+                        && rows.getLong(rows.getColumnIndexOrThrow(OpenableColumns.SIZE)) == image.length,
+                        "A paste target can query metadata on the granted image");
+            }
+            rejects(SecurityException.class, () -> transport.query(denied, uri, null, new Bundle(), null));
+            rejects(SecurityException.class, () -> transport.openFile(granted, uri, "w", null));
+            if (binder) {
+                try (var first = new ParcelFileDescriptor.AutoCloseInputStream(
+                                transport.openFile(granted, uri, "r", null));
+                     var other = new ParcelFileDescriptor.AutoCloseInputStream(
+                                transport.openFile(granted, uri, "r", null))) {
+                    check(first.read() == 'B' && other.read() == 'B',
+                            "Two target reads get independent offsets");
+                    h.write("replace granted image");
+                    check(java.util.Arrays.equals(first.readAllBytes(), new byte[]{'M', 0, 1}),
+                            "Already opened Windows image snapshots survive clipboard replacement");
+                }
+            } else h.write("replace granted image");
+            rejects(SecurityException.class, () -> transport.openFile(granted, uri, "r", null));
+        });
+        check(!grants.canAccess(h.privileged, uri, read | write, 0)
+                        && !grants.canAccess(h.privileged, uri, read, 0),
+                "Replacing an image retires its grant");
+        h.as(h.peer, () -> rejects(SecurityException.class,
+                () -> transport.query(denied, uri, null, new Bundle(), null)));
+    }
+
     private static void clipboardUriGrants(ClipboardFixture h) throws Exception {
         Uri item = Uri.parse("content://" + OWNER + ".files/item");
         Uri data = Uri.parse("content://" + OWNER + ".files/intent");
@@ -318,7 +379,7 @@ public final class ClipboardSecurityContractTest {
                     "All nonzero unsigned Windows sequence values are valid"));
             h.nativeState.sequence = 1;
             focusAndIdentity(h); imeAndPermissions(h); appOps(h); sourceAndStorage(h);
-            clipboardUriGrants(h); callbackPolicyAndRetirement(h);
+            nativeImageGrants(h, binder); clipboardUriGrants(h); callbackPolicyAndRetirement(h);
         }
         return checks;
     }

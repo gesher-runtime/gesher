@@ -109,6 +109,7 @@ public final class ClipboardService extends IClipboard.Default
     private final CallerIdentity mCallers;
     private final AppOpsService mAppOps;
     private final UriGrants mUriGrants;
+    private final ClipboardImageProvider mImages;
     private final Host mHost;
     private final AutoCloseable mPackageChanges;
     private final AutoCloseable mPackageRemovals;
@@ -119,7 +120,7 @@ public final class ClipboardService extends IClipboard.Default
     // mClipboardLock also serializes native reads/writes, keeping sequence and provenance together.
     private ClipData mClip;
     private String mSource;
-    private File mOwnedImage;
+    private Uri mOwnedImage;
     private ClipUris mClipUris;
     private int mSequence;
     private boolean mHaveSequence;
@@ -134,6 +135,7 @@ public final class ClipboardService extends IClipboard.Default
         mCallers = new CallerIdentity(pm, atm);
         mAppOps = pm.appOps();
         mUriGrants = Objects.requireNonNull(atm.uriGrants());
+        mImages = atm.clipboardImages();
         mHost = Objects.requireNonNull(host);
         mPackageChanges = pm.onPackageChange(ignored -> pruneListeners());
         mPackageRemovals = pm.onPackageRemoval(ignored -> pruneListeners());
@@ -141,6 +143,7 @@ public final class ClipboardService extends IClipboard.Default
 
     private record ListenerInfo(int uid, String packageName, String attributionTag, ApkPackage owner) { }
     private record Callback(IOnPrimaryClipChangedListener listener, ListenerInfo identity) { }
+    // The registered provider owns imported host images, so those have no app publisher.
     private record ClipUris(ListenerInfo publisher, IBinder owner, List<Uri> uris,
             Set<ApkPackage> readers) { }
 
@@ -241,20 +244,23 @@ public final class ClipboardService extends IClipboard.Default
                 byte[] image = mHost.image();
                 if (mHost.sequence() != sequence) continue;
                 ClipData clip = null;
-                File imageFile = null;
+                Uri imageUri = null;
+                ClipUris uris = null;
                 if (image != null && image.length > 0 && image.length <= MAX_IMAGE_BYTES) {
-                    try {
-                        File directory = new File(System.getProperty("java.io.tmpdir", "."), "gesher_clipboard");
-                        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("No clipboard cache");
-                        imageFile = File.createTempFile("clip-", ".bmp", directory);
-                        java.nio.file.Files.write(imageFile.toPath(), image);
-                        ClipDescription description = new ClipDescription(WINDOWS_LABEL, new String[]{"image/bmp", "image/*"});
-                        clip = new ClipData(description, new ClipData.Item(text, html, null,
-                                android.net.Uri.fromFile(imageFile)));
-                    } catch (IOException failure) {
-                        deleteImage(imageFile); imageFile = null;
-                        SystemServer.log("clipboard: could not cache native image: " + failure);
+                    List<String> mimeTypes = new ArrayList<>(3);
+                    mimeTypes.add("image/bmp");
+                    if (html != null) {
+                        mimeTypes.add(ClipDescription.MIMETYPE_TEXT_HTML);
+                        if (text == null) {
+                            text = android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString();
+                        }
                     }
+                    if (text != null) mimeTypes.add(ClipDescription.MIMETYPE_TEXT_PLAIN);
+                    imageUri = mImages.add(image);
+                    clip = new ClipData(new ClipDescription(WINDOWS_LABEL, mimeTypes.toArray(new String[0])),
+                            new ClipData.Item(text, html, null, imageUri));
+                    uris = new ClipUris(null, new Binder("Clipboard image permissions"),
+                            List.of(imageUri), new HashSet<>());
                 }
                 if (clip == null) {
                     if (text != null && html != null) clip = ClipData.newHtmlText(WINDOWS_LABEL, text, html);
@@ -263,24 +269,18 @@ public final class ClipboardService extends IClipboard.Default
                             android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString(), html);
                 }
                 mSequence = sequence; mHaveSequence = true;
-                changed = replaceLocked(clip, null, imageFile, null);
+                changed = replaceLocked(clip, null, imageUri, uris);
                 break;
             }
         }
         if (changed && notify) notifyListeners();
     }
 
-    private static void deleteImage(File file) {
-        if (file == null) return;
-        try { java.nio.file.Files.deleteIfExists(file.toPath()); }
-        catch (IOException failure) { SystemServer.log("clipboard: could not release cached image: " + failure); }
-    }
-
-    private boolean replaceLocked(ClipData clip, String source, File imageFile, ClipUris uris) {
+    private boolean replaceLocked(ClipData clip, String source, Uri image, ClipUris uris) {
         boolean changed = clip != null || mClip != null;
+        if (mOwnedImage != null) mImages.remove(mOwnedImage);
         if (mClipUris != null) mUriGrants.revokeByOwner(mClipUris.owner);
-        deleteImage(mOwnedImage);
-        mOwnedImage = imageFile;
+        mOwnedImage = image;
         mClipUris = uris;
         mClip = clip;
         mSource = clip == null ? null : source;
@@ -502,11 +502,17 @@ public final class ClipboardService extends IClipboard.Default
             synchronized (mPm) {
                 if (!current(reader)) return null;
                 try {
-                    if (!current(uris.publisher)) throw new SecurityException("Retired clipboard publisher");
+                    if (uris.publisher != null && !current(uris.publisher)) {
+                        throw new SecurityException("Retired clipboard publisher");
+                    }
                     if (reader.owner != null && !uris.readers.contains(reader.owner)) {
-                        List<UriGrants.Grant> grants = mUriGrants.prepareClipboard(uris.publisher.uid,
-                                reader.packageName, uris.uris);
-                        mUriGrants.publish(uris.owner, grants);
+                        if (mOwnedImage != null) {
+                            mImages.grantRead(uris.owner, reader.packageName, mOwnedImage);
+                        } else {
+                            List<UriGrants.Grant> grants = mUriGrants.prepareClipboard(uris.publisher.uid,
+                                    reader.packageName, uris.uris);
+                            mUriGrants.publish(uris.owner, grants);
+                        }
                         uris.readers.add(reader.owner);
                     }
                     return new ClipData(mClip);

@@ -896,6 +896,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         return mAm != null ? mAm.uriGrants() : null;
     }
 
+    ClipboardImageProvider clipboardImages() {
+        return mAm.providers().clipboardImages();
+    }
+
     /** Resolves a native foreground observation to a current, authenticated application. */
     synchronized boolean ownsForegroundProcess(int uid, long[] foreground) {
         if (foreground == null || foreground.length != 2 || foreground[0] <= 0

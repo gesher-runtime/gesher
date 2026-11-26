@@ -56,6 +56,7 @@ final class ContentProviders {
     private final ActivityTaskManagerService mAtm;
     private final SettingsProvider mSettings;
     private final DocumentsStorageProvider mDocumentsStorage;
+    private final ClipboardImageProvider mClipboardImages;
     private final CallLogProvider mCallLog;
     private final ContactsProvider mContacts;
     private final CallerIdentity mCallers;
@@ -210,6 +211,7 @@ final class ContentProviders {
             }).start();
         }
         mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
+        mClipboardImages = new ClipboardImageProvider(this);
         mCallLog = new CallLogProvider(this, mUriGrants);
         mContacts = new ContactsProvider(this, pm, atm, mUriGrants);
         pm.setHostedProviders(this);
@@ -229,6 +231,7 @@ final class ContentProviders {
         mDownloads = downloads;
     }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
+    ClipboardImageProvider clipboardImages() { return mClipboardImages; }
 
     /** The system server's {@code media} provider (MediaStore), once it is registered. */
     private volatile MediaStoreProvider mMedia;
@@ -400,6 +403,14 @@ final class ContentProviders {
             }
             enforceAccess(actualPackage, registration.info);
             return mDocumentsStorage.holder();
+        }
+        if (ClipboardImageProvider.AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration != mClipboardImages.registration || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Clipboard image authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mClipboardImages.holder();
         }
         DownloadProvider downloads = mDownloads;
         if (downloads != null && DownloadProvider.AUTHORITY.equals(name)) {
