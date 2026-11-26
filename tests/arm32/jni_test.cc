@@ -161,6 +161,21 @@ void Run(const char* path) {
   std::string error;
   if (!bridge.Install(&error)) std::cerr << "install JNI32: " << error << '\n';
   Check(bridge.GuestEnvironment() != 0, "install real 32-bit JNIEnv and function table");
+  int registration_calls = 0;
+  std::vector<RegisteredNative32> observed_natives;
+  // The fake environment is intentionally NOT a real ART trampoline
+  // installer. Returning false proves JNI_ERR reaches the guest instead of
+  // claiming native registration succeeded without callable host methods.
+  Check(bridge.SetNativeRegistrationHandler(
+          [&](jclass klass, const std::vector<RegisteredNative32>& methods,
+              std::string*) {
+            Check(klass == reinterpret_cast<jclass>(fake.class_object),
+                  "registered JNI class matches real host object");
+            ++registration_calls;
+            observed_natives = methods;
+            return false;
+          }, &error),
+        "attach explicit rejecting ART registration handler");
   uint32_t table = 0, version = 0, missing = 1;
   Check(program.Memory().Read32(bridge.GuestEnvironment(), &table) &&
         program.Memory().Read32(table + 4 * 4, &version) && version != 0 &&
@@ -233,6 +248,25 @@ void Run(const char* path) {
         fake.utf_acquired == 1, "global refs and UTF buffers released exactly once");
   Check(bridge.ReleaseLocals(&error) && fake.locals == 0,
         "local references retired at explicit JNI frame boundary");
+
+  Value register_result;
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_register_natives",
+          {Value::GuestPointer(bridge.GuestEnvironment())}, ValueKind::I32,
+          &register_result, &error) &&
+        static_cast<int32_t>(register_result.bits) == JNI_ERR &&
+        registration_calls == 1 && observed_natives.size() == 1 &&
+        observed_natives[0].name == "nativeAdd" &&
+        observed_natives[0].descriptor == "(II)I" &&
+        observed_natives[0].guest_entry != 0,
+        "real ARM/Thumb RegisterNatives is decoded but refuses fake ART success");
+  Check(!program.CallExport("gesher_arm32_jni_fixture.so",
+          "jni32_invalid_registration",
+          {Value::GuestPointer(bridge.GuestEnvironment())}, ValueKind::I32,
+          &register_result, &error) &&
+        registration_calls == 1,
+        "non-executable guest native entry fails before calling ART handler");
+  Check(bridge.ReleaseLocals(&error) && fake.locals == 0,
+        "RegisterNatives JNI local class reference cleaned up after failure");
 
   // ART -> ARM32: primitive, reference and 64-bit CriticalNative method calls
   // must pass through descriptor-aware AAPCS32 marshalling, never through a
