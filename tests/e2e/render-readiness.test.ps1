@@ -162,6 +162,14 @@ function Case([string] $name, [long] $pageAt, [long] $renderAt, [bool] $pass, [s
   }
   Write-Host "READINESS_CASE $name close_ms=$script:closeAt original_deadline_ms=$deadline problems=$($result.Problems.Count) $(@($result.Problems) -join ' | ')"
 }
+[GesherWin32]::Stage = 2
+$frame = CaptureSettled ([IntPtr]1) 1
+Check ($frame -is [int[]] -and [object]::ReferenceEquals($frame, [GesherWin32]::Edited)) 'settled capture keeps the original typed pixel buffer'
+[GesherWin32]::CaptureFault = 1
+$missingFrame = CaptureSettled ([IntPtr]1) 1
+Check ($null -eq $missingFrame) 'failed capture returns null'
+[GesherWin32]::CaptureFault = 0
+
 Case 'pending load after old early close' 14000 14000 $true
 Case 'normal three-action input path' 17000 17000 $true -Normal
 Case 'missing completion despite real content' ([long]::MaxValue) 14000 $false
