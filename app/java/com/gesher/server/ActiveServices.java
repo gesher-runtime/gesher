@@ -502,7 +502,9 @@ final class ActiveServices {
             if (r == null || !(bindToken instanceof IntentBindRecord)) return;
             requireServiceOwner(r);
             IntentBindRecord b = (IntentBindRecord) bindToken;
-            if (b.service != r) return;
+            // An onBind result, including null, belongs to this process and
+            // Intent binding until its cache is reset. onRebind has no result.
+            if (b.service != r || b.received) return;
             b.binder = service;
             b.received = true;
             for (ConnectionRecord c : b.connections) clients.add(c);

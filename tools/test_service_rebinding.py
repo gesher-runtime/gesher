@@ -17,7 +17,7 @@ def main() -> None:
     for name in ("framework-classes", "core-classes", "app-classes", "apksig", "java-home"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--source-ref", help="Compile prior ActiveServices as a regression control")
-    parser.add_argument("--scenario", default="all", choices=("all", "retained", "declined", "delayed", "null", "intents", "reentrant", "ordered", "ordered-destroyed", "replacement", "failed-local", "interleaved", "client-death", "force-stop", "retired", "destroyed", "restarted"))
+    parser.add_argument("--scenario", default="all", choices=("all", "retained", "declined", "delayed", "null", "intents", "reentrant", "ordered", "ordered-destroyed", "replacement", "failed-local", "interleaved", "client-death", "force-stop", "retired", "destroyed", "restarted", "publication"))
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:

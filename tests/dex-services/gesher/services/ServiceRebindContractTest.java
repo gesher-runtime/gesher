@@ -570,6 +570,37 @@ public final class ServiceRebindContractTest {
         h.unbind(second);
     }
 
+    private static void repeatedPublication() throws Exception {
+        for (boolean publishNull : List.of(false, true)) {
+            Harness h = new Harness();
+            h.start();
+            Connection first = new Connection(Runnable::run);
+            h.bind(first, "cached", Context.BIND_AUTO_CREATE);
+            IBinder original = publishNull ? null : new Binder();
+            IBinder duplicate = publishNull ? new Binder() : null;
+            h.publish(0, original);
+            h.publish(0, duplicate);
+            if (publishNull) first.nullOnce();
+            else check(first.connected == 1 && first.value == original && first.nulls == 0
+                            && first.disconnected == 0,
+                    "Repeated publication replaced an active cached Binder");
+            h.unbind(first);
+            h.acknowledge(0, true);
+            h.publish(0, duplicate);
+
+            Connection rebound = new Connection(Runnable::run);
+            h.bind(rebound, "cached", Context.BIND_AUTO_CREATE);
+            check(h.thread.binds.size() == 2 && h.thread.binds.get(1).rebind,
+                    "Cached publication did not preserve onRebind");
+            if (publishNull) rebound.nullOnce();
+            else check(rebound.connected == 1 && rebound.value == original && rebound.nulls == 0,
+                    "Later bind did not receive the first publication");
+            h.unbind(rebound);
+            h.acknowledge(1, false);
+            h.stop();
+        }
+    }
+
     private static void restarted() throws Exception {
         Harness h = new Harness(); h.start();
         Connection oldClient = new Connection(Runnable::run); h.bind(oldClient, "restart", Context.BIND_AUTO_CREATE);
@@ -601,6 +632,7 @@ public final class ServiceRebindContractTest {
         if (scenario.equals("all") || scenario.equals("retired")) retiredQueued();
         if (scenario.equals("all") || scenario.equals("destroyed")) destroyed();
         if (scenario.equals("all") || scenario.equals("restarted")) restarted();
+        if (scenario.equals("all") || scenario.equals("publication")) repeatedPublication();
         check(checks > 0, "No service rebind scenario selected");
         System.out.println("Service rebinding contracts passed: " + checks
                 + " checks; cached/null Binders, true/false/delayed acknowledgements, reentry, ordering, cleanup and restart");
