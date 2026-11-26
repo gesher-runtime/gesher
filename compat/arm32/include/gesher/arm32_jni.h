@@ -35,6 +35,20 @@ class Jni32 {
   // Must be called after Install(); no host pointer is returned.
   uint32_t GuestEnvironment() const;
 
+  // Enter a named ARM32 JNI method from the owning ART thread. The descriptor
+  // governs every argument and the result; jobjects are copied into
+  // generation-checked 32-bit guest tokens, never narrowed from 64-bit host
+  // addresses. CriticalNative omits JNIEnv and receiver entirely and accepts
+  // primitives only. Calling this does not register the method in ART.
+  // On success a returned jobject is a new host local reference for ART.
+  // Every temporary guest local reference is released at the return boundary.
+  bool CallNative(std::string_view library, std::string_view export_name,
+                  std::string_view descriptor, JniCallMode mode,
+                  jobject receiver_or_class, const jvalue* arguments,
+                  size_t argument_count, jvalue* result,
+                  std::string* error = nullptr,
+                  uint64_t instruction_budget = 1000000);
+
   // Clear all local reference tokens (and their real JNI local references)
   // at the native method's return boundary. Global references survive.
   // Must run on the owning thread after guest execution has stopped.
