@@ -73,3 +73,65 @@ jobs:
           ctest --test-dir out-arm32 --output-on-failure
       - name: Cross-check AAPCS32 with independent Unicorn
         run: python tests/arm32/abi_oracle.py --cxx g++
+
+  arm32-windows:
+    name: ARM32 guest runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            compat/arm32
+            tests/arm32
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Install Windows guest compiler and component build tools
+        run: python -m pip install cmake==4.4.5 ninja==1.13.2 ziglang==0.17.1 pyelftools==0.33
+      - name: Build real ARM/Thumb ELF32 fixtures
+        run: python tests/arm32/build_guest_fixture.py --out-dir out-fixtures
+      - name: Verify host ABI, ELF32 and memory core
+        run: |
+          set -euo pipefail
+          cmake -S compat/arm32 -B out-arm32-core -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build out-arm32-core --parallel 4
+          ctest --test-dir out-arm32-core --output-on-failure
+      - name: Fetch pinned Dynarmic, Boost headers, and verified A32 patch
+        run: |
+          set -euo pipefail
+          mkdir -p deps
+          git init -q deps/dynarmic
+          git -C deps/dynarmic config core.autocrlf false
+          git -C deps/dynarmic fetch --depth 1 https://github.com/yuzu-mirror/dynarmic 9d4582339990d4eae53f1dc7160686920fc2075c
+          git -C deps/dynarmic checkout -q FETCH_HEAD
+          test "$(git -C deps/dynarmic rev-parse HEAD)" = 9d4582339990d4eae53f1dc7160686920fc2075c
+          curl --fail --location --retry 3 -o deps/boost.tar.bz2 https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.bz2
+          tar -xjf deps/boost.tar.bz2 -C deps boost_1_83_0/boost
+          python compat/arm32/patch_dynarmic.py deps/dynarmic
+      - name: Compile and run ARM32 AAPCS32, ELF, JNI and Bionic on Windows
+        run: |
+          set -euo pipefail
+          cmake -S compat/arm32 -B out-arm32 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DGESHER_ARM32_WITH_DYNARMIC=ON \
+            -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
+            -DBoost_INCLUDE_DIR="$PWD/deps/boost_1_83_0" \
+            -DARM32_GUEST_FIXTURES="$PWD/out-fixtures/fixture-arm.so;$PWD/out-fixtures/fixture-thumb.so" \
+            -DARM32_GUEST_BIONIC_FIXTURES="$PWD/out-fixtures/bionic-arm.so;$PWD/out-fixtures/bionic-thumb.so" \
+            -DARM32_GUEST_JNI_FIXTURES="$PWD/out-fixtures/jni-arm.so;$PWD/out-fixtures/jni-thumb.so" \
+            -DARM32_GUEST_DEPENDENCY_DIR="$PWD/out-fixtures" \
+            -DARM32_ALIGNED_FIXTURE_DIR="$PWD/out-fixtures"
+          cmake --build out-arm32 --parallel 4
+          ctest --test-dir out-arm32 --output-on-failure
