@@ -100,6 +100,8 @@ void operator delete[](void* value) noexcept { ::operator delete(value); }
 void operator delete[](void* value, size_t) noexcept { ::operator delete(value); }
 #endif
 
+namespace gesher::binder { class ProtectedPeer; }
+
 @PRODUCTION@
 
 #ifdef _WIN32
