@@ -37,6 +37,9 @@ struct ElfImage {
   uint32_t load_bias = 0;
   uint32_t entry = 0;
   std::string soname;
+  // DT_NEEDED names in declared order, after the caller's dependency callback
+  // has accepted each name. No dependency image is owned by this object.
+  std::vector<std::string> dependencies;
   std::vector<uint8_t> bytes;
   std::vector<ElfSegment> segments;
   // Validated PT_GNU_RELRO byte ranges. The executor applies read-only
@@ -59,6 +62,12 @@ struct ElfLoadOptions {
   // host pointer here. false means unresolved; unresolved weak references
   // follow AAELF32's absolute/PC-relative rules. No host function is called.
   std::function<bool(std::string_view name, uint32_t* address)> resolve_import;
+  // Called once for each DT_NEEDED before resolving undefined symbols.
+  // The caller is responsible for dependency namespaces, recursively loading
+  // libraries, cycle detection, lifetime and rollback of external side effects.
+  // Without this callback, DT_NEEDED is rejected instead of pretending a
+  // missing Android library is present. Callback exceptions fail the load.
+  std::function<bool(std::string_view soname)> resolve_dependency;
 };
 
 // Loads a little-endian ARM EABI5 softfp ET_DYN image using checked ELF32
@@ -66,7 +75,8 @@ struct ElfLoadOptions {
 // GLOB_DAT and JUMP_SLOT, standard and legacy Android RELR tables, Android\n// APS2 packed REL groups, SysV/GNU dynamic hashes, BSS and init/fini arrays.
 //
 // This is the loader core for an experimental executor, not an Android app
-// runtime. DT_NEEDED, TLS, IFUNC, packed RELA relocations, versioned
+// runtime. DT_NEEDED requires an explicit caller-managed dependency resolver;
+// TLS, IFUNC, packed RELA relocations, versioned
 // symbols, an interpreter and preinit arrays are explicitly unsupported.
 // Only System V/Linux OSABI with ABI version zero is accepted; FDPIC and
 // unknown ABI variants are rejected. Unknown dynamic tags are rejected.
