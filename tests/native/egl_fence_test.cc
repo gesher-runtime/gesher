@@ -62,6 +62,44 @@ bool FileInfo(int fd, sync_file_info* file, sync_fence_info* fence) {
   return ioctl(fd, SYNC_IOC_FILE_INFO, file) == 0 && file->num_fences == 1;
 }
 
+void FileInfoUserMemory(int fd) {
+  SYSTEM_INFO system{};
+  GetSystemInfo(&system);
+  auto* header = static_cast<sync_file_info*>(VirtualAlloc(
+      nullptr, system.dwPageSize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+  Check(header != nullptr, "allocate a page for sync-file argument protection tests");
+  if (!header) return;
+
+  *header = sync_file_info{};
+  sync_fence_info fence{};
+  header->num_fences = 1;
+  header->sync_fence_info = reinterpret_cast<uintptr_t>(&fence);
+  DWORD previous = 0;
+  if (VirtualProtect(header, system.dwPageSize, PAGE_READONLY, &previous)) {
+    Check(ioctl(fd, SYNC_IOC_FILE_INFO, header) == -1 && errno == EFAULT &&
+              fence.status == 1 && header->status == 0,
+          "read-only file-info header fails after publishing the writable fence array");
+  } else {
+    Check(false, "protect sync-file header read-only");
+  }
+
+  sync_file_info info{};
+  info.num_fences = 2;
+  info.sync_fence_info = reinterpret_cast<uintptr_t>(header);
+  if (VirtualProtect(header, system.dwPageSize, PAGE_NOACCESS, &previous)) {
+    Check(ioctl(fd, SYNC_IOC_FILE_INFO, header) == -1 && errno == EFAULT,
+          "unreadable file-info header reports EFAULT");
+    Check(ioctl(fd, SYNC_IOC_FILE_INFO, &info) == -1 && errno == EFAULT &&
+              info.num_fences == 2 && info.status == 0,
+          "inaccessible fence array reports EFAULT without publishing file info");
+  } else {
+    Check(false, "protect sync-file output page as inaccessible");
+  }
+  VirtualFree(header, 0, MEM_RELEASE);
+  Check(FileInfo(fd, &info, &fence) && info.status == 1 && fence.status == 1,
+        "the same fence remains usable after failing user copies");
+}
+
 template <class F> F Gl(const char* name) { return reinterpret_cast<F>(gesher_egl_proc(name)); }
 
 struct Context {
@@ -308,6 +346,7 @@ void Validation(EGLDisplay display, Context& context) {
   info.num_fences = 1;
   Check(info_fd >= 0 && ioctl(info_fd, SYNC_IOC_FILE_INFO, &info) == -1 && errno == EFAULT,
         "SYNC_IOC_FILE_INFO with a count needs the fence array");
+  if (info_fd >= 0) FileInfoUserMemory(info_fd);
   sync_merge_data merge{};
   merge.fd2 = info_fd;
   Check(info_fd >= 0 && ioctl(info_fd, SYNC_IOC_MERGE, &merge) == -1 && errno == ENOTTY,

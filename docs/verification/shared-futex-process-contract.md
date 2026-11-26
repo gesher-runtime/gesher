@@ -35,3 +35,15 @@ if ($LASTEXITCODE -ne 0) { throw 'setup failed' }
 ```
 
 Keep both process exit codes and transcripts, the ELF digest, the Android fingerprint and ABI, and the Windows runtime build and revision. A successful row requires both participants to report `PASS` and exit zero. Exit 1 is a failed contract; exit 2 is a setup or rendezvous error. Delete the fresh Windows file after both processes have exited. The test does not exercise priority inheritance, robust-list owner death, or the pthread process-shared API.
+
+## Recorded executions
+
+NDK 28.2.13676358 produced the arm64 PIE SHA-256 `ac5855e857e4ce8a487df3819a85ebe012c9cd6c363e851d32aff1e45cda2365` and the x86-64 PIE SHA-256 `9fb2a560b5b0f23e8da3afa2e3b1963afde2fae4b994316e8ddc9710bee8bc4e`.
+
+| Environment | Guest ABI | Observed result |
+| --- | --- | --- |
+| Android 16 API 36 emulator, `Android/sdk_phone64_arm64/emu64a:16/BE2A.250530.026.D1/13818094:userdebug/test-keys` | arm64 | Five matching pairs. With no waker, the waiter timed out and returned 1. |
+| Android 14 API 34 emulator, `google/sdk_gphone64_arm64/emu64a:14/UE1A.230829.050/12077443:userdebug/dev-keys` | arm64 | Five matching pairs. With no waker, the waiter timed out and returned 1. |
+| Gesher portable `0.2.0.3123` from [CI run 45668397258 at `156abd94`](https://github.com/gesher-runtime/gesher/actions/runs/45668397258), Windows 11 Pro ARM64 in Parallels running the x64 launcher | arm64 and x86-64 | Setup and shared-memory rendezvous succeeded. The waker reported zero matching cross-process wakes and exited 1. The waiter reported `ETIMEDOUT` and exited 1. |
+
+The Windows launcher SHA-256 was `6c8f2215f78a46ecc115ade86bf8fa804d5b25e6f5af4bd3af6ea758a9f219d2`. The retained build establishes a Windows baseline for the exact test ELFs. The current source revision and an x86-64 Android reference still need runs.

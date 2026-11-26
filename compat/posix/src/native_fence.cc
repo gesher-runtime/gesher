@@ -5,6 +5,7 @@
 #include "event_internal.h"
 #include "internal.h"
 #include "record_lock_descriptors.h"
+#include "socket_user_copy.h"
 
 #include <gesher/clocks.h>
 #include <linux/sync_file.h>
@@ -322,31 +323,30 @@ bool SyncFileIoctl(int fd, unsigned long request, void* argument, int* result) {
   auto fence = LookupNativeFence(fd);
   if (!fence) return false;
   if (request != SYNC_IOC_FILE_INFO) { *result = (errno = ENOTTY, -1); return true; }
-  auto* info = static_cast<sync_file_info*>(argument);
-  if (info == nullptr) { *result = (errno = EFAULT, -1); return true; }
-  if (info->flags != 0 || info->pad != 0) { *result = (errno = EINVAL, -1); return true; }
+  sync_file_info info;
+  if (!ws::usercopy::From(&info, argument, sizeof(info))) { *result = (errno = EFAULT, -1); return true; }
+  if (info.flags != 0 || info.pad != 0) { *result = (errno = EINVAL, -1); return true; }
   // One fence per file: the GPU completion eglDupNativeFenceFDANDROID exported.
   // A descriptor exists only for a completed fence (export waits for it,
   // adoption takes a signaled event), so this is 1; 0 and -EIO keep the
   // kernel's mapping for the other states.
   const FenceStatus state = NativeFenceStatus(fence);
   const int32_t status = state == FenceStatus::kSignaled ? 1 : state == FenceStatus::kPending ? 0 : -EIO;
-  if (info->num_fences != 0) {
-    // Linux: the caller's array must hold every fence; a file with fences
-    // reports the worst of their states.
-    auto* fences = reinterpret_cast<sync_fence_info*>(static_cast<uintptr_t>(info->sync_fence_info));
-    if (fences == nullptr) { *result = (errno = EFAULT, -1); return true; }
+  if (info.num_fences != 0) {
+    // Linux copies the requested array before publishing the file information.
+    auto* fences = reinterpret_cast<void*>(static_cast<uintptr_t>(info.sync_fence_info));
     sync_fence_info one{};
     std::strcpy(one.obj_name, "d3d11");
     std::strcpy(one.driver_name, "gesher");
     one.status = status;
     one.timestamp_ns = status == 1 ? static_cast<uint64_t>(fence->signaled_ns.load(std::memory_order_acquire)) : 0;
-    std::memcpy(fences, &one, sizeof(one));
+    if (!ws::usercopy::To(fences, &one, sizeof(one))) { *result = (errno = EFAULT, -1); return true; }
   }
-  std::memset(info->name, 0, sizeof(info->name));
-  std::strcpy(info->name, "gesher-d3d11");
-  info->status = status;
-  info->num_fences = 1;
+  std::memset(info.name, 0, sizeof(info.name));
+  std::strcpy(info.name, "gesher-d3d11");
+  info.status = status;
+  info.num_fences = 1;
+  if (!ws::usercopy::To(argument, &info, sizeof(info))) { *result = (errno = EFAULT, -1); return true; }
   *result = 0;
   return true;
 }
