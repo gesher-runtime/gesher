@@ -105,16 +105,16 @@ def main() -> None:
             expected = {"jni32_version", "jni32_contract", "jni32_stale",
                         "jni32_wrong_env", "jni32_unsupported",
                         "jni32_vm_bad_version", "jni32_vm_attach",
-                        "jni32_env_get_vm"}
+                        "jni32_env_get_vm", "jni32_onload_state"}
             named = {symbol.name: symbol for symbol in symbols
                      if symbol.name.startswith("Java_gesher_Test_")}
             expected_named = {"Java_gesher_Test_add", "Java_gesher_Test_length",
                               "Java_gesher_Test_echo", "Java_gesher_Test_critical"}
             onload = {symbol.name: symbol for symbol in symbols
-                      if symbol.name == "JNI_OnLoad"}
+                      if symbol.name in {"JNI_OnLoad", "JNI_OnUnload"}}
             all_functions = list(functions.values()) + list(named.values()) + list(onload.values())
             if (set(functions) != expected or set(named) != expected_named or
-                    set(onload) != {"JNI_OnLoad"} or any(
+                    set(onload) != {"JNI_OnLoad", "JNI_OnUnload"} or any(
                         bool(symbol["st_value"] & 1) != (mode == "thumb")
                         for symbol in all_functions)):
                 raise RuntimeError(f"{jni_output}: JNI functions lost ARM/Thumb entry state")
