@@ -3,6 +3,7 @@
 
 #include <sys/syscall.h>
 #include <gesher/clocks.h>
+#include <gesher/futex_interrupt.h>
 #include <sys/mman.h>
 
 #include <errno.h>
@@ -13,6 +14,10 @@
 #include <time.h>
 #include <windows.h>
 
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 #include <atomic>
 
 namespace {
@@ -23,6 +28,8 @@ struct Waiter {
   bool private_key;
   Waiter* next = nullptr;
   Waiter* previous = nullptr;
+  // 0 waiting; 1 woken (FUTEX_WAKE/requeue removed it); 2 interrupted
+  // (gesher_futex_interrupt_request; still queued until its owner removes it).
   std::atomic<int> ready{0};
   // Requeue can move a sleeping stack node more than once. Its owner must
   // acquire the current bucket before removing it on timeout or returning.
@@ -117,8 +124,18 @@ DWORD Remaining(const Deadline& deadline) {
   DWORD cap = deadline.clock == CLOCK_REALTIME ? 1000 : INFINITE - 1;
   return millis > cap ? cap : static_cast<DWORD>(millis);
 }
+// The calling thread's attached interrupt cell (futex_interrupt.h), if any.
+thread_local gesher_futex_interrupt* t_interrupt = nullptr;
+
+// Consumes a pending interrupt request of `cell`.
+bool TakeInterrupt(gesher_futex_interrupt* cell) {
+  return cell != nullptr && InterlockedExchange(&cell->requested, 0) != 0;
+}
+
 long Wait(volatile int* address, int value, uint32_t mask, bool private_key,
           const Deadline& deadline) {
+  gesher_futex_interrupt* cell = t_interrupt;
+  if (TakeInterrupt(cell)) return errno = EINTR, -1;
   Bucket& bucket = BucketFor(address);
   AcquireSRWLockExclusive(&bucket.lock);
   if (__atomic_load_n(address, __ATOMIC_SEQ_CST) != value) {
@@ -129,6 +146,17 @@ long Wait(volatile int* address, int value, uint32_t mask, bool private_key,
   Waiter waiter{address, mask, private_key};
   Append(&waiter);
   ReleaseSRWLockExclusive(&bucket.lock);
+  if (cell != nullptr) {
+    // Published before the request check below: a requester that sets the
+    // flag after that check finds this node and marks it interrupted.
+    AcquireSRWLockExclusive(&cell->lock);
+    cell->waiter = &waiter;
+    ReleaseSRWLockExclusive(&cell->lock);
+    if (TakeInterrupt(cell)) {
+      int expected = 0;
+      waiter.ready.compare_exchange_strong(expected, 2, std::memory_order_acq_rel);
+    }
+  }
   int result = 0, error = 0;
   for (;;) {
     DWORD millis = Remaining(deadline);
@@ -142,9 +170,20 @@ long Wait(volatile int* address, int value, uint32_t mask, bool private_key,
     // Timeouts are slices (and address waits may wake spuriously). Recompute
     // against the original full-width deadline, including realtime clock steps.
   }
+  if (cell != nullptr) {
+    // No requester touches this stack node after it is unpublished.
+    AcquireSRWLockExclusive(&cell->lock);
+    cell->waiter = nullptr;
+    ReleaseSRWLockExclusive(&cell->lock);
+  }
   Bucket* current = LockWaiter(&waiter);
-  if (waiter.ready.load(std::memory_order_relaxed)) result = 0;
-  else Remove(&waiter);
+  const int state = waiter.ready.load(std::memory_order_relaxed);
+  if (state == 1) {
+    result = 0;  // a wake that raced with an interrupt is still consumed
+  } else {
+    Remove(&waiter);
+    if (state == 2) { result = -1; error = EINTR; }
+  }
   // Wakers signal while holding this lock, so none can access this stack node
   // after the waiting thread releases the lock and returns.
   ReleaseSRWLockExclusive(&current->lock);
@@ -223,6 +262,43 @@ extern "C" __declspec(dllexport) long gesher_futex_owner_v1(
   return FutexOwned(address, op, value, time, target, value3);
 }
 
+extern "C" __declspec(dllexport) void gesher_futex_interrupt_attach_v1(gesher_futex_interrupt* cell) {
+  t_interrupt = cell;
+}
+extern "C" __declspec(dllexport) void gesher_futex_interrupt_request_v1(gesher_futex_interrupt* cell) {
+  InterlockedExchange(&cell->requested, 1);
+  AcquireSRWLockExclusive(&cell->lock);
+  if (cell->waiter != nullptr) {
+    auto* waiter = static_cast<Waiter*>(cell->waiter);
+    int expected = 0;
+    if (waiter->ready.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+      InterlockedExchange(&cell->requested, 0);
+      WakeByAddressSingle(&waiter->ready);
+    }
+  }
+  // A WaitOnAddress waiter (the shim's pthread waits) wakes and rechecks.
+  if (cell->address != nullptr) WakeByAddressAll(const_cast<void*>(cell->address));
+  ReleaseSRWLockExclusive(&cell->lock);
+}
+
+namespace {
+template <typename Fn>
+Fn FutexOwnerExport(const char* name) {
+  return reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(nullptr), name)));
+}
+}  // namespace
+
+extern "C" void gesher_futex_interrupt_attach(gesher_futex_interrupt* cell) {
+  using Fn = void (*)(gesher_futex_interrupt*);
+  static Fn owner = FutexOwnerExport<Fn>("gesher_futex_interrupt_attach_v1");
+  if (owner != nullptr) owner(cell);
+}
+extern "C" void gesher_futex_interrupt_request(gesher_futex_interrupt* cell) {
+  using Fn = void (*)(gesher_futex_interrupt*);
+  static Fn owner = FutexOwnerExport<Fn>("gesher_futex_interrupt_request_v1");
+  if (owner != nullptr) owner(cell);
+}
+
 extern "C" long syscall(long number, ...) {
   va_list args;
   va_start(args, number);
@@ -258,3 +334,34 @@ extern "C" long syscall(long number, ...) {
   va_end(args);
   return result;
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the futex buckets. The child's copies of the lists
+// hold the parent's other threads' waiters, which the child does not have: a
+// wake there must not be spent on them.
+namespace {
+bool FutexBucketsTryLock(void*) {
+  for (size_t i = 0; i < 64; ++i) {
+    if (!TryAcquireSRWLockExclusive(&g_futex_buckets[i].lock)) {
+      while (i-- > 0) ReleaseSRWLockExclusive(&g_futex_buckets[i].lock);
+      return false;
+    }
+  }
+  return true;
+}
+void FutexBucketsUnlock(void*) {
+  for (Bucket& bucket : g_futex_buckets) ReleaseSRWLockExclusive(&bucket.lock);
+}
+void FutexBucketsChild(void*) {
+  for (Bucket& bucket : g_futex_buckets) {
+    InitializeSRWLock(&bucket.lock);
+    bucket.first = bucket.last = nullptr;
+  }
+}
+const gesher::ForkLockOps kFutexBucketOps = {&FutexBucketsTryLock, &FutexBucketsUnlock,
+                                             &FutexBucketsChild};
+const gesher::ForkLockRegistration g_fork_futex_buckets(
+    gesher::kForkOrderLeaf, "futex buckets", []() -> void* { return g_futex_buckets; },
+    &kFutexBucketOps);
+}  // namespace
+#endif

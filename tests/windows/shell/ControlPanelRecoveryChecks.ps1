@@ -1,5 +1,6 @@
 param([string] $PanelPath = (Join-Path $PSScriptRoot '../../../tools/package/gesher-control-panel.ps1'))
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName PresentationCore
 
 # Deliberately omit notifications. Real production parsers, app projection,
 # signatures, stamps and scheduling must recover every consumed metadata input.
@@ -8,8 +9,9 @@ $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath($PanelPath), [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($name in 'Get-SeparateWindowApps','Get-InstalledApps','Get-FileStamp','Get-StateStamp','Get-AppFilesStamp',
-        'Update-AppsView','Test-PanelMetadataVisible','Request-PanelMetadataRefresh','Update-PanelMetadataWatch',
-        'Refresh-Dashboard','Invoke-LiveRefreshTick') {
+        'Update-AppsView', 'Update-AppsFilter','Test-PanelMetadataVisible','Request-PanelMetadataRefresh','Update-PanelMetadataWatch',
+        'Refresh-Dashboard','Invoke-LiveRefreshTick',
+        'ConvertTo-ProxyValue','Read-ProxyProperties','ConvertFrom-PropertiesEscapes','Get-ProxySettings','Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $false))
@@ -17,6 +19,13 @@ foreach ($name in 'Get-SeparateWindowApps','Get-InstalledApps','Get-FileStamp','
     . ([scriptblock]::Create($definitions[0].Extent.Text))
 }
 $script:Checks = 0
+$script:ReadInstalledApps = ${function:Get-InstalledApps}
+$script:ListReads = 0
+function Get-InstalledApps([hashtable] $ReadStamps = $null) {
+    $script:ListReads++
+    $script:LastReadStamps = $ReadStamps
+    & $script:ReadInstalledApps $ReadStamps
+}
 function Assert-Recovery([bool] $okay, [string] $reason) {
     if (-not $okay) { throw $reason }
     $script:Checks++
@@ -26,6 +35,10 @@ function Get-PanelAppIcon([string] $path, [string] $stamp, [hashtable] $icons) {
     if ([IO.File]::ReadAllText($path) -eq 'decoder-failure') { throw 'Declared decoder failure' }
     $image = [pscustomobject]@{ Path = $path }
     $icons[$path] = @{ Stamp = $stamp; Image = $image }
+    if ($script:ChangeMetadataDuringDecode) {
+        $script:ChangeMetadataDuringDecode = $false
+        Write-Metadata $shortcut "label=Changed during rendering`nicon=$custom`n"
+    }
     return $image
 }
 function Update-DeviceView { }
@@ -52,6 +65,7 @@ $conventional = Join-Path $root 'data/data/fixture.app/gesher-shell/icon.ico'
 $external = Join-Path $fixture 'external/late.ico'
 $custom = Join-Path $root 'custom/late.ico'
 $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
+$script:ProxyFile = Join-Path $root 'data/system/proxy.properties'
 $icoFile = Join-Path $fixture 'panel-default.ico'
 $appsList = [pscustomobject]@{ ItemsSource = @() }
 $window = @{ IsVisible = $true; WindowState = 'Normal' }
@@ -64,7 +78,7 @@ try {
     # Each explicitly watched state input must also change the fallback stamp.
     foreach ($path in @((Join-Path $root 'data/system/gesher-device.ready'), $packages,
             (Join-Path $root 'microg.enabled'), (Join-Path $root 'system/priv-app/com.google.android.gms/base.apk'),
-            $script:AppWindowsFile)) {
+            $script:AppWindowsFile, $script:ProxyFile)) {
         $before = Get-StateStamp
         Write-Metadata $path 'metadata fixture'
         Assert-Recovery ($before -ne (Get-StateStamp)) "Creation is absent from recovery stamp: $path"
@@ -74,14 +88,31 @@ try {
     }
     Write-Metadata $packages "fixture.app`n"
     Write-Metadata $script:AppWindowsFile "separate.fixture.app=false`n"
-    Refresh-Dashboard; Refresh-Dashboard
+    Refresh-Dashboard
+    Assert-Recovery (@($script:ViewState.AppFiles | Where-Object { -not $script:LastReadStamps.ContainsKey($_) }).Count -eq 0) 'A discovered metadata path was not captured before its read'
+    Recover-Visible
+    Assert-Recovery ($script:ListReads -eq 1 -and -not $script:LiveState.PendingSince) 'Delayed recovery treated the newly discovered path set as a file change'
     Assert-Recovery ($appsList.ItemsSource.Count -eq 1 -and -not $appsList.ItemsSource[0].SeparateWindows) 'Initial preference projection is invalid'
+    $initialItems = $appsList.ItemsSource
+    Refresh-Dashboard
+    Assert-Recovery ([Object]::ReferenceEquals($initialItems, $appsList.ItemsSource) -and
+        (Get-AppFilesStamp) -ceq $script:LiveState.AppsStamp) 'An unchanged rendering signature lost its complete metadata snapshot'
     Write-Metadata $script:AppWindowsFile "separate.fixture.app=true`n"
     Recover-Visible
     Assert-Recovery $appsList.ItemsSource[0].SeparateWindows 'Missed preference event left the actual app projection stale'
     [IO.File]::Delete($script:AppWindowsFile)
     Recover-Visible
     Assert-Recovery (-not $appsList.ItemsSource[0].SeparateWindows) 'Missed preference deletion retained the old separate-window state'
+
+    $launchMarker = Join-Path $root 'data/data/fixture.app/gesher-shell/no-launcher-activity'
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Visible) 'Initial launcher eligibility was lost'
+    Assert-Recovery ($script:ViewState.AppFiles -contains $launchMarker) 'Launcher metadata is absent from recovery inputs'
+    Write-Metadata $launchMarker 'no launcher'
+    Recover-Visible
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Collapsed) 'Missed marker creation kept Launch visible'
+    [IO.File]::Delete($launchMarker)
+    Recover-Visible
+    Assert-Recovery ($appsList.ItemsSource[0].LaunchVisibility -eq [System.Windows.Visibility]::Visible) 'Missed marker removal kept Launch hidden'
 
     Write-Metadata $shortcut "label=Fixture`nicon=$external`n"
     Write-Metadata $conventional 'declared conventional image'
@@ -110,6 +141,17 @@ try {
     Write-Metadata $custom 'repaired declared custom image'
     Recover-Visible
     Assert-Recovery ($appsList.ItemsSource[0].IconImage.Path -eq $custom) 'Replacing an undecodable candidate did not retry image selection'
+
+    # Change a consumed shortcut after the real parser read it, while the
+    # declared decoder boundary is rendering. With notifications absent, the
+    # captured pre-read stamp must still force visible recovery.
+    Write-Metadata $shortcut "label=Before rendering`nicon=$custom`n"
+    $script:ChangeMetadataDuringDecode = $true
+    Refresh-Dashboard
+    Assert-Recovery ($appsList.ItemsSource[0].Label -eq 'Before rendering') 'The fixture did not retain its parsed snapshot during rendering'
+    Assert-Recovery ((Get-AppFilesStamp) -cne $script:LiveState.AppsStamp -and -not $script:LiveState.PendingSince) 'A change during rendering was acknowledged by a late stamp or a synthetic notification'
+    Recover-Visible
+    Assert-Recovery ($appsList.ItemsSource[0].Label -eq 'Changed during rendering') 'Missed metadata change during rendering left the projection stale'
 
     [IO.File]::Delete($custom); [IO.File]::Delete($conventional)
     Recover-Visible

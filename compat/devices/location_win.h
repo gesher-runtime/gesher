@@ -41,4 +41,9 @@ struct Fix {
 // time-out); DesiredAccuracy High when `high`.
 HRESULT GetFix(bool high, int64_t maxAgeMs, int64_t timeoutMs, Fix* fix);
 
+// Whether a GNSS receiver is present: a device interface of the Windows GNSS
+// driver class (GUID_DEVINTERFACE_GNSS) that Windows' location service reads
+// with high accuracy. false with *hr on a failed query.
+bool HasGnssReceiver(HRESULT* hr);
+
 }  // namespace gesher::devices::location

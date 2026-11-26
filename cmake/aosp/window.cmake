@@ -65,3 +65,10 @@ target_compile_options(windows4_ime_tsf_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(windows4_ime_tsf_probe PRIVATE user32 imm32 ole32 uuid)
 set_target_properties(windows4_ime_tsf_probe PROPERTIES EXCLUDE_FROM_ALL ON)
 add_dependencies(windows4_ime_tsf_probe windows4_tsf_service)
+
+# Standalone production frame geometry/drawing checks, without a VM or renderer.
+add_executable(window_frame_test EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/native/window_frame_test.cc)
+set_property(TARGET window_frame_test PROPERTY LINK_LIBRARIES "")
+target_compile_options(window_frame_test PRIVATE -UNOGDI -Wall -Wextra -Werror)
+target_link_libraries(window_frame_test PRIVATE user32 gdi32)

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Run the complete production resume callback and window activation on a host JVM.
 
+It also runs the single-process Activity finish (finishLocalActivity), including a
+finish requested before the window's Win32 window and handler exist.
+
 Activity/window records are admitted by the fixture, the Handler queue is drained
 explicitly, and JNI show/activate calls are observed. Production selection,
 policy, lifetime checks, Application dispatch and NativeWindow wrappers are unchanged.

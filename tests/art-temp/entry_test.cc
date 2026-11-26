@@ -29,6 +29,7 @@ int temp_reads;
 int attribute_reads;
 int crt_writes;
 int vm_calls;
+int storage_initializations;
 std::vector<std::string> vm_arguments;
 
 void Require(bool value, const char* message) {
@@ -45,6 +46,7 @@ void Reset() {
   attributes = FILE_ATTRIBUTE_DIRECTORY;
   environment_failure = temp_failure = publish_failure = false;
   crt_failure = temp_reads = attribute_reads = crt_writes = vm_calls = 0;
+  storage_initializations = 0;
   vm_arguments.clear();
 }
 
@@ -119,6 +121,7 @@ std::string Narrow(const std::wstring& value) {
 }
 }
 namespace gesher {
+void InitializeExternalStoragePolicy() { ++storage_initializations; }
 // The entry policy calls the shared owner; its real storage, ABI and native
 // mutation transactions are exercised by the separate environment contracts.
 int SetWideEnvironment(const wchar_t* name, const wchar_t* value) {
@@ -130,6 +133,7 @@ int SetWideEnvironment(const wchar_t* name, const wchar_t* value) {
 }
 }
 int gesher_dalvikvm_main(int argc, char** argv) {
+  Require(storage_initializations == 1, "Storage identity must be frozen before ART application code");
   ++vm_calls;
   for (int i = 0; i < argc; ++i) vm_arguments.emplace_back(argv[i]);
   Require(argv[argc] == nullptr, "ART argv must retain its null sentinel");
