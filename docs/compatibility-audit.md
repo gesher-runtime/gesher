@@ -123,8 +123,16 @@ framework and gesher-app, `--sdk-jar` for SDK 36 android.jar, and optionally
 `--candidate-replace gesher-app.jar=PATH`. It records file hashes, separates
 module/annotation families, and correlates named class observations when
 `--observations-json` is supplied. A class missing from that boot path can
-have a module/APK/shared-library provider elsewhere. The tool does not test
-methods, native registration or behavior.
+have a module, APK or shared-library provider elsewhere. To inventory those
+archives, pass repeated `--provider LABEL=ARCHIVE` arguments alongside the
+ordered boot inputs. Use the same label for DEX-bearing base and split archives
+in one provider, and different labels for independently supplied providers.
+The tool reads root `classes*.dex` entries and records each archive hash and
+the source IDs for definitions of SDK classes outside the selected boot path.
+A definition can appear under several provider labels. The installed and
+candidate boot counts remain separate and exclude provider classes. A missing
+definition is scoped to the supplied inputs. Actual loader visibility, order,
+linkage, methods, native registration and behavior require separate evidence.
 
 `tools/java_member_inventory.py` adds public/protected fields, constructors and
 methods with exact JVM descriptors. It resolves definitions through supplied
