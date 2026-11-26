@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <wchar.h>
 #include <windows.h>
 
 #include <barrier>
@@ -50,6 +51,10 @@ bool ForkSetHeld() { abort(); }
 }
 namespace gesher::elf {
 bool SetupThreadTls() { abort(); }
+void KeepResidentForAddress(const void*) { abort(); }
+struct Library;
+Library* RetainForAddress(const void*) { abort(); }
+void ReleaseLifetimePin(Library*) { abort(); }
 }
 namespace gesher::bionic {
 gesher_futex_interrupt* AttachSignalInterrupt() { return nullptr; }
@@ -105,6 +110,13 @@ Shared* View(const wchar_t* path, int prot, off_t offset, uintptr_t preferred, s
 long Futex(int* word, int operation, int expected, const timespec* time = nullptr, int mask = 0) {
   return syscall(SYS_futex, word, operation, expected, time, nullptr, mask);
 }
+
+long WakeOperation(int* first, int* second, int command, int count, int count2, unsigned encoded) {
+  const auto* second_count = reinterpret_cast<const timespec*>(static_cast<intptr_t>(count2));
+  return syscall(SYS_futex, first, command, count, second_count, second, static_cast<int>(encoded));
+}
+
+#include "futex_wake_op_test.inc"
 
 template <typename... Args>
 int Pthread(const char* name, Args... args) {
@@ -171,13 +183,18 @@ void Child(const wchar_t* path, int mask, int mode) {
     return;
   }
   const bool basic = mode == 1;
+  int* word = mode >= 4 ? &view->other : &view->word;
   InterlockedIncrement(reinterpret_cast<LONG*>(&view->ready));
   timespec relative{5, 0};
   timespec absolute{};
   Require(clock_gettime(CLOCK_REALTIME, &absolute) == 0, "get realtime");
   absolute.tv_sec += 5;
-  long result = Futex(&view->word, basic ? FUTEX_WAIT : FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME,
-                      0, basic ? &relative : &absolute, mask);
+  long result;
+  do {
+    const int expected = mode == 5 ? __atomic_load_n(word, __ATOMIC_SEQ_CST) : 0;
+    result = Futex(word, basic ? FUTEX_WAIT : FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME,
+                   expected, basic ? &relative : &absolute, mask);
+  } while (mode == 5 && result == -1 && errno == EAGAIN);
   Require(result == 0, "cross-process waiter receives its wake", result);
   Require(munmap(base, kBytes) == 0, "unmap");
   printf("child mask=%d map=%p PASS\n", mask, static_cast<void*>(view));
@@ -354,11 +371,70 @@ void TestBarrier(Shared* view, const wchar_t* child_path) {
   printf("N29 Bionic pshared barrier: %d overlapping two-participant cohorts PASS\n",
          kBarrierContenders * kBarrierRounds / 2);
 }
+
+void TestWakeOp(Shared* view, Shared* read_only, const wchar_t* child_path) {
+  CheckWakeOpWords();
+  constexpr unsigned probe = FUTEX_OP(FUTEX_OP_ADD, 0, FUTEX_OP_CMP_EQ, 0);
+  Require(WakeOperation(&view->word, &read_only->other, FUTEX_WAKE_OP, 1, 1, probe) == -1 &&
+          errno == EFAULT, "shared read-only target rejected");
+
+  HANDLE first = Spawn(child_path, 1, 0), second = Spawn(child_path, 2, 4);
+  AwaitReady(view, 2);
+  const ULONGLONG until = GetTickCount64() + 3500;
+  long woken = 0;
+  while (woken < 2) {
+    const long n = WakeOperation(&read_only->word, &view->other, FUTEX_WAKE_OP, 1, 1, probe);
+    Require(n >= 0 && n <= 2 && woken + n <= 2, "wake op selects the two shared keys", n);
+    woken += n;
+    Require(GetTickCount64() < until, "wake op waits for enrollment");
+    if (woken < 2) Sleep(1);
+  }
+  Reap(first, 0);
+  Reap(second, 0);
+  Require(WakeOperation(&view->word, &view->other, FUTEX_WAKE_OP, 1, 1,
+                        FUTEX_OP(FUTEX_OP_SET, 27, FUTEX_OP_CMP_EQ, 0)) == 0 &&
+          read_only->other == 27 && view->word == 0, "target update appears in the file alias");
+
+  first = Spawn(child_path, 1, 0);
+  second = Spawn(child_path, 2, 0);
+  AwaitReady(view, 4);
+  const ULONGLONG alias_until = GetTickCount64() + 3500;
+  woken = 0;
+  while (woken < 2) {
+    const long n = WakeOperation(&read_only->word, &view->word, FUTEX_WAKE_OP, 1, 1, probe);
+    Require(n >= 0 && n <= 2 && woken + n <= 2, "one file key shared by both arguments", n);
+    woken += n;
+    Require(GetTickCount64() < alias_until, "alias waiters enroll");
+    if (woken < 2) Sleep(1);
+  }
+  Reap(first, 0);
+  Reap(second, 0);
+
+  view->other = 0;
+  HANDLE compares_old = Spawn(child_path, 4, 5);
+  AwaitReady(view, 5);
+  // Alter the word on every attempt. The child retries after EAGAIN if its
+  // comparison happened before it enrolled. Only a wake counted against the
+  // old value can complete this test.
+  int local = 0;
+  for (int attempt = 0;; ++attempt) {
+    const int old = __atomic_load_n(&view->other, __ATOMIC_SEQ_CST);
+    const long n = WakeOperation(&local, &view->other, FUTEX_WAKE_OP, 1, 1,
+                                 FUTEX_OP(FUTEX_OP_XOR, 1, FUTEX_OP_CMP_EQ, old));
+    Require(n == 0 || n == 1, "conditional wake uses the original second word", n);
+    if (n == 1) break;
+    Require(attempt < 1000, "conditional waiter was not selected");
+    Sleep(1);
+  }
+  Reap(compares_old, 0);
+  puts("N29 FUTEX_WAKE_OP atomic operations and two cross-process keys PASS");
+}
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
   if (argc == 4) { Child(argv[1], _wtoi(argv[2]), _wtoi(argv[3])); return 0; }
-  Require(argc == 1, "fixture arguments");
+  const bool wake_op = argc == 2 && wcscmp(argv[1], L"wake-op") == 0;
+  Require(argc == 1 || wake_op, "fixture arguments");
   wchar_t dir[MAX_PATH], path[MAX_PATH], hardlink[MAX_PATH];
   Require(GetTempPathW(MAX_PATH, dir) != 0 && GetTempFileNameW(dir, L"gft", 0, path),
           "create backing file path");
@@ -373,6 +449,13 @@ int wmain(int argc, wchar_t** argv) {
   Require(CreateHardLinkW(hardlink, path, nullptr), "create hard link");
 
   auto* view = View(path, PROT_READ | PROT_WRITE, kBytes - kPage, 0x30000000000, kPage);
+  if (wake_op) {
+    auto* alias = View(path, PROT_READ, kBytes - kPage, 0x40000000000, kPage);
+    TestWakeOp(view, alias, hardlink);
+    Require(munmap(alias, kPage) == 0 && munmap(view, kPage) == 0, "unmap aliases");
+    Require(DeleteFileW(hardlink) && DeleteFileW(path), "delete backing file");
+    return 0;
+  }
   timespec zero{};
   Require(Futex(&view->word, FUTEX_WAIT, 1, &zero) == -1 && errno == EAGAIN, "mismatch");
   Require(Futex(&view->word, FUTEX_WAIT, 0, &zero) == -1 && errno == ETIMEDOUT, "timeout");

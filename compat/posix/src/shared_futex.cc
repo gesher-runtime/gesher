@@ -12,6 +12,8 @@
 #include <wchar.h>
 
 #include <new>
+#include <tuple>
+#include <utility>
 
 namespace gesher {
 namespace {
@@ -31,13 +33,15 @@ void EventName(const EventToken& token, wchar_t (&out)[80]) {
 
 int LastError() { return ErrnoFromWin32(GetLastError()); }
 
+int LockQueue(HANDLE mutex) {
+  const DWORD result = WaitForSingleObject(mutex, INFINITE);
+  if (result == WAIT_OBJECT_0 || result == WAIT_ABANDONED) return 0;
+  return result == WAIT_FAILED ? LastError() : EIO;
+}
+
 class QueueLock {
  public:
-  explicit QueueLock(HANDLE mutex) : mutex_(mutex) {
-    const DWORD result = WaitForSingleObject(mutex, INFINITE);
-    if (result != WAIT_OBJECT_0 && result != WAIT_ABANDONED)
-      error_ = result == WAIT_FAILED ? LastError() : EIO;
-  }
+  explicit QueueLock(HANDLE mutex) : mutex_(mutex), error_(LockQueue(mutex)) {}
   ~QueueLock() { if (error_ == 0) ReleaseMutex(mutex_); }
   QueueLock(const QueueLock&) = delete;
   QueueLock& operator=(const QueueLock&) = delete;
@@ -230,6 +234,10 @@ int SharedFutexQueue::Complete(const SharedFutexWaiter& waiter, bool retire) {
 long SharedFutexQueue::Wake(int count, uint32_t mask) {
   QueueLock lock(resources_.mutex);
   if (lock.Error()) return -lock.Error();
+  return WakeLocked(count, mask);
+}
+
+long SharedFutexQueue::WakeLocked(int count, uint32_t mask) {
   int woken = 0;
   // Match the existing non-PI wake behavior for nonpositive counts.
   const int limit = count > 0 ? count : 1;
@@ -264,6 +272,31 @@ long SharedFutexQueue::Wake(int count, uint32_t mask) {
     ++woken;
   }
   return woken;
+}
+
+SharedFutexPairLock::SharedFutexPairLock(const SharedFutexQueue* first,
+                                         const SharedFutexQueue* second) {
+  if (first == nullptr) std::swap(first, second);
+  if (first == nullptr) return;
+  if (second != nullptr && first->key_ == second->key_) second = nullptr;
+  const auto ordered_key = [](const SharedFutexKey& key) {
+    return std::make_tuple(key.file.Tuple(), key.offset);
+  };
+  if (second != nullptr && ordered_key(second->key_) < ordered_key(first->key_)) {
+    std::swap(first, second);
+  }
+  error_ = LockQueue(first->resources_.mutex);
+  if (error_ != 0) return;
+  first_ = first->resources_.mutex;
+  if (second != nullptr) {
+    error_ = LockQueue(second->resources_.mutex);
+    if (error_ == 0) second_ = second->resources_.mutex;
+  }
+}
+
+SharedFutexPairLock::~SharedFutexPairLock() {
+  if (second_ != nullptr) ReleaseMutex(second_);
+  if (first_ != nullptr) ReleaseMutex(first_);
 }
 
 }  // namespace gesher

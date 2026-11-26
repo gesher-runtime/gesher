@@ -68,6 +68,7 @@
 #endif
 #include "revocable_internal.h"
 #ifdef _WIN32
+#include <linux/futex.h>
 #include "record_lock_liveness.h"
 #include "shared_futex.h"
 #endif
@@ -1686,12 +1687,16 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
 namespace {
 
 int SharedFutexRegion(State& s, const volatile int* address, gesher::SharedFutexKey* key,
-                      HANDLE* section) {
+                      HANDLE* section, bool write = false) {
   const auto at = reinterpret_cast<uintptr_t>(address);
   MEMORY_BASIC_INFORMATION info;
   if (VirtualQuery(const_cast<const int*>(address), &info, sizeof(info)) == 0 ||
       info.State != MEM_COMMIT ||
       (info.Protect & (PAGE_NOACCESS | PAGE_GUARD | PAGE_EXECUTE)) != 0) return -EFAULT;
+  constexpr DWORD kWrite = PAGE_READWRITE | PAGE_WRITECOPY |
+      PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+  if (write && (info.Protect & kWrite) == 0) return -EFAULT;
+  if (key == nullptr) return 0;  // private key: observe protection without resolving a file key
   auto region = FindRegion(s, at);
   if (region == s.regions.end() || region->second.kind != Kind::kView ||
       !region->second.shared) return 0;
@@ -1728,6 +1733,27 @@ int ReadSharedFutexWord(const volatile int* address, const SharedFutexKey& key, 
   // Compare an aligned 32-bit word while its mapping and protection are
   // locked against replacement by mmap, munmap and mprotect.
   *value = __atomic_load_n(address, __ATOMIC_SEQ_CST);
+  return 0;
+}
+
+int UpdateFutexWord(volatile int* address, const SharedFutexKey* key, bool private_key,
+                    int operation, int operand, int* previous) {
+  State& s = state();
+  std::lock_guard<std::mutex> guard(s.lock);
+  SharedFutexKey current;
+  const int status = SharedFutexRegion(s, address, private_key ? nullptr : &current, nullptr, true);
+  if (status < 0) return -status;
+  if ((key == nullptr && status != 0) || (key != nullptr && (status == 0 || current != *key))) {
+    return EFAULT;
+  }
+  switch (operation) {
+    case FUTEX_OP_SET: *previous = __atomic_exchange_n(address, operand, __ATOMIC_SEQ_CST); break;
+    case FUTEX_OP_ADD: *previous = __atomic_fetch_add(address, operand, __ATOMIC_SEQ_CST); break;
+    case FUTEX_OP_OR: *previous = __atomic_fetch_or(address, operand, __ATOMIC_SEQ_CST); break;
+    case FUTEX_OP_ANDN: *previous = __atomic_fetch_and(address, ~operand, __ATOMIC_SEQ_CST); break;
+    case FUTEX_OP_XOR: *previous = __atomic_fetch_xor(address, operand, __ATOMIC_SEQ_CST); break;
+    default: return ENOSYS;
+  }
   return 0;
 }
 
