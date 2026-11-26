@@ -130,3 +130,12 @@ int jni32_vm_attach(JavaVM32* vm) {
   if (VMAPI(vm, 5, VmDetach)(vm) != -1) return -3;
   return 77;
 }
+
+typedef int (*EnvGetVm)(JNIEnv32*, JavaVM32**);
+int jni32_env_get_vm(JNIEnv32* env) {
+  JavaVM32* vm = 0;
+  if (API(env, 219, EnvGetVm)(env, &vm) != 0 || !vm) return -1;
+  JNIEnv32* again = 0;
+  if (VMAPI(vm, 6, VmGetEnv)(vm, &again, 0x10006) != 0) return -2;
+  return again == env ? 88 : -3;
+}
