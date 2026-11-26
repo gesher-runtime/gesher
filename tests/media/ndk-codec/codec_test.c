@@ -48,6 +48,21 @@ static bool Feed(AMediaCodec* codec, const uint8_t* data, size_t size, uint64_t 
   return status == AMEDIA_OK;
 }
 
+static bool ContainsIdr(const uint8_t* bytes, size_t size) {
+  for (size_t i = 0; i + 3 < size; ++i) {
+    if (bytes[i] == 0 && bytes[i + 1] == 0 && bytes[i + 2] == 1 &&
+        (bytes[i + 3] & 0x1f) == 5) return true;
+  }
+  return false;
+}
+
+static bool FeedPicture(AMediaCodec* encoder, int ordinal) {
+  uint8_t frame[kFrameBytes];
+  memset(frame, kLuma[ordinal], kLumaBytes);
+  memset(frame + kLumaBytes, 128, sizeof(frame) - kLumaBytes);
+  return Feed(encoder, frame, sizeof(frame), kFirstTime + ordinal * kInterval, 0);
+}
+
 static bool Dimensions(AMediaFormat* format) {
   int32_t width = 0, height = 0;
   return format != NULL && AMediaFormat_getInt32(format, "width", &width) &&
@@ -179,6 +194,7 @@ static int RunCodec(void) {
   AMediaCodec* named = NULL;
   AMediaFormat* configuration = NULL;
   AMediaFormat* encoded = NULL;
+  AMediaFormat* parameters = NULL;
 #ifndef CODEC_BUFFER_COMPONENT
   AMediaFormat* surface_format = NULL;
 #endif
@@ -196,6 +212,18 @@ static int RunCodec(void) {
   printf("NDK codec idle state start=%d dequeue=%zd\n", early_start, early_dequeue);
   CHECK(early_start == AMEDIA_ERROR_UNKNOWN, "start before configure reports the Android state error");
   CHECK(early_dequeue == AMEDIA_ERROR_UNKNOWN, "dequeue before start reports the Android state error");
+
+  parameters = AMediaFormat_new();
+  REQUIRED(parameters != NULL, "allocate live encoder controls");
+  AMediaFormat_setInt32(parameters, "request-sync", 0);
+  CHECK(AMediaCodec_setParameters(NULL, parameters) == AMEDIA_ERROR_INVALID_PARAMETER &&
+        AMediaCodec_setParameters(encoder, NULL) == AMEDIA_ERROR_INVALID_PARAMETER,
+        "reject missing parameter handles");
+  const media_status_t idle_controls = AMediaCodec_setParameters(encoder, parameters);
+  printf("NDK codec parameter submission while idle=%d\n", idle_controls);
+#ifdef CODEC_PARAMETER_CONTROL_COMPONENT
+  CHECK(idle_controls == AMEDIA_ERROR_INVALID_OPERATION, "idle encoder refuses live controls");
+#endif
 
   configuration = AMediaFormat_new();
   REQUIRED(configuration != NULL, "allocate AVC configuration");
@@ -220,14 +248,8 @@ static int RunCodec(void) {
   name = NULL;
   REQUIRED(AMediaCodec_start(encoder) == AMEDIA_OK, "start AVC encoder");
 
-  uint8_t frame[kFrameBytes];
-  for (int i = 0; i < kFrames; ++i) {
-    memset(frame, kLuma[i], kLumaBytes);
-    memset(frame + kLumaBytes, 128, sizeof(frame) - kLumaBytes);
-    REQUIRED(Feed(encoder, frame, sizeof(frame), kFirstTime + i * kInterval, 0), "queue raw AVC frame");
-  }
-  REQUIRED(Feed(encoder, NULL, 0, kFirstTime + kFrames * kInterval,
-                AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM), "queue encoder EOS");
+  AMediaFormat_setInt32(parameters, "video-bitrate", 360000);
+  REQUIRED(FeedPicture(encoder, 0) && FeedPicture(encoder, 1), "queue initial raw AVC frames");
 
   for (int attempt = 0; attempt < 24 && !eos; ++attempt) {
     AMediaCodecBufferInfo info = {0};
@@ -257,10 +279,36 @@ static int RunCodec(void) {
         packet->data = malloc(packet->size);
         REQUIRED(packet->data != NULL, "retain independent compressed bytes");
         memcpy(packet->data, bytes + info.offset, packet->size);
+        if (packet_count == 2) {
+          CHECK((info.flags & AMEDIACODEC_BUFFER_FLAG_KEY_FRAME) == 0 &&
+                !ContainsIdr(packet->data, packet->size), "ordinary picture before sync request is not an IDR");
+        } else if (packet_count == 3) {
+          const bool idr = (info.flags & AMEDIACODEC_BUFFER_FLAG_KEY_FRAME) &&
+                           ContainsIdr(packet->data, packet->size);
+          CHECK(idr, "running sync request produces a real AVC IDR picture");
+          AMediaFormat* changed_format = AMediaCodec_getOutputFormat(encoder);
+          int32_t target = 0;
+          if (changed_format != NULL) {
+            AMediaFormat_getInt32(changed_format, "bitrate", &target);
+            AMediaFormat_delete(changed_format);
+          }
+          printf("NDK codec live controls: idr=%d output-bitrate=%d\n", idr, target);
+#ifdef CODEC_PARAMETER_CONTROL_COMPONENT
+          CHECK(target == 360000, "encoder reports the accepted backend bitrate target");
+#endif
+        }
       }
     }
     eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
     CHECK(AMediaCodec_releaseOutputBuffer(encoder, (size_t)index, false) == AMEDIA_OK, "release encoded buffer");
+    if (packet_count == 2 && parameters != NULL) {
+      REQUIRED(AMediaCodec_setParameters(encoder, parameters) == AMEDIA_OK, "submit running video encoder controls");
+      AMediaFormat_delete(parameters);
+      parameters = NULL;
+      REQUIRED(FeedPicture(encoder, 2), "queue picture after live encoder controls");
+      REQUIRED(Feed(encoder, NULL, 0, kFirstTime + kFrames * kInterval,
+                    AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM), "queue encoder EOS");
+    }
   }
   REQUIRED(eos && wrote_config && packet_count == kFrames, "real AVC config, access units and EOS");
   void* sps = NULL;
@@ -331,6 +379,7 @@ cleanup:
   if (name != NULL) AMediaCodec_releaseName(encoder, name);
   if (configuration != NULL) AMediaFormat_delete(configuration);
   if (encoded != NULL) AMediaFormat_delete(encoded);
+  if (parameters != NULL) AMediaFormat_delete(parameters);
 #ifndef CODEC_BUFFER_COMPONENT
   if (surface_format != NULL) AMediaFormat_delete(surface_format);
 #endif

@@ -688,17 +688,29 @@ class Codec {
     return true;
   }
 
-  bool SetParameters(const Format& parameters) {
+  media_status_t SetParameters(AMediaFormat* parameters, bool native) {
     int32_t bitrate = 0, sync = 0;
-    parameters.GetInt32("video-bitrate", &bitrate);
-    const bool request_sync = parameters.GetInt32("request-sync", &sync);
+    const bool has_bitrate = AMediaFormat_getInt32(parameters, "video-bitrate", &bitrate);
+    const bool request_sync = AMediaFormat_getInt32(parameters, "request-sync", &sync);
     std::lock_guard<std::mutex> lock(mu_);
-    if (released_ || fatal_) return false;
+    if (released_ || fatal_ || (native && (!started_ || flushed_ || enc_eos_sent_))) {
+      return AMEDIA_ERROR_INVALID_OPERATION;
+    }
+    if (native) {
+      if (!entry_.video || !entry_.encoder || (!has_bitrate && !request_sync)) {
+        return AMEDIA_ERROR_UNSUPPORTED;
+      }
+      if ((has_bitrate && bitrate <= 0) || (request_sync && sync != 0)) {
+        return AMEDIA_ERROR_INVALID_PARAMETER;
+      }
+    }
     if (configured_ && entry_.video && entry_.encoder && !enc_eos_sent_) {
+      // Submission and application are separate. Only the worker interacts
+      // with the backend, and it records a new target only after acceptance.
       if (request_sync) force_key_ = true;
       if (bitrate > 0) pending_bitrate_ = bitrate;
     }
-    return true;
+    return AMEDIA_OK;
   }
 
   bool SetVideoScalingMode(int mode) {
@@ -2129,6 +2141,12 @@ media_status_t SetInputSurface(Codec* codec, ANativeWindow* window) {
   return codec->SetInputSurface(source, &error) ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
 }
 
+media_status_t SetParameters(Codec* codec, const AMediaFormat* parameters) {
+  if (codec == nullptr || parameters == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  // The NDK getter is non-const but does not change numeric format entries.
+  return codec->SetParameters(const_cast<AMediaFormat*>(parameters), /*native=*/true);
+}
+
 media_status_t SignalEndOfInputStream(Codec* codec) {
   if (codec == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::string error;
@@ -2185,6 +2203,7 @@ bool Register() {
   CODEC_ENTRY(createInputSurface, CreateInputSurface);
   CODEC_ENTRY(createPersistentInputSurface, CreatePersistentInputSurface);
   CODEC_ENTRY(setInputSurface, SetInputSurface);
+  CODEC_ENTRY(setParameters, SetParameters);
   CODEC_ENTRY(signalEndOfInputStream, SignalEndOfInputStream);
   CODEC_ENTRY(getName, GetName);
   CODEC_ENTRY(releaseName, ReleaseName);
@@ -2468,7 +2487,7 @@ void JNICALL MC_setParameters(JNIEnv* env, jobject thiz, jobjectArray keys, jobj
   auto c = GetCodec(env, thiz);
   if (c == nullptr) return;
   Format parameters = FormatFromJava(env, keys, values);
-  if (!env->ExceptionCheck() && !c->SetParameters(parameters)) {
+  if (!env->ExceptionCheck() && c->SetParameters(parameters.get(), /*native=*/false) != AMEDIA_OK) {
     jniThrow(env, "java/lang/IllegalStateException", "setParameters() after release()");
   }
 }

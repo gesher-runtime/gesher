@@ -16,8 +16,19 @@ The fixture submits three different 128×96 I420 images to a real AVC encoder
 and passes its compressed access units and codec-specific data to a real AVC
 decoder. It checks each resulting image's luma, including the corresponding
 64-bit timestamp, dimensions, format ownership, slot return, EOS and flush. It
-also checks that absent codecs and operations in the idle state report the
-Android error behavior.
+also checks absent codecs, idle start and dequeue, and missing parameter
+handles.
+
+The live-parameter test waits for an ordinary AVC picture, submits
+`request-sync=0` and a `video-bitrate` target, then inspects the next picture's
+actual IDR NAL unit. The Windows JNI test selects libavc and also reads the
+new bitrate target after the backend accepted it. This is the configured target
+and the test does not measure achieved throughput. Android 16's ARM64 AVC
+provider returned success even for an idle submission and continued exposing
+the original bitrate in its output format. The documented NDK contract limits
+submissions to a running codec and permits controls to go unapplied. Gesher
+rejects inactive submissions and handles sync and positive bitrate requests
+for a running video encoder. [Android NDK parameter contract](https://developer.android.com/ndk/reference/group/media#amediacodec_setparameters).
 
 A second decode sends the same AVC access units to a YUV ImageReader surface.
 The test compares each submitted render timestamp and luma with the acquired
