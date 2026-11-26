@@ -70,6 +70,10 @@ class Program {
   const GuestMemory& Memory() const { return memory_; }
   size_t LibraryCount() const { return modules_.size(); }
 
+  // Non-mutating, guest-address-only dynamic export probe. An exported
+  // function may still be unsupported or unreachable until initialized.
+  bool HasExport(std::string_view library, std::string_view symbol) const;
+
  private:
   struct Module {
     std::string requested_name;
