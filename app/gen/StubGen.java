@@ -123,6 +123,15 @@ public final class StubGen {
             }
             s.append(");\n    }\n");
         }
+        // Gesher's extension transactions (com.gesher.server.StandIn.Extension), above the
+        // interface's own codes; any other code goes to the AIDL dispatch as before.
+        s.append("\n    @Override\n    public boolean onTransact(int code, android.os.Parcel data,"
+                + " android.os.Parcel reply, int flags) throws android.os.RemoteException {\n");
+        s.append("        if (code >= com.gesher.server.StandIn.FIRST_EXTENSION_TRANSACTION\n"
+                + "                && code <= com.gesher.server.StandIn.LAST_EXTENSION_TRANSACTION) {\n"
+                + "            return com.gesher.server.StandIn.extensionTransaction(mImpl, code,"
+                + " data, reply, flags);\n        }\n");
+        s.append("        return super.onTransact(code, data, reply, flags);\n    }\n");
         s.append("}\n");
         Files.writeString(dir.resolve(name + ".java"), s, StandardCharsets.UTF_8);
         System.out.println("StubGen: " + pkg + "." + name + " (" + methods.size()

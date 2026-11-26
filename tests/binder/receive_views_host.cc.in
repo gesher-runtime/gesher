@@ -180,6 +180,8 @@ BOOL ReadFile(HANDLE, void* data, DWORD wanted, DWORD* read, void*) {
   p.read_at += count; *read = static_cast<DWORD>(count); return 1;
 }
 HANDLE GetCurrentProcess() { return reinterpret_cast<HANDLE>(42); }
+// A binder file records the process that opened it (ADR 0092): this one.
+DWORD GetCurrentProcessId() { return 4242; }
 BOOL ReadProcessMemory(HANDLE, const void* source, void* destination, size_t size, SIZE_T* read) {
   if (!source || source == fixture::peer->bad_input) return 0;
   std::memcpy(destination, source, size); *read = size; return 1;

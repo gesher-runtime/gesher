@@ -116,6 +116,43 @@ static HWND AccountChooserControl(HWND dialog, DWORD extra, const WCHAR* klass,
   return control;
 }
 
+static BOOL AccountChooserCreateControls(HWND dialog, AccountChooserState* state) {
+  GesherHostThemeInit(&state->theme, dialog);
+  BOOL rtl = GesherUiRtl(state->language);
+  DWORD reading = rtl ? WS_EX_RTLREADING : 0;
+  DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
+  HWND brand = AccountChooserControl(dialog, reading, L"STATIC",
+      GesherUiText(state->language, "brand"), alignment,
+      ACCOUNT_CHOOSER_BRAND, 16, 10, 288, 14);
+  HWND prompt = AccountChooserControl(dialog, reading, L"STATIC",
+      state->prompt != NULL ? state->prompt : GesherUiText(state->language, "chooser_prompt"),
+      // Wraps to the two lines the heading font fits; ellipsis only after that.
+      alignment | SS_EDITCONTROL | SS_ENDELLIPSIS | SS_NOPREFIX, ACCOUNT_CHOOSER_PROMPT,
+      16, 30, 288, 26);
+  // A package identifier remains LTR even when the host UI uses Hebrew.
+  HWND package = AccountChooserControl(dialog, WS_EX_LTRREADING, L"STATIC",
+      state->package_name, SS_LEFT | SS_ENDELLIPSIS, -1, 16, 58, 288, 18);
+  HWND list = AccountChooserControl(dialog, reading, L"LISTBOX", L"",
+      WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+      ACCOUNT_CHOOSER_LIST, 16, 82, 288, 126);
+  HWND select = AccountChooserControl(dialog, 0, L"BUTTON",
+      GesherUiText(state->language, "chooser_select"),
+      WS_TABSTOP | BS_OWNERDRAW, IDOK, 140, 218, 80, 22);
+  HWND cancel = AccountChooserControl(dialog, 0, L"BUTTON",
+      GesherUiText(state->language, "chooser_cancel"),
+      WS_TABSTOP | BS_OWNERDRAW, IDCANCEL, 228, 218, 76, 22);
+  HWND add = state->can_add ? AccountChooserControl(dialog, 0, L"BUTTON",
+      GesherUiText(state->language, "chooser_add"),
+      WS_TABSTOP | BS_OWNERDRAW, ACCOUNT_CHOOSER_ADD, 16, 218, 114, 22) : NULL;
+  if (!brand || !prompt || !package || !list || !select || !cancel
+      || (state->can_add && !add)) {
+    return FALSE;
+  }
+  GesherHostSetFont(prompt, &state->heading_font, 145, FW_SEMIBOLD);
+  GesherHostSetFont(brand, &state->brand_font, 100, FW_BOLD);
+  return TRUE;
+}
+
 /* Windows invokes this procedure with its host CALLBACK ABI, not GESHER_NATIVE. */
 static INT_PTR CALLBACK AccountChooserDialog(HWND dialog, UINT message, WPARAM wparam, LPARAM lparam) {
   AccountChooserState* state = (AccountChooserState*)GetWindowLongPtrW(dialog, DWLP_USER);
@@ -127,40 +164,13 @@ static INT_PTR CALLBACK AccountChooserDialog(HWND dialog, UINT message, WPARAM w
       AccountChooserFinish(dialog, state, -1);
       return FALSE;
     }
-    GesherHostThemeInit(&state->theme, dialog);
-    BOOL rtl = GesherUiRtl(state->language);
-    DWORD reading = rtl ? WS_EX_RTLREADING : 0;
-    DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
-    HWND brand = AccountChooserControl(dialog, reading, L"STATIC",
-        GesherUiText(state->language, "brand"), alignment,
-        ACCOUNT_CHOOSER_BRAND, 16, 10, 288, 14);
-    HWND prompt = AccountChooserControl(dialog, reading, L"STATIC",
-        state->prompt != NULL ? state->prompt : GesherUiText(state->language, "chooser_prompt"),
-        // Wraps to the two lines the heading font fits; ellipsis only after that.
-        alignment | SS_EDITCONTROL | SS_ENDELLIPSIS | SS_NOPREFIX, ACCOUNT_CHOOSER_PROMPT,
-        16, 30, 288, 26);
-    // A package identifier remains LTR even when the host UI uses Hebrew.
-    HWND package = AccountChooserControl(dialog, WS_EX_LTRREADING, L"STATIC",
-        state->package_name, SS_LEFT | SS_ENDELLIPSIS, -1, 16, 58, 288, 18);
-    HWND list = AccountChooserControl(dialog, reading, L"LISTBOX", L"",
-        WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-        ACCOUNT_CHOOSER_LIST, 16, 82, 288, 126);
-    HWND select = AccountChooserControl(dialog, 0, L"BUTTON",
-        GesherUiText(state->language, "chooser_select"),
-        WS_TABSTOP | BS_OWNERDRAW, IDOK, 140, 218, 80, 22);
-    HWND cancel = AccountChooserControl(dialog, 0, L"BUTTON",
-        GesherUiText(state->language, "chooser_cancel"),
-        WS_TABSTOP | BS_OWNERDRAW, IDCANCEL, 228, 218, 76, 22);
-    HWND add = state->can_add ? AccountChooserControl(dialog, 0, L"BUTTON",
-        GesherUiText(state->language, "chooser_add"),
-        WS_TABSTOP | BS_OWNERDRAW, ACCOUNT_CHOOSER_ADD, 16, 218, 114, 22) : NULL;
-    if (!brand || !prompt || !package || !list || !select || !cancel
-        || (state->can_add && !add)) {
+    if (!AccountChooserCreateControls(dialog, state)) {
       AccountChooserFinish(dialog, state, -1);
       return FALSE;
     }
-    GesherHostSetFont(prompt, &state->heading_font, 145, FW_SEMIBOLD);
-    GesherHostSetFont(brand, &state->brand_font, 100, FW_BOLD);
+    HWND list = GetDlgItem(dialog, ACCOUNT_CHOOSER_LIST);
+    HWND select = GetDlgItem(dialog, IDOK);
+    HWND cancel = GetDlgItem(dialog, IDCANCEL);
     for (jsize i = 0; i < state->count; ++i) {
       LRESULT added = SendMessageW(list, LB_ADDSTRING, 0, (LPARAM)state->labels[i]);
       if (added == LB_ERR || added == LB_ERRSPACE) {

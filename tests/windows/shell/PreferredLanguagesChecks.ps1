@@ -1,20 +1,9 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
-# Exercise the production managed merge without reading or changing HKCU.
+# Exercise the production language merge without changing HKCU.
 param([string] $UiPath = (Join-Path $PSScriptRoot '../../../tools/package/gesher-ui.ps1'))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
-if (-not ('Gesher.UiLanguages' -as [type])) {
-    $tokens = $null; $errors = $null
-    $ast = [Management.Automation.Language.Parser]::ParseFile($UiPath, [ref]$tokens, [ref]$errors)
-    if ($errors.Count) { throw ($errors | Out-String) }
-    $sources = @($ast.FindAll({
-        param($node)
-        $node -is [Management.Automation.Language.StringConstantExpressionAst] -and
-            $node.Value.Contains('public static class UiLanguages')
-    }, $true))
-    if ($sources.Count -ne 1) { throw 'Expected one production UiLanguages definition' }
-    Add-Type -TypeDefinition $sources[0].Value
-}
+. $UiPath
 $zero = [char]0
 $english = 'en-US' + $zero + $zero
 $hebrew = 'he-IL' + $zero + $zero
@@ -37,14 +26,14 @@ $cases = @(
 )
 $checks = 0
 foreach ($case in $cases) {
-    $actual = [Gesher.UiLanguages]::Merge($case.Profile, $case.Display)
-    if ($actual -cne $case.Expected) { throw "Managed preference order: expected '$($case.Expected)', got '$actual'" }
+    $actual = Merge-GesherUiLanguages $case.Profile $case.Display
+    if ($actual -cne $case.Expected) { throw "Preferred language order: expected '$($case.Expected)', got '$actual'" }
     $checks++
 }
 $longProfile = [string[]](@(0..299 | ForEach-Object { 'qaa-x-{0:D4}' -f $_ }) + @('he-IL'))
 $expected = (@($longProfile) + @('en-US')) -join ','
-if ($expected.Length -le 1024 -or [Gesher.UiLanguages]::Merge($longProfile, $english) -cne $expected) {
-    throw 'Managed preferred list was truncated or reordered'
+if ($expected.Length -le 1024 -or (Merge-GesherUiLanguages $longProfile $english) -cne $expected) {
+    throw 'Preferred language list was truncated or reordered'
 }
 $checks++
-Write-Host "PASS: $checks production managed preferred-language checks without changing user settings"
+Write-Host "PASS: $checks production preferred-language checks without changing user settings"
