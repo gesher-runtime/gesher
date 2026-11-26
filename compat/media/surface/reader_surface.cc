@@ -1,13 +1,14 @@
 #include "reader_surface.h"
 #include "queue_surface.h"
+#include "../../bionic/hardware_buffer_base.h"
 #include <android_runtime/android_view_Surface.h>
 #include <gesher/rgba_buffers.h>
 #include <GraphicsJNI.h>
 #include <hwui/Bitmap.h>
 #include <nativehelper/JNIHelp.h>
-#include <atomic>
 #include <cstring>
 #include <memory>
+#include <new>
 
 namespace gesher::bionic {
 int RegisterSyncFenceNatives(JNIEnv* env);  // hardware_buffer_java.cc
@@ -15,39 +16,52 @@ int RegisterSyncFenceNatives(JNIEnv* env);  // hardware_buffer_java.cc
 
 namespace gesher::media {
 namespace {
-// A Java HardwareBuffer of a reader image holds a reference to the image's RGBA
-// AHardwareBuffer (<gesher/rgba_buffers.h>), which the reader's pool will not
-// write into while it is held. Its immutable Bitmap conversion works on both
-// Gesher's CPU and SkiaGL display pipelines.
-struct Buffer {
-  void* ahb;  // a reference
-  int width, height;
-  Buffer(void* b, int w, int h) : ahb(b), width(w), height(h) { gesher::bionic::ahb::RetainRgbaBuffer(b); }
-  ~Buffer() {
-    gesher::bionic::ahb::NoteRgbaAppReleased(ahb);  // the app's draws so far: the buffer's release fence
-    gesher::bionic::ahb::ReleaseRgbaBuffer(ahb);
+namespace ahb = gesher::bionic::ahb;
+
+// The Java object owns one reference to the same storage used by the NDK.
+struct JavaBuffer {
+  ahb::Buffer* buffer;
+  bool from_reader;
+  ~JavaBuffer() {
+    if (from_reader) ahb::NoteRgbaAppReleased(ahb::ToApp(buffer));
+    ahb::Release(buffer);
   }
 };
 jclass buffer_class;
 jmethodID buffer_constructor;
 jfieldID buffer_pointer;
-Buffer* Of(jlong ptr) { return reinterpret_cast<Buffer*>(ptr); }
-void DeleteBuffer(void* ptr) { delete static_cast<Buffer*>(ptr); }
+JavaBuffer* Of(jlong ptr) { return reinterpret_cast<JavaBuffer*>(ptr); }
+void DeleteBuffer(void* ptr) { delete static_cast<JavaBuffer*>(ptr); }
 jlong JNICALL Finalizer(JNIEnv*, jclass) { return reinterpret_cast<jlong>(&DeleteBuffer); }
-jint JNICALL Width(JNIEnv*, jclass, jlong ptr) { return Of(ptr)->width; }
-jint JNICALL Height(JNIEnv*, jclass, jlong ptr) { return Of(ptr)->height; }
-jint JNICALL Format(JNIEnv*, jclass, jlong) { return 1; }
-jint JNICALL Layers(JNIEnv*, jclass, jlong) { return 1; }
+jint JNICALL Width(JNIEnv*, jclass, jlong ptr) { return ahb::Desc(Of(ptr)->buffer).width; }
+jint JNICALL Height(JNIEnv*, jclass, jlong ptr) { return ahb::Desc(Of(ptr)->buffer).height; }
+jint JNICALL Format(JNIEnv*, jclass, jlong ptr) { return ahb::Desc(Of(ptr)->buffer).format; }
+jint JNICALL Layers(JNIEnv*, jclass, jlong ptr) { return ahb::Desc(Of(ptr)->buffer).layers; }
 jlong JNICALL Usage(JNIEnv*, jclass, jlong ptr) {
-  return static_cast<jlong>(gesher::bionic::ahb::RgbaBufferUsage(Of(ptr)->ahb));
+  return static_cast<jlong>(ahb::Desc(Of(ptr)->buffer).usage);
 }
 // @CriticalNative omits JNIEnv and jclass; the accessors above are @FastNative.
-jlong JNICALL Id(jlong ptr) { return static_cast<jlong>(gesher::bionic::ahb::RgbaBufferId(Of(ptr)->ahb)); }
-jlong JNICALL Estimate(jlong ptr) { return static_cast<jlong>(Of(ptr)->width) * Of(ptr)->height * 4; }
-jboolean JNICALL Supported(JNIEnv*, jclass, jint, jint, jint, jint, jlong) { return JNI_FALSE; }
-jlong JNICALL Create(JNIEnv* env, jclass, jint, jint, jint, jint, jlong) {
-  jniThrowException(env, "java/lang/UnsupportedOperationException", "HardwareBuffer allocation is not supported; only reader snapshots are available");
-  return 0;
+jlong JNICALL Id(jlong ptr) { return static_cast<jlong>(ahb::BufferId(Of(ptr)->buffer)); }
+jlong JNICALL Estimate(jlong ptr) { return static_cast<jlong>(ahb::AllocationSize(Of(ptr)->buffer)); }
+
+AHardwareBuffer_Desc Description(jint width, jint height, jint format, jint layers, jlong usage) {
+  return {static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+          static_cast<uint32_t>(layers), static_cast<uint32_t>(format),
+          static_cast<uint64_t>(usage), 0, 0, 0};
+}
+
+jboolean JNICALL Supported(JNIEnv*, jclass, jint width, jint height, jint format, jint layers,
+                           jlong usage) {
+  return ahb::IsBufferSupported(Description(width, height, format, layers, usage));
+}
+
+jlong JNICALL Create(JNIEnv*, jclass, jint width, jint height, jint format, jint layers,
+                     jlong usage) {
+  ahb::Buffer* buffer = ahb::AllocateBuffer(Description(width, height, format, layers, usage));
+  if (buffer == nullptr) return 0;  // HardwareBuffer.create throws IllegalArgumentException.
+  auto* java_buffer = new (std::nothrow) JavaBuffer{buffer, false};
+  if (java_buffer == nullptr) ahb::Release(buffer);
+  return reinterpret_cast<jlong>(java_buffer);
 }
 jlong JNICALL FromGraphicBuffer(JNIEnv* env, jclass, jobject) {
   jniThrowException(env, "java/lang/UnsupportedOperationException", "GraphicBuffer import is not supported on Gesher");
@@ -66,17 +80,21 @@ jobject JNICALL Wrap(JNIEnv* env, jclass, jobject buffer, jlong color_space) {
     jniThrowException(env, "java/lang/IllegalStateException", "HardwareBuffer is closed");
     return nullptr;
   }
-  Buffer* data = Of(ptr);
+  JavaBuffer* data = Of(ptr);
+  // This snapshot path only handles ImageReader's RGBA storage.
+  if (!data->from_reader) return nullptr;
+  const auto& desc = ahb::Desc(data->buffer);
   SkBitmap pixels;
-  auto info = SkImageInfo::Make(data->width, data->height, kRGBA_8888_SkColorType,
+  auto info = SkImageInfo::Make(desc.width, desc.height, kRGBA_8888_SkColorType,
       kPremul_SkAlphaType, GraphicsJNI::getNativeColorSpace(color_space));
   if (!pixels.tryAllocPixels(info)) {
     jniThrowException(env, "java/lang/OutOfMemoryError", "Cannot allocate reader bitmap");
     return nullptr;
   }
-  for (int y = 0; y < data->height; y++)
-    memcpy(pixels.getAddr(0, y), gesher::bionic::ahb::RgbaBufferPixels(data->ahb) + static_cast<size_t>(y) * data->width * 4,
-           static_cast<size_t>(data->width) * 4);
+  const uint8_t* source = ahb::RgbaBufferPixels(ahb::ToApp(data->buffer));
+  for (uint32_t y = 0; y < desc.height; y++)
+    memcpy(pixels.getAddr(0, y), source + static_cast<size_t>(y) * desc.stride * 4,
+           static_cast<size_t>(desc.width) * 4);
   pixels.setImmutable();
   auto bitmap = android::Bitmap::createFrom(info, *pixels.pixelRef());
   return android::bitmap::createBitmap(env, bitmap.release(), android::bitmap::kBitmapCreateFlag_Premultiplied);
@@ -119,14 +137,21 @@ class NativeReaderSurface final : public ReaderSurface {
 std::shared_ptr<ReaderSurface> MakeReaderSurface(int width, int height, ReaderFrame listener) {
   return std::make_shared<NativeReaderSurface>(width, height, std::move(listener));
 }
-void* ReaderHardwareBufferNative(JNIEnv* env, jobject buffer) {
+void* HardwareBufferNative(JNIEnv* env, jobject buffer) {
   if (buffer == nullptr || buffer_class == nullptr || !env->IsInstanceOf(buffer, buffer_class))
     return nullptr;
   jlong ptr = env->GetLongField(buffer, buffer_pointer);
-  return ptr != 0 ? Of(ptr)->ahb : nullptr;
+  return ptr != 0 ? ahb::ToApp(Of(ptr)->buffer) : nullptr;
 }
-jobject ReaderHardwareBuffer(JNIEnv* env, void* rgba, int width, int height) {
-  auto buffer = std::make_unique<Buffer>(rgba, width, height);
+jobject ReaderHardwareBuffer(JNIEnv* env, void* rgba) {
+  ahb::Buffer* backing = ahb::FromApp(rgba);
+  if (backing == nullptr) return nullptr;
+  auto buffer = std::unique_ptr<JavaBuffer>(new (std::nothrow) JavaBuffer{backing, true});
+  if (buffer == nullptr) {
+    jniThrowException(env, "java/lang/OutOfMemoryError", "Cannot allocate reader HardwareBuffer");
+    return nullptr;
+  }
+  ahb::Acquire(backing);
   jobject result = env->NewObject(buffer_class, buffer_constructor, reinterpret_cast<jlong>(buffer.get()));
   if (result != nullptr && !env->ExceptionCheck()) buffer.release();
   return result;

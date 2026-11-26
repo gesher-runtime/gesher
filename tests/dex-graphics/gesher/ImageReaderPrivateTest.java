@@ -38,6 +38,8 @@ public final class ImageReaderPrivateTest {
     private static final int RED = 0xff0000ff, GREEN = 0xff00ff00, BLUE = 0xffff0000;
 
     private static native int nativeInspect(HardwareBuffer buffer, int[] probes, int[] out);
+    private static native boolean nativeCheckJavaBuffer(HardwareBuffer buffer, int width,
+            int height, int format, long usage, long id);
     private static native int nativeFenceFd();
     // An EGLImage and texture kept after the Image and HardwareBuffer are closed
     // (tests/native/reader_buffer_test.c).
@@ -60,6 +62,34 @@ public final class ImageReaderPrivateTest {
     static void check(boolean value, String label) {
         if (!value) throw new AssertionError(label);
         System.out.println("ImageReaderPrivateTest PASS " + label);
+    }
+
+    private static void checkJavaAllocation() {
+        long cpu = HardwareBuffer.USAGE_CPU_READ_OFTEN | HardwareBuffer.USAGE_CPU_WRITE_OFTEN;
+        for (int format : new int[] {HardwareBuffer.RGBA_8888, HardwareBuffer.RGB_565,
+                HardwareBuffer.BLOB}) {
+            int height = format == HardwareBuffer.BLOB ? 1 : 5;
+            check(HardwareBuffer.isSupported(7, height, format, 1, cpu),
+                    "Java allocation supported for format " + format);
+            try (HardwareBuffer buffer = HardwareBuffer.create(7, height, format, 1, cpu)) {
+                check(buffer.getWidth() == 7 && buffer.getHeight() == height
+                        && buffer.getFormat() == format && buffer.getLayers() == 1
+                        && buffer.getUsage() == cpu, "Java allocation metadata for format " + format);
+                check(nativeCheckJavaBuffer(buffer, 7, height, format, cpu, buffer.getId())
+                        && buffer.isClosed(), "native reference outlives Java close for format " + format);
+            }
+        }
+
+        long invalid = HardwareBuffer.USAGE_CPU_READ_OFTEN | HardwareBuffer.USAGE_PROTECTED_CONTENT;
+        check(!HardwareBuffer.isSupported(7, 5, HardwareBuffer.RGBA_8888, 1, invalid),
+                "Java query rejects a CPU-readable protected buffer");
+        boolean rejected = false;
+        try (HardwareBuffer buffer = HardwareBuffer.create(7, 5, HardwareBuffer.RGBA_8888, 1, invalid)) {
+            check(false, "unexpected protected allocation " + buffer);
+        } catch (IllegalArgumentException expected) {
+            rejected = true;
+        }
+        check(rejected, "Java create throws IllegalArgumentException for an unsupported buffer");
     }
 
     private static ImageReader privateReader(int maxImages) {
@@ -118,6 +148,7 @@ public final class ImageReaderPrivateTest {
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
         System.load(args[0]);
+        checkJavaAllocation();
         HandlerThread callbacks = new HandlerThread("reader-private-callback");
         callbacks.start();
         Handler handler = new Handler(callbacks.getLooper());
