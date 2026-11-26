@@ -1,0 +1,19 @@
+Make repeated poller shutdown harmless. The Linux watch service's finalizer also
+closes its poller, including after a normal explicit WatchService.close().
+Treat the previous successful shutdown as success while leaving closed-service
+errors from registering or canceling watches intact.
+
+diff --git a/ojluni/src/main/java/sun/nio/fs/AbstractPoller.java b/ojluni/src/main/java/sun/nio/fs/AbstractPoller.java
+--- a/ojluni/src/main/java/sun/nio/fs/AbstractPoller.java
++++ b/ojluni/src/main/java/sun/nio/fs/AbstractPoller.java
+@@ -145,5 +145,9 @@ abstract class AbstractPoller implements Runnable {
+      * Shutdown poller thread
+      */
+     final void close() throws IOException {
+-        invoke(RequestType.CLOSE);
++        try {
++            invoke(RequestType.CLOSE);
++        } catch (ClosedWatchServiceException alreadyClosed) {
++            // LinuxWatchService's poller finalizer may be closing it again.
++        }
+     }
