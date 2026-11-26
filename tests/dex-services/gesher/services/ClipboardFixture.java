@@ -20,6 +20,7 @@ import android.os.RemoteException;
 import android.provider.Settings;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedAttributionImpl;
+import com.android.internal.pm.pkg.component.ParsedProviderImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import com.gesher.server.ApkPackage;
 import com.gesher.server.AppOpsService;
@@ -67,6 +68,15 @@ public final class ClipboardFixture implements AutoCloseable {
         PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(name, "/fixture/" + name + "/base.apk");
         parsed.setEnabled(true); parsed.setTargetSdkVersion(36);
         for (String permission : permissions) parsed.addUsesPermission(new ParsedUsesPermissionImpl(permission, 0, java.util.Set.of()));
+        if (OWNER.equals(name)) {
+            ParsedProviderImpl provider = new ParsedProviderImpl();
+            provider.setPackageName(name);
+            provider.setName(name + ".Provider");
+            provider.setEnabled(true);
+            provider.setAuthority(name + ".files");
+            provider.setGrantUriPermissions(true);
+            parsed.addProvider(provider);
+        }
         parsed.addAttribution(new ParsedAttributionImpl("clipboard", 1, List.of()));
         parsed.hideAsFinal();
         ApkPackage code = (ApkPackage) UNSAFE.allocateInstance(ApkPackage.class);
