@@ -67,7 +67,7 @@ mkdir -p "$work/classes" "$work/dex"
 find "$here" -name '*.java' > "$work/sources.txt"
 printf '%s\n' "$here/../net/HttpEngineDeviceSmoke.java" "$here/../net/Http2DeviceSmoke.java" \
   "$here/../net/HttpEngineProtocolPolicyTest.java" "$here/../net/Http2SessionContracts.java" \
-  "$here/../net/Http2CreditContracts.java" "$here/../net/HttpEngineCacheTest.java" \
+  "$here/../net/Http2CreditContracts.java" "$here/../net/Http2BindingsTest.java" "$here/../net/HttpEngineCacheTest.java" \
   "$here/../net/HttpEngineConnectionLifetimeTest.java" "$here/../net/HttpEngineReadBufferTest.java" \
   "$here/../net/HttpBrotliFixtures.java" "$here/../net/HttpEngineBrotliTest.java" \
   "$here/../net/HttpEngineAdmissionTest.java" >> "$work/sources.txt"
