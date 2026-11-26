@@ -553,12 +553,21 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
           const int32_t capacity = static_cast<int32_t>(a[1].bits);
           if (capacity < 0)
             return Fail(e, "JNI32 VM enumeration has negative capacity");
-          if (a[2].bits == 0 || !program.Memory().Write32(
-                  static_cast<uint32_t>(a[2].bits), 1, e))
+          const uint32_t count_at = static_cast<uint32_t>(a[2].bits);
+          const uint32_t vm_at = static_cast<uint32_t>(a[0].bits);
+          if (a[2].bits == 0 ||
+              !program.Memory().IsMapped(count_at, 4, MemoryPermission::kWrite))
             return Fail(e, "JNI32 VM count output is not writable guest memory");
-          if (capacity > 0 && (a[0].bits == 0 || !program.Memory().Write32(
-                  static_cast<uint32_t>(a[0].bits), kGuestVm, e)))
-            return Fail(e, "JNI32 guest JavaVM array is not writable");
+          if (capacity > 0) {
+            const uint64_t delta = count_at > vm_at ? uint64_t{count_at} - vm_at
+                                                    : uint64_t{vm_at} - count_at;
+            if (a[0].bits == 0 || delta < 4 ||
+                !program.Memory().IsMapped(vm_at, 4, MemoryPermission::kWrite))
+              return Fail(e, "JNI32 guest JavaVM array is overlapping or unwritable");
+          }
+          if (!program.Memory().Write32(count_at, 1, e)) return false;
+          if (capacity > 0 && !program.Memory().Write32(vm_at, kGuestVm, e))
+            return false;
           *out = Value::Signed32(JNI_OK);
           return true;
         }, error);
