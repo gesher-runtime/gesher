@@ -3,6 +3,7 @@ package gesher.services;
 
 import android.Manifest;
 import android.app.AppOpsManager;
+import android.app.AsyncNotedAppOp;
 import android.app.IApplicationThread;
 import android.app.SyncNotedAppOp;
 import android.content.AttributionSourceState;
@@ -17,6 +18,7 @@ import android.os.IInterface;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.permission.IPermissionChecker;
+import com.android.internal.app.IAppOpsAsyncNotedCallback;
 import com.android.internal.app.IAppOpsCallback;
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
@@ -539,6 +541,98 @@ public final class AppOpsContractTest {
         h.ops.resetAllModes(0, NAME); awaitCount(watcher.calls, 2);
         h.service.stopWatchingMode(watcher); check(watcher.token.recipients.isEmpty(), "Unwatch releases the death recipient");
     }
+    private static final class AsyncWatcher extends IAppOpsAsyncNotedCallback.Default {
+        final Token token = new Token();
+        final List<String> messages = new ArrayList<>();
+        boolean fail;
+        @Override public IBinder asBinder() { return token; }
+        @Override public void opNoted(AsyncNotedAppOp event) throws RemoteException {
+            if (fail) throw new RemoteException("fixture delivery failure");
+            messages.add(event.getMessage());
+        }
+    }
+
+    private static void requireAsync(boolean condition, String message) {
+        if (!condition) throw new AssertionError(message);
+    }
+
+    private static void asyncNote(Harness h, String message) throws Exception {
+        requireAsync(h.ops.noteOperation(OP_VIBRATE, UID, NAME, "one", true, message, false)
+                .getOpMode() == MODE_ALLOWED, "Async note must use an allowed real operation");
+    }
+
+    private static void asyncWatchers(Harness h) throws Exception {
+        // Callbacks use local test endpoints. Notes and extraction retain the fixture's
+        // normal service transport (generated Binder on ART).
+        AsyncWatcher first = new AsyncWatcher(), last = new AsyncWatcher();
+        h.service.startWatchingAsyncNoted(NAME, first);
+        h.service.startWatchingAsyncNoted(NAME, last);
+        h.service.stopWatchingAsyncNoted(NAME, first);
+        asyncNote(h, "surviving watcher");
+        drain(h);
+        requireAsync(first.token.recipients.isEmpty() && first.messages.isEmpty()
+                && last.messages.equals(List.of("surviving watcher")),
+                "Removing one watcher must keep delivering only to the live watcher");
+
+        last.fail = true;
+        asyncNote(h, "while monitored");
+        drain(h);
+        h.service.stopWatchingAsyncNoted(NAME, last);
+        asyncNote(h, "after stop");
+        drain(h);
+        List<AsyncNotedAppOp> pending = h.ops.extractAsyncOps(NAME);
+        requireAsync(last.token.recipients.isEmpty() && pending != null && pending.size() == 1
+                && "while monitored".equals(pending.get(0).getMessage()),
+                "Explicit stop must preserve an earlier failed delivery and discard later notes");
+
+        AsyncWatcher dying = new AsyncWatcher();
+        h.service.startWatchingAsyncNoted(NAME, dying);
+        dying.token.die();
+        asyncNote(h, "after death");
+        drain(h);
+        requireAsync(h.ops.extractAsyncOps(NAME) == null,
+                "Death of the final callback must retire the package's subscription");
+
+        // Pause the event executor, change the installed generation and register
+        // its observer before allowing the old generation's queued event to run.
+        Harness generations = new Harness();
+        AsyncWatcher old = new AsyncWatcher(), replacement = new AsyncWatcher();
+        generations.service.startWatchingAsyncNoted(NAME, old);
+        old.fail = true;
+        asyncNote(generations, "old backlog");
+        drain(generations);
+        old.fail = false;
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        var executor = (java.util.concurrent.ScheduledThreadPoolExecutor)get(generations.service, "mEvents");
+        var blocker = executor.submit(() -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) throw new AssertionError("Async note fixture timed out");
+            return null;
+        });
+        try {
+            requireAsync(entered.await(5, TimeUnit.SECONDS), "Could not pause the event executor");
+            asyncNote(generations, "old queued note");
+            ApkPackage replacementCode = pkg(NAME, UID, (byte)7);
+            call(replacementCode, "setRestrictedPermissionAllowlist",
+                    new Class<?>[]{Collection.class}, (Object)null);
+            call(generations.pm, "add", new Class<?>[]{ApkPackage.class}, replacementCode);
+            requireAsync(generations.pm.get(NAME) == replacementCode
+                    && generations.ops.extractAsyncOps(NAME) == null,
+                    "The new generation must not inherit undelivered notes even before registering");
+            generations.service.startWatchingAsyncNoted(NAME, replacement);
+            asyncNote(generations, "new queued note");
+        } finally {
+            release.countDown();
+        }
+        blocker.get(5, TimeUnit.SECONDS);
+        drain(generations);
+        requireAsync(replacement.messages.equals(List.of("new queued note")) && old.messages.isEmpty(),
+                "An async note scheduled for the old generation must not reach the replacement");
+        generations.service.stopWatchingAsyncNoted(NAME, replacement);
+        System.out.println("AppOps async watcher lifecycle contracts passed");
+    }
+
     private static void foreground(Harness h) throws Exception {
         h.pm.permissions().grantRuntimePermission(NAME, Manifest.permission.CAMERA, "default:0", 0);
         check(h.ops.checkOperationRaw(OP_CAMERA, UID, NAME, null) == MODE_FOREGROUND,
@@ -1576,6 +1670,7 @@ public final class AppOpsContractTest {
         Harness h = new Harness(); fixedModeRefreshCost(h); modes(h); lifetimes(h); watchers(h); foreground(h); restrictions(h); delivery(h); persistence(h);
         permissionCheckerEdges();
         foregroundServiceExit();
+        asyncWatchers(h);
         return checks;
     }
     public static void main(String[] args) throws Exception {

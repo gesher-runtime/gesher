@@ -7,6 +7,7 @@ package com.gesher.server;
 import android.Manifest;
 import android.app.ActivityManager;
 import android.app.AppOpsManager;
+import android.app.AsyncNotedAppOp;
 import android.app.SyncNotedAppOp;
 import android.content.AttributionSource;
 import android.content.AttributionSourceState;
@@ -15,13 +16,16 @@ import android.content.pm.ParceledListSlice;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Process;
+import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.UserHandle;
 import android.util.LongSparseArray;
+import com.android.internal.app.IAppOpsAsyncNotedCallback;
 import com.android.internal.app.IAppOpsCallback;
 import com.android.internal.app.IAppOpsService;
 import java.io.File;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -594,8 +598,9 @@ public final class AppOpsService extends IAppOpsService.Default {
         verifyIncomingUid(uid); verifyReadableOp(code);
         if (device != 0) return new SyncNotedAppOp(MODE_IGNORED, code, tag, name);
         OpKey key = key(code, uid, name, tag, device);
+        AsyncNotedCallbacks callbacks = collect ? asyncWatch(key) : null;
         SyncNotedAppOp result = note(key, OP_FLAG_SELF, null);
-        if (collect && result.getOpMode() == MODE_ALLOWED) collectAsync(key, message);
+        if (collect && result.getOpMode() == MODE_ALLOWED) collectAsync(key, message, callbacks);
         return result;
     }
     private SyncNotedAppOp note(OpKey key, int flags, AppOpsManager.OpEventProxyInfo proxy) {
@@ -627,8 +632,9 @@ public final class AppOpsService extends IAppOpsService.Default {
             int mode = checkOperationForDevice(dependency, uid, name, tag, device);
             if (mode != MODE_ALLOWED) return result(mode, key);
         }
+        AsyncNotedCallbacks callbacks = collect ? asyncWatch(key) : null;
         SyncNotedAppOp result = start(token, key, startDefault, flags, chain);
-        if (collect && result.getOpMode() == MODE_ALLOWED) collectAsync(key, message);
+        if (collect && result.getOpMode() == MODE_ALLOWED) collectAsync(key, message, callbacks);
         return result;
     }
     private SyncNotedAppOp start(IBinder token, OpKey key, boolean startDefault, int flags, int chain) {
@@ -905,13 +911,14 @@ public final class AppOpsService extends IAppOpsService.Default {
     private void retireObservers(String name, ApkPackage current) {
         List<ModeWatcher> modes = new ArrayList<>();
         List<EventWatcher> events = new ArrayList<>();
-        android.os.RemoteCallbackList<com.android.internal.app.IAppOpsAsyncNotedCallback> async = null;
+        AsyncNotedCallbacks async = null;
         synchronized (mLock) {
             for (ModeWatcher watcher : mWatchers.values()) if (watcher.owner != null
                     && name.equals(watcher.owner.packageName) && watcher.owner != current) modes.add(watcher);
             for (EventWatcher watcher : mEventWatchers.values()) if (watcher.owner != null
                     && name.equals(watcher.owner.packageName) && watcher.owner != current) events.add(watcher);
-            if (mAsyncOwners.get(name) != current || current == null) {
+            ApkPackage asyncOwner = mAsyncOwners.get(name);
+            if (asyncOwner != null && packageFor(asyncOwner.uid(), name) != asyncOwner) {
                 async = mAsync.remove(name); mAsyncOwners.remove(name); mUnforwarded.remove(name);
             }
         }
@@ -988,13 +995,14 @@ public final class AppOpsService extends IAppOpsService.Default {
         if (source.deviceId != 0 || receiver.deviceId != 0) return result(MODE_IGNORED, key(op, receiver));
         boolean trusted = trustedProxy(source, receiver);
         OpKey proxied = key(op, receiver);
+        AsyncNotedCallbacks callbacks = collect ? asyncWatch(proxied) : null;
         if (!(skip && trustedSkip(source))) {
             SyncNotedAppOp proxy = note(key(op, source), trusted ? OP_FLAG_TRUSTED_PROXY : OP_FLAG_UNTRUSTED_PROXY, null);
             if (proxy.getOpMode() != MODE_ALLOWED) return result(proxy.getOpMode(), proxied);
         }
         SyncNotedAppOp result = note(proxied, trusted ? OP_FLAG_TRUSTED_PROXIED : OP_FLAG_UNTRUSTED_PROXIED,
                 new AppOpsManager.OpEventProxyInfo(source.uid, source.packageName, attribution(packageFor(source.uid, source.packageName), source.attributionTag)));
-        if (collect && result.getOpMode() == MODE_ALLOWED) collectAsync(proxied, message);
+        if (collect && result.getOpMode() == MODE_ALLOWED) collectAsync(proxied, message, callbacks);
         return result;
     }
     @Override public SyncNotedAppOp startProxyOperation(IBinder token, int op, AttributionSource source,
@@ -1012,6 +1020,7 @@ public final class AppOpsService extends IAppOpsService.Default {
         AttributionSourceState receiver = chain.get(1);
         if (source.deviceId != 0 || receiver.deviceId != 0) return result(MODE_IGNORED, key(op, receiver));
         OpKey proxy = key(op, source), proxied = key(op, receiver);
+        AsyncNotedCallbacks callbacks = collect ? asyncWatch(proxied) : null;
         boolean omitProxy = skip && trustedSkip(source);
         refreshUidStates();
         int mode = proxied.device != 0 ? MODE_IGNORED : effective(op, proxied.uid, proxied.name);
@@ -1025,7 +1034,7 @@ public final class AppOpsService extends IAppOpsService.Default {
                 trustedProxy(source, receiver) ? OP_FLAG_TRUSTED_PROXIED : OP_FLAG_UNTRUSTED_PROXIED,
                 new AppOpsManager.OpEventProxyInfo(proxy.uid, proxy.name, proxy.tag));
         if (result.getOpMode() != MODE_ALLOWED && !omitProxy) finish(token, proxy);
-        if (collect && result.getOpMode() == MODE_ALLOWED) collectAsync(proxied, message);
+        if (collect && result.getOpMode() == MODE_ALLOWED) collectAsync(proxied, message, callbacks);
         return result;
     }
     @Override public void finishProxyOperation(IBinder token, int op, AttributionSource source, boolean skip) {
@@ -1135,64 +1144,133 @@ public final class AppOpsService extends IAppOpsService.Default {
                 key.op, key.uid, key.name, key.tag, key.device, flags, mode));
     }
 
-    private final Map<String, android.os.RemoteCallbackList<com.android.internal.app.IAppOpsAsyncNotedCallback>> mAsync = new HashMap<>();
+    private final Map<String, AsyncNotedCallbacks> mAsync = new HashMap<>();
     private final Map<String, ApkPackage> mAsyncOwners = new HashMap<>();
-    private final Map<String, java.util.ArrayDeque<android.app.AsyncNotedAppOp>> mUnforwarded = new HashMap<>();
-    private void verifyOwnPackage(String name) {
-        callers().requirePackage(name);
-        if (mPm.get(name) == null || mPm.isRemovalPending(name)
-                || packageFor(callers().callerUid(), name) == null && !callers().isSystem()) throw new SecurityException("Unknown package");
-    }
-    @Override public void startWatchingAsyncNoted(String name, com.android.internal.app.IAppOpsAsyncNotedCallback callback) {
-        verifyOwnPackage(name); Objects.requireNonNull(callback);
-        synchronized (mClientRegistration) {
-            android.os.RemoteCallbackList<com.android.internal.app.IAppOpsAsyncNotedCallback> callbacks;
-            android.os.RemoteCallbackList<com.android.internal.app.IAppOpsAsyncNotedCallback> stale = null;
-            synchronized (mLock) {
-                ApkPackage owner = mPm.get(name);
-                if (mAsyncOwners.get(name) != owner) {
-                    stale = mAsync.remove(name); mUnforwarded.remove(name);
-                }
-                callbacks = mAsync.computeIfAbsent(name, ignored -> new android.os.RemoteCallbackList<>());
-                mAsyncOwners.put(name, owner);
+    private final Map<String, ArrayDeque<AsyncNotedAppOp>> mUnforwarded = new HashMap<>();
+
+    private final class AsyncNotedCallbacks extends RemoteCallbackList<IAppOpsAsyncNotedCallback> {
+        final ApkPackage owner;
+        AsyncNotedCallbacks(ApkPackage owner) { this.owner = owner; }
+
+        @Override public void onCallbackDied(IAppOpsAsyncNotedCallback callback) {
+            synchronized (mClientRegistration) {
+                retireIfEmpty();
             }
-            if (stale != null) stale.kill();
-            callbacks.register(callback);
+        }
+
+        // Caller holds mClientRegistration so another registration cannot
+        // populate this list after the empty check and before removal.
+        void retireIfEmpty() {
+            if (getRegisteredCallbackCount() == 0) {
+                synchronized (mLock) { mAsync.remove(owner.packageName, this); }
+            }
         }
     }
-    @Override public void stopWatchingAsyncNoted(String name, com.android.internal.app.IAppOpsAsyncNotedCallback callback) {
-        verifyOwnPackage(name); Objects.requireNonNull(callback);
-        android.os.RemoteCallbackList<com.android.internal.app.IAppOpsAsyncNotedCallback> callbacks;
-        synchronized (mLock) { callbacks = mAsync.get(name); }
-        if (callbacks != null) callbacks.unregister(callback);
+
+    private ApkPackage verifyOwnPackage(String name) {
+        CallerIdentity caller = callers();
+        caller.requirePackage(name);
+        ApkPackage owner = mPm.get(name);
+        if (owner == null || mPm.isRemovalPending(name)
+                || !caller.isSystem() && owner.uid() != caller.callerUid()) {
+            throw new SecurityException("Unknown package");
+        }
+        return owner;
     }
-    @Override public List<android.app.AsyncNotedAppOp> extractAsyncOps(String name) {
-        verifyOwnPackage(name);
+
+    @Override public void startWatchingAsyncNoted(String name, IAppOpsAsyncNotedCallback callback) {
+        ApkPackage owner = verifyOwnPackage(name);
+        Objects.requireNonNull(callback);
+        synchronized (mClientRegistration) {
+            AsyncNotedCallbacks callbacks;
+            AsyncNotedCallbacks stale = null;
+            synchronized (mLock) {
+                if (packageFor(owner.uid(), name) != owner) return;
+                if (mAsyncOwners.get(name) != owner) {
+                    stale = mAsync.remove(name);
+                    mUnforwarded.remove(name);
+                    mAsyncOwners.put(name, owner);
+                }
+                callbacks = mAsync.get(name);
+            }
+            if (stale != null) stale.kill();
+            if (callbacks != null) {
+                callbacks.register(callback);
+                return;
+            }
+            callbacks = new AsyncNotedCallbacks(owner);
+            if (!callbacks.register(callback)) return;
+            synchronized (mLock) {
+                if (packageFor(owner.uid(), name) == owner && callbacks.getRegisteredCallbackCount() != 0) {
+                    mAsync.put(name, callbacks);
+                    return;
+                }
+            }
+            callbacks.kill();
+        }
+    }
+
+    @Override public void stopWatchingAsyncNoted(String name, IAppOpsAsyncNotedCallback callback) {
+        ApkPackage owner = verifyOwnPackage(name);
+        Objects.requireNonNull(callback);
+        synchronized (mClientRegistration) {
+            AsyncNotedCallbacks callbacks;
+            synchronized (mLock) { callbacks = mAsync.get(name); }
+            if (callbacks != null && callbacks.owner == owner) {
+                callbacks.unregister(callback);
+                callbacks.retireIfEmpty();
+            }
+        }
+    }
+
+    @Override public List<AsyncNotedAppOp> extractAsyncOps(String name) {
+        ApkPackage owner = verifyOwnPackage(name);
         synchronized (mLock) {
-            java.util.ArrayDeque<android.app.AsyncNotedAppOp> queue = mUnforwarded.remove(name);
+            if (mAsyncOwners.get(name) != owner || packageFor(owner.uid(), name) != owner) return null;
+            ArrayDeque<AsyncNotedAppOp> queue = mUnforwarded.remove(name);
             return queue == null ? null : new ArrayList<>(queue);
         }
     }
-    private void collectAsync(OpKey key, String message) {
+
+    private AsyncNotedCallbacks asyncWatch(OpKey key) {
+        synchronized (mLock) {
+            AsyncNotedCallbacks callbacks = mAsync.get(key.name);
+            return callbacks != null && isCurrentAsyncWatch(key, callbacks) ? callbacks : null;
+        }
+    }
+
+    private void collectAsync(OpKey key, String message, AsyncNotedCallbacks callbacks) {
         Objects.requireNonNull(message);
-        android.app.AsyncNotedAppOp event = new android.app.AsyncNotedAppOp(key.op, callers().callerUid(), key.tag, message, System.currentTimeMillis());
+        if (callbacks == null) return;
+        AsyncNotedAppOp event = new AsyncNotedAppOp(key.op, callers().callerUid(), key.tag,
+                message, System.currentTimeMillis());
         dispatch(() -> {
-            android.os.RemoteCallbackList<com.android.internal.app.IAppOpsAsyncNotedCallback> callbacks;
-            synchronized (mLock) { callbacks = mAsync.get(key.name); }
-            if (callbacks == null || packageFor(key.uid, key.name) == null) return;
+            synchronized (mLock) {
+                if (!isCurrentAsyncWatch(key, callbacks)) return;
+            }
             boolean sent = false;
             int size = callbacks.beginBroadcast();
             try {
-                for (int i = 0; i < size; i++) try { callbacks.getBroadcastItem(i).opNoted(event); sent = true; }
-                catch (RemoteException dead) { }
+                for (int i = 0; i < size; i++) try {
+                    callbacks.getBroadcastItem(i).opNoted(event);
+                    sent = true;
+                } catch (RemoteException dead) { }
             } finally { callbacks.finishBroadcast(); }
             if (!sent) synchronized (mLock) {
-                java.util.ArrayDeque<android.app.AsyncNotedAppOp> queue = mUnforwarded.computeIfAbsent(key.name, ignored -> new java.util.ArrayDeque<>());
+                if (!isCurrentAsyncWatch(key, callbacks)) return;
+                ArrayDeque<AsyncNotedAppOp> queue =
+                        mUnforwarded.computeIfAbsent(key.name, ignored -> new ArrayDeque<>());
                 if (queue.size() == 10) queue.removeFirst();
                 queue.addLast(event);
             }
         });
     }
+
+    // Caller holds mLock.
+    private boolean isCurrentAsyncWatch(OpKey key, AsyncNotedCallbacks callbacks) {
+        return mAsync.get(key.name) == callbacks && packageFor(key.uid, key.name) == callbacks.owner;
+    }
+
     @Override public boolean shouldCollectNotes(int op) {
         validateOp(op);
         if (AppOpsManager.shouldForceCollectNoteForOp(op)) return true;
