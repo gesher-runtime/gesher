@@ -103,10 +103,11 @@ hashed again after reading to detect changes during collection. Unfamiliar
 AIDL or public-resource forms fail explicitly; this is a deliberately bounded
 artifact reader, not a general source parser.
 
-The output is deterministic for the same manifest, archives and generator
-files. It includes no current timestamp or local input path. Run the command
-again into a second output directory and compare its three files with the
-first run. To compare with the committed report:
+The output is deterministic for the same manifest, archives, options and
+generator files. It includes no current timestamp or local input path. Run the
+command again into a second output directory and compare its three files with
+the first run. To reproduce the committed report byte for byte, use the
+generator revisions identified by its recorded hashes and the default options:
 
 ```sh
 cmp /tmp/gesher-sdk-platform-report/summary.json \
@@ -142,7 +143,7 @@ they are never summed into a compatibility or implementation percentage.
 
 ### JVM declarations and hierarchy lookup
 
-`java_member_inventory.py` supplies the unchanged archive/class parser and
+`java_member_inventory.py` supplies the archive/class parser and
 conservative hierarchy resolver. `java_api_inventory.py` supplies its existing
 bounded archive validation. All encoded classes in `android.jar` are counted,
 including classes with nonpublic classfile visibility. Member counts include
@@ -175,12 +176,27 @@ claims that Android 17 runtime classes disappeared or that an APK fails to
 link. The 98 raw modifier changes include relaxing `final` and changing
 `native` flags; they are not 98 diagnosed application failures.
 
-Constant values, generic signatures, annotations, annotation defaults and
-checked-exception metadata are explicitly **unmeasured**. The parser skips
-their attributes; hashing an archive containing them does not measure their
-semantic changes. `InnerClasses` source access, code bodies, optional SDK jars,
-class-loader constraints, protected receiver rules and full binary/source
-compatibility are also outside this result.
+### Encoded Java constants
+
+Pass `--include-constant-values` and use a separate output directory to compare
+the [`ConstantValue` attributes](https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-4.html#jvms-4.7.2)
+of public or protected static final fields. Each `java_constant_value` row uses
+`[declaring class, field name, descriptor]` as its key. The report counts added,
+removed, changed and unchanged attributes separately from declaration changes.
+For example, the same field declaration can gain an encoded constant without
+changing its flags or descriptor. A `null` in a delta means the measured
+attribute is absent on that side. The JVM encodes boolean and small integral
+types in the integer pool. The report uses signed decimal strings for `long`
+and exact hexadecimal bits for floating-point values to preserve precision,
+signed zero and special values.
+
+Java clients can embed static constants when compiled. This comparison reads
+the SDK stubs. It leaves runtime field initialization and values already
+embedded in APKs unmeasured. The default report also leaves constant attributes
+unmeasured. Generic signatures, annotations, annotation defaults, checked
+exceptions, `InnerClasses` source access, code bodies, optional SDK jars,
+class-loader constraints and full binary/source compatibility are outside the
+comparison in both modes.
 
 ### Preprocessed framework AIDL
 

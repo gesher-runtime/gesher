@@ -40,6 +40,8 @@ jobs:
         run: python tests/e2e/test_apk_identity.py -v
       - name: Coverage accounting contracts
         run: python tests/e2e/test_coverage.py -v
+      - name: Installer and runtime provenance contracts
+        run: python tests/e2e/test_runtime_provenance.py -v
       - name: Actual evidence writer and runner syntax
         shell: pwsh
         run: |

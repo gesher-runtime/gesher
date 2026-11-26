@@ -123,8 +123,16 @@ framework and gesher-app, `--sdk-jar` for SDK 36 android.jar, and optionally
 `--candidate-replace gesher-app.jar=PATH`. It records file hashes, separates
 module/annotation families, and correlates named class observations when
 `--observations-json` is supplied. A class missing from that boot path can
-have a module/APK/shared-library provider elsewhere. The tool does not test
-methods, native registration or behavior.
+have a module, APK or shared-library provider elsewhere. To inventory those
+archives, pass repeated `--provider LABEL=ARCHIVE` arguments alongside the
+ordered boot inputs. Use the same label for DEX-bearing base and split archives
+in one provider, and different labels for independently supplied providers.
+The tool reads root `classes*.dex` entries and records each archive hash and
+the source IDs for definitions of SDK classes outside the selected boot path.
+A definition can appear under several provider labels. The installed and
+candidate boot counts remain separate and exclude provider classes. A missing
+definition is scoped to the supplied inputs. Actual loader visibility, order,
+linkage, methods, native registration and behavior require separate evidence.
 
 `tools/java_member_inventory.py` adds public/protected fields, constructors and
 methods with exact JVM descriptors. It resolves definitions through supplied
@@ -153,7 +161,7 @@ separates reviewed families from raw registration-name candidates. Alternate
 registrations, app-local service injection and later native overrides require
 individual review.
 
-Schema 2 resolves each method by its complete compiled JVM descriptor, including
+The report resolves each method by its complete compiled JVM descriptor, including
 parameter types, array dimensions and return type. It follows inherited concrete
 implementations and retains compiler bridges for covariant/generic overrides.
 Indirect and anonymous Default/Stub subclasses in the app input are included.
@@ -172,6 +180,15 @@ missing methods. The report records archive and parser hashes, framework-first
 compile-input provider selection, and duplicate app classes shadowed by that
 selection. Compile inputs can differ from shipped DEX/loaders, and their hashes
 do not replace a build receipt tying them to source.
+
+Schema 3 links direct `services.put` keys to the interface class explicitly
+passed to `StandIn.of`. It records the class literal and distinguishes compiled
+framework interfaces from absent, unresolved or non-interface definitions and
+other adapter shapes. Literal keys and simple `Context` constants are resolved
+from source and the supplied framework JAR, respectively. A failed Context
+constant read leaves the candidate count unmeasured. These rows record source
+declarations. Conditional registration, concrete delegate selection, manager
+lookup, callback delivery and live Binder dispatch require separate evidence.
 
 ```powershell
 python tools/audit_services_jni.py `

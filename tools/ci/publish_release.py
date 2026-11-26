@@ -29,6 +29,7 @@ UPLOAD_STEP = 'Upload tested installer artifact'
 PUBLISH_STEP = 'Verify and publish the exact tested installer'
 ARTIFACT_NAME = 'gesher-setup'
 CHECKSUM_NAME = 'SHA256SUMS.txt'
+RUNTIME_PROVENANCE_NAME = 'gesher-runtime-provenance.json'
 BOT = {'login': 'github-actions[bot]', 'id': 41898282, 'type': 'Bot'}
 OID = re.compile(r'[0-9a-f]{40}')
 NONCE = re.compile(r'[0-9a-f]{64}')
@@ -247,9 +248,14 @@ def read_payload(directory, source):
     name = installer_name(source.version)
     portable = portable_name(source.version)
     portable_checksum_name = portable + '.sha256'
-    require({path.name for path in directory.iterdir()} ==
+    entries = {path.name for path in directory.iterdir()}
+    require(entries - {RUNTIME_PROVENANCE_NAME} ==
             {name, portable, portable_checksum_name, CHECKSUM_NAME},
             'The verified archive must contain exactly the versioned installer, portable ZIP and checksums')
+    if RUNTIME_PROVENANCE_NAME in entries:
+        # Read only the four publication assets below. The package job also
+        # carries this bounded internal receipt for real-app CI.
+        Asset.read(directory / RUNTIME_PROVENANCE_NAME, 16 * 1024)
     installer = Asset.read(directory / name, MAX_INSTALLER_SIZE)
     archive = Asset.read(directory / portable, MAX_INSTALLER_SIZE)
     portable_checksum = Asset.read(directory / portable_checksum_name, 512)

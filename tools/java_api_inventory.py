@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Offline SDK class definitions versus actual boot-JAR DEX class definitions.
+"""Offline SDK class definitions versus boot JAR and named provider DEX definitions.
 
-Class availability only: no methods, JNI registrations, semantics or APK scan.
+Class definitions only. Provider membership does not establish class-loader visibility.
 Reports omit absolute paths, arbitrary class-file strings and DEX string data.
 """
 from __future__ import annotations
@@ -40,6 +40,7 @@ class Limits:
 
 INTERNAL = re.compile(rb"[A-Za-z0-9_$-]+(?:/[A-Za-z0-9_$-]+)*\Z")
 DEX_ENTRY = re.compile(r"classes(?:[2-9]|[1-9][0-9]+)?\.dex\Z")
+PROVIDER_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 KNOWN_NAMES = {"android.jar", "core-oj.jar", "core-libart.jar", "core-icu4j.jar",
                "framework.jar", "gesher-app.jar"}
 FAMILIES = (("android.bluetooth.", "bluetooth_module", "module_or_feature_provider"),
@@ -308,9 +309,11 @@ def archive_inventory(path: Path, role: str, source_id: str, limits: Limits):
                     annotations.add(name)
                 versions[f"class_major_{version}"] += 1
                 selected += 1
-            elif role == "boot" and info.filename.endswith(".dex"):
+            elif role in ("boot", "provider") and info.filename.endswith(".dex"):
                 if not DEX_ENTRY.fullmatch(info.filename):
-                    fail("unsupported_boot_dex_member_name")
+                    if role == "boot":
+                        fail("unsupported_boot_dex_member_name")
+                    continue  # APK assets and other dynamically loaded DEX are outside this inventory.
                 classes, version = dex_classes(archive.read(info), limits)
                 names.update(classes)
                 versions[f"dex_{version}"] += 1
@@ -332,15 +335,19 @@ def family(name):
 
 
 def inventory(sdk: Path, boots: list[Path], replacements: dict[str, Path] | None = None,
-              limits: Limits = Limits(), sdk_api: int = 36, observed: set[str] | None = None):
+              limits: Limits = Limits(), sdk_api: int = 36, observed: set[str] | None = None,
+              providers: list[tuple[str, Path]] | None = None):
     replacements = replacements or {}
+    providers = providers or []
     if any(value <= 0 for value in asdict(limits).values()) or not boots:
         fail("invalid_inventory_bounds_or_boot_list")
-    if len(boots) + 1 + len(replacements) > limits.max_archives or len({p.name for p in boots}) != len(boots):
+    all_paths = [sdk, *boots, *replacements.values(), *(path for _, path in providers)]
+    if len(all_paths) > limits.max_archives or len({p.name for p in boots}) != len(boots):
         fail("archive_count_or_duplicate_boot_name")
     if set(replacements) - {path.name for path in boots}:
         fail("candidate_replacement_has_no_base_input")
-    all_paths = [sdk, *boots, *replacements.values()]
+    if any(not PROVIDER_LABEL.fullmatch(label) for label, _ in providers):
+        fail("invalid_provider_label")
     if sum(safe_file(path, limits).stat().st_size for path in all_paths) > limits.max_total_archive_bytes:
         fail("total_archive_bytes_limit")
     sdk_names, annotations, sdk_manifest = archive_inventory(sdk, "sdk", "sdk", limits)
@@ -355,32 +362,69 @@ def inventory(sdk: Path, boots: list[Path], replacements: dict[str, Path] | None
             manifest["replaces_source_id"] = f"boot-{index:02d}"
             manifests.append(manifest)
         candidate.update(names)
+    definitions_by_provider = defaultdict(set)
+    sources_by_provider = defaultdict(list)
+    sdk_class_sources = defaultdict(lambda: defaultdict(list))
+    for index, (label, path) in enumerate(providers, 1):
+        source_id = f"provider-{index:02d}"
+        names, _, manifest = archive_inventory(path, "provider", source_id, limits)
+        manifest["provider"] = label
+        manifests.append(manifest)
+        definitions_by_provider[label].update(names)
+        sources_by_provider[label].append(source_id)
+        for name in names & sdk_names:
+            sdk_class_sources[name][label].append(source_id)
+
     observed = observed or set()
     def comparison(available):
         missing = []
+        provider_counts = dict.fromkeys(sorted(definitions_by_provider), 0)
+        provider_status_counts = {"defined_in_supplied_provider": 0, "absent_from_supplied_providers": 0}
         grouped = defaultdict(lambda: {"sdk_classes": 0, "boot_available": 0, "boot_absent": 0,
                                        "absent_annotations": 0})
         for name in sorted(sdk_names):
             owner, scope = family(name)
             group = grouped[owner]
             group["sdk_classes"] += 1
-            group["boot_available" if name in available else "boot_absent"] += 1
-            if name not in available:
-                group["absent_annotations"] += name in annotations
-                missing.append({"class": name, "family": owner, "provider_scope": scope,
-                                "annotation_type": name in annotations,
-                                "runtime_log_evidence": "observed_missing" if name in observed else "not_observed_in_selected_logs",
-                                "outside_boot_provider_status": "not_assessed",
-                                "method_and_behavior_status": "not_assessed"})
-        return {"boot_defined_classes": len(available), "sdk_available": len(sdk_names & available),
-                "sdk_absent_from_boot": len(missing), "missing_classes": missing,
-                "families": dict(sorted(grouped.items()))}
+            if name in available:
+                group["boot_available"] += 1
+                continue
+            group["boot_absent"] += 1
+            group["absent_annotations"] += name in annotations
+            row = {"class": name, "family": owner, "provider_scope": scope,
+                   "annotation_type": name in annotations,
+                   "runtime_log_evidence": "observed_missing" if name in observed else "not_observed_in_selected_logs",
+                   "outside_boot_provider_status": "not_assessed",
+                   "method_and_behavior_status": "not_assessed"}
+            if providers:
+                sources = dict(sorted(sdk_class_sources.get(name, {}).items()))
+                status = "defined_in_supplied_provider" if sources else "absent_from_supplied_providers"
+                row["outside_boot_provider_status"] = status
+                row["outside_boot_definitions"] = sources
+                provider_status_counts[status] += 1
+                for label in sources:
+                    provider_counts[label] += 1
+            missing.append(row)
+        result = {"boot_defined_classes": len(available), "sdk_available": len(sdk_names & available),
+                  "sdk_absent_from_boot": len(missing), "missing_classes": missing,
+                  "families": dict(sorted(grouped.items()))}
+        if providers:
+            result["outside_boot_provider_status_counts"] = provider_status_counts
+            result["boot_absent_sdk_classes_by_provider"] = provider_counts
+        return result
     report = {"schema_version": 1, "scope": "public SDK static CLASS availability on selected boot path only",
               "declared_sdk_api": sdk_api, "sdk_api_claim": "caller_declared; exact input hash recorded",
               "not_a_defect_count": True, "limits": asdict(limits), "inputs": manifests,
               "sdk_class_definitions": len(sdk_names), "sdk_annotation_classes": len(annotations),
               "installed": comparison(defined),
               "generator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    if providers:
+        report["scope"] = "public SDK static CLASS definitions on selected boot paths and supplied outside-boot providers"
+        report["outside_boot_providers"] = {
+            label: {"input_source_ids": sources_by_provider[label], "defined_classes": len(names),
+                    "sdk_class_definitions": len(names & sdk_names)}
+            for label, names in sorted(definitions_by_provider.items())
+        }
     if replacements:
         report["candidate"] = comparison(candidate)
         report["candidate_delta"] = {"added_boot_classes": sorted(candidate - defined),
@@ -390,8 +434,11 @@ def inventory(sdk: Path, boots: list[Path], replacements: dict[str, Path] | None
 
 
 def markdown(report):
+    providers = report.get("outside_boot_providers")
+    provider_scope = ("Provider findings identify definitions in the supplied archives. Class-loader visibility, order and linkage are untested."
+                      if providers else "Absent from this boot path is not absent globally: modules, uses-library and APK providers are not assessed.")
     lines = ["# Static Java class availability", "", report["scope"], "",
-             "Absent from this boot path is not absent globally: modules, uses-library and APK providers are not assessed.",
+             provider_scope,
              "SDK stubs include annotation types. Counts do not measure method behavior, JNI registration or defects.", "",
              "| Input | SDK classes | Available on boot | Absent from boot |",
              "| --- | ---: | ---: | ---: |"]
@@ -399,6 +446,19 @@ def markdown(report):
         if name in report:
             item = report[name]
             lines.append(f"| {name} | {report['sdk_class_definitions']} | {item['sdk_available']} | {item['sdk_absent_from_boot']} |")
+    if providers:
+        lines += ["", "## SDK classes outside the selected boot paths", "",
+                  "| Boot inputs | Defined in supplied providers | Absent from supplied providers |", "| --- | ---: | ---: |"]
+        for name in ("installed", "candidate"):
+            if name in report:
+                counts = report[name]["outside_boot_provider_status_counts"]
+                lines.append(f"| {name} | {counts['defined_in_supplied_provider']} | {counts['absent_from_supplied_providers']} |")
+        lines += ["", "| Provider | DEX input IDs | SDK definitions | Absent from installed boot |",
+                  "| --- | --- | ---: | ---: |"]
+        for label, item in providers.items():
+            count = report["installed"]["boot_absent_sdk_classes_by_provider"][label]
+            lines.append(f"| {label} | {', '.join(item['input_source_ids'])} | {item['sdk_class_definitions']} | {count} |")
+        lines += ["", "A class can occur in several providers. Input hashes and per-class source IDs are in the JSON report."]
     lines += ["", "## Absent classes by family (installed)", "",
               "| Family | SDK classes | Absent | Absent annotation types |", "| --- | ---: | ---: | ---: |"]
     for name, item in report["installed"]["families"].items():
@@ -418,6 +478,8 @@ def main(argv=None):
     parser.add_argument("--sdk-api-level", default=36, type=int)
     parser.add_argument("--boot-jar", required=True, action="append", type=Path)
     parser.add_argument("--candidate-replace", action="append", default=[], metavar="BOOT_NAME=JAR")
+    parser.add_argument("--provider", action="append", default=[], metavar="LABEL=ARCHIVE",
+                        help="DEX-bearing module, APK or shared-library archive. Repeat a label for a split set.")
     parser.add_argument("--observations-json", type=Path)
     parser.add_argument("--outdir", type=Path, default=Path("out/compat-audit/java"))
     args = parser.parse_args(argv)
@@ -428,6 +490,12 @@ def main(argv=None):
             if not separator or name in replacements or name not in {p.name for p in args.boot_jar}:
                 fail("invalid_candidate_replacement")
             replacements[name] = Path(path)
+        providers = []
+        for value in args.provider:
+            label, separator, path = value.partition("=")
+            if not separator or not path:
+                fail("invalid_provider_specification")
+            providers.append((label, Path(path)))
         observed = set()
         if args.observations_json:
             if args.observations_json.stat().st_size > 4 << 20:
@@ -438,7 +506,8 @@ def main(argv=None):
                     name = item["identifier"]
                     if INTERNAL.fullmatch(name.replace(".", "/").encode("ascii", errors="ignore")):
                         observed.add(name)
-        report = inventory(args.sdk_jar, args.boot_jar, replacements, sdk_api=args.sdk_api_level, observed=observed)
+        report = inventory(args.sdk_jar, args.boot_jar, replacements, sdk_api=args.sdk_api_level,
+                           observed=observed, providers=providers)
         args.outdir.mkdir(parents=True, exist_ok=True)
         for name, text in (("java-class-availability.json", json.dumps(report, indent=2) + "\n"),
                            ("java-class-availability.md", markdown(report))):
