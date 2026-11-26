@@ -322,6 +322,40 @@ public final class ClipboardSecurityContractTest {
                 "Explicit clipboard clear retained prior URI grants");
     }
 
+    private static void retireDelegatedUriPublisher(ClipboardFixture h) throws Exception {
+        Uri uri = Uri.parse("content://" + OWNER + ".files/delegated");
+        UriGrants grants = (UriGrants) call(h.atm, "uriGrants", new Class<?>[0]);
+        int read = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        h.asOwner(() -> call(grants, "grant", new Class<?>[]{String.class, Uri.class, int.class, int.class},
+                PRIVILEGED, uri, read, 0));
+        h.as(h.privileged, () -> h.api.setPrimaryClip(ClipData.newRawUri("delegated", uri),
+                PRIVILEGED, null, 0, 0));
+        h.configureIme(PEER + "/.Keyboard");
+        try {
+            h.as(h.peer, () -> {
+                ClipData clip = h.api.getPrimaryClip(PEER, null, 0, 0);
+                check(clip != null && uri.equals(clip.getItemAt(0).getUri()),
+                        "Authorized clipboard publisher can delegate another provider's URI");
+            });
+            check(grants.canAccess(h.peer, uri, read, 0), "Clipboard recipient initially holds the delegated URI");
+            int sequence = h.nativeState.sequence;
+            call(h.pm, "beginPackageRemoval", new Class<?>[]{ApkPackage.class}, h.privileged);
+            try {
+                call(h.pm, "revokePackageCapabilities", new Class<?>[]{String.class}, PRIVILEGED);
+                check(!grants.canAccess(h.peer, uri, read, 0),
+                        "Publisher retirement revokes its delegated clipboard grant without another read");
+                check(h.nativeState.sequence == sequence,
+                        "Retiring a delegated URI has no native clipboard side effect");
+            } finally {
+                call(h.pm, "endPackageRemoval", new Class<?>[]{ApkPackage.class}, h.privileged);
+            }
+            h.as(h.peer, () -> check(h.api.getPrimaryClip(PEER, null, 0, 0) == null,
+                    "A restored installation cannot revive the retired clipboard grant"));
+        } finally {
+            h.configureIme(null);
+        }
+    }
+
     @SuppressWarnings("unchecked") private static void callbackPolicyAndRetirement(ClipboardFixture h) throws Exception {
         Listener owner = new Listener(), peer = new Listener(), privileged = new Listener();
         h.nativeState.foreground = new long[]{PID, CREATED};
@@ -379,7 +413,8 @@ public final class ClipboardSecurityContractTest {
                     "All nonzero unsigned Windows sequence values are valid"));
             h.nativeState.sequence = 1;
             focusAndIdentity(h); imeAndPermissions(h); appOps(h); sourceAndStorage(h);
-            nativeImageGrants(h, binder); clipboardUriGrants(h); callbackPolicyAndRetirement(h);
+            nativeImageGrants(h, binder); clipboardUriGrants(h); retireDelegatedUriPublisher(h);
+            callbackPolicyAndRetirement(h);
         }
         return checks;
     }

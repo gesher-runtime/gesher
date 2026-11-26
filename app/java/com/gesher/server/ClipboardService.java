@@ -121,7 +121,7 @@ public final class ClipboardService extends IClipboard.Default
     private ClipData mClip;
     private String mSource;
     private Uri mOwnedImage;
-    private ClipUris mClipUris;
+    private volatile ClipUris mClipUris;
     private int mSequence;
     private boolean mHaveSequence;
 
@@ -137,15 +137,25 @@ public final class ClipboardService extends IClipboard.Default
         mUriGrants = Objects.requireNonNull(atm.uriGrants());
         mImages = atm.clipboardImages();
         mHost = Objects.requireNonNull(host);
-        mPackageChanges = pm.onPackageChange(ignored -> pruneListeners());
-        mPackageRemovals = pm.onPackageRemoval(ignored -> pruneListeners());
+        mPackageChanges = pm.onPackageChange(pkg -> packageLifetimeChanged(pkg.packageName));
+        mPackageRemovals = pm.onPackageRemoval(this::packageLifetimeChanged);
     }
 
     private record ListenerInfo(int uid, String packageName, String attributionTag, ApkPackage owner) { }
     private record Callback(IOnPrimaryClipChangedListener listener, ListenerInfo identity) { }
     // The registered provider owns imported host images, so those have no app publisher.
-    private record ClipUris(ListenerInfo publisher, IBinder owner, List<Uri> uris,
-            Set<ApkPackage> readers) { }
+    private static final class ClipUris {
+        final ListenerInfo publisher;
+        final IBinder owner = new Binder("Clipboard URI permissions");
+        final List<Uri> uris;
+        final Set<ApkPackage> readers = new HashSet<>();  // mClipboardLock
+        volatile boolean retired;
+
+        ClipUris(ListenerInfo publisher, List<Uri> uris) {
+            this.publisher = publisher;
+            this.uris = uris;
+        }
+    }
 
     private ListenerInfo caller(String packageName, String attributionTag) {
         if (mClosed) throw new IllegalStateException("Clipboard service is closed");
@@ -259,8 +269,7 @@ public final class ClipboardService extends IClipboard.Default
                     imageUri = mImages.add(image);
                     clip = new ClipData(new ClipDescription(WINDOWS_LABEL, mimeTypes.toArray(new String[0])),
                             new ClipData.Item(text, html, null, imageUri));
-                    uris = new ClipUris(null, new Binder("Clipboard image permissions"),
-                            List.of(imageUri), new HashSet<>());
+                    uris = new ClipUris(null, List.of(imageUri));
                 }
                 if (clip == null) {
                     if (text != null && html != null) clip = ClipData.newHtmlText(WINDOWS_LABEL, text, html);
@@ -301,6 +310,19 @@ public final class ClipboardService extends IClipboard.Default
             } finally { mListeners.finishBroadcast(); }
         }
         return snapshot;
+    }
+
+    private void packageLifetimeChanged(String packageName) {
+        // Installation retirement can revoke the delegated capability while
+        // readers are idle. Keep this callback independent of the clipboard
+        // monitor and act only on the exact captured owner.
+        ClipUris uris = mClipUris;
+        if (uris != null && uris.publisher != null
+                && uris.publisher.packageName.equals(packageName) && !current(uris.publisher)) {
+            uris.retired = true;
+            mUriGrants.revokeByOwner(uris.owner);
+        }
+        pruneListeners();
     }
 
     private void pruneListeners() {
@@ -442,7 +464,7 @@ public final class ClipboardService extends IClipboard.Default
                 // display attribution supplied to setPrimaryClipAsPackage is separate.
                 mUriGrants.prepareClipboard(identity.uid, null, uris);
             }
-            clipUris = new ClipUris(identity, new Binder("Clipboard URI permissions"), uris, new HashSet<>());
+            clipUris = new ClipUris(identity, uris);
         }
         start();
         String[] windows = forWindows(saved);
@@ -502,7 +524,7 @@ public final class ClipboardService extends IClipboard.Default
             synchronized (mPm) {
                 if (!current(reader)) return null;
                 try {
-                    if (uris.publisher != null && !current(uris.publisher)) {
+                    if (uris.retired || (uris.publisher != null && !current(uris.publisher))) {
                         throw new SecurityException("Retired clipboard publisher");
                     }
                     if (reader.owner != null && !uris.readers.contains(reader.owner)) {
