@@ -198,6 +198,11 @@ void Run(const char* path) {
           &vm_result, &error) &&
         static_cast<int32_t>(vm_result.bits) == JNI_EVERSION,
         "JavaVM GetEnv returns JNI_EVERSION for unsupported JNI version");
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_vm_unknown_version",
+          {Value::GuestPointer(bridge.GuestJavaVM())}, ValueKind::I32,
+          &vm_result, &error) &&
+        static_cast<int32_t>(vm_result.bits) == JNI_EVERSION,
+        "JavaVM GetEnv rejects an undefined JNI version between 1.4 and 1.6");
   Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_vm_attach",
           {Value::GuestPointer(bridge.GuestJavaVM())}, ValueKind::I32,
           &vm_result, &error) &&
