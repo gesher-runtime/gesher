@@ -20,7 +20,7 @@ DLL, or advertised by `NativeLibs.SUPPORTED` or `build.prop`.
 | --- | --- |
 | `arm32_memory` | A separate 32-bit guest address domain, zero-filled pages, independent read/write/execute permissions, checked range arithmetic, transactional memory operations and synchronized scalar/CAS access. |
 | `arm32_abi` | Scalar Android softfp argument/return frames, even-register alignment for 64-bit values, stack spills, floating-point bit preservation, JNI descriptor validation and explicit opaque guest handles. |
-| `arm32_elf` | Checked little-endian ELF32 ARM EABI5 softfp `ET_DYN` parsing, owned image bytes, SysV/GNU symbols, ordinary REL and standard/legacy Android RELR relative relocations, explicit imports, BSS, init/fini arrays and validated RELRO ranges. |
+| `arm32_elf` | Checked little-endian ELF32 ARM EABI5 softfp `ET_DYN` parsing, owned image bytes, SysV/GNU symbols, ordinary REL relocations, standard/legacy Android RELR and bounded Android APS2 packed REL groups, explicit imports, BSS, init/fini arrays and validated RELRO ranges. |
 | `arm32_image_memory` | Mapping relocated image bytes into guest pages, inaccessible segment holes and read-only RELRO protection. |
 | `arm32_executor` | ARM/Thumb execution through the pinned Dynarmic A32 frontend, finite instruction budgets, checked instruction/data access, explicit faults and typed host-function thunks. |
 
@@ -52,13 +52,13 @@ thread affinity, array/string pinning or ART native registration.
 ### ELF and execution limits
 
 The image loader supports `R_ARM_NONE`, `R_ARM_RELATIVE`, `R_ARM_ABS32`,
-`R_ARM_REL32`, `R_ARM_GLOB_DAT` and `R_ARM_JUMP_SLOT`, together with standard ELF32 RELR and Android's earlier RELR tag family. RELR entries are checked for size, range, writable targets, duplicates and bounded expansion before relocation writes. It preserves Thumb symbol
+`R_ARM_REL32`, `R_ARM_GLOB_DAT` and `R_ARM_JUMP_SLOT`, together with standard ELF32 RELR and Android's earlier RELR tag family. RELR entries are checked for size, range, writable targets, duplicates and bounded expansion before relocation writes. Android APS2 REL groups use checked SLEB128 decoding and are validated against the same relocation and rollback rules. Neither format establishes full Android dependency or JNI support. It preserves Thumb symbol
 bits and rejects unresolved required imports. Weak imports follow the relevant
 relocation contract. ELF tables and relocation targets are range checked;
 failed loads preserve the previous output image, including allocation and
 import-adapter failures.
 
-Dependencies, TLS, IFUNC, Android APS2 packed relocations, RELA, symbol versions,
+Dependencies, TLS, IFUNC, Android packed RELA relocations, symbol versions,
 executable interpreters and preinit arrays are explicitly rejected. The loader
 does not claim general Android DSO compatibility. It accepts System V/Linux
 OSABI values with ABI version zero and rejects unsupported FDPIC variants.
@@ -136,7 +136,7 @@ at the PR head before making that claim.
 
 ## Validation and review
 
-The initial implementation was independently reviewed for memory/ABI, ELF
+The initial infrastructure implementation was independently reviewed for memory/ABI, ELF
 loading and execution. Host unit tests cover invalid ranges, allocation
 failure, permission violations, malformed ELF input, rollback, JNI descriptor
 validation and stale-handle rejection. The independent ABI oracle exercises
@@ -149,7 +149,7 @@ load alignment and cancellation of queued code-cache invalidation. These
 specific failures have regression tests. ASan/UBSan results do not include
 LeakSanitizer when leak detection is disabled in a ptrace-supervised environment.
 
-None of these results substitutes for real Windows/ART application tests.
+The later RELR and APS2 additions have not yet been compiled or executed in a verified test run. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
 Existing x86-64/AArch64 production sources, packaging and advertised ABI lists
 are unchanged by these standalone components.
 
