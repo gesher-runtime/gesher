@@ -1169,8 +1169,7 @@ public final class AppOpsService extends IAppOpsService.Default {
 
     private ApkPackage verifyOwnPackage(String name) {
         CallerIdentity caller = callers();
-        caller.requirePackage(name);
-        ApkPackage owner = mPm.get(name);
+        ApkPackage owner = caller.requireCurrentPackage(name);
         if (owner == null || mPm.isRemovalPending(name)
                 || !caller.isSystem() && owner.uid() != caller.callerUid()) {
             throw new SecurityException("Unknown package");

@@ -140,10 +140,16 @@ public final class ClipboardService extends IClipboard.Default
         if (mClosed) throw new IllegalStateException("Clipboard service is closed");
         int uid = Binder.getCallingUid();
         checkPackage(uid, packageName);
-        // The package/UID pair must also belong to this authenticated Binder process.
-        // Root and the system package are native control-plane identities in AOSP.
-        if (uid != Process.ROOT_UID) mCallers.requirePackage(packageName);
-        return new ListenerInfo(uid, packageName, attributionTag, mPm.get(packageName));
+        // Keep the authenticated installation with this request. A process
+        // finishing an older installation must not use the replacement's grants.
+        ApkPackage installed = mPm.get(packageName);
+        if (uid != Process.ROOT_UID && !mCallers.isSystem()) {
+            String actual = mCallers.requirePackage(packageName);
+            ApkPackage process = mCallers.packageCodeForPid(Binder.getCallingPid(), uid);
+            if (process == null || !actual.equals(process.packageName)) installed = null;
+            else if (actual.equals(packageName)) installed = process;
+        }
+        return new ListenerInfo(uid, packageName, attributionTag, installed);
     }
 
     private void checkPackage(int uid, String packageName) {
@@ -399,13 +405,14 @@ public final class ClipboardService extends IClipboard.Default
 
     private void setPrimaryClipInternal(ClipData clip, String packageName, String tag, String source) {
         if (clip == null || clip.getItemCount() <= 0) throw new IllegalArgumentException("No items");
-        if (!access(caller(packageName, tag), AppOpsManager.OP_WRITE_CLIPBOARD, true)) return;
+        ListenerInfo identity = caller(packageName, tag);
+        if (!access(identity, AppOpsManager.OP_WRITE_CLIPBOARD, true)) return;
         start();
         ClipData saved = new ClipData(clip);
         String[] windows = forWindows(saved);
         byte[] image = extractImage(saved);
         synchronized (mClipboardLock) {
-            if (mClosed) return;
+            if (mClosed || !current(identity)) return;
             int writtenSequence = mHost.available() ? mHost.write(windows[0], windows[1], image) : 0;
             replaceLocked(saved, source, null);
             if (writtenSequence != 0) { mSequence = writtenSequence; mHaveSequence = true; }
@@ -426,11 +433,12 @@ public final class ClipboardService extends IClipboard.Default
     }
 
     @Override public void clearPrimaryClip(String packageName, String tag, int userId, int deviceId) {
-        if (!access(caller(packageName, tag), AppOpsManager.OP_WRITE_CLIPBOARD, true)) return;
+        ListenerInfo identity = caller(packageName, tag);
+        if (!access(identity, AppOpsManager.OP_WRITE_CLIPBOARD, true)) return;
         start();
         boolean changed;
         synchronized (mClipboardLock) {
-            if (mClosed) return;
+            if (mClosed || !current(identity)) return;
             int writtenSequence = mHost.available() ? mHost.clear() : 0;
             changed = replaceLocked(null, null, null);
             if (writtenSequence != 0) { mSequence = writtenSequence; mHaveSequence = true; }

@@ -620,6 +620,12 @@ public final class AppOpsContractTest {
             requireAsync(generations.pm.get(NAME) == replacementCode
                     && generations.ops.extractAsyncOps(NAME) == null,
                     "The new generation must not inherit undelivered notes even before registering");
+            generations.asApp(() -> {
+                try {
+                    generations.service.startWatchingAsyncNoted(NAME, new AsyncWatcher());
+                    throw new AssertionError("The old process registered as the replacement's observer");
+                } catch (SecurityException expected) { }
+            });
             generations.service.startWatchingAsyncNoted(NAME, replacement);
             asyncNote(generations, "new queued note");
         } finally {

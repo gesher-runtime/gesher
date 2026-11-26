@@ -225,11 +225,27 @@ public final class ClipboardSecurityContractTest {
         Map<String, ApkPackage> packages = new LinkedHashMap<>((Map<String, ApkPackage>)get(h.pm, "mPackages"));
         ApkPackage replacement = pkg(PRIVILEGED, h.privileged.uid(), (byte)42, Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND, Manifest.permission.SET_CLIP_SOURCE);
         packages.put(PRIVILEGED, replacement); set(h.pm, "mPackages", packages);
+        read(h, h.privileged, false, "The old process cannot adopt its replacement's clipboard authority");
+        Listener obsolete = new Listener();
+        h.add(h.privileged, obsolete);
+        check(obsolete.token.deaths.isEmpty(), "The old process was given a replacement-generation callback");
+        int writes = h.nativeState.writes, clears = h.nativeState.clears;
+        h.as(h.privileged, () -> {
+            h.api.setPrimaryClip(ClipData.newPlainText("obsolete", "retired write"), PRIVILEGED, null, 0, 0);
+            h.api.clearPrimaryClip(PRIVILEGED, null, 0, 0);
+        });
+        check(writes == h.nativeState.writes && clears == h.nativeState.clears,
+                "An old process wrote or cleared the clipboard under the replacement's name");
         call(h.pm, "packageInstalled", new Class<?>[]{ApkPackage.class, boolean.class, Object.class}, replacement, true, new Object());
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
         while (h.listeners().getRegisteredCallbackCount() == 3 && System.nanoTime() < deadline) Thread.sleep(5);
         check(h.listeners().getRegisteredCallbackCount() == 2 && privileged.token.deaths.isEmpty(), "Package replacement releases old-generation callback ownership");
         h.write("replacement"); check(privileged.calls.get() == 3, "New package generation cannot revive a saved listener");
+        set(h.processes.get(2), "packageCode", replacement);
+        read(h, replacement, true, "The newly admitted process keeps its normal clipboard access");
+        h.as(replacement, () -> h.api.setPrimaryClip(ClipData.newPlainText("current", "new write"),
+                PRIVILEGED, null, 0, 0));
+        check("new write".equals(h.nativeState.text), "The newly admitted process retains write access");
         call(h.pm, "beginPackageRemoval", new Class<?>[]{ApkPackage.class}, h.owner);
         call(h.pm, "revokePackageCapabilities", new Class<?>[]{String.class}, OWNER);
         check(h.listeners().getRegisteredCallbackCount() == 1 && owner.token.deaths.isEmpty(), "Package removal revokes listener lifetime");
