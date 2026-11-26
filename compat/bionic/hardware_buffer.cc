@@ -797,12 +797,13 @@ int LockImpl(Buffer* b, uint64_t usage, int32_t fence, const ARect* rect, void**
     WaitFenceAndClose(fence);
     return kBadValue;
   }
-  WaitFenceAndClose(fence);
+  // An invalid region never accepts the lock or takes ownership of its fence.
   const ARect bounds = Clip(b, nullptr);
   const ARect r = rect == nullptr ? bounds : *rect;
   if (r.left < 0 || r.top < 0 || r.right > bounds.right || r.bottom > bounds.bottom)
     return kBadValue;
   if (Empty(r)) return kInvalidOperation;
+  WaitFenceAndClose(fence);
   bool readback;
   {
     std::lock_guard<std::mutex> lock(b->mutex);

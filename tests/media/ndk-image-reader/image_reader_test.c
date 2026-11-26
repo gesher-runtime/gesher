@@ -6,6 +6,7 @@
 #include <android/rect.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <media/NdkImageReader.h>
 #include <poll.h>
 #include <pthread.h>
@@ -51,24 +52,31 @@ static void expect_buffer_lock_regions(AHardwareBuffer* buffer, int stride, uint
     const ARect inner = {1, 1, kWidth - 1, kHeight - 1};
     const ARect outside[] = {{-1, 0, 2, 2}, {1, 1, kWidth + 1, kHeight}};
     const ARect empty[] = {{1, 1, 1, 2}, {2, 2, 1, 1}};
+    // An unsignaled descriptor stays with the caller on invalid regions.
+    int pending[2];
+    CHECK(pipe(pending) == 0);
     for (size_t i = 0; i < sizeof(outside) / sizeof(outside[0]); ++i) {
         void* data = NULL;
         AHardwareBuffer_Planes planes = {0};
         int32_t pixel_stride = -1, row_stride = -1;
-        CHECK(AHardwareBuffer_lock(buffer, usage, -1, &outside[i], &data) == -EINVAL);
-        CHECK(AHardwareBuffer_lockPlanes(buffer, usage, -1, &outside[i], &planes) == -EINVAL);
-        CHECK(AHardwareBuffer_lockAndGetInfo(buffer, usage, -1, &outside[i], &data,
+        CHECK(AHardwareBuffer_lock(buffer, usage, pending[0], &outside[i], &data) == -EINVAL);
+        CHECK(AHardwareBuffer_lockPlanes(buffer, usage, pending[0], &outside[i], &planes) == -EINVAL);
+        CHECK(AHardwareBuffer_lockAndGetInfo(buffer, usage, pending[0], &outside[i], &data,
                                             &pixel_stride, &row_stride) == -EINVAL);
+        CHECK(fcntl(pending[0], F_GETFD) >= 0);
     }
     for (size_t i = 0; i < sizeof(empty) / sizeof(empty[0]); ++i) {
         void* data = NULL;
         AHardwareBuffer_Planes planes = {0};
         int32_t pixel_stride = -1, row_stride = -1;
-        CHECK(AHardwareBuffer_lock(buffer, usage, -1, &empty[i], &data) != 0);
-        CHECK(AHardwareBuffer_lockPlanes(buffer, usage, -1, &empty[i], &planes) != 0);
-        CHECK(AHardwareBuffer_lockAndGetInfo(buffer, usage, -1, &empty[i], &data,
+        CHECK(AHardwareBuffer_lock(buffer, usage, pending[0], &empty[i], &data) != 0);
+        CHECK(AHardwareBuffer_lockPlanes(buffer, usage, pending[0], &empty[i], &planes) != 0);
+        CHECK(AHardwareBuffer_lockAndGetInfo(buffer, usage, pending[0], &empty[i], &data,
                                             &pixel_stride, &row_stride) != 0);
+        CHECK(fcntl(pending[0], F_GETFD) >= 0);
     }
+    CHECK(close(pending[0]) == 0);
+    CHECK(close(pending[1]) == 0);
     void* data = NULL;
     int32_t pixel_stride = -1, row_stride = -1;
     CHECK(AHardwareBuffer_lockAndGetInfo(buffer, usage, -1, &inner, &data,
