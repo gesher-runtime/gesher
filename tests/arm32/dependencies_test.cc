@@ -57,9 +57,11 @@ void Run(const char* consumer_path, const char* dependency_path,
   // The dependency's finalizer deliberately traps if the consumer's finalizer
   // has not called dependency_mark_shutdown first. A successful shutdown is
   // therefore proof of actual guest finalizer ordering, not a state mock.
-  if (!program.Shutdown(&error))
+  const bool shut_down = program.Shutdown(&error);
+  if (!shut_down)
     std::cerr << "ARM32 reverse finalization: " << error << '\n';
-  Check(error.empty(), "guest dependency finalizers run consumer before dependency");
+  Check(shut_down && error.empty(),
+        "guest dependency finalizers run consumer before dependency");
 
   Program missing([&](std::string_view name, std::vector<uint8_t>* out,
                       std::string*) {
