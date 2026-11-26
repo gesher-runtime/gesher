@@ -27,7 +27,7 @@ diff --git a/runtime/native/dalvik_system_DexFile.cc b/runtime/native/dalvik_sys
    return false;
 @@ -351,9 +359,11 @@
  #endif  // ART_TARGET_ANDROID
- 
+
  static bool isReadOnlyJavaDclChecked() {
 +#if !defined(_WIN32)
    if (!kIsTargetAndroid) {
