@@ -102,19 +102,25 @@ bool GuestMemory::Map(GuestAddress address, std::uint64_t size, MemoryPermission
   }
   // A separate map owns every allocation until staging succeeds. Merging equal
   // std::map allocators transfers nodes, so publishing needs no new allocation.
-  std::map<GuestAddress, std::unique_ptr<Page>> staged;
   try {
+    // MSVC std::map default construction allocates a 48-byte sentinel.
+    // Creating the staging map outside this try leaks std::bad_alloc from
+    // the public Map API on Windows even before the first guest page is
+    // allocated. GCC's empty map does not allocate, hiding the error there.
+    std::map<GuestAddress, std::unique_ptr<Page>> staged;
     for (std::uint64_t at = address; at < end; at += kPageSize) {
       auto page = std::make_unique<Page>();
       page->permissions = permissions;
       staged.emplace(static_cast<GuestAddress>(at), std::move(page));
     }
+    // Merge transfers preallocated nodes without allocating, so the entire
+    // requested mapping is published only after staging has completed.
+    pages_.merge(staged);
+    mapped_bytes_ += static_cast<std::size_t>(size);
+    return true;
   } catch (const std::bad_alloc&) {
     return Fail(error, "cannot allocate ARM32 memory");
   }
-  pages_.merge(staged);
-  mapped_bytes_ += static_cast<std::size_t>(size);
-  return true;
 }
 
 bool GuestMemory::Unmap(GuestAddress address, std::uint64_t size, std::string* error) {
