@@ -32,6 +32,7 @@ struct SurfaceFrame {
   std::vector<uint32_t> pixels;  // RGBA_8888 (R in the low byte)
   int64_t timestamp_ns = 0;
   uint64_t number = 0;
+  int32_t dataspace = 0;  // HAL_DATASPACE_UNKNOWN until a producer tags the frame.
   int video_scaling_mode = 1;  // MediaCodec scale-to-fit; pixels remain uncropped.
 };
 
@@ -63,12 +64,11 @@ class QueueSurface : public android::Surface {
   // A frame from a producer in another process (a Surface parceled to it,
   // compat/framework/surface_parcel.cc), queued as queueBuffer queues one:
   // `pixels` (RGBA_8888, `stride` pixels a row) become the latest frame, with
-  // the producer's time stamp, and the listener is called. This surface's own
-  // producer state (its buffer, requested size and format, a lock) is left
-  // alone. Returns -EAGAIN for an occupied single buffer, -ENODEV after abandonment,
-  // or the publication status.
+  // the producer's timestamp and dataspace. The listener is called. The
+  // surface's own producer state is left alone. Returns -EAGAIN for an occupied
+  // single buffer, -ENODEV after abandonment, or the publication status.
   int PostFrame(int width, int height, int stride, const uint32_t* pixels, int64_t timestamp_ns,
-                int video_scaling_mode = 1);
+                int video_scaling_mode = 1, int32_t dataspace = 0);
 
   // A YUV consumer can accept decoded I420 without converting it to RGBA.
   // A missing result asks the producer to use the ordinary window path.
@@ -126,6 +126,7 @@ class QueueSurface : public android::Surface {
   int user_width_ = 0, user_height_ = 0;
   int default_width_ = 1, default_height_ = 1;
   int64_t timestamp_ns_ = NATIVE_WINDOW_TIMESTAMP_AUTO;
+  int32_t dataspace_ = 0;  // HAL_DATASPACE_UNKNOWN
   bool locked_ = false;
   bool buffer_contents_valid_ = false;
   bool abandoned_ = false;

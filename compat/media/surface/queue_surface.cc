@@ -172,7 +172,8 @@ void QueueSurface::Abandon() {
 }
 
 int QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* pixels,
-                            int64_t timestamp_ns, int video_scaling_mode) {
+                            int64_t timestamp_ns, int video_scaling_mode,
+                            int32_t dataspace) {
   if (width <= 0 || height <= 0 || stride < width || pixels == nullptr ||
       (video_scaling_mode != 1 && video_scaling_mode != 2)) return -EINVAL;
   if (single_buffer_mode_) {
@@ -185,6 +186,7 @@ int QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* p
   auto f = std::make_shared<RecycledFrame>(frame_pool_, width, height);
   f->width = width;
   f->height = height;
+  f->dataspace = dataspace;
   f->video_scaling_mode = video_scaling_mode;
   f->pixels.resize(static_cast<size_t>(width) * height);
   if (stride == width) {
@@ -301,6 +303,7 @@ QueueSurface::Publication QueueSurface::PublishLocked(std::optional<int64_t> tim
   auto f = std::make_shared<RecycledFrame>(frame_pool_, buffer_->width, buffer_->height);
   f->width = buffer_->width;
   f->height = buffer_->height;
+  f->dataspace = dataspace_;
   f->video_scaling_mode = video_scaling_mode;
   const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
   const bool bgra = buffer_->format == HAL_PIXEL_FORMAT_BGRA_8888;
@@ -397,6 +400,12 @@ int QueueSurface::query(int what, int* value) const {
     case NATIVE_WINDOW_FORMAT:
       *value = format_;
       return 0;
+    case NATIVE_WINDOW_DATASPACE:
+      *value = dataspace_;
+      return 0;
+    case NATIVE_WINDOW_DEFAULT_DATASPACE:
+      *value = 0;  // No consumer-provided dataspace.
+      return 0;
     case NATIVE_WINDOW_MIN_UNDEQUEUED_BUFFERS:
       *value = 1;
       return 0;
@@ -468,6 +477,12 @@ int QueueSurface::perform(int operation, va_list args) {
       if (format != HAL_PIXEL_FORMAT_RGBA_8888 && format != HAL_PIXEL_FORMAT_RGBX_8888 &&
           format != HAL_PIXEL_FORMAT_BGRA_8888) return -EINVAL;
       format_ = format;
+      return 0;
+    }
+    case NATIVE_WINDOW_SET_BUFFERS_DATASPACE: {
+      const int32_t dataspace = va_arg(args, int);
+      std::lock_guard<std::mutex> lock(mutex_);
+      dataspace_ = dataspace;
       return 0;
     }
     case NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP: {

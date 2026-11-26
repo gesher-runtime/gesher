@@ -77,6 +77,7 @@ def generate(component: str, ref: str | None) -> str:
         members = re.findall(r"  int64_t timestamp_ns_ = [^;]+;", header)
         if len(members) != 1:
             raise ValueError("timestamp member boundary changed")
+        members += re.findall(r"  int32_t dataspace_ = [^;]+;", header)
         template = (ROOT / "tests/media/surface_timestamp_host.cc.in").read_text(encoding="utf-8")
         if "int video_scaling_mode" not in source:
             template = template.replace(", int video_scaling_mode = 1", "")
@@ -100,7 +101,7 @@ def generate(component: str, ref: str | None) -> str:
             "@PUBLISH_MEMBERS@": publication + "\n  " + declaration,
             "@FRAME_POOL_MEMBERS@": pool_members,
             "@FRAME_POOL_CLASSES@": pool_classes,
-            "@TIMESTAMP_MEMBER@": members[0].strip(),
+            "@PRODUCER_MEMBERS@": "\n".join(members).strip(),
             "@TIMESTAMP_DISPATCH@": section(source, "    case NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP: {",
                                             "    case NATIVE_WINDOW_GET_REFRESH_CYCLE_DURATION:"),
             "@PUBLISH@": section(source, "int QueueSurface::unlockAndPost() {",

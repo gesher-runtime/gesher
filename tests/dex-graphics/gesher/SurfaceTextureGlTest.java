@@ -4,6 +4,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.SurfaceTexture;
+import android.hardware.DataSpace;
 import android.opengl.EGL14;
 import android.opengl.EGLConfig;
 import android.opengl.EGLContext;
@@ -50,6 +51,9 @@ public final class SurfaceTextureGlTest {
   private static final int W = 32;
   private static final int H = 32;
   private static final int EXTERNAL = GLES11Ext.GL_TEXTURE_EXTERNAL_OES;
+
+  // Tests only. The shared fixture is also used by ImageReaderPrivateTest.
+  private static native int nativeTagProducer(Surface surface, int dataspace, int rgba, boolean post);
 
   private static int failures;
   private static EGLDisplay display;
@@ -104,9 +108,14 @@ public final class SurfaceTextureGlTest {
     Gl a = new Gl();
     Gl b = new Gl();
     check(a.makeCurrent() && b.makeCurrent(), "two ES 2 contexts on pbuffers");
-    attachedAtConstruction(a, b, handler);
-    detachedAtOnce(a, handler);
-    singleBuffer(a, b, handler);
+    if (args.length == 0) {
+      attachedAtConstruction(a, b, handler);
+      detachedAtOnce(a, handler);
+      singleBuffer(a, b, handler);
+    } else {
+      System.load(args[0]);
+      taggedFrames(a, b, handler);
+    }
     a.destroy();
     b.destroy();
     EGL14.eglTerminate(display);
@@ -190,6 +199,68 @@ public final class SurfaceTextureGlTest {
     check(st.isReleased() && throwsRuntime(st::updateTexImage),
         "after release() updateTexImage throws");
     GLES20.glDeleteTextures(1, new int[] {texB}, 0);
+  }
+
+  private static void taggedFrames(Gl a, Gl b, Handler handler) throws Exception {
+    a.makeCurrent();
+    int name = newTexture();
+    SurfaceTexture texture = new SurfaceTexture(name);
+    Surface producer = new Surface(texture);
+    int textureName = name;
+    try {
+      texture.setDefaultBufferSize(W, H);
+      Semaphore frames = new Semaphore(0);
+      texture.setOnFrameAvailableListener(ignored -> frames.release(), handler);
+      check(texture.getDataSpace() == DataSpace.DATASPACE_UNKNOWN, "no latched frame has no dataspace");
+      check(nativeTagProducer(producer, DataSpace.DATASPACE_SRGB, 0xff0000ff, true) == 0
+              && frames.tryAcquire(5, TimeUnit.SECONDS),
+          "NDK producer posts red pixels tagged sRGB");
+      check(nativeTagProducer(producer, DataSpace.DATASPACE_SRGB_LINEAR, 0, false) == 0,
+          "NDK producer changes its setting without posting");
+      check(texture.getDataSpace() == DataSpace.DATASPACE_UNKNOWN,
+          "publication alone does not update SurfaceTexture dataspace");
+
+      texture.updateTexImage();
+      float[] matrix = new float[16];
+      texture.getTransformMatrix(matrix);
+      check(texture.getDataSpace() == DataSpace.DATASPACE_SRGB
+              && sample(name, matrix)[at(W / 2, H / 2)] == Color.RED,
+          "updateTexImage latches the posted sRGB tag and its red pixels");
+
+      check(nativeTagProducer(producer, DataSpace.DATASPACE_SRGB_LINEAR, 0xff00ff00, true) == 0
+              && frames.tryAcquire(5, TimeUnit.SECONDS),
+          "NDK producer posts green pixels tagged linear sRGB");
+      b.makeCurrent();
+      check(throwsIllegalState(texture::updateTexImage)
+              && texture.getDataSpace() == DataSpace.DATASPACE_SRGB,
+          "failed update in another context keeps the old dataspace");
+      a.makeCurrent();
+      texture.updateTexImage();
+      texture.getTransformMatrix(matrix);
+      check(texture.getDataSpace() == DataSpace.DATASPACE_SRGB_LINEAR
+              && sample(name, matrix)[at(W / 2, H / 2)] == Color.GREEN,
+          "the next latch updates both the dataspace and the pixels");
+      texture.updateTexImage();
+      check(texture.getDataSpace() == DataSpace.DATASPACE_SRGB_LINEAR,
+          "update with no queued frame preserves the latched dataspace");
+
+      texture.detachFromGLContext();
+      textureName = 0;
+      check(texture.getDataSpace() == DataSpace.DATASPACE_SRGB_LINEAR,
+          "detach preserves the dataspace");
+      b.makeCurrent();
+      textureName = newTexture();
+      texture.attachToGLContext(textureName);
+      check(texture.getDataSpace() == DataSpace.DATASPACE_SRGB_LINEAR,
+          "reattachment preserves the dataspace");
+      texture.releaseTexImage();
+      check(texture.getDataSpace() == DataSpace.DATASPACE_UNKNOWN,
+          "releaseTexImage clears the dataspace with the frame");
+    } finally {
+      producer.release();
+      texture.release();
+      if (textureName != 0) GLES20.glDeleteTextures(1, new int[] {textureName}, 0);
+    }
   }
 
   private static void singleBuffer(Gl a, Gl b, Handler handler) throws Exception {

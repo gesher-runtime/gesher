@@ -13,8 +13,8 @@
 //
 // The receiver's Surface is a QueueSurface of its own (a forwarding one) whose
 // every frame goes to the endpoint: the pixels in a memfd it reuses, their size
-// and time stamp in a synchronous transaction, which the endpoint answers once
-// it has queued the frame to the consumer's QueueSurface. The answer carries
+// and per-frame metadata in a synchronous transaction. The endpoint answers
+// once it has queued the frame to the consumer's QueueSurface. The answer carries
 // the consumer's current size, which becomes the producer's default size (as
 // libgui's Surface takes it from each queueBuffer's output), and whether the
 // consumer is still there: once it is not (released, abandoned, its process
@@ -65,6 +65,7 @@ namespace {
 constexpr int32_t kParcelMagic = 0x46525347;  // "GSRF"
 constexpr uint32_t kFrame = IBinder::FIRST_CALL_TRANSACTION;
 constexpr int32_t kFrameScalingVersion = 1;
+constexpr int32_t kFrameDataspaceVersion = 2;
 // The largest frame side either end takes (a 16384x16384 frame is 1 GiB).
 constexpr int32_t kMaxSide = 16384;
 
@@ -77,18 +78,36 @@ const String16& Descriptor() {
   return descriptor;
 }
 
-// Old producers end after the FD and therefore mean scale-to-fit. A non-default
-// display mode is an optional, versioned tail; reject malformed extensions before
-// mapping the producer's storage. No image bytes or descriptor ownership change.
-status_t ReadFrameVideoScalingMode(const Parcel& data, int* mode) {
+// A frame without a tail is scale-to-fit with unknown dataspace. Older
+// producers can also send a scaling-only tail. Reject incomplete metadata before
+// mapping the producer's pixels.
+status_t ReadFrameMetadata(const Parcel& data, int* mode, int32_t* dataspace) {
   *mode = 1;
-  if (data.dataAvail() == 0) return OK;
+  *dataspace = 0;
+  const size_t bytes = data.dataAvail();
+  if (bytes == 0) return OK;
+  if (bytes != 2 * sizeof(int32_t) && bytes != 3 * sizeof(int32_t)) return BAD_VALUE;
   int32_t version = 0, value = 0;
-  if (data.dataAvail() != 2 * sizeof(int32_t) || data.readInt32(&version) != OK ||
-      data.readInt32(&value) != OK || version != kFrameScalingVersion ||
-      (value != 1 && value != 2)) return BAD_VALUE;
+  const int32_t expected_version =
+      bytes == 2 * sizeof(int32_t) ? kFrameScalingVersion : kFrameDataspaceVersion;
+  if (data.readInt32(&version) != OK || version != expected_version ||
+      data.readInt32(&value) != OK || (value != 1 && value != 2)) return BAD_VALUE;
+  int32_t tag = 0;
+  if (version == kFrameDataspaceVersion && data.readInt32(&tag) != OK) return BAD_VALUE;
   *mode = value;
+  *dataspace = tag;
   return OK;
+}
+
+void WriteFrameMetadata(Parcel& data, int video_scaling_mode, int32_t dataspace) {
+  if (dataspace != 0) {
+    data.writeInt32(kFrameDataspaceVersion);
+    data.writeInt32(video_scaling_mode);
+    data.writeInt32(dataspace);
+  } else if (video_scaling_mode != 1) {
+    data.writeInt32(kFrameScalingVersion);
+    data.writeInt32(video_scaling_mode);
+  }
 }
 
 // The consumer's endpoint, a binder in its process. It holds the consumer's
@@ -115,7 +134,7 @@ class SurfaceSink : public BBinder {
 
   // kFrame: int32 width, int32 height, int64 time stamp, uint64 the memfd's id
   // (its producer's: a new memfd has a new one), the memfd with the pixels
-  // (RGBA_8888, width pixels a row), optionally int32 scaling-version and mode.
+  // (RGBA_8888, width pixels a row), optionally version, scaling mode and dataspace.
   // Answered with int32 status (OK; NO_INIT: the consumer is gone; WOULD_BLOCK:
   // the single buffer is occupied; BAD_VALUE: not a frame) and its current
   // size.
@@ -202,7 +221,8 @@ class SurfaceSink : public BBinder {
     // The Parcel's descriptor (it closes it).
     const int fd = data.readFileDescriptor();
     int video_scaling_mode = 1;
-    if (ReadFrameVideoScalingMode(data, &video_scaling_mode) != OK) return BAD_VALUE;
+    int32_t dataspace = 0;
+    if (ReadFrameMetadata(data, &video_scaling_mode, &dataspace) != OK) return BAD_VALUE;
     const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
     static gesher::perf::Site site("surface sink: post a forwarded frame");
     const int64_t start = gesher::perf::Now();
@@ -210,7 +230,8 @@ class SurfaceSink : public BBinder {
     std::shared_ptr<Mapping> m = MappingFor(id, fd, bytes, &status);
     if (m == nullptr) return status;
     status = gesher_surface_post(surface, width, height, width, timestamp,
-                                 static_cast<const uint32_t*>(m->pixels), video_scaling_mode);
+                                static_cast<const uint32_t*>(m->pixels), video_scaling_mode,
+                                dataspace);
     site.Add(gesher::perf::Now() - start);
     return status;
   }
@@ -332,7 +353,7 @@ bool Reserve(Forwarder* f, size_t bytes) {
 
 // A frame queued to a forwarding Surface, on its producer's thread.
 int Forward(void* context, jlong surface, int width, int height, int64_t timestamp,
-            const uint32_t* pixels, int video_scaling_mode) {
+            const uint32_t* pixels, int video_scaling_mode, int32_t dataspace) {
   Forwarder* f = static_cast<std::shared_ptr<Forwarder>*>(context)->get();
   status_t status = NO_INIT;
   int32_t consumer_width = 0, consumer_height = 0;
@@ -358,10 +379,7 @@ int Forward(void* context, jlong surface, int width, int height, int64_t timesta
     data.writeInt64(timestamp);
     data.writeUint64(f->id);
     data.writeFileDescriptor(f->fd);
-    if (video_scaling_mode != 1) {
-      data.writeInt32(kFrameScalingVersion);
-      data.writeInt32(video_scaling_mode);
-    }
+    WriteFrameMetadata(data, video_scaling_mode, dataspace);
     const status_t transport = f->sink->transact(kFrame, data, &reply);
     transact_site.Add(gesher::perf::Now() - copied);
     if (transport == OK) {

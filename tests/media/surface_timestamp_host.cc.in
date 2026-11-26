@@ -40,6 +40,7 @@ struct SurfaceFrame {
   int64_t timestamp_ns = 0;
   uint64_t number = 0;
   int video_scaling_mode = 1;
+  int32_t dataspace = 0;
 };
 class QueueSurface {
  public:
@@ -50,7 +51,7 @@ class QueueSurface {
   };
   std::mutex mutex_;
   std::shared_ptr<Buffer> buffer_ = std::make_shared<Buffer>();
-  @TIMESTAMP_MEMBER@
+  @PRODUCER_MEMBERS@
   bool abandoned_ = false;
   bool locked_ = false;
   bool buffer_contents_valid_ = false;

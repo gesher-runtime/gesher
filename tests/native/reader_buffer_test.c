@@ -17,13 +17,16 @@
 //   nativeFenceFd(): a native fence fd of the current EGL display (an
 //     EGL_SYNC_NATIVE_FENCE_ANDROID after glFlush), or -1.
 //
-// Only JNI and the NDK's AHardwareBuffer/EGL/GLES entry points, no libc.
+// Only JNI and the NDK's AHardwareBuffer/ANativeWindow/EGL/GLES entry points, no libc.
 #define EGL_EGLEXT_PROTOTYPES 1
 #define GL_GLEXT_PROTOTYPES 1
 #include <android/hardware_buffer.h>
 #include <android/hardware_buffer_jni.h>
+#include <android/native_window_jni.h>
+#include <errno.h>
 #include <jni.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -34,6 +37,32 @@ enum {
   kStatus, kWidth, kHeight, kFormat, kUsage, kSame, kImage, kIdLo, kIdHi, kUsageHi, kGl2d, kGlExt,
   kPixels
 };
+
+// Set a producer's dataspace and optionally post known RGBA pixels to the
+// actual SurfaceTexture queue using the public NDK entry points.
+JNIEXPORT jint JNICALL Java_gesher_SurfaceTextureGlTest_nativeTagProducer(
+    JNIEnv* env, jclass clazz, jobject surface, jint dataspace, jint rgba, jboolean post) {
+  (void)clazz;
+  ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
+  if (window == NULL) return -EINVAL;
+  int result = ANativeWindow_setBuffersDataSpace(window, dataspace);
+  if (result == 0 && post) {
+    result = ANativeWindow_setBuffersGeometry(window, 0, 0, WINDOW_FORMAT_RGBA_8888);
+    ANativeWindow_Buffer buffer;
+    if (result == 0) result = ANativeWindow_lock(window, &buffer, NULL);
+    if (result == 0) {
+      uint32_t* pixels = buffer.bits;
+      for (int y = 0; y < buffer.height; y++) {
+        for (int x = 0; x < buffer.width; x++) {
+          pixels[(size_t)y * buffer.stride + x] = (uint32_t)rgba;
+        }
+      }
+      result = ANativeWindow_unlockAndPost(window);
+    }
+  }
+  ANativeWindow_release(window);
+  return result;
+}
 
 static unsigned pack(const unsigned char* px) {
   return (unsigned)px[0] | (unsigned)px[1] << 8 | (unsigned)px[2] << 16 | (unsigned)px[3] << 24;

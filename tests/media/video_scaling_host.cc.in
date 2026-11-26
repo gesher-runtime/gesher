@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #define HAS_SCALING @HAS_SCALING@
+#define HAS_DATASPACE @HAS_DATASPACE@
 #define HAS_ANDROID_REFERENCE @HAS_ANDROID_REFERENCE@
 @SURFACE_PRODUCTION@
 using gesher::media::QueueSurface;
@@ -183,9 +184,7 @@ struct Parcel {
 };
 @PARCEL_VERSION@
 @PARCEL_READER@
-void WriteFrameTail(Parcel& data, int video_scaling_mode) {
 @PARCEL_WRITER@
-}
 
 namespace android_reference {
 struct Rect {
@@ -407,35 +406,63 @@ void CropGeometry() {
 void ParcelContract() {
 #if HAS_SCALING
   for (int mode : {1, 2}) {
-    Parcel data; WriteFrameTail(data, mode);
-    Check(data.bytes.size() == (mode == 1 ? 0 : 8), "default mode keeps legacy payload size");
+    Parcel data; WriteFrameMetadata(data, mode, 0);
+    Check(data.bytes.size() == (mode == 1 ? 0 : 8), "untagged frames keep existing payloads");
     int result = 99;
-    Check(ReadFrameVideoScalingMode(data, &result) == OK && result == mode && data.dataAvail() == 0,
-          "actual writer and reader roundtrip per-frame mode");
+    int32_t dataspace = -1;
+    Check(ReadFrameMetadata(data, &result, &dataspace) == OK &&
+          result == mode && dataspace == 0 && data.dataAvail() == 0,
+          "actual writer and reader roundtrip the legacy scaling-only metadata");
   }
   for (int version : {0, 1, 2, INT_MIN, INT_MAX}) {
     for (int mode : {-1, 0, 1, 2, 3, INT_MAX}) {
       Parcel data; data.writeInt32(version); data.writeInt32(mode);
       int result = 99;
       const bool valid = version == 1 && (mode == 1 || mode == 2);
-      Check((ReadFrameVideoScalingMode(data, &result) == OK) == valid,
-            "only known version and valid modes accepted");
+      int32_t dataspace = -1;
+      Check((ReadFrameMetadata(data, &result, &dataspace) == OK) == valid && dataspace == 0,
+            "only known version and valid modes accepted for legacy payload size");
       Check(result == (valid ? mode : 1), "failed Parcel read cannot publish partial mode");
     }
   }
   for (size_t size = 1; size <= 32; ++size) {
     if (size == 8) continue;
-    Parcel data; WriteFrameTail(data, 2); data.bytes.resize(size);
+    Parcel data; WriteFrameMetadata(data, 2, 0); data.bytes.resize(size);
     int result = 99;
-    Check(ReadFrameVideoScalingMode(data, &result) == BAD_VALUE && result == 1 && data.reads == 0,
-          "truncated or extra Parcel bytes rejected before consuming extension");
+    int32_t dataspace = -1;
+    Check(ReadFrameMetadata(data, &result, &dataspace) == BAD_VALUE && result == 1 && dataspace == 0,
+          "truncated or extra Parcel bytes cannot publish partial metadata");
   }
   for (int failure : {1, 2}) {
-    Parcel data; WriteFrameTail(data, 2); data.fail_read = failure;
+    Parcel data; WriteFrameMetadata(data, 2, 0); data.fail_read = failure;
     int result = 99;
-    Check(ReadFrameVideoScalingMode(data, &result) == BAD_VALUE && result == 1,
+    int32_t dataspace = -1;
+    Check(ReadFrameMetadata(data, &result, &dataspace) == BAD_VALUE && result == 1 && dataspace == 0,
           "Parcel integer read failure returns error and default output");
   }
+#if HAS_DATASPACE
+  constexpr int32_t kSrgb = (1 << 16) | (2 << 22) | (1 << 27);
+  for (int mode : {1, 2}) {
+    Parcel data; WriteFrameMetadata(data, mode, kSrgb);
+    int result = 99;
+    int32_t dataspace = 0;
+    Check(data.bytes.size() == 12 && ReadFrameMetadata(data, &result, &dataspace) == OK &&
+          result == mode && dataspace == kSrgb && data.dataAvail() == 0,
+          "actual writer and reader roundtrip the tagged frame");
+  }
+  for (int failure : {1, 2, 3}) {
+    Parcel data; WriteFrameMetadata(data, 2, kSrgb); data.fail_read = failure;
+    int result = 99;
+    int32_t dataspace = -1;
+    Check(ReadFrameMetadata(data, &result, &dataspace) == BAD_VALUE && result == 1 && dataspace == 0,
+          "any truncated metadata read leaves both fields at their defaults");
+  }
+  auto sink = android::sp<QueueSurface>::make(2, 2);
+  uint32_t pixels[] = {23, 25, 27, 29};
+  Check(sink->PostFrame(2, 2, 2, pixels, 1234, 2, kSrgb) == 0 &&
+        sink->Latest()->dataspace == kSrgb && sink->Latest()->video_scaling_mode == 2 &&
+        sink->Latest()->pixels[0] == 23, "the forwarded tag stays with the real published frame");
+#endif
 #endif
 }
 }
