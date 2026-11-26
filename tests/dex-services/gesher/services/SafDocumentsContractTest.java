@@ -5,6 +5,7 @@ import android.app.*;
 import android.app.servertransaction.*;
 import android.content.*;
 import android.content.pm.*;
+import android.database.ContentObserver;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.*;
@@ -343,6 +344,8 @@ public final class SafDocumentsContractTest {
         @Override public int getUserId(){return 0;}
         @Override public ApplicationInfo getApplicationInfo(){return new ApplicationInfo();}
         @Override public PackageManager getPackageManager(){return packages;}
+        // The provider dispatches its cursor observers directly. This fixture has no global resolver.
+        @Override public ContentResolver getContentResolver(){return null;}
         @Override public String getSystemServiceName(Class<?> c){return c==PermissionCheckerManager.class?Context.PERMISSION_CHECKER_SERVICE:c==AppOpsManager.class?Context.APP_OPS_SERVICE:null;}
         @Override public Object getSystemService(String n){return Context.APP_OPS_SERVICE.equals(n)?appOps:Context.PERMISSION_CHECKER_SERVICE.equals(n)?checker:null;}
         @Override public int checkPermission(String p,int pid,int uid){return h.pm.checkUidPermission(p,uid);}
@@ -439,6 +442,75 @@ public final class SafDocumentsContractTest {
         try(Cursor c=h.query(parent,new String[]{Document.COLUMN_FLAGS,Document.COLUMN_SIZE})){check(c.moveToFirst()&&(c.getInt(0)&Document.FLAG_DIR_SUPPORTS_CREATE)!=0,"Writable directory advertises create");check((c.getInt(0)&Document.FLAG_SUPPORTS_WRITE)==0&&c.isNull(1),"Directory has no regular-file write capability or invented size");}
         h.retire(owner);rejects(SecurityException.class,()->h.query(doc,null));h.grants.flush();
     }
+    private static final class ChildChanges extends ContentObserver {
+        private final BlockingQueue<Boolean> changes = new LinkedBlockingQueue<>();
+
+        ChildChanges() { super(null); }
+
+        @Override public void onChange(boolean selfChange) { changes.add(selfChange); }
+
+        void requireChange(String operation) throws InterruptedException {
+            check(Boolean.FALSE.equals(changes.poll(3, TimeUnit.SECONDS)),
+                    operation + " must notify the active directory cursor");
+        }
+    }
+
+    private static void childNotifications(File dir) throws Exception {
+        File root = Files.createDirectory(new File(dir, "child-notifications").toPath()).toFile();
+        File selected = Files.createDirectory(new File(root, "selected").toPath()).toFile();
+        File sibling = Files.createDirectory(new File(root, "sibling").toPath()).toFile();
+        Uri tree = tree(root);
+        Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, selected.getCanonicalPath());
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, selected.getCanonicalPath());
+        Uri unrelated = DocumentsContract.buildChildDocumentsUriUsingTree(tree, sibling.getCanonicalPath());
+        Harness h = new Harness(new File(dir, "notification-grants.xml"));
+        IBinder owner = new Binder();
+        h.owned(owner, tree, READ | WRITE | PREFIX);
+        String[] names = {Document.COLUMN_DISPLAY_NAME};
+        ChildChanges active = new ChildChanges(), retired = new ChildChanges(), unrelatedChanges = new ChildChanges();
+        try (Cursor open = h.query(children, names); Cursor second = h.query(children, names);
+                Cursor other = h.query(unrelated, names)) {
+            check(open.getCount() == 0, "Fixture starts with an empty directory");
+            if (!nativeFiles) {
+                Uri expected = DocumentsContract.buildChildDocumentsUri(AUTH, selected.getCanonicalPath());
+                check(expected.equals(open.getNotificationUri()), "Child cursor identifies its own notification URI");
+            }
+            open.registerContentObserver(active);
+            second.registerContentObserver(retired);
+            other.registerContentObserver(unrelatedChanges);
+            Uri created = h.operation(DocumentsContract.METHOD_CREATE_DOCUMENT, parent, "observed.txt")
+                    .getParcelable(DocumentsContract.EXTRA_URI, Uri.class);
+            check(created != null && new File(DocumentsContract.getDocumentId(created)).isFile(),
+                    "Notification follows real creation");
+            active.requireChange("createDocument");
+            retired.requireChange("createDocument");
+            second.close();
+
+            Uri renamed = h.operation(DocumentsContract.METHOD_RENAME_DOCUMENT, created, "renamed.txt")
+                    .getParcelable(DocumentsContract.EXTRA_URI, Uri.class);
+            active.requireChange("renameDocument");
+            check(renamed != null && !new File(DocumentsContract.getDocumentId(created)).exists(),
+                    "Notification follows the real rename");
+            try (Cursor refresh = h.query(children, names)) {
+                check(refresh.moveToFirst() && refresh.getCount() == 1 && "renamed.txt".equals(refresh.getString(0)),
+                        "Requery observes the new document name");
+            }
+
+            h.operation(DocumentsContract.METHOD_DELETE_DOCUMENT, renamed, null);
+            active.requireChange("deleteDocument");
+            try (Cursor refresh = h.query(children, names)) {
+                check(refresh.getCount() == 0, "Requery observes completed deletion");
+            }
+            check(retired.changes.poll(100, TimeUnit.MILLISECONDS) == null,
+                    "Closed cursor does not receive later mutations");
+            check(unrelatedChanges.changes.poll(100, TimeUnit.MILLISECONDS) == null,
+                    "Sibling cursor does not receive another directory's changes");
+        } finally {
+            h.retire(owner);
+            h.grants.flush();
+        }
+    }
+
     static void persistence(File dir)throws Exception{
         File f=new File(dir,"durable.txt");Files.writeString(f.toPath(),"durable");File state=new File(dir,"durable-grants.xml");Uri uri=document(f);IBinder owner=new Binder();
         Harness first=new Harness(state);first.owned(owner,uri,READ|WRITE|PERSIST);as(UID,PID,()->first.ugm.takePersistableUriPermission(uri,READ,null,0));first.grants.flush();first.retire(owner);
@@ -1385,7 +1457,7 @@ public final class SafDocumentsContractTest {
         fixtureMimeMap();
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
-        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
+        try{provider(dir);childNotifications(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
             if(nativeFiles){
                 check(nativeIncoming.get()>nativeOtherIncoming.get()&&nativeOtherIncoming.get()>0,
                         "SAF exercised actual incoming Binder transactions from both ordinary peers");

@@ -10,10 +10,12 @@ import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
+import android.os.Binder;
 import android.os.CancellationSignal;
 import android.os.FileUtils;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
+import android.util.Log;
 import android.provider.DocumentsContract;
 import android.provider.DocumentsContract.Document;
 import android.provider.DocumentsContract.Root;
@@ -25,8 +27,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * The local filesystem behind the Windows document picker. The framework's
@@ -46,6 +52,7 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
     private final ProviderInfo mInfo;
     private final UriGrants mGrants;
     private final CallerIdentity mCallers;
+    private final Map<String, Set<ChildrenCursor>> mChildQueries = new HashMap<>();
     final ContentProviders.RegisteredProvider registration;
 
     DocumentsStorageProvider(ContentProviders providers, UriGrants grants) {
@@ -224,14 +231,67 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
         return result;
     }
 
+    private final class ChildrenCursor extends MatrixCursor {
+        private final String parentId;
+
+        ChildrenCursor(String parentId, String[] projection) {
+            super(projection);
+            this.parentId = parentId;
+            Uri uri = DocumentsContract.buildChildDocumentsUri(AUTHORITY, parentId);
+            // The provider dispatches completed mutations directly to its active cursors.
+            setNotificationUris(getContext().getContentResolver(), List.of(uri),
+                    getContext().getUserId(), false);
+            synchronized (mChildQueries) {
+                mChildQueries.computeIfAbsent(parentId, key -> new HashSet<>()).add(this);
+            }
+        }
+
+        @Override public void close() {
+            synchronized (mChildQueries) {
+                Set<ChildrenCursor> queries = mChildQueries.get(parentId);
+                if (queries != null && queries.remove(this) && queries.isEmpty()) {
+                    mChildQueries.remove(parentId);
+                }
+            }
+            super.close();
+        }
+
+        void childrenChanged() {
+            if (!isClosed()) onChange(false);
+        }
+    }
+
+    private void notifyChildrenChanged(String parentId) {
+        List<ChildrenCursor> snapshot;
+        synchronized (mChildQueries) {
+            Set<ChildrenCursor> queries = mChildQueries.get(parentId);
+            if (queries == null) return;
+            snapshot = List.copyOf(queries);
+        }
+        long token = Binder.clearCallingIdentity();
+        try {
+            for (ChildrenCursor cursor : snapshot) {
+                try {
+                    cursor.childrenChanged();
+                } catch (RuntimeException error) {
+                    // Observer failure cannot undo a committed filesystem operation.
+                    Log.w("DocumentsStorageProvider", "Document observer callback failed");
+                }
+            }
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+    }
+
     @Override public Cursor queryChildDocuments(String parentId, String[] projection, String sortOrder)
             throws FileNotFoundException {
         File parent = file(parentId);
         if (!parent.isDirectory()) throw new FileNotFoundException("Document is not a directory");
         File[] children = parent.listFiles();
         if (children == null) throw new FileNotFoundException("Cannot list document children");
-        MatrixCursor result = new MatrixCursor(projection == null ? DOCUMENT_COLUMNS : projection);
-        if (DocumentPicker.blockedAndroidDirectory(parent)) return result;
+        String[] columns = projection == null ? DOCUMENT_COLUMNS : projection;
+        if (DocumentPicker.blockedAndroidDirectory(parent)) return new MatrixCursor(columns);
+        MatrixCursor result = new ChildrenCursor(parent.getPath(), columns);
         for (File child : children) {
             if (DocumentPicker.blockedAndroidDirectory(child)) continue;
             try { row(result, file(child.getAbsolutePath())); }
@@ -291,7 +351,9 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
             try {
                 if (Document.MIME_TYPE_DIR.equals(mimeType)) Files.createDirectory(target.toPath());
                 else Files.createFile(target.toPath());
-                return file(target.getCanonicalPath()).getPath();
+                String createdId = file(target.getCanonicalPath()).getPath();
+                notifyChildrenChanged(parent.getPath());
+                return createdId;
             } catch (java.nio.file.FileAlreadyExistsException collision) {
                 // Another creator won; choose another Android unique name.
             } catch (IOException error) { throw missing("Cannot create document", error); }
@@ -307,30 +369,36 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
         if (source.equals(target)) return null;
         try {
             Files.move(source.toPath(), target.toPath()); // No REPLACE_EXISTING.
-            return file(target.getCanonicalPath()).getPath();
+            File renamed = file(target.getCanonicalPath());
+            notifyChildrenChanged(parent.getPath());
+            if (renamed.isDirectory()) notifyChildrenChanged(source.getPath());
+            return renamed.getPath();
         } catch (IOException error) { throw missing("Cannot rename document", error); }
     }
 
     @Override public void deleteDocument(String documentId) throws FileNotFoundException {
         File file = file(documentId);
         if (isFilesystemRoot(file)) throw new FileNotFoundException("Cannot delete a volume root");
-        try { deleteTree(file); }
+        Set<String> changedDirectories = new HashSet<>();
+        try { deleteTree(file, changedDirectories); }
         catch (IOException error) { throw missing("Cannot delete document", error); }
+        finally { changedDirectories.forEach(this::notifyChildrenChanged); }
     }
 
-    private void deleteTree(File file) throws IOException {
+    private void deleteTree(File file, Set<String> changedDirectories) throws IOException {
         file = file(file.getPath()); // Refuse symlinks/reparse aliases outside the tree.
         if (file.isDirectory()) {
             File[] children = file.listFiles();
             if (children == null) throw new IOException("Cannot list directory for deletion");
             for (File child : children) {
-                deleteTree(child);
+                deleteTree(child, changedDirectories);
                 // DocumentsProvider retires the requested document after return;
                 // retire each side-effect deletion now, even if a later delete fails.
                 revokeDocumentPermission(child.getPath());
             }
         }
         Files.delete(file.toPath());
+        if (file.getParent() != null) changedDirectories.add(file.getParent());
     }
 
     private static FileNotFoundException missing(String message, Exception error) {
