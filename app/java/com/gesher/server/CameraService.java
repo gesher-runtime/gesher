@@ -6,9 +6,11 @@ package com.gesher.server;
 
 import android.Manifest;
 import android.app.ActivityThread;
+import android.app.AppOpsManager;
 import android.app.GesherActivityWindow;
 import android.app.WindowConfiguration;
 import android.content.AttributionSourceState;
+import android.content.Context;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageManager;
 import android.content.res.CameraCompatibilityInfo;
@@ -31,6 +33,7 @@ import android.hardware.display.DisplayManagerGlobal;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Process;
+import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.ServiceSpecificException;
 import android.os.UserHandle;
@@ -41,6 +44,9 @@ import android.util.SizeF;
 import android.view.Display;
 import android.view.DisplayInfo;
 import android.view.Surface;
+
+import com.android.internal.app.IAppOpsCallback;
+import com.android.internal.app.IAppOpsService;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -75,7 +81,7 @@ public final class CameraService extends ICameraService.Default {
     private static volatile CameraService sInstance;
 
     private volatile List<WindowsCamera.Device> mDevices;
-    private final Map<String, CameraDeviceUser> mOpen = new HashMap<>();
+    private final Map<String, OpenCamera> mOpen = new HashMap<>();
 
     private CameraService() {
     }
@@ -534,22 +540,187 @@ public final class CameraService extends ICameraService.Default {
             throw new ServiceSpecificException(ERROR_PERMISSION_DENIED, "package " + packageName
                     + " does not have " + Manifest.permission.CAMERA);
         }
-        CameraDeviceUser previous;
-        CameraDeviceUser user = new CameraDeviceUser(this, cameraId, d, callbacks);
-        synchronized (mOpen) {
-            previous = mOpen.put(cameraId, user);
+        OpenCamera previous;
+        ICameraDeviceUser connection;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            IBinder binder = ServiceManager.checkService(Context.APP_OPS_SERVICE);
+            if (binder == null) {
+                throw new ServiceSpecificException(ERROR_DISABLED, "camera AppOps unavailable");
+            }
+            OpenCamera opened = new OpenCamera(packageName, clientAttribution.attributionTag, binder);
+            synchronized (opened) {
+                try {
+                    opened.watch();
+                    opened.user = new CameraDeviceUser(this, cameraId, d, callbacks);
+                    connection = StandIn.of(ICameraDeviceUser.class, opened.user).asInterface();
+                    synchronized (mOpen) {
+                        previous = mOpen.put(cameraId, opened);
+                    }
+                } catch (RemoteException | SecurityException e) {
+                    opened.close();
+                    throw new ServiceSpecificException(ERROR_DISABLED, "camera AppOps unavailable");
+                } catch (RuntimeException | Error e) {
+                    if (opened.user != null) opened.user.disconnect();
+                    opened.close();
+                    throw e;
+                }
+            }
+        } finally {
+            Binder.restoreCallingIdentity(identity);
         }
         if (previous != null) {
             // A new client takes the camera, as cameraserver gives it to the newest.
-            previous.evicted();
+            try {
+                previous.user.evicted();
+            } finally {
+                previous.close();
+            }
         }
         log("connectDevice " + cameraId + " (" + d.name + ") for " + packageName);
-        return StandIn.of(ICameraDeviceUser.class, user).asInterface();
+        return connection;
+    }
+
+    private OpenCamera owner(String cameraId, CameraDeviceUser user) {
+        synchronized (mOpen) {
+            OpenCamera opened = mOpen.get(cameraId);
+            return opened != null && opened.user == user ? opened : null;
+        }
+    }
+
+    boolean startCapture(String cameraId, CameraDeviceUser user) {
+        OpenCamera opened = owner(cameraId, user);
+        return opened != null && opened.startCapture();
+    }
+
+    void captureFailedToOpen(String cameraId, CameraDeviceUser user) {
+        OpenCamera opened = owner(cameraId, user);
+        if (opened != null) opened.finishCapture();
     }
 
     void closed(String cameraId, CameraDeviceUser user) {
+        OpenCamera opened;
         synchronized (mOpen) {
-            if (mOpen.get(cameraId) == user) mOpen.remove(cameraId);
+            opened = mOpen.get(cameraId);
+            if (opened == null || opened.user != user) return;
+            mOpen.remove(cameraId);
+        }
+        opened.close();
+    }
+
+    /** One AppOps watcher per camera owner, with an operation only while using the source. */
+    private static final class OpenCamera extends IAppOpsCallback.Stub
+            implements IBinder.DeathRecipient {
+        private final int uid = Process.myUid();
+        private final String packageName;
+        private final String tag;
+        private final IBinder binder;
+        private final IAppOpsService ops;
+        private final IBinder token = new Binder();
+        private CameraDeviceUser user;
+        private boolean watching;
+        private boolean linked;
+        private boolean started;
+        private boolean stopped;
+
+        OpenCamera(String packageName, String tag, IBinder binder) {
+            this.packageName = packageName;
+            this.tag = tag;
+            this.binder = binder;
+            ops = IAppOpsService.Stub.asInterface(binder);
+        }
+
+        // Called with our monitor held through publication. A remote change cannot
+        // disconnect this client before it is visible to the owner registry.
+        void watch() throws RemoteException {
+            binder.linkToDeath(this, 0);
+            linked = true;
+            watching = true;
+            ops.startWatchingModeWithFlags(AppOpsManager.OP_CAMERA, packageName,
+                    AppOpsManager.WATCH_FOREGROUND_CHANGES, this);
+            int mode = ops.checkOperation(AppOpsManager.OP_CAMERA, uid, packageName);
+            if (mode != AppOpsManager.MODE_ALLOWED) {
+                int error = mode == AppOpsManager.MODE_IGNORED ? ERROR_DISABLED : ERROR_PERMISSION_DENIED;
+                throw new ServiceSpecificException(error, "camera AppOps denied " + packageName);
+            }
+        }
+
+        synchronized boolean startCapture() {
+            if (stopped) return false;
+            long identity = Binder.clearCallingIdentity();
+            try {
+                if (!hasCameraPermission(packageName)) return false;
+                if (started) {
+                    return ops.checkOperation(AppOpsManager.OP_CAMERA, uid, packageName)
+                            == AppOpsManager.MODE_ALLOWED;
+                }
+                started = ops.startOperation(token, AppOpsManager.OP_CAMERA, uid, packageName, tag,
+                        false, false, "camera capture", false, 0, -1).getOpMode()
+                        == AppOpsManager.MODE_ALLOWED;
+                return started;
+            } catch (RemoteException | RuntimeException e) {
+                return false;
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+
+        synchronized void finishCapture() {
+            if (!started) return;
+            started = false;
+            long identity = Binder.clearCallingIdentity();
+            try {
+                ops.finishOperation(token, AppOpsManager.OP_CAMERA, uid, packageName, tag);
+            } catch (RemoteException | RuntimeException e) {
+                log("finishing camera AppOps for " + packageName + ": " + e);
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+
+        private synchronized boolean allowed() {
+            if (stopped || user == null) return true;
+            long identity = Binder.clearCallingIdentity();
+            try {
+                return hasCameraPermission(packageName)
+                        && ops.checkOperation(AppOpsManager.OP_CAMERA, uid, packageName)
+                                == AppOpsManager.MODE_ALLOWED;
+            } catch (RemoteException | RuntimeException e) {
+                return false;
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+
+        @Override
+        public void opChanged(int op, int changedUid, String name, String deviceId) {
+            if (op == AppOpsManager.OP_CAMERA && uid == changedUid && packageName.equals(name)
+                    && !allowed()) user.disabled();
+        }
+
+        @Override
+        public void binderDied() {
+            CameraDeviceUser opened;
+            synchronized (this) {
+                if (stopped) return;
+                opened = user;
+            }
+            if (opened != null) opened.disabled();
+        }
+
+        synchronized void close() {
+            if (stopped) return;
+            stopped = true;
+            finishCapture();
+            long identity = Binder.clearCallingIdentity();
+            try {
+                if (watching) ops.stopWatchingMode(this);
+            } catch (RemoteException | RuntimeException e) {
+                log("stopping camera AppOps watcher for " + packageName + ": " + e);
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+                if (linked) binder.unlinkToDeath(this, 0);
+            }
         }
     }
 

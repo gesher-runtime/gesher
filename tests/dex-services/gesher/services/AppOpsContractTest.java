@@ -638,11 +638,38 @@ public final class AppOpsContractTest {
         System.out.println("AppOps async watcher lifecycle contracts passed");
     }
 
+    @SuppressWarnings("unchecked")
     private static void foreground(Harness h) throws Exception {
         h.pm.permissions().grantRuntimePermission(NAME, Manifest.permission.CAMERA, "default:0", 0);
         check(h.ops.checkOperationRaw(OP_CAMERA, UID, NAME, null) == MODE_FOREGROUND,
                 "The manifest background permission produces foreground-only camera access");
         check(h.ops.checkOperation(OP_CAMERA, UID, NAME) == MODE_IGNORED, "A cached registered process has no camera foreground capability");
+        h.visible(true);
+        Object launching = ((List<?>) get(h.process, "activities")).get(0);
+        Object launchingState = field(type("ActivityTaskManagerService$State"), "LAUNCHING").get(null);
+        set(launching, "state", launchingState);
+        set(launching, "launchingPaused", true);
+        List<Object> activities = (List<Object>) get(h.atm, "mActivities");
+        activities.add(launching);
+        try {
+            check(h.ops.checkOperation(OP_CAMERA, UID, NAME) == MODE_IGNORED,
+                    "An activity launching paused does not contribute camera foreground capability");
+            set(launching, "launchingPaused", false);
+            check(h.ops.checkOperation(OP_CAMERA, UID, NAME) == MODE_ALLOWED,
+                    "A visible activity can open the camera from onCreate before resume acknowledgement");
+        } finally {
+            activities.remove(launching);
+        }
+        h.visible(false);
+        set(h.process, "inProcessActivityState", launchingState);
+        try {
+            var states = (java.util.Map<?, ?>) call(h.atm, "appOpsUidStates", new Class<?>[0]);
+            int capabilities = (int) call(states.get(UID), "capabilities", new Class<?>[0]);
+            check((capabilities & android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0,
+                    "The admitted standalone foreground launch also contributes camera capability");
+        } finally {
+            set(h.process, "inProcessActivityState", null);
+        }
         h.visible(true);
         check(h.ops.checkOperation(OP_CAMERA, UID, NAME) == MODE_ALLOWED, "A resumed activity contributes actual foreground capability");
         Token token = new Token();

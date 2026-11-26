@@ -853,7 +853,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || mPm.isRemovalPending(app.packageName)) continue;
             int state = android.app.AppOpsManager.UID_STATE_CACHED;
             int capabilities = 0;
-            if (app.inProcessActivityState == State.RESUMING
+            if (app.inProcessActivityState == State.LAUNCHING
+                    || app.inProcessActivityState == State.RESUMING
                     || app.inProcessActivityState == State.RESUMED) {
                 state = android.app.AppOpsManager.UID_STATE_TOP;
                 capabilities = android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_LOCATION
@@ -866,7 +867,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             for (ActivityRecord activity : app.activities) {
                 if (activity.finishing || mHiddenTasks.contains(activity.taskId)) continue;
-                if (activity.state == State.RESUMED || activity.state == State.RESUMING) {
+                // LaunchActivityItem runs onCreate/onStart before the accompanying
+                // ResumeActivityItem acknowledges the visible launch.
+                boolean visibleLaunch = activity.state == State.LAUNCHING && !activity.launchingPaused
+                        && mActivities.contains(activity) && activityCodeCurrent(activity)
+                        && isVisible(activity);
+                if (visibleLaunch || activity.state == State.RESUMED || activity.state == State.RESUMING) {
                     state = android.app.AppOpsManager.UID_STATE_TOP;
                     capabilities = android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_LOCATION
                             | android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA

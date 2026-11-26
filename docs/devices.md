@@ -300,11 +300,17 @@ Tests: `tools/test_captioning_contracts.py`, `tests/captioning/caption_windows_t
   `data`. It requests ordinary runtime CAMERA consent before starting camera work;
   refusal returns `RESULT_CANCELED`. `com.gesher.camera.extra.AUTO_CAPTURE_MS`
   takes it by itself after permission admission (tests).
-- This opening check is one part of [#56/C07](https://github.com/gesher-runtime/gesher/issues/56).
-  It does not complete active-session revocation, AppOps data-delivery ownership,
-  proxy-attribution chains, foreground/privacy policy or hardware qualification.
-  [Admission validation and its boundaries](research/camera-permission-admission-2026-11-22.md)
-  describe the focused evidence.
+- Camera2 checks the authenticated package's effective camera AppOps mode before
+  assigning the device. It starts one operation when opening the capture source
+  and ends it on failure, close, eviction or revocation. A mode or foreground
+  change that removes access disconnects the owner with `ERROR_CAMERA_DISABLED`.
+  The capture worker closes any source it owns when an in-flight read returns.
+  [Android 16 camera service](https://android.googlesource.com/platform/frameworks/av/+/refs/heads/android16-release/services/camera/libcameraservice/CameraService.cpp)
+- [#56/C07](https://github.com/gesher-runtime/gesher/issues/56) also tracks
+  ongoing Legacy Camera enforcement, trusted proxy attribution, sensor privacy
+  and target-runtime validation. The
+  [original admission report](research/camera-permission-admission-2026-11-22.md)
+  records the initial permission and UID validation.
 - Not there: reprocessing, offline sessions, extensions, torch, high-speed
   sessions, multi-resolution readers, ImageReader surfaces used by other
   producers than the camera (MediaCodec...), preview into SurfaceView or

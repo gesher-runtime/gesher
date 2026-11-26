@@ -97,6 +97,7 @@ public final class InProcessApplication implements AutoCloseable {
         return mServices.atm.registerInProcessActivity(mProcess, active, result);
     }
 
+    public void activityLaunching() { activityState(ActivityTaskManagerService.State.LAUNCHING); }
     public void activityStarted() { activityState(ActivityTaskManagerService.State.STARTED); }
     public void activityResuming() { activityState(ActivityTaskManagerService.State.RESUMING); }
     public void activityResumed() { activityState(ActivityTaskManagerService.State.RESUMED); }

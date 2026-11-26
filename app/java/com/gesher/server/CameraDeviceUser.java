@@ -230,6 +230,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                 }
             }
         }
+        checkConnected();
         return new int[0];
     }
 
@@ -487,30 +488,41 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     @Override
     public void disconnect() {
+        disconnect(ICameraDeviceCallbacks.ERROR_CAMERA_INVALID_ERROR, true);
+    }
+
+    private void disconnect(int error, boolean waitForCapture) {
         Thread thread;
         synchronized (mLock) {
             if (mDisconnected) return;
             mDisconnected = true;
+            if (error != ICameraDeviceCallbacks.ERROR_CAMERA_INVALID_ERROR) {
+                mCallbackQueue.deviceError(error, extras(-1, 0, -1));
+            }
             flush();
             thread = mThread;
             mLock.notifyAll();
         }
         mCallbackQueue.close();
-        if (thread != null && thread != Thread.currentThread()) {
+        mService.closed(mCameraId, this);
+        if (waitForCapture && thread != null && thread != Thread.currentThread()) {
             try {
                 thread.join(5000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
-        mService.closed(mCameraId, this);
         CameraService.log("disconnect " + mCameraId);
     }
 
     /** Another client opened this camera. */
     void evicted() {
-        mCallbackQueue.disconnected(extras(-1, 0, -1));
-        disconnect();
+        disconnect(ICameraDeviceCallbacks.ERROR_CAMERA_DISCONNECTED, true);
+    }
+
+    /** Policy changes retire the client without waiting on an in-flight native read. */
+    void disabled() {
+        disconnect(ICameraDeviceCallbacks.ERROR_CAMERA_DISABLED, false);
     }
 
     private void checkConnected() {
@@ -663,6 +675,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                                     s.size.getWidth(), s.size.getHeight(),
                                     quality != null ? quality & 0xff : 95);
                         }
+                        if (f.callbacks.terminal()) break;
                         if (timing != null) ++timing.deliveries;
                         int delivered = CameraFrames.deliver(surface, nv12, mCapture.width,
                                 mCapture.height, timestamp, jpeg);
@@ -751,7 +764,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         }
         try {
             open(size);
-        } catch (WindowsCamera.OpenException e) {
+        } catch (WindowsCamera.OpenException | ServiceSpecificException e) {
             CameraService.log(e.getMessage());
         }
     }
@@ -759,8 +772,18 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     /** Opens the device at its offered size nearest to {@code size}, as mCapture. */
     private void open(Size size) throws WindowsCamera.OpenException {
         long start = SystemClock.elapsedRealtime();
-        WindowsCamera.Capture capture = CameraImageSource.open(mDevice.id, size.getWidth(),
-                size.getHeight(), mSourceChoice);
+        if (!mService.startCapture(mCameraId, this)) {
+            disabled();
+            throw new ServiceSpecificException(ICameraService.ERROR_DISABLED,
+                    "camera access no longer allowed");
+        }
+        WindowsCamera.Capture capture;
+        try {
+            capture = CameraImageSource.open(mDevice.id, size.getWidth(), size.getHeight(), mSourceChoice);
+        } catch (WindowsCamera.OpenException | RuntimeException | Error e) {
+            mService.captureFailedToOpen(mCameraId, this);
+            throw e;
+        }
         mCapture = capture;
         mCaptureFor = size;
         startAutoFocus(capture);

@@ -10,8 +10,14 @@
 #undef Java_android_os_Binder_clearCallingIdentity
 #undef Java_android_os_Binder_restoreCallingIdentity
 #include <stdint.h>
+#include <time.h>
 #include <stdlib.h>
 static _Thread_local jlong identity;
+JNIEXPORT jlong JNICALL Java_android_os_SystemClock_elapsedRealtime(JNIEnv* env, jclass type) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (jlong)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
 JNIEXPORT jint JNICALL Java_android_os_Binder_getCallingPid(JNIEnv* env, jclass type) {
     return identity ? (jint)identity : getpid();
 }

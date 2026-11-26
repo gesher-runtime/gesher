@@ -3,7 +3,10 @@ package gesher.services;
 
 import android.Manifest;
 import android.app.ActivityThread;
+import android.app.AppOpsManager;
+import android.app.SyncNotedAppOp;
 import android.content.AttributionSourceState;
+import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageInfo;
@@ -11,25 +14,34 @@ import android.content.pm.PackageManager;
 import android.hardware.ICameraService;
 import android.hardware.camera2.ICameraDeviceCallbacks;
 import android.hardware.camera2.ICameraDeviceUser;
+import android.hardware.camera2.impl.CaptureResultExtras;
 import android.os.Binder;
+import android.os.IBinder;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.ServiceManager;
 import android.os.ServiceSpecificException;
 import android.os.UserHandle;
 import android.util.Size;
+import com.android.internal.app.IAppOpsCallback;
+import com.android.internal.app.IAppOpsService;
 import com.gesher.server.CameraService;
 import com.gesher.server.LegacyCamera;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Runs both complete production admission paths. Only package/permission answers and
- * camera enumeration are fixture boundaries; no hardware, capture, or remote Binder
- * observation is claimed. The selected camera never opens a native capture session.
+ * Runs both complete production admission paths and Camera2 AppOps ownership.
+ * Package, AppOps and device enumeration are controlled boundaries. Neither
+ * camera hardware nor remote Binder is used.
  */
 public final class CameraPermissionContractTest {
     private static final String OWNER = "com.gesher.camera.permission.owner";
@@ -107,6 +119,141 @@ public final class CameraPermissionContractTest {
         }
     }
 
+    private static final class CameraOps extends IAppOpsService.Default {
+        final Map<String, Integer> modes = new HashMap<>();
+        final Map<IAppOpsCallback, String> watchers = new HashMap<>();
+        final Map<IBinder, String> running = new HashMap<>();
+        boolean failCheck;
+
+        private int mode(int op, int uid, String name) {
+            check(op == AppOpsManager.OP_CAMERA && uid == Process.myUid(), "camera AppOps operation owner");
+            check(Binder.getCallingUid() == uid && Binder.getCallingPid() == Process.myPid(),
+                    "camera AppOps query inherited remote identity");
+            return modes.getOrDefault(name, AppOpsManager.MODE_ALLOWED);
+        }
+
+        @Override public int checkOperation(int op, int uid, String name) throws RemoteException {
+            if (failCheck) throw new RemoteException("controlled AppOps check failure");
+            return mode(op, uid, name);
+        }
+
+        @Override public void startWatchingModeWithFlags(int op, String name, int flags,
+                IAppOpsCallback watcher) {
+            check(op == AppOpsManager.OP_CAMERA && flags == AppOpsManager.WATCH_FOREGROUND_CHANGES,
+                    "watch camera mode and effective foreground transitions");
+            check(watchers.put(watcher, name) == null, "unique watcher per camera owner");
+        }
+
+        @Override public void stopWatchingMode(IAppOpsCallback watcher) {
+            check(watchers.remove(watcher) != null, "remove the exact watcher once");
+        }
+
+        @Override public SyncNotedAppOp startOperation(IBinder token, int op, int uid, String name,
+                String tag, boolean startDefault, boolean collect, String message,
+                boolean collectMessage, int flags, int chain) {
+            int mode = mode(op, uid, name);
+            if (mode == AppOpsManager.MODE_ALLOWED) {
+                check(running.put(token, name) == null, "start one token per open capture source");
+            }
+            return new SyncNotedAppOp(mode, op, tag, name);
+        }
+
+        @Override public void finishOperation(IBinder token, int op, int uid, String name, String tag) {
+            mode(op, uid, name);
+            check(name.equals(running.remove(token)), "finish the exact capture token once");
+        }
+
+        void notifyMode(String name, int mode) throws RemoteException {
+            modes.put(name, mode);
+            for (var watcher : new ArrayList<>(watchers.entrySet())) {
+                if (name.equals(watcher.getValue())) {
+                    watcher.getKey().opChanged(AppOpsManager.OP_CAMERA, Process.myUid(), name, "default:0");
+                }
+            }
+        }
+    }
+
+    private static void activeCamera2(CameraService service, Packages packages, CameraOps ops)
+            throws Exception {
+        CountDownLatch disabled = new CountDownLatch(1);
+        ICameraDeviceUser active = service.connectDevice(new ICameraDeviceCallbacks.Default() {
+            @Override public void onDeviceError(int error, CaptureResultExtras extras) {
+                if (error == ICameraDeviceCallbacks.ERROR_CAMERA_DISABLED) disabled.countDown();
+            }
+        }, "0", 0, 36, null, source(OWNER), 0, false);
+        var owners = (Map<?, ?>) field(CameraService.class, "mOpen").get(service);
+        Object owner = owners.get("0");
+        try {
+            ops.notifyMode(SIBLING, AppOpsManager.MODE_ERRORED);
+            denied(service, source(SIBLING), "hard AppOps denial cannot evict an allowed owner");
+            ops.notifyMode(SIBLING, AppOpsManager.MODE_IGNORED);
+            denied(service, source(SIBLING), ICameraService.ERROR_DISABLED,
+                    "soft AppOps denial cannot evict an allowed owner");
+            check(ops.watchers.size() == 1 && owners.get("0") == owner && ops.running.isEmpty(),
+                    "admission watches policy without starting capture use or changing owner");
+            ops.failCheck = true;
+            denied(service, source(SIBLING), ICameraService.ERROR_DISABLED, "failed AppOps authority");
+            ops.failCheck = false;
+            check(ops.watchers.size() == 1, "failed policy check removes its provisional watcher");
+
+            // Invoke the service boundary used before Media Foundation opens the
+            // source. The camera itself stays isolated from hardware on this host.
+            Object user = field(owner.getClass(), "user").get(owner);
+            Method start = CameraService.class.getDeclaredMethod("startCapture", String.class,
+                    user.getClass());
+            start.setAccessible(true);
+            Method failed = CameraService.class.getDeclaredMethod("captureFailedToOpen", String.class,
+                    user.getClass());
+            failed.setAccessible(true);
+            check((boolean) start.invoke(service, "0", user), "the allowed capture starts");
+            check((boolean) start.invoke(service, "0", user) && ops.running.size() == 1,
+                    "same camera source does not nest start accounting");
+            failed.invoke(service, "0", user);
+            check(ops.running.isEmpty(), "failed native open finishes source accounting");
+            check((boolean) start.invoke(service, "0", user), "a failed native open can retry");
+
+            IAppOpsCallback watcher = ops.watchers.keySet().iterator().next();
+            watcher.opChanged(AppOpsManager.OP_CAMERA, Process.myUid() + 1, OWNER, "default:0");
+            check(owners.get("0") == owner && ops.running.size() == 1, "ignore unrelated UID callback");
+            ops.notifyMode(OWNER, AppOpsManager.MODE_IGNORED);
+            check(disabled.await(5, TimeUnit.SECONDS), "active client receives CAMERA_DISABLED");
+            check(owners.isEmpty() && ops.running.isEmpty() && ops.watchers.isEmpty(),
+                    "revocation retires the owner, operation and watcher");
+            try {
+                active.beginConfigure();
+                throw new AssertionError("disabled owner accepted a new camera configuration");
+            } catch (ServiceSpecificException expected) {
+                check(expected.errorCode == ICameraService.ERROR_DISCONNECTED, "disabled owner disconnected");
+            }
+            denied(service, source(OWNER), ICameraService.ERROR_DISABLED, "revoked owner cannot reopen");
+            ops.notifyMode(OWNER, AppOpsManager.MODE_ALLOWED);
+            ICameraDeviceUser superseded = camera2(service, source(OWNER));
+            try {
+                Object newOwner = owners.get("0");
+                Object newUser = field(newOwner.getClass(), "user").get(newOwner);
+                check((boolean) start.invoke(service, "0", newUser), "restored access starts on reopen");
+                ICameraDeviceUser replacement = camera2(service, source(OWNER));
+                try {
+                    check(ops.watchers.size() == 1 && ops.running.isEmpty(),
+                            "new owner finishes the old token and removes only the old watcher");
+                    // Live permission loss is checked again when policy notifies us.
+                    packages.granted = false;
+                    ops.notifyMode(OWNER, AppOpsManager.MODE_ALLOWED);
+                    check(owners.isEmpty() && ops.watchers.isEmpty(), "runtime permission loss disconnects");
+                } finally {
+                    replacement.disconnect();
+                    packages.granted = true;
+                }
+            } finally {
+                superseded.disconnect();
+            }
+        } finally {
+            active.disconnect();
+            ops.failCheck = false;
+            ops.modes.clear();
+        }
+    }
+
     private static AttributionSourceState source(String name) {
         AttributionSourceState source = new AttributionSourceState();
         source.uid = Process.myUid();
@@ -122,13 +269,18 @@ public final class CameraPermissionContractTest {
 
     private static void denied(CameraService service, AttributionSourceState source, String reason)
             throws Exception {
+        denied(service, source, ICameraService.ERROR_PERMISSION_DENIED, reason);
+    }
+
+    private static void denied(CameraService service, AttributionSourceState source, int error,
+            String reason) throws Exception {
         Object previous = ((Map<?, ?>) field(CameraService.class, "mOpen").get(service)).get("0");
         try {
             ICameraDeviceUser unexpected = camera2(service, source);
             if (unexpected != null) unexpected.disconnect();
             throw new AssertionError(reason + ": Camera2 admitted the caller");
         } catch (ServiceSpecificException expected) {
-            check(expected.errorCode == ICameraService.ERROR_PERMISSION_DENIED,
+            check(expected.errorCode == error,
                     reason + ": wrong Camera2 error");
         }
         check(((Map<?, ?>) field(CameraService.class, "mOpen").get(service)).get("0") == previous,
@@ -165,6 +317,12 @@ public final class CameraPermissionContractTest {
         Field devices = field(CameraService.class, "mDevices");
         Object oldDevices = devices.get(service);
         Packages packages = new Packages();
+        CameraOps ops = new CameraOps();
+        @SuppressWarnings("unchecked")
+        Map<String, IBinder> services = (Map<String, IBinder>) field(ServiceManager.class, "sCache").get(null);
+        Binder opsBinder = new Binder();
+        opsBinder.attachInterface(ops, IAppOpsService.class.getName());
+        IBinder oldOps = services.put(Context.APP_OPS_SERVICE, opsBinder);
         Object thread = allocate(ActivityThread.class);
         Class<?> boundClass = Class.forName("android.app.ActivityThread$AppBindData");
         Object bound = allocate(boundClass);
@@ -188,6 +346,7 @@ public final class CameraPermissionContractTest {
             check(packages.permissionReads >= 2, "both APIs must query the runtime grant");
             packages.granted = true;
             both(service, application, OWNER, true, "explicit runtime grant");
+            activeCamera2(service, packages, ops);
             ICameraDeviceUser active = camera2(service, source(OWNER));
             packages.granted = false;
             denied(service, source(OWNER), "revoked caller cannot evict an existing owner");
@@ -238,12 +397,14 @@ public final class CameraPermissionContractTest {
         } finally {
             Binder.restoreCallingIdentity(initialIdentity);
             LegacyCamera.release(null);
+            if (oldOps == null) services.remove(Context.APP_OPS_SERVICE);
+            else services.put(Context.APP_OPS_SERVICE, oldOps);
             manager.set(null, oldManager);
             current.set(null, oldThread);
             devices.set(service, oldDevices);
         }
         System.out.println("CameraPermissionContractTest: both admission paths, live grants and UID attribution passed ("
-                + checks + " checks; isolated package and device boundaries)");
+                + checks + " checks; includes Camera2 AppOps lifetime and revoke)");
     }
 
     public static void main(String[] args) throws Exception {
