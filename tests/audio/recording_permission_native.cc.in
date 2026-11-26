@@ -1,6 +1,7 @@
 /* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
-// Exact production JNI resolver body. JNI lookup/exception outcomes are the fixture boundary.
+// Exact production JNI resolver body. JNI lookup/attach/exception outcomes are the fixture boundary.
 #include <jni.h>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -9,15 +10,25 @@
 using namespace gesher::media;
 
 static JNINativeInterface_ functions;
+static JNIInvokeInterface_ vm_functions;
 static JNIEnv environment{&functions};
-static JNIEnv* attached;
-static int outcome, clears, releases, calls, checks;
+static JavaVM runtime_vm{&vm_functions};
+static std::atomic<JavaVM*> g_jvm{nullptr};
+static JavaVM* env_vm = &runtime_vm;
+static JavaVM* fallback_vm = nullptr;
+static bool attached_now = true;
+static bool attach_null_env = false;
+static jint getenv_override = 0;
+static jint attach_status = JNI_OK;
+static int outcome, clears, releases, calls, checks, attaches, detaches;
 static bool exception;
+
 static void check(bool condition, const char* message) {
     if (!condition) { std::fprintf(stderr, "recording permission failure: %s\n", message); std::exit(1); }
     ++checks;
 }
-static JNIEnv* AttachedEnv(const char*) { return attached; }
+[[maybe_unused]] static JavaVM* Vm() { return fallback_vm; }
+[[maybe_unused]] static JNIEnv* AttachedEnv(const char*) { return attached_now ? &environment : nullptr; }
 static bool CheckException(JNIEnv* env, const char*) {
     if (!env->ExceptionCheck()) return false;
     env->ExceptionClear(); return true;
@@ -25,11 +36,67 @@ static bool CheckException(JNIEnv* env, const char*) {
 
 @MAY_RECORD_AUDIO@
 
-static void reset(int value) {
-    outcome = value; clears = releases = calls = 0; exception = false; attached = &environment;
+static jint JNICALL FixtureGetJavaVM(JNIEnv*, JavaVM** vm) {
+    *vm = env_vm;
+    return env_vm != nullptr ? JNI_OK : JNI_ERR;
 }
+static jint JNICALL FixtureGetEnv(JavaVM*, void** penv, jint version) {
+    check(version == JNI_VERSION_1_6, "MayRecordAudio requests JNI_VERSION_1_6");
+    if (getenv_override != 0) {
+        *penv = nullptr;
+        return getenv_override;
+    }
+    if (!attached_now) {
+        *penv = nullptr;
+        return JNI_EDETACHED;
+    }
+    *penv = &environment;
+    return JNI_OK;
+}
+static jint JNICALL FixtureAttach(JavaVM*, void** penv, void* args) {
+    ++attaches;
+    check(!attached_now, "only detached threads attach to the JVM");
+    if (args != nullptr) {
+        auto* attach_args = static_cast<JavaVMAttachArgs*>(args);
+        check(attach_args->version == JNI_VERSION_1_6, "attach uses JNI_VERSION_1_6");
+    }
+    if (attach_status != JNI_OK) {
+        *penv = nullptr;
+        return attach_status;
+    }
+    if (attach_null_env) {
+        *penv = nullptr;
+        return JNI_OK;
+    }
+    attached_now = true;
+    *penv = &environment;
+    return JNI_OK;
+}
+static jint JNICALL FixtureDetach(JavaVM*) {
+    ++detaches;
+    check(attached_now, "DetachCurrentThread requires an attached thread");
+    check(!exception, "DetachCurrentThread must not run with a pending JNI exception");
+    attached_now = false;
+    return JNI_OK;
+}
+
+static void reset(int value, bool is_attached = true) {
+    outcome = value;
+    clears = releases = calls = attaches = detaches = 0;
+    exception = false;
+    attached_now = is_attached;
+    attach_null_env = false;
+    getenv_override = 0;
+    attach_status = JNI_OK;
+    env_vm = &runtime_vm;
+    fallback_vm = nullptr;
+    g_jvm.store(&runtime_vm, std::memory_order_release);
+}
+
 int main() {
+    functions.GetJavaVM = FixtureGetJavaVM;
     functions.FindClass = [](JNIEnv*, const char* name) -> jclass {
+        check(attached_now, "FindClass runs only on an attached thread");
         check(std::strcmp(name, "com/gesher/server/AudioService") == 0, "the real policy class is queried");
         if (outcome == 1) { exception = true; return nullptr; }
         return reinterpret_cast<jclass>(1);
@@ -49,8 +116,25 @@ int main() {
     functions.ExceptionClear = [](JNIEnv*) { ++clears; exception = false; };
     functions.DeleteLocalRef = [](JNIEnv*, jobject) { ++releases; };
 
-    reset(0); attached = nullptr;
-    check(!MayRecordAudio(nullptr), "no attached Java environment denies");
+    vm_functions.GetEnv = FixtureGetEnv;
+    vm_functions.AttachCurrentThread = FixtureAttach;
+    vm_functions.AttachCurrentThreadAsDaemon = FixtureAttach;
+    vm_functions.DetachCurrentThread = FixtureDetach;
+
+    // 1. Fail-closed when no JavaVM* has been initialized yet.
+    reset(0, false);
+    g_jvm.store(nullptr, std::memory_order_release);
+    check(!MayRecordAudio(nullptr), "uninitialized JavaVM denies recording");
+    check(attaches == 0 && detaches == 0 && calls == 0, "uninitialized JavaVM never attaches");
+
+    // 2. Capturing JavaVM* via env->GetJavaVM(&g_jvm) on an attached JNI call.
+    reset(0, true);
+    g_jvm.store(nullptr, std::memory_order_release);
+    check(MayRecordAudio(&environment), "attached call with explicit env grants and records JavaVM");
+    check(g_jvm.load(std::memory_order_acquire) == &runtime_vm, "MayRecordAudio captures JavaVM from JNIEnv");
+    check(attaches == 0 && detaches == 0, "explicit env neither attaches nor detaches");
+
+    // 3. Lookup/exception/grant/denial controls with explicit JNIEnv*.
     reset(1);
     check(!MayRecordAudio(&environment), "missing Java policy class denies");
     check(clears == 1 && releases == 0 && calls == 0 && !exception, "missing class clears lookup failure");
@@ -66,13 +150,83 @@ int main() {
     reset(0);
     check(MayRecordAudio(&environment), "granted Java policy propagates");
     check(releases == 1 && calls == 1, "granted policy releases class");
+
+    // 4. Already-attached thread calling MayRecordAudio(nullptr) / RecordingAllowed():
+    //    must NOT re-attach and must NOT DetachCurrentThread!
     SetRecordingPermissionProvider(nullptr);
     check(!RecordingAllowed(), "native process without provider denies");
     SetRecordingPermissionProvider([] { return MayRecordAudio(nullptr); });
-    check(RecordingAllowed(), "native adapters consult the Java provider");
+
+    reset(0, true);
+    check(RecordingAllowed(), "attached thread with null env consults Java provider");
+    check(attaches == 0 && detaches == 0 && attached_now, "attached thread stays attached without DetachCurrentThread");
+
+    reset(4, true);
+    check(!RecordingAllowed(), "attached thread with null env propagates denial");
+    check(attaches == 0 && detaches == 0 && attached_now, "attached thread denial does not detach caller");
+
+    // 5. Detached native thread (AAudio / OpenSL ES, env == nullptr):
+    //    must attach temporarily, check live permission, and RAII-detach!
+    reset(0, false);
+    check(RecordingAllowed(), "detached native thread with granted permission is allowed");
+    check(attaches == 1 && detaches == 1 && !attached_now && releases == 1 && calls == 1,
+          "detached native grant attaches once and RAII-detaches");
+
+    reset(4, false);
+    check(!RecordingAllowed(), "detached native thread with denied permission is rejected");
+    check(attaches == 1 && detaches == 1 && !attached_now && releases == 1 && calls == 1,
+          "detached native denial attaches once and RAII-detaches");
+
+    // Live grant -> revoke -> grant transitions across detached native calls (no caching).
+    reset(0, false);
+    check(RecordingAllowed(), "detached native provider observes initial grant");
+    check(!attached_now && attaches == 1 && detaches == 1, "detached after first check");
     outcome = 4;
-    check(!RecordingAllowed(), "native provider does not cache an earlier grant");
+    check(!RecordingAllowed(), "detached native provider does not cache an earlier grant");
+    check(!attached_now && attaches == 2 && detaches == 2, "detached after revoke check");
     outcome = 0;
-    check(RecordingAllowed(), "native provider observes a later grant");
+    check(RecordingAllowed(), "detached native provider observes a later grant");
+    check(!attached_now && attaches == 3 && detaches == 3, "detached after re-grant check");
+
+    // Detached native thread failure & exception unwind controls.
+    reset(1, false);
+    check(!RecordingAllowed(), "detached native thread denies when policy class is missing");
+    check(attaches == 1 && detaches == 1 && !attached_now && clears == 1 && !exception,
+          "detached missing-class path clears exception and detaches");
+
+    reset(2, false);
+    check(!RecordingAllowed(), "detached native thread denies when policy method is missing");
+    check(attaches == 1 && detaches == 1 && !attached_now && clears == 1 && releases == 1 && !exception,
+          "detached missing-method path releases class, clears exception and detaches");
+
+    reset(3, false);
+    check(!RecordingAllowed(), "detached native thread denies when Java policy throws");
+    check(attaches == 1 && detaches == 1 && !attached_now && clears == 1 && releases == 1 && !exception,
+          "detached throwing-policy path clears exception before RAII detach");
+
+    reset(0, false);
+    attach_status = JNI_ERR;
+    check(!RecordingAllowed(), "attach failure fails closed");
+    check(attaches == 1 && detaches == 0 && !attached_now && calls == 0,
+          "failed attach does not call DetachCurrentThread");
+
+    reset(0, false);
+    attach_null_env = true;
+    check(!RecordingAllowed(), "null JNIEnv from attach fails closed");
+    check(attaches == 1 && detaches == 0 && !attached_now && calls == 0,
+          "null attach env does not call DetachCurrentThread");
+
+    reset(0, false);
+    getenv_override = JNI_EVERSION;
+    check(!RecordingAllowed(), "unexpected GetEnv error fails closed");
+    check(attaches == 0 && detaches == 0 && calls == 0, "unexpected GetEnv error never attaches");
+
+    // Fallback to Vm() when g_jvm was not populated directly yet.
+    reset(0, false);
+    g_jvm.store(nullptr, std::memory_order_release);
+    fallback_vm = &runtime_vm;
+    check(RecordingAllowed(), "detached native thread falls back to media Vm() when g_jvm is unset");
+    check(attaches == 1 && detaches == 1 && !attached_now, "Vm() fallback attaches and RAII-detaches");
+
     std::printf("Recording permission native resolver all passed: %d checks\n", checks);
 }

@@ -91,6 +91,7 @@ struct SocketDescription {
   // sender's credentials (winsock.cc's UnixDatagramHeader); SO_PASSCRED delivers them.
   std::atomic<bool> unix_datagram_pair{false};
   std::atomic<bool> pass_credentials{false};  // SO_PASSCRED
+  std::atomic<bool> recv_pktinfo{false};  // IP_PKTINFO: recvmsg delivers in_pktinfo
   // A stream pair (SOCK_STREAM): SCM_RIGHTS goes through the broker's queue for
   // the connection, keyed by both loopback ports (stream_ports: local << 16 |
   // peer, 0 until first needed), at stream positions that SendOwned and
@@ -190,6 +191,21 @@ int UnixDatagramPayload(int available);
 // A stream pair end's loopback ports (SocketDescription::stream_ports, cached
 // there); false with errno if they cannot be known.
 bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint16_t* peer);
+
+// IP_PKTINFO of an IPv4 datagram: the interface it arrived on, its
+// destination address and the local address it was received at (Linux's
+// ipi_spec_dst, fib_compute_spec_dst), each 4 bytes in network order.
+struct PacketInfo {
+  bool valid = false;
+  uint32_t ifindex = 0;
+  uint8_t address[4] = {};
+  uint8_t local[4] = {};
+};
+// Asks Windows to report each received IPv4 datagram's packet information.
+int SetPacketInfo(Socket s, bool on);
+// While set on this thread, a UDP receive (Recv) stores its IPv4 datagram's
+// packet information there (a dual-stack IPv6 socket's v4-mapped ones too) (valid = false if there was none). Null: none.
+void SetReceivePacketInfo(PacketInfo* info);
 
 int GetOption(Socket s, Option option, int* value);
 int SetOption(Socket s, Option option, int value);

@@ -1,0 +1,21 @@
+{
+  "additional_sources": {
+    "tools/windows4/TsfOutputMetadataChecks.cs": "d1e37f5f6dd8df17e562fba08785a8cad1d78dcc81a9775db4432d76579d3b00"
+  },
+  "after_sha256": {
+    "tools/windows4/TsfJobSupervisor.cs": "15dd6752990656078caf08aa20f45dbce3fca734847cbe5948f27871cc05f20e",
+    "tools/windows4/test-tsf-job-supervisor.ps1": "2a87580b1c5cb7af735c9536807798854f439e0601bf648f1d59b580c07bdf05"
+  },
+  "baseline": "3b2eaca95b5ddd9cee3c3db4e430460e512eb355",
+  "baseline_policy_sha256": "8ea68df5b79b1ba3a9f0feeb49a9a96d3201264a0275f8b2b49d7b83c570ead0",
+  "before_sha256": {
+    "tools/windows4/TsfJobSupervisor.cs": "070a03b1e1cc55538cd8bd5e5ff8bb2c65db5998b4d5442fc084f97f8c875359",
+    "tools/windows4/test-tsf-job-supervisor.ps1": "f73d32025218e9d962597d29107b10d5b9cf337ed85cdc1ad1a14d5a4903381e"
+  },
+  "feature_head": "8d955bd7b6ec85b84fa31f7df685197ddb963276",
+  "patch_sha256": "e3768c81c5a196eb83c04718664ecbf9a148fa721641b0d2d1fd059a4e210e72",
+  "paths": [
+    "tools/windows4/TsfJobSupervisor.cs",
+    "tools/windows4/test-tsf-job-supervisor.ps1"
+  ]
+}

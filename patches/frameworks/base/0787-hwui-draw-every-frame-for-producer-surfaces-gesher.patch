@@ -1,0 +1,41 @@
+From: Gesher Authors
+Subject: [PATCH] hwui: draw every frame posted to a surface the compositor does not consume
+
+hwui drops a frame as AlreadyDrawn when its vsync time is within 2 ms of the
+last swap's, so one frame is drawn per display vsync pulse. A Surface whose
+consumer is not the display compositor (an ImageReader's, a SurfaceTexture's)
+has no pulse to pace: Surface.lockHardwareCanvas gives each
+unlockCanvasAndPost its own timestamp and its consumer expects a frame for
+every post. Frames posted less than 2 ms after one another were dropped, with
+no image and no onImageAvailable. A surface that does not queue to the window
+composer (NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER is 0: Gesher's QueueSurface of
+an ImageReader or a SurfaceTexture) is no longer subject to that skip. Window
+surfaces are unchanged, and so is a SurfaceView's: its BLAST surface (also a
+QueueSurface in Gesher) reports 1, as it does on Android where it is composited
+into the window, and keeps the pacing.
+---
+diff --git a/libs/hwui/renderthread/CanvasContext.cpp b/libs/hwui/renderthread/CanvasContext.cpp
+--- a/libs/hwui/renderthread/CanvasContext.cpp
++++ b/libs/hwui/renderthread/CanvasContext.cpp
+@@ -519,7 +519,21 @@
+         // the vsync was estimated due to being slow handling the signal.
+         // See the logic in TimeLord#computeFrameTimeNanos or in
+         // Choreographer.java for details on when this happens
++#ifdef GESHER
++        // Gesher: a vsync pulse paces frames shown by the display compositor. A
++        // surface whose consumer is not that compositor (an ImageReader or a
++        // SurfaceTexture, drawn with Surface.lockHardwareCanvas) takes every
++        // frame posted to it, so none is dropped for being soon after the last. A
++        // SurfaceView's surface is composited into its window: it reports 1.
++        int queuesToComposer = 1;
++        ANativeWindow* const window = mNativeSurface ? mNativeSurface->getNativeWindow() : nullptr;
++        if (window != nullptr) {
++            window->query(window, NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER, &queuesToComposer);
++        }
++        if (vsyncDelta < 2_ms && queuesToComposer != 0) {
++#else
+         if (vsyncDelta < 2_ms) {
++#endif
+             // Already drew for this vsync pulse, UI draw request missed
+             // the deadline for RT animations
+             info.out.skippedFrameReason = SkippedFrameReason::AlreadyDrawn;

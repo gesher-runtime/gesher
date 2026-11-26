@@ -1,0 +1,223 @@
+// Copyright (C) 2026 The Gesher Authors; All rights reserved.
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <deque>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+// Isolated STA/COM boundary. Production functions below are extracted verbatim.
+using HRESULT = int32_t;
+using LPCWSTR = const wchar_t*;
+using HWND = void*;
+constexpr HRESULT S_OK = 0, E_FAIL = -1;
+#define SUCCEEDED(hr) ((hr) >= 0)
+#define FAILED(hr) ((hr) < 0)
+constexpr int kFailed = 2, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC = 0;
+HWND g_parking = nullptr;
+HWND GetFocus() { return nullptr; }
+bool IsChild(HWND, HWND) { return false; }
+HWND GetParent(HWND) { return nullptr; }
+void SetFocus(HWND) {}
+std::wstring Hex(HRESULT hr) { return std::to_wstring(hr); }
+struct ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler {
+  std::function<HRESULT(HRESULT, LPCWSTR)> invoke;
+  template<class F> explicit ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler(F f) : invoke(std::move(f)) {}
+};
+#define GESHER_CALLBACK(Type, ...) std::make_shared<Type>(__VA_ARGS__)
+struct FakeWebView {
+  struct Pending { std::wstring script; std::function<HRESULT(HRESULT, LPCWSTR)> done; };
+  struct Record { std::wstring command, target; std::vector<std::wstring> scripts; };
+  std::deque<Pending> pending;
+  std::map<std::wstring, std::wstring> scripts;
+  std::vector<Record> records;
+  int next_id = 0, add_calls = 0, remove_calls = 0;
+  HRESULT next_add = S_OK, next_remove = S_OK;
+  HRESULT AddScriptToExecuteOnDocumentCreated(LPCWSTR script, ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler* done) {
+    ++add_calls;
+    if (FAILED(next_add)) { HRESULT value = next_add; next_add = S_OK; return value; }
+    pending.push_back({script, done->invoke}); return S_OK;
+  }
+  HRESULT RemoveScriptToExecuteOnDocumentCreated(LPCWSTR id) {
+    ++remove_calls;
+    if (FAILED(next_remove)) { HRESULT value = next_remove; next_remove = S_OK; return value; }
+    scripts.erase(id); return S_OK;
+  }
+  std::vector<std::wstring> Active() const { std::vector<std::wstring> out; for (const auto& s : scripts) out.push_back(s.second); return out; }
+  HRESULT RecordCommand(std::wstring command, std::wstring target = L"") { records.push_back({std::move(command), std::move(target), Active()}); return S_OK; }
+  HRESULT NavigateToString(LPCWSTR text) { return RecordCommand(L"navigate", text); }
+  HRESULT Reload() { return RecordCommand(L"reload"); }
+  HRESULT Stop() { return RecordCommand(L"stop"); }
+  HRESULT GoBack() { return RecordCommand(L"back"); }
+  HRESULT GoForward() { return RecordCommand(L"forward"); }
+  HRESULT OpenDevToolsWindow() { return RecordCommand(L"devtools"); }
+  void Complete(HRESULT hr, bool missing_id = false) {
+    if (pending.empty()) { std::fprintf(stderr, "unexpected empty completion queue\n"); std::abort(); }
+    Pending p = std::move(pending.front()); pending.pop_front();
+    std::wstring id;
+    if (SUCCEEDED(hr)) { id = L"script-" + std::to_wstring(++next_id); scripts[id] = p.script; }
+    p.done(hr, SUCCEEDED(hr) && !missing_id ? id.c_str() : nullptr);
+  }
+  size_t Count(const std::wstring& command) const { return std::count_if(records.begin(), records.end(), [&](const Record& r) { return r.command == command; }); }
+};
+struct FakeController { void MoveFocus(int) {} };
+struct Host {
+  struct Impl;
+  enum Command { kReload=1, kStop, kGoBack, kGoForward, kFocus, kBlur, kDevTools };
+  std::shared_ptr<Impl> impl_;
+  explicit Host(std::shared_ptr<Impl> i) : impl_(std::move(i)) {}
+  void NavigateToString(const std::wstring& html);
+  void Run(Command command);
+  void SetDocumentScript(const std::wstring& script);
+};
+struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
+  bool ready = true, destroyed = false, closing = false, failed = false;
+  bool document_script_in_flight = false, api_navigation = false;
+  std::wstring document_script_id;
+  uint64_t document_script_generation = 0, navigation_generation = 0;
+  std::vector<std::function<void(Impl*)>> pending;
+  std::deque<std::function<void(Impl*)>> document_script_waiters;
+  std::vector<std::function<void(void*)>> service_waiting;
+  std::shared_ptr<FakeWebView> webview = std::make_shared<FakeWebView>();
+  std::shared_ptr<FakeController> controller = std::make_shared<FakeController>();
+  HWND container = nullptr;
+  int reports = 0;
+  // Popup deferrals are covered by the separate production popup contract.
+  void CancelPendingNewWindows() {}
+  void Report(int, int, int32_t, const std::wstring&) { ++reports; }
+};
+using Impl = Host::Impl;
+std::deque<std::function<void()>> sta;
+void PostToWebViewThread(std::function<void()> fn) { sta.push_back(std::move(fn)); }
+void Pump() { while (!sta.empty()) { auto fn = std::move(sta.front()); sta.pop_front(); fn(); } }
+
+@PRODUCTION@
+
+void CompleteReady(const std::shared_ptr<Impl>& impl) {
+  impl->ready = true;
+@DRAIN_PENDING@
+}
+
+int failures = 0, checks = 0;
+void Check(bool result, const char* name) { ++checks; std::printf("%s %s\n", result ? "PASS" : "FAIL", name); if (!result) ++failures; }
+void Startup() {
+  auto i = std::make_shared<Impl>(); Host h(i); i->ready = false;
+  h.SetDocumentScript(L"storage-disabled"); h.SetDocumentScript(L"storage-enabled"); h.NavigateToString(L"startup"); Pump();
+  CompleteReady(i);
+  Check(i->webview->add_calls == 1 && i->webview->records.empty(), "startup waits for initial script");
+  i->webview->Complete(S_OK);
+  Check(i->webview->add_calls == 2 && i->webview->records.empty(), "startup waits for replacement script");
+  i->webview->Complete(S_OK);
+  Check(i->webview->records.size() == 1 && i->webview->records[0].scripts == std::vector<std::wstring>{L"storage-enabled"}, "startup navigation sees only final settings");
+}
+void StopPending() {
+  auto i = std::make_shared<Impl>(); Host h(i);
+  h.SetDocumentScript(L"settings"); h.NavigateToString(L"must-not-start"); h.Run(Host::kStop); Pump();
+  Check(i->webview->Count(L"stop") == 1, "stop reaches active renderer without waiting for script callback");
+  i->webview->Complete(S_OK);
+  Check(i->webview->Count(L"navigate") == 0, "stopped queued navigation never starts after completion");
+  h.NavigateToString(L"new-request"); Pump();
+  Check(i->webview->records.back().target == L"new-request", "a later navigation remains usable after stop");
+}
+void StopActive() {
+  auto i = std::make_shared<Impl>(); Host h(i);
+  h.NavigateToString(L"already-loading"); Pump();
+  h.SetDocumentScript(L"replacement"); h.Run(Host::kStop); Pump();
+  Check(i->webview->Count(L"stop") == 1, "active load stops while settings registration is pending");
+  i->webview->Complete(S_OK);
+}
+void FailedSettings() {
+  auto i = std::make_shared<Impl>(); Host h(i);
+  h.SetDocumentScript(L"storage-disabled"); h.NavigateToString(L"dependent-page"); Pump();
+  i->webview->Complete(E_FAIL);
+  Check(i->reports != 0, "failed required settings registration is reported");
+  Check(i->webview->Count(L"navigate") == 0, "failed required settings do not silently launch dependent page");
+}
+void Interleaved() {
+  auto i = std::make_shared<Impl>(); Host h(i);
+  h.SetDocumentScript(L"first"); h.NavigateToString(L"one"); h.SetDocumentScript(L"second");
+  h.Run(Host::kReload); h.SetDocumentScript(L""); h.Run(Host::kGoForward); Pump();
+  Check(i->webview->records.empty(), "interleaved commands initially wait for settings");
+  i->webview->Complete(S_OK);
+  Check(i->webview->records.size() == 1 && i->webview->records[0].scripts == std::vector<std::wstring>{L"first"},
+        "first interleaved navigation uses first settings");
+  i->webview->Complete(S_OK);
+  Check(i->webview->records.size() == 3 && i->webview->records[1].command == L"reload"
+        && i->webview->records[1].scripts == std::vector<std::wstring>{L"second"},
+        "reload follows replacement settings");
+  Check(i->webview->records.back().command == L"forward" && i->webview->records.back().scripts.empty(),
+        "empty script clears settings before following history navigation");
+}
+void StopBeforeReadyAndPreserveSettings() {
+  auto i = std::make_shared<Impl>(); Host h(i); i->ready = false;
+  h.SetDocumentScript(L"old"); h.NavigateToString(L"canceled-before-ready");
+  h.SetDocumentScript(L"latest"); h.Run(Host::kStop); h.NavigateToString(L"after-stop"); Pump();
+  Check(i->webview->Count(L"stop") == 1, "stop is dispatched before controller readiness");
+  CompleteReady(i);
+  i->webview->Complete(S_OK); i->webview->Complete(S_OK);
+  Check(i->webview->Count(L"navigate") == 1 && i->webview->records.back().target == L"after-stop",
+        "stop invalidates only older pre-ready loads");
+  Check(i->webview->records.back().scripts == std::vector<std::wstring>{L"latest"},
+        "stop preserves queued settings for a later load");
+}
+void StopQueuedHistory() {
+  auto i = std::make_shared<Impl>(); Host h(i);
+  h.SetDocumentScript(L"settings"); h.Run(Host::kReload); h.Run(Host::kGoBack); h.Run(Host::kGoForward);
+  h.Run(Host::kStop); Pump(); i->webview->Complete(S_OK);
+  Check(i->webview->Count(L"stop") == 1 && i->webview->Count(L"reload") == 0
+        && i->webview->Count(L"back") == 0 && i->webview->Count(L"forward") == 0,
+        "stop cancels queued reload and history commands");
+}
+void OtherSettingsFailures() {
+  for (bool ready : {false, true}) {
+    auto i = std::make_shared<Impl>(); Host h(i); i->ready = ready; i->webview->next_add = E_FAIL;
+    h.SetDocumentScript(L"required"); h.NavigateToString(L"must-not-start"); h.Run(Host::kReload); Pump();
+    if (!ready) CompleteReady(i);
+    Check(i->reports == 1, ready ? "synchronous registration failure is reported" : "startup registration failure is reported");
+    Check(i->webview->Count(L"navigate") == 0 && i->webview->Count(L"reload") == 0,
+          ready ? "synchronous failure blocks later navigation" : "startup failure stops already-detached readiness queue");
+  }
+  {
+    auto i = std::make_shared<Impl>(); Host h(i);
+    h.SetDocumentScript(L"required"); h.NavigateToString(L"must-not-start"); Pump();
+    i->webview->Complete(S_OK, true);
+    Check(i->reports == 1 && i->webview->Count(L"navigate") == 0, "missing script identifier is an explicit registration failure");
+  }
+  {
+    auto i = std::make_shared<Impl>(); Host h(i);
+    h.SetDocumentScript(L"old"); Pump(); i->webview->Complete(S_OK);
+    i->webview->next_remove = E_FAIL;
+    h.SetDocumentScript(L"new"); h.NavigateToString(L"must-not-start"); Pump();
+    Check(i->reports == 1 && i->webview->Count(L"navigate") == 0, "failed old-script removal blocks navigation with mixed settings");
+  }
+}
+void RetiredCallbacks() {
+  for (int phase = 0; phase < 3; ++phase) {
+    auto i = std::make_shared<Impl>(); Host h(i);
+    h.SetDocumentScript(L"required"); h.NavigateToString(L"must-not-start"); Pump();
+    if (phase == 0) i->closing = true;
+    if (phase == 1) i->destroyed = true;
+    if (phase == 2) Fail(i.get(), E_FAIL, L"other host failure");
+    i->webview->Complete(S_OK);
+    Check(i->webview->Count(L"navigate") == 0 && i->document_script_waiters.empty(),
+          "late script completion cannot navigate a retired or failed host");
+  }
+  std::shared_ptr<FakeWebView> retained;
+  std::weak_ptr<Impl> weak;
+  {
+    auto i = std::make_shared<Impl>(); Host h(i); weak = i; retained = i->webview;
+    h.SetDocumentScript(L"required"); Pump();
+  }
+  Check(weak.expired(), "script callback does not retain a dead Host");
+  retained->Complete(S_OK);
+  Check(retained->records.empty(), "callback after host lifetime performs no navigation");
+}
+int main() {
+  Startup(); StopPending(); StopActive(); FailedSettings(); Interleaved();
+  StopBeforeReadyAndPreserveSettings(); StopQueuedHistory(); OtherSettingsFailures(); RetiredCallbacks();
+  std::printf("%d checks, %d failures\n", checks, failures); return failures ? 1 : 0;
+}

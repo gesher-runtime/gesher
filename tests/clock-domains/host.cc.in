@@ -21,6 +21,13 @@
 using DWORD = uint32_t;
 using LONGLONG = int64_t;
 using ULONGLONG = unsigned long long;
+using LONG = int32_t;
+// The futex deadline code declares the directed-signal interrupt cell
+// (gesher/futex_interrupt.h); no wait here attaches one.
+struct gesher_futex_interrupt { volatile LONG requested; };
+static LONG InterlockedExchange(volatile LONG* target, LONG value) {
+  return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST);
+}
 struct LARGE_INTEGER { int64_t QuadPart; };
 static constexpr DWORD INFINITE = 0xffffffff;
 static int64_t awake = 10000000000LL, suspended = 40000000000LL;
@@ -174,6 +181,11 @@ class CodecProbe {
   std::mutex mu_;
   std::condition_variable cv_;
   bool started_ = true, surface_eos_ = false;
+  // The clock probe is an active, stable encoder execution. Retain the real
+  // admission/generation checks in the extracted production callback; their
+  // state transitions are exercised by the separate codec lifecycle gate.
+  bool released_ = false, fatal_ = false, flushed_ = false, flush_requested_ = false;
+  uint64_t execution_generation_ = 0, wait_generation_ = 0;
   std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
 @CODEC_RENDER@
 @CODEC_INPUT@

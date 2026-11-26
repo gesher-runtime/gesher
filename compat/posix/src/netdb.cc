@@ -17,6 +17,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 
+#include <gesher/fork.h>
 #include <gesher/inet.h>
 
 #include <string>
@@ -85,6 +86,16 @@ int gesher_getaddrinfo_interface(const char* node, const char* service, const st
   if (res == nullptr) return EAI_FAIL;
   *res = nullptr;
   if (node == nullptr && service == nullptr) return EAI_NONAME;
+  if (node != nullptr && gesher::InForkedChild()) {
+    // A forked child (gesher/fork.h, ADR 0092) cannot resolve names: Windows'
+    // resolver (dnsapi) faults loading in a clone, and the shared resolver
+    // runs on a thread pool the child has not. Numeric addresses still parse.
+    unsigned char numeric[16];
+    if (inet_pton(AF_INET, node, numeric) != 1 && inet_pton(AF_INET6, node, numeric) != 1) {
+      errno = ENOSYS;
+      return EAI_SYSTEM;
+    }
+  }
   if (node != nullptr && !gesher_inet_allowed()) {
     // No INTERNET permission (<gesher/inet.h>): only numeric addresses resolve.
     unsigned char numeric[16];
@@ -198,6 +209,11 @@ const char* gai_strerror(int errcode) {
 
 int getnameinfo(const struct sockaddr* addr, socklen_t addrlen, char* host, socklen_t hostlen,
                 char* serv, socklen_t servlen, int flags) {
+  // A forked child cannot look names up (see getaddrinfo).
+  if (gesher::InForkedChild() && host != nullptr && hostlen != 0 && (flags & NI_NUMERICHOST) == 0) {
+    errno = ENOSYS;
+    return EAI_SYSTEM;
+  }
   ws::Address address;
   if (!ToAddress(addr, addrlen, &address)) return EAI_FAMILY;
   if (address.family != ws::Family::kInet && address.family != ws::Family::kInet6) {
