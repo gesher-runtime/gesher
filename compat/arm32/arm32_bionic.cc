@@ -96,7 +96,10 @@ Bionic32::Bionic32(Program& program) : state_(std::make_shared<State>(program)) 
 
 uint32_t Bionic32::State::Alloc(uint32_t requested) {
   const uint64_t rounded = RoundUp(std::max<uint64_t>(requested, 1));
-  if (rounded > kHeapEnd - 0xd1000000) return 0;
+  if (rounded > kHeapEnd - 0xd1000000) {
+    SetErrno(kLinuxEnomem);
+    return 0;
+  }
   std::lock_guard guard(mutex);
   uint32_t base = 0;
   size_t available = 0;
@@ -112,11 +115,16 @@ uint32_t Bionic32::State::Alloc(uint32_t requested) {
   const bool reuse = reusable_it != reusable.end();
   if (!reuse) {
     if (next_heap >= kHeapEnd || kHeapEnd - next_heap < kPage ||
-        rounded > kHeapEnd - next_heap - kPage)
+        rounded > kHeapEnd - next_heap - kPage) {
+      SetErrno(kLinuxEnomem);
       return 0;
+    }
     base = static_cast<uint32_t>(next_heap);
   }
-  if (!program.Memory().Map(base, rounded, kRW)) return 0;
+  if (!program.Memory().Map(base, rounded, kRW)) {
+    SetErrno(kLinuxEnomem);
+    return 0;
+  }
   try {
     live.emplace(base, Allocation{requested, static_cast<size_t>(rounded)});
     if (reuse) {
@@ -130,6 +138,7 @@ uint32_t Bionic32::State::Alloc(uint32_t requested) {
   } catch (...) {
     program.Memory().Unmap(base, rounded);
     live.erase(base);
+    SetErrno(kLinuxEnomem);
     return 0;
   }
   return base;
@@ -150,7 +159,10 @@ bool Bionic32::State::Free(uint32_t address) {
 
 uint32_t Bionic32::State::Realloc(uint32_t address, uint32_t requested) {
   if (address == 0) return Alloc(requested);
-  if (requested == 0) return Free(address) ? 0 : 0;
+  if (requested == 0) {
+    (void)Free(address);
+    return 0;
+  }
   uint32_t old_size;
   {
     std::lock_guard guard(mutex);
@@ -210,7 +222,18 @@ bool Bionic32::Install(std::string* error) {
                             std::move(callback), error);
   };
   using K = ValueKind;
-  if (!bind("malloc", {K::U32}, K::Pointer32,
+  // An Android 32-bit errno pointer is itself a guest address; it is never
+  // a narrowed host TLS pointer. This component has one guest executor thread,
+  // so a per-thread TLS errno domain needs the future thread implementation.
+  if (!p.Memory().Map(State::kErrnoAddress, GuestMemory::kPageSize, kRW, error))
+    return false;
+  if (!bind("__errno", {}, K::Pointer32,
+      [s](const auto& a, Value* r, std::string* e) {
+        if (!GoodArguments(a, 0, e)) return false;
+        *r = Pointer(State::kErrnoAddress);
+        return true;
+      }) ||
+      !bind("malloc", {K::U32}, K::Pointer32,
       [s](const auto& a, Value* r, std::string* e) {
         if (!GoodArguments(a, 1, e)) return false;
         *r = Pointer(s->Alloc(Word(a[0])));
@@ -221,6 +244,7 @@ bool Bionic32::Install(std::string* error) {
         if (!GoodArguments(a, 2, e)) return false;
         uint32_t count = Word(a[0]), size = Word(a[1]);
         if (size != 0 && count > UINT32_MAX / size) {
+          s->SetErrno(State::kLinuxEnomem);
           *r = Pointer(0);
           return true;
         }
