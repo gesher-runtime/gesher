@@ -24,8 +24,12 @@ import android.provider.DocumentsProvider;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.ClosedWatchServiceException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -52,7 +56,9 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
     private final ProviderInfo mInfo;
     private final UriGrants mGrants;
     private final CallerIdentity mCallers;
-    private final Map<String, Set<ChildrenCursor>> mChildQueries = new HashMap<>();
+    private final Map<String, DirectoryQueries> mChildQueries = new HashMap<>();
+    private final Map<WatchKey, Set<DirectoryQueries>> mChildWatchKeys = new HashMap<>();
+    private WatchService mChildWatchService;
     final ContentProviders.RegisteredProvider registration;
 
     DocumentsStorageProvider(ContentProviders providers, UriGrants grants) {
@@ -231,26 +237,43 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
         return result;
     }
 
+    /** The directory's subscription and all cursors sharing it. Guarded by mChildQueries. */
+    private final class DirectoryQueries {
+        final Set<ChildrenCursor> cursors = new HashSet<>();
+        WatchKey key;
+    }
+
     private final class ChildrenCursor extends MatrixCursor {
         private final String parentId;
 
-        ChildrenCursor(String parentId, String[] projection) {
+        ChildrenCursor(File parent, String[] projection) {
             super(projection);
-            this.parentId = parentId;
+            parentId = parent.getPath();
             Uri uri = DocumentsContract.buildChildDocumentsUri(AUTHORITY, parentId);
-            // The provider dispatches completed mutations directly to its active cursors.
+            // The directory subscription delivers changes directly to its active cursors.
             setNotificationUris(getContext().getContentResolver(), List.of(uri),
                     getContext().getUserId(), false);
             synchronized (mChildQueries) {
-                mChildQueries.computeIfAbsent(parentId, key -> new HashSet<>()).add(this);
+                DirectoryQueries queries = mChildQueries.computeIfAbsent(parentId, path -> new DirectoryQueries());
+                queries.cursors.add(this);
+                if (queries.key == null) watchDirectoryLocked(parent.toPath(), queries);
             }
         }
 
         @Override public void close() {
             synchronized (mChildQueries) {
-                Set<ChildrenCursor> queries = mChildQueries.get(parentId);
-                if (queries != null && queries.remove(this) && queries.isEmpty()) {
+                DirectoryQueries queries = mChildQueries.get(parentId);
+                if (queries != null && queries.cursors.remove(this) && queries.cursors.isEmpty()) {
                     mChildQueries.remove(parentId);
+                    if (queries.key != null) {
+                        Set<DirectoryQueries> directories = mChildWatchKeys.get(queries.key);
+                        directories.remove(queries);
+                        if (directories.isEmpty()) {
+                            mChildWatchKeys.remove(queries.key);
+                            queries.key.cancel();
+                        }
+                        if (mChildWatchKeys.isEmpty()) closeWatchServiceLocked();
+                    }
                 }
             }
             super.close();
@@ -261,13 +284,82 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
         }
     }
 
-    private void notifyChildrenChanged(String parentId) {
+    private void watchDirectoryLocked(Path directory, DirectoryQueries queries) {
+        try {
+            if (mChildWatchService == null) {
+                WatchService watcher = directory.getFileSystem().newWatchService();
+                Thread worker = new Thread(() -> readDirectoryChanges(watcher), "documents-watch");
+                worker.setDaemon(true);
+                mChildWatchService = watcher;
+                worker.start();
+            }
+            queries.key = directory.register(mChildWatchService, StandardWatchEventKinds.ENTRY_CREATE,
+                    StandardWatchEventKinds.ENTRY_DELETE, StandardWatchEventKinds.ENTRY_MODIFY);
+            mChildWatchKeys.computeIfAbsent(queries.key, key -> new HashSet<>()).add(queries);
+        } catch (IOException | UnsupportedOperationException | SecurityException unavailable) {
+            // Some directories (including virtual roots) cannot be watched. The
+            // provider can still list them and report its own completed operations.
+            if (mChildWatchKeys.isEmpty()) closeWatchServiceLocked();
+        }
+    }
+
+    private void closeWatchServiceLocked() {
+        WatchService watcher = mChildWatchService;
+        mChildWatchService = null;
+        if (watcher != null) {
+            try { watcher.close(); }
+            catch (IOException error) { Log.w("DocumentsStorageProvider", "Cannot close directory watcher"); }
+        }
+    }
+
+    private void readDirectoryChanges(WatchService watcher) {
+        try {
+            while (true) {
+                WatchKey key = watcher.take();
+                boolean changed = !key.pollEvents().isEmpty();
+                boolean valid = key.reset();
+                List<ChildrenCursor> snapshot = new ArrayList<>();
+                synchronized (mChildQueries) {
+                    Set<DirectoryQueries> directories = mChildWatchKeys.get(key);
+                    if (directories == null) continue;
+                    if (changed || !valid) {
+                        for (DirectoryQueries directory : directories) snapshot.addAll(directory.cursors);
+                    }
+                    if (!valid) {
+                        mChildWatchKeys.remove(key);
+                        for (DirectoryQueries directory : directories) directory.key = null;
+                        if (mChildWatchKeys.isEmpty()) closeWatchServiceLocked();
+                    }
+                }
+                dispatchChildrenChanged(snapshot);
+            }
+        } catch (ClosedWatchServiceException closed) {
+            // The last watched directory was retired.
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } finally {
+            synchronized (mChildQueries) {
+                if (mChildWatchService == watcher) {
+                    for (DirectoryQueries directory : mChildQueries.values()) directory.key = null;
+                    mChildWatchKeys.clear();
+                    closeWatchServiceLocked();
+                }
+            }
+        }
+    }
+
+    private void notifyChildrenChanged(String parentId, boolean onlyUnwatched) {
         List<ChildrenCursor> snapshot;
         synchronized (mChildQueries) {
-            Set<ChildrenCursor> queries = mChildQueries.get(parentId);
-            if (queries == null) return;
-            snapshot = List.copyOf(queries);
+            DirectoryQueries queries = mChildQueries.get(parentId);
+            if (queries == null || onlyUnwatched && queries.key != null && queries.key.isValid()) return;
+            snapshot = List.copyOf(queries.cursors);
         }
+        dispatchChildrenChanged(snapshot);
+    }
+
+    private void dispatchChildrenChanged(List<ChildrenCursor> snapshot) {
+        if (snapshot.isEmpty()) return;
         long token = Binder.clearCallingIdentity();
         try {
             for (ChildrenCursor cursor : snapshot) {
@@ -287,17 +379,22 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
             throws FileNotFoundException {
         File parent = file(parentId);
         if (!parent.isDirectory()) throw new FileNotFoundException("Document is not a directory");
-        File[] children = parent.listFiles();
-        if (children == null) throw new FileNotFoundException("Cannot list document children");
         String[] columns = projection == null ? DOCUMENT_COLUMNS : projection;
         if (DocumentPicker.blockedAndroidDirectory(parent)) return new MatrixCursor(columns);
-        MatrixCursor result = new ChildrenCursor(parent.getPath(), columns);
-        for (File child : children) {
-            if (DocumentPicker.blockedAndroidDirectory(child)) continue;
-            try { row(result, file(child.getAbsolutePath())); }
-            catch (FileNotFoundException absentOrLink) { /* Never fabricate a disappearing child. */ }
+        ChildrenCursor result = new ChildrenCursor(parent, columns);
+        try {
+            File[] children = parent.listFiles();
+            if (children == null) throw new FileNotFoundException("Cannot list document children");
+            for (File child : children) {
+                if (DocumentPicker.blockedAndroidDirectory(child)) continue;
+                try { row(result, file(child.getAbsolutePath())); }
+                catch (FileNotFoundException absentOrLink) { /* Never fabricate a disappearing child. */ }
+            }
+            return result;
+        } catch (FileNotFoundException | RuntimeException failure) {
+            result.close();
+            throw failure;
         }
-        return result;
     }
 
     @Override public boolean isChildDocument(String parentId, String childId) {
@@ -352,7 +449,7 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
                 if (Document.MIME_TYPE_DIR.equals(mimeType)) Files.createDirectory(target.toPath());
                 else Files.createFile(target.toPath());
                 String createdId = file(target.getCanonicalPath()).getPath();
-                notifyChildrenChanged(parent.getPath());
+                notifyChildrenChanged(parent.getPath(), true);
                 return createdId;
             } catch (java.nio.file.FileAlreadyExistsException collision) {
                 // Another creator won; choose another Android unique name.
@@ -370,8 +467,8 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
         try {
             Files.move(source.toPath(), target.toPath()); // No REPLACE_EXISTING.
             File renamed = file(target.getCanonicalPath());
-            notifyChildrenChanged(parent.getPath());
-            if (renamed.isDirectory()) notifyChildrenChanged(source.getPath());
+            notifyChildrenChanged(parent.getPath(), true);
+            if (renamed.isDirectory()) notifyChildrenChanged(source.getPath(), false);
             return renamed.getPath();
         } catch (IOException error) { throw missing("Cannot rename document", error); }
     }
@@ -382,7 +479,7 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
         Set<String> changedDirectories = new HashSet<>();
         try { deleteTree(file, changedDirectories); }
         catch (IOException error) { throw missing("Cannot delete document", error); }
-        finally { changedDirectories.forEach(this::notifyChildrenChanged); }
+        finally { changedDirectories.forEach(parent -> notifyChildrenChanged(parent, true)); }
     }
 
     private void deleteTree(File file, Set<String> changedDirectories) throws IOException {

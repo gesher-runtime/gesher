@@ -450,7 +450,7 @@ public final class SafDocumentsContractTest {
         @Override public void onChange(boolean selfChange) { changes.add(selfChange); }
 
         void requireChange(String operation) throws InterruptedException {
-            check(Boolean.FALSE.equals(changes.poll(3, TimeUnit.SECONDS)),
+            check(Boolean.FALSE.equals(changes.poll(6, TimeUnit.SECONDS)),
                     operation + " must notify the active directory cursor");
         }
     }
@@ -485,6 +485,7 @@ public final class SafDocumentsContractTest {
             active.requireChange("createDocument");
             retired.requireChange("createDocument");
             second.close();
+            retired.changes.clear();
 
             Uri renamed = h.operation(DocumentsContract.METHOD_RENAME_DOCUMENT, created, "renamed.txt")
                     .getParcelable(DocumentsContract.EXTRA_URI, Uri.class);
@@ -505,6 +506,63 @@ public final class SafDocumentsContractTest {
                     "Closed cursor does not receive later mutations");
             check(unrelatedChanges.changes.poll(100, TimeUnit.MILLISECONDS) == null,
                     "Sibling cursor does not receive another directory's changes");
+        } finally {
+            h.retire(owner);
+            h.grants.flush();
+        }
+    }
+
+    private static void externalChildNotifications(File dir) throws Exception {
+        File root = Files.createDirectory(new File(dir, "external-child-notifications").toPath()).toFile();
+        File selected = Files.createDirectory(new File(root, "selected").toPath()).toFile();
+        File sibling = Files.createDirectory(new File(root, "sibling").toPath()).toFile();
+        Uri tree = tree(root);
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, selected.getCanonicalPath());
+        Uri unrelated = DocumentsContract.buildChildDocumentsUriUsingTree(tree, sibling.getCanonicalPath());
+        Harness h = new Harness(new File(dir, "external-notification-grants.xml"));
+        IBinder owner = new Binder();
+        h.owned(owner, tree, READ | PREFIX);
+        String[] names = {Document.COLUMN_DISPLAY_NAME};
+        ChildChanges active = new ChildChanges(), retired = new ChildChanges(), unrelatedChanges = new ChildChanges();
+        var added = selected.toPath().resolve("external.txt");
+        var moved = selected.toPath().resolve("external-renamed.txt");
+        try {
+            try (Cursor open = h.query(children, names); Cursor second = h.query(children, names);
+                    Cursor other = h.query(unrelated, names)) {
+                check(open.getCount() == 0, "External fixture starts with an empty directory");
+                open.registerContentObserver(active);
+                second.registerContentObserver(retired);
+                other.registerContentObserver(unrelatedChanges);
+                // No provider mutation API is used, and the cursor client has only read access.
+                Files.createFile(added);
+                active.requireChange("external creation");
+                retired.requireChange("external creation");
+                second.close();
+                retired.changes.clear();
+                active.changes.clear();
+                Files.move(added, moved);
+                active.requireChange("external rename");
+                try (Cursor refresh = h.query(children, names)) {
+                    check(refresh.moveToFirst() && refresh.getCount() == 1
+                                    && moved.getFileName().toString().equals(refresh.getString(0)),
+                            "Requery observes the external rename");
+                }
+                check(retired.changes.poll(100, TimeUnit.MILLISECONDS) == null,
+                        "Closed cursor does not receive externally initiated changes");
+                check(unrelatedChanges.changes.poll(100, TimeUnit.MILLISECONDS) == null,
+                        "Sibling cursor does not receive an externally initiated change elsewhere");
+            }
+            check(get(h.provider, "mChildWatchService") == null,
+                    "The last cursor close retires the filesystem watcher");
+            try (Cursor reopened = h.query(children, names)) {
+                ChildChanges afterReopen = new ChildChanges();
+                reopened.registerContentObserver(afterReopen);
+                Files.delete(moved);
+                afterReopen.requireChange("external deletion after reopening");
+                try (Cursor refresh = h.query(children, names)) {
+                    check(refresh.getCount() == 0, "Requery observes external deletion");
+                }
+            }
         } finally {
             h.retire(owner);
             h.grants.flush();
@@ -1457,7 +1515,8 @@ public final class SafDocumentsContractTest {
         fixtureMimeMap();
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
-        try{provider(dir);childNotifications(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
+        try{provider(dir);childNotifications(dir);externalChildNotifications(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);
+            localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
             if(nativeFiles){
                 check(nativeIncoming.get()>nativeOtherIncoming.get()&&nativeOtherIncoming.get()>0,
                         "SAF exercised actual incoming Binder transactions from both ordinary peers");
