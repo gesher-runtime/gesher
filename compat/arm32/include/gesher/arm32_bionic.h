@@ -24,7 +24,8 @@ class Bionic32 {
   Bionic32(const Bionic32&) = delete;
   Bionic32& operator=(const Bionic32&) = delete;
 
-  // Adds malloc/calloc/realloc/free, strlen/strnlen, memcpy/memmove/memset,
+  // Adds __errno (the single executor thread's guest errno pointer),
+  // malloc/calloc/realloc/free, strlen/strnlen, memcpy/memmove/memset,
   // memcmp, strcmp and strncmp as typed ARM32 import thunks. Refuses duplicate
   // names. Installation is for a newly created Program with no guest code
   // loaded: successful registrations are not automatically removed on error.
@@ -39,6 +40,11 @@ class Bionic32 {
     std::map<uint32_t, Allocation> live;
     std::map<uint32_t, size_t> reusable;
     uint64_t next_heap = 0xd1000000;
+    static constexpr uint32_t kErrnoAddress = 0xd0000000;
+    static constexpr uint32_t kLinuxEnomem = 12;
+    void SetErrno(uint32_t code) {
+      (void)program.Memory().Write32(kErrnoAddress, code);
+    }
 
     uint32_t Alloc(uint32_t requested);
     bool Free(uint32_t address);
