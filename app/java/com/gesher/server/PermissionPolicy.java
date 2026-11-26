@@ -739,14 +739,18 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     int checkProcessPermission(String permission, int pid, int uid) {
         CallerIdentity callers = mCallers;
         if (callers == null) return PackageManager.PERMISSION_DENIED;
-        // A package's effective UID comes from its authenticated registered PID.
-        String pkg = callers.packageForPid(pid);
-        if (pkg != null) {
-            ApkPackage installed = mPm.get(pkg);
-            return installed != null && installed.uid() == uid && granted(permission, pkg)
-                    ? PackageManager.PERMISSION_GRANTED : PackageManager.PERMISSION_DENIED;
+        // The attached process owns its installation, even when a newer APK
+        // has already been published with the same package name and UID.
+        ApkPackage owner = callers.packageCodeForPid(pid, uid);
+        if (owner != null) {
+            synchronized (this) {
+                return mPm.get(owner.packageName) == owner && !mPm.isRemovalPending(owner.packageName)
+                        && granted(permission, owner.packageName)
+                        ? PackageManager.PERMISSION_GRANTED : PackageManager.PERMISSION_DENIED;
+            }
         }
-        if (pid == Process.myPid() && (uid == Process.SYSTEM_UID || uid == Process.myUid())) {
+        if (pid == Process.myPid() && callers.packageForPid(pid) == null
+                && (uid == Process.SYSTEM_UID || uid == Process.myUid())) {
             return PackageManager.PERMISSION_GRANTED;
         }
         return PackageManager.PERMISSION_DENIED;
