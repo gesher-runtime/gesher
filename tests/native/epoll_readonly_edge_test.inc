@@ -104,9 +104,9 @@ static bool readonly_ctl(int ep, int op, int fd, uint32_t events, uint64_t data)
   event.events = events; event.data.u64 = data;
   return epoll_ctl(ep, op, fd, &event) == 0;
 }
-static bool readonly_event(int ep, uint64_t data, uint32_t events = EPOLLIN) {
+static bool readonly_event(int ep, uint64_t data, uint32_t events = EPOLLIN, int timeout = 1000) {
   epoll_event event{};
-  return epoll_wait(ep, &event, 1, 1000) == 1 &&
+  return epoll_wait(ep, &event, 1, timeout) == 1 &&
          event.data.u64 == data && event.events == events;
 }
 static bool readonly_empty(int ep, int timeout = 0) {
@@ -188,9 +188,14 @@ static void readonly_exclusive_contract(bool timer, uint32_t flags) {
     check("readonly exclusive source drains", readonly_drain(fd, timer) > 0);
     check("readonly exclusive clears drained readiness",
           readonly_empty(waiters[0].ep) && readonly_empty(waiters[1].ep));
+    // A timer callback can run after publish() returns. Observe readiness
+    // independently before inspecting either exclusive registration, so
+    // both epolls really are idle when the producer publishes.
+    check("readonly publication observed while both exclusive epolls are idle",
+          publish() && readonly_event(waiters[2].ep, waiters[2].cookie));
     check("readonly exclusive publication reaches both idle epolls",
-          publish() && readonly_event(waiters[0].ep, waiters[0].cookie) &&
-              readonly_event(waiters[1].ep, waiters[1].cookie));
+          readonly_event(waiters[0].ep, waiters[0].cookie, EPOLLIN, 0) &&
+              readonly_event(waiters[1].ep, waiters[1].cookie, EPOLLIN, 0));
   }
   for (const auto& waiter : waiters) {
     if (waiter.ep >= 0) close(waiter.ep);
