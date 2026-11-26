@@ -92,6 +92,8 @@ int fchmod(int fd, mode_t mode);
 int fchmodat(int dirfd, const char* path, mode_t mode, int flags);
 int fchown(int fd, uid_t owner, gid_t group);
 int mkfifo(const char* path, mode_t mode);
+// Gesher: 1 if path names a FIFO (following symbolic links), else 0.
+int gesher_is_fifo_path(const char* path);
 // Device nodes cannot be created (EPERM); regular files can (S_IFREG).
 int mknod(const char* path, mode_t mode, dev_t dev);
 int mkdirat(int dirfd, const char* path, mode_t mode);

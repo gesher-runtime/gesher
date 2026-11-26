@@ -487,28 +487,67 @@ foreach ($n in 1, 2) {
 DevsvcCheck 'devsvc: jobs: a content URI trigger (TriggerContentUri, descendants) runs the job once for a provider''s two notifyChange calls, with the triggered URIs and authority; a ContentObserver gets both changes' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'jobscheduler' | Out-String))
 
 # --- hwsvc2: network constraints ---------------------------------------------------
-# Jobs needing any network and an unmetered one run on the runner's Ethernet (as
-# ConnectivityManager describes Windows' networks), with their Network; one needing a
-# cellular network waits for connectivity.
+# Match each job against the actual public ConnectivityManager capabilities. An
+# Ethernet interface is not proof of an unmetered connection: unavailable Windows
+# cost information must keep UNMETERED jobs pending. A changed observation fails
+# this fixture rather than silently weakening its positive or negative assertions.
 $mark = (DevsvcText $devsvcLog).Length
 $t = DevsvcLaunch 'NetJobActivity'
 $out = WaitTimed $t 300
 $code = $LASTEXITCODE
-$null = DevsvcWait $mark @('devsvc: netjobs: done') 30
+$ok = DevsvcWait $mark @('devsvc: netjobs: done') 30
 $log = DevsvcSince $mark
 $problems = @()
 if ($code -ne 0) { $problems += "launch exit $code" }
-foreach ($e in 'devsvc: netjobs: scheduled 4 (network any): 1', 'devsvc: netjobs: scheduled 5 (network unmetered): 1',
-    'devsvc: jobs: onStartJob 4 (network any) run 1', 'devsvc: jobs: onStartJob 5 (network unmetered) run 1') {
-  if (-not $log.Contains($e)) { $problems += "no '$e'" }
+if (-not $ok -or $log -notmatch '(?m)^devsvc: netjobs: done\r?$') { $problems += 'the network job observation did not finish' }
+if ($log -match '(?m)^devsvc: netjobs: (before|after) network \d+ capabilities null\r?$') {
+  $problems += 'a network disappeared while reading its capabilities'
 }
-if ($log -notmatch 'jobs: job 4 network 1\d\d') { $problems += 'job 4''s JobParameters have no Windows network' }
-if ($log.Contains('onStartJob 6 ')) { $problems += 'the cellular job ran' }
-if ($log -match 'netjobs: cellular job pending reason (\d+) \(connectivity is (\d+)\)') {
-  if ($Matches[1] -ne $Matches[2]) { $problems += "the cellular job waits for reason $($Matches[1]), not connectivity" }
-} else { $problems += 'no pending reason for the cellular job' }
-$network = if ($log -match 'jobs: job 4 network (\d+)') { $Matches[1] } else { '?' }
-DevsvcCheck "devsvc: jobs: network constraints over ConnectivityManager's networks: NETWORK_TYPE_ANY and UNMETERED jobs run (JobParameters.getNetwork $network), a CELLULAR job waits for connectivity" $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'jobscheduler' | Out-String))
+$kinds = @{ 4 = 'network any'; 5 = 'network unmetered'; 6 = 'network cellular' }
+foreach ($id in 4, 5, 6) {
+  $kind = [regex]::Escape($kinds[$id])
+  $scheduled = [regex]::Matches($log, "(?m)^devsvc: netjobs: scheduled $id \($kind\): (-?[0-9]+)\r?$")
+  if ($scheduled.Count -ne 1 -or $scheduled[0].Groups[1].Value -ne '1') {
+    $problems += "job $id was not scheduled exactly once successfully"
+  }
+  if ([regex]::Matches($log, "(?m)^devsvc: netjobs: cancelled $id, pending false\r?$").Count -ne 1) {
+    $problems += "job $id remained scheduled after fixture cleanup"
+  }
+  $before = [regex]::Matches($log, "(?m)^devsvc: netjobs: before matches $id \[([0-9,]*)\]\r?$")
+  $after = [regex]::Matches($log, "(?m)^devsvc: netjobs: after matches $id \[([0-9,]*)\]\r?$")
+  if ($before.Count -ne 1 -or $after.Count -ne 1) {
+    $problems += "job $id lacks an unambiguous before/after capability observation"
+    continue
+  }
+  $matching = $before[0].Groups[1].Value
+  if ($matching -ne $after[0].Groups[1].Value) { $problems += "job $id's matching networks changed during observation" }
+  if ($matching -and $matching -notmatch '^[1-9][0-9]*(,[1-9][0-9]*)*$') {
+    $problems += "job $id has malformed matching network ids"
+    continue
+  }
+  $starts = [regex]::Matches($log, "(?m)^devsvc: jobs: onStartJob $id \([^\r\n]*\) run [0-9]+[^\r\n]*\r?$")
+  $parameters = [regex]::Matches($log, "(?m)^devsvc: jobs: job $id network ([^\r\n]+)\r?$")
+  $finished = [regex]::Matches($log, "(?m)^devsvc: jobs: job $id finished\r?$")
+  if ($matching) {
+    if ($starts.Count -ne 1 -or $starts[0].Value -notmatch "onStartJob $id \($kind\) run 1( |\r?$)") {
+      $problems += "eligible job $id did not run exactly once"
+    }
+    if ($parameters.Count -ne 1 -or $parameters[0].Groups[1].Value -notin ($matching -split ',')) {
+      $problems += "job $id's JobParameters do not name an observed satisfying Windows network"
+    }
+    if ($finished.Count -ne 1) { $problems += "eligible job $id did not finish exactly once" }
+  } else {
+    if ($id -eq 4) { $problems += 'the runner has no observed network satisfying NETWORK_TYPE_ANY' }
+    if ($starts.Count -ne 0 -or $parameters.Count -ne 0 -or $finished.Count -ne 0) {
+      $problems += "ineligible job $id ran without a satisfying network"
+    }
+    $reason = [regex]::Matches($log, "(?m)^devsvc: netjobs: job $id pending reason (-?[0-9]+) \(connectivity is ([0-9]+)\)\r?$")
+    if ($reason.Count -ne 1 -or $reason[0].Groups[1].Value -ne $reason[0].Groups[2].Value) {
+      $problems += "ineligible job $id did not wait for connectivity"
+    }
+  }
+}
+DevsvcCheck 'devsvc: jobs: network constraints follow observed Windows capabilities; eligible jobs receive a matching Network and finish, ineligible jobs remain pending for connectivity' $problems ($out + "`n--- package log`n" + $log + "`n--- system server`n" + ((DevsvcText $serverLog) -split "`n" | Select-String 'jobscheduler' | Out-String))
 
 # --- hwsvc2: sleep and resume ------------------------------------------------------
 # WM_POWERBROADCAST to the device's event window (as Windows sends it): PBT_APMSUSPEND is

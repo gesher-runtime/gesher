@@ -24,6 +24,7 @@ def main() -> int:
     parser.add_argument('--source-ref')
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'c++'))
     parser.add_argument('--sanitize', action='store_true')
+    parser.add_argument('--measure-only', action='store_true', help='Measure exact-source full/dirty 1080p copies')
     args = parser.parse_args()
     def read(path: str) -> str:
         if args.source_ref:
@@ -37,11 +38,18 @@ def main() -> int:
                .replace('protected:', 'public:') for text in original]
     constants = set(re.findall(r'\bNATIVE_WINDOW_[A-Z0-9_]+\b', '\n'.join(original)))
     constants.discard('NATIVE_WINDOW_TIMESTAMP_AUTO')
+    constants.add('NATIVE_WINDOW_SET_SURFACE_DAMAGE')
+    constants.update(('NATIVE_WINDOW_API_CONNECT', 'NATIVE_WINDOW_API_DISCONNECT',
+                      'NATIVE_WINDOW_API_EGL', 'NATIVE_WINDOW_API_CPU'))
     enum = 'enum { ' + ', '.join(sorted(constants)) + ' };\n'
     source = (ROOT / 'tests/media/surface_geometry_host.cc.in').read_text()
+    damage = re.sub(r'^\s*#(?:include|pragma).*\n', '',
+                    (ROOT / 'compat/hwui/window/surface_damage.h').read_text(), flags=re.MULTILINE)
+    source = source.replace('@DAMAGE_TYPES@', damage)
     source = source.replace('@CONSTANTS@', enum).replace('@PRODUCTION@', '\n'.join(adapted))
     source = source.replace('@ASSERTIONS@', (ROOT / 'tests/media/surface_geometry_assertions.h').read_text())
     source = source.replace('@RELEASE_ASSERTIONS@', (ROOT / 'tests/media/surface_release_assertions.h').read_text())
+    source = source.replace('@DAMAGE_ASSERTIONS@', (ROOT / 'tests/media/surface_damage_host_assertions.h').read_text())
     print('surface geometry source SHA256 ' + hashlib.sha256('\n'.join(original).encode()).hexdigest(),
           flush=True)
     with tempfile.TemporaryDirectory(prefix='gesher-surface-geometry-') as temporary:
@@ -55,7 +63,8 @@ def main() -> int:
             command += ['-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                         '-fno-omit-frame-pointer']
         subprocess.run(command, check=True, timeout=120)
-        return subprocess.run([str(binary)], check=False, timeout=30).returncode
+        return subprocess.run([str(binary)] + (['measure'] if args.measure_only else []),
+                              check=False, timeout=60).returncode
 
 
 if __name__ == '__main__':

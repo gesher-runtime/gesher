@@ -35,7 +35,8 @@ def main():
         subprocess.run([str(args.java_home / "bin/javac"), "-encoding", "UTF-8", "-cp", classpath,
                         "-d", str(classes), str(ROOT / "tests/dex-services/gesher/services/FixtureServiceContext.java"),
                         str(ROOT / "tests/dex-services/gesher/services/AppOpsContractTest.java"),
-                        str(ROOT / "tests/appops/AppOpsHost.java")], check=True)
+                        str(ROOT / "tests/appops/AppOpsHost.java"),
+                        str(ROOT / "tests/appops/AppOpsMonitorProbeHost.java")], check=True)
         cleaner = work / "cleaner/sun/misc"
         cleaner.mkdir(parents=True)
         for source in (args.core_classes / "sun/misc").glob("Cleaner*.class"):
@@ -47,6 +48,9 @@ def main():
         subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData", "--patch-module",
                         "jdk.unsupported=" + str(work / "cleaner"), "-cp", str(classes) + os.pathsep + classpath,
                         "AppOpsHost", str(library)], env=env, check=True, timeout=75)
+        subprocess.run([str(args.java_home / "bin/java"), "-XX:-UsePerfData", "--patch-module",
+                        "jdk.unsupported=" + str(work / "cleaner"), "-cp", str(classes) + os.pathsep + classpath,
+                        "AppOpsMonitorProbeHost", str(library)], env=env, check=True, timeout=20)
 
 
 if __name__ == "__main__":

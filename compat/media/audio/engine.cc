@@ -106,6 +106,13 @@ inline float Kernel(const float* table, double x) {
   return table[i] + (table[i + 1] - table[i]) * f;
 }
 
+int ExactHalfPhase(double position, int64_t center) {
+  // Leave ample range for the bounded integral taps and an exact half-step.
+  if (!(position >= 0 && position < 0x1p51)) return -1;
+  const double fraction = position - static_cast<double>(center);
+  return fraction == 0 ? 0 : fraction == 0.5 ? 1 : -1;
+}
+
 // Converts `frames` frames of `fmt` to float.
 void ToFloat(const uint8_t* src, PcmFormat fmt, size_t samples, float* dst) {
   switch (fmt) {
@@ -176,6 +183,8 @@ struct Track::Resampler {
 };
 
 // --- Engine ------------------------------------------------------------------------------
+
+void Sink::WaitForRefill(void* timer) { WaitForSingleObject(timer, 100); }
 
 class Engine : public Mixer {
  public:
@@ -323,7 +332,7 @@ class Engine : public Mixer {
     uint64_t last_retry = GetTickCount64();
     bool null_sink = sink->Describe().rfind("none", 0) == 0;
     for (;;) {
-      WaitForSingleObject(timer, 100);
+      sink->WaitForRefill(timer);
       uint32_t g = Generation();
       if (g != generation) {
         generation = g;
@@ -806,6 +815,15 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
   const double cutoff = step > 1.0 ? 1.0 / step * 0.97 : 1.0;
   const size_t width = passthrough ? 0 : static_cast<size_t>(std::ceil(kHalfTaps / cutoff));
   const float* table = KernelTable();
+  // Integer and half-integer steps repeat at most two exact phases. Reuse only
+  // those actual coefficients within this mix; no phase quantization or state
+  // survives a rate change. Wider filters keep the original per-frame path.
+  constexpr size_t kReusableWidth = 64;
+  float weights[2][2 * kReusableWidth];
+  bool weights_ready[2] = {};
+  double integral_step;
+  const bool reusable_step = !passthrough && width <= kReusableWidth &&
+                             std::modf(step * 2, &integral_step) == 0;
 
   if (!rs.primed || rs.width != width) {
     if (!rs.primed) {
@@ -922,13 +940,42 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
         rs.t += 1.0;
       }
     } else {
+      const int64_t first = center - static_cast<int64_t>(width) + 1;
+      const float* repeated = nullptr;
+      if (reusable_step) {
+        // In this range both an integer and its half-step are represented
+        // exactly. Subtracting each integral tap gives the same coefficient
+        // argument whenever the exact phase repeats, including after history
+        // compaction. A fractional phase left by another rate falls back.
+        const int phase = ExactHalfPhase(rs.t, center);
+        if (phase >= 0) {
+          if (!weights_ready[phase]) {
+            for (size_t tap = 0; tap < 2 * width; ++tap) {
+              const int64_t k = first + static_cast<int64_t>(tap);
+              weights[phase][tap] = Kernel(table, (rs.t - static_cast<double>(k)) * cutoff) *
+                                    static_cast<float>(cutoff);
+            }
+            weights_ready[phase] = true;
+          }
+          repeated = weights[phase];
+        }
+      }
       std::fill(frame.begin(), frame.end(), 0.0f);
-      for (int64_t k = center - static_cast<int64_t>(width) + 1;
-           k <= center + static_cast<int64_t>(width); k++) {
-        float w = Kernel(table, (rs.t - static_cast<double>(k)) * cutoff) * static_cast<float>(cutoff);
-        if (w == 0) continue;
-        const float* s = &rs.hist[static_cast<size_t>(k) * ch];
-        for (size_t c = 0; c < ch; c++) frame[c] += s[c] * w;
+      if (repeated) {
+        for (int64_t k = first; k <= center + static_cast<int64_t>(width); k++) {
+          const float w = repeated[static_cast<size_t>(k - first)];
+          if (w == 0) continue;
+          const float* s = &rs.hist[static_cast<size_t>(k) * ch];
+          for (size_t c = 0; c < ch; c++) frame[c] += s[c] * w;
+        }
+      } else {
+        for (int64_t k = center - static_cast<int64_t>(width) + 1;
+             k <= center + static_cast<int64_t>(width); k++) {
+          float w = Kernel(table, (rs.t - static_cast<double>(k)) * cutoff) * static_cast<float>(cutoff);
+          if (w == 0) continue;
+          const float* s = &rs.hist[static_cast<size_t>(k) * ch];
+          for (size_t c = 0; c < ch; c++) frame[c] += s[c] * w;
+        }
       }
       mix_frame(frame.data());
       rs.t += step;
@@ -954,14 +1001,17 @@ bool Track::MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_c
   // would wait for data that may never come (AAudio's getFramesRead, a
   // position that must reach what was written).
   if (starved && out_done == 0 && rs.primed) {
-    if (++starved_ticks_ >= 2) {
+    if (starved_since_ns_ < 0) starved_since_ns_ = played_time_ns_;
+    // Preserve the 10 ms grace between empty mixes when the device asks
+    // for frames more often than the engine's periodic timer.
+    if (played_time_ns_ - starved_since_ns_ >= 10'000'000) {
       int64_t end = rs.start_index + static_cast<int64_t>(rs.frames());
       if (end > rs.played_index) played_ += static_cast<uint64_t>(end - rs.played_index);
       rs.Reset();
-      starved_ticks_ = 0;
+      starved_since_ns_ = -1;
     }
   } else if (!starved) {
-    starved_ticks_ = 0;
+    starved_since_ns_ = -1;
   }
 
   // Drop history the filter no longer needs.

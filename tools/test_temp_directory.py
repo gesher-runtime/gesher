@@ -21,6 +21,8 @@ def main():
             (root / 'compat/posix/include/gesher/unc_paths.h').read_bytes())
         (includes / 'environment.h').write_bytes(
             (root / 'compat/posix/include/gesher/environment.h').read_bytes())
+        (includes / 'storage_policy.h').write_bytes(
+            (root / 'compat/posix/include/gesher/storage_policy.h').read_bytes())
         source = tests / 'entry_test.cc'
         if args.baseline_ref:
             baseline = subprocess.check_output([

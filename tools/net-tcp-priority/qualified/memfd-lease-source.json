@@ -1,0 +1,20 @@
+{
+  "baseline": "e074b67b2f83ce9128c11713171329e9fbbf6739",
+  "paths": [
+    "compat/posix/src/internal.h",
+    "compat/posix/src/memfd_seals.cc",
+    "compat/posix/src/mman.cc"
+  ],
+  "patch_sha256": "c83c521a3ba72dbff24e0796988bafde699456ec86d407abbdc4afb14bb6c5e0",
+  "previous_sha256": {
+    "compat/posix/src/internal.h": "0d32c3de7e103e2070e8f120cadb9b4aa77f15e3cd3c31a89d372015d950b7ef",
+    "compat/posix/src/memfd_seals.cc": "058cb8d0cef69da7f7c17952873e234b6ccaec97821dfee32f4770beaf45b831",
+    "compat/posix/src/mman.cc": "31a5cac2af159fede9ab71853466da95bfb1d4245c01ecba1359761e798cd726"
+  },
+  "source_sha256": {
+    "compat/posix/src/internal.h": "41a5cf4277dde42d576cc40a10fc79fdbc5dde243d576d27d9baeaec3bee1d04",
+    "compat/posix/src/memfd_seals.cc": "00f0b1427bad39e321b54b410cf4506f20f1f4eb516d276b67b584f9359e4d7c",
+    "compat/posix/src/mman.cc": "6a3b28d8a3e8a35dccf77e9c07e34390d3a0c35cd6fa4a8dd66a76d8228dc559"
+  },
+  "native_runtime_approval": false
+}

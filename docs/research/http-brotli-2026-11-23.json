@@ -1,0 +1,68 @@
+{
+  "date": "2026-11-23",
+  "base": "6afcb6e671fc4f2d08a4a98220f9d9a906a327bf",
+  "brotli_provider": "39026f8dd0485dddcb0f9f5b12fb5ed788beca43",
+  "okhttp_provider": "e3d37d381375156dfad90887870775137e0481bf",
+  "baseline": {
+    "requests": 10,
+    "decoded_bytes": 13166720,
+    "encoded_body_bytes": 417870,
+    "brotli_responses": 0
+  },
+  "candidate": {
+    "requests": 10,
+    "decoded_bytes": 13166720,
+    "encoded_body_bytes": 191340,
+    "brotli_responses": 10
+  },
+  "encoded_body_reduction_percent": 54.210639672625454,
+  "measurement": "deterministic synthetic JSON over actual HTTP1 transport; no CPU/latency/energy claim",
+  "production_and_fixture_sha256": {
+    "compat/net/brotli_jni.cc": "3681c500ae84b6d4e55df2b873d1d4b9859a5deea7f26b86212ecaf4616718c6",
+    "cmake/aosp/brotli.cmake": "48c7145e0e2c155a7bff40349eada4e87bbc9f31763804759b5c1339d85d471e",
+    "app/java/android/net/http/BrotliInputStream.java": "8b64ee816e75627e85f301af9b8eface1b7d6ba4c26972419ef7830af1d5cbab",
+    "app/java/android/net/http/ContentDecoding.java": "cc4bee70bf833de80a3c18b95bcc88713c06b95be555c9fd36e4b9d3bf078b05",
+    "app/java/android/net/http/HttpEngine.java": "562a3aa9540674dade7c79a64663b32680df2657b4b93fc8b306b3576fe97ae6",
+    "app/java/android/net/http/JavaHttpEngine.java": "4f7f435ec0b9ee5124e9a30fe291a0e2f735f794a47477385fb7ffabb3015c45",
+    "app/java/android/net/http/JavaEngineConnection.java": "13d5e7f03e557231c07fb49e1827a662ba32e63c41a8e52f70807b819eb46e8e",
+    "app/java/android/net/http/Http2Transport.java": "8dffd0a7889d47c74caf52fcc33e29b7d820dee4561f6ec35b3312f14fb1e343",
+    "app/java/android/net/http/JavaBidirectionalStream.java": "76fd46c3a6af158bc3800071579cc253615481ce10e738d9ba5cecb7e310a404",
+    "tests/net/HttpBrotliFixtures.java": "b2cafbad987ebfeb2bde4cf1b4c7a118acc6c9efda9ccf69191a8766e040332f"
+  },
+  "chromium_reviewed_sources": [
+    {
+      "path": "net/http/http_request_headers.cc",
+      "url": "https://chromium.googlesource.com/chromium/src/+/3e1fe2448617f75a6ebd5fa97a3d7d509da2bbfe/net/http/http_request_headers.cc",
+      "sha256": "7cb467441cc6cd1c5e20f8f5f350f1d3affe436e8f28810102aaf78788c20331",
+      "matches_reviewed": true
+    },
+    {
+      "path": "net/filter/filter_source_stream.cc",
+      "url": "https://chromium.googlesource.com/chromium/src/+/3e1fe2448617f75a6ebd5fa97a3d7d509da2bbfe/net/filter/filter_source_stream.cc",
+      "sha256": "b509fe103f86141ddd97b361f5699c46edb6e5fae108e36178e5116cd56b4712",
+      "matches_reviewed": true
+    },
+    {
+      "path": "net/filter/brotli_source_stream.cc",
+      "url": "https://chromium.googlesource.com/chromium/src/+/3e1fe2448617f75a6ebd5fa97a3d7d509da2bbfe/net/filter/brotli_source_stream.cc",
+      "sha256": "471698134807d026c8f21c10830e5d22141a05b8cefd75d4e8298c52f06f9688",
+      "matches_reviewed": true
+    },
+    {
+      "path": "net/url_request/url_request_http_job.cc",
+      "url": "https://chromium.googlesource.com/chromium/src/+/3e1fe2448617f75a6ebd5fa97a3d7d509da2bbfe/net/url_request/url_request_http_job.cc",
+      "sha256": "e376a49c14f40a32cf9c059de638f0915f85fd3678cf6a2b5740f5e2975471ff",
+      "matches_reviewed": true
+    }
+  ],
+  "raw_lines": [
+    "BROTLI_PUBLIC_WORKLOAD requests=10 decoded=13166720 wire=417870 brotliResponses=0 baseline=true",
+    "BROTLI_PUBLIC_WORKLOAD requests=10 decoded=13166720 wire=191340 brotliResponses=10 baseline=false",
+    "BROTLI_WIRE_WORK payload=1316672 gzip=41787 br=19134 cachedNetworkBytes=0",
+    "HttpEngineBrotliTest passed: 10881 native/HTTP contracts",
+    "Http2DeviceSmoke passed: full duplex, flush, direct buffers and gRPC trailers",
+    "Http2DeviceSmoke passed: full duplex, flush, direct buffers and gRPC trailers",
+    "HTTP2_CANCEL DATA=65535 reader=Gesher-HttpEngine#29 writer=Gesher-HttpEngine#22 retired=true terminals=1",
+    "Http2DeviceSmoke passed: blocked duplex cancellation and scratch retirement"
+  ]
+}

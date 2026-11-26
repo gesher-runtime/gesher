@@ -7,8 +7,9 @@
 // kind (Wi-Fi, Ethernet, cellular, VPN), addresses, gateways, DNS servers and
 // suffix, MTU and link speeds, and from the Network List Manager whether it
 // reaches the internet and whether it is metered or roaming. Changes of
-// interfaces, addresses and routes (NotifyIpInterfaceChange and friends) set
-// an event that nativeWaitForChange waits on.
+// interfaces, addresses and routes (NotifyIpInterfaceChange and friends), and of a
+// connection's cost (the Network List Manager's INetworkConnectionCostEvents,
+// cost_events_win.cc), set an event that nativeWaitForChange waits on.
 //
 // Win32 side (Windows' headers) but for the JNI table, which needs only jni.h.
 
@@ -29,6 +30,8 @@
 
 #include <map>
 #include <mutex>
+#include "cost_events_win.h"
+#include "nlm_info.h"
 #include <string>
 #include <vector>
 
@@ -82,14 +85,12 @@ std::string Address(const SOCKADDR* sa) {
   return text;
 }
 
-// What the Network List Manager says of an adapter.
-struct NlmInfo {
-  bool internet = false;
-  bool captive_portal = false;
-  bool metered = false;
-  bool roaming = false;
-  bool congested = false;
-};
+using gesher::net::NlmInfo;
+static_assert(NlmInfo::kUnrestricted == NLM_CONNECTION_COST_UNRESTRICTED);
+static_assert(NlmInfo::kFixed == NLM_CONNECTION_COST_FIXED);
+static_assert(NlmInfo::kVariable == NLM_CONNECTION_COST_VARIABLE);
+static_assert(NlmInfo::kRoaming == NLM_CONNECTION_COST_ROAMING);
+static_assert(NlmInfo::kCongested == NLM_CONNECTION_COST_CONGESTED);
 
 // By adapter GUID; empty when the Network List Manager cannot be asked.
 std::map<GUID, NlmInfo, bool (*)(const GUID&, const GUID&)> QueryNlm(bool* machine_internet,
@@ -138,16 +139,14 @@ std::map<GUID, NlmInfo, bool (*)(const GUID&, const GUID&)> QueryNlm(bool* machi
             network->Release();
           }
           INetworkConnectionCost* cost = nullptr;
+          DWORD value = NLM_CONNECTION_COST_UNKNOWN;
+          bool cost_available = false;
           if (SUCCEEDED(c->QueryInterface(kIidNetworkConnectionCost,
-                                          reinterpret_cast<void**>(&cost)))) {
-            DWORD value = 0;
-            if (SUCCEEDED(cost->GetCost(&value))) {
-              info.metered = (value & (NLM_CONNECTION_COST_FIXED | NLM_CONNECTION_COST_VARIABLE)) != 0;
-              info.roaming = (value & NLM_CONNECTION_COST_ROAMING) != 0;
-              info.congested = (value & NLM_CONNECTION_COST_CONGESTED) != 0;
-            }
+                                          reinterpret_cast<void**>(&cost))) && cost != nullptr) {
+            cost_available = SUCCEEDED(cost->GetCost(&value));
             cost->Release();
           }
+          info.SetCost(cost_available, value);
         }
         c->Release();
       }
@@ -288,6 +287,7 @@ std::string Snapshot() {
 // --- change notifications -------------------------------------------------------
 
 HANDLE g_changed = nullptr;
+gesher::net::CostWatch* g_cost_watch = nullptr;  // for the life of the process
 std::once_flag g_watch_once;
 
 void CALLBACK OnInterfaceChange(PVOID, PMIB_IPINTERFACE_ROW, MIB_NOTIFICATION_TYPE) {
@@ -308,6 +308,11 @@ void StartWatching() {
   NotifyUnicastIpAddressChange(AF_UNSPEC, OnAddressChange, nullptr, FALSE, &h);
   h = nullptr;
   NotifyRouteChange2(AF_UNSPEC, OnRouteChange, nullptr, FALSE, &h);
+  // A metered setting changes the cost of a network that stays connected, which none of the
+  // above report. Without the subscription (an edition without the Network List Manager) the
+  // service's own timed re-read still sees the change, within its wait timeout.
+  HRESULT hr = S_OK;
+  g_cost_watch = gesher::net::StartCostWatch(g_changed, &hr);
 }
 
 // --- JNI ---------------------------------------------------------------------------
