@@ -248,6 +248,16 @@ namespace {
 
 inline uint8_t Clamp8(int v) { return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v); }
 
+// The odd-crop scalar path also accepts overlapping storage. Keep its original
+// read/write order there; RowToRgba requires independent source/output spans.
+bool DisjointFrameOutput(const VideoFrame& f, const uint32_t* dst, int stride, int w, int h) {
+  if (w <= 0 || h <= 0 || stride < w) return false;
+  const uint64_t bytes = (static_cast<uint64_t>(h - 1) * stride + w) * sizeof(uint32_t);
+  const uintptr_t source = reinterpret_cast<uintptr_t>(f.data.data());
+  const uintptr_t output = reinterpret_cast<uintptr_t>(dst);
+  return output >= source ? output - source >= f.data.size() : source - output >= bytes;
+}
+
 }  // namespace
 
 void I420ToRgba(const VideoFrame& f, uint32_t* dst, int dst_stride, int dst_w, int dst_h) {
@@ -265,6 +275,22 @@ void I420ToRgba(const VideoFrame& f, uint32_t* dst, int dst_stride, int dst_w, i
                      up + static_cast<size_t>(sy / 2) * f.stride_uv + f.crop_left / 2,
                      vp + static_cast<size_t>(sy / 2) * f.stride_uv + f.crop_left / 2,
                      dst + static_cast<size_t>(y) * dst_stride, dst_w);
+    }
+    return;
+  }
+  if (same && DisjointFrameOutput(f, dst, dst_stride, dst_w, dst_h)) {
+    // An odd crop begins in the second pixel of a chroma pair. Consume it
+    // first, then use the existing even-column row helper for the remainder.
+    for (int y = 0; y < dst_h; y++) {
+      const int sy = f.crop_top + y;
+      const uint8_t* yr = yp + static_cast<size_t>(sy) * f.stride_y + f.crop_left;
+      const uint8_t* ur = up + static_cast<size_t>(sy / 2) * f.stride_uv + f.crop_left / 2;
+      const uint8_t* vr = vp + static_cast<size_t>(sy / 2) * f.stride_uv + f.crop_left / 2;
+      uint32_t* d = dst + static_cast<size_t>(y) * dst_stride;
+      d[0] = yuv::PixelToRgba(yr[0], ur[0], vr[0]);
+      if (dst_w > 1) {
+        yuv::RowToRgba(yr + 1, ur + 1, vr + 1, d + 1, dst_w - 1);
+      }
     }
     return;
   }
