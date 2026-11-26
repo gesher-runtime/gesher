@@ -330,6 +330,9 @@ static void CALLBACK InspectReview(HWND dialog, UINT message, UINT_PTR timer, DW
     }
     if (review_action == RV_MANAGED_CONFIRM || review_action == RV_MANAGED_CANCEL) {
       HWND scroll = GetDlgItem(dialog, REVIEW_SCROLL);
+      if (review_expected_count > REVIEW_VISIBLE_ROWS) {
+        Check(scroll != NULL, "overflowing review creates a scrollbar");
+      }
       if (scroll) {
         RECT scroll_bounds, row_bounds;
         GetWindowRect(scroll, &scroll_bounds);
