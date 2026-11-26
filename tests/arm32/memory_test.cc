@@ -33,7 +33,11 @@ void Check(bool passed, const char* expression, int line) {
 void* operator new(std::size_t size) {
   long remaining = allocations_before_failure.load(std::memory_order_relaxed);
   if (remaining >= 0) {
-    if (remaining == 0) throw std::bad_alloc();
+    if (remaining == 0) {
+      std::fprintf(stderr, "arm32_memory: global operator new throwing bad_alloc (size=%zu)\n", size);
+      std::fflush(stderr);
+      throw std::bad_alloc();
+    }
     allocations_before_failure.fetch_sub(1, std::memory_order_relaxed);
   }
   if (void* allocation = std::malloc(size == 0 ? 1 : size)) return allocation;
@@ -212,7 +216,17 @@ void AllocationRollback() {
     std::fprintf(stderr, "arm32_memory: injection at %ld\n", fail_after);
     std::fflush(stderr);
     allocations_before_failure.store(fail_after);
-    const bool mapped = memory.Map(P, P * 2, R | W);
+    bool mapped = false;
+    try {
+      mapped = memory.Map(P, P * 2, R | W);
+      std::fprintf(stderr, "arm32_memory: guest Map returned %d\n", static_cast<int>(mapped));
+      std::fflush(stderr);
+    } catch (const std::bad_alloc&) {
+      allocations_before_failure.store(-1);
+      std::fprintf(stderr, "arm32_memory: uncaught Map bad_alloc\n");
+      std::fflush(stderr);
+      Check(false, "GuestMemory::Map must contain std::bad_alloc", __LINE__);
+    }
     allocations_before_failure.store(-1);
     CHECK(!mapped);
     CHECK(memory.MappedBytes() == P);
