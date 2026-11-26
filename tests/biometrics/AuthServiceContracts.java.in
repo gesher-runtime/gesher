@@ -550,6 +550,40 @@ public final class AuthServiceContracts {
 
     static int can(int authenticators) { return service.canAuthenticate("com.example.bank", 0, authenticators); }
 
+    static void protectedRuntimeCredential() {
+        wired(WindowsHelloBackend.AVAILABLE, WINDOWS_11);
+        credential = DeviceCredential.forRuntime(true, () -> {
+            throw new AssertionError("protected runtime must not probe the service account");
+        }, () -> {
+            throw new AssertionError("protected runtime must not attempt availability");
+        });
+        host.trust = credential;
+        service = new AuthService(host, credential);
+        check(!credential.supported() && !credential.available() && credential.backend() == null,
+                "protected runtime: no secure lock screen, enrolled credential or verifier");
+        check(can(CRED) == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED,
+                "protected runtime: canAuthenticate gives no credential");
+        Receiver receiver = new Receiver("protected");
+        start(receiver, new Token(), prompt(CRED));
+        host.drain();
+        check(receiver.calls.equals(List.of("error(1,14,0)")) && backend.requests.isEmpty(),
+                "protected runtime: biometric prompt cannot verify the service account");
+
+        Intent intent = new Intent(ConfirmCredential.ACTION);
+        List<Integer> results = new ArrayList<>();
+        ConfirmCredential.request(service, intent, 10123, 4321, "com.example.bank", results::add);
+        host.drain();
+        check(results.equals(List.of(Activity.RESULT_CANCELED)) && backend.requests.isEmpty(),
+                "protected runtime: credential confirmation cancels without Windows Hello");
+
+        DeviceCredential desktop = DeviceCredential.forRuntime(false, () -> backend, () -> WINDOWS_11);
+        check(desktop.supported() && desktop.available() && desktop.backend() == backend,
+                "ordinary desktop runtime may use its own user's verifier");
+        check(!DeviceCredential.system().supported() && !DeviceCredential.system().available()
+                && DeviceCredential.system().backend() == null,
+                "unknown runtime identity: no secure lock screen, enrolled credential or verifier");
+    }
+
     static void availability() {
         DeviceCredential none = new DeviceCredential(null, WINDOWS_11);
         check(!none.supported() && !none.available() && none.backend() == null
@@ -935,6 +969,7 @@ public final class AuthServiceContracts {
         unavailable();
         available();
         availability();
+        protectedRuntimeCredential();
         windowsAvailabilityCache();
         busy();
         confirmCredential();
@@ -1058,6 +1093,10 @@ interface IInvalidationCallback {
 
 final class UserHandle {
     static int getCallingUserId() { return 0; }
+}
+
+final class ProtectedRuntime {
+    static boolean enabled() { throw new UnsatisfiedLinkError("host has no startup identity"); }
 }
 
 final class SystemServer {

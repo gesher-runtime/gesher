@@ -1,7 +1,9 @@
 # 0091: Biometric and device-credential authentication over Windows Hello (auth track)
 
 Status: Device-credential verification approved by the maintainer on 2026-11-26.
-Windows Hello supplies Android's device credential where Windows exposes a usable verifier.
+Windows Hello supplies Android's device credential where Windows exposes a usable verifier
+for the desktop user's ordinary runtime. The protected runtime runs under a private service
+identity, so all credential features and requests stay unavailable there.
 Biometric-only and keystore-bound verification remain unavailable. Authenticating the
 Windows user does not authorize access to AndroidKeyStore keys.
 
@@ -10,8 +12,10 @@ GKS1 store did not record whether a secret or private key requested authenticati
 so the provider refuses to return those keys. Upgrading alone does not rewrite the file.
 When the app next saves its store, GKS2 retains the old records and marks those keys
 unrecoverable. Trusted certificates and newly created non-authenticated keys remain
-accessible. This changes provider access only; it does not encrypt the previously stored
-bytes or give them hardware protection.
+accessible. A malformed store reports an error and stays untouched. Record changes are
+published only after atomic replacement, and failed writes leave the previous file and
+in-memory aliases in place. This changes provider access only; it does not encrypt the
+previously stored bytes or give them hardware protection.
 
 ## Context
 

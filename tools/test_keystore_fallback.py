@@ -32,7 +32,7 @@ def main():
             [str(java_bin / "javac"), "-encoding", "UTF-8", "-cp", android, "-d", str(classes),
              *map(str, sources)], check=True, timeout=60
         )
-        for phase in ("seed", "migrate", "reload"):
+        for phase in ("seed", "failed-persistence", "migrate", "reload"):
             subprocess.run(
                 [str(java_bin / "java"), "-cp", os.pathsep.join((str(classes), android)),
                  "com.gesher.tests.AndroidKeyStoreContracts", phase, str(work)],

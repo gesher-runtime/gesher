@@ -10,8 +10,10 @@ import com.gesher.app.AndroidKeyStore;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.Key;
 import java.security.KeyPair;
@@ -19,6 +21,7 @@ import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.Provider;
+import java.security.ProviderException;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.Certificate;
 import java.util.Arrays;
@@ -172,11 +175,66 @@ public final class AndroidKeyStoreContracts {
         }
     }
 
+    private static void checkFailedPersistence(Path directory) throws Exception {
+        Path active = directory.resolve(STORE);
+        byte[] original = Files.readAllBytes(active);
+        ActivityThread.application = new Application(directory.toFile());
+        KeyStore store = open();
+        SecretKeySpec incoming = new SecretKeySpec(new byte[16], "AES");
+
+        byte[] truncated = Arrays.copyOf(original, original.length - 1);
+        Files.write(active, truncated);
+        rejected(IOException.class, AndroidKeyStoreContracts::open);
+        rejected(ProviderException.class, () -> store.containsAlias("old-secret"));
+        rejected(KeyStoreException.class, () -> store.setKeyEntry("failed", incoming, null, null));
+        rejected(KeyStoreException.class, () -> store.deleteEntry("old-certificate"));
+        check(Arrays.equals(truncated, Files.readAllBytes(active)), "corrupt store must survive failed read");
+        Files.write(active, original);
+        check(store.containsAlias("old-certificate"), "valid file can be reloaded");
+
+        // Occupy the exact destination during serialization, after the provider loaded GKS1
+        // and created its staging file. The real atomic move cannot replace a nonempty directory.
+        Path saved = directory.resolve("saved.gks1");
+        Path blocker = active.resolve("blocker");
+        SecretKeySpec failing = new SecretKeySpec(new byte[16], "AES") {
+            private int encodings;
+
+            @Override
+            public byte[] getEncoded() {
+                if (++encodings == 2) {
+                    try {
+                        Files.move(active, saved, StandardCopyOption.ATOMIC_MOVE);
+                        Files.createDirectory(active);
+                        Files.createFile(blocker);
+                    } catch (IOException failure) {
+                        throw new AssertionError("could not set up atomic-move failure", failure);
+                    }
+                }
+                return super.getEncoded();
+            }
+        };
+        rejected(KeyStoreException.class, () -> store.setKeyEntry("failed", failing, null, null));
+        check(Arrays.equals(original, Files.readAllBytes(saved)), "previous payload must survive failed move");
+        check(Files.exists(blocker), "failed move must not remove its existing destination");
+        Files.delete(blocker);
+        Files.delete(active);
+        Files.move(saved, active, StandardCopyOption.ATOMIC_MOVE);
+        check(!store.containsAlias("failed"), "uncommitted alias must not become visible");
+        check(store.containsAlias("old-secret") && store.getCertificate("old-certificate") != null,
+                "existing aliases survive rollback");
+        try (var listing = Files.list(directory)) {
+            check(listing.noneMatch(path -> path.getFileName().toString().endsWith(".tmp")),
+                    "failed commit must clean its staging file");
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         Path directory = Path.of(args[1]);
         if ("seed".equals(args[0])) {
             seed(directory.resolve(STORE));
             Files.copy(directory.resolve(STORE), directory.resolve("original.gks1"));
+        } else if ("failed-persistence".equals(args[0])) {
+            checkFailedPersistence(directory);
         } else {
             checkStore(directory, "reload".equals(args[0]));
         }

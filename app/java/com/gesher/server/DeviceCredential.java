@@ -13,6 +13,8 @@ package com.gesher.server;
  * <p>The credential is Windows Hello's, confirmed through {@link WindowsHelloBackend}. It is
  * available when all of these hold:
  * <ul>
+ * <li>the system server runs under the desktop user's ordinary identity. In the protected
+ *     runtime it runs under a private service identity that cannot confirm the desktop user;
  * <li>the Windows Hello natives are in this runtime;
  * <li>Windows is build {@value #MINIMUM_WINDOWS_BUILD} or later, the minimum Microsoft
  *     documents for {@code IUserConsentVerifierInterop::RequestVerificationForWindowAsync};
@@ -116,10 +118,26 @@ final class DeviceCredential {
     /** The system server's instance, over the real Windows Hello. */
     static synchronized DeviceCredential system() {
         if (sSystem == null) {
-            WindowsHello hello = WindowsHello.create();
-            sSystem = new DeviceCredential(hello, hello == null ? 0 : WindowsHello.windowsBuild());
+            boolean protectedRuntime;
+            try {
+                protectedRuntime = ProtectedRuntime.enabled();
+            } catch (UnsatisfiedLinkError unavailable) {
+                // Without native startup state the verifier's identity is unestablished.
+                protectedRuntime = true;
+            }
+            sSystem = forRuntime(protectedRuntime, WindowsHello::create, WindowsHello::windowsBuild);
         }
         return sSystem;
+    }
+
+    static DeviceCredential forRuntime(boolean protectedRuntime,
+            java.util.function.Supplier<WindowsHelloBackend> backendFactory,
+            java.util.function.IntSupplier windowsBuild) {
+        // UserConsentVerifier would check the private service account. No protected
+        // protocol currently verifies the desktop user under that user's own token.
+        if (protectedRuntime) return new DeviceCredential(null, 0);
+        WindowsHelloBackend backend = backendFactory.get();
+        return new DeviceCredential(backend, backend == null ? 0 : windowsBuild.getAsInt());
     }
 
     /** FEATURE_SECURE_LOCK_SCREEN: fixed for this run of the system server. */
