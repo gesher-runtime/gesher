@@ -356,17 +356,24 @@ public final class Services {
                 android.credentials.ICredentialManager.class,
                 new CredentialManagerService(new CredentialManagerHost(am, pm),
                         WindowsWebAuthn.create(), new AssetLinks.Https())).asBinder());
+        // The device credential (ADR 0091): Windows Hello, where Gesher can confirm it.
+        // trust, the window manager's isKeyguardSecure, auth, the confirm-credential
+        // activity and FEATURE_SECURE_LOCK_SCREEN all read this one decision.
+        DeviceCredential credential = DeviceCredential.system();
         StandIn<android.app.trust.ITrustManager> trust = StandIn.of(
-                android.app.trust.ITrustManager.class, new DeviceServices.TrustService());
+                android.app.trust.ITrustManager.class, new DeviceServices.TrustService(credential,
+                        (permission, pid, uid) -> am.checkPermission(permission, pid, uid)
+                                == android.content.pm.PackageManager.PERMISSION_GRANTED));
         services.put(Context.TRUST_SERVICE, trust.asBinder());
-        // auth: BiometricManager and BiometricPrompt (ADR 0091). AOSP registers it on every
-        // device; no biometric sensor, the device credential as trust reports it. A
-        // credential is confirmed by Windows Hello (WindowsHello, null without its natives);
-        // while trust reports no secure device, no prompt reaches it.
+        // auth: BiometricManager and BiometricPrompt. AOSP registers it on every device; no
+        // biometric sensor, the device credential as trust reports it, confirmed by
+        // Windows Hello. The activity manager answers ACTION_CONFIRM_DEVICE_CREDENTIAL
+        // with the same confirmation.
+        AuthService auth = new AuthService(
+                new AuthServiceHost(am, atm, pm, trust.asInterface()), credential);
         services.put(Context.AUTH_SERVICE, StandIn.of(
-                android.hardware.biometrics.IAuthService.class,
-                new AuthService(new AuthServiceHost(am, atm, pm, trust.asInterface()),
-                        WindowsHello.create())).asBinder());
+                android.hardware.biometrics.IAuthService.class, auth).asBinder());
+        atm.setAuthService(auth);
         services.put(Context.SHORTCUT_SERVICE, StandIn.of(
                 android.content.pm.IShortcutService.class,
                 new DeviceServices.ShortcutService(pm, am.callers())).asBinder());

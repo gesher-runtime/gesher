@@ -192,10 +192,29 @@ final class DeviceServices {
     }
 
     /**
-     * {@code trust}: TrustManager service stand-in for ITrustManager. Reports device as
-     * unlocked and not secure so KeyguardManager initializes and isDeviceSecure() returns false.
+     * {@code trust}: ITrustManager, what KeyguardManager.isDeviceSecure/isDeviceLocked and
+     * BiometricService's PreAuthInfo ({@code credentialAvailable}) ask (ADR 0091).
+     *
+     * <p>The device is secure when the user has a credential Gesher can confirm
+     * ({@link DeviceCredential}: Windows Hello, on Windows build 22000 or later). It is never
+     * locked: an app runs in the signed-in user's unlocked Windows session. As
+     * TrustManagerService, a virtual device is not secure and another user's state needs
+     * INTERACT_ACROSS_USERS_FULL; Gesher has the one user.
      */
     static final class TrustService extends ITrustManager.Default {
+        /** Whether pid/uid holds a permission. */
+        interface Permissions {
+            boolean has(String permission, int pid, int uid);
+        }
+
+        private final DeviceCredential mCredential;
+        private final Permissions mPermissions;
+
+        TrustService(DeviceCredential credential, Permissions permissions) {
+            mCredential = credential;
+            mPermissions = permissions;
+        }
+
         @Override
         public boolean isDeviceLocked(int userId, int deviceId) {
             return false;
@@ -203,7 +222,14 @@ final class DeviceServices {
 
         @Override
         public boolean isDeviceSecure(int userId, int deviceId) {
-            return false;
+            if (deviceId != android.content.Context.DEVICE_ID_DEFAULT) return false;
+            if (userId != android.os.UserHandle.getCallingUserId()
+                    && !mPermissions.has("android.permission.INTERACT_ACROSS_USERS_FULL",
+                            android.os.Binder.getCallingPid(), android.os.Binder.getCallingUid())) {
+                throw new SecurityException("isDeviceSecure: user " + userId
+                        + " requires android.permission.INTERACT_ACROSS_USERS_FULL");
+            }
+            return userId == android.os.UserHandle.USER_SYSTEM && mCredential.available();
         }
     }
 

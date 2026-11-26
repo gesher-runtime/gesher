@@ -270,6 +270,21 @@ public final class PackageServiceQueriesTest {
         require(service.hasSystemFeature(PackageManager.FEATURE_WEBVIEW, 0) == (webView != null),
                 "WebView feature disagrees with the WebView2 Runtime (" + webView + ")");
 
+        // The feature follows verifier capability, independently of current enrollment.
+        try {
+            Class<?> credential = Class.forName("com.gesher.server.DeviceCredential");
+            java.lang.reflect.Method system = credential.getDeclaredMethod("system");
+            java.lang.reflect.Method supported = credential.getDeclaredMethod("supported");
+            system.setAccessible(true);
+            supported.setAccessible(true);
+            boolean secureLockScreen = (Boolean) supported.invoke(system.invoke(null));
+            require(service.hasSystemFeature(PackageManager.FEATURE_SECURE_LOCK_SCREEN, 0)
+                            == secureLockScreen,
+                    "Secure lock screen feature disagrees with credential-verifier capability");
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Cannot query credential-verifier capability", e);
+        }
+
         int[] hardware;
         try {
             hardware = com.gesher.server.WindowsHost.hardwareSummary();
@@ -310,7 +325,6 @@ public final class PackageServiceQueriesTest {
                 PackageManager.FEATURE_CAMERA_FLASH,
                 PackageManager.FEATURE_USB_HOST,
                 PackageManager.FEATURE_NFC,
-                PackageManager.FEATURE_SECURE_LOCK_SCREEN,
                 PackageManager.FEATURE_VERIFIED_BOOT}) {
             require(!service.hasSystemFeature(absent, 0), "Unimplemented feature claimed: " + absent);
         }

@@ -14,6 +14,7 @@ HOST.add('account-chooser-native-tests.dex')
 HOST.add('permission_dialog_test.exe')
 FRAMEWORK.update('icon-base.apk icon-density.apk icon-bundle.apks icon-bundle.xapk'.split())
 FRAMEWORK.add('crashnotice.apk')
+FRAMEWORK.add('hellocred.apk')
 FRAMEWORK.add('gesher-stt.apk')
 FRAMEWORK.add('gesher-tts.apk')
 

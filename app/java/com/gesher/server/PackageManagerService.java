@@ -1194,6 +1194,7 @@ public final class PackageManagerService extends IPackageManager.Default {
      * WindowsLocation#hasGnssReceiver}). Google Play filters
      * on these (a RECORD_AUDIO or location permission implies the feature unless the app
      * marks it not required), so an absent one hides an app the device can run.
+     * FEATURE_SECURE_LOCK_SCREEN follows Windows Hello ({@link #addSecureLockScreenFeature}).
      * The rest (docs/system-features.md lists every SDK feature and why it is or is not
      * here) follow what Windows has when the system server starts: FEATURE_WEBVIEW with a
      * WebView2 Runtime behind android.webkit.WebView ({@link #addWebViewFeature}),
@@ -1240,6 +1241,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         addLocationFeatures(FEATURES, WindowsLocation.hasGnssReceiver());
         try {
+            addSecureLockScreenFeature(FEATURES, DeviceCredential.system().supported());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no verifier to report.
+        }
+        try {
             addPrintingFeature(FEATURES, PrintManagerService.supported());
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no printing to report.
@@ -1269,6 +1275,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         addWifiFeature(FEATURES, com.gesher.net.WindowsWifi.hardware());
         // ro.opengles.version, set before app processes start (they may read it).
         glEsVersion();
+    }
+
+    /**
+     * FEATURE_SECURE_LOCK_SCREEN when Windows has a credential verifier Gesher can use
+     * (Windows Hello on build 22000 or later, set up by the user or not), decided once
+     * when the system server starts ({@link DeviceCredential#supported}, ADR 0091).
+     */
+    static void addSecureLockScreenFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            boolean supported) {
+        if (supported) addFeature(features, PackageManager.FEATURE_SECURE_LOCK_SCREEN);
     }
 
     /**

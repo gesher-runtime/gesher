@@ -85,6 +85,22 @@ public final class WindowManagerService extends IWindowManager.Default {
         return factory != null ? factory.apply(callback) : mSession.asInterface();
     }
 
+    /**
+     * KeyguardManager.isKeyguardSecure: PhoneWindowManager answers whether the user has a
+     * secure lock screen (or a locked SIM, which Gesher has not). The same decision as
+     * {@code trust}'s isDeviceSecure ({@link DeviceCredential}, ADR 0091). As AOSP's, another
+     * user's state needs INTERACT_ACROSS_USERS, which only the system holds here.
+     */
+    @Override
+    public boolean isKeyguardSecure(int userId) {
+        if (userId != android.os.UserHandle.getCallingUserId()
+                && android.os.Binder.getCallingPid() != android.os.Process.myPid()
+                && android.os.Binder.getCallingUid() != android.os.Process.SYSTEM_UID) {
+            throw new SecurityException("Requires INTERACT_ACROSS_USERS permission");
+        }
+        return userId == android.os.UserHandle.USER_SYSTEM && DeviceCredential.system().available();
+    }
+
     @Override
     public void getInitialDisplaySize(int displayId, Point size) {
         size.set(DeviceProfile.WIDTH, DeviceProfile.HEIGHT);

@@ -561,6 +561,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     /** Accepted system Settings requests, including queued/headless windows. Guarded by this. */
     private final java.util.Set<ExactAlarmSettingsSession> mExactAlarmSettingsSessions = new java.util.HashSet<>();
     private BluetoothRequests mBluetoothRequests; // server-local backend injection for tests
+    private volatile AuthService mAuth; // confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0091)
     private final Set<NativeUiActivity> mNativeUiActivities = new HashSet<>();
     private DialRequests mDialRequests = new DialRequests(); // server-local dialog injection for tests
     private final ThreadLocal<String> mVerifiedCreator = new ThreadLocal<>();
@@ -1639,6 +1640,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         : android.app.Activity.RESULT_OK, result);
         if (resumeCovered) { realStartActivity(session.covered); resume(session.covered); }
         updateTopResumed();
+    }
+
+    /** The auth service that confirms ACTION_CONFIRM_DEVICE_CREDENTIAL (ADR 0091). */
+    void setAuthService(AuthService auth) {
+        mAuth = auth;
     }
 
     /** Lets the server start app processes on demand ({@link #startProcess}). */
@@ -2794,8 +2800,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     /**
-     * Native system UI that covers the app as an activity would (Bluetooth consent, the
-     * print dialog) and keeps a headless device alive.
+     * Native system UI that covers the app as an activity would (Bluetooth consent, credential
+     * confirmation, or the print dialog) and keeps a headless device alive.
      */
     private final class NativeUiActivity {
         final ActivityRecord covered;
@@ -2898,7 +2904,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // Validate before consuming a forwarded result route or scheduling host work.
         requests.validate(action, pkg, captured);
         return requestNativeConsent(intent, callingProcess, internalCreator, delegated, publication,
-                resultToToken, resultWho, requestCode, (ownerPid, lifetime, beforeWork, completion) ->
+                resultToToken, resultWho, requestCode, false, (owner, lifetime, beforeWork, completion) ->
                         requests.request(action, pkg, captured, lifetime, beforeWork, completion));
     }
 
@@ -2914,11 +2920,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
         final Intent launch = new Intent(intent);
         return requestNativeConsent(launch, callingProcess, internalCreator, delegated, publication,
-                resultToToken, resultWho, requestCode, (ownerPid, lifetime, beforeWork, completion) -> {
+                resultToToken, resultWho, requestCode, false, (owner, lifetime, beforeWork, completion) -> {
                     java.util.function.BooleanSupplier current = () -> lifetime.getAsBoolean()
                             && (captured == null || mPm.get(pkg) == captured
                                 && !mPm.isRemovalPending(pkg) && captured.matchesEnabledApplication(0));
-                    mDialRequests.request(launch, pkg, ownerPid, current,
+                    mDialRequests.request(launch, pkg, owner == null ? 0 : owner.pid, current,
                             () -> canDelegateExternalUrl(launch, resolvedType), beforeWork,
                             opened -> {
                                 SystemServer.log("startActivity: Windows dial request "
@@ -2929,16 +2935,70 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 });
     }
 
+    private int confirmDeviceCredential(Intent intent, String verifiedCaller,
+            ProcessRecord callingProcess, boolean internalCreator,
+            java.util.function.BooleanSupplier delegated,
+            java.util.function.BooleanSupplier publication,
+            IBinder resultToToken, String resultWho, int requestCode) {
+        final AuthService auth = mAuth;
+        final Intent confirmationIntent = new Intent(intent);
+        return requestNativeConsent(intent, callingProcess, internalCreator, delegated, publication,
+                resultToToken, resultWho, requestCode, true, (owner, lifetime, beforeWork, completion) -> {
+                    if (owner == null || !lifetime.getAsBoolean()) {
+                        completion.accept(android.app.Activity.RESULT_CANCELED);
+                        return;
+                    }
+                    final String pkg = owner.packageName != null ? owner.packageName : verifiedCaller;
+                    Thread worker = new Thread(() -> {
+                        long identity = Binder.clearCallingIdentity();
+                        try {
+                            beforeWork.run();
+                            if (!lifetime.getAsBoolean()) {
+                                completion.accept(android.app.Activity.RESULT_CANCELED);
+                                return;
+                            }
+                            final java.util.concurrent.atomic.AtomicBoolean done =
+                                    new java.util.concurrent.atomic.AtomicBoolean();
+                            AuthService.Confirmation confirmation = ConfirmCredential.request(auth,
+                                    confirmationIntent, owner.uid, owner.pid, pkg, result -> {
+                                        if (done.compareAndSet(false, true)) completion.accept(result);
+                                    });
+                            while (confirmation != null && !done.get()) {
+                                if (!lifetime.getAsBoolean()) {
+                                    confirmation.cancel();
+                                    break;
+                                }
+                                try {
+                                    Thread.sleep(250);
+                                } catch (InterruptedException interrupted) {
+                                    confirmation.cancel();
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
+                        } catch (RuntimeException | LinkageError failure) {
+                            SystemServer.log("confirm-credential: request failed: " + failure);
+                            completion.accept(android.app.Activity.RESULT_CANCELED);
+                        } finally {
+                            Binder.restoreCallingIdentity(identity);
+                        }
+                    }, "confirm-credential");
+                    worker.setDaemon(true);
+                    worker.start();
+                });
+    }
+
     @FunctionalInterface
     private interface NativeConsentRequest {
-        void enqueue(int ownerPid, java.util.function.BooleanSupplier lifetime,
+        void enqueue(ProcessRecord owner, java.util.function.BooleanSupplier lifetime,
                 Runnable beforeWork, java.util.function.IntConsumer completion);
     }
 
     private int requestNativeConsent(Intent intent, ProcessRecord callingProcess,
             boolean internalCreator, java.util.function.BooleanSupplier delegated,
             java.util.function.BooleanSupplier publication,
-            IBinder resultToToken, String resultWho, int requestCode, NativeConsentRequest request) {
+            IBinder resultToToken, String resultWho, int requestCode, boolean callerOwned,
+            NativeConsentRequest request) {
         final ActivityRecord source, recipient;
         final ProcessRecord sourceProcess, expectedProcess;
         final String targetWho;
@@ -2989,9 +3049,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         // After a result is forwarded/detached (or none was requested), the system UI
         // owns its work. A trampoline may finish or die without canceling that request.
         final boolean detached = forwarded || cancelResult || source == null || requestCode < 0;
+        final ProcessRecord consentOwner = sourceProcess != null ? sourceProcess : callingProcess;
         java.util.function.BooleanSupplier lifetime = () -> {
             synchronized (ActivityTaskManagerService.this) {
-                return (delegated == null || delegated.getAsBoolean())
+                return (!callerOwned || (consentOwner != null
+                            && !consentOwner.exiting && !consentOwner.dead && !consentOwner.pidSuperseded
+                            && processByPid(consentOwner.pid) == consentOwner
+                            && (consentOwner.enabledProcessLifetime == null
+                                || consentOwner.enabledProcessLifetime.getAsBoolean())
+                            && (source == null || source.app == consentOwner && !source.finishing
+                                && source.state != State.DESTROYED && mActivities.contains(source)
+                                && activityEnabled(source))))
+                        && (delegated == null || delegated.getAsBoolean())
                         && (detached || internalCreator || callingProcess == null
                             || !callingProcess.exiting && !callingProcess.dead && !callingProcess.pidSuperseded
                                 && processByPid(callingProcess.pid) == callingProcess
@@ -3019,8 +3088,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             updateTopResumed();
             // A detached request may outlive its source process. Do not attach its
             // later dialog to a recycled PID's window; Gesher owns that dialog.
-            int ownerPid = !detached && sourceProcess != null ? sourceProcess.pid : 0;
-            request.enqueue(ownerPid, lifetime, activity::awaitPause, completion);
+            ProcessRecord owner = callerOwned ? consentOwner : (detached ? null : sourceProcess);
+            request.enqueue(owner, lifetime, activity::awaitPause, completion);
         } catch (SecurityException revoked) {
             // Permission may be revoked after admission consumed a forwarded route.
             // That accepted launch must finish with cancellation, not lose its result.
@@ -3343,6 +3412,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                                 internalCreator, delegated, publication, resultToToken, resultWho, requestCode)
                         : requestDial(intent, resolvedType, verifiedCaller, originalProcess,
                                 internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
+            }
+            if (requiredTask == null && mAuth != null
+                    && ConfirmCredential.handles(intent, resolvedType)) {
+                // Settings' ConfirmDeviceCredentialActivity on Android; here Windows Hello's
+                // prompt over the caller. A caller without a live app process has no
+                // window to own the prompt: its request ends as canceled.
+                return confirmDeviceCredential(intent, verifiedCaller, originalProcess,
+                        internalCreator, delegated, publication, resultToToken, resultWho, requestCode);
             }
             if (requiredTask == null && PrintManagerService.handles(intent)) {
                 return startPrintDialog(verifiedCaller, intent, resultToToken);

@@ -27,6 +27,8 @@ import java.security.Provider;
 import java.security.SecureRandom;
 import java.security.Security;
 import java.security.Signature;
+import java.security.UnrecoverableEntryException;
+import java.security.UnrecoverableKeyException;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
@@ -67,10 +69,10 @@ import javax.security.auth.x500.X500Principal;
  * certificate from the spec's subject, serial and validity, as KeyMint gives them.
  *
  * <p>The keys of an app are in its data directory ({@value #FILE}), unencrypted: the
- * Windows user's profile protects them, nothing binds them to the hardware or to the
- * user's authentication. Authorizations in the spec (purposes, user authentication,
- * StrongBox, attestation) are not enforced. Before the app's Application exists, keys
- * are kept in memory and written to the file once it does.
+ * Windows user's profile protects them. The provider rejects generation and import when
+ * user authentication is required. Older key records with unknown authorizations remain
+ * stored but cannot be retrieved. The software keys offer no hardware binding. Before the
+ * app's Application exists, keys are kept in memory and written once it does.
  */
 public final class AndroidKeyStore extends Provider {
     static final String NAME = "AndroidKeyStore";
@@ -113,7 +115,10 @@ public final class AndroidKeyStore extends Provider {
     private static final int SECRET = 1;
     private static final int PRIVATE = 2;
     private static final int TRUSTED = 3;
-    private static final int MAGIC = 0x474b5331;  // "GKS1"
+    private static final int LEGACY_MAGIC = 0x474b5331;  // "GKS1"
+    private static final int MAGIC = 0x474b5332;  // "GKS2"
+    private static final String AUTH_REQUIRED = "User-authenticated AndroidKeyStore keys are unavailable";
+    private static final String UNKNOWN_AUTH = "This key predates persisted authentication requirements";
 
     /** One alias: a secret key, a private key and its chain, or a trusted certificate. */
     private static final class Entry {
@@ -121,12 +126,22 @@ public final class AndroidKeyStore extends Provider {
         final Key key;               // SECRET, PRIVATE
         final Certificate[] chain;   // PRIVATE: the key's chain; TRUSTED: the certificate
         final Date created;
+        final String algorithm;
+        // For an old secret/private key, retain its original bytes without reconstructing it.
+        final byte[][] legacyEncoding;
 
         Entry(int kind, Key key, Certificate[] chain, Date created) {
+            this(kind, key, chain, created, key != null ? key.getAlgorithm() : "", null);
+        }
+
+        Entry(int kind, Key key, Certificate[] chain, Date created, String algorithm,
+                byte[][] legacyEncoding) {
             this.kind = kind;
             this.key = key;
             this.chain = chain;
             this.created = created;
+            this.algorithm = algorithm;
+            this.legacyEncoding = legacyEncoding;
         }
     }
 
@@ -140,6 +155,7 @@ public final class AndroidKeyStore extends Provider {
         private static File sFile;     // the file read, null before the app's data directory
         private static long sStamp;
         private static long sLength;
+        private static boolean sReadFailed;
 
         private static File file() {
             try {
@@ -200,10 +216,14 @@ public final class AndroidKeyStore extends Provider {
 
         private static Map<String, Entry> read(File f) {
             Map<String, Entry> out = new LinkedHashMap<>();
+            sReadFailed = false;
             if (!f.exists()) return out;
             try (DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(
                     new FileInputStream(f)))) {
-                if (in.readInt() != MAGIC) throw new IOException("not a Gesher key store");
+                int magic = in.readInt();
+                if (magic != LEGACY_MAGIC && magic != MAGIC) {
+                    throw new IOException("not a Gesher key store");
+                }
                 int n = in.readInt();
                 CertificateFactory x509 = null;
                 for (int i = 0; i < n; i++) {
@@ -211,29 +231,35 @@ public final class AndroidKeyStore extends Provider {
                     int kind = in.readByte();
                     Date created = new Date(in.readLong());
                     String algorithm = in.readUTF();
+                    boolean legacy = (magic == LEGACY_MAGIC || in.readBoolean()) && kind != TRUSTED;
                     byte[] encoded = bytes(in);
                     Certificate[] chain = new Certificate[in.readInt()];
+                    byte[][] retained = legacy ? new byte[1 + chain.length][] : null;
+                    if (legacy) retained[0] = encoded;
                     for (int c = 0; c < chain.length; c++) {
+                        byte[] certificate = bytes(in);
+                        if (legacy) retained[c + 1] = certificate;
                         if (x509 == null) x509 = CertificateFactory.getInstance("X.509");
-                        chain[c] = x509.generateCertificate(new ByteArrayInputStream(bytes(in)));
+                        chain[c] = x509.generateCertificate(new ByteArrayInputStream(certificate));
                     }
                     Key key = null;
-                    if (kind == SECRET) {
+                    if (!legacy && kind == SECRET) {
                         key = new SecretKeySpec(encoded, algorithm);
-                    } else if (kind == PRIVATE) {
+                    } else if (!legacy && kind == PRIVATE) {
                         key = KeyFactory.getInstance(algorithm)
                                 .generatePrivate(new PKCS8EncodedKeySpec(encoded));
                     }
-                    out.put(alias, new Entry(kind, key, chain, created));
+                    out.put(alias, new Entry(kind, key, chain, created, algorithm, retained));
                 }
             } catch (IOException | java.security.GeneralSecurityException e) {
-                log("cannot read " + f + ", its keys are not used: " + e);
+                sReadFailed = true;
+                log("cannot read " + f + "; refusing to replace it: " + e);
             }
             return out;
         }
 
         private static void write() {
-            if (sFile == null) return;
+            if (sFile == null || sReadFailed) return;
             File tmp = new File(sFile.getPath() + ".tmp");
             try {
                 try (DataOutputStream out = new DataOutputStream(new java.io.BufferedOutputStream(
@@ -245,20 +271,18 @@ public final class AndroidKeyStore extends Provider {
                         out.writeUTF(e.getKey());
                         out.writeByte(entry.kind);
                         out.writeLong(entry.created.getTime());
-                        out.writeUTF(entry.key != null ? entry.key.getAlgorithm() : "");
-                        byte[][] parts = encode(entry);
+                        out.writeUTF(entry.algorithm);
+                        out.writeBoolean(entry.legacyEncoding != null);
+                        byte[][] parts = entry.legacyEncoding != null
+                                ? entry.legacyEncoding : encode(entry);
                         writeBytes(out, parts[0]);
                         out.writeInt(parts.length - 1);
                         for (int i = 1; i < parts.length; i++) writeBytes(out, parts[i]);
                     }
                 }
-                try {
-                    java.nio.file.Files.move(tmp.toPath(), sFile.toPath(),
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                } catch (IOException | RuntimeException e) {
-                    if (!sFile.delete() && sFile.exists()) throw e;
-                    if (!tmp.renameTo(sFile)) throw new IOException("cannot rename " + tmp);
-                }
+                java.nio.file.Files.move(tmp.toPath(), sFile.toPath(),
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 stamp();
             } catch (IOException | KeyStoreException e) {
                 log("cannot write " + sFile + ", the keys stay in memory: " + e);
@@ -307,8 +331,9 @@ public final class AndroidKeyStore extends Provider {
     /** KeyStore "AndroidKeyStore": load(null) only, the keys are the Store's. */
     public static final class Spi extends KeyStoreSpi {
         @Override
-        public Key engineGetKey(String alias, char[] password) {
+        public Key engineGetKey(String alias, char[] password) throws UnrecoverableKeyException {
             Entry e = alias != null ? Store.get(alias) : null;
+            if (e != null && e.legacyEncoding != null) throw new UnrecoverableKeyException(UNKNOWN_AUTH);
             return e != null ? e.key : null;
         }
 
@@ -425,9 +450,11 @@ public final class AndroidKeyStore extends Provider {
 
         /** Entries without a password, as Android's (KeyProtection is a ProtectionParameter). */
         @Override
-        public KeyStore.Entry engineGetEntry(String alias, KeyStore.ProtectionParameter param) {
+        public KeyStore.Entry engineGetEntry(String alias, KeyStore.ProtectionParameter param)
+                throws UnrecoverableEntryException {
             Entry e = alias != null ? Store.get(alias) : null;
             if (e == null) return null;
+            if (e.legacyEncoding != null) throw new UnrecoverableKeyException(UNKNOWN_AUTH);
             switch (e.kind) {
                 case SECRET:
                     return new KeyStore.SecretKeyEntry((SecretKey) e.key);
@@ -438,10 +465,15 @@ public final class AndroidKeyStore extends Provider {
             }
         }
 
-        /** Imports a key or certificate; the protection (KeyProtection) is not enforced. */
+        /** Imports software keys that do not require user authentication, and certificates. */
         @Override
         public void engineSetEntry(String alias, KeyStore.Entry entry,
                 KeyStore.ProtectionParameter param) throws KeyStoreException {
+            if (!(entry instanceof KeyStore.TrustedCertificateEntry)
+                    && param instanceof android.security.keystore.KeyProtection
+                    && ((android.security.keystore.KeyProtection) param).isUserAuthenticationRequired()) {
+                throw new KeyStoreException(AUTH_REQUIRED);
+            }
             if (entry instanceof KeyStore.SecretKeyEntry) {
                 engineSetKeyEntry(alias, ((KeyStore.SecretKeyEntry) entry).getSecretKey(), null,
                         null);
@@ -509,6 +541,10 @@ public final class AndroidKeyStore extends Provider {
             }
             android.security.keystore.KeyGenParameterSpec spec =
                     (android.security.keystore.KeyGenParameterSpec) params;
+            if (spec.isUserAuthenticationRequired()) {
+                alias = null;
+                throw new InvalidAlgorithmParameterException(AUTH_REQUIRED);
+            }
             int size = spec.getKeySize() > 0 ? spec.getKeySize() : defaultBits;
             if (!validSize(size)) {
                 throw new InvalidAlgorithmParameterException("Unsupported key size: " + size);
@@ -609,6 +645,10 @@ public final class AndroidKeyStore extends Provider {
             if (params instanceof android.security.keystore.KeyGenParameterSpec) {
                 android.security.keystore.KeyGenParameterSpec spec =
                         (android.security.keystore.KeyGenParameterSpec) params;
+                if (spec.isUserAuthenticationRequired()) {
+                    alias = null;
+                    throw new InvalidAlgorithmParameterException(AUTH_REQUIRED);
+                }
                 alias = spec.getKeystoreAlias();
                 bits = spec.getKeySize();
                 keyParams = spec.getAlgorithmParameterSpec();
