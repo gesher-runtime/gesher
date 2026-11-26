@@ -2,14 +2,15 @@
 //
 // - android.media.ImageReader and its SurfaceImage: Gesher's own natives (the
 //   framework's need libgui's BufferItemConsumer). A reader is a queue of
-//   images in process memory. RGBA readers also expose a native QueueSurface
+//   images in process memory. RGBA and PRIVATE readers also expose a native QueueSurface
 //   so Canvas, NDK and EGL producers can publish images, including Flutter's
 //   platform-view render targets. CameraFrames retains its direct YUV/JPEG path.
 // - android.hardware.camera2.utils.SurfaceUtils: a reader's size and format,
 //   or a window surface's through its ANativeWindow.
 // - com.gesher.server.CameraFrames (gesher-app.jar): the camera service hands
 //   each frame (NV12) to a target Surface: converted for an ImageReader
-//   (YUV_420_888 as I420, RGBA_8888, JPEG bytes the service encoded), or drawn
+//   (YUV_420_888 as I420, RGBA_8888 and PRIVATE as RGBA, JPEG bytes the service
+//   encoded), or drawn
 //   into a surface that has a native window (ANativeWindow_lock).
 
 #include <dlfcn.h>
@@ -32,6 +33,7 @@
 #include "camera_frames.h"
 #include "camera_trace.h"
 #include "../media/surface/reader_surface.h"
+#include <gesher/rgba_buffers.h>
 #include "../media/video/video_decoder.h"
 
 // libandroid_runtime's host ANativeWindow_fromSurface and the ANativeWindow
@@ -64,10 +66,15 @@ int RegisterGesherNatives(JNIEnv* env, const char* className, const JNINativeMet
 
 namespace {
 
-// HAL formats (system/graphics.h): BLOB is JPEG; YCbCr_420_888 (0x23) and
-// IMPLEMENTATION_DEFINED (0x22, PRIVATE) are stored as I420.
+// HAL formats (system/graphics.h): BLOB is JPEG; YCbCr_420_888 (0x23) is stored
+// as I420. RGBA_8888 and IMPLEMENTATION_DEFINED (0x22, PRIVATE: a GPU-sampled
+// reader, whose images are sampled as RGBA and have no CPU planes) are stored
+// as RGBA, whatever produced the frame (a Canvas/EGL producer through the
+// reader's Surface, the camera, or a video decoder, which renders to the
+// reader's native window and so arrives as a Surface frame too).
 constexpr int kHalRgba8888 = 1;
 constexpr int kHalBlob = 0x21;
+constexpr int kHalPrivate = 0x22;          // IMPLEMENTATION_DEFINED, ImageFormat.PRIVATE
 constexpr int kBadValue = -22;             // -EINVAL, as SurfaceUtils' BAD_VALUE
 // GRALLOC_USAGE_SW_READ_OFTEN | HW_TEXTURE (what a preview consumer has).
 constexpr int64_t kUsagePreview = 0x100 | 0x3;
@@ -77,13 +84,24 @@ struct Plane {
   int rowStride, pixelStride;
 };
 
+// An image's pixels: RGBA ones (an RGBA reader's, a PRIVATE reader's and everything
+// drawn into either's Surface) live in a pooled AHardwareBuffer the image holds a
+// reference to; YUV and JPEG ones in `data`.
 struct Image {
   std::vector<uint8_t> data;
+  void* rgba = nullptr;  // the pooled buffer (a reference), instead of `data`
   std::vector<Plane> planes;
   int width = 0, height = 0;
   int64_t timestampNs = 0;
   int dataSpace = 0;
   int halFormat = 0;
+  Image() = default;
+  Image(const Image&) = delete;
+  Image& operator=(const Image&) = delete;
+  ~Image() {
+    if (rgba != nullptr) gesher::bionic::ahb::ReleaseRgbaBuffer(rgba);
+  }
+  uint8_t* bytes() { return rgba != nullptr ? gesher::bionic::ahb::RgbaBufferPixels(rgba) : data.data(); }
 };
 
 struct Reader {
@@ -96,7 +114,60 @@ struct Reader {
   int acquired = 0;
   bool closed = false;
   std::shared_ptr<gesher::media::ReaderSurface> producer;
+  // RGBA buffers frames are written into (a reference each, the pool's own),
+  // least recently used first. A frame goes into the first one that only
+  // EGLImages (and the pool) still reference, which moves to the back: the one
+  // released longest ago is rewritten, so the pool's slack separates a rewrite
+  // from the buffer's last use, and the buffers, with their ids, repeat. A pool
+  // whose buffers are all held by Images grows, and its front entries are let
+  // go past twice maxImages (the queue and the acquired images) + 2.
+  std::vector<void*> pool;
+  // Frames can be sampled by the GPU (GPU_SAMPLED_IMAGE usage or a PRIVATE
+  // reader): only then are buffers given a GPU form (ANGLE and the GPU thread).
+  bool GpuForm() const { return (usage & 0x100) != 0 || halFormat == kHalPrivate; }
 };
+
+// A pooled buffer for the next RGBA frame of `r`, with a reference for the
+// caller (an Image); null once the reader is closed, or when memory runs out
+// (the caller then keeps the frame in process memory). A new buffer is made
+// outside the reader's lock: the first one may start the GPU thread.
+void* AcquireRgbaBuffer(const std::shared_ptr<Reader>& r) {
+  using namespace gesher::bionic::ahb;
+  {
+    std::lock_guard<std::mutex> lock(r->mutex);
+    if (r->closed) return nullptr;
+    for (auto it = r->pool.begin(); it != r->pool.end(); ++it) {
+      void* candidate = *it;
+      if (RgbaBufferReusable(candidate)) {
+        std::rotate(it, it + 1, r->pool.end());  // now the most recently used
+        RetainRgbaBuffer(candidate);
+        return candidate;
+      }
+    }
+  }
+  void* fresh = AllocateRgbaBuffer(r->width, r->height, r->GpuForm());
+  if (fresh == nullptr) return nullptr;
+  std::lock_guard<std::mutex> lock(r->mutex);
+  if (r->closed) {
+    ReleaseRgbaBuffer(fresh);
+    return nullptr;
+  }
+  r->pool.push_back(fresh);
+  while (static_cast<int>(r->pool.size()) > 2 * r->maxImages + 2) {
+    ReleaseRgbaBuffer(r->pool.front());  // its holders keep it alive
+    r->pool.erase(r->pool.begin());
+  }
+  RetainRgbaBuffer(fresh);
+  return fresh;
+}
+
+// Where an RGBA frame of `r` goes: a pooled buffer, else process memory.
+uint8_t* RgbaStorage(const std::shared_ptr<Reader>& r, Image* image) {
+  image->rgba = AcquireRgbaBuffer(r);
+  if (image->rgba != nullptr) return image->bytes();
+  image->data.resize(static_cast<size_t>(r->width) * r->height * 4);
+  return image->data.data();
+}
 
 struct {
   JavaVM* vm;
@@ -179,12 +250,16 @@ void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
   image->timestampNs = timestamp;
   image->dataSpace = r->dataSpace;
   image->halFormat = r->halFormat;
-  image->data.resize(static_cast<size_t>(r->width) * r->height * 4);
-  auto* output = reinterpret_cast<uint32_t*>(image->data.data());
-  for (int y = 0; y < r->height; y++)
-    for (int x = 0; x < r->width; x++)
-      output[static_cast<size_t>(y) * r->width + x] = pixels[static_cast<size_t>(y * height / r->height) * width + x * width / r->width];
-  image->planes.push_back({0, image->data.size(), r->width * 4, 4});
+  auto* output = reinterpret_cast<uint32_t*>(RgbaStorage(r, image));
+  if (width == r->width && height == r->height) {
+    memcpy(output, pixels, static_cast<size_t>(width) * height * 4);
+  } else {
+    for (int y = 0; y < r->height; y++)
+      for (int x = 0; x < r->width; x++)
+        output[static_cast<size_t>(y) * r->width + x] = pixels[static_cast<size_t>(y * height / r->height) * width + x * width / r->width];
+  }
+  if (image->rgba != nullptr) gesher::bionic::ahb::MarkRgbaWritten(image->rgba);
+  image->planes.push_back({0, static_cast<size_t>(r->width) * r->height * 4, r->width * 4, 4});
   EnqueueImage(env, r, image);
   if (attached) gIr.vm->DetachCurrentThread();
 }
@@ -199,7 +274,11 @@ void ImageReader_init(JNIEnv* env, jobject thiz, jobject weakSelf, jint w, jint 
   r->halFormat = halFormat;
   r->dataSpace = dataSpace;
   r->usage = usage;
-  if (halFormat == kHalRgba8888) {
+  // RGBA readers, and PRIVATE ones (a GPU-sampled reader such as Flutter's
+  // platform-view target: ImageReader.Builder with PRIVATE and GPU_SAMPLED_IMAGE)
+  // take drawn frames through a native producer Surface. A PRIVATE reader also
+  // keeps receiving camera frames by Surface identity (ReaderForSurface).
+  if (halFormat == kHalRgba8888 || halFormat == kHalPrivate) {
     r->producer = gesher::media::MakeReaderSurface(w, h,
         [weak = std::weak_ptr<Reader>(r)](const uint32_t* pixels, int width, int height, int64_t timestamp) {
           QueueRgba(weak, pixels, width, height, timestamp);
@@ -234,6 +313,8 @@ void ImageReader_close(JNIEnv* env, jobject thiz) {
     std::lock_guard<std::mutex> lock(r->mutex);
     for (Image* i : r->pending) delete i;
     r->pending.clear();
+    for (void* buffer : r->pool) gesher::bionic::ahb::ReleaseRgbaBuffer(buffer);
+    r->pool.clear();
     r->closed = true;
     env->DeleteGlobalRef(r->weakSelf);
     env->DeleteGlobalRef(r->surface);
@@ -246,6 +327,9 @@ Image* ImageOf(JNIEnv* env, jobject image) {
 }
 
 void ReleaseImage(const std::shared_ptr<Reader>& r, Image* i) {
+  // What the app drew with this buffer before closing the Image is what a rewrite
+  // must wait for. Not under the reader's mutex: this takes ANGLE's lock.
+  if (i->rgba != nullptr) gesher::bionic::ahb::NoteRgbaAppReleased(i->rgba);
   delete i;
   if (r == nullptr) return;
   {
@@ -296,7 +380,20 @@ jint ImageReader_detachImage(JNIEnv* env, jobject, jobject, jboolean) {
   return -1;
 }
 
-void ImageReader_discardFreeBuffers(JNIEnv*, jobject) {}
+// Lets go of the pooled buffers nothing references (no Image, HardwareBuffer or EGLImage).
+void ImageReader_discardFreeBuffers(JNIEnv* env, jobject thiz) {
+  auto r = ReaderOf(env, thiz);
+  if (r == nullptr) return;
+  std::lock_guard<std::mutex> lock(r->mutex);
+  for (auto it = r->pool.begin(); it != r->pool.end();) {
+    if (gesher::bionic::ahb::RgbaBufferUnshared(*it)) {
+      gesher::bionic::ahb::ReleaseRgbaBuffer(*it);
+      it = r->pool.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
 
 jobjectArray ImageReader_createImagePlanes(JNIEnv* env, jclass, jint, jobject, jint, jint, jint,
                                            jint, jint, jint) {
@@ -322,7 +419,7 @@ jobjectArray Image_createPlanes(JNIEnv* env, jobject thiz, jint numPlanes, jint,
   for (int p = 0; p < n; ++p) {
     const Plane& pl = i->planes[p];
     ScopedLocalRef<jobject> buffer(
-        env, env->NewDirectByteBuffer(i->data.data() + pl.offset, static_cast<jlong>(pl.size)));
+        env, env->NewDirectByteBuffer(i->bytes() + pl.offset, static_cast<jlong>(pl.size)));
     ScopedLocalRef<jobject> plane(env, env->NewObject(gIr.planeClass, gIr.planeCtor, thiz,
                                                       pl.rowStride, pl.pixelStride,
                                                       buffer.get()));
@@ -347,8 +444,13 @@ jint Image_getFenceFd(JNIEnv*, jobject) { return -1; }
 
 jobject Image_getHardwareBuffer(JNIEnv* env, jobject thiz) {
   Image* image = ImageOf(env, thiz);
-  if (image == nullptr || image->halFormat != kHalRgba8888) return nullptr;
-  return gesher::media::ReaderHardwareBuffer(env, image->data.data(), image->width, image->height);
+  // Only RGBA pixels (drawn into the Surface, or a camera or decoder frame converted
+  // to RGBA) can be handed out; a YUV or JPEG image has no such buffer.
+  if (image == nullptr || image->rgba == nullptr) return nullptr;
+  // An existing GPU form (an EGLImage the app kept from an earlier frame in this
+  // buffer) takes this frame's pixels now, when the app asks for the image.
+  gesher::bionic::ahb::FlushRgbaToGpu(image->rgba);
+  return gesher::media::ReaderHardwareBuffer(env, image->rgba, image->width, image->height);
 }
 
 // --- frames into a reader ----------------------------------------------------------------
@@ -449,12 +551,14 @@ int QueueFrame(JNIEnv* env, const std::shared_ptr<Reader>& r, const uint8_t* nv1
     }
     i->data.assign(jpeg, jpeg + jpegSize);
     i->planes.push_back({0, jpegSize, 0, 0});
-  } else if (r->halFormat == kHalRgba8888) {
-    i->data.resize(static_cast<size_t>(tw) * th * 4);
-    Nv12ToRgba(nv12, w, h, i->data.data(), tw, tw, th);
-    i->planes.push_back({0, i->data.size(), tw * 4, 4});
+  } else if (r->halFormat == kHalRgba8888 || r->halFormat == kHalPrivate) {
+    // RGBA, and PRIVATE too: a GPU-sampled reader's images are sampled as RGBA
+    // (getHardwareBuffer); a PRIVATE image has no visible planes.
+    Nv12ToRgba(nv12, w, h, RgbaStorage(r, i), tw, tw, th);
+    if (i->rgba != nullptr) gesher::bionic::ahb::MarkRgbaWritten(i->rgba);
+    i->planes.push_back({0, static_cast<size_t>(tw) * th * 4, tw * 4, 4});
   } else {
-    // YUV_420_888 (and PRIVATE, whose planes nobody sees): I420.
+    // YUV_420_888: I420.
     size_t ySize = static_cast<size_t>(tw) * th;
     int cw = (tw + 1) / 2, ch = (th + 1) / 2;
     size_t cSize = static_cast<size_t>(cw) * ch;
@@ -524,11 +628,11 @@ int QueueVideoFrame(JNIEnv* env, const std::shared_ptr<Reader>& r,
   image->dataSpace = r->dataSpace;
   image->halFormat = r->halFormat;
   const int tw = r->width, th = r->height;
-  if (r->halFormat == kHalRgba8888) {
-    image->data.resize(static_cast<size_t>(tw) * th * 4);
+  if (r->halFormat == kHalRgba8888 || r->halFormat == kHalPrivate) {
+    uint8_t* const rgba = RgbaStorage(r, image);
     for (int ty = 0; ty < th; ++ty) {
       const int sy = static_cast<int>(static_cast<int64_t>(ty) * h / th);
-      uint8_t* row = image->data.data() + static_cast<size_t>(ty) * tw * 4;
+      uint8_t* row = rgba + static_cast<size_t>(ty) * tw * 4;
       for (int tx = 0; tx < tw; ++tx) {
         const int sx = static_cast<int>(static_cast<int64_t>(tx) * w / tw);
         const int c = y[static_cast<size_t>(sy) * frame.stride_y + sx] - 16;
@@ -540,7 +644,8 @@ int QueueVideoFrame(JNIEnv* env, const std::shared_ptr<Reader>& r,
         row[tx * 4 + 3] = 255;
       }
     }
-    image->planes.push_back({0, image->data.size(), tw * 4, 4});
+    if (image->rgba != nullptr) gesher::bionic::ahb::MarkRgbaWritten(image->rgba);
+    image->planes.push_back({0, static_cast<size_t>(tw) * th * 4, tw * 4, 4});
   } else {
     const size_t y_size = static_cast<size_t>(tw) * th;
     const int cw = (tw + 1) / 2, ch = (th + 1) / 2;
@@ -879,9 +984,9 @@ void LegacyCamera_release(JNIEnv* env, jobject thiz) {
   LegacyVoid(env, "release", "(" LEGACY_CAMERA ")V", thiz);
 }
 
-// unlock, lock, reconnect, cancelAutoFocus, stopSmoothZoom, stopFaceDetection,
-// setDisplayOrientation, enableFocusMoveCallback, setPreviewCallbackSurface: nothing to
-// do for an open camera (one process, fixed focus, frames are not rotated).
+// unlock, lock, reconnect, stopSmoothZoom, stopFaceDetection, setDisplayOrientation,
+// enableFocusMoveCallback, setPreviewCallbackSurface: nothing to do for an open camera
+// (one process, no focus-move callbacks, frames are not rotated).
 void LegacyCamera_check(JNIEnv* env, jobject thiz) {
   LegacyVoid(env, "check", "(" LEGACY_CAMERA ")V", thiz);
 }
@@ -925,6 +1030,10 @@ void LegacyCamera_addCallbackBuffer(JNIEnv* env, jobject thiz, jbyteArray buffer
 
 void LegacyCamera_autoFocus(JNIEnv* env, jobject thiz) {
   LegacyVoid(env, "autoFocus", "(" LEGACY_CAMERA ")V", thiz);
+}
+
+void LegacyCamera_cancelAutoFocus(JNIEnv* env, jobject thiz) {
+  LegacyVoid(env, "cancelAutoFocus", "(" LEGACY_CAMERA ")V", thiz);
 }
 
 void LegacyCamera_takePicture(JNIEnv* env, jobject thiz, jint msgType) {
@@ -988,7 +1097,7 @@ const JNINativeMethod gLegacyCameraMethods[] = {
     {"setPreviewCallbackSurface", "(Landroid/view/Surface;)V",
      GESHER_JNI(LegacyCamera_checkObject)},
     {"native_autoFocus", "()V", GESHER_JNI(LegacyCamera_autoFocus)},
-    {"native_cancelAutoFocus", "()V", GESHER_JNI(LegacyCamera_check)},
+    {"native_cancelAutoFocus", "()V", GESHER_JNI(LegacyCamera_cancelAutoFocus)},
     {"enableFocusMoveCallback", "(I)V", GESHER_JNI(LegacyCamera_checkInt)},
     {"native_takePicture", "(I)V", GESHER_JNI(LegacyCamera_takePicture)},
     {"startSmoothZoom", "(I)V", GESHER_JNI(LegacyCamera_startSmoothZoom)},

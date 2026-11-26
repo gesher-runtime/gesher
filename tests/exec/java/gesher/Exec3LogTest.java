@@ -79,6 +79,27 @@ public final class Exec3LogTest {
         contains(filtered, "native-visible\n");
         contains(command(child, "log-abi", tag + "Abi"), "log-abi:PASS");
         System.out.println("Exec3LogTest PASS actual Java/NDK records, tags, priority filters, nine formats and live loggability properties");
+        // Credentials never reach the persisted logcat file or the stderr log (docs/logging.md).
+        // The values are synthetic; 45-exec3.ps1 also searches the log files for them.
+        String secretTag = tag + "Secret";
+        println.invoke(null, 4, secretTag, "GmsAuthenticator getAuthToken: ya29.a0Exec3SYNTHETICjava\n"
+                + "LoginRequest{user=7, auth_token=8754Exec3SYNTHETIC}\n\u05e9\u05dc\u05d5\u05dd Bearer Exec3SYNTHETICbearer");
+        String nativeOutput = command(child, "log-print", secretTag, "6", "auth_tok", "en=Exec3SYNTH",
+                "ETICsplit ya2", "9.Exec3SYNTHETICnative");
+        if (nativeOutput.contains("SYNTHETIC")) throw new AssertionError("native stderr log kept a credential: " + nativeOutput);
+        contains(nativeOutput, "auth_token=<redacted> ya29.<redacted>");
+        equal("GmsAuthenticator getAuthToken: <redacted>\nLoginRequest{user=7, auth_token=<redacted>}\n"
+                + "\u05e9\u05dc\u05d5\u05dd Bearer <redacted>\nauth_token=<redacted> ya29.<redacted>\n",
+                command("logcat", "-d", "-v", "raw", "-s", secretTag));
+        if (args.length == 1) {
+            // In an app process (ExecActivity): stdout/stderr are the package's .log file.
+            System.out.print("Exec3 stdout getAuthToken: ya2");
+            System.out.print("9.a0Exec3SYNTHETICstdout");
+            System.out.println();
+            System.err.println("Exec3 stderr password=Exec3SYNTHETICstderr");
+            System.err.flush();
+        }
+        System.out.println("Exec3LogTest PASS credentials are redacted in the logcat file and stderr for Java, split native arguments, multi-line and non-ASCII text");
         command("logcat", "-c");
         equal("", command("logcat", "-d", "-v", "raw", "-s", tag));
         set.invoke(null, "log.tag." + tag, "V");

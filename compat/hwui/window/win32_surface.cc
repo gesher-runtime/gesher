@@ -83,6 +83,7 @@ void Win32Surface::SetSurfaceInsets(int left, int top, int right, int bottom) {
   std::lock_guard<std::mutex> lock(mutex_);
   inset_left_ = std::max(0, left); inset_top_ = std::max(0, top);
   inset_right_ = std::max(0, right); inset_bottom_ = std::max(0, bottom);
+  window_contents_valid_ = false;
 }
 
 bool Win32Surface::HasSurfaceInsets() const {
@@ -132,6 +133,7 @@ void Win32Surface::EnsureBuffer() {
     }
     buffer_ = fresh;
     buffer_contents_valid_ = false;
+    window_contents_valid_ = false;
   }
 }
 
@@ -140,6 +142,7 @@ int Win32Surface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   if (locked_) return -EINVAL;
   EnsureBuffer();
   locked_ = true;
+  connected_to_cpu_ = true;
   out->width = buffer_->width;
   out->height = buffer_->height;
   out->stride = buffer_->stride;
@@ -158,46 +161,67 @@ int Win32Surface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
       if (dirty->left >= dirty->right || dirty->top >= dirty->bottom) *dirty = {0, 0, 0, 0};
     }
   }
+  locked_dirty_ = dirty != nullptr ? PixelRect{dirty->left, dirty->top, dirty->right, dirty->bottom}
+                                   : PixelRect{};
   return 0;
 }
 
 int Win32Surface::unlockAndPost() {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!locked_) return -EINVAL;
-    locked_ = false;
-  }
-  Present();
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!locked_) return -EINVAL;
+  locked_ = false;
+  PresentLocked(&locked_dirty_);
   return 0;
 }
 
 void Win32Surface::Present() {
   std::lock_guard<std::mutex> lock(mutex_);
+  PresentLocked(nullptr);
+}
+
+void Win32Surface::PresentLocked(const PixelRect* dirty) {
   if (buffer_ == nullptr) return;
   buffer_contents_valid_ = true;
   int w, h, stride;
-  uint8_t* dst = window_->Lock(&w, &h, &stride);
+  uint64_t version = 0;
+  uint8_t* dst = window_->Lock(&w, &h, &stride, &version);
   const bool swap = buffer_->format != HAL_PIXEL_FORMAT_BGRA_8888;
   const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
   int rows = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(h,
       int64_t{buffer_->height} - inset_top_ - inset_bottom_)));
   int cols = static_cast<int>(std::max<int64_t>(0, std::min<int64_t>(w,
       int64_t{buffer_->width} - inset_left_ - inset_right_)));
-  for (int y = 0; y < rows && cols > 0; y++) {
-    const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y + inset_top_) * buffer_->stride + inset_left_];
-    uint32_t* d = reinterpret_cast<uint32_t*>(dst) + static_cast<size_t>(y) * stride;
+  PixelRect copy = PixelRect::Full(cols, rows);
+  bool partial = false;
+  if (dirty != nullptr && !dirty->empty() && window_contents_valid_ &&
+      version == presented_window_version_) {
+    // Crop producer damage by the surface insets, then by the destination.
+    PixelRect clipped = dirty->Clip(buffer_->width, buffer_->height);
+    PixelRect visible{clipped.left - inset_left_, clipped.top - inset_top_,
+                      clipped.right - inset_left_, clipped.bottom - inset_top_};
+    visible = visible.Clip(cols, rows);
+    if (!visible.empty()) { copy = visible; partial = true; }
+  }
+  for (int y = copy.top; y < copy.bottom && !copy.empty(); y++) {
+    const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y + inset_top_) * buffer_->stride +
+                                         inset_left_ + copy.left];
+    uint32_t* d = reinterpret_cast<uint32_t*>(dst) + static_cast<size_t>(y) * stride + copy.left;
     if (!swap) {
-      memcpy(d, s, static_cast<size_t>(cols) * 4);
+      memcpy(d, s, static_cast<size_t>(copy.right - copy.left) * 4);
       continue;
     }
     // RGBA bytes (R in the low byte) to GDI's BGRA (B in the low byte).
-    for (int x = 0; x < cols; x++) {
+    for (int x = 0; x < copy.right - copy.left; x++) {
       uint32_t p = s[x];
       uint32_t q = (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu);
       d[x] = opaque ? (q | 0xff000000u) : q;
     }
   }
-  window_->UnlockAndPost();
+  // The Window version also detects a resize or another producer (GL readback,
+  // for example) overwriting the retained destination between CPU frames.
+  presented_window_version_ = version + 1;
+  window_contents_valid_ = true;
+  window_->UnlockAndPost(partial ? &copy : nullptr);
   frames_++;
 }
 
@@ -243,7 +267,13 @@ android::sp<Win32Surface::Buffer> Win32Surface::TakeDequeued(ANativeWindowBuffer
 
 int Win32Surface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
   std::lock_guard<std::mutex> lock(mutex_);
-  TakeDequeued(buffer);
+  if (TakeDequeued(buffer) != nullptr) {
+    // The producer may have modified the cancelled buffer. It no longer
+    // proves that pixels outside a subsequent dirty region match the display.
+    buffer_contents_valid_ = false;
+    window_contents_valid_ = false;
+  }
+  queued_dirty_valid_ = false;
   return 0;
 }
 
@@ -260,6 +290,7 @@ int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
                 buffer_ != nullptr ? buffer_->width : 0, buffer_ != nullptr ? buffer_->height : 0);
       }
       buffer_ = queued;
+      window_contents_valid_ = false;
     }
     if (getenv("GESHER_WINDOW_DEBUG") != nullptr && buffer_ != nullptr) {
       // Each frame for a while after the queued size changes: its size, the
@@ -300,8 +331,19 @@ int Win32Surface::queueBuffer(ANativeWindowBuffer* buffer, int) {
                 buffer_->pixels[static_cast<size_t>(y) * buffer_->stride + x]);
       }
     }
+    PixelRect damage;
+    if (queued_dirty_valid_ && buffer_ != nullptr) {
+      // native_window_set_surface_damage uses OpenGL's bottom-left origin.
+      // Clamp before subtraction to avoid overflowing on arbitrary app input.
+      PixelRect clipped = queued_dirty_.Clip(buffer_->width, buffer_->height);
+      if (!clipped.empty()) {
+        damage = {clipped.left, buffer_->height - clipped.bottom,
+                  clipped.right, buffer_->height - clipped.top};
+      }
+    }
+    queued_dirty_valid_ = false;  // the contract resets damage after every queue
+    PresentLocked(&damage);
   }
-  Present();
   if (getenv("GESHER_WINDOW_DEBUG") != nullptr && frames_ <= 4) {
     std::vector<uint32_t> shown;
     int w = 0, h = 0;
@@ -373,6 +415,31 @@ int Win32Surface::perform(int operation, va_list args) {
     }
     case NATIVE_WINDOW_UNLOCK_AND_POST:
       return unlockAndPost();
+    case NATIVE_WINDOW_API_CONNECT:
+    case NATIVE_WINDOW_API_DISCONNECT: {
+      const int api = va_arg(args, int);
+      std::lock_guard<std::mutex> lock(mutex_);
+      connected_to_cpu_ = operation == NATIVE_WINDOW_API_CONNECT && api == NATIVE_WINDOW_API_CPU;
+      queued_dirty_valid_ = false;
+      return 0;
+    }
+    case NATIVE_WINDOW_SET_SURFACE_DAMAGE: {
+      const auto* rects = va_arg(args, const android_native_rect_t*);
+      const size_t count = va_arg(args, size_t);
+      std::lock_guard<std::mutex> lock(mutex_);
+      queued_dirty_ = {};
+      // AOSP ignores this hint for CPU connections; lock() supplies their
+      // damage separately in top-left coordinates.
+      queued_dirty_valid_ = count != 0 && !connected_to_cpu_;
+      if (connected_to_cpu_) return 0;
+      if (count != 0 && rects == nullptr) { queued_dirty_valid_ = false; return -EINVAL; }
+      for (size_t i = 0; i < count; ++i) {
+        PixelRect rect{rects[i].left, rects[i].bottom, rects[i].right, rects[i].top};
+        if (rect.empty()) { queued_dirty_valid_ = false; break; }
+        queued_dirty_.Unite(rect);
+      }
+      return 0;
+    }
     case NATIVE_WINDOW_SET_BUFFERS_FORMAT: {
       int format = va_arg(args, int);
       if (format == 0) format = HAL_PIXEL_FORMAT_RGBA_8888;  // the default

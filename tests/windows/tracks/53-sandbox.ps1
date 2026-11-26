@@ -4,7 +4,9 @@
 # production launch path (SpawnInAppContainer) with real AppContainer tokens:
 # the kernel closes the user's files to a contained process, binderd's pipe admits
 # it only with the binder-client capability, and binderd refuses its claims of a
-# system UID or of another process's pid.
+# system UID or of another process's pid. The same probe checks shared-storage
+# inheritance, live downgrade/revoke, protected private roots and replacement
+# policy-file readability through real Windows access checks.
 $sandboxSaved = $env:GESHER_SANDBOX
 $sandboxDevice = "sandbox-$PID"
 $sandboxBinderd = $null
@@ -18,7 +20,7 @@ try {
     if ($sandboxBinderd.HasExited) { break }
     Start-Sleep -Milliseconds 100
   }
-  Check 'sandbox: AppContainer launch path, the user''s files closed, binderd admission and refused identity claims' {
+  Check 'sandbox: AppContainer isolation, Binder identity and live storage ACL lifecycle' {
     & "$Dir/appcontainer_probe.exe" $sandboxDevice
   } @('all passed')
 } finally {

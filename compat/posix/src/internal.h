@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <windows.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -126,7 +127,45 @@ bool List(const std::wstring& name, std::vector<Entry>* entries);
 bool ReadLink(const std::wstring& name, std::string* target);
 // n for /proc/self/fd/<n> when fd n is open, else -1.
 int FdOfLink(const std::wstring& name);
+// The name's Linux path, as an fd open on it reports it: "/proc/<pid>/maps"
+// for proc/self/maps.
+std::string LinuxName(const std::wstring& name);
+// The inode number stat and fstat report for that Linux path.
+unsigned long long Inode(const std::string& linux_path);
+// What stat and lstat need of a name, from one lookup: its type (as Type()),
+// its permission bits, and for a link what following it fails with (Linux
+// refuses /proc/<pid>/map_files/* to a process without
+// CAP_CHECKPOINT_RESTORE: EPERM; else 0) and n for /proc/self/fd/<n> (else
+// -1).
+struct NameStatus {
+  unsigned type = 0;
+  unsigned mode = 0;
+  int follow_error = 0;
+  int fd = -1;
+};
+NameStatus Describe(const std::wstring& name);
+// The times (100 ns units since 1601, FILETIME's) stat and fstat report for
+// that Linux path: the process's start for /proc/<pid>/..., boot otherwise.
+long long Time(const std::string& linux_path);
+// Whether the file behind `file` (a handle of an fd) is one that open() made
+// for a name here: its Linux path, its type (S_IFREG, S_IFDIR, or S_IFLNK
+// for a link itself, opened O_PATH | O_NOFOLLOW) and, if `mode` is given,
+// the permission bits stat gave the name when it was opened. Such an fd
+// stays a /proc file for fstat, fstatfs, getdents64, readlink of
+// /proc/self/fd/<n> and the *at calls, as Linux's does.
+bool DescribeHandle(HANDLE file, unsigned* type, std::string* linux_path,
+                    unsigned* mode = nullptr);
+// As DescribeHandle, for a file the caller already knows is
+// FILE_ATTRIBUTE_TEMPORARY (only those can be one): one query, of the
+// attribute.
+bool DescribeTemporaryFile(HANDLE file, unsigned* type, std::string* linux_path,
+                           unsigned* mode = nullptr);
 }  // namespace procfs
+
+// Whether the file view mmap made at `address` maps a file mmap was given
+// open for writing (O_RDWR): Linux's f_mode of a mapping's file, which
+// /proc/<pid>/map_files shows (mman.cc).
+bool MappedFileWritable(const void* address);
 
 // Symbolic links on disk (links.cc): whether a handle opened with
 // FILE_FLAG_OPEN_REPARSE_POINT is a symbolic link or junction, and its target
@@ -200,13 +239,23 @@ int MemfdResizeError(int fd, uint64_t new_size);
 int MemfdGrowError(int fd, uint64_t end);
 // A MAP_SHARED mapping of fd: EPERM when writable and write-sealed; sets
 // *deny_write when a write seal must keep the mapping from becoming writable.
-int MemfdSharedMapError(int fd, bool writable, bool* deny_write);
+// A writable mapping of a memfd also yields a lease in *write_lease (which the
+// caller must supply for a writable request): F_SEAL_WRITE answers EBUSY for as
+// long as any lease of the file lives, in any process. The mapping's owner holds
+// the lease until the last page of the mapping is unmapped (or the process
+// dies, when the OS releases it); an error returns no lease.
+int MemfdSharedMapError(int fd, bool writable, bool* deny_write,
+                        std::shared_ptr<void>* write_lease);
 // Snapshot I/O must check the pinned object, never a recycled descriptor.
 bool FileHasMemfdSeals(HANDLE file);
 int MemfdWriteHandleError(HANDLE file, bool at_position, uint64_t offset,
                           uint64_t length, bool append);
 int MemfdResizeHandleError(HANDLE file, uint64_t new_size);
 int MemfdGrowHandleError(HANDLE file, uint64_t end);
-int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write);
+int MemfdSharedMapHandleError(HANDLE file, bool writable, bool* deny_write,
+                               std::shared_ptr<void>* write_lease);
+// In a forked child (ADR 0092): a write lease the child inherited with its
+// mapping becomes the child's own (its byte-range lock was the parent's).
+void RenewMemfdWriteLeaseInChild(void* write_lease);
 
 }  // namespace gesher

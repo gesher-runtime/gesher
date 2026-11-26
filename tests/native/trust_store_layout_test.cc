@@ -111,6 +111,10 @@ int main() {
                                 utf8.data(), static_cast<int>(utf8.size()), nullptr, nullptr);
   utf8.resize(len > 0 ? len : 0);
   _putenv_s("ANDROID_ROOT", utf8.c_str());
+  // The sync also writes the user-added CAs under $ANDROID_DATA: keep them in
+  // the temporary root too.
+  std::string android_data = utf8 + "\\data";
+  _putenv_s("ANDROID_DATA", android_data.c_str());
 
   // A different object type on the writer's mutex name makes CreateMutexW
   // fail immediately. A failed admission must never start the migration.

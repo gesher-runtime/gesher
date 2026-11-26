@@ -46,12 +46,12 @@ std::vector<uint8_t> Nv12Expected(const Array& input, int w, int h, int tw, int 
 int Nv12Push(Target& target, Array& input, int w, int h, int64_t timestamp, jbyteArray jpeg=nullptr) {
   return CameraFrames_deliver(&target.env,0,&target.surface,&input,w,h,timestamp,jpeg);
 }
-void Nv12Metadata(const Target& target, const Image& image, int64_t timestamp) {
+void Nv12Metadata(const Target& target, Image& image, int64_t timestamp) {
   Check(image.width == target.reader->width && image.height == target.reader->height &&
         image.timestampNs == timestamp && image.dataSpace == target.reader->dataSpace &&
-        image.halFormat == 1, "NV12 reader dimensions timestamp and dataspace");
+        image.halFormat == target.reader->halFormat && IsRgbaFormat(image.halFormat), "NV12 reader dimensions timestamp and dataspace");
   Check(image.planes.size() == 1 && image.planes[0].offset == 0 &&
-        image.planes[0].size == image.data.size() && image.planes[0].rowStride == image.width*4 &&
+        image.planes[0].size == ImageStorage(image).size() && image.planes[0].rowStride == image.width*4 &&
         image.planes[0].pixelStride == 4, "NV12 reader exact RGBA plane layout");
 }
 void Nv12ReaderCases() {
@@ -70,10 +70,10 @@ void Nv12ReaderCases() {
     Image* image = target.Acquire();
     Check(image != nullptr, "NV12 delivered image can be acquired");
     if (!image) continue;
-    Check(image->data == expected, "NV12 complete RGBA pixel oracle");
+    Check(ImageStorageMatches(*image,expected), "NV12 complete RGBA pixel oracle");
     Nv12Metadata(target,*image,1234567);
     Check(input.bytes == saved, "NV12 input remains unchanged");
-    if (!image->data.empty()) image->data[0] ^= 0xff;
+    if (!ImageStorage(*image).empty()) ImageStorage(*image)[0] ^= 0xff;
     Check(input.bytes == saved, "NV12 delivered RGBA storage is independently writable");
     ReleaseImage(target.reader,image);
     Check(target.env.events == 1 && target.env.pins == 1 && target.env.releases == 1 &&
@@ -177,12 +177,12 @@ void Nv12LifetimeCases() {
   auto* held = target.Acquire();
   Check(held != nullptr, "NV12 held image exists");
   if (!held) return;
-  const auto saved = held->data;
+  const auto saved = ImageSnapshot(*held);
   for (int n=2; n<=7; ++n) {
     input = Nv12Input(16,8,n);
     Check(Nv12Push(target,input,16,8,n) == OK, "NV12 producer reuse delivers");
   }
-  Check(held->data == saved && target.reader->pending.size() == 2,
+  Check(ImageStorageMatches(*held,saved) && target.reader->pending.size() == 2,
         "NV12 acquired bytes survive bounded queue replacement");
   auto* next = target.Acquire();
   Check(next && next->timestampNs == 6, "NV12 pending FIFO retains the last two frames");
@@ -193,7 +193,7 @@ void Nv12LifetimeCases() {
   auto* last = target.Acquire();
   Check(last && last->timestampNs == 7, "NV12 last surviving frame has original timestamp");
   if (last) ReleaseImage(target.reader,last);
-  Check(held->data == saved, "NV12 separate release cannot alter acquired image");
+  Check(ImageStorageMatches(*held,saved), "NV12 separate release cannot alter acquired image");
   ReleaseImage(target.reader,held);
   target.Close();
   Check(Nv12Push(target,input,16,8,8) == NO_INIT && target.reader->pending.empty(),
@@ -245,6 +245,16 @@ void Nv12OtherFormatsAndErrors() {
     Target planar(16,8,format);
     Check(Nv12Push(planar,input,16,8,3) == OK,"NV12 planar/PRIVATE fallback delivers");
     auto* image = planar.Acquire();
+    if (IsRgbaFormat(format)) {
+      const auto expected = Nv12Expected(input,16,8,16,8,16);
+      Check(image && ImageStorageMatches(*image,expected),
+            "NV12 PRIVATE reader retains the current complete RGBA contract");
+      if (image) {
+        Nv12Metadata(planar,*image,3);
+        ReleaseImage(planar.reader,image);
+      }
+      continue;
+    }
     Check(image && image->data.size() == input.bytes.size() && image->planes.size() == 3,
           "NV12 planar/PRIVATE retains I420 layout");
     if (image) {
@@ -289,7 +299,7 @@ void Nv12ExhaustiveColors() {
     const uint8_t mask = static_cast<uint8_t>(1u<<(triple&7));
     if (!(seen[triple/8]&mask)) { seen[triple/8] |= mask; ++unique; }
     const auto expected = Nv12Color(luma,u,v);
-    Check(std::memcmp(image->data.data()+at*4,expected.data(),4) == 0,
+    Check(std::memcmp(ImageStorage(*image).data()+at*4,expected.data(),4) == 0,
           "NV12 exhaustive independent color oracle");
   }
   Check(unique == (1u<<24) && std::all_of(seen.begin(),seen.end(),[](uint8_t b){return b==255;}),
@@ -330,10 +340,10 @@ uint64_t Nv12Cycle(const Nv12Workload& work, int frames, std::array<Array,2>& in
       auto* image = target.Acquire();
       Check(image != nullptr,"timed NV12 image acquired");
       if (!image) continue;
-      Check(image->data == expected[n%2],"timed NV12 full pixel oracle");
+      Check(ImageStorageMatches(*image,expected[n%2]),"timed NV12 full pixel oracle");
       Nv12Metadata(target,*image,n+1);
-      checksum += image->data.size()+image->timestampNs;
-      if (!image->data.empty()) checksum += image->data.front()+image->data.back();
+      checksum += ImageStorage(*image).size()+image->timestampNs;
+      if (!ImageStorage(*image).empty()) checksum += ImageStorage(*image).front()+ImageStorage(*image).back();
       ReleaseImage(target.reader,image);
     }
     Check(target.env.events == frames && target.env.pins == frames && target.env.releases == frames &&
