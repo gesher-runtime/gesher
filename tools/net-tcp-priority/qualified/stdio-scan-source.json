@@ -1,0 +1,17 @@
+{
+  "baseline": "d38b5549dc3963f8d491e9205f9b2743bb6d3745",
+  "paths": [
+    "compat/posix/src/stdio_output.cc"
+  ],
+  "patch_sha256": "cc2459ed87595dc027fe2818e808fe22741bb059154127f3f2be65b788f168c8",
+  "previous_sha256": {
+    "compat/posix/src/stdio_output.cc": "7ed987581cbb4b8449293235d0b0fafa8fd6725b06820a97c23924bff949ba97"
+  },
+  "source_sha256": {
+    "compat/posix/src/stdio_output.cc": "be072ca4a7d45cd6d7b89b60313c50b12a3553af86506a3f24fb573676277c5d"
+  },
+  "contract_evidence": [
+    "docs/research/stdio-formatted-input-2026-11-23.md"
+  ],
+  "native_runtime_approval": false
+}

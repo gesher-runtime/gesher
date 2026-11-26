@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -36,6 +37,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -70,6 +72,7 @@ using SLpermille = int16_t;
 constexpr SLresult kSuccess = 0;
 constexpr SLresult kPreconditionsViolated = 1;
 constexpr SLresult kParameterInvalid = 2;
+constexpr SLresult kResourceError = 4;
 constexpr SLresult kBufferInsufficient = 7;
 constexpr SLresult kContentUnsupported = 9;
 constexpr SLresult kFeatureUnsupported = 12;
@@ -132,7 +135,7 @@ Object* ObjectOf(const void* self) {
 
 enum class Kind { kEngine, kOutputMix, kPlayer, kRecorder };
 
-enum class Slot { kObject, kEngine, kPlay, kQueue, kVolume, kSeek, kConfig, kPrefetch, kRecord };
+enum class Slot { kObject, kEngine, kPlay, kQueue, kVolume, kSeek, kConfig, kPrefetch, kRecord, kEffect };
 constexpr uint32_t KindBit(Kind kind) { return 1u << static_cast<unsigned>(kind); }
 constexpr uint32_t SlotBit(Slot slot) { return 1u << static_cast<unsigned>(slot); }
 constexpr uint32_t kPlayers = KindBit(Kind::kPlayer), kRecorders = KindBit(Kind::kRecorder);
@@ -156,6 +159,7 @@ const Interface kInterfaces[] = {
     {SL_IID_ANDROIDCONFIGURATION, Slot::kConfig, kPlayers | kRecorders, false, true},
     {SL_IID_PREFETCHSTATUS, Slot::kPrefetch, kPlayers, false, false},
     {SL_IID_RECORD, Slot::kRecord, kRecorders, true, false},
+    {SL_IID_ANDROIDEFFECT, Slot::kEffect, kPlayers, false, false},
 };
 
 bool SameId(SLInterfaceID a, SLInterfaceID b) {
@@ -194,6 +198,14 @@ SLresult CheckInterfaces(Kind kind, bool queue, SLuint32 count, const SLInterfac
   return kSuccess;
 }
 
+struct VolumeEffect {
+  bool enabled = false;
+  SLmillibel level = 0;
+  SLboolean mute = 0;
+  SLboolean stereo_enabled = 0;
+  SLpermille stereo_position = 0;
+};
+
 struct Object {
   Kind kind;
   ItfSlot object_itf;
@@ -205,6 +217,7 @@ struct Object {
   ItfSlot config_itf;
   ItfSlot prefetch_itf;
   ItfSlot record_itf;
+  ItfSlot effect_itf;
   SLuint32 state = kObjectUnrealized;
   uint32_t exposed = 0;
 
@@ -232,6 +245,7 @@ struct Object {
   SLuint32 event_mask = 0;
   SLmillibel level = 0;
   bool mute = false;
+  std::optional<VolumeEffect> volume_effect;
   std::shared_ptr<DataSource> source;  // fd/URI players
   std::shared_ptr<Player> player;
   std::atomic<bool> at_end{false};
@@ -243,8 +257,17 @@ struct Object {
 
 void ApplyVolume(Object* o) {
   float gain = o->mute ? 0.0f : static_cast<float>(std::pow(10.0, o->level / 2000.0));
-  if (o->track != nullptr) o->track->SetVolume(gain, gain);
-  if (o->player != nullptr) o->player->SetVolume(gain, gain);
+  int balance_db = 0;
+  if (o->volume_effect && o->volume_effect->enabled) {
+    const auto& effect = *o->volume_effect;
+    const int level_db = effect.mute ? -96 : effect.level / 100;
+    gain *= static_cast<float>(std::pow(10.0, level_db / 20.0));
+    if (effect.stereo_enabled) balance_db = effect.stereo_position * 96 / 1000;
+  }
+  const float left = gain * static_cast<float>(std::pow(10.0, -std::max(balance_db, 0) / 20.0));
+  const float right = gain * static_cast<float>(std::pow(10.0, std::min(balance_db, 0) / 20.0));
+  if (o->track != nullptr) o->track->SetVolume(left, right);
+  if (o->player != nullptr) o->player->SetVolume(left, right);
 }
 
 // The feeder of a buffer-queue player: copies queued buffers into the track,
@@ -372,6 +395,7 @@ SLresult SYSV ObjGetInterface(const void* self, SLInterfaceID iid, void* out) {
     case Slot::kConfig: slot = &o->config_itf; break;
     case Slot::kPrefetch: slot = &o->prefetch_itf; break;
     case Slot::kRecord: slot = &o->record_itf; break;
+    case Slot::kEffect: slot = &o->effect_itf; break;
   }
   if (slot == nullptr) return kFeatureUnsupported;
   *static_cast<Itf*>(out) = reinterpret_cast<Itf>(slot);
@@ -623,13 +647,16 @@ SLresult SYSV VolSetLevel(const void* self, SLint32 raw_level) {
     MEDIA_LOGI("OpenSL volume boundary trace: raw32 %d, signed16 %d", raw_level, static_cast<int>(level));
   }
   Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
   o->level = std::min<SLmillibel>(level, 0);
   ApplyVolume(o);
   return kSuccess;
 }
 SLresult SYSV VolGetLevel(const void* self, SLmillibel* level) {
   if (level == nullptr) return kParameterInvalid;
-  *level = ObjectOf(self)->level;
+  Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
+  *level = o->level;
   return kSuccess;
 }
 SLresult SYSV VolGetMax(const void*, SLmillibel* level) {
@@ -639,13 +666,16 @@ SLresult SYSV VolGetMax(const void*, SLmillibel* level) {
 }
 SLresult SYSV VolSetMute(const void* self, SLboolean mute) {
   Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
   o->mute = mute != 0;
   ApplyVolume(o);
   return kSuccess;
 }
 SLresult SYSV VolGetMute(const void* self, SLboolean* mute) {
   if (mute == nullptr) return kParameterInvalid;
-  *mute = ObjectOf(self)->mute ? 1 : 0;
+  Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
+  *mute = o->mute ? 1 : 0;
   return kSuccess;
 }
 SLresult SYSV VolEnableStereo(const void*, SLboolean) { return kSuccess; }
@@ -665,6 +695,124 @@ const void* const kVolumeVtable[] = {
     reinterpret_cast<const void*>(&VolGetMute),  reinterpret_cast<const void*>(&VolEnableStereo),
     reinterpret_cast<const void*>(&VolIsStereo), reinterpret_cast<const void*>(&VolSetStereo),
     reinterpret_cast<const void*>(&VolGetStereo),
+};
+
+// The Android bundle's insert-volume effect runs in the player's own session.
+constexpr SLInterfaceID_ kBundleVolume = {
+    0x119341a0, 0x8469, 0x11df, 0x81f9, {0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b}};
+
+SLresult SYSV EffectCreate(const void* self, SLInterfaceID id) {
+  if (id == nullptr) return kParameterInvalid;
+  if (!SameId(id, &kBundleVolume)) return kResourceError;
+  Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
+  if (!o->volume_effect) o->volume_effect.emplace();
+  return kSuccess;
+}
+
+SLresult SYSV EffectRelease(const void* self, SLInterfaceID id) {
+  Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
+  if (!o->volume_effect || !SameId(id, &kBundleVolume)) return kParameterInvalid;
+  o->volume_effect.reset();
+  ApplyVolume(o);
+  return kSuccess;
+}
+
+SLresult SYSV EffectSetEnabled(const void* self, SLInterfaceID id, SLboolean enabled) {
+  Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
+  if (!o->volume_effect || !SameId(id, &kBundleVolume)) return kParameterInvalid;
+  o->volume_effect->enabled = enabled == 1;
+  ApplyVolume(o);
+  return kSuccess;
+}
+
+SLresult SYSV EffectIsEnabled(const void* self, SLInterfaceID id, SLboolean* enabled) {
+  Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
+  if (!o->volume_effect || !SameId(id, &kBundleVolume) || enabled == nullptr) return kParameterInvalid;
+  *enabled = o->volume_effect->enabled ? 1 : 0;
+  return kSuccess;
+}
+
+// effect_param_t followed by a single 32-bit parameter ID. The value begins
+// immediately after the ID because its size already gives four-byte alignment.
+struct VolumeEffectParam {
+  int32_t status;
+  uint32_t parameter_size;
+  uint32_t value_size;
+  uint32_t parameter;
+};
+
+template <typename T>
+int32_t VolumeEffectValue(bool write, uint32_t& size, void* data, T& value, T min, T max,
+                          bool allow_larger_reply = false) {
+  if (size != sizeof(T) && (write || !allow_larger_reply || size < sizeof(T))) return -EINVAL;
+  if (!write) {
+    memcpy(data, &value, sizeof(T));
+    size = sizeof(T);
+    return 0;
+  }
+  T next;
+  memcpy(&next, data, sizeof(T));
+  if (next < min || next > max) return -EINVAL;
+  value = next;
+  return 0;
+}
+
+SLresult SYSV EffectSendCommand(const void* self, SLInterfaceID id, SLuint32 command,
+                               SLuint32 command_size, void* command_data,
+                               SLuint32* reply_size, void* reply) {
+  // Command IDs from system/audio_effect.h.
+  constexpr SLuint32 kSetParam = 5, kGetParam = 8;
+  if (command != kSetParam && command != kGetParam) return kParameterInvalid;
+  if (command_data == nullptr || command_size < sizeof(VolumeEffectParam) ||
+      reply == nullptr || reply_size == nullptr) return kParameterInvalid;
+  VolumeEffectParam param;
+  memcpy(&param, command_data, sizeof(param));
+  if (param.parameter_size != sizeof(param.parameter)) return kParameterInvalid;
+  const bool write = command == kSetParam;
+  if (write ? param.value_size > command_size - sizeof(param) || *reply_size < sizeof(param.status)
+            : *reply_size < sizeof(param) || param.value_size > *reply_size - sizeof(param)) {
+    return kParameterInvalid;
+  }
+  auto* data = static_cast<uint8_t*>(write ? command_data : reply) + sizeof(param);
+  Object* o = ObjectOf(self);
+  std::lock_guard lock(o->mu);
+  if (!o->volume_effect || !SameId(id, &kBundleVolume)) return kParameterInvalid;
+  auto& effect = *o->volume_effect;
+  constexpr SLmillibel kMinLevel = -9600, kMaxLevel = 0;
+  SLmillibel max_level = kMaxLevel;
+  switch (param.parameter) {
+    case 0:
+      param.status = VolumeEffectValue(write, param.value_size, data, effect.level, kMinLevel, kMaxLevel);
+      if (write && param.status == 0) effect.level = static_cast<SLmillibel>(effect.level / 100 * 100);
+      break;
+    case 1: param.status = write ? -EINVAL : VolumeEffectValue(false, param.value_size, data,
+                                             max_level, kMinLevel, kMaxLevel); break;
+    case 2: param.status = VolumeEffectValue(write, param.value_size, data, effect.mute, 0u, 1u, true); break;
+    case 3: param.status = VolumeEffectValue(write, param.value_size, data, effect.stereo_enabled, 0u, 1u, true); break;
+    case 4: param.status = VolumeEffectValue<SLpermille>(write, param.value_size, data,
+                                             effect.stereo_position, -1000, 1000); break;
+    default: param.status = -EINVAL; break;
+  }
+  if (write) {
+    if (param.status == 0) ApplyVolume(o);
+    memcpy(reply, &param.status, sizeof(param.status));
+    *reply_size = sizeof(param.status);
+  } else {
+    if (param.status != 0) param.value_size = 0;
+    memcpy(reply, &param, sizeof(param));
+    *reply_size = static_cast<SLuint32>(sizeof(param)) + param.value_size;
+  }
+  return kSuccess;
+}
+
+const void* const kEffectVtable[] = {
+    reinterpret_cast<const void*>(&EffectCreate), reinterpret_cast<const void*>(&EffectRelease),
+    reinterpret_cast<const void*>(&EffectSetEnabled), reinterpret_cast<const void*>(&EffectIsEnabled),
+    reinterpret_cast<const void*>(&EffectSendCommand),
 };
 
 // --- SLSeekItf (fd and URI players) ------------------------------------------------------
@@ -1017,6 +1165,7 @@ Object* NewObject(Kind kind) {
   o->config_itf = {kConfigVtable, o};
   o->prefetch_itf = {kPrefetchVtable, o};
   o->record_itf = {kRecordVtable, o};
+  o->effect_itf = {kEffectVtable, o};
   return o;
 }
 

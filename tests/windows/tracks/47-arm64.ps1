@@ -16,24 +16,37 @@ $a64 = (Resolve-Path $Dir).Path
 # Ends what a run left behind: processes whose parent it was, and theirs (a
 # guest fork's children outlive a parent that is killed, as orphans do on
 # Linux; the test job must not keep them).
-function A64StopDescendants([int] $ProcessId) {
-  # Most probes have no descendants. Only snapshot the full process tree
-  # when the targeted query finds children, with one RPC for the whole tree.
+function A64StopDescendants([int] $ProcessId, [datetime] $Started) {
+  # Most probes create no children. Enumerate the full tree only when needed.
   $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" `
-    -Property ParentProcessId, ProcessId -OperationTimeoutSec 5)
+    -Property ProcessId,ParentProcessId,CreationDate -OperationTimeoutSec 5 -ErrorAction Stop)
   if (-not $children.Count) { return }
-  $byParent = Get-CimInstance Win32_Process -Property ParentProcessId, ProcessId -OperationTimeoutSec 5 |
+  $byParent = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate `
+    -OperationTimeoutSec 5 -ErrorAction Stop |
     Group-Object -Property ParentProcessId -AsHashTable -AsString
   $byParent[[string]$ProcessId] = $children + @($byParent[[string]$ProcessId] | Where-Object { $null -ne $_ })
-  $parents = [Collections.Generic.Queue[int]]::new()
-  $seen = [Collections.Generic.HashSet[int]]::new()
-  $parents.Enqueue($ProcessId)
-  [void]$seen.Add($ProcessId)
-  while ($parents.Count) {
-    foreach ($child in $byParent[[string]$parents.Dequeue()]) {
-      if ($seen.Add($child.ProcessId)) {
-        Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
-        $parents.Enqueue($child.ProcessId)
+  $tree = @([pscustomobject]@{ ProcessId = $ProcessId; CreationDate = $Started })
+  $seen = [System.Collections.Generic.HashSet[int]]::new()
+  $null = $seen.Add($ProcessId)
+  for ($i = 0; $i -lt $tree.Count; $i++) {
+    $parent = $tree[$i]
+    $tree += @($byParent[[string]$parent.ProcessId] | Where-Object {
+      $_.CreationDate -ge $parent.CreationDate -and
+        $seen.Add($_.ProcessId)
+    })
+  }
+  for ($i = $tree.Count - 1; $i -gt 0; $i--) {
+    $child = $tree[$i]
+    $live = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+    if ($live) {
+      try {
+        if ([Math]::Abs(($live.StartTime - $child.CreationDate).TotalMilliseconds) -lt 1) {
+          Stop-Process -InputObject $live -Force -ErrorAction Stop
+        }
+      } catch {
+        if (-not $live.HasExited) { throw }
+      } finally {
+        $live.Dispose()
       }
     }
   }
@@ -43,23 +56,33 @@ function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
   $out = Join-Path $env:RUNNER_TEMP "a64-$([guid]::NewGuid()).out"
   $err = "$out.err"
   $quoted = $Arguments | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+  $started = Get-Date
+  Write-Host "ARM64_PROCESS_START exe=$Exe"
   $p = Start-Process -FilePath $Exe -ArgumentList $quoted -NoNewWindow -PassThru `
     -RedirectStandardOutput $out -RedirectStandardError $err
+  Write-Host "ARM64_PROCESS_WAIT pid=$($p.Id) timeoutSeconds=$Seconds"
   try {
-    $timedOut = -not $p.WaitForExit($Seconds * 1000)
-    if ($timedOut) {
+    $null = $p.Handle
+    if (-not $p.WaitForExit($Seconds * 1000)) {
       Write-Output "TIMEOUT after $Seconds s: $Exe $($Arguments -join ' ')"
       try { $p.Kill() } catch { if (-not $p.HasExited) { throw } }
-      if (-not $p.WaitForExit(5000)) { throw "ARM64 test process did not exit within five seconds after kill: $Exe" }
+      if (-not $p.WaitForExit(5000)) { throw 'ARM64 process did not exit after termination' }
+      $exitCode = 124
+    } else {
+      $exitCode = $p.ExitCode
     }
-    A64StopDescendants $p.Id
-    $global:LASTEXITCODE = if ($timedOut) { 124 } else { $p.ExitCode }
+    Write-Host "ARM64_PROCESS_CLEANUP pid=$($p.Id) exit=$exitCode"
+    A64StopDescendants $p.Id $started
+  } catch {
+    Write-Output "ARM64 process or descendant cleanup failed: $_"
+    $exitCode = 125
   } finally {
     $p.Dispose()
     Get-Content $out -ErrorAction SilentlyContinue
     Get-Content $err -ErrorAction SilentlyContinue
     Remove-Item $out, $err -ErrorAction SilentlyContinue
   }
+  $global:LASTEXITCODE = $exitCode
 }
 
 # A run that must crash the way Android reports a native crash: the expected

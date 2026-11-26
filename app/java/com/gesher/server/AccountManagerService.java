@@ -57,8 +57,9 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Account secrets belong to their installed authenticator's code identity. Visible
  * clients request real tokens from that authenticator; grants are scoped to client code
- * identity and custom-token expiry. The synthetic Google fallback exists only without
- * an installed GMS package. Apps' own account types work as on Android: {@code addAccount}, {@code hasFeatures} and {@code getAccountsByFeatures}
+ * identity and custom-token expiry. No account exists that an authenticator did not add:
+ * without microG there is no Google authenticator, so no Google account or token
+ * (issue #335). Apps' own account types work as on Android: {@code addAccount}, {@code hasFeatures} and {@code getAccountsByFeatures}
  * go to the type's authenticator (the app's service for
  * {@link AccountManager#ACTION_AUTHENTICATOR_INTENT}, its type in the
  * {@code account-authenticator} XML of its meta-data), bound through the activity manager;
@@ -69,7 +70,12 @@ import java.util.concurrent.TimeUnit;
 public final class AccountManagerService extends IAccountManager.Default {
     private static final String TAG = "accounts: ";
     private static final String GOOGLE_TYPE = "com.google";
-    private static final Account DEFAULT_ACCOUNT = new Account("user@gesher.local", GOOGLE_TYPE);
+    /**
+     * The Google account Gesher once reported without an authenticator. It was never
+     * persisted in the account store, but apps could store sync settings for it; those
+     * are retired at start ({@link #retireSyntheticAccountResidue}).
+     */
+    private static final Account RETIRED_SYNTHETIC_ACCOUNT = new Account("user@gesher.local", GOOGLE_TYPE);
     private static final String ANDROID_NS = "http://schemas.android.com/apk/res/android";
     /** AOSP Session budget, including binding and any login Activity continuation. */
     private static final long AUTHENTICATOR_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(15);
@@ -227,11 +233,6 @@ public final class AccountManagerService extends IAccountManager.Default {
         mAm = am;
         mPm = pm;
         mCallers = am != null ? am.callers() : new CallerIdentity(pm, null);
-        if (pm.get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            Entry dummy = new Entry();
-            dummy.password = "dummy_password";
-            mAccounts.put(DEFAULT_ACCOUNT, dummy);
-        }
         if (persistent) load();
         else mStoreWriter = values -> { /* Stand-in accounts live only in this process. */ };
         if (am != null) am.setAccountManager(this);
@@ -248,6 +249,25 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     void setSyncRetirement(java.util.function.BiConsumer<Set<Account>, Set<Account>> retire) {
         mRetireSync = retire;
+    }
+
+    /**
+     * At start: remove what apps stored for {@link #RETIRED_SYNTHETIC_ACCOUNT} (its sync
+     * settings and periodic syncs), as Android retires a removed account's sync state.
+     * An account of that name that an authenticator really added keeps its settings.
+     */
+    void retireSyntheticAccountResidue() {
+        Set<Account> retained;
+        synchronized (this) {
+            if (mAccounts.containsKey(RETIRED_SYNTHETIC_ACCOUNT)) return;
+            retained = new HashSet<>(mAccounts.keySet());
+        }
+        try {
+            mRetireSync.accept(Set.of(RETIRED_SYNTHETIC_ACCOUNT), retained);
+        } catch (IllegalStateException e) {
+            // The settings stay for the next start; no account or token depends on them.
+            SystemServer.log(TAG + "retired account sync settings not removed yet: " + e);
+        }
     }
 
     /** Before package publication, seal the intent to remove owned accounts and revoke client grants. */
@@ -509,14 +529,6 @@ public final class AccountManagerService extends IAccountManager.Default {
                 && !mPm.isRemovalPending(recipient.name) && mPm.get(recipient.name) == current;
     }
 
-    private static boolean synthetic(Account account, Entry e) {
-        return DEFAULT_ACCOUNT.equals(account) && e != null && e.owner == null && e.ownerIdentity == null;
-    }
-
-    private synchronized boolean dummy(Account account) {
-        return synthetic(account, mAccounts.get(account)) && mPm.get(GmsPackageSupport.PACKAGE_GMS) == null;
-    }
-
     private boolean owns(Caller c, Entry e) {
         return !retiring(e) && (c.system || e != null && c.name != null && c.code != null
                 && c.name.equals(e.owner) && c.code.equals(e.ownerIdentity));
@@ -609,7 +621,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private boolean visible(Caller c, Account account, Entry e) {
-        if (dummy(account)) return true;
         int value = visibility(c, e);
         return value == AccountManager.VISIBILITY_VISIBLE
                 || value == AccountManager.VISIBILITY_USER_MANAGED_VISIBLE;
@@ -694,7 +705,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             if (retiring(e) || accountType != null && !accountType.equals(a.type)) continue;
             if (!c.system && !owns(c, e)
                     && (!packageName.equals(c.name) || !visible(c, a, e))) continue;
-            if (!dummy(a)) result.put(a.name, visibility(target, e));
+            result.put(a.name, visibility(target, e));
         }
         return result;
     }
@@ -827,7 +838,6 @@ public final class AccountManagerService extends IAccountManager.Default {
         List<Account> list = new ArrayList<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             Account a = item.getKey();
-            if (synthetic(a, item.getValue()) && !dummy(a)) continue;
             if ((type == null || type.equals(a.type)) && visible(c, a, item.getValue())) list.add(a);
         }
         return list.toArray(new Account[0]);
@@ -848,7 +858,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     synchronized Account[] syncableAccounts() {
         List<Account> list = new ArrayList<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
-            if (!synthetic(item.getKey(), item.getValue()) && !retiring(item.getValue())) {
+            if (!retiring(item.getValue())) {
                 list.add(item.getKey());
             }
         }
@@ -915,7 +925,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public boolean removeAccountExplicitly(Account account) {
         if (account == null) return false;
-        synchronized (this) { if (synthetic(account, mAccounts.get(account))) return false; }
         AccountChange change;
         synchronized (this) {
             Entry removed = mAccounts.get(account); requireOwner(caller(null), removed);
@@ -1061,10 +1070,19 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (account == null || authTokenType == null) {
             error(response, AccountManager.ERROR_CODE_BAD_ARGUMENTS, "An account and token type are required"); return;
         }
+        boolean known;
         synchronized (this) {
             Entry e = mAccounts.get(account);
-            if (dummy(account)) { reply(response, tokenResult(account, dummyToken(account))); return; }
-            if (e == null || !visible(c, account, e)) throw new SecurityException("Account is not visible to this caller");
+            known = e != null && visible(c, account, e);
+        }
+        if (!known) {
+            // Android binds the type's authenticator before it reads anything about the
+            // account (AccountManagerService.Session.bind): with none, the request fails
+            // with "bind failure", which AccountManager reports as AuthenticatorException.
+            if (authenticator(account.type) == null) {
+                error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "bind failure"); return;
+            }
+            throw new SecurityException("Account is not visible to this caller");
         }
         mCalls.execute(() -> {
             Authenticator a = authenticator(account.type);
@@ -1122,13 +1140,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         });
     }
 
-    private static String dummyToken(Account account) {
-        return "dummy_token_gesher_" + account.name.replace("@", "_at_");
-    }
-
     @Override
     public synchronized String peekAuthToken(Account account, String authTokenType) {
-        if (dummy(account)) return dummyToken(account);
         Entry e = mAccounts.get(account); requireOwner(caller(null), e);
         return e.tokens.get(authTokenType);
     }
@@ -1136,7 +1149,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public synchronized String getPassword(Account account) {
         Entry e = mAccounts.get(account);
-        if (dummy(account)) return e != null ? e.password : null;
         requireOwner(caller(null), e); return e.password;
     }
 
@@ -1152,7 +1164,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public synchronized String getUserData(Account account, String key) {
         Entry e = mAccounts.get(account);
-        if (dummy(account)) return e != null ? e.data.getOrDefault(key, "dummy_user_data") : null;
         requireOwner(caller(null), e); return e.data.get(key);
     }
 
@@ -1320,7 +1331,7 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     private Boolean hasFeatures(Account account, String[] features) {
         if (features == null || features.length == 0) return exists(account);
-        if (!exists(account) || DEFAULT_ACCOUNT.equals(account)) return false;
+        if (!exists(account)) return false;
         Authenticator a = authenticator(account.type);
         if (a == null) return false;
         synchronized (this) {
@@ -2206,7 +2217,6 @@ public final class AccountManagerService extends IAccountManager.Default {
             p.setProperty("pendingRemoval.count", Integer.toString(i));
             i = 0;
             for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
-                if (synthetic(item.getKey(), item.getValue())) continue;
                 String prefix = i + "."; Entry e = item.getValue();
                 p.setProperty(prefix + "name", item.getKey().name);
                 p.setProperty(prefix + "type", item.getKey().type);
