@@ -51,6 +51,12 @@ class Program {
   // attempt is made to undo arbitrary side effects performed by constructors.
   bool Initialize(std::string* error = nullptr);
 
+  // Runs DT_FINI_ARRAY/DT_FINI in reverse dependency load order. The program
+  // becomes permanently closed (including after a failed guest finalizer).
+  // Repeated calls are idempotent. The destructor performs best-effort
+  // shutdown before unmapping objects; calling explicitly reports errors.
+  bool Shutdown(std::string* error = nullptr);
+
   bool CallExport(std::string_view library, std::string_view symbol,
                   const std::vector<Value>& arguments, ValueKind result_kind,
                   Value* result, std::string* error = nullptr,
@@ -84,6 +90,7 @@ class Program {
   uint64_t next_thunk_ = 0xe0000000;
   bool stack_ok_ = false;
   bool initialization_failed_ = false;
+  bool closed_ = false;
   std::atomic_flag busy_ = ATOMIC_FLAG_INIT;
 
   static constexpr uint32_t kStackBase = 0xeff00000;
