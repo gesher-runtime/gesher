@@ -266,7 +266,7 @@ Java_com_gesher_server_WindowsLocation_nativePromptEnable(JNIEnv* env, jclass cl
   text[at] = 0;
   BOOL open = GesherHostPrompt(GesherUiText(lang, "brand"), text,
       GesherUiText(lang, "location_off_open"), GesherUiText(lang, "location_off_later"),
-      GesherUiRtl(lang), NULL);
+      GesherUiRtl(lang), NULL, MB_ICONINFORMATION);
   HeapFree(GetProcessHeap(), 0, text);
   return open ? JNI_TRUE : JNI_FALSE;
 }
