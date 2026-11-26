@@ -47,8 +47,33 @@ state. With opt-in enabled, two transports matched in each of three stages.
 The opt-in run used APK SHA-256
 `7094422aec52d412029f00d637f67541948fb1a442e9627046198dca998603f6`.
 The API 37 AOSP emulator image r06 failed to finish booting on the test Mac.
-The target 37 cases are built and awaiting execution. Gesher comparison,
-native sockets, HttpEngine, WebView, discovery pickers and inbound traffic
-also remain open.
+The Android target 37 reference is awaiting execution.
+
+## Observed Gesher baseline on Windows
+
+Gesher portable 0.2.0.3123 (source `156abd94bbe733e07171931027d5eb3613565dc1`)
+ran both signed APKs on Windows 11 ARM64 build 26300 under Parallels. The
+same peer ran inside the Windows guest and bound TCP and UDP to one ephemeral
+loopback port. The authenticated host shell delivered the endpoint as Intent
+extras and granted and revoked the requested permission in a fresh profile.
+Each APK checked its own permission before opening new Java sockets.
+
+| Target SDK | Permission manipulated | Initially denied | Granted | Revoked |
+| --- | --- | --- | --- | --- |
+| 36 | `NEARBY_WIFI_DEVICES` | TCP and UDP echo | TCP and UDP echo | TCP and UDP echo |
+| 37 | `ACCESS_LOCAL_NETWORK` | TCP and UDP echo | TCP and UDP echo | TCP and UDP echo |
+
+Permission checks reported `-1`, `0`, `-1` for the requested permission in
+both runs. The peer received six TCP and six UDP requests in total and the app
+verified every reply. The target 36 APK matched the Android reference SHA-256
+above. The target 37 APK SHA-256 was
+`0c4caa9d27c706c4acaef6f12135c8126976f8f352784170cb9659268e396a9d`.
+
+This Windows baseline uses Gesher's own policy and the Windows guest's
+loopback path. The opt-in Android 16 case used the emulator's host-side peer
+alias. The results establish the observed permission and byte-transfer behavior
+on each profile. Enforcement against a common LAN destination, existing sockets,
+NDK callers, HttpEngine, WebView, discovery pickers and inbound traffic remain
+open.
 
 [Android local network permission contract](https://developer.android.com/privacy-and-security/local-network-permission)
