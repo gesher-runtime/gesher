@@ -127,7 +127,8 @@ public final class TaskStackContractTest {
         parsed.setEnabled(true);
         parsed.setTargetSdkVersion(36);
         for (String name : List.of("Root", "Middle", "Top", "Other", "Private", "Guarded", "Single",
-                "Instance", "Doc", "DocNever", "DocAlways", "NoHistory", "ResetChild", "ClearResetRoot")) {
+                "Instance", "Doc", "DocNever", "DocAlways", "NoHistory", "ResetChild", "ClearResetRoot",
+                "AffinityDonor", "Reparent")) {
             ParsedActivityImpl activity = new ParsedActivityImpl();
             activity.setPackageName(pkg);
             activity.setName(pkg + "." + name);
@@ -140,6 +141,8 @@ public final class TaskStackContractTest {
             if (name.equals("NoHistory")) activity.setFlags(ActivityInfo.FLAG_NO_HISTORY);
             if (name.equals("ResetChild")) activity.setFlags(ActivityInfo.FLAG_FINISH_ON_TASK_LAUNCH);
             if (name.equals("ClearResetRoot")) activity.setFlags(ActivityInfo.FLAG_CLEAR_TASK_ON_LAUNCH);
+            if (name.equals("AffinityDonor")) activity.setTaskAffinity(affinity + ".donor");
+            if (name.equals("Reparent")) activity.setFlags(ActivityInfo.FLAG_ALLOW_TASK_REPARENTING);
             if (name.equals("Doc")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_INTO_EXISTING);
             if (name.equals("DocNever")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_NEVER);
             if (name.equals("DocAlways")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_ALWAYS);
@@ -879,6 +882,38 @@ public final class TaskStackContractTest {
                 == ActivityManager.START_TASK_TO_FRONT && live(h, top) && "RESUMED".equals(h.state(top))
                 && h.thread.items(ActivityResultItem.class, root) == 0,
                 "clearTaskOnLaunch canceled a reply owed to the retained root");
+    }
+
+    private static void launcherClearIncomingAffinity() throws Exception {
+        Harness h = new Harness();
+        h.startOne(launch("AffinityDonor").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null);
+        Object donor = h.record("AffinityDonor"); h.acknowledge("activityResumed", donor);
+        h.startOne(launch("Reparent"), donor);
+        Object child = h.record("Reparent"); h.acknowledge("activityPaused", donor);
+        h.acknowledge("activityResumed", child); h.acknowledge("activityIdle", child);
+        h.acknowledgeStopped(donor);
+        h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("Top"), null,
+                (IBinder)get(child, "token"), "donor-reply", 80, 0, null, null)
+                == ActivityManager.START_SUCCESS, "Donor reply activity did not start"));
+        Object reply = h.record("Top"); h.acknowledge("activityPaused", child);
+        h.acknowledge("activityResumed", reply); h.acknowledge("activityIdle", reply);
+        h.acknowledgeStopped(child);
+        Intent launcher = Intent.makeMainActivity(new ComponentName(PKG, PKG + ".ClearResetRoot"))
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        h.startOne(launcher, null);
+        Object target = h.record("ClearResetRoot"); h.acknowledge("activityResumed", target);
+        check(!get(donor, "taskId").equals(get(target, "taskId")), "Fixture did not create lower donor task");
+        check(h.startOne(launcher, null) == ActivityManager.START_TASK_TO_FRONT
+                && live(h, child) && live(h, reply), "Ordinary launcher intent cleared a lower task");
+        check(h.startOne(new Intent(launcher).addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED), null)
+                == ActivityManager.START_TASK_TO_FRONT, "Forced reset did not reuse its target");
+        check(live(h, target) && live(h, donor) && !live(h, child) && !live(h, reply)
+                && "PAUSING".equals(h.state(reply)), "Forced reset left incoming affinity history");
+        check(h.thread.items(ActivityResultItem.class, child) == 0,
+                "Forced reset sent a result to a sibling finishing in the same group");
+        h.acknowledge("activityPaused", reply);
+        check(h.thread.launches(target) == 1 && h.thread.launches(donor) == 1,
+                "Forced reset recreated a retained root");
     }
 
     private static void launcherResetDocumentSuffix() throws Exception {
@@ -2477,7 +2512,8 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("tasks")) { taskFlags(); reorderedUriOwner(); abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris(); }
         if (selected.equals("all") || selected.equals("ordinary")) {
             ordinaryTaskReuse(); ordinaryWaitReuse(); ordinaryClearTop(); ordinaryRootAndMultipleTasks(); ordinaryAffinityOwner(); launcherResetTask();
-            launcherClearTaskOnLaunch(); launcherResetDocumentSuffix(); ordinaryNewTaskResult(); ordinaryDocumentResult();
+            launcherClearTaskOnLaunch(); launcherClearIncomingAffinity(); launcherResetDocumentSuffix();
+            ordinaryNewTaskResult(); ordinaryDocumentResult();
             ordinaryReuseAdmission(); ordinaryAuthenticatorCompletion();
         }
         if (selected.equals("all") || selected.equals("recents")) {

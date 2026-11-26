@@ -3912,6 +3912,37 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
             replies.clear();
         }
+        collectClearedAffinityActivitiesLocked(root.taskId, clearTaskOnLaunch, selected);
+    }
+
+    /** Reset finishes activities a lower task would otherwise move here. Guarded by this. */
+    private void collectClearedAffinityActivitiesLocked(int targetId, boolean forceReset,
+            List<ActivityRecord> selected) {
+        AppTaskRecord target = mAppTasks.get(targetId);
+        if (target == null || target.affinity == null) return;
+        int targetIndex = mTaskOrder.indexOf(targetId);
+        for (int i = targetIndex - 1; i >= 0; i--) {
+            int taskId = mTaskOrder.get(i);
+            ActivityRecord donorRoot = rootOf(taskId);
+            if (donorRoot == null) continue;
+            Set<ActivityRecord> finishes = new java.util.LinkedHashSet<>();
+            for (ActivityRecord activity : mActivities) {
+                if (activity.taskId != taskId || activity == donorRoot || activity.finishing
+                        || activity.state == State.DESTROYED) continue;
+                if (activity.resultTo != null) {
+                    // Keep each reply attached to the actual activity which requested it.
+                    if (finishes.contains(activity.resultTo)) finishes.add(activity);
+                } else if ((activity.info.flags & ActivityInfo.FLAG_ALLOW_TASK_REPARENTING) != 0
+                        && activity.info.taskAffinity != null
+                        && target.matchesAffinity(activity.info.applicationInfo.uid, activity.info.taskAffinity)
+                        && (forceReset || (activity.info.flags & ActivityInfo.FLAG_FINISH_ON_TASK_LAUNCH) != 0)) {
+                    finishes.add(activity);
+                }
+            }
+            List<ActivityRecord> fromDonor = new ArrayList<>(finishes);
+            java.util.Collections.reverse(fromDonor);
+            selected.addAll(fromDonor);
+        }
     }
 
     /** The task's top activity that is not finishing, or null. Guarded by this. */
