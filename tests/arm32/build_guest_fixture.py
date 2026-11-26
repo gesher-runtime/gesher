@@ -104,7 +104,8 @@ def main() -> None:
                          if symbol.name.startswith("jni32_")}
             expected = {"jni32_version", "jni32_contract", "jni32_stale",
                         "jni32_wrong_env", "jni32_unsupported",
-                        "jni32_vm_bad_version", "jni32_vm_attach"}
+                        "jni32_vm_bad_version", "jni32_vm_attach",
+                        "jni32_env_get_vm"}
             named = {symbol.name: symbol for symbol in symbols
                      if symbol.name.startswith("Java_gesher_Test_")}
             expected_named = {"Java_gesher_Test_add", "Java_gesher_Test_length",
