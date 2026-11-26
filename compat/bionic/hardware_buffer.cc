@@ -37,6 +37,7 @@
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -75,6 +76,7 @@ constexpr uint64_t kVendorUsage = (0xFULL << 28) | (0xFFFFULL << 48);  // VENDOR
 // What this implementation serves.
 constexpr uint64_t kServedUsage = kCpuMask | kGpuUsage | kVendorUsage;
 constexpr uint64_t kMaxBufferBytes = 1ULL << 30;
+constexpr int kFixedSizeSeals = F_SEAL_GROW | F_SEAL_SHRINK;
 
 struct Format {
   uint32_t format;
@@ -201,23 +203,30 @@ size_t BufferBytes(const AHardwareBuffer_Desc& desc, const Format* f) {
   return bytes <= kMaxBufferBytes ? static_cast<size_t>(bytes) : 0;
 }
 
+// The layout and usages supported by the shared CPU backing store.
+size_t StorageBytes(const AHardwareBuffer_Desc& desc) {
+  const Format* f = FindFormat(desc.format);
+  if (f == nullptr || desc.layers != 1 || desc.stride < desc.width ||
+      (desc.usage & ~kServedUsage) != 0 || (!f->gpu && (desc.usage & kGpuUsage) != 0)) {
+    return 0;
+  }
+  return BufferBytes(desc, f);
+}
+
 // Whether this implementation can allocate a valid description.
 bool Served(const AHardwareBuffer_Desc* desc) {
-  const Format* f = FindFormat(desc->format);
-  if (f == nullptr || desc->layers != 1) return false;
-  if ((desc->usage & ~kServedUsage) != 0) return false;
   AHardwareBuffer_Desc tight = *desc;
   tight.stride = tight.width;
-  if (BufferBytes(tight, f) == 0) return false;
+  if (StorageBytes(tight) == 0) return false;
   if ((desc->usage & kGpuUsage) != 0) {
-    if (!f->gpu) return false;
     gpu::Thread* thread = gpu::Thread::Get();
     if (thread == nullptr) return false;
     if (desc->width > static_cast<uint32_t>(thread->max_texture_size()) ||
         desc->height > static_cast<uint32_t>(thread->max_texture_size())) {
       return false;
     }
-    if (f->texture == gpu::TextureFormat::kRgba16f && (desc->usage & AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER) != 0 &&
+    if (desc->format == AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT &&
+        (desc->usage & AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER) != 0 &&
         !thread->color_buffer_float()) {
       return false;
     }
@@ -729,11 +738,11 @@ int BIONIC_SYSV Allocate(const AHardwareBuffer_Desc* desc, AHardwareBuffer** out
   }
   AHardwareBuffer_Desc d = *desc;
   d.stride = d.width;
-  const Format* f = FindFormat(d.format);
-  const size_t size = BufferBytes(d, f);
-  int fd = memfd_create("AHardwareBuffer", MFD_CLOEXEC);
+  const size_t size = StorageBytes(d);
+  int fd = memfd_create("AHardwareBuffer", MFD_CLOEXEC | MFD_ALLOW_SEALING);
   if (fd < 0) return -errno;
-  if (ftruncate(fd, static_cast<off_t>(size)) != 0) {
+  if (ftruncate(fd, static_cast<off_t>(size)) != 0 ||
+      fcntl(fd, F_ADD_SEALS, kFixedSizeSeals | F_SEAL_SEAL) != 0) {
     int e = errno;
     close(fd);
     return -e;
@@ -925,6 +934,12 @@ struct Wire {
 };
 constexpr uint32_t kWireMagic = 0x57424841;  // "AHBW"
 
+bool IsStreamSocket(int fd) {
+  int type = 0;
+  socklen_t len = sizeof type;
+  return getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == 0 && type == SOCK_STREAM;
+}
+
 int BIONIC_SYSV SendHandle(const AHardwareBuffer* buffer, int socket_fd) {
   Buffer* b = FromApp(buffer);
   if (b == nullptr) return kBadValue;
@@ -960,8 +975,18 @@ int BIONIC_SYSV SendHandle(const AHardwareBuffer* buffer, int socket_fd) {
     std::fflush(stderr);
     return -e;
   }
-  if (static_cast<size_t>(n) != sizeof wire) return kInvalidOperation;
-  return 0;
+  size_t sent = static_cast<size_t>(n);
+  if (sent == 0 || (sent < sizeof wire && !IsStreamSocket(socket_fd))) return kInvalidOperation;
+  // The first write carried the descriptor. Only send the remaining bytes.
+  while (sent < sizeof wire) {
+    const ssize_t more = send(socket_fd, reinterpret_cast<const char*>(&wire) + sent,
+                              sizeof wire - sent, MSG_NOSIGNAL);
+    if (more < 0 && errno == EINTR) continue;
+    if (more < 0) return -errno;
+    if (more == 0) return kInvalidOperation;
+    sent += static_cast<size_t>(more);
+  }
+  return sent == sizeof wire ? 0 : kInvalidOperation;
 }
 
 int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
@@ -969,7 +994,7 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   *out = nullptr;
   Wire wire{};
   iovec iov{&wire, sizeof wire};
-  alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 4)] = {};
+  alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 4) + CMSG_SPACE(sizeof(ucred))] = {};
   msghdr msg{};
   msg.msg_iov = &iov;
   msg.msg_iovlen = 1;
@@ -981,31 +1006,40 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   } while (n < 0 && errno == EINTR);
   if (n < 0) return -errno;
   int fd = -1;
+  size_t fd_count = 0;
   for (cmsghdr* c = CMSG_FIRSTHDR(&msg); c != nullptr; c = CMSG_NXTHDR(&msg, c)) {
     if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
     const size_t count = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
     for (size_t i = 0; i < count; ++i) {
       int received;
       std::memcpy(&received, CMSG_DATA(c) + i * sizeof(int), sizeof(int));
-      if (fd < 0) {
+      if (++fd_count == 1) {
         fd = received;
       } else {
-        close(received);  // only one belongs to a buffer
+        close(received);
       }
     }
   }
-  // A stream socket may deliver the rest of the description later.
+  if ((msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0 || fd_count != 1 || fd < 0) {
+    if (fd >= 0) close(fd);
+    return kInvalidOperation;
+  }
+  // A stream may split a description. A short packet is a malformed record,
+  // so leave the next packet for the next call.
   size_t got = static_cast<size_t>(n);
+  if (got > 0 && got < sizeof wire && !IsStreamSocket(socket_fd)) {
+    close(fd);
+    return kInvalidOperation;
+  }
   while (got > 0 && got < sizeof wire) {
     ssize_t more = recv(socket_fd, reinterpret_cast<char*>(&wire) + got, sizeof wire - got, 0);
     if (more < 0 && errno == EINTR) continue;
     if (more <= 0) break;
     got += static_cast<size_t>(more);
   }
-  if (got != sizeof wire || wire.magic != kWireMagic || wire.version != 1 || fd < 0) {
-    if (fd >= 0) close(fd);
-    std::fprintf(stderr, "gesher AHardwareBuffer: no buffer in what fd %d received\n", socket_fd);
-    std::fflush(stderr);
+  if (got != sizeof wire || wire.magic != kWireMagic || wire.version != 1 || wire.reserved != 0 ||
+      wire.id == 0) {
+    close(fd);
     return kInvalidOperation;
   }
   AHardwareBuffer_Desc desc{};
@@ -1015,16 +1049,19 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   desc.format = wire.format;
   desc.usage = wire.usage;
   desc.stride = wire.stride;
-  const Format* f = FindFormat(desc.format);
-  const size_t required_bytes = f != nullptr ? BufferBytes(desc, f) : 0;
-  if (!ValidDescription(&desc) || desc.stride < desc.width || required_bytes == 0 ||
-      wire.size < required_bytes || wire.size > kMaxBufferBytes ||
-      (Planar420(desc.format) && (desc.usage & ~(kCpuMask | kVendorUsage)) != 0)) {
+  const size_t size = StorageBytes(desc);
+  const int seals = fcntl(fd, F_GET_SEALS);
+  struct stat info{};
+  // Windows may grow a short file when making a mapping. Check the received
+  // file before mapping so a claimed byte count cannot create backing storage.
+  if (!ValidDescription(&desc) || size == 0 || wire.size != size ||
+      seals < 0 || (seals & kFixedSizeSeals) != kFixedSizeSeals ||
+      fstat(fd, &info) != 0 || info.st_size != static_cast<off_t>(size)) {
     close(fd);
     return kInvalidOperation;
   }
   int error = 0;
-  Buffer* b = Create(desc, fd, static_cast<size_t>(wire.size), wire.id, /*foreign=*/true, &error);
+  Buffer* b = Create(desc, fd, size, wire.id, /*foreign=*/true, &error);
   if (b == nullptr) {
     close(fd);
     return error != 0 ? error : -ENOMEM;

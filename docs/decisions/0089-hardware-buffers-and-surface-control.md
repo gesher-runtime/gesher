@@ -46,22 +46,26 @@ scope (CONTRIBUTING.md). The contracts are implemented instead.
 
 ### 1. AHardwareBuffer is shared memory with a per-process GPU form
 
-- A buffer is a memfd (stride x height pixels, stride = width) mapped in the
-  process, its `AHardwareBuffer_Desc` and an id `pid << 32 | count` (as
+- A buffer is a fixed-size, writable memfd mapped in the process, its
+  `AHardwareBuffer_Desc` and an id `pid << 32 | count` (as
   GraphicBuffer's). `AHardwareBuffer_lock`/`lockAndGetInfo`/`lockPlanes`
   return the mapping; `unlock` completes before it returns (fence -1, which the
   NDK defines as "already complete").
 - What is served, and what `AHardwareBuffer_isSupported` answers: formats
-  R8G8B8A8, R8G8B8X8, R8G8B8, R5G6B5, R16G16B16A16_FLOAT, R10G10B10A2, R8 and
-  BLOB; one layer; CPU read/write, GPU sampling, GPU color output and composer
+  R8G8B8A8, R8G8B8X8, R8G8B8, R5G6B5, R16G16B16A16_FLOAT, R10G10B10A2, R8,
+  BLOB and CPU-only planar YUV 4:2:0; one layer; CPU read/write, GPU sampling,
+  GPU color output and composer
   overlay usage (vendor bits are accepted as the hints they are). Protected
   content, video encoding, sensor data, GPU data buffers, cube maps, mipmaps,
-  multi-layer and YUV buffers are refused (`-EINVAL`, `isSupported` 0); GPU
+  multi-layer and other YUV buffers are refused (`-EINVAL`, `isSupported` 0); GPU
   usage needs ANGLE's device and fits its texture size. Invalid descriptions
   follow AOSP's `AHardwareBuffer_isValidDescription`.
 - `AHardwareBuffer_sendHandleToUnixSocket` sends the description and the
   memfd with `SCM_RIGHTS` (ADR 0088's broker between processes); the receiver
-  maps the same memory, so CPU writes are shared as on Android.
+  validates the layout and the size seals on the descriptor, and maps the
+  same memory. CPU writes are shared as on Android and the receiver holds an
+  independent reference after the sender releases its buffer. A short or
+  truncated packet fails without consuming the next packet.
 
 ### 2. A GPU thread per process holds each buffer's texture
 
