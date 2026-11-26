@@ -54,6 +54,34 @@ def main() -> None:
                 raise RuntimeError(f"{output}: fixture lost its constructor or relocation coverage")
         print(f"Verified {mode} ELF32 fixture: {output}")
 
+        # Exercise the multi-DSO program loader with a later DSO requiring
+        # 64-KiB PT_LOAD alignment. The guest base can differ from the load
+        # bias when a PT_LOAD begins mid-page; align the BIAS, not the image.
+        aligned_output = (args.out_dir / f"fixture-{mode}-align64k.so").resolve()
+        subprocess.run(compiler + [
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "-mthumb" if mode == "thumb" else "-marm",
+            "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-sanitize=all",
+            "-shared", "-fPIC", "-nostdlib", "-fno-stack-protector",
+            "-Wl,--hash-style=both", "-Wl,-z,max-page-size=65536",
+            "-Wl,-soname,gesher_arm32_aligned_fixture.so",
+            str(source), "-o", str(aligned_output),
+        ], check=True, timeout=120)
+        with aligned_output.open("rb") as stream:
+            aligned = ELFFile(stream)
+            segments = [part for part in aligned.iter_segments()
+                        if part["p_type"] == "PT_LOAD"]
+            if not segments or any(part["p_align"] != 65536 for part in segments):
+                raise RuntimeError(f"{aligned_output}: missing 64-KiB PT_LOAD alignment")
+            functions = [symbol for symbol in
+                         aligned.get_section_by_name(".dynsym").iter_symbols()
+                         if symbol.name.startswith("fixture_")]
+            if len(functions) != 6 or any(
+                    bool(symbol["st_value"] & 1) != (mode == "thumb")
+                    for symbol in functions):
+                raise RuntimeError(f"{aligned_output}: lost real ARM/Thumb state")
+        print(f"Verified {mode} 64-KiB-aligned ELF32 fixture: {aligned_output}")
+
         # The second fixture calls real libc symbols through the guest ELF
         # import table. It is not linked to the host's libc or Android ART.
         bionic_source = source.with_name("guest_bionic_fixture.c")
