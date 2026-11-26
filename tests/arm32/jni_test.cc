@@ -282,6 +282,26 @@ void Run(const char* path) {
   Check(bridge.ReleaseLocals(&error), "guest local reference frame complete");
   Check(program.Shutdown(&error), "close guest JNI module");
 
+  {
+    Program retired([](std::string_view, std::vector<uint8_t>*, std::string*) {
+      return false;
+    });
+    uint32_t env_address = 0, vm_address = 0;
+    {
+      Jni32 ephemeral(retired, &env);
+      Check(ephemeral.Install(&error), "install temporary JNI bridge");
+      env_address = ephemeral.GuestEnvironment();
+      vm_address = ephemeral.GuestJavaVM();
+      Check(retired.Memory().IsMapped(env_address, 4096) &&
+            retired.Memory().IsMapped(vm_address, 4096),
+            "temporary bridge owns live guest JNIEnv and JavaVM pages");
+    }
+    Check(!retired.Memory().IsMapped(env_address, 4096) &&
+          !retired.Memory().IsMapped(vm_address, 4096) &&
+          !retired.Memory().IsMapped(0xd0004000, 4096) &&
+          !retired.Memory().IsMapped(0xd0006000, 4096),
+          "destroyed JNI bridge retires all four owned guest mapping pages");
+  }
   for (uint32_t occupied : {0xd0005000u, 0xd0006000u}) {
     Program collision([](std::string_view, std::vector<uint8_t>*, std::string*) {
       return false;
