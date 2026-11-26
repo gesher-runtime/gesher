@@ -1,5 +1,8 @@
 package com.gesher.app;
 
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -68,9 +71,10 @@ import javax.security.auth.x500.X500Principal;
  *
  * <p>The keys of an app are in its data directory ({@value #FILE}), unencrypted: the
  * Windows user's profile protects them, nothing binds them to the hardware or to the
- * user's authentication. Authorizations in the spec (purposes, user authentication,
- * StrongBox, attestation) are not enforced. Before the app's Application exists, keys
- * are kept in memory and written to the file once it does.
+ * user's authentication. Secret key generation validates the algorithm parameters.
+ * The keys are still used through other providers, without operation-time
+ * authorization. Before the app's Application exists, keys are kept in memory
+ * and written to the file once it does.
  */
 public final class AndroidKeyStore extends Provider {
     static final String NAME = "AndroidKeyStore";
@@ -475,17 +479,19 @@ public final class AndroidKeyStore extends Provider {
     abstract static class SecretKeyGenerator extends KeyGeneratorSpi {
         private final String algorithm;
         private final int defaultBits;
+        private final String hmacDigest;
         private String alias;
         private int bits;
         private SecureRandom random;
 
-        SecretKeyGenerator(String algorithm, int defaultBits) {
+        SecretKeyGenerator(String algorithm, int defaultBits, String hmacDigest) {
             this.algorithm = algorithm;
             this.defaultBits = defaultBits;
+            this.hmacDigest = hmacDigest;
         }
 
         boolean validSize(int bits) {
-            return bits >= 64 && bits % 8 == 0 && bits <= 1024;
+            return bits >= 64 && bits % 8 == 0 && bits <= 512;
         }
 
         @Override
@@ -503,19 +509,54 @@ public final class AndroidKeyStore extends Provider {
         @Override
         protected void engineInit(AlgorithmParameterSpec params, SecureRandom random)
                 throws InvalidAlgorithmParameterException {
-            if (!(params instanceof android.security.keystore.KeyGenParameterSpec)) {
+            // A rejected spec invalidates the previous initialization as on Android.
+            alias = null;
+            this.random = null;
+            if (!(params instanceof KeyGenParameterSpec spec)) {
                 throw new InvalidAlgorithmParameterException("Cannot initialize without a "
-                        + "android.security.keystore.KeyGenParameterSpec parameter");
+                        + KeyGenParameterSpec.class.getName() + " parameter");
             }
-            android.security.keystore.KeyGenParameterSpec spec =
-                    (android.security.keystore.KeyGenParameterSpec) params;
-            int size = spec.getKeySize() > 0 ? spec.getKeySize() : defaultBits;
+            int size = spec.getKeySize() == -1 ? defaultBits : spec.getKeySize();
             if (!validSize(size)) {
                 throw new InvalidAlgorithmParameterException("Unsupported key size: " + size);
             }
+            validateParameters(spec);
             alias = spec.getKeystoreAlias();
             bits = size;
             this.random = random != null ? random : new SecureRandom();
+        }
+
+        private void validateParameters(KeyGenParameterSpec spec)
+                throws InvalidAlgorithmParameterException {
+            try {
+                KeyProperties.Purpose.allToKeymaster(spec.getPurposes());
+                KeyProperties.EncryptionPadding.allToKeymaster(spec.getEncryptionPaddings());
+                if (spec.getSignaturePaddings().length != 0) {
+                    throw new InvalidAlgorithmParameterException(
+                            "Signature paddings not supported for symmetric key algorithms");
+                }
+                String[] blockModes = spec.getBlockModes();
+                KeyProperties.BlockMode.allToKeymaster(blockModes);
+                if ((spec.getPurposes() & KeyProperties.PURPOSE_ENCRYPT) != 0
+                        && spec.isRandomizedEncryptionRequired()) {
+                    for (String mode : blockModes) {
+                        if (KeyProperties.BLOCK_MODE_ECB.equalsIgnoreCase(mode)) {
+                            throw new InvalidAlgorithmParameterException(
+                                    "Randomized encryption required but ECB was specified");
+                        }
+                    }
+                }
+                if (spec.isDigestsSpecified()) {
+                    int[] digests = KeyProperties.Digest.allToKeymaster(spec.getDigests());
+                    if (hmacDigest != null && (digests.length != 1
+                            || digests[0] != KeyProperties.Digest.toKeymaster(hmacDigest))) {
+                        throw new InvalidAlgorithmParameterException(
+                                "Only " + hmacDigest + " is supported for " + algorithm);
+                    }
+                }
+            } catch (IllegalArgumentException e) {
+                throw new InvalidAlgorithmParameterException(e);
+            }
         }
 
         @Override
@@ -535,7 +576,7 @@ public final class AndroidKeyStore extends Provider {
 
     public static final class Aes extends SecretKeyGenerator {
         public Aes() {
-            super("AES", 128);
+            super("AES", 128, null);
         }
 
         @Override
@@ -546,31 +587,31 @@ public final class AndroidKeyStore extends Provider {
 
     public static final class HmacSha1 extends SecretKeyGenerator {
         public HmacSha1() {
-            super("HmacSHA1", 160);
+            super("HmacSHA1", 160, KeyProperties.DIGEST_SHA1);
         }
     }
 
     public static final class HmacSha224 extends SecretKeyGenerator {
         public HmacSha224() {
-            super("HmacSHA224", 224);
+            super("HmacSHA224", 224, KeyProperties.DIGEST_SHA224);
         }
     }
 
     public static final class HmacSha256 extends SecretKeyGenerator {
         public HmacSha256() {
-            super("HmacSHA256", 256);
+            super("HmacSHA256", 256, KeyProperties.DIGEST_SHA256);
         }
     }
 
     public static final class HmacSha384 extends SecretKeyGenerator {
         public HmacSha384() {
-            super("HmacSHA384", 384);
+            super("HmacSHA384", 384, KeyProperties.DIGEST_SHA384);
         }
     }
 
     public static final class HmacSha512 extends SecretKeyGenerator {
         public HmacSha512() {
-            super("HmacSHA512", 512);
+            super("HmacSHA512", 512, KeyProperties.DIGEST_SHA512);
         }
     }
 
