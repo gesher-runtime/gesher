@@ -509,6 +509,13 @@ public final class AndroidKeyStore extends Provider {
             if (entry instanceof KeyStore.SecretKeyEntry) {
                 importSecret(alias, ((KeyStore.SecretKeyEntry) entry).getSecretKey(), param);
             } else if (entry instanceof KeyStore.PrivateKeyEntry) {
+                if (param instanceof KeyProtection protection) {
+                    try {
+                        AndroidKeyStoreSecretKeys.validateImportProtection(protection);
+                    } catch (InvalidAlgorithmParameterException failure) {
+                        throw new KeyStoreException(failure);
+                    }
+                }
                 KeyStore.PrivateKeyEntry p = (KeyStore.PrivateKeyEntry) entry;
                 engineSetKeyEntry(alias, p.getPrivateKey(), null, p.getCertificateChain());
             } else if (entry instanceof KeyStore.TrustedCertificateEntry) {
@@ -684,6 +691,8 @@ public final class AndroidKeyStore extends Provider {
         private Date notBefore;
         private Date notAfter;
         private SecureRandom random;
+        private boolean strongBox;
+        private boolean attestation;
 
         PairGenerator(String algorithm) {
             this.algorithm = algorithm;
@@ -700,9 +709,20 @@ public final class AndroidKeyStore extends Provider {
         @SuppressWarnings("deprecation")
         public void initialize(AlgorithmParameterSpec params, SecureRandom random)
                 throws InvalidAlgorithmParameterException {
+            // A rejected reinitialization must retire any previous authorization.
+            alias = null;
+            strongBox = false;
+            attestation = false;
             if (params instanceof android.security.keystore.KeyGenParameterSpec) {
                 android.security.keystore.KeyGenParameterSpec spec =
                         (android.security.keystore.KeyGenParameterSpec) params;
+                AndroidKeyStoreSecretKeys.validateProtection(spec,
+                        spec.isCriticalToDeviceEncryption(), spec.getMaxUsageCount());
+                if (spec.getNamespace() != android.security.keystore.KeyProperties.NAMESPACE_APPLICATION) {
+                    throw new InvalidAlgorithmParameterException("Unsupported asymmetric key namespace");
+                }
+                strongBox = spec.isStrongBoxBacked();
+                attestation = spec.getAttestationChallenge() != null || spec.getAttestKeyAlias() != null;
                 alias = spec.getKeystoreAlias();
                 bits = spec.getKeySize();
                 keyParams = spec.getAlgorithmParameterSpec();
@@ -716,6 +736,10 @@ public final class AndroidKeyStore extends Provider {
                 if (spec.getKeyType() != null && !algorithm.equalsIgnoreCase(spec.getKeyType())) {
                     throw new InvalidAlgorithmParameterException("Key type " + spec.getKeyType()
                             + " does not match " + algorithm);
+                }
+                if (spec.isEncryptionRequired()) {
+                    throw new InvalidAlgorithmParameterException(
+                            "The Gesher software keystore cannot enforce device-bound encryption");
                 }
                 alias = spec.getKeystoreAlias();
                 bits = spec.getKeySize();
@@ -747,6 +771,13 @@ public final class AndroidKeyStore extends Provider {
         @Override
         public KeyPair generateKeyPair() {
             if (alias == null) throw new IllegalStateException("Not initialized");
+            if (strongBox) {
+                throw new android.security.keystore.StrongBoxUnavailableException(
+                        "Gesher has no StrongBox provider");
+            }
+            if (attestation) {
+                throw new java.security.ProviderException("Gesher has no key attestation provider");
+            }
             try {
                 KeyPairGenerator g = KeyPairGenerator.getInstance(algorithm, other("KeyPairGenerator", algorithm));
                 g.initialize(keyGenParams(bits, keyParams), random);

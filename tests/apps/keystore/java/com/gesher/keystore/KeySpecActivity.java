@@ -17,7 +17,7 @@ public final class KeySpecActivity extends Activity {
         new Thread(() -> {
             String message;
             try {
-                KeySpecCases.run(System.out::println);
+                KeySpecCases.run(this, System.out::println);
                 message = "Keystore spec checks passed";
             } catch (Exception | AssertionError e) {
                 e.printStackTrace(System.out);

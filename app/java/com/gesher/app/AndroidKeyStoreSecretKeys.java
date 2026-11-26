@@ -107,7 +107,7 @@ final class AndroidKeyStoreSecretKeys {
         return bits >= 64 && bits <= 512 && bits % 8 == 0;
     }
 
-    private static void validateProtection(UserAuthArgs auth, boolean critical, int useCount)
+    static void validateProtection(UserAuthArgs auth, boolean critical, int useCount)
             throws InvalidAlgorithmParameterException {
         if (auth.isUserAuthenticationRequired() || auth.isUserConfirmationRequired()
                 || auth.isUserPresenceRequired() || auth.isUnlockedDeviceRequired()
@@ -143,17 +143,21 @@ final class AndroidKeyStoreSecretKeys {
 
     static Authorization imported(String algorithm, int bits, KeyProtection spec)
             throws InvalidAlgorithmParameterException {
-        validateProtection(spec, spec.isCriticalToDeviceEncryption(), spec.getMaxUsageCount());
-        if (spec.isStrongBoxBacked() || spec.isRollbackResistant()) {
-            throw new InvalidAlgorithmParameterException(
-                    "The Gesher software keystore cannot enforce this hardware protection");
-        }
+        validateImportProtection(spec);
         return authorization(algorithm, bits, ORIGIN_IMPORTED, spec.getPurposes(),
                 spec.getBlockModes(), spec.getEncryptionPaddings(), spec.getSignaturePaddings(),
                 spec.isDigestsSpecified() ? spec.getDigests() : null,
                 spec.isRandomizedEncryptionRequired(), spec.getKeyValidityStart(),
                 spec.getKeyValidityForOriginationEnd(), spec.getKeyValidityForConsumptionEnd())
                 .forNewKey();
+    }
+
+    static void validateImportProtection(KeyProtection spec) throws InvalidAlgorithmParameterException {
+        validateProtection(spec, spec.isCriticalToDeviceEncryption(), spec.getMaxUsageCount());
+        if (spec.isStrongBoxBacked() || spec.isRollbackResistant()) {
+            throw new InvalidAlgorithmParameterException(
+                    "The Gesher software keystore cannot enforce this hardware protection");
+        }
     }
 
     private static Authorization authorization(String algorithm, int bits, int origin, int purposes,

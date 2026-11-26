@@ -4,16 +4,21 @@
  */
 package com.gesher.keystore;
 
+import android.app.KeyguardManager;
+import android.content.Context;
+import android.content.pm.PackageManager;
 import android.security.keystore.KeyExpiredException;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyInfo;
 import android.security.keystore.KeyNotYetValidException;
 import android.security.keystore.KeyProperties;
 import android.security.keystore.KeyProtection;
+import android.security.keystore.StrongBoxUnavailableException;
 
 import java.security.InvalidKeyException;
 
 import java.security.InvalidAlgorithmParameterException;
+import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.ProviderException;
@@ -40,7 +45,7 @@ public final class KeySpecCases {
 
     private KeySpecCases() {}
 
-    public static void run(Consumer<String> report) throws Exception {
+    public static void run(Context context, Consumer<String> report) throws Exception {
         KeyStore store = KeyStore.getInstance(PROVIDER);
         store.load(null);
         Checks checks = new Checks(report);
@@ -278,12 +283,50 @@ public final class KeySpecCases {
                 rejectKey(InvalidKeyException.class, () -> Cipher.getInstance("AES/GCM/NoPadding")
                         .init(Cipher.ENCRYPT_MODE, key));
             });
+            KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
+            if (keyguard != null && !keyguard.isDeviceSecure()) {
+                checks.run("rsa-required-authentication", () -> requireUnenrolledRsaRejected(store));
+            }
+            if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)) {
+                checks.run("ec-strongbox-unavailable", () -> {
+                    KeyGenParameterSpec setup = spec("ec-strongbox", KeyProperties.PURPOSE_SIGN)
+                            .setDigests(KeyProperties.DIGEST_SHA256).setIsStrongBoxBacked(true).build();
+                    KeyPairGenerator generator = KeyPairGenerator.getInstance("EC", PROVIDER);
+                    generator.initialize(setup);
+                    try {
+                        generator.generateKeyPair();
+                        throw new AssertionError("published a software key for StrongBox");
+                    } catch (StrongBoxUnavailableException expected) {
+                        require(!store.containsAlias(setup.getKeystoreAlias()), "stored a rejected key");
+                    }
+                });
+            }
         } finally {
             for (String alias : java.util.Collections.list(store.aliases())) {
                 if (alias.startsWith(PREFIX)) store.deleteEntry(alias);
             }
         }
         checks.finish();
+    }
+
+    private static void requireUnenrolledRsaRejected(KeyStore store) throws Exception {
+        KeyGenParameterSpec.Builder setup = spec("rsa-auth", KeyProperties.PURPOSE_SIGN)
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1);
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA", PROVIDER);
+        generator.initialize(setup.build());
+        KeyGenParameterSpec protectedKey = setup.setUserAuthenticationRequired(true).build();
+        try {
+            generator.initialize(protectedKey);
+            throw new AssertionError("required user authentication without an enrolled credential");
+        } catch (InvalidAlgorithmParameterException expected) {
+            try {
+                generator.generateKeyPair();
+                throw new AssertionError("reused pre-rejection state");
+            } catch (IllegalStateException uninitialized) {
+                require(!store.containsAlias(protectedKey.getKeystoreAlias()), "stored a rejected key");
+            }
+        }
     }
 
     private static KeyGenParameterSpec.Builder spec(String suffix, int purposes) {
