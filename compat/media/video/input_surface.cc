@@ -24,8 +24,19 @@ struct InputState {
   InputFrameCallback cb;
 };
 
+// Native clients retain the producer through ANativeWindow's reference count.
+class NativePersistentProducer final : public QueueSurface {
+ public:
+  NativePersistentProducer() : QueueSurface(1, 1) {}
+
+  const std::shared_ptr<InputState> state = std::make_shared<InputState>();
+};
+
 struct InputQueue {
-  InputQueue(int width, int height) : surface(new QueueSurface(width, height)) {}
+  InputQueue(int width, int height)
+      : state(std::make_shared<InputState>()), surface(new QueueSurface(width, height)) {}
+  explicit InputQueue(NativePersistentProducer* producer)
+      : state(producer->state), surface(producer), native_owned(true) {}
 
   // Called under state->mu before this lease's callback is installed.
   void Listen(uint64_t owner) {
@@ -47,6 +58,8 @@ struct InputQueue {
   }
 
   ~InputQueue() {
+    // The native producer's own references may outlive an adapter or lease.
+    if (native_owned) return;
     std::lock_guard<std::recursive_mutex> lock(state->mu);
     state->abandoned = true;
     state->cb = nullptr;
@@ -58,8 +71,9 @@ struct InputQueue {
     return android::android_view_Surface_createFromSurface(env, s);
   }
 
-  std::shared_ptr<InputState> state = std::make_shared<InputState>();
-  android::sp<QueueSurface> surface;
+  const std::shared_ptr<InputState> state;
+  const android::sp<QueueSurface> surface;
+  const bool native_owned = false;
 };
 
 class QueueInputSurface final : public InputSurface {
@@ -103,6 +117,10 @@ class QueueInputSurface final : public InputSurface {
 class PersistentQueue final : public PersistentInputSurface {
  public:
   PersistentQueue() : queue_(std::make_shared<InputQueue>(1, 1)) {}
+  explicit PersistentQueue(NativePersistentProducer* producer)
+      : queue_(std::make_shared<InputQueue>(producer)) {}
+
+  ANativeWindow* NativeWindow() const override { return queue_->surface.get(); }
 
   jobject NewJavaSurface(JNIEnv* env) override { return queue_->NewJavaSurface(env); }
 
@@ -132,8 +150,16 @@ InputSurface* CreateInputSurface(int width, int height) {
   return new QueueInputSurface(std::move(queue), 1, false);
 }
 
-std::shared_ptr<PersistentInputSurface> CreatePersistentInputSurface() {
-  return std::make_shared<PersistentQueue>();
+std::shared_ptr<PersistentInputSurface> CreatePersistentInputSurface(bool native_owned) {
+  if (!native_owned) return std::make_shared<PersistentQueue>();
+  android::sp<NativePersistentProducer> producer(new NativePersistentProducer());
+  return std::make_shared<PersistentQueue>(producer.get());
+}
+
+std::shared_ptr<PersistentInputSurface> PersistentInputSurfaceFromWindow(ANativeWindow* window) {
+  auto* producer = dynamic_cast<NativePersistentProducer*>(QueueSurface::From(window));
+  if (producer == nullptr) return nullptr;
+  return std::make_shared<PersistentQueue>(producer);
 }
 
 }  // namespace gesher::media

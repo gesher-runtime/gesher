@@ -29,7 +29,12 @@ AVC slice and EOS. The Android executable draws with EGL. The Windows
 fixture writes the same frame through the native window's CPU lock and post
 interface, exercising its normal QueueSurface producer.
 
-These fixtures cover synchronous CPU buffers, decoder output surfaces and
-ordinary encoder input surfaces. Persistent native input surfaces,
-asynchronous callbacks, secure codecs and standalone Gesher ELF execution
-require separate implementation and validation.
+The persistent producer test submits a frame and receives AVC and EOS from
+each of two successive encoders. It releases the last caller-owned native
+window reference after the second submission, before signalling EOS. The
+Windows fixture also checks repeat attachment by the current owner and
+rejects competing attachments and ordinary input windows.
+
+The fixtures cover synchronous CPU buffers, decoder output surfaces and
+ordinary and persistent encoder input surfaces. Asynchronous callbacks,
+secure codecs and standalone Gesher ELF execution require separate work.

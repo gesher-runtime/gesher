@@ -29,5 +29,6 @@ foreach ($codecAbi in @(@{ Name = 'x86_64'; Triple = 'x86_64' },
   }
   CheckTimed "NDK codec AVC input Surface ($($codecAbi.Name)): real picture and EOS" "$Dir/dalvikvm.exe" `
     ($codecVm + @('-cp', (NoDrive $codecDex), 'gesher.NdkCodecTest', (NoDrive $codecInputDll))) `
-    @('NDK codec input encoded AVC picture:', 'NDK codec input Surface: all passed') 45 -Publish
+    @('NDK codec input encoded AVC picture:', 'NDK codec input Surface: all passed',
+      'NDK codec persistent input Surface: all passed') 45 -Publish
 }

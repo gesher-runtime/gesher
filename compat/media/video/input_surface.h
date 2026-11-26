@@ -53,10 +53,16 @@ InputSurface* CreateInputSurface(int width, int height);
 class PersistentInputSurface {
  public:
   virtual ~PersistentInputSurface() = default;
+  // Borrowed while this source reference is held.
+  virtual ANativeWindow* NativeWindow() const = 0;
   virtual jobject NewJavaSurface(JNIEnv* env) = 0;
   virtual std::unique_ptr<InputSurface> Attach(int width, int height) = 0;
 };
 
-std::shared_ptr<PersistentInputSurface> CreatePersistentInputSurface();
+std::shared_ptr<PersistentInputSurface> CreatePersistentInputSurface(bool native_owned = false);
+
+// Accept a producer created for the NDK API. The caller must hold a native
+// window reference while passing it in.
+std::shared_ptr<PersistentInputSurface> PersistentInputSurfaceFromWindow(ANativeWindow* window);
 
 }  // namespace gesher::media

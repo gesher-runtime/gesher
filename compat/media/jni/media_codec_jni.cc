@@ -646,7 +646,8 @@ class Codec {
       }
       // Repeated calls are permitted while configured. Re-selecting the same
       // producer keeps the existing exclusive lease and queued producer state.
-      if (source == persistent_input_) return true;
+      if (persistent_input_ != nullptr &&
+          source->NativeWindow() == persistent_input_->NativeWindow()) return true;
       width = enc_params_.width;
       height = enc_params_.height;
     }
@@ -2112,6 +2113,22 @@ media_status_t CreateInputSurface(Codec* codec, ANativeWindow** window) {
   return *window != nullptr ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
 }
 
+media_status_t CreatePersistentInputSurface(ANativeWindow** window) {
+  if (window == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  auto source = gesher::media::CreatePersistentInputSurface(/*native_owned=*/true);
+  *window = source->NativeWindow();
+  ANativeWindow_acquire(*window);
+  return AMEDIA_OK;
+}
+
+media_status_t SetInputSurface(Codec* codec, ANativeWindow* window) {
+  if (codec == nullptr || window == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  auto source = PersistentInputSurfaceFromWindow(window);
+  if (source == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  std::string error;
+  return codec->SetInputSurface(source, &error) ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
+}
+
 media_status_t SignalEndOfInputStream(Codec* codec) {
   if (codec == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::string error;
@@ -2166,6 +2183,8 @@ bool Register() {
   CODEC_ENTRY(releaseOutputBufferAtTime, ReleaseOutputAtTime);
   CODEC_ENTRY(setOutputSurface, SetOutputSurface);
   CODEC_ENTRY(createInputSurface, CreateInputSurface);
+  CODEC_ENTRY(createPersistentInputSurface, CreatePersistentInputSurface);
+  CODEC_ENTRY(setInputSurface, SetInputSurface);
   CODEC_ENTRY(signalEndOfInputStream, SignalEndOfInputStream);
   CODEC_ENTRY(getName, GetName);
   CODEC_ENTRY(releaseName, ReleaseName);

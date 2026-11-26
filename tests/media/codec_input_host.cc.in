@@ -147,6 +147,7 @@ class ObservedSource final : public PersistentInputSurface {
   std::shared_ptr<PersistentInputSurface> source = CreatePersistentInputSurface();
   std::shared_ptr<SourceHooks> hooks = std::make_shared<SourceHooks>();
   jobject NewJavaSurface(JNIEnv* env) override { return source->NewJavaSurface(env); }
+  ANativeWindow* NativeWindow() const override { return source->NativeWindow(); }
   std::unique_ptr<InputSurface> Attach(int width, int height) override {
     if (hooks->attach) hooks->attach();
     auto input = source->Attach(width, height);
