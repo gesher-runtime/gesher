@@ -44,7 +44,9 @@ Program::Program(LibraryProvider provider, size_t budget)
 }
 
 Program::~Program() {
-  Shutdown(nullptr);
+  // Destruction must never throw, even if a guest finalizer or an allocation
+  // in its diagnostic fails. Explicit Shutdown reports those failures.
+  try { Shutdown(nullptr); } catch (...) {}
   Rollback(0, 0x10000000);
 }
 
