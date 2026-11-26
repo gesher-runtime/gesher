@@ -49,7 +49,7 @@ constexpr size_t Slot(size_t offset) { return offset / sizeof(void*); }
 
 }  // namespace
 
-struct Jni32::State {
+struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
   struct Ref {
     jobject object = nullptr;
     bool global = false;
@@ -196,8 +196,17 @@ struct Jni32::State {
     if (slot >= slots || slot >= kPage / 4)
       return Fail(error, "JNI32 slot is outside guest function table");
     const std::string symbol = std::string("jni32.") + name;
+    // Program owns its thunks beyond the lifetime of the Jni32 wrapper.
+    // Retain State so the callback never calls a dangling [this] capture;
+    // the State's active flag prevents access after Jni32 destruction.
+    HostCallback retained = [self = shared_from_this(),
+                             callback = std::move(callback)](
+                                 const std::vector<Value>& values,
+                                 Value* output, std::string* failure) {
+      return callback(values, output, failure);
+    };
     if (!program.BindHostSymbol(symbol, std::move(kinds), result,
-                                std::move(callback), error)) return false;
+                                std::move(retained), error)) return false;
     uint32_t address = 0;
     if (!program.HostSymbolAddress(symbol, &address))
       return Fail(error, "JNI32 bound host thunk address is absent");
@@ -216,7 +225,11 @@ struct Jni32::State {
       memory.Unmap(kGuestEnv, kPage);
       return false;
     }
-    if (!memory.Write32(kGuestEnv, kGuestTable, error)) return false;
+    if (!memory.Write32(kGuestEnv, kGuestTable, error)) {
+      memory.Unmap(kGuestEnv, kPage);
+      memory.Unmap(kGuestTable, kPage);
+      return false;
+    }
     active = true;
     using K = ValueKind;
     constexpr auto P = K::Pointer32, I = K::I32, U = K::U32, V = K::Void;
