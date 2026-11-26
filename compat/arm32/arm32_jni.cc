@@ -658,6 +658,8 @@ bool Jni32::CallNative(std::string_view library, std::string_view export_name,
   if (!state_ || !state_->CheckThread(error) || !result ||
       (argument_count && !arguments))
     return Fail(error, "JNI32 native invocation has invalid inputs or Java thread");
+  if (mode != JniCallMode::CriticalNative && receiver == nullptr)
+    return Fail(error, "JNI32 native method has no owning object or class");
 
   JniMethodSignature signature;
   if (!ParseJniMethodDescriptor(descriptor, &signature, error)) return false;
@@ -708,6 +710,12 @@ bool Jni32::CallNative(std::string_view library, std::string_view export_name,
                        &receiver_token, &failure)) {
       // Adopt releases the new ref when token allocation fails.
     }
+    // A host allocation failure while duplicating an object/class reference
+    // must propagate its pending ART exception, never call native code with
+    // an invented null token. Null Java arguments remain valid when no
+    // exception was raised.
+    if (failure.empty() && state_->real->ExceptionCheck())
+      failure = "JNI32 host failed to create a local reference before guest entry";
     CallFrame frame;
     if (failure.empty() &&
         !PackJniCall(signature, mode,
