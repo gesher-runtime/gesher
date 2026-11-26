@@ -1,7 +1,8 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index f9e65608b832965c8ff609bf276e99f77ecef8e3..b33481fe72b0e4a8e2ae6094c54108037d28c145 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -80,6 +80,43 @@
+@@ -80,6 +80,43 @@ jobs:
            python3 tools/ci/test_release_workflows.py
            python3 -m unittest discover -s tools/ci -p test_cache_policy.py
            python3 -m unittest discover -s tools/ci -p test_prune_caches.py
@@ -45,7 +46,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
    # Short Windows host contracts share one runner per OS: separate jobs each
    # paid for a runner, checkout and queue slot to run a minute of checks.
    # Every check step runs even after an earlier one fails, so one failure
-@@ -102,14 +139,60 @@
+@@ -102,14 +139,60 @@ jobs:
          with:
            distribution: temurin
            java-version: '21.0.13'
@@ -107,7 +108,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        - name: Build actual app identity restart implementation
          shell: cmd
          run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib
-@@ -140,6 +223,55 @@
+@@ -140,6 +223,55 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: tests/windows/clipboard/Publication.ps1
@@ -163,7 +164,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        - name: Exact native reader ownership and handle reuse controls
          if: ${{ !cancelled() }}
          shell: pwsh
-@@ -168,6 +300,72 @@
+@@ -168,6 +300,72 @@ jobs:
          if: ${{ !cancelled() }}
          shell: bash
          run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
@@ -236,7 +237,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        - name: Release updater and control panel contracts on Windows PowerShell 5.1
          if: ${{ !cancelled() }}
          shell: powershell
-@@ -178,23 +376,44 @@
+@@ -178,23 +376,44 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -281,17 +282,33 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        - name: API 37 report gate failure and selection contracts
          if: ${{ !cancelled() }}
          shell: bash
-@@ -305,6 +524,9 @@
+@@ -255,8 +474,13 @@ jobs:
+           fetch-depth: 0
+       - name: Install media contract encoder and decoder tools
+         run: |
+-          sudo apt-get update
+-          sudo apt-get install -y --no-install-recommends ffmpeg
++          # FFmpeg comes from Ubuntu. Keep third-party repositories out of this update.
++          ubuntu_sources=(
++            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
++            -o Dir::Etc::sourceparts=-
++          )
++          sudo apt-get "${ubuntu_sources[@]}" update
++          sudo apt-get "${ubuntu_sources[@]}" install -y --no-install-recommends ffmpeg
+ 
+       - name: Windows test shard coverage, dependencies and failure controls
+         shell: pwsh
+@@ -305,6 +529,9 @@ jobs:
        - name: Notification image staging, cache, cancellation and encoder ownership
          run: python3 tools/test_notification_images.py
-
+ 
 +      - name: Google client-library test fixtures report Play services' absence (#335)
 +        run: python3 tools/test_gms_client_fixtures.py
 +
        - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
          run: |
            python3 tools/test_hwui_renderer_policy.py --sanitize
-@@ -316,10 +538,13 @@
+@@ -316,10 +543,13 @@ jobs:
            python3 tools/test_bionic_system_contracts.py --sanitize
            python3 tools/test_environment_contracts.py --sanitize
            python3 tools/test_environment_lookup_contracts.py
@@ -305,7 +322,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts
            python3 tools/test_scandir_report.py
            python3 tools/test_bionic_semaphore_contracts.py --sanitize
-@@ -329,18 +554,20 @@
+@@ -329,18 +559,20 @@ jobs:
            python3 tools/test_file_io_contracts.py --sanitize
            python3 tools/test_pipe_io_contracts.py --sanitize
            python3 tools/test_revocable_file_contracts.py --sanitize
@@ -319,7 +336,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +          python3 tools/test_i420_crop.py --sanitize --negative-controls
            python3 tools/test_utc_time_contracts.py --sanitize
            python3 tools/test_sleep_contracts.py --sanitize
-
+ 
        - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
          run: |
 -          python3 tools/test_bionic_key_contracts.py --sanitize
@@ -327,7 +344,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_pthread_clock_contracts.py --sanitize
            python3 tools/test_pthread_clock_contracts.py --linux-reference
            python3 tools/test_pthread_attribute_contracts.py --sanitize
-@@ -361,6 +588,7 @@
+@@ -361,6 +593,7 @@ jobs:
            python3 tools/test_elf_tls_rollback.py --sanitize
            python3 tools/test_arm64_pending_rollback.py --sanitize
            python3 tools/test_arm64_native_rollback.py --sanitize
@@ -335,7 +352,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_media_api_contracts.py --sanitize
            python3 tools/test_aaudio_builder_contracts.py
            python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
-@@ -371,8 +599,12 @@
+@@ -371,8 +604,12 @@ jobs:
            python3 tools/test_boottime_resume.py --sanitize
            python3 tools/test_timerfd_contracts.py --sanitize
            python3 tools/test_input_surface_callbacks.py --sanitize
@@ -346,15 +363,15 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_dns_query_lifecycle.py --sanitize
 +          python3 tools/test_uia_query_retirement.py --sanitize
            python3 tools/test_dns_admission.py --sanitize
-
+ 
        - name: Stream device identity across close and reopen
-@@ -395,8 +627,14 @@
+@@ -395,8 +632,14 @@ jobs:
        - name: Descriptor-backed stdio and stream lifetime contracts
          run: |
            python3 tools/test_stdio_contracts.py --sanitize
 +          python3 tools/test_stdio_scanning.py --sanitize --negative-controls
            python3 tools/test_socket_registry_lifetime.py --sanitize
-
+ 
 +      - name: Guest snprintf bounded accumulation contracts
 +        run: |
 +          python3 tools/test_snprintf_bounds.py --sanitize --negative-controls
@@ -362,8 +379,8 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +
        - name: MediaPlayer PCM priming and playback lifecycle contracts
          run: python3 tools/test_media_player_priming.py --sanitize
-
-@@ -409,6 +647,7 @@
+ 
+@@ -409,6 +652,7 @@ jobs:
            python3 tools/test_fnmatch_performance.py --sanitize
            python3 tools/test_virtual_path_classification.py --sanitize
            python3 tools/test_binder_reply_allocations.py --sanitize
@@ -371,7 +388,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_binder_receive_views.py --sanitize
            python3 tools/test_camera_capture_allocations.py --sanitize
            python3 tools/test_layered_bitmap_cache.py --sanitize
-@@ -421,7 +660,9 @@
+@@ -421,7 +665,9 @@ jobs:
            python3 tools/test_art_jni_dispatch.py --sanitize
            python3 tools/test_audio_mixer_allocations.py --sanitize
            python3 tools/test_audio_unity_rate.py --sanitize
@@ -381,7 +398,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_capture_stream_selection.py --sanitize
            python3 tools/test_audio_file_source.py --sanitize
            python3 tools/test_audio_rate_history.py --sanitize
-@@ -436,6 +677,7 @@
+@@ -436,6 +682,7 @@ jobs:
              tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
            "$RUNNER_TEMP/event-loop-reference"
            python3 tools/test_audio_state_contracts.py --sanitize
@@ -389,10 +406,10 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_surface_geometry_contracts.py --sanitize
            python3 tools/test_video_scaling_contracts.py --sanitize
            python3 tools/test_native_window_dispatch.py --sanitize
-@@ -467,6 +709,12 @@
+@@ -467,6 +714,12 @@ jobs:
            "$RUNNER_TEMP/gesher-noreplace-holes"
            python3 tools/test_madvise_reference.py
-
+ 
 +      - name: Actual wide conversion, pinned Android and guard-page contracts
 +        run: python3 tools/test_wide_ascii_contracts.py --sanitize
 +
@@ -402,7 +419,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        - name: Filesystem metadata and media source ownership contracts
          run: |
            python3 tools/test_file_timestamp_contracts.py --sanitize
-@@ -478,9 +726,13 @@
+@@ -478,9 +731,13 @@ jobs:
            python3 tools/test_media_callback_state.py --sanitize
            python3 tools/test_media_http_contracts.py --sanitize
            python3 tools/test_mf_encoder_input.py --sanitize
@@ -416,16 +433,16 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
              tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
            "$RUNNER_TEMP/filesystem-metadata-reference"
-@@ -501,13 +753,22 @@
+@@ -501,13 +758,22 @@ jobs:
            python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_media_receiver_lifetimes.py
            python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
 +          python3 tools/test_media_session_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_media_encoder_selection.py
-
+ 
        - name: Android HttpEngine requests over real HTTP sockets
          run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
-
+ 
 +      - name: DownloadManager provider, queue and transfer over real HTTP sockets
 +        run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
 +
@@ -437,10 +454,10 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +
 +      - name: MediaStore provider ownership, pending items, queries and scanning over real SQLite
 +        run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
-
+ 
        - name: WebStorage origin, owned WebView responses and running-task contracts
          run: |
-@@ -515,6 +776,8 @@
+@@ -515,6 +781,8 @@ jobs:
            python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
@@ -448,8 +465,8 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +          python3 tools/test_webview_popup_script.py --sanitize
            python3 tools/test_uia_snapshot_contracts.py --sanitize
            python3 tools/test_running_tasks_contracts.py
-
-@@ -523,8 +786,19 @@
+ 
+@@ -523,8 +791,19 @@ jobs:
            python3 tools/test_bluetooth_native_contracts.py --sanitize
            python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
@@ -466,13 +483,13 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +        run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
 +      - name: Biometric and device-credential auth service contracts (ADR 0091)
 +        run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
-
+ 
        - name: MediaDataSource adapter contracts with checked JNI and UBSan
          run: python3 tools/test_media_callback_adapter.py
-@@ -538,6 +812,20 @@
+@@ -538,6 +817,20 @@ jobs:
        - name: APK native library filename contracts
          run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
-
+ 
 +      - name: Windows mailto/tel/sms/geo handler intent contracts (AOSP android-16 Intent and IntentFilter)
 +        run: python3 tools/test_uri_handler_contracts.py --java-home "$JAVA_HOME"
 +      - name: Caption style contracts (AOSP android-16 Settings.Secure and CaptionStyle)
@@ -490,7 +507,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
          run: |
            python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
-@@ -545,13 +833,16 @@
+@@ -545,13 +838,16 @@ jobs:
            python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
@@ -505,9 +522,22 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
 +          python3 tools/test_recorder_camera_ready.py --java-home "$JAVA_HOME" --negative-controls
            python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
-
+ 
        - name: Validate user interface translations
-@@ -596,6 +887,36 @@
+@@ -590,12 +886,47 @@ jobs:
+ 
+       - name: Recorder lifecycle and complete-container size budgets
+         run: |
+-          sudo apt-get update
+-          sudo apt-get install -y --no-install-recommends ffmpeg
++          # FFmpeg comes from Ubuntu. Keep third-party repositories out of this update.
++          ubuntu_sources=(
++            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
++            -o Dir::Etc::sourceparts=-
++          )
++          sudo apt-get "${ubuntu_sources[@]}" update
++          sudo apt-get "${ubuntu_sources[@]}" install -y --no-install-recommends ffmpeg
+           python3 tools/test_media_recorder_lifecycle.py
            python3 tools/test_media_recorder_rollover.py --sanitize
            python3 tools/test_mp4_rollover_work.py
            python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
@@ -541,13 +571,13 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +      - name: Actual RGBA input conversion and real AVC output
 +        run: |
 +          python3 tools/test_rgba_i420.py --libavc-root third_party/aosp/external/libavc --sanitize --negative-controls
-
+ 
        - name: libcore System.nanoTime shares Android awake-time domain
          run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
-@@ -608,6 +929,12 @@
+@@ -608,6 +939,12 @@ jobs:
        - name: Build test apps
          run: tests/build-test-apps.sh out/test-apps
-
+ 
 +      - name: Incremental Brotli native and real HTTP provider contracts
 +        run: >-
 +          python3 tools/test_http_brotli.py --java-home "$JAVA_HOME"
@@ -556,8 +586,8 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +
        - name: Build boot class path (core-oj, core-libart)
          run: tools/build-boot-jars.sh out/boot-jars
-
-@@ -617,7 +944,13 @@
+ 
+@@ -617,7 +954,13 @@ jobs:
        - name: Collect framework assets
          run: |
            mkdir -p framework-assets
@@ -571,7 +601,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
            cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
            # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
-@@ -702,6 +1035,9 @@
+@@ -702,6 +1045,9 @@ jobs:
            python3 tools/test_binder_reply_allocations.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_reply_allocations_test.exe
@@ -581,7 +611,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_lifetime_test.exe
-@@ -717,6 +1053,14 @@
+@@ -717,6 +1063,14 @@ jobs:
            python3 tools/test_arm64_tls_lifecycle.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/arm64_tls_lifecycle_test.exe
@@ -593,10 +623,10 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +            --fixture-ref c65f4b119f79c586aaec043f166efa3afb567e06 \
 +            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
 +            --output out/arm64_tls_lifecycle_baseline.exe
-
+ 
        - name: Build
          run: |
-@@ -745,9 +1089,10 @@
+@@ -745,9 +1099,10 @@ jobs:
            ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
            ninja -C out native3_unicode_test
            ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
@@ -607,8 +637,8 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test window_frame_test
            ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
            ninja -C out font_environment_test
-
-@@ -802,6 +1147,7 @@
+ 
+@@ -802,6 +1157,7 @@ jobs:
            cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
            cp out/gesher_shellext.dll dist/
            cp out/futex_test_module.dll dist/
@@ -616,7 +646,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            cp out/libgesher_account_crypto.so dist/
            cp out/libgesher_install_pipe.so dist/
            cp out/libgesher_webview_bridge.so dist/
-@@ -1130,7 +1476,11 @@
+@@ -1130,7 +1486,11 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -628,10 +658,10 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            tests/windows/shell/UpdateChecks.ps1
            tests/windows/shell/UpdateTransportChecks.ps1
            tests/windows/shell/ControlPanelUpdateChecks.ps1
-@@ -1181,6 +1531,11 @@
+@@ -1181,6 +1541,11 @@ jobs:
            "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
            Get-ChildItem installer
-
+ 
 +      - name: Build portable ZIP from the same verified runtime
 +        shell: pwsh
 +        run: |
@@ -640,16 +670,16 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        # Uploaded before the checks below: the e2e job tests this installer even when one
        # of them fails.
        - name: Upload tested installer artifact
-@@ -1189,6 +1544,8 @@
+@@ -1189,6 +1554,8 @@ jobs:
            name: gesher-setup
            path: |
              installer/*.exe
 +            installer/*-portable.zip
 +            installer/*-portable.zip.sha256
              installer/SHA256SUMS.txt
-
+ 
        - name: Install, run Hello, uninstall
-@@ -1205,9 +1562,11 @@
+@@ -1205,9 +1572,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
            python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
            if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
@@ -662,7 +692,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            . (Join-Path $app 'gesher-update.ps1')
            $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
            if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {
-@@ -1220,6 +1579,9 @@
+@@ -1220,6 +1589,9 @@ jobs:
              throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
            }
            'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -672,7 +702,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
            $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
-@@ -1231,8 +1593,8 @@
+@@ -1231,8 +1603,8 @@ jobs:
            if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
            # gesher-app and the framework it runs on are installed, and the
            # installed copy takes the bundled app to onResume.
@@ -683,7 +713,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
              if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
            }
            $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
-@@ -1496,6 +1858,33 @@
+@@ -1496,6 +1868,33 @@ jobs:
              throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
            }
            'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -717,7 +747,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
            $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
            Write-Host "toast activator: $activator"
-@@ -1839,6 +2228,13 @@
+@@ -1839,6 +2238,13 @@ jobs:
            if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
            if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
            'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -731,10 +761,10 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
            $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
            if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
-@@ -1851,6 +2247,14 @@
+@@ -1851,6 +2257,14 @@ jobs:
            'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
            'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
-
+ 
 +      - name: Preserve portable Windows runtime and Setup evidence
 +        if: always()
 +        uses: actions/upload-artifact@v4
@@ -746,14 +776,14 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
    # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
    # clean runner runs real, unmodified open-source apps from F-Droid
    # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
-@@ -1916,9 +2320,22 @@
+@@ -1916,9 +2330,22 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
            $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
 +          $env:GESHER_TRACE_WEBVIEW_NAVIGATION = '1'
            pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -BuildTools $env:GESHER_TEST_BUILD_TOOLS
            exit $LASTEXITCODE
-
+ 
 +      - name: Show captured WebView navigation event diagnostics
 +        if: always()
 +        shell: pwsh
@@ -769,7 +799,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        - name: Validate and publish real-app coverage
          if: always()
          shell: pwsh
-@@ -2025,6 +2442,11 @@
+@@ -2025,6 +2452,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/binder_reply_allocations_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -781,10 +811,10 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
            & ./dist/layered_bitmap_cache_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/structured_logging_test.exe
-@@ -2042,6 +2464,14 @@
+@@ -2042,6 +2474,14 @@ jobs:
            & ./dist/sqlite_path_test.exe
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
+ 
 +      - name: Real Windows external storage permissions and live revocation
 +        if: matrix.shard == 'native'
 +        timeout-minutes: 2
@@ -796,10 +826,10 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
        - name: Verify and assemble framework artifact
          shell: pwsh
          run: |
-@@ -2060,11 +2490,13 @@
+@@ -2060,11 +2500,13 @@ jobs:
            python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
+ 
 -      - name: ARM64 parked TLS, reuse and actual translator callbacks
 +      - name: ARM64 active and parked TLS, baseline commitment and actual translator callbacks
          if: matrix.shard == 'native'
@@ -810,8 +840,8 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
 +          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-@@ -2215,6 +2647,8 @@
+ 
+@@ -2215,6 +2657,8 @@ jobs:
            path: |
              results.txt
              ci-owners.json
@@ -820,7 +850,7 @@ diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
              dist/realtime-signals-evidence/**/*.json
              ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
              ${{ runner.temp }}/gesher-root/logs/system_server.log
-@@ -2613,7 +3047,7 @@
+@@ -2613,7 +3057,7 @@ jobs:
    ci-required:
      name: ci-required
      if: always()
