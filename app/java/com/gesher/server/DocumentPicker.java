@@ -367,7 +367,8 @@ final class DocumentPicker {
         ClipData clip = new ClipData(request.pickImages ? "documents" : null,
                 types, new ClipData.Item(uris.get(0)));
         for (int i = 1; i < uris.size(); i++) clip.addItem(new ClipData.Item(uris.get(i)));
-        return data.setClipData(clip);
+        data.setClipData(clip);
+        return data;
     }
 
     static boolean isBlockedTreeRoot(File file) {
