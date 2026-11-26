@@ -23,6 +23,13 @@ A second decode sends the same AVC access units to a YUV ImageReader surface.
 The test compares each submitted render timestamp and luma with the acquired
 image and verifies the first image remains readable after the decoder stops.
 
-This fixture covers synchronous CPU buffers and decoder output surfaces.
-Surface input, asynchronous callbacks, secure codecs and standalone Gesher
-ELF execution require separate implementation and validation.
+The encoder input test replaces a configured producer, writes a real frame
+to its successor, releases the caller's window references and waits for an
+AVC slice and EOS. The Android executable draws with EGL. The Windows
+fixture writes the same frame through the native window's CPU lock and post
+interface, exercising its normal QueueSurface producer.
+
+These fixtures cover synchronous CPU buffers, decoder output surfaces and
+ordinary encoder input surfaces. Persistent native input surfaces,
+asynchronous callbacks, secure codecs and standalone Gesher ELF execution
+require separate implementation and validation.

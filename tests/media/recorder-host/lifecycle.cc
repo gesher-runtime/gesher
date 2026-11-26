@@ -173,6 +173,7 @@ class HostVideoEncoder : public VideoEncoder {
 class HostSurface : public InputSurface {
  public:
   jobject NewJavaSurface(JNIEnv*) override { return nullptr; }
+  ANativeWindow* NativeWindow() const override { return nullptr; }
   void SetCallback(InputFrameCallback callback) override { callback_ = std::move(callback); }
   uint64_t frames() const override { return count_; }
   void Abandon() override {

@@ -69,6 +69,7 @@ class QueueInputSurface final : public InputSurface {
   ~QueueInputSurface() override { Abandon(); }
 
   jobject NewJavaSurface(JNIEnv* env) override { return queue_->NewJavaSurface(env); }
+  ANativeWindow* NativeWindow() const override { return queue_->surface.get(); }
 
   void SetCallback(InputFrameCallback cb) override {
     std::lock_guard<std::recursive_mutex> lock(queue_->state->mu);

@@ -47,6 +47,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <sys/types.h>
 
@@ -571,7 +572,9 @@ class Codec {
 
   // --- Encoders: the input Surface, the end of its stream, parameters.
 
-  jobject CreateInputSurface(JNIEnv* env, std::string* error) {
+  template <class Factory>
+  auto MakeCodecInputSurface(Factory make_surface, bool reuse, std::string* error)
+      -> decltype(make_surface(std::declval<InputSurface&>())) {
     std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     int width, height;
     {
@@ -584,8 +587,8 @@ class Codec {
         *error = "createInputSurface() must be called after configure() and before start()";
         return nullptr;
       }
-      if (input_surface_ != nullptr && persistent_input_ == nullptr)
-        return input_surface_->NewJavaSurface(env);
+      if (reuse && input_surface_ != nullptr && persistent_input_ == nullptr)
+        return make_surface(*input_surface_);
       width = enc_params_.width;
       height = enc_params_.height;
     }
@@ -594,9 +597,9 @@ class Codec {
       *error = "cannot create the input Surface";
       return nullptr;
     }
-    jobject surface = input->NewJavaSurface(env);
+    auto surface = make_surface(*input);
     if (surface == nullptr) {
-      *error = "cannot create the Java input Surface";
+      *error = "cannot acquire the input Surface";
       return nullptr;
     }
     input->SetCallback([this](const uint32_t* rgba, int w, int h, int64_t ts_ns) {
@@ -614,6 +617,21 @@ class Codec {
       input_surface_ = std::move(input);
     }
     return surface;
+  }
+
+  jobject CreateInputSurface(JNIEnv* env, std::string* error) {
+    return MakeCodecInputSurface([env](InputSurface& input) { return input.NewJavaSurface(env); },
+                                 true, error);
+  }
+
+  ANativeWindow* CreateNativeInputSurface(std::string* error) {
+    // The NDK returns a newly created producer with a reference the caller
+    // owns. The encoder still owns its lease if the caller releases the window.
+    return MakeCodecInputSurface([](InputSurface& input) {
+      ANativeWindow* window = input.NativeWindow();
+      if (window != nullptr) ANativeWindow_acquire(window);
+      return window;
+    }, false, error);
   }
 
   bool SetInputSurface(const std::shared_ptr<PersistentInputSurface>& source, std::string* error) {
@@ -658,9 +676,9 @@ class Codec {
     return true;
   }
 
-  bool SignalEndOfInputStream(std::string* error) {
+  bool SignalEndOfInputStream(std::string* error, bool native = false) {
     std::lock_guard<std::mutex> lock(mu_);
-    if (released_ || input_surface_ == nullptr) {
+    if (released_ || input_surface_ == nullptr || (native && (!started_ || surface_eos_))) {
       *error = "signalEndOfInputStream() without an input surface";
       return false;
     }
@@ -2087,6 +2105,19 @@ media_status_t SetOutputSurface(Codec* codec, ANativeWindow* window) {
                           : AMEDIA_ERROR_INVALID_OBJECT;
 }
 
+media_status_t CreateInputSurface(Codec* codec, ANativeWindow** window) {
+  if (codec == nullptr || window == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  std::string error;
+  *window = codec->CreateNativeInputSurface(&error);
+  return *window != nullptr ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
+}
+
+media_status_t SignalEndOfInputStream(Codec* codec) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  std::string error;
+  return codec->SignalEndOfInputStream(&error, true) ? AMEDIA_OK : AMEDIA_ERROR_INVALID_OPERATION;
+}
+
 media_status_t GetName(Codec* codec, char** name) {
   if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   if (name == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
@@ -2134,6 +2165,8 @@ bool Register() {
   CODEC_ENTRY(releaseOutputBuffer, ReleaseOutput);
   CODEC_ENTRY(releaseOutputBufferAtTime, ReleaseOutputAtTime);
   CODEC_ENTRY(setOutputSurface, SetOutputSurface);
+  CODEC_ENTRY(createInputSurface, CreateInputSurface);
+  CODEC_ENTRY(signalEndOfInputStream, SignalEndOfInputStream);
   CODEC_ENTRY(getName, GetName);
   CODEC_ENTRY(releaseName, ReleaseName);
 #undef CODEC_ENTRY

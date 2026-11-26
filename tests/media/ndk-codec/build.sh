@@ -14,6 +14,9 @@ for abi in x86_64 aarch64; do
   common=(-std=c17 -O2 -Wall -Wextra -Werror "$here/codec_test.c" -lmediandk)
   "$compiler" -DCODEC_STANDALONE -fPIE -pie "${common[@]}" -o "$out/ndk-codec-$abi"
   "$compiler" -fPIC -shared "${common[@]}" -o "$out/libndk-codec-$abi.so"
+  input=(-std=c17 -O2 -Wall -Wextra -Werror "$here/input_test.c" -lmediandk -lnativewindow)
+  "$compiler" -DCODEC_STANDALONE -fPIE -pie "${input[@]}" -lEGL -lGLESv2 -o "$out/ndk-codec-input-$abi"
+  "$compiler" -DCODEC_INPUT_CPU_WINDOW -fPIC -shared "${input[@]}" -o "$out/libndk-codec-input-$abi.so"
 done
 if [ "$#" -ge 3 ]; then
   classes=$(mktemp -d)

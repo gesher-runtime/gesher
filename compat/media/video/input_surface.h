@@ -13,6 +13,8 @@
 #include <functional>
 #include <memory>
 
+struct ANativeWindow;
+
 namespace gesher::media {
 
 // RGBA_8888 pixels (R in the low byte), width x height with stride == width.
@@ -24,6 +26,8 @@ class InputSurface {
   virtual ~InputSurface() = default;
   // A new android.view.Surface (a local reference) over this input.
   virtual jobject NewJavaSurface(JNIEnv* env) = 0;
+  // The same producer, borrowed while this consumer lease is held.
+  virtual ANativeWindow* NativeWindow() const = 0;
   // Replace after any current callback on another thread has returned. A
   // callback may replace itself; its current invocation still owns its captures.
   virtual void SetCallback(InputFrameCallback cb) = 0;

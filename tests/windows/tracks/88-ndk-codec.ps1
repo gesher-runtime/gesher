@@ -21,4 +21,13 @@ foreach ($codecAbi in @(@{ Name = 'x86_64'; Triple = 'x86_64' },
     @("NDK codec ABI: $($codecAbi.Name)", 'NDK codec AVC frame pts=4294971956',
       'NDK codec AVC frame pts=4295005289', 'NDK codec AVC frame pts=4295038622',
       'NDK codec surface: all passed', 'NDK codec AVC: all passed') 45 -Publish
+  $codecInputDll = Join-Path $codecRoot "libndk-codec-input-$($codecAbi.Triple).so"
+  if (-not (Test-Path $codecInputDll)) {
+    Write-Host "FAIL  NDK codec input Surface ($($codecAbi.Name)) guest fixture missing"
+    $script:failed++
+    continue
+  }
+  CheckTimed "NDK codec AVC input Surface ($($codecAbi.Name)): real picture and EOS" "$Dir/dalvikvm.exe" `
+    ($codecVm + @('-cp', (NoDrive $codecDex), 'gesher.NdkCodecTest', (NoDrive $codecInputDll))) `
+    @('NDK codec input encoded AVC picture:', 'NDK codec input Surface: all passed') 45 -Publish
 }

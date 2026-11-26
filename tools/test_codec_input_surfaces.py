@@ -39,6 +39,8 @@ def main() -> int:
         "ALLOCATE": method(video, "void VideoFrame::Allocate("),
         "CLAMP": method(video, "inline uint8_t Clamp8("),
         "CONVERT": method(video, "void RgbaToI420("),
+        "MAKE_INPUT": (method(codec, "  template <class Factory>\n  auto MakeCodecInputSurface(")
+                       if "MakeCodecInputSurface(" in codec else ""),
         "CREATE_INPUT": method(codec, "  jobject CreateInputSurface("),
         "SET_INPUT": method(codec, "  bool SetInputSurface(") if persistent else "",
         "ON_FRAME": method(codec, "  void OnSurfaceFrame("),

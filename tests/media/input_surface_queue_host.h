@@ -15,8 +15,9 @@ struct ANativeWindow_Buffer {
   void* bits = nullptr;
 };
 struct ARect;
+struct ANativeWindow {};
 namespace android {
-class Surface {
+class Surface : public ANativeWindow {
  public:
   void incStrong(const void*) const { ++references_; }
   void decStrong(const void*) const { if (--references_ == 0) delete this; }

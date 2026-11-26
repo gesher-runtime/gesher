@@ -71,6 +71,7 @@ class Codec {
   std::shared_ptr<PersistentInputSurface> persistent_input_;
   std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
   ~Codec() { if (input_surface_) input_surface_->Abandon(); }
+@MAKE_INPUT@
 @CREATE_INPUT@
 @SET_INPUT@
 @ON_FRAME@
@@ -126,6 +127,7 @@ class ObservedInput final : public InputSurface {
   ObservedInput(std::unique_ptr<InputSurface> input, std::shared_ptr<SourceHooks> hooks)
       : input_(std::move(input)), hooks_(std::move(hooks)) {}
   jobject NewJavaSurface(JNIEnv* env) override { return input_->NewJavaSurface(env); }
+  ANativeWindow* NativeWindow() const override { return input_->NativeWindow(); }
   void SetCallback(InputFrameCallback cb) override {
     if (hooks_->install) hooks_->install();
     input_->SetCallback(std::move(cb));
