@@ -26,6 +26,7 @@ jobs:
             tests/media/ndk-format
             tests/media/opensl-contracts
             tests/media/ndk-muxer
+            tests/media/ndk-codec
             tests/media/ndk-extractor
             compat/media/ndk
             compat/media/player
