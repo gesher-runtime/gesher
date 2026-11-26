@@ -69,7 +69,7 @@ CheckSounds 'media: the engine''s capture has each tone at its frequency, durati
 # endpoint (CI) and that is said, not a crash.
 $out = & "$Dir/media_probe.exe" wasapi 2>&1 | Out-String
 $code = $LASTEXITCODE
-if ($code -eq 0 -and ($out -match 'wasapi: WASAPI shared mode on .+' -and $out -match 'wasapi: rendered [1-9]\d* frames')) {
+if ($code -eq 0 -and ($out -match 'wasapi: WASAPI shared mode on .+' -and $out -match 'wasapi: rendered [1-9]\d* media frames and [1-9]\d* voice frames')) {
   Write-Host "PASS  media: WASAPI shared mode opens on the default endpoint and renders ($(($out -split "`n")[0].Trim()))"
 } elseif ($code -eq 0 -and $out -match 'wasapi: unavailable: (WASAPI: .+)') {
   Write-Host "PASS  media: WASAPI fails cleanly where there is no audio endpoint ($($Matches[1].Trim()))"
@@ -210,6 +210,10 @@ if (Test-Path "$Dir/mediaapp.apk") {
   Write-Host 'INFO  media: mediaapp.apk not in the build output; its checks skipped'
 }
 
+Check 'media: WASAPI refills the requested group using endpoint padding' {
+  & "$Dir/wasapi_refill_test.exe"
+} @('WASAPI refill contracts passed')
+
 # --- Video (stage 2, ADR 0051): videoapp.apk (tests/apps/videoapp) ---------------------
 # A decoder's I420 frames drawn into a Surface go through compat/media/video/yuv_rgba.h's
 # rows (pairs of pixels, AVX2 where the CPU has it): every Y, U, V gives the reference
@@ -223,6 +227,9 @@ Check 'media: target-sized retriever pixels match the pinned full-image Skia ora
 Check 'media: actual AVC output preserves reordered pixels and owned storage through drain and reset' {
   & "$Dir/media_soft_avc_output_test.exe" gate "$Dir/media-avc-output-fixtures"
 } @('real reordered pixels and owned output storage passed')
+Check 'media: software AVC retains only returned inputs and reuses bounded encode storage' {
+  & "$Dir/media_soft_avc_reuse_test.exe"
+} @('real codec packets, owned inputs and bounded scratch passed')
 
 # Clips of 2 s at 320x240, red, lime, blue and white for 0.5 s each: each decoded frame's
 # color says which frame it is.

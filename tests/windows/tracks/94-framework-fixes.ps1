@@ -449,7 +449,35 @@ $appOpsCode = $LASTEXITCODE
 Check 'services: AppOps defaults, authority, attributed delivery, foreground lifecycle and signed persistence' {
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
-} @('AppOpsContractTest all passed: 489 checks; binder=true')
+} @('AppOpsContractTest all passed: 494 checks; binder=true')
+
+$specialAccessOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SpecialAccessTest') 90
+$specialAccessCode = $LASTEXITCODE
+Check 'services: special app access switches write, persist and notify real AppOps; apps cannot grant themselves' {
+  $global:LASTEXITCODE = $specialAccessCode
+  $specialAccessOut
+} @('SpecialAccessTest all passed:')
+$alertWindowUid = [Environment]::GetEnvironmentVariable('GESHER_UID', 'Process')
+$alertWindowBinderUid = [Environment]::GetEnvironmentVariable('GESHER_BINDER_UID', 'Process')
+try {
+  $env:GESHER_UID = '12931'
+  $env:GESHER_BINDER_UID = '12931'
+  $alertWindowOut = FixesRun ($dvmFixes + 'gesher.services.AlertWindowContractTest') 90
+  $alertWindowCode = $LASTEXITCODE
+} finally {
+  [Environment]::SetEnvironmentVariable('GESHER_UID', $alertWindowUid, 'Process')
+  [Environment]::SetEnvironmentVariable('GESHER_BINDER_UID', $alertWindowBinderUid, 'Process')
+}
+Check 'services: window admission and live Windows overlay visibility follow the app-op' {
+  $global:LASTEXITCODE = $alertWindowCode
+  $alertWindowOut
+} @('AlertWindowContractTest all passed:')
+$settingsResultsOut = FixesRun ($dvmFixes + 'gesher.services.SettingsResultsTest') 60
+$settingsResultsCode = $LASTEXITCODE
+Check 'services: per-app Settings screen results wait for the Control Center, once, bounded and timed out' {
+  $global:LASTEXITCODE = $settingsResultsCode
+  $settingsResultsOut
+} @('SettingsResultsTest all passed:')
 
 $permissionStateOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'RuntimePermissionStateTest') 90
@@ -458,6 +486,16 @@ Check 'services: runtime permission denial, rationale, fixed retry policy and ow
   $global:LASTEXITCODE = $permissionStateCode
   $permissionStateOut
 } @('RuntimePermissionStateTest all passed:', ' checks; binder=true')
+
+# Production foreground-service permission/type admission through generated AM parcels.
+# Parsed APK metadata and the notification display sink are isolated fixture boundaries.
+$foregroundAdmissionOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ForegroundServiceAdmissionTest') 90
+$foregroundAdmissionCode = $LASTEXITCODE
+Check 'services: foreground-service manifest permission and type admission' {
+  $global:LASTEXITCODE = $foregroundAdmissionCode
+  $foregroundAdmissionOut
+} @('ForegroundServiceAdmissionTest all passed:', 'checks; binder=true')
 
 # Real UID grant decisions and the production AudioRecord/MediaRecorder JNI errors.
 . "$PSScriptRoot/../helpers/FixturePermissions.ps1"
@@ -661,6 +699,49 @@ foreach ($fixture in @(
   } @("$($fixture[0]) all passed:")
 }
 
+# FEATURE_SENSOR_* through the production path: the runner registers the runtime natives
+# (the plain run above has none, so its sensor comparison is empty on both sides).
+# GESHER_SENSOR_TEST's sensors, the runners having no Windows sensor, must become system
+# features; with the defaults the runners' SensorManager lists Gesher's stationary
+# accelerometer, a desktop default that must declare no feature; GESHER_SENSOR_FALLBACK=0
+# removes it from the list.
+function SensorFeaturesRun([hashtable] $Environment, [string] $Mode) {
+  $saved = @{}
+  foreach ($name in @('GESHER_SENSOR_TEST', 'GESHER_SENSOR_FALLBACK')) {
+    $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    [Environment]::SetEnvironmentVariable($name, $Environment[$name], 'Process')
+  }
+  try {
+    $out = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+      'PackageServiceQueriesTest' + $Mode) 90
+    return @{ Out = $out; Code = $LASTEXITCODE }
+  } finally {
+    foreach ($name in $saved.Keys) {
+      [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process')
+    }
+  }
+}
+$sensorFeatures = SensorFeaturesRun @{ GESHER_SENSOR_TEST = '1' } 'sensor-test'
+Check 'services: GESHER_SENSOR_TEST''s accelerometer and light sensor are FEATURE_SENSOR_* through the sensor natives' {
+  $global:LASTEXITCODE = $sensorFeatures.Code
+  $sensorFeatures.Out
+} @('PackageServiceQueriesTest: GESHER_SENSOR_TEST''s accelerometer and light sensor are system features',
+  'PackageServiceQueriesTest all passed:')
+$sensorFallback = SensorFeaturesRun @{} 'sensor-fallback'
+Check 'services: Gesher''s stationary accelerometer is listed by the sensor natives and declares no FEATURE_SENSOR_*' {
+  $global:LASTEXITCODE = $sensorFallback.Code
+  $sensorFallback.Out
+} @('PackageServiceQueriesTest: SensorManager lists 1 sensors, 1 stationary accelerometer',
+  'PackageServiceQueriesTest: the stationary accelerometer is listed and declares no system feature',
+  'PackageServiceQueriesTest all passed:')
+$sensorFallbackOff = SensorFeaturesRun @{ GESHER_SENSOR_FALLBACK = '0' } 'sensor-fallback-off'
+Check 'services: GESHER_SENSOR_FALLBACK=0 lists no stationary accelerometer and declares no FEATURE_SENSOR_*' {
+  $global:LASTEXITCODE = $sensorFallbackOff.Code
+  $sensorFallbackOff.Out
+} @('PackageServiceQueriesTest: SensorManager lists 0 sensors, 0 stationary accelerometer',
+  'PackageServiceQueriesTest: GESHER_SENSOR_FALLBACK=0 lists no stationary accelerometer and its features follow the real sensors',
+  'PackageServiceQueriesTest all passed:')
+
 # org.apache.http.legacy (external/apache-http), a shared library apps name in
 # <uses-library>, not on the boot class path: laid out as gesher-app.ps1 installs it
 # ($ANDROID_ROOT/framework and etc/permissions, the declaration Gesher ships), in a
@@ -692,6 +773,48 @@ Check 'services: BasicCookieStore (Gmail''s contacts client) loads and works fro
 } @('HttpLegacyTest: BasicCookieStore loads from the shared jar and stores and clears a synthetic cookie',
   'HttpLegacyTest all passed')
 
+# android.test.base, android.test.mock and android.test.runner (frameworks/base/test-*),
+# shared libraries apps name in <uses-library> (GloryFit's android.test.runner), laid
+# out as gesher-app.ps1 installs them, in a system root of their own.
+$testLibRoot = Join-Path $root 'android-test-system'
+New-Item -ItemType Directory -Force (Join-Path $testLibRoot 'framework'), (Join-Path $testLibRoot 'etc/permissions') | Out-Null
+foreach ($library in 'android.test.base', 'android.test.mock', 'android.test.runner') {
+  Copy-Item "$Dir/$library.jar" (Join-Path $testLibRoot 'framework') -Force
+  Copy-Item (Join-Path $PSScriptRoot "../../../tools/package/etc/permissions/$library.xml") (Join-Path $testLibRoot 'etc/permissions') -Force
+}
+$testLibOut = FixesRun ($dvmFixes + 'gesher.services.AndroidTestLibrariesTest' + (NoDrive $testLibRoot)) 90
+$testLibCode = $LASTEXITCODE
+Check 'services: android.test.runner resolves with android.test.base and android.test.mock to the system root''s jars' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: android.test.runner resolves to $ANDROID_ROOT/framework jars with android.test.base and android.test.mock',
+  'AndroidTestLibrariesTest all passed')
+Check 'services: apps targeting API 29 or lower get android.test.base, as AndroidTestBaseUpdater adds it' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: apps targeting API 29 or lower get android.test.base, android.test.runner brings mock and base',
+  'AndroidTestLibrariesTest all passed')
+Check 'services: JUnit 3, MockContext and InstrumentationTestRunner load from the android.test jars' {
+  $global:LASTEXITCODE = $testLibCode
+  $testLibOut
+} @('AndroidTestLibrariesTest: junit.framework, android.test.mock and android.test.InstrumentationTestRunner load from the jars, not the boot class path',
+  'AndroidTestLibrariesTest all passed')
+
+# The system root's shared-library declarations, read once while unchanged (no XML
+# parsing or jar hashing in a bindService), and read again after a change.
+$snapshotOut = FixesRun ($dvmFixes + 'gesher.services.SharedLibrarySnapshotTest' + (NoDrive $root)) 90
+$snapshotCode = $LASTEXITCODE
+Check 'services: shared-library declarations are read once and reused while their files are unchanged' {
+  $global:LASTEXITCODE = $snapshotCode
+  $snapshotOut
+} @('SharedLibrarySnapshotTest: unchanged declarations are read once and their graph reused, with no StrictMode violation for the caller',
+  'SharedLibrarySnapshotTest all passed')
+Check 'services: changed shared-library jars and declarations are seen at the next resolution' {
+  $global:LASTEXITCODE = $snapshotCode
+  $snapshotOut
+} @('SharedLibrarySnapshotTest: replaced, added and removed jars and declarations are seen at the next resolution',
+  'SharedLibrarySnapshotTest all passed')
+
 # An installed APK's signers (ApkPackage), which apps read for their own: WhatsApp's
 # registration token is built from GET_SIGNATURES. Its fixtures (tests/dex-services/
 # fixtures, generate.sh) are signed as WhatsApp is: a key rotated for SDK 33 and up.
@@ -722,3 +845,19 @@ Check 'framework: SpeechRecognizer connection callback and cancellation contract
   $global:LASTEXITCODE = $recognizerClientCode
   $recognizerClientOut
 } @('SpeechRecognizerConnectionTest all passed:')
+
+$externalStorageOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExternalStorageAccessTest') 60
+$externalStorageCode = $LASTEXITCODE
+Check 'services: MANAGE_EXTERNAL_STORAGE, policy persistence and StorageService.mkdirs' {
+  $global:LASTEXITCODE = $externalStorageCode
+  $externalStorageOut
+} @('ExternalStorageAccessTest passed')
+
+$storagePublicationOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'ExternalStoragePolicyContractTest') 90
+$storagePublicationCode = $LASTEXITCODE
+Check 'services: external storage grant, revoke, publication failures and authenticated directories' {
+  $global:LASTEXITCODE = $storagePublicationCode
+  $storagePublicationOut
+} @('ExternalStoragePolicyContractTest passed:')

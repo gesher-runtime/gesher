@@ -70,6 +70,12 @@ bool Recorder::Prepare(std::string* error, bool* invalid_state) {
   return true;
 }
 
+bool Recorder::SetInputSurface(std::shared_ptr<PersistentInputSurface> source) {
+  if (!CanConfigure() || source == nullptr) return false;
+  persistent_input_ = std::move(source);
+  return true;
+}
+
 bool Recorder::SetNextOutputFile(int fd, std::string* error, bool* invalid_state) {
   if (invalid_state != nullptr) *invalid_state = false;
   // The native MediaRecorder checks writable access before Stagefright checks
@@ -122,7 +128,7 @@ InputSurface* Recorder::input_surface() {
   // Writer completion abandons the producer but leaves the public recorder
   // prepared/recording until stop or reset. AOSP retains the queryable Surface
   // through that interval; returning it must not restart capture or encoding.
-  return prepared_ ? input_surface_.get() : nullptr;
+  return prepared_ && persistent_input_ == nullptr ? input_surface_.get() : nullptr;
 }
 
 bool Recorder::BuildPipeline(std::string* error) {
@@ -230,9 +236,14 @@ bool Recorder::BuildPipeline(std::string* error) {
     video_params_.i_frame_interval_s = 1.0f;
     video_enc_ = VideoEncoder::Create(video_mime_, video_params_, error);
     if (video_enc_ == nullptr) return false;
-    input_surface_.reset(CreateInputSurface(video_params_.width, video_params_.height));
+    if (persistent_input_ != nullptr) {
+      input_surface_ = persistent_input_->Attach(video_params_.width, video_params_.height);
+    } else {
+      input_surface_.reset(CreateInputSurface(video_params_.width, video_params_.height));
+    }
     if (input_surface_ == nullptr) {
-      *error = "cannot create the recording Surface";
+      *error = persistent_input_ != nullptr ? "persistent input Surface already has a consumer"
+                                          : "cannot create the recording Surface";
       return false;
     }
     input_surface_->SetCallback([this](const uint32_t* rgba, int w, int h, int64_t ts_ns) {
@@ -765,6 +776,7 @@ void Recorder::ReleasePipeline() {
 
 void Recorder::Clear() {
   ReleasePipeline();
+  persistent_input_.reset();
   if (config_.fd >= 0) close(config_.fd);
   config_ = RecorderConfig();
   prepared_ = started_ = false;

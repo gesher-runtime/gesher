@@ -1,5 +1,5 @@
 diff --git a/compat/bionic/stdio_bionic.cc b/compat/bionic/stdio_bionic.cc
-index 3848a9a10..0f46ab7c1 100644
+index 3848a9a10..10ce0edbc 100644
 --- a/compat/bionic/stdio_bionic.cc
 +++ b/compat/bionic/stdio_bionic.cc
 @@ -31,7 +31,6 @@
@@ -409,7 +409,17 @@ index 3848a9a10..0f46ab7c1 100644
    if (Orient(stderr, -1) == 0) return;
    if (s != nullptr && *s != 0) {
      std::fprintf(stderr, "%s: %s\n", s, strerror(errno));
-@@ -1205,6 +1072,7 @@ int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* a
+@@ -1161,6 +1028,9 @@ const HANDLE logOutput = [] {
+ int LogWrite(int prio, const char* tag, const char* text, int buffer = 0, bool filter = true) {
+   if (!tag) tag = ::gesher_android_default_log_tag();
+   if (filter && !::__android_log_is_loggable_len(prio, tag, tag ? std::strlen(tag) : 0, 2)) return -1;
++  // Both sinks persist (the logcat file and the package's .log): no credentials.
++  std::string redacted;
++  if (text && logging::RedactCredentials(text, std::strlen(text), &redacted)) text = redacted.c_str();
+   logging::Record(buffer, prio, tag, text);
+   std::string line(1, PriorityLetter(prio));
+   line += '/';
+@@ -1205,6 +1075,7 @@ int BIONIC_SYSV gesher_bionic_vsprintf(char* buf, const char* fmt, SysvVaList* a
  int BIONIC_SYSV gesher_bionic_vfprintf(void* f, const char* fmt, SysvVaList* ap) {
    FILE* stream = F(f);
    StreamLock lock(stream);
@@ -417,7 +427,7 @@ index 3848a9a10..0f46ab7c1 100644
    if (Orient(stream, -1) == 0) return -1;
    bool valid;
    std::string s = Format(fmt, ap, &valid);
-@@ -1255,6 +1123,7 @@ int BIONIC_SYSV gesher_bionic_vsscanf(const char* str, const char* fmt, SysvVaLi
+@@ -1255,6 +1126,7 @@ int BIONIC_SYSV gesher_bionic_vsscanf(const char* str, const char* fmt, SysvVaLi
  int BIONIC_SYSV gesher_bionic_vfscanf(void* f, const char* fmt, SysvVaList* ap) {
    FILE* stream = F(f);
    StreamLock lock(stream);
@@ -425,7 +435,7 @@ index 3848a9a10..0f46ab7c1 100644
    if (Orient(stream, -1) == 0) return EOF;
    return VFscanfImpl(stream, fmt, ap);
  }
-@@ -1297,10 +1166,11 @@ int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t*
+@@ -1297,10 +1169,11 @@ int BIONIC_SYSV gesher_bionic_vswprintf(uint32_t* buf, size_t n, const uint32_t*
  int BIONIC_SYSV gesher_bionic_vfwprintf(void* f, const uint32_t* fmt, SysvVaList* ap) {
    FILE* stream = F(f);
    StreamLock lock(stream);
@@ -490,10 +500,21 @@ index 7eb5900d2..18ab24678 100644
  FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int* retired);
  
 diff --git a/compat/posix/src/stdio_output.cc b/compat/posix/src/stdio_output.cc
-index 1bbbc5112..83ab9abce 100644
+index 1bbbc5112..966a54384 100644
 --- a/compat/posix/src/stdio_output.cc
 +++ b/compat/posix/src/stdio_output.cc
-@@ -60,6 +60,7 @@ struct State {
+@@ -16,6 +16,10 @@
+ #include "record_lock_descriptors.h"
+ #include "../../bionic/stdio_windows_lock.h"
+ #include <gesher/file_description.h>
++// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
++#if __has_include(<gesher/fork.h>)
++#include <gesher/fork.h>
++#endif
+ 
+ #include <windows.h>
+ #include <fcntl.h>
+@@ -60,6 +64,7 @@ struct State {
    int fd = -1;
    bool live = true;
    std::atomic<bool> line_output{false};
@@ -501,7 +522,7 @@ index 1bbbc5112..83ab9abce 100644
    mbstate_t input_conversion{};
    mbstate_t output_conversion{};
  };
-@@ -125,6 +126,7 @@ int ConfigureDefaults(State& state, FILE* stream, int fd, int flags, bool standa
+@@ -125,6 +130,7 @@ int ConfigureDefaults(State& state, FILE* stream, int fd, int flags, bool standa
    state.fd = fd;
    state.live = true;
    state.line_output.store(false, std::memory_order_relaxed);
@@ -509,7 +530,7 @@ index 1bbbc5112..83ab9abce 100644
    state.input_conversion = {};
    state.output_conversion = {};
    const int saved = errno;
-@@ -275,6 +277,7 @@ int FlushLocal(FILE* stream) {
+@@ -275,6 +281,7 @@ int FlushLocal(FILE* stream) {
    return state->buffer.FlushOutput(Writer(state->fd));
  }
  size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
@@ -517,7 +538,7 @@ index 1bbbc5112..83ab9abce 100644
    if (formatting_stream && formatting_stream->stream == stream) {
      return formatting_stream->buffer.Write(bytes, size, count, Writer(formatting_stream->fd));
    }
-@@ -283,6 +286,7 @@ size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bo
+@@ -283,6 +290,7 @@ size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bo
    return state->buffer.Write(bytes, size, count, Writer(state->fd));
  }
  size_t ReadLocal(void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
@@ -525,7 +546,7 @@ index 1bbbc5112..83ab9abce 100644
    AccessStream state(stream, unlocked);
    if (!state) return 0;
    state->line_output.store(false, std::memory_order_release);
-@@ -352,11 +356,11 @@ int FlagLocal(FILE* stream, bool error, bool unlocked) {
+@@ -352,11 +360,11 @@ int FlagLocal(FILE* stream, bool error, bool unlocked) {
    // A stream with no shared I/O state has no recorded EOF or error. Queries
    // must not create metadata or invent an error when allocation is exhausted.
    AccessStream state(stream, unlocked, false);
@@ -539,7 +560,7 @@ index 1bbbc5112..83ab9abce 100644
  }
  void ErrorLocal(FILE* stream, int error) {
    AccessStream state(stream, false);
-@@ -370,15 +374,24 @@ int BufferLocal(FILE* stream, char* buffer, int mode, size_t size) {
+@@ -370,15 +378,24 @@ int BufferLocal(FILE* stream, char* buffer, int mode, size_t size) {
    auto buffering = mode == _IONBF ? StreamBuffer::Mode::kNone :
        mode == _IOLBF ? StreamBuffer::Mode::kLine : StreamBuffer::Mode::kFull;
    int result = state->buffer.Configure(buffering, buffer, size, Writer(state->fd));
@@ -567,7 +588,7 @@ index 1bbbc5112..83ab9abce 100644
    return result;
  }
  int64_t TellLocal(FILE* stream) {
-@@ -474,6 +487,10 @@ int ScanWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
+@@ -474,6 +491,10 @@ int ScanWideLocal(FILE* stream, const wchar_t* format, va_list arguments) {
    state->buffer.Orient(1);
    return __real___mingw_vfwscanf(stream, format, arguments);
  }
@@ -578,7 +599,7 @@ index 1bbbc5112..83ab9abce 100644
  struct Api {
    std::shared_ptr<void> (*acquire)(FILE*);
    void (*release)(const std::shared_ptr<void>&);
-@@ -503,6 +520,7 @@ struct Api {
+@@ -503,6 +524,7 @@ struct Api {
    int (*print_wide)(FILE*, const wchar_t*, va_list);
    int (*scan)(FILE*, const char*, va_list);
    int (*scan_wide)(FILE*, const wchar_t*, va_list);
@@ -586,7 +607,7 @@ index 1bbbc5112..83ab9abce 100644
  };
  const Api* Owner() {
    using Factory = const Api* (*)();
-@@ -519,7 +537,7 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
+@@ -519,7 +541,7 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
        OpenDescriptorLocal, RegisterLocal, ForgetLocal, FlushLocal, WriteLocal, ReadLocal,
        LineLocal, UngetLocal, FflushLocal, FlagLocal, ClearLocal, ErrorLocal, BufferLocal,
        SeekLocal, TellLocal, OrientLocal, PutWideLocal, GetWideLocal, UngetWideLocal,
@@ -595,7 +616,7 @@ index 1bbbc5112..83ab9abce 100644
    return &api;
  }
  namespace {
-@@ -538,6 +556,7 @@ StreamGuard::StreamGuard(FILE* stream)
+@@ -538,6 +560,7 @@ StreamGuard::StreamGuard(FILE* stream)
      : token_(Owner()->acquire(stream)), cleanup_([](void* raw) { static_cast<StreamGuard*>(raw)->Release(); }, this) {}
  StreamGuard::~StreamGuard() = default;
  void StreamGuard::Release() { Owner()->release(token_); token_.reset(); }
@@ -603,3 +624,48 @@ index 1bbbc5112..83ab9abce 100644
  void Lock(FILE* stream) { Owner()->lock(stream); }
  void Unlock(FILE* stream) { Owner()->unlock(stream); }
  int TryLock(FILE* stream) { return Owner()->try_lock(stream); }
+@@ -760,3 +783,44 @@ extern "C" {
+ int (*__imp_fseeko64)(FILE*, long long, int) = gesher_fseeko64;
+ long long (*__imp_ftello64)(FILE*) = gesher_ftello64;
+ }
++
++#ifdef GESHER_FORK_LOCK
++// fork (gesher/fork.h): the stream registry. A stream's own lock is not
++// waited for (another thread may hold it across a blocking read, and Linux's
++// fork waits for no stream): in the child every stream's lock is made anew,
++// free, unless the forking thread itself held it (flockfile around fork),
++// which keeps it at that depth. A stream another thread was writing at that
++// moment may hold part of that write in the child's copy of its buffer.
++namespace {
++DWORD g_stdio_fork_thread = 0;
++bool StdioTryLock(void*) {
++  using namespace gesher::stdio;
++  if (registry == nullptr) return true;
++  if (!registry->mutex.try_lock()) return false;
++  g_stdio_fork_thread = GetCurrentThreadId();
++  return true;
++}
++void StdioUnlock(void*) {
++  using namespace gesher::stdio;
++  if (registry != nullptr) registry->mutex.unlock();
++}
++void StdioChild(void*) {
++  using namespace gesher::stdio;
++  if (registry == nullptr) return;
++  for (auto& entry : registry->streams) {
++    auto* section = reinterpret_cast<CRITICAL_SECTION*>(&entry.second->mutex);
++    const bool ours = reinterpret_cast<uintptr_t>(section->OwningThread) == g_stdio_fork_thread;
++    const LONG depth = ours ? section->RecursionCount : 0;
++    InitializeCriticalSection(section);
++    for (LONG i = 0; i < depth; ++i) EnterCriticalSection(section);
++  }
++  new (&registry->mutex) std::mutex();
++}
++const gesher::ForkLockOps kStdioForkOps = {&StdioTryLock, &StdioUnlock, &StdioChild};
++// Registered with a non-null object: the registry may be made later.
++int g_stdio_fork_anchor = 0;
++const gesher::ForkLockRegistration g_fork_stdio(gesher::kForkOrderSubsystem, "stdio streams",
++                                                []() -> void* { return &g_stdio_fork_anchor; },
++                                                &kStdioForkOps);
++}  // namespace
++#endif

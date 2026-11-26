@@ -426,7 +426,9 @@ class ArtifactBatch(unittest.TestCase):
 
 class BatchManifestWiring(unittest.TestCase):
     """Each batch job downloads exactly its committed manifest from producers it waits for."""
-    JOBS = {'test-shards': ('tools/ci/test_shard_artifacts.json', 'ci-suppliers/core'),
+    # core-suppliers publishes its batch as one bundle for every test shard
+    # (see test_supplier_bundle.py); it assembles nothing itself.
+    JOBS = {'core-suppliers': ('tools/ci/test_shard_artifacts.json', 'ci-suppliers/core'),
             'web3-query-regression': ('tools/ci/web3_query_artifacts.json', 'ci-suppliers/web3'),
             'package': ('tools/ci/package_artifacts.json', 'ci-suppliers/package'),
             'binder2-sg-regression': ('tools/ci/binder2_sg_artifacts.json', 'ci-suppliers/binder2')}
@@ -473,7 +475,7 @@ class BatchManifestWiring(unittest.TestCase):
                 for spec in specs:
                     self.assertIn(spec['producer'].split(' / ', 1)[0], set(job['needs']), spec)
                     self.assertTrue(self.producer_exists(spec['producer']), spec)
-                if job_name == 'test-shards':
+                if job_name == 'core-suppliers':
                     continue
                 # Single receipts for batch members would repeat the API reads.
                 for spec in specs:
@@ -493,6 +495,115 @@ class BatchManifestWiring(unittest.TestCase):
                     self.assertIn('Move-Item -LiteralPath "' + destination +
                                   '/artifacts/$($pair[0])" -Destination $pair[1]', runs)
                     self.assertIn('if (Test-Path -LiteralPath $pair[1]) { throw', runs)
+
+
+class RetainedE2EInstaller(unittest.TestCase):
+    def setUp(self):
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        self.destination = Path(temporary) / 'suppliers' / 'installer'
+        self.value = dict(repo='gesher-runtime/gesher', repo_id='8', head_repo='9', run_id='7',
+                          attempt='3', workflow='ci', head='b' * 40, checkout='a' * 40)
+        self.runs = {attempt: dict(id=7, run_attempt=attempt, head_sha=self.value['head'],
+                     name='ci', path='.github/workflows/ci.yml', event='pull_request', status='completed',
+                     repository={'id': 8, 'full_name': self.value['repo']}, head_repository={'id': 9})
+                     for attempt in (1, 2, 3)}
+        self.jobs = {attempt: dict(id=100 + attempt, run_id=7, run_attempt=attempt, name='package',
+                     head_sha=self.value['head'], status='completed', conclusion='success', steps=[],
+                     started_at='2026-11-23T15:08:18Z', completed_at='2026-11-23T15:11:57Z')
+                     for attempt in (1, 2, 3)}
+        self.jobs[1]['steps'] = [dict(name='Upload tested installer artifact', conclusion='success',
+                                    started_at='2026-11-23T15:10:19Z', completed_at='2026-11-23T15:10:21Z')]
+        self.items = [dict(id=1000, name='gesher-setup', expired=False, digest='sha256:' + 'a' * 64,
+                           size_in_bytes=80, created_at='2026-11-23T15:10:20Z',
+                           workflow_run=dict(id=7, head_sha=self.value['head'], repository_id=8,
+                                             head_repository_id=9))]
+        self.args = types.SimpleNamespace(name='gesher-setup', producer='package', producer_suffix=False,
+                                          allow_failed_producer=True, destination=self.destination)
+        env = dict(GITHUB_WORKFLOW='ci', GITHUB_JOB='e2e', GITHUB_EVENT_NAME='pull_request')
+        self.enterContext(patch.dict(os.environ, env, clear=True))
+        self.enterContext(patch.object(receipt, 'context', return_value=self.value))
+        self.enterContext(patch.object(receipt, 'get_json', side_effect=self.read_run))
+        self.enterContext(patch.object(receipt, 'read_jobs', side_effect=self.read_jobs))
+        self.enterContext(patch.object(receipt, 'read_artifacts', side_effect=lambda *_a, **_k: copy.deepcopy(self.items)))
+        self.enterContext(patch.object(receipt, 'check_checkout'))
+        self.download = self.enterContext(patch.object(receipt, 'download', side_effect=self.extract))
+        self.logs = self.enterContext(contextlib.redirect_stdout(io.StringIO()))
+
+    def read_run(self, endpoint):
+        if '/attempts/' in endpoint:
+            attempt = int(endpoint.rsplit('/', 1)[-1])
+        else:
+            attempt = 3
+        return copy.deepcopy(self.runs[attempt])
+
+    def read_jobs(self, value):
+        return dict(total_count=1, jobs=[copy.deepcopy(self.jobs[int(value['attempt'])])])
+
+    def extract(self, _, target):
+        target.mkdir()
+        (target / 'installer.exe').write_bytes(b'tested installer')
+
+    def reject(self, error):
+        with self.assertRaisesRegex(RuntimeError, error):
+            receipt.single(self.args)
+        self.assertFalse(self.destination.exists())
+        self.download.assert_not_called()
+
+    def test_copied_attempts_retain_original_upload_and_exact_archive(self):
+        receipt.single(self.args)
+        self.assertEqual((self.destination / 'installer.exe').read_bytes(), b'tested installer')
+        self.download.assert_called_once()
+        self.assertIn('original_attempt=1 original_producer_id=101', self.logs.getvalue())
+        self.assertIn('producer_id=103', self.logs.getvalue())
+
+    def test_original_run_and_copied_execution_must_match(self):
+        for target, key, value, error in (
+                (self.runs[1], 'head_sha', 'c' * 40, 'run identity'),
+                (self.runs[1], 'path', '.github/workflows/other.yml', 'run identity'),
+                (self.runs[2], 'event', 'push', 'run identity'),
+                (self.jobs[2], 'id', 103, 'does not match'),
+                (self.jobs[2], 'conclusion', 'failure', 'does not match'),
+                (self.jobs[1], 'started_at', '2026-11-23T15:08:19Z', 'does not match')):
+            with self.subTest(key=key):
+                with patch.dict(target, {key: value}):
+                    self.reject(error)
+
+    def test_present_failed_step_never_falls_back(self):
+        failure = {**self.jobs[1]['steps'][0], 'conclusion': 'failure'}
+        for attempt in (1, 2, 3):
+            with self.subTest(attempt=attempt), patch.dict(self.jobs[attempt], {'steps': [failure]}):
+                self.reject('Installer upload did not complete')
+
+    def test_artifact_must_come_from_original_upload_step(self):
+        with patch.dict(self.items[0], {'created_at': '2026-11-23T15:09:10Z'}):
+            self.reject('outside the original successful upload')
+        with patch.dict(self.items[0], {'expired': True}):
+            self.reject('expiry mismatch')
+        with patch.dict(self.items[0]['workflow_run'], {'head_repository_id': 10}):
+            self.reject('identity mismatch')
+
+    def test_download_followed_by_changed_archive_or_attempt_is_not_published(self):
+        for target, key, value, error in (
+                (self.items[0], 'digest', 'sha256:' + 'b' * 64, 'evidence changed'),
+                (self.runs[3], 'run_attempt', 4, 'Current run/source/attempt')):
+            with self.subTest(key=key):
+                previous = target[key]
+
+                def extract_then_change(item, path):
+                    self.extract(item, path)
+                    target[key] = value
+
+                try:
+                    self.download.side_effect = extract_then_change
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        receipt.single(self.args)
+                    self.assertFalse(self.destination.exists())
+                finally:
+                    target[key] = previous
+
+    def test_guard_still_rejects_any_other_consumer(self):
+        with patch.dict(os.environ, {'GITHUB_JOB': 'test-shards'}):
+            self.reject('restricted to canonical e2e')
 
 
 if __name__ == '__main__':

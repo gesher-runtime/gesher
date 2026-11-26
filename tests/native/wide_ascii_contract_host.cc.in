@@ -1,0 +1,132 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+#include <sys/mman.h>
+#include <unistd.h>
+#include "abi_types.h"
+
+// The existing reference generator preserves all supplier function bodies.
+#define main PinnedWideContractsMain
+#include "reference.cpp"
+#undef main
+
+namespace gesher::bionic {
+namespace {
+using wchar32 = uint32_t;
+using wint32 = uint32_t;
+constexpr wint32 kWEOF = 0xffffffffu;
+constexpr int kEILSEQ = 84, kEINVAL = 22;
+constexpr size_t kInvalid = size_t(-1), kIncomplete = size_t(-2);
+@PRODUCTION@
+}  // namespace
+}  // namespace gesher::bionic
+
+namespace {
+uint64_t checks = 0;
+void Check(bool ok, const char* message) {
+  ++checks;
+  if (!ok) { std::fprintf(stderr, "WIDE_ASCII_FAIL %s check=%llu\n", message,
+                         static_cast<unsigned long long>(checks)); std::exit(1); }
+}
+struct Pages {
+  size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+  unsigned char* base = static_cast<unsigned char*>(
+      mmap(nullptr, page * 3, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+  Pages() {
+    Check(base != MAP_FAILED, "allocate real guard pages");
+    Check(mprotect(base + page, page, PROT_READ | PROT_WRITE) == 0, "enable middle page");
+  }
+  ~Pages() { Check(munmap(base, page * 3) == 0, "release guard pages"); }
+  unsigned char* end() { return base + page * 2; }
+};
+
+void Compare(const std::vector<uint32_t>& input, size_t limit, size_t cap,
+             bool measure, unsigned pending = 0) {
+  namespace g = gesher::bionic;
+  std::vector<wchar_t> reference_input(input.begin(), input.end());
+  std::vector<char> actual(cap + 4, '\x55'), expected(cap + 4, '\x55');
+  g::BionicMbstate state{};
+  pinned::mbstate_t reference_state{};
+  auto* raw = reinterpret_cast<unsigned char*>(&state);
+  auto* reference_raw = reinterpret_cast<unsigned char*>(&reference_state);
+  for (size_t i = 0; i < 8; ++i) raw[i] = reference_raw[i] = i < 4 ? 0 : 0xa5;
+  if (pending) raw[pending - 1] = reference_raw[pending - 1] = 0xc2;
+  const uint32_t* cursor = input.data();
+  const wchar_t* reference_cursor = reference_input.data();
+  errno = 17;
+  size_t result = g::Wcsnrtombs(measure ? nullptr : actual.data() + 2, &cursor, limit, cap, &state);
+  int error = errno;
+  errno = 17;
+  size_t reference_result = pinned::wcsnrtombs(measure ? nullptr : expected.data() + 2,
+                                              &reference_cursor, limit, cap, &reference_state);
+  Check(result == reference_result && error == errno, "pinned result and errno");
+  Check((cursor == nullptr) == (reference_cursor == nullptr), "pinned NUL consumption");
+  if (cursor) Check(cursor - input.data() == reference_cursor - reference_input.data(), "pinned source position");
+  Check(actual == expected, "pinned complete output and guard bytes");
+  Check(std::memcmp(&state, &reference_state, 8) == 0, "pinned all state bytes");
+}
+
+void GuardPages() {
+  namespace g = gesher::bionic;
+  Pages input, output;
+  auto* word = reinterpret_cast<uint32_t*>(input.end()) - 1;
+  char* byte = reinterpret_cast<char*>(output.end()) - 1;
+  g::BionicMbstate state{};
+  const uint32_t* cursor = word;
+  *word = 'A'; *byte = '!';
+  Check(g::Wcsnrtombs(byte, &cursor, 1, 1, &state) == 1 && *byte == 'A' && cursor == word + 1,
+        "bounded ASCII never reads or writes past the last mapped unit");
+  cursor = word; *word = 0; *byte = '!';
+  Check(g::Wcsnrtombs(byte, &cursor, SIZE_MAX, 1, &state) == 0 && *byte == 0 && cursor == nullptr,
+        "terminating NUL at a guard-page edge");
+  cursor = reinterpret_cast<const uint32_t*>(input.end());
+  Check(g::Wcsnrtombs(byte, &cursor, 0, 1, &state) == 0 && cursor == reinterpret_cast<const uint32_t*>(input.end()),
+        "zero source bound does not read the protected page");
+  cursor = word; *word = 'A';
+  Check(g::Wcsnrtombs(reinterpret_cast<char*>(output.end()), &cursor, 1, 0, &state) == 0 && cursor == word,
+        "zero output bound does not read or write beyond it");
+  cursor = word;
+  Check(g::Wcsnrtombs(nullptr, &cursor, 1, 0, nullptr) == 1 && cursor == word,
+        "internal-state measurement stops at its exact source bound");
+  auto* sequence = word - 1; sequence[0] = 'A'; sequence[1] = 0x1f642;
+  cursor = sequence;
+  char* two = byte - 1; two[0] = two[1] = '!';
+  Check(g::Wcsnrtombs(two, &cursor, 2, 2, &state) == 1 && cursor == sequence + 1 &&
+            two[0] == 'A' && two[1] == '!', "incomplete multibyte output never enters the guard page");
+}
+}  // namespace
+
+int main() {
+  Check(PinnedWideContractsMain() == 0, "complete maintained pinned wide corpus");
+  namespace g = gesher::bionic;
+  WideAsciiContracts<uint32_t, g::BionicMbstate>(g::Wcsnrtombs, g::Wcsrtombs, g::Wcstombs, Check);
+  const uint32_t boundaries[] = {0, 1, 0x7f, 0x80, 0x7ff, 0x800, 0xd7ff, 0xd800, 0xdfff,
+      0xe000, 0xffff, 0x10000, 0x10ffff, 0x110000, 0x1fffff, 0x200000,
+      0x7fffffff, 0x80000000, 0xffffffff};
+  for (uint32_t c : boundaries) {
+    for (size_t prefix : {0u, 1u, 7u, 16u}) {
+      std::vector<uint32_t> input(prefix, 'A');
+      input.insert(input.end(), {c, 'Z', 0});
+      for (size_t limit = 0; limit <= input.size() + 1; ++limit)
+        for (size_t cap = 0; cap <= prefix + 7; ++cap)
+          for (bool measure : {false, true}) Compare(input, limit, cap, measure);
+    }
+  }
+  for (unsigned pending = 1; pending <= 4; ++pending)
+    for (size_t cap : {0u, 1u, 8u})
+      for (size_t limit : {0u, 1u, 8u})
+        for (bool measure : {false, true}) Compare({'A', 0}, limit, cap, measure, pending);
+  // All values accepted by the pinned encoder, including its surrogate and
+  // non-Unicode asymmetry. Each call follows a real ASCII prefix.
+  for (uint32_t c = 0; c <= 0x200000; ++c) Compare({'A', c, 'Z', 0}, 4, 9, false);
+  GuardPages();
+  std::printf("WIDE_ASCII_CONTRACT_PASS checks=%llu\n", static_cast<unsigned long long>(checks));
+}

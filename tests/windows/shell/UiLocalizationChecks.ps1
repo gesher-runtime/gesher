@@ -13,8 +13,8 @@ $cases = @{
 foreach ($case in $cases.GetEnumerator()) {
     if ((Get-GesherUiLanguage $case.Key) -ne $case.Value) { throw "Language selection: $($case.Key)" }
 }
-$detected = [Gesher.UiLanguages]::Read()
-if ([string]::IsNullOrWhiteSpace($detected)) { throw 'UiLanguages::Read returned empty' }
+$detected = Read-GesherUiLanguages
+if ([string]::IsNullOrWhiteSpace($detected)) { throw 'Read-GesherUiLanguages returned empty' }
 $script:GesherUiLanguage = 'he'
 $path = 'C:\שלום\{1}.apk'
 if ((Get-GesherText 'microg_missing' @($path)) -ne "קובץ ההרחבה אינו קיים: $path") { throw 'Literal placeholder in path changed' }

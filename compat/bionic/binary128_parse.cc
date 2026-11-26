@@ -14,6 +14,10 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string_view>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 extern "C" int gesher_gdtoa_strtorQ(const char*, char**, int, void*);
 extern "C" void gesher_gdtoa_hexdig_init(void);
@@ -234,3 +238,9 @@ size_t Binary128WidePrefix(const char* text) {
 }
 
 }  // namespace gesher::bionic
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::shared_mutex, g_parse_gate);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::mutex, g_alloc_lock);
+#endif
