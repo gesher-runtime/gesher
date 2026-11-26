@@ -14,6 +14,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(IMAGE_READER_STANDALONE) && !defined(IMAGE_READER_COMPONENT)
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#endif
+
 #ifndef IMAGE_READER_STANDALONE
 #include <jni.h>
 #endif
@@ -150,12 +156,63 @@ static void expect_listener(void) {
     CHECK(pthread_mutex_destroy(&callback.mutex) == 0);
 }
 
+#if defined(IMAGE_READER_STANDALONE) && !defined(IMAGE_READER_COMPONENT)
+static int make_release_fence(void) {
+    EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (display == EGL_NO_DISPLAY || !eglInitialize(display, NULL, NULL)) {
+        puts("NDK image reader: EGL display unavailable for release-fence check");
+        return -1;
+    }
+    const char* extensions = eglQueryString(display, EGL_EXTENSIONS);
+    if (extensions == NULL || strstr(extensions, "EGL_ANDROID_native_fence_sync") == NULL) {
+        CHECK(eglTerminate(display));
+        puts("NDK image reader: EGL native release fence unavailable");
+        return -1;
+    }
+    PFNEGLCREATESYNCKHRPROC create_sync =
+        (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
+    PFNEGLDUPNATIVEFENCEFDANDROIDPROC dup_fence =
+        (PFNEGLDUPNATIVEFENCEFDANDROIDPROC)eglGetProcAddress("eglDupNativeFenceFDANDROID");
+    PFNEGLDESTROYSYNCKHRPROC destroy_sync =
+        (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
+    CHECK(create_sync != NULL && dup_fence != NULL && destroy_sync != NULL);
+
+    const EGLint config_attributes[] = {
+        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE,
+    };
+    const EGLint context_attributes[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+    const EGLint surface_attributes[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+    EGLConfig config;
+    EGLint count = 0;
+    CHECK(eglChooseConfig(display, config_attributes, &config, 1, &count) && count == 1);
+    EGLSurface surface = eglCreatePbufferSurface(display, config, surface_attributes);
+    CHECK(surface != EGL_NO_SURFACE);
+    EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attributes);
+    CHECK(context != EGL_NO_CONTEXT);
+    CHECK(eglMakeCurrent(display, surface, surface, context));
+    glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    EGLSyncKHR sync = create_sync(display, EGL_SYNC_NATIVE_FENCE_ANDROID, NULL);
+    CHECK(sync != EGL_NO_SYNC_KHR);
+    glFlush();
+    const int fence = dup_fence(display, sync);
+    CHECK(fence >= 0);
+    CHECK(destroy_sync(display, sync));
+    CHECK(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    CHECK(eglDestroyContext(display, context));
+    CHECK(eglDestroySurface(display, surface));
+    CHECK(eglTerminate(display));
+    return fence;
+}
+#endif
+
 static int run_test(void) {
     checks = 0;
     void* library = dlopen("libmediandk.so", RTLD_NOW | RTLD_LOCAL);
     CHECK(library != NULL);
     CHECK(dlsym(library, "AImageReader_new") != NULL);
     CHECK(dlsym(library, "AImage_getHardwareBuffer") != NULL);
+    CHECK(dlsym(library, "AImage_deleteAsync") != NULL);
     CHECK(dlsym(library, "AImageReader_acquireNextImageAsync") != NULL);
     CHECK(dlsym(library, "AImageReader_acquireLatestImageAsync") != NULL);
     CHECK(dlclose(library) == 0);
@@ -194,7 +251,12 @@ static int run_test(void) {
     AImage* third = NULL;
     CHECK(AImageReader_acquireNextImage(reader, &third) == AMEDIA_IMGREADER_MAX_IMAGES_ACQUIRED);
     CHECK(third == NULL);
-    AImage_delete(second);
+    int release_fence = -1;
+#if defined(IMAGE_READER_STANDALONE) && !defined(IMAGE_READER_COMPONENT)
+    release_fence = make_release_fence();
+#endif
+    AImage_deleteAsync(second, release_fence);
+    if (release_fence >= 0) puts("NDK image reader: released through an EGL native fence");
     CHECK(AImageReader_acquireNextImage(reader, &third) == AMEDIA_OK);
     expect_image(third, blue);
     AImage_delete(third);

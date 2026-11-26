@@ -8,6 +8,7 @@
 
 #include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
+#include <gesher/native_fence.h>
 #include <gesher/rgba_buffers.h>
 
 #include <cerrno>
@@ -19,6 +20,7 @@
 #include <mutex>
 #include <new>
 #include <unordered_set>
+#include <utility>
 
 #include "abi_types.h"
 #include "../surface/queue_surface.h"
@@ -307,14 +309,31 @@ media_status_t BIONIC_SYSV SetImageListener(AImageReader* reader,
   return AMEDIA_OK;
 }
 
-void BIONIC_SYSV DeleteImage(AImage* image) {
+void ReleaseImageFrame(void* frame) { delete static_cast<ImageFrame*>(frame); }
+
+void BIONIC_SYSV DeleteImageAsync(AImage* image, int release_fence_fd) {
   if (image == nullptr) return;
+  std::shared_ptr<gesher::NativeFence> fence;
+  if (release_fence_fd >= 0) {
+    // The caller transfers this descriptor. Retain the native event first,
+    // since closing the fd drops the registry's own reference to it.
+    fence = gesher::LookupNativeFence(release_fence_fd);
+    close(release_fence_fd);
+  }
+
+  std::unique_ptr<ImageFrame> frame;
   {
     std::lock_guard<std::mutex> lock(image->owner->mutex);
     image->owner->acquired.erase(image);
+    frame = std::move(image->frame);
   }
   delete image;
+  if (fence && frame) {
+    gesher::ReleaseAfterNativeFence(fence, frame.release(), ReleaseImageFrame);
+  }
 }
+
+void BIONIC_SYSV DeleteImage(AImage* image) { DeleteImageAsync(image, -1); }
 
 template <class T, T ImageFrame::*Field>
 media_status_t BIONIC_SYSV GetImageField(const AImage* image, T* out) {
@@ -392,6 +411,7 @@ bool Register() {
   ENTRY(AImageReader_acquireLatestImageAsync, AcquireLatestAsync);
   ENTRY(AImageReader_setImageListener, SetImageListener);
   ENTRY(AImage_delete, DeleteImage);
+  ENTRY(AImage_deleteAsync, DeleteImageAsync);
   ENTRY(AImage_getWidth, GetImageField<int32_t, &ImageFrame::width>);
   ENTRY(AImage_getHeight, GetImageField<int32_t, &ImageFrame::height>);
   ENTRY(AImage_getFormat, GetImageValue<kFormat>);

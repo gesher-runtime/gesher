@@ -24,6 +24,7 @@
 #include <cwchar>
 #include <mutex>
 #include <new>
+#include <utility>
 
 namespace gesher {
 using Microsoft::WRL::ComPtr;
@@ -90,10 +91,13 @@ void Mark(int fd, bool present) {
 // A wait registration owns a completion until it is signaled. Closing the EGL
 // sync or its last fd must not close an event still registered with DXGI/D3D.
 // One thread-pool wait per pending fence; no polling thread and no GL context.
+using DeferredResource = std::unique_ptr<void, void (*)(void*)>;
+
 struct CompletionWatch {
   std::mutex mutex;
   HANDLE wait = nullptr;
   std::shared_ptr<NativeFence> fence;
+  DeferredResource resource{nullptr, nullptr};
 };
 
 void CALLBACK Completed(void* argument, BOOLEAN) {
@@ -113,11 +117,13 @@ void CALLBACK Completed(void* argument, BOOLEAN) {
   delete watch;
 }
 
-void RetainUntilComplete(const std::shared_ptr<NativeFence>& fence) {
+void RetainUntilComplete(const std::shared_ptr<NativeFence>& fence,
+                         DeferredResource resource = {nullptr, nullptr}) {
   if (WaitForSingleObject(fence->event, 0) == WAIT_OBJECT_0) { NoteSignaled(*fence); return; }
   auto* watch = new (std::nothrow) CompletionWatch;
   if (!watch) { WaitForSingleObject(fence->event, INFINITE); NoteSignaled(*fence); return; }
   watch->fence = fence;
+  watch->resource = std::move(resource);
   bool registered;
   {
     std::lock_guard<std::mutex> lock(watch->mutex);
@@ -233,6 +239,12 @@ FenceStatus WaitNativeFence(const std::shared_ptr<NativeFence>& fence, uint64_t 
     status = NativeFenceStatus(fence);
     if (status != FenceStatus::kPending) return status;
   }
+}
+
+void ReleaseAfterNativeFence(const std::shared_ptr<NativeFence>& fence, void* resource,
+                             void (*release)(void*)) {
+  DeferredResource owned(resource, release);
+  if (fence) RetainUntilComplete(fence, std::move(owned));
 }
 
 HRESULT ServerWaitNativeFence(const std::shared_ptr<NativeFence>& fence, ID3D11Device* device) {

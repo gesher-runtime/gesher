@@ -34,8 +34,11 @@ RGBA_8888 via the native window's CPU lock/post path. Producer pixels are
 copied synchronously into the existing CPU-accessible native hardware buffer
 before the reader publishes them. An acquired image keeps its own buffer
 reference. Async acquisition returns the completed CPU pixels with no fence.
-Further formats, other consumer usages, GPU buffer dequeue, release fences, and
-camera/codec integration are outside this fixture.
+Async deletion takes ownership of a release fence descriptor and keeps the
+image storage until the native event completes. The standalone Android fixture
+passes an EGL native fence when the device supports that extension. Further
+formats, other consumer usages, GPU buffer dequeue, and camera/codec
+integration are outside this fixture.
 
 The contract follows the Android 16 public
 [ImageReader and Image API](https://developer.android.com/ndk/reference/group/media).
