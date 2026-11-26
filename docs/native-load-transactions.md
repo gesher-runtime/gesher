@@ -73,6 +73,20 @@ The pinned Bionic `__tls_get_addr` similarly keeps a validated cached path
 outside its registry lock; its broader DTV generation/unload machinery is not
 claimed here.
 
+### Resident library lookup
+
+Android ELF `RTLD_NOLOAD` opens use the same loaded SONAME and file-identity
+checks as ordinary opens. A miss never maps the requested file or runs its
+constructors. An explicit path or hard link identifies the already-linked file
+even when two images share a SONAME. Both guest `dlopen` and
+`android_dlopen_ext` reject unknown flag bits before lookup. The Windows
+POSIX adapter also passes `RTLD_NOLOAD` to its ELF provider.
+See Bionic's
+[`load_library`](https://android.googlesource.com/platform/bionic/+/f22516cbc67e81c13cf943ce02f01b8929a98726/linker/linker.cpp#1191)
+and
+[`do_dlopen`](https://android.googlesource.com/platform/bionic/+/f22516cbc67e81c13cf943ce02f01b8929a98726/linker/linker.cpp#2149).
+Reference counting for guest closes remains tracked in N06.
+
 ### IFUNC reentry into a pending object
 
 A request for an object still pending in an outer transaction returns an

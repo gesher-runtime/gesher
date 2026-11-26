@@ -2276,7 +2276,7 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
   std::string name = base ? base + 1 : path;
   FileImage image;
   if (!OpenImage(path, &image, error)) return nullptr;
-  if (image.id) {
+  if (image.id && !(options.no_load && options.reject_loaded_file)) {
     if (Library* existing = FindFile(Loaded(), *image.id)) {
       if (options.reject_loaded_file) {
         Fail(error, "ANDROID_DLEXT_FORCE_LOAD of an already loaded file is not supported");
@@ -2285,6 +2285,10 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
       RunInit(existing);
       return existing;
     }
+  }
+  if (options.no_load) {
+    Fail(error, std::string("library \"") + path + "\" wasn't loaded and RTLD_NOLOAD prevented it");
+    return nullptr;
   }
   if (!MapImage(path, &image, error)) return nullptr;
   if (IsGesherLinkerImage(image.data, image.size)) {

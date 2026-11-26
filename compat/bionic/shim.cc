@@ -26,6 +26,7 @@
 // bcrypt.h needs windows.h first.
 #include <bcrypt.h>
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <malloc.h>
@@ -1133,9 +1134,9 @@ void* DlOpenUnsupported(uint64_t flags) {
   return DlOpenFail(message);
 }
 
-void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext);
-void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
-  void* handle = DlOpenImpl(filename, nullptr);
+void* DlOpenImpl(const char* filename, int flags, const AndroidDlextinfo* ext);
+void* BIONIC_SYSV DlOpen(const char* filename, int flags) {
+  void* handle = DlOpenImpl(filename, flags, nullptr);
   if (TraceDl()) {
     std::fprintf(stderr, "gesher dl: dlopen(\"%s\") = %s%s%s\n", filename ? filename : "(null)",
                  handle ? "ok" : "null", handle ? "" : ": ", handle ? "" : t_dlerror.c_str());
@@ -1146,9 +1147,9 @@ void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
 // RESERVED_ADDRESS and RESERVED_ADDRESS_HINT load the library into the
 // caller's reservation (LoadOptions::reserved_addr); the other valid flags
 // are not implemented and fail the call (kDlextUnsupportedFlags).
-void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int /*flags*/,
+void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int flags,
                                    const AndroidDlextinfo* ext) {
-  void* handle = DlOpenImpl(filename, ext);
+  void* handle = DlOpenImpl(filename, flags, ext);
   if (TraceDl()) {
     std::fprintf(stderr,
                  "gesher dl: android_dlopen_ext(\"%s\", flags=0x%llx, reserved_addr=%p, "
@@ -1160,8 +1161,15 @@ void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int /*flags*/,
   }
   return handle;
 }
-void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
-  // bionic's do_dlopen checks the extended flags first (linker.cpp).
+void* DlOpenImpl(const char* filename, int flags, const AndroidDlextinfo* ext) {
+  constexpr int kValidFlags = RTLD_NOW | RTLD_LAZY | RTLD_LOCAL | RTLD_GLOBAL |
+                              RTLD_NODELETE | RTLD_NOLOAD;
+  if ((flags & ~kValidFlags) != 0) {
+    char message[64];
+    std::snprintf(message, sizeof(message), "invalid flags to dlopen: %x",
+                  static_cast<unsigned>(flags));
+    return DlOpenFail(message);
+  }
   if (ext != nullptr) {
     char message[160];
     if ((ext->flags & ~kDlextValidFlags) != 0) {
@@ -1218,6 +1226,7 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
   }
   gesher::elf::LoadOptions options;
   options.reject_loaded_file = force_load;
+  options.no_load = (flags & RTLD_NOLOAD) != 0;
   if (ext != nullptr && (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint)) != 0) {
     options.use_reserved = true;
     options.reserved_addr = ext->reserved_addr;
@@ -1233,7 +1242,7 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
   if (lib == nullptr) {
     t_dlerror = "dlopen failed: " + error;
     t_has_dlerror = true;
-  } else if (!dir.empty()) {
+  } else if (!options.no_load && !dir.empty()) {
     NoteLibraryDirectory(dir);
   }
   return lib;

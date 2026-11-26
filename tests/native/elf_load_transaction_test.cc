@@ -366,7 +366,16 @@ void FileIdentity(const std::string& root) {
                             std::to_string(getpid()) + ".so";
   const std::string missing = root + "/incomplete/tx_identity.so";
   std::string error;
+  elf::LoadOptions no_load;
+  no_load.no_load = true;
+  Check(elf::Load(first.c_str(), &error, no_load) == nullptr &&
+            error.find("RTLD_NOLOAD") != std::string::npos,
+        "an existing file cannot be mapped under RTLD_NOLOAD");
+  Check(initialized[29] == 0 && Count() == initial_count,
+        "a failed RTLD_NOLOAD adds no constructor calls or program-header entries");
   auto* a = elf::Load(first.c_str(), &error);
+  Check(elf::Load(second.c_str(), &error, no_load) == nullptr && initialized[30] == 0,
+        "an unrelated file with the same SONAME cannot satisfy RTLD_NOLOAD");
   auto* b = elf::Load(second.c_str(), &error);
   Check(a != nullptr && b != nullptr && a != b, "same basename and SONAME can load from distinct files");
   Check(Call(a, "tx_identity") == 29 && Call(b, "tx_identity") == 30,
@@ -375,10 +384,18 @@ void FileIdentity(const std::string& root) {
   Check(elf::OpenLoaded("tx_identity.so") == a, "bare SONAME retains first loaded match");
   Check(elf::Load(missing.c_str(), &error) == nullptr, "missing explicit path never resolves by basename");
   Check(elf::Load(first.c_str(), &error) == a, "repeated path reuses its loaded object");
+  Check(elf::Load(first.c_str(), &error, no_load) == a, "RTLD_NOLOAD returns the loaded file");
+  no_load.reject_loaded_file = true;
+  Check(elf::Load(first.c_str(), &error, no_load) == nullptr &&
+            error.find("RTLD_NOLOAD") != std::string::npos,
+        "FORCE_LOAD with RTLD_NOLOAD skips the loaded file without mapping a copy");
+  no_load.reject_loaded_file = false;
   const bool linked = link(first.c_str(), alias.c_str()) == 0;
   Check(linked, "hard-link alias fixture is a link to the first file");
   if (linked) {
     Check(elf::Load(alias.c_str(), &error) == a, "hard-link alias reuses its original file identity");
+    Check(elf::Load(alias.c_str(), &error, no_load) == a,
+          "RTLD_NOLOAD recognizes an alias of the loaded file");
     Check(unlink(alias.c_str()) == 0, "remove hard-link alias fixture");
   }
   Check(initialized[29] == 1 && initialized[30] == 1 && Count() == initial_count + 2,

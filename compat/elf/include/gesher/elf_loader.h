@@ -78,6 +78,8 @@ struct LoadOptions {
   // FORCE_LOAD can map a new file, but requesting another copy of the same
   // already loaded file is unsupported.
   bool reject_loaded_file = false;
+  // For Load(): accept an already-linked instance of the opened file only.
+  bool no_load = false;
 };
 
 // Loads the ELF object at `path`. On success returns a handle and runs its
