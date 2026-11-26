@@ -49,7 +49,8 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix='gesher-windows-events-') as temporary:
         work = Path(temporary); classes = work / 'classes'; classes.mkdir()
         source = work / 'WindowsHost.java'; source.write_bytes(java)
-        sources = [source, ROOT / 'tests/windows-host-events/WindowsHostEventsHost.java']
+        sources = [source, ROOT / 'app/java/com/gesher/server/DeviceConstraints.java',
+                   ROOT / 'tests/windows-host-events/WindowsHostEventsHost.java']
         for name, body in {
                 'Process': 'public static final int SYSTEM_UID = 1000;',
                 'SystemClock': 'public static long uptimeMillis() { return System.nanoTime()/1000000; }'}.items():

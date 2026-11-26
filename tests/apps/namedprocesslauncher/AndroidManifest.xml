@@ -4,5 +4,6 @@
     <activity android:name=".ExitZeroActivity" android:process=":worker" android:exported="true" />
     <activity android:name=".Exit17Activity" android:process=":worker" android:exported="true" />
     <activity android:name=".ExitMinActivity" android:process=":worker" android:exported="true" />
+    <activity android:name=".ExitBeforeIdleActivity" android:process=":worker" android:exported="true" />
   </application>
 </manifest>

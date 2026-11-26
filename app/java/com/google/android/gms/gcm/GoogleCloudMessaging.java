@@ -11,10 +11,11 @@ import android.os.Bundle;
 
 import java.io.IOException;
 import java.util.Collections;
-import java.util.UUID;
 
 /**
- * Legacy Google Cloud Messaging (GCM) client.
+ * Legacy Google Cloud Messaging client for the gmsapp test fixture. It has no
+ * registration transport: registration fails with ERROR_SERVICE_NOT_AVAILABLE, as the
+ * client library reports it without a push provider (issue #335).
  */
 public class GoogleCloudMessaging {
     public static final String MESSAGE_TYPE_MESSAGE = "gcm";
@@ -40,11 +41,11 @@ public class GoogleCloudMessaging {
     }
 
     public synchronized String register(String... senderIds) throws IOException {
-        String sender = (senderIds != null && senderIds.length > 0) ? senderIds[0] : "default";
-        return "gcm_reg_token_gesher_" + sender + "_" + UUID.randomUUID().toString().substring(0, 8);
+        throw new IOException(ERROR_SERVICE_NOT_AVAILABLE);
     }
 
     public synchronized void unregister() throws IOException {
+        throw new IOException(ERROR_SERVICE_NOT_AVAILABLE);
     }
 
     public void send(String to, String msgId, Bundle data) throws IOException {
@@ -52,6 +53,7 @@ public class GoogleCloudMessaging {
     }
 
     public void send(String to, String msgId, long timeToLive, Bundle data) throws IOException {
+        throw new IOException(ERROR_SERVICE_NOT_AVAILABLE);
     }
 
     public void close() {

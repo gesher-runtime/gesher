@@ -13,6 +13,7 @@
 #include <syslog.h>
 #include <termios.h>
 #include <unistd.h>
+#include <gesher/ptrace_state.h>
 #include <gesher/stdio.h>
 
 #include <limits>
@@ -138,9 +139,20 @@ int prctl(int option, ...) {
       break;
     }
     case PR_GET_DUMPABLE:
-      result = 1;
+      result = gesher::ptrace::GetDumpable();
       break;
     case PR_SET_DUMPABLE:
+    case PR_SET_PTRACER: {
+      // Both take an unsigned long, which callers here pass as 32 bits;
+      // PR_SET_PTRACER_ANY is then all ones and sign-extends to the kernel's.
+      const int value = va_arg(args, int);
+      const uint64_t wide = static_cast<uint64_t>(static_cast<int64_t>(value));
+      const int error = option == PR_SET_DUMPABLE
+                            ? gesher::ptrace::SetDumpable(static_cast<uint32_t>(value))
+                            : gesher::ptrace::SetPtracer(wide);
+      result = error == 0 ? 0 : (errno = -error, -1);
+      break;
+    }
     case PR_SET_NO_NEW_PRIVS:
       result = 0;
       break;
@@ -233,35 +245,8 @@ char* hasmntopt(const struct mntent* mnt, const char* opt) {
 
 // Reads up to and including `delim` into *lineptr, growing it with realloc.
 ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
-  if (lineptr == nullptr || n == nullptr || stream == nullptr) return errno = EINVAL, -1;
-  gesher::stdio::StreamGuard lock(stream);
-  if (!lock) return -1;
-  if (*lineptr == nullptr || *n == 0) {
-    char* initial = static_cast<char*>(realloc(*lineptr, 128));
-    if (initial == nullptr) { gesher::stdio::SetError(stream, ENOMEM); return -1; }
-    *lineptr = initial;
-    *n = 128;
-  }
-  size_t length = 0;
-  for (;;) {
-    int c = gesher::stdio::Get(stream, true);
-    if (c == EOF) break;
-    if (length + 2 > *n) {  // room for c and the terminator
-      if (*n > static_cast<size_t>(std::numeric_limits<ssize_t>::max()) / 2) {
-        gesher::stdio::SetError(stream, EOVERFLOW);
-        return -1;
-      }
-      size_t bigger = *n * 2;
-      char* grown = static_cast<char*>(realloc(*lineptr, bigger));
-      if (grown == nullptr) { gesher::stdio::SetError(stream, ENOMEM); return -1; }
-      *lineptr = grown;
-      *n = bigger;
-    }
-    (*lineptr)[length++] = static_cast<char>(c);
-    if (c == delim) break;
-  }
-  (*lineptr)[length] = '\0';
-  return length > 0 ? static_cast<ssize_t>(length) : -1;  // -1 at end of file
+  if (stream == nullptr) return errno = EINVAL, -1;
+  return static_cast<ssize_t>(gesher::stdio::ReadDelimited(lineptr, n, delim, stream));
 }
 
 ssize_t getline(char** lineptr, size_t* n, FILE* stream) {

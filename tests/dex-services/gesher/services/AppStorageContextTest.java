@@ -3,6 +3,7 @@ package gesher.services;
 
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
@@ -165,6 +166,82 @@ public final class AppStorageContextTest {
                 "new LoadedApk/Context lost independently persisted areas");
     }
 
+    /** An absent APK cannot acquire a context or create private storage through a query. */
+    private static void absentPackages(Context client, File data) throws Exception {
+        for (String name : List.of("com.google.android.gms", "com.android.vending")) {
+            File rootLegacy = new File("/data/data/" + name);
+            boolean legacyExisted = rootLegacy.exists();
+            try {
+                client.getPackageManager().getApplicationInfo(name, 0);
+                throw new AssertionError("absent package has application metadata: " + name);
+            } catch (PackageManager.NameNotFoundException expected) {
+                checks++;
+            }
+            try {
+                client.createPackageContext(name, 0);
+                throw new AssertionError("absent package has a context: " + name);
+            } catch (PackageManager.NameNotFoundException expected) {
+                checks++;
+            }
+            check(!new File(new File(data, "data"), name).exists()
+                            && !new File(new File(data, "user_de/0"), name).exists()
+                            && (legacyExisted || !rootLegacy.exists()),
+                    "querying an absent package created private storage: " + name);
+        }
+    }
+
+    /**
+     * Opening another package's real ContextImpl cannot create its missing private
+     * storage. This fixture has a valid resource APK but no prepared data directories;
+     * it does not depend on fabricated Play services metadata. No path may escape
+     * $ANDROID_DATA ("/data/data/..." is the root of the current Windows drive).
+     */
+    private static void foreignPackageStorage(Context client, ApkPackage foreign, File data)
+            throws Exception {
+        String name = foreign.packageName;
+        File rootLegacy = new File("/data/data/" + name);
+        boolean legacyExisted = rootLegacy.exists();
+        ApplicationInfo info = client.getPackageManager().getApplicationInfo(name, 0);
+        File credential = new File(new File(data, "data"), name);
+        // record() uses the explicit data-dir override, whose DE area is a sibling.
+        File device = new File(new File(data, "data"), name + ".device-protected");
+        check(new File(info.dataDir).getCanonicalFile().equals(credential.getCanonicalFile())
+                        && info.dataDir.equals(info.credentialProtectedDataDir)
+                        && new File(info.deviceProtectedDataDir).getCanonicalFile()
+                                .equals(device.getCanonicalFile())
+                        && info.nativeLibraryDir != null
+                        && info.nativeLibraryDir.startsWith(info.dataDir),
+                "foreign package data areas are not under $ANDROID_DATA: "
+                        + info.dataDir + ", " + info.deviceProtectedDataDir + ", " + info.nativeLibraryDir);
+        check(!credential.exists() && !device.exists(),
+                "querying the foreign package created its data areas");
+
+        Context other = client.createPackageContext(name, 0);
+        check(other.getDataDir().getCanonicalFile().equals(credential.getCanonicalFile()),
+                "another package's context does not use its described data area");
+        android.content.SharedPreferences flags = other.getSharedPreferences("foreign-storage", 0);
+        check(flags.getAll().isEmpty() && flags.getInt("value", -1) == -1,
+                "another package's absent preferences are not empty");
+        check(!flags.edit().putInt("value", 7).commit(),
+                "a client committed preferences into another package's private area");
+        check(!credential.exists() && !device.exists(),
+                "a client created another package's private data area");
+        check(legacyExisted || !rootLegacy.exists(),
+                "a client created " + rootLegacy + " at the root of the drive");
+
+        ApplicationInfo browser = client.getPackageManager().getApplicationInfo("com.gesher.browser", 0);
+        check(new File(browser.dataDir).getCanonicalFile().equals(
+                        new File(new File(data, "data"), "com.gesher.browser").getCanonicalFile())
+                        && browser.dataDir.equals(browser.credentialProtectedDataDir)
+                        && new File(browser.deviceProtectedDataDir).getCanonicalFile().equals(
+                                new File(new File(data, "user_de/0"), "com.gesher.browser")
+                                        .getCanonicalFile())
+                        && new File(browser.nativeLibraryDir).equals(new File(browser.dataDir, "lib"))
+                        && !new File(browser.dataDir).exists()
+                        && !new File(browser.deviceProtectedDataDir).exists(),
+                "the browser package's data area is outside $ANDROID_DATA: " + browser.dataDir);
+    }
+
     private static int databaseValue(Context context, String name) {
         try (SQLiteDatabase db = context.openOrCreateDatabase(name, 0, null);
                 Cursor cursor = db.rawQuery("SELECT value FROM values_table", null)) {
@@ -187,12 +264,18 @@ public final class AppStorageContextTest {
         ApkPackage ordinary = record(unsafe, "fixture.storage.credential", data, false, false);
         ApkPackage requested = record(unsafe, "fixture.storage.requested", data, true, false);
         ApkPackage device = record(unsafe, "fixture.storage.device", data, true, true);
+        ApkPackage foreign = record(unsafe, "fixture.storage.foreign", new File(data, "data"), false, false);
+        set(foreign, "mUid", Process.myUid() + 1);
+        ((PackageImpl) ordinary.parsed).addQueriesPackage(foreign.packageName);
         ordinary.prepareDataDirectories(); requested.prepareDataDirectories(); device.prepareDataDirectories();
         legacyMigration(unsafe, data);
-        Services.installInProcess(Services.createInProcess(List.of(ordinary, requested, device)));
+        Services.installInProcess(Services.createInProcess(List.of(ordinary, requested, device, foreign)));
         exercise(MediaRouterContractTest.context(ordinary.packageName), ordinary, false);
         exercise(MediaRouterContractTest.context(requested.packageName), requested, false);
         exercise(MediaRouterContractTest.context(device.packageName), device, true);
+        Context client = MediaRouterContractTest.context(ordinary.packageName);
+        absentPackages(client, data);
+        foreignPackageStorage(client, foreign, data);
         System.out.println("AppStorageContextTest all passed: " + checks + " checks");
         System.exit(0);
     }
