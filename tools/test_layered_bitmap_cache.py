@@ -39,13 +39,30 @@ def main() -> int:
     if source.count(start) != 1 or source.count(end) != 1:
         raise ValueError("layered presentation extraction boundary changed")
     presentation = source[source.index(start):source.index(end)]
+    # The producer post and dimming methods participate in dirty coalescing.
+    # Keep their real state transitions in the fixture, not a mirrored model.
+    window_path = "compat/hwui/window/gesher_window.cc"
+    window = ((ROOT / window_path).read_text() if not args.source_ref else
+              subprocess.run(["git", "show", args.source_ref + ":" + window_path], cwd=ROOT,
+                             capture_output=True, text=True, check=True).stdout)
+    post = window[window.index("void Window::UnlockAndPost("):window.index("int Window::width()")]
+    dim = source[source.index("void Window::SetDim("):source.index("void Window::ScreenBounds(")]
+    post_declaration = post[:post.index("{")].replace("Window::", "").strip() + ";"
+    dim_signature = dim[dim.index("const uint8_t* Window::DimmedPixels("):]
+    dim_declaration = dim_signature[:dim_signature.index("{")].replace("Window::", "").strip()
+    dim_declaration = dim_declaration.replace("const PixelRect* dirty", "const PixelRect* dirty = nullptr") + ";"
     # The baseline does not use the new helper. Keep the helper's direct lifetime
     # tests identical while comparing old/new production presentation functions.
     header = re.sub(r"^\s*#(?:include|pragma).*\n", "",
                     (ROOT / "compat/hwui/window/layered_bitmap.h").read_text(), flags=re.MULTILINE)
+    damage = re.sub(r"^\s*#(?:include|pragma).*\n", "",
+                    (ROOT / "compat/hwui/window/surface_damage.h").read_text(), flags=re.MULTILINE)
+    header = damage + header
     fixture = (ROOT / "tests/media/layered_bitmap_cache_host.cc.in").read_text()
-    fixture = fixture.replace("@CACHE@", header).replace("@PRESENTATION@", "namespace gesher {\n" + presentation + "\n}")
-    print("layered bitmap source SHA256 " + hashlib.sha256((header + presentation).encode()).hexdigest(), flush=True)
+    fixture = fixture.replace("@POST_DECLARATION@", post_declaration).replace("@DIM_DECLARATION@", dim_declaration)
+    fixture = fixture.replace("@POST_ARGUMENT@", "dirty" if "PixelRect" in post_declaration else "")
+    fixture = fixture.replace("@CACHE@", header).replace("@PRESENTATION@", "namespace gesher {\n" + post + dim + presentation + "\n}")
+    print("layered bitmap source SHA256 " + hashlib.sha256((header + post + dim + presentation).encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="gesher-layered-cache-") as temporary:
         work = Path(temporary)
         cpp = work / "layered.cc"

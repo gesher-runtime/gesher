@@ -45,6 +45,21 @@ def generate(source_ref: str | None, control: str | None) -> str:
     if playback.count("std::condition_variable cv_;") != 1:
         raise ValueError("Playback condition-variable boundary changed")
     playback = playback.replace("std::condition_variable cv_;", "PlayerConditionVariable cv_;")
+    # The fixture's clock, and the feeder's waits for room, are observable; the
+    # production bodies are otherwise unchanged. The old-source control has neither
+    # the timeout constant nor the room wait.
+    playback = playback.replace("gesher::MonotonicNanos()", "player_fixture::Now()")
+    safety = re.findall(r"^  static constexpr int kFeedSafetyMs = \d+;\n", playback, flags=re.M)
+    if safety:
+        if len(safety) != 1:
+            raise ValueError("feeder safety timeout boundary changed")
+        production_ms = re.search(r"\d+", safety[0].split("=")[1]).group()
+        playback = playback.replace(safety[0], "")
+        wait = "full->WaitForRoom(room_frames, kFeedSafetyMs)"
+        if playback.count(wait) != 1:
+            raise ValueError("feeder room-wait boundary changed")
+        playback = playback.replace(
+            wait, "player_fixture::ObservedRoomWait(*full, room_frames, player_fixture::FeedSafetyMs(%s))" % production_ms)
     # Explicit compiled mutation controls isolate the additional A/V and EOF
     # guards. The old-source control needs none of the new fields or helpers.
     if control:
@@ -108,6 +123,8 @@ def main() -> int:
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     parser.add_argument("--sanitize", action="store_true")
     parser.add_argument("--control", choices=["eager-video", "resume-without-drain"])
+    parser.add_argument("--measure", action="store_true",
+                        help="print idle wake counts, CPU and latencies of this source instead of testing it")
     args = parser.parse_args()
     cxx = shlex.split(args.cxx)
     with tempfile.TemporaryDirectory(prefix="gesher-player-priming-") as temporary:
@@ -118,9 +135,11 @@ def main() -> int:
         command = cxx + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                          "-pthread", str(source), "-o", str(binary)]
         if args.sanitize:
-            command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+            command += ["-fsanitize=address,undefined,float-cast-overflow", "-fno-sanitize-recover=all",
                         "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, timeout=120)
+        if args.measure:
+            return subprocess.run([str(binary), "--measure"], check=False, timeout=120).returncode
         result = subprocess.run([str(binary), str(work / "startup.pcm")], check=False, timeout=60)
         tone_ok = analyze(work, cxx, args.source_ref)
         return int(result.returncode != 0 or not tone_ok)

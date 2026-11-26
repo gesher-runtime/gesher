@@ -38,6 +38,8 @@
 #include "binder_internal.h"
 #include "event_internal.h"
 #include "internal.h"
+#include "storage_policy.h"
+#include "native_fence_internal.h"
 #include "pipe_io.h"
 #include "revocable_internal.h"
 #include "linux_socket.h"
@@ -212,7 +214,9 @@ int statvfs(const char* path, struct statvfs* buf) {
   std::wstring mapped;
   gesher::PathKind kind = gesher::MapPath(path, &mapped);
   if (kind == gesher::PathKind::kMissing) return errno = ENOENT, -1;
-  if (kind != gesher::PathKind::kFile) {
+  if (kind == gesher::PathKind::kFile) {
+    if (!gesher::CheckExternalStorageAccess(mapped, gesher::AccessKind::kStat)) return -1;
+  } else {
     // Retain the existing backing-volume approximation for virtual paths.
     // This repair does not supply procfs/device filesystem statistics.
     mapped = gesher::Widen(path);
@@ -330,8 +334,9 @@ int sched_setparam(pid_t, const struct sched_param*) { return 0; }
 // --- ioctl, wait --------------------------------------------------------------
 
 // FIONREAD and FIONBIO, the ioctls Android's Java libraries use on files,
-// pipes and sockets; the only device ioctls are /dev/binder's (binder.cc),
-// others fail with ENOTTY.
+// pipes and sockets; the only device ioctls are /dev/binder's (binder.cc) and
+// a native fence's SYNC_IOC_FILE_INFO (native_fence.cc), others fail with
+// ENOTTY.
 int ioctl(int fd, unsigned long request, ...) {
   va_list args;
   va_start(args, request);
@@ -339,6 +344,8 @@ int ioctl(int fd, unsigned long request, ...) {
   va_end(args);
   int binder_result;
   if (gesher::BinderIoctl(fd, request, argp, &binder_result)) return binder_result;
+  int fence_result;
+  if (gesher::SyncFileIoctl(fd, request, argp, &fence_result)) return fence_result;
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
     if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
@@ -837,7 +844,7 @@ ssize_t process_vm_readv(pid_t, const struct iovec*, unsigned long, const struct
 // --- extra stat calls (lstat, fstatat, mkdirat: path.cc) ----------------------
 
 // fchown is in unistd.cc, with chown.
-int mkfifo(const char*, mode_t) { return errno = ENOSYS, -1; }
+// mkfifo is in fifo.cc, with the FIFO descriptors (ADR 0097).
 
 int mknod(const char* path, mode_t mode, dev_t) {
   switch (mode & S_IFMT) {
