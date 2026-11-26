@@ -58,18 +58,23 @@ final class AndroidKeyStoreSecretKeys {
         DIGEST_SHA1, DIGEST_SHA224, DIGEST_SHA256, DIGEST_SHA384, DIGEST_SHA512
     };
 
-    static void register(Provider provider) {
+    static void registerFactories(Provider provider) {
+        service(provider, "SecretKeyFactory", KEY_ALGORITHM_AES, Factory.class);
+        for (String algorithm : HMAC_ALGORITHMS) {
+            service(provider, "SecretKeyFactory", algorithm, Factory.class);
+        }
+    }
+
+    static void registerOperations(Provider provider) {
         service(provider, "Cipher", "AES/ECB/NoPadding", Ecb.class);
         service(provider, "Cipher", "AES/ECB/PKCS7Padding", EcbPkcs7.class);
         service(provider, "Cipher", "AES/CBC/NoPadding", Cbc.class);
         service(provider, "Cipher", "AES/CBC/PKCS7Padding", CbcPkcs7.class);
         service(provider, "Cipher", "AES/CTR/NoPadding", Ctr.class);
         service(provider, "Cipher", "AES/GCM/NoPadding", Gcm.class);
-        service(provider, "SecretKeyFactory", KEY_ALGORITHM_AES, Factory.class);
         Class<?>[] macs = {Hmac1.class, Hmac224.class, Hmac256.class, Hmac384.class, Hmac512.class};
         for (int i = 0; i < HMAC_ALGORITHMS.length; i++) {
             service(provider, "Mac", HMAC_ALGORITHMS[i], macs[i]);
-            service(provider, "SecretKeyFactory", HMAC_ALGORITHMS[i], Factory.class);
         }
     }
 
@@ -328,7 +333,8 @@ final class AndroidKeyStoreSecretKeys {
 
     private static boolean platformCrypto(Provider provider) {
         // Never hand an app-supplied provider the underlying encoding.
-        return !AndroidKeyStore.NAME.equals(provider.getName())
+        return !(provider instanceof AndroidKeyStore)
+                && !(provider instanceof AndroidKeyStore.CryptoOperations)
                 && provider.getClass().getClassLoader() == Cipher.class.getClassLoader();
     }
 

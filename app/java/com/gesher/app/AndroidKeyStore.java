@@ -94,26 +94,52 @@ public final class AndroidKeyStore extends Provider {
         put("KeyGenerator.HmacSHA512", HmacSha512.class.getName());
         put("KeyPairGenerator.RSA", Rsa.class.getName());
         put("KeyPairGenerator.EC", Ec.class.getName());
-        AndroidKeyStoreSecretKeys.register(this);
+        AndroidKeyStoreSecretKeys.registerFactories(this);
+    }
+
+    /** Handles opaque keys ahead of providers which probe their key encoding. */
+    public static final class CryptoOperations extends Provider {
+        public CryptoOperations() {
+            super("AndroidKeyStoreBCWorkaround", 1.0, "Gesher's AndroidKeyStore operations");
+            AndroidKeyStoreSecretKeys.registerOperations(this);
+        }
     }
 
     /**
-     * Appends this provider to the configured providers (security.provider.N), after
-     * Android's, as AndroidKeyStoreProvider.install adds it last. Nothing is loaded until
-     * JCA first looks for a provider. {@code configured} is the list Digests wrote, or
-     * null when it left the configuration as it was.
+     * Match Android's provider order. Conscrypt filters symmetric keys by format.
+     * Bouncy Castle can attempt to read an opaque key before our SPI if it comes
+     * first. Libcore would then report its failure instead of our checked rejection.
+     * Keep the providers configured by class name so boot can still load them lazily.
      */
     static void configure(List<String> configured) {
+        boolean writeProperties = configured == null;
+        if (writeProperties) {
+            configured = new ArrayList<>();
+            for (int i = 1; ; i++) {
+                String provider = Security.getProperty("security.provider." + i);
+                if (provider == null || provider.isBlank()) break;
+                configured.add(provider);
+            }
+        }
+        String operations = CryptoOperations.class.getName();
+        if (!configured.contains(operations)) {
+            int index = configured.size();
+            for (int i = 0; i < configured.size(); i++) {
+                String name = configured.get(i).trim().split("\\s+", 2)[0];
+                if ("com.android.org.bouncycastle.jce.provider.BouncyCastleProvider".equals(name)) {
+                    index = i;
+                    break;
+                }
+            }
+            configured.add(index, operations);
+        }
         String className = AndroidKeyStore.class.getName();
-        if (configured != null) {
-            if (!configured.contains(className)) configured.add(className);
-            return;
+        if (!configured.contains(className)) configured.add(className);
+        if (writeProperties) {
+            for (int i = 0; i < configured.size(); i++) {
+                Security.setProperty("security.provider." + (i + 1), configured.get(i));
+            }
         }
-        int i = 1;
-        for (String name; (name = Security.getProperty("security.provider." + i)) != null; i++) {
-            if (name.trim().split("\\s+")[0].equals(className)) return;
-        }
-        Security.setProperty("security.provider." + i, className);
     }
 
     // --- the keys --------------------------------------------------------
