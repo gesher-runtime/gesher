@@ -1,4 +1,4 @@
-"""Publish one source-bound installer using the protected main workflow."""
+"""Publish source-bound installer and portable assets using the protected main workflow."""
 from dataclasses import dataclass
 import hashlib
 import json
@@ -15,7 +15,7 @@ from urllib.parse import quote
 from github_jobs import get_jobs
 from github_read import GitHubReadError, get_json
 from release_version import (API, DIGEST, MAX_INSTALLER_SIZE, REPOSITORY, REPOSITORY_ID,
-                             installer_name, release_catalog, release_version,
+                             installer_name, portable_name, release_catalog, release_version,
                              stable_version, timestamp, version_string)
 
 
@@ -245,14 +245,23 @@ class Asset:
 
 def read_payload(directory, source):
     name = installer_name(source.version)
-    require({path.name for path in directory.iterdir()} == {name, CHECKSUM_NAME},
-            'The verified archive must contain exactly the versioned installer and checksum')
+    portable = portable_name(source.version)
+    portable_checksum_name = portable + '.sha256'
+    require({path.name for path in directory.iterdir()} ==
+            {name, portable, portable_checksum_name, CHECKSUM_NAME},
+            'The verified archive must contain exactly the versioned installer, portable ZIP and checksums')
     installer = Asset.read(directory / name, MAX_INSTALLER_SIZE)
-    checksum = Asset.read(directory / CHECKSUM_NAME, 512)
-    line = f'{installer.digest.removeprefix("sha256:")}  {name}'.encode('ascii')
-    require(checksum.path.read_bytes() in (line + b'\r\n', line + b'\n'),
-            'SHA256SUMS.txt does not match the tested installer')
-    return installer, checksum
+    archive = Asset.read(directory / portable, MAX_INSTALLER_SIZE)
+    portable_checksum = Asset.read(directory / portable_checksum_name, 512)
+    checksum = Asset.read(directory / CHECKSUM_NAME, 1024)
+    lines = [f'{item.digest.removeprefix("sha256:")}  {item.name}'.encode('ascii')
+             for item in (installer, archive)]
+    require(portable_checksum.path.read_bytes() in (lines[1] + b'\r\n', lines[1] + b'\n'),
+            'Portable checksum does not match the tested ZIP')
+    require(checksum.path.read_bytes() in (b'\r\n'.join(lines) + b'\r\n',
+                                          b'\n'.join(lines) + b'\n'),
+            'SHA256SUMS.txt does not match the tested installer and portable ZIP')
+    return installer, archive, portable_checksum, checksum
 
 
 def download_artifact(artifact_id, digest, destination):
@@ -260,8 +269,8 @@ def download_artifact(artifact_id, digest, destination):
     try:
         subprocess.run([sys.executable, str(verifier), '--id', str(artifact_id), '--digest', digest,
                         '--destination', str(destination)], check=True,
-                       # Download time plus the downloader's 15-minute quota wait budget.
-                       timeout=360 + 15 * 60)
+                       # Download time plus the downloader's 61-minute quota wait budget.
+                       timeout=360 + 61 * 60)
     except (OSError, subprocess.SubprocessError):
         raise ReleaseError('Could not download and verify the exact installer archive') from None
 

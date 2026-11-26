@@ -426,7 +426,9 @@ class ArtifactBatch(unittest.TestCase):
 
 class BatchManifestWiring(unittest.TestCase):
     """Each batch job downloads exactly its committed manifest from producers it waits for."""
-    JOBS = {'test-shards': ('tools/ci/test_shard_artifacts.json', 'ci-suppliers/core'),
+    # core-suppliers publishes its batch as one bundle for every test shard
+    # (see test_supplier_bundle.py); it assembles nothing itself.
+    JOBS = {'core-suppliers': ('tools/ci/test_shard_artifacts.json', 'ci-suppliers/core'),
             'web3-query-regression': ('tools/ci/web3_query_artifacts.json', 'ci-suppliers/web3'),
             'package': ('tools/ci/package_artifacts.json', 'ci-suppliers/package'),
             'binder2-sg-regression': ('tools/ci/binder2_sg_artifacts.json', 'ci-suppliers/binder2')}
@@ -473,7 +475,7 @@ class BatchManifestWiring(unittest.TestCase):
                 for spec in specs:
                     self.assertIn(spec['producer'].split(' / ', 1)[0], set(job['needs']), spec)
                     self.assertTrue(self.producer_exists(spec['producer']), spec)
-                if job_name == 'test-shards':
+                if job_name == 'core-suppliers':
                     continue
                 # Single receipts for batch members would repeat the API reads.
                 for spec in specs:

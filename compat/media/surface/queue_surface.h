@@ -45,6 +45,10 @@ class QueueSurface : public android::Surface {
   void SetDefaultSize(int width, int height);
   // Called on the producer's thread after each frame.
   void SetListener(std::function<void()> listener);
+  // Whether NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER reports 1: the surface's frames
+  // are composited into a window (a SurfaceView's, as on Android) rather than
+  // consumed by the app (an ImageReader's, a SurfaceTexture's: the default, 0).
+  void SetQueuesToWindowComposer(bool queues) { queues_to_composer_ = queues; }
   // The last frame queued, or null.
   std::shared_ptr<const SurfaceFrame> Latest() const;
   uint64_t frames() const;
@@ -103,6 +107,7 @@ class QueueSurface : public android::Surface {
   bool locked_ = false;
   bool buffer_contents_valid_ = false;
   bool abandoned_ = false;
+  bool queues_to_composer_ = false;
   std::shared_ptr<FramePool> frame_pool_;
   std::shared_ptr<const SurfaceFrame> latest_;
   uint64_t frames_ = 0;

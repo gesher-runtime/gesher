@@ -20,7 +20,8 @@ import java.util.Map;
  * screens it has a counterpart for:
  * <ul>
  * <li>A screen about one installed app ({@code package:} data, or the app package extra):
- *     Gesher's Control Center, on that app's details (launch, uninstall).
+ *     Gesher's Control Center, on that app's details (uninstall, and the special access
+ *     switches the app requests: {@link SpecialAccess}).
  * <li>A device screen Windows has: the matching {@code ms-settings:} page.
  * <li>The app list, accounts and sync, Settings' main page: the Control Center.
  * </ul>

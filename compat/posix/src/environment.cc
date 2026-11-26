@@ -10,6 +10,10 @@
 #include <mutex>
 #include <new>
 #include <system_error>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 int RawPutAssignment(const char* assignment);
@@ -331,3 +335,11 @@ int (*__imp__putenv_s)(const char*, const char*) = gesher_crt_putenv_s;
 int (*__imp__wputenv_s)(const wchar_t*, const wchar_t*) = gesher_crt_wputenv_s;
 int (*__imp__putenv)(const char*) = gesher_crt_putenv;
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): setenv/getenv in a forked child.
+GESHER_FORK_LOCK_PTR(gesher::kForkOrderSubsystem, std::recursive_mutex,
+                     gesher::local != nullptr ? &gesher::local->writer : nullptr);
+GESHER_FORK_LOCK_PTR(gesher::kForkOrderSubsystem, std::mutex,
+                     gesher::local != nullptr ? &gesher::local->snapshot : nullptr);
+#endif

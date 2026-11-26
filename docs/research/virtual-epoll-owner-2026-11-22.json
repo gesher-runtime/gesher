@@ -1,0 +1,569 @@
+{
+  "schema": 1,
+  "date": "2026-11-22",
+  "issue": "https://github.com/gesher-runtime/gesher/issues/56",
+  "scope": "N33/T12 virtual epoll description ownership and related close work",
+  "base": "20252fde18db387b4d99d99f7050d6336f58bf6e",
+  "sources": {
+    "compat/posix/src/epoll.cc": "ee08dcaee0c1119140abbacec3154ffbd04abc855f5299b07c15271961f30226",
+    "compat/posix/src/event_internal.h": "b98eab70226f3967a53e35aa64bd0a430efa9b61eda8ae67837452278614a774",
+    "probes/posix/epoll_probe.cc": "776d30568554bc5f687a4757a548fec972f4a49d95e571b23ce1380684d3f805",
+    "tests/native/epoll_virtual_owner_test.inc": "588d6deb6f82dab69b13e61792d5f05fb89839d0c55117f1467023fc2912b13f",
+    "tests/native/epoll_virtual_owners_host.inc": "817db6ec10891e6ac1cdf8721c68a5b62b6fb6d52e764d475dd63765133bbfd1",
+    "tests/native/host_epoll_contract_test.cc.in": "6f478cd02f1a60fca216edf352be64d5c4d95be84b623d10d353b36f06b03f57",
+    "tests/native/host_scratch_contract_test.cc.in": "fc22c713231b543ba49659bda7b563101c2f9c3443954df74faacfb502dc58d5",
+    "tests/native/host_vector_contract_test.cc.in": "9b96ae544063862d0b005a68e7e4affddd8827edf6a5da32f5f86728f7634a69",
+    "tests/windows/run-tests.ps1": "773233cf3ab56c0954ec3bf81a227f254e2d37ff8c4970e8280143ae0c5e6611",
+    "tools/test_epoll_virtual_owners.py": "6934df1f0d8b7539bc6accf3f4699c4b21d2f7bc2fc87ecfde4c8f154c4afe52",
+    "tools/test_host_event_loop_contracts.py": "2ed346955643cb8b63732baff65a1f3257c6669cab84f19133500cbed8185b49"
+  },
+  "android_kernel_contract_references": [
+    {
+      "path": "fs/eventpoll.c",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/fs/eventpoll.c",
+      "sha256": "bef423c5c795a317e9492581212f161aa75d2080071fd4e9e05439819fb70dc8"
+    },
+    {
+      "path": "fs/file_table.c",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/fs/file_table.c?format=TEXT",
+      "sha256": "797d7c508621a3e8f7ccefe36836eddf0093b661ec3e88701a097578c63580b7",
+      "bytes": 14093
+    },
+    {
+      "path": "fs/read_write.c",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/fs/read_write.c?format=TEXT",
+      "sha256": "5ca4291e5dcea76325f269247ad8ef0994245315b9016f045db50bc4393b8b73",
+      "bytes": 45139
+    }
+  ],
+  "environment": {
+    "system": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "compiler": "c++ (Debian 14.2.0-19) 14.2.0",
+    "host_compiler_flags": [
+      "-std=c++20",
+      "-O1",
+      "-g",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-Wno-unused-function",
+      "-pthread"
+    ],
+    "sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "local_sanitizer_env": "ASAN_OPTIONS=detect_leaks=0; executor ptrace prevents LSan, not disabled in ordinary CI"
+  },
+  "commands": [
+    {
+      "argv": [
+        "python3",
+        "tools/test_host_event_loop_contracts.py",
+        "--sanitize"
+      ],
+      "exit": 0,
+      "captured_stdout": "epoll.cc ee08dcaee0c1119140abbacec3154ffbd04abc855f5299b07c15271961f30226\nsystem.cc 6e7ed41adf58c9c5ce3bf5c841f6965825d0368262a7d5e9284d36b28185d09f\nfd.cc e6cb83d3c295dd92f5f279fb6707b5721aafda8b8c2bb5d953f29b83e14adcda\nselect.cc fc4c3c4be5bad8afe8ecca37a964f335aea305d907375a00a5faa4fd23d7c2ac\npoll_scratch.h 669038c41eb20231d58c371f1ad38ff2e340525a938c476635481d68e7e0d393\nproduction epoll fairness: 15 checks, 0 failures\nPASS epoll\nproduction vector routing: 85 checks, 0 failures\nPASS vector\nproduction host select: 28 checks, 0 failures\nPASS select\nMEASURE 64 mixed poll descriptors: calls=10000 allocations=0 bytes=0 elapsed_us=176770\nMEASURE one eventfd poll: calls=10000 allocations=0 bytes=0 elapsed_us=5744\nMEASURE 64-entry epoll wait: calls=10000 allocations=0 bytes=0 elapsed_us=171756\nMEASURE 64-entry epoll poll (private nested storage): calls=10000 allocations=140000 bytes=30480000 elapsed_us=236068\nouter poll scratch: 88 checks, 0 failures\nPASS scratch\nproduction epoll.cc sha256=ee08dcaee0c1119140abbacec3154ffbd04abc855f5299b07c15271961f30226\neventfd edge contracts: complete\neventfd edge Linux reference: 116 checks, 0 failures\neventfd edge contracts: complete\neventfd edge wait contracts: complete\neventfd edge production host: 153 checks, 0 failures\nproduction epoll.cc sha256=ee08dcaee0c1119140abbacec3154ffbd04abc855f5299b07c15271961f30226\nnegative control pin-virtual-wait body sha256=b51cf92f9241948769f52f6104b56e457c6910cc868855f0a7e20e3af39c1a57\nvirtual epoll owner contracts: complete\nreadonly epoll owner contracts: complete\nvirtual epoll owner Linux reference: 122 checks, 0 failures\neventfd edge contracts: complete\neventfd edge wait contracts: complete\neventfd edge production host: 153 checks, 0 failures\nvirtual epoll owner contracts: complete\nowner close work: epolls=256 closes=4096 allocations=0 bytes=0 elapsed_ns=7577573\nowner creation work: files=64 allocations=384 bytes=26368 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=320 bytes=22528\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=791298319 (includes native-event adapters)\nvirtual epoll owner production host: 535 checks, 0 failures\nEXPECTED_NEGATIVE FAIL owner snapshot/wait never pins final file\nEXPECTED_NEGATIVE virtual owner wait lifetime control: 26 checks, 1 failures\nPASS retained-poll negative control\n"
+    },
+    {
+      "argv": [
+        "python3",
+        "tools/test_epoll_virtual_owners.py",
+        "--sanitize",
+        "--source-ref",
+        "20252fde18db387b4d99d99f7050d6336f58bf6e"
+      ],
+      "exit": 1,
+      "expected_negative_control": true,
+      "captured_stdout": "production epoll.cc sha256=95cad52383150175108c9abba6ef9a2478b0c2410ee724f1aef2ed651fdfa548\nvirtual epoll owner contracts: complete\nreadonly epoll owner contracts: complete\nvirtual epoll owner Linux reference: 122 checks, 0 failures\neventfd edge contracts: complete\neventfd edge wait contracts: complete\neventfd edge production host: 153 checks, 0 failures\nFAIL owner both independent registrations survive\nFAIL owner level and one-shot/edge modes preserved\nFAIL owner old source publication remains isolated\nFAIL owner restored identity can rearm original key\nFAIL owner restored registration receives\nFAIL owner both independent registrations survive\nFAIL owner old source publication remains isolated\nFAIL owner restored identity can rearm original key\nFAIL owner restored registration receives\nFAIL owner both independent registrations survive\nFAIL owner restored identity can rearm original key\nFAIL owner restored registration receives\nFAIL owner both independent registrations survive\nFAIL owner restored identity can rearm original key\nFAIL owner restored registration receives\nFAIL owner nested readiness follows owner\nFAIL owner nested poll does not consume child\nFAIL owner nesting cycle survives alias close\nFAIL owner two nested files coexist\nFAIL owner nested replaced file retires independently\nFAIL owner restored nested identity can delete\nvirtual epoll owner contracts: complete\nFAIL owner snapshot/wait never pins final file\nFAIL owner real read preserves registration\nFAIL owner nested source publishes without numeric target\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner captured description survives numeric reuse\nFAIL owner readonly source published after original close\nFAIL owner readonly numeric replacement isolated\nFAIL owner readonly last alias does not revoke real operation\nFAIL owner readonly source published after original close\nFAIL owner readonly numeric replacement isolated\nFAIL owner readonly last alias does not revoke real operation\nowner close work: epolls=256 closes=4096 allocations=36864 bytes=33488896 elapsed_ns=148847133\nFAIL owner unrelated virtual close does not allocate global census\nowner creation work: files=64 allocations=256 bytes=17152 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=64 bytes=9728\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=853725855 (includes native-event adapters)\nvirtual epoll owner production host: 535 checks, 63 failures\nFAIL production-host: exit=1\n\n"
+    },
+    {
+      "argv": [
+        "python3",
+        "tools/net-tcp-priority/test-selected-policy.py",
+        "--selftest"
+      ],
+      "exit": 0,
+      "captured_stdout": "TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0\nTCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases=20\n"
+    }
+  ],
+  "retained_poll_negative_control": {
+    "mutation": "SampleVirtualEntries: item.fd = -1 -> item.fd = key.fd",
+    "production_mutated": false,
+    "checks": 26,
+    "expected_failures": 1,
+    "expected_only_failure": "owner snapshot/wait never pins final file",
+    "executed_by_maintained_gate": true,
+    "boundary": "PollFds retains actual LookupEventFd results for full call; close-to-return barrier prevents race with release"
+  },
+  "windows_target_compile": {
+    "archive": "llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz",
+    "archive_sha256": "5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4",
+    "compiler": "Clang 23.1.3; unmodified publisher",
+    "flags": [
+      "-std=c++20",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-mno-ms-bitfields",
+      "-fno-exceptions",
+      "-fsized-deallocation",
+      "-DWIN32_LEAN_AND_MEAN",
+      "-DNOMINMAX",
+      "-DNOGDI",
+      "-D_USE_MATH_DEFINES",
+      "-D_WIN32_WINNT=0x0A00",
+      "-DWINVER=0x0A00",
+      "-D_FILE_OFFSET_BITS=64",
+      "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+      "-Icompat/posix/include"
+    ],
+    "exit": 0,
+    "captured_stdout": "x86_64 compat/posix/src/epoll.cc PASS ee08dcaee0c1119140abbacec3154ffbd04abc855f5299b07c15271961f30226\nx86_64 probes/posix/epoll_probe.cc PASS 776d30568554bc5f687a4757a548fec972f4a49d95e571b23ce1380684d3f805\naarch64 compat/posix/src/epoll.cc PASS ee08dcaee0c1119140abbacec3154ffbd04abc855f5299b07c15271961f30226\naarch64 probes/posix/epoll_probe.cc PASS 776d30568554bc5f687a4757a548fec972f4a49d95e571b23ce1380684d3f805\n",
+    "executed_windows_binary": false,
+    "selected_supplier_authority": false
+  },
+  "windows_runner_parse": {
+    "pwsh": "7.4.22",
+    "path": "tests/windows/run-tests.ps1",
+    "exit": 0
+  },
+  "work_measurements": {
+    "sanitized": false,
+    "repetitions": 5,
+    "order": "alternating baseline/candidate",
+    "boundary": "complete production epoll source, same declared retained-source PollFds/CRT/Win32 adapter",
+    "medians_ns": {
+      "owner close work": {
+        "baseline": 17460244,
+        "candidate": 1089332
+      },
+      "owner ready wait work": {
+        "baseline": 614641037,
+        "candidate": 628778943
+      }
+    },
+    "close_speedup": 16.02839538359288,
+    "ready_wait_ratio": 1.0230018907767786,
+    "raw_runs": [
+      {
+        "iteration": 0,
+        "role": "baseline",
+        "exit": 1,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 259,
+            "bytes": 18872
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 64,
+            "bytes": 9728
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 631759683
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 36864,
+            "bytes": 33488896,
+            "elapsed_ns": 17460244
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=259 bytes=18872 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=64 bytes=9728\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=631759683 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=36864 bytes=33488896 elapsed_ns=17460244\nFAIL owner unrelated virtual close does not allocate global census\n"
+      },
+      {
+        "iteration": 0,
+        "role": "candidate",
+        "exit": 0,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 387,
+            "bytes": 28088
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 320,
+            "bytes": 22528
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 617105980
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "elapsed_ns": 1031925
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=387 bytes=28088 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=320 bytes=22528\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=617105980 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=0 bytes=0 elapsed_ns=1031925\n"
+      },
+      {
+        "iteration": 1,
+        "role": "candidate",
+        "exit": 0,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 387,
+            "bytes": 28088
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 320,
+            "bytes": 22528
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 632708167
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "elapsed_ns": 1169293
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=387 bytes=28088 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=320 bytes=22528\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=632708167 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=0 bytes=0 elapsed_ns=1169293\n"
+      },
+      {
+        "iteration": 1,
+        "role": "baseline",
+        "exit": 1,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 259,
+            "bytes": 18872
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 64,
+            "bytes": 9728
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 662428705
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 36864,
+            "bytes": 33488896,
+            "elapsed_ns": 16762432
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=259 bytes=18872 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=64 bytes=9728\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=662428705 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=36864 bytes=33488896 elapsed_ns=16762432\nFAIL owner unrelated virtual close does not allocate global census\n"
+      },
+      {
+        "iteration": 2,
+        "role": "baseline",
+        "exit": 1,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 259,
+            "bytes": 18872
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 64,
+            "bytes": 9728
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 614641037
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 36864,
+            "bytes": 33488896,
+            "elapsed_ns": 18001580
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=259 bytes=18872 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=64 bytes=9728\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=614641037 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=36864 bytes=33488896 elapsed_ns=18001580\nFAIL owner unrelated virtual close does not allocate global census\n"
+      },
+      {
+        "iteration": 2,
+        "role": "candidate",
+        "exit": 0,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 387,
+            "bytes": 28088
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 320,
+            "bytes": 22528
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 628778943
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "elapsed_ns": 1089332
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=387 bytes=28088 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=320 bytes=22528\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=628778943 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=0 bytes=0 elapsed_ns=1089332\n"
+      },
+      {
+        "iteration": 3,
+        "role": "candidate",
+        "exit": 0,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 387,
+            "bytes": 28088
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 320,
+            "bytes": 22528
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 624761526
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "elapsed_ns": 1214922
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=387 bytes=28088 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=320 bytes=22528\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=624761526 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=0 bytes=0 elapsed_ns=1214922\n"
+      },
+      {
+        "iteration": 3,
+        "role": "baseline",
+        "exit": 1,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 259,
+            "bytes": 18872
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 64,
+            "bytes": 9728
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 608599173
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 36864,
+            "bytes": 33488896,
+            "elapsed_ns": 17476187
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=259 bytes=18872 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=64 bytes=9728\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=608599173 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=36864 bytes=33488896 elapsed_ns=17476187\nFAIL owner unrelated virtual close does not allocate global census\n"
+      },
+      {
+        "iteration": 4,
+        "role": "baseline",
+        "exit": 1,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 259,
+            "bytes": 18872
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 64,
+            "bytes": 9728
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 609291879
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 36864,
+            "bytes": 33488896,
+            "elapsed_ns": 16687689
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=259 bytes=18872 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=64 bytes=9728\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=609291879 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=36864 bytes=33488896 elapsed_ns=16687689\nFAIL owner unrelated virtual close does not allocate global census\n"
+      },
+      {
+        "iteration": 4,
+        "role": "candidate",
+        "exit": 0,
+        "measurements": {
+          "owner creation work": {
+            "files": 64,
+            "allocations": 387,
+            "bytes": 28088
+          },
+          "owner registration work": {
+            "registrations": 64,
+            "allocations": 320,
+            "bytes": 22528
+          },
+          "owner ready wait work": {
+            "registrations": 64,
+            "waits": 10000,
+            "allocations": 10000,
+            "bytes": 20000,
+            "elapsed_ns": 636673421
+          },
+          "owner close work": {
+            "epolls": 256,
+            "closes": 4096,
+            "allocations": 0,
+            "bytes": 0,
+            "elapsed_ns": 983934
+          }
+        },
+        "stdout": "owner creation work: files=64 allocations=387 bytes=28088 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=320 bytes=22528\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=636673421 (includes native-event adapters)\nowner close work: epolls=256 closes=4096 allocations=0 bytes=0 elapsed_ns=983934\n"
+      }
+    ]
+  },
+  "limits": [
+    "No Windows or ART execution claimed by local host tests/cross-compilation.",
+    "Real Linux and wired Windows public corpus use real timerfd/inotify; the complete epoll host uses declared payload lifetime boundaries.",
+    "The host counter includes native-event adapter allocations equally; byte counts are requested C++ allocation sizes, not RSS.",
+    "The rare nested target retained only by real in-flight operation uses bounded10ms mixed-poll cadence after its last numeric alias closes.",
+    "No general pipe/socket/fence alias or EPOLLEXCLUSIVE behavior is implemented.",
+    "Persistent setup cost increases144 measured bytes per virtual eventfd and200 bytes per LT registration."
+  ],
+  "composition": {
+    "readonly_epollet_pr293": {
+      "head": "80ea4d9914332acf38a73f0d5250b3d8cf1fb32e",
+      "tree": "315044d316388de11926e05c23ffc7b5eccb8801",
+      "parent_heads": [
+        "89f31f6565fee83f72c3f3c6a44a1060b4e2d7f3",
+        "6c97f416d9061c20ae5758fc4bcfed508bc06e5f"
+      ],
+      "changed_paths": [
+        "compat/posix/src/epoll.cc",
+        "compat/posix/src/event_internal.h",
+        "compat/posix/src/inotify.cc",
+        "compat/posix/src/timerfd.cc",
+        "docs/research/readonly-epoll-notifications-2026-11-22.json",
+        "docs/research/readonly-epoll-notifications-2026-11-22.md",
+        "docs/research/virtual-epoll-owner-2026-11-22.json",
+        "docs/research/virtual-epoll-owner-2026-11-22.md",
+        "probes/posix/epoll_probe.cc",
+        "tests/native/epoll_eventfd_edges_host.cc.in",
+        "tests/native/epoll_readonly_edge_test.inc",
+        "tests/native/epoll_readonly_edges_host.cc.in",
+        "tests/native/epoll_virtual_owner_test.inc",
+        "tests/native/epoll_virtual_owners_host.inc",
+        "tests/native/host_epoll_contract_test.cc.in",
+        "tests/native/host_scratch_contract_test.cc.in",
+        "tests/native/host_vector_contract_test.cc.in",
+        "tests/windows/run-tests.ps1",
+        "tools/test_epoll_readonly_edges.py",
+        "tools/test_epoll_virtual_owners.py",
+        "tools/test_host_event_loop_contracts.py"
+      ],
+      "shared_paths": [
+        "compat/posix/src/epoll.cc",
+        "compat/posix/src/event_internal.h",
+        "probes/posix/epoll_probe.cc",
+        "tests/windows/run-tests.ps1",
+        "tools/test_host_event_loop_contracts.py"
+      ],
+      "manual_conflicts": [
+        "compat/posix/src/epoll.cc",
+        "probes/posix/epoll_probe.cc",
+        "tests/windows/run-tests.ps1",
+        "tools/test_host_event_loop_contracts.py"
+      ],
+      "disjoint_own_files_exact": 8,
+      "disjoint_readonly_files_exact": 8,
+      "epoll_sha256": "d6838d452ec389a1dc3b19bc846e264c4c81ac8bc6aaaeb21e19ab96a27d3fc6",
+      "host_gate_exit": 0,
+      "host_gate_stdout": "epoll.cc d6838d452ec389a1dc3b19bc846e264c4c81ac8bc6aaaeb21e19ab96a27d3fc6\nsystem.cc 6e7ed41adf58c9c5ce3bf5c841f6965825d0368262a7d5e9284d36b28185d09f\nfd.cc e6cb83d3c295dd92f5f279fb6707b5721aafda8b8c2bb5d953f29b83e14adcda\nselect.cc fc4c3c4be5bad8afe8ecca37a964f335aea305d907375a00a5faa4fd23d7c2ac\npoll_scratch.h 669038c41eb20231d58c371f1ad38ff2e340525a938c476635481d68e7e0d393\nproduction epoll fairness: 15 checks, 0 failures\nPASS epoll\nproduction vector routing: 85 checks, 0 failures\nPASS vector\nproduction host select: 28 checks, 0 failures\nPASS select\nMEASURE 64 mixed poll descriptors: calls=10000 allocations=0 bytes=0 elapsed_us=182001\nMEASURE one eventfd poll: calls=10000 allocations=0 bytes=0 elapsed_us=5847\nMEASURE 64-entry epoll wait: calls=10000 allocations=0 bytes=0 elapsed_us=193324\nMEASURE 64-entry epoll poll (private nested storage): calls=10000 allocations=140000 bytes=30480000 elapsed_us=220138\nouter poll scratch: 88 checks, 0 failures\nPASS scratch\nproduction epoll.cc sha256=d6838d452ec389a1dc3b19bc846e264c4c81ac8bc6aaaeb21e19ab96a27d3fc6\neventfd edge contracts: complete\neventfd edge Linux reference: 116 checks, 0 failures\neventfd edge contracts: complete\neventfd edge wait contracts: complete\neventfd edge production host: 153 checks, 0 failures\nepoll.cc SHA256 d6838d452ec389a1dc3b19bc846e264c4c81ac8bc6aaaeb21e19ab96a27d3fc6\ntimerfd.cc SHA256 1e29f03fb0017ca49e5ba8ba1c873a328691a6460d7e40b79ba3c2fc55529241\ninotify.cc SHA256 442c1cbeceeadb756232a5b0b4bce7761a9ab7bb7b2386850d83e6270cc268e5\nreadonly work timerfd: idle_waits=10000 repeated_deliveries=0\nreadonly work inotify: idle_waits=10000 repeated_deliveries=0\nreadonly Linux overflow: capacity=16384 retained_markers=1\nreadonly edge contracts: complete\nreadonly edge Linux reference: 137 checks, 0 failures\nreadonly work timerfd: idle_waits=10000 repeated_deliveries=0\nreadonly work inotify: idle_waits=10000 repeated_deliveries=0\nreadonly edge contracts: complete\nreadonly work periodic: periods=10000 callbacks=1 arms=1 ticks=10000\nreadonly edge production host: 535 checks, 0 failures\nproduction epoll.cc sha256=d6838d452ec389a1dc3b19bc846e264c4c81ac8bc6aaaeb21e19ab96a27d3fc6\nnegative control pin-virtual-wait body sha256=034dfa8bbaa0180353508b00e0af5b8d3b096504c9f45088151a4e9180457c02\nvirtual epoll owner contracts: complete\nreadonly epoll owner contracts: complete\nvirtual epoll owner Linux reference: 122 checks, 0 failures\neventfd edge contracts: complete\neventfd edge wait contracts: complete\neventfd edge production host: 153 checks, 0 failures\nvirtual epoll owner contracts: complete\nowner close work: epolls=256 closes=4096 allocations=0 bytes=0 elapsed_ns=6104973\nowner creation work: files=64 allocations=384 bytes=26368 (includes declared native-event adapters)\nowner registration work: registrations=64 allocations=320 bytes=22528\nowner ready wait work: registrations=64 waits=10000 allocations=10000 bytes=20000 elapsed_ns=776945683 (includes native-event adapters)\nvirtual epoll owner production host: 535 checks, 0 failures\nEXPECTED_NEGATIVE FAIL owner snapshot/wait never pins final file\nEXPECTED_NEGATIVE virtual owner wait lifetime control: 26 checks, 1 failures\nPASS retained-poll negative control\n",
+      "policy_gate_exit": 0,
+      "policy_gate_stdout": "TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0\nTCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases=20\n",
+      "powershell_runner_parse_exit": 0,
+      "windows_runtime": false,
+      "windows_target_compile_exit": 0,
+      "windows_target_compile_stdout": "x86_64 compat/posix/src/epoll.cc PASS d6838d452ec389a1dc3b19bc846e264c4c81ac8bc6aaaeb21e19ab96a27d3fc6\nx86_64 probes/posix/epoll_probe.cc PASS b2cdbca957ee7bc473bba34780e95c02ff439d7d467481e478e2557440a57fa4\naarch64 compat/posix/src/epoll.cc PASS d6838d452ec389a1dc3b19bc846e264c4c81ac8bc6aaaeb21e19ab96a27d3fc6\naarch64 probes/posix/epoll_probe.cc PASS b2cdbca957ee7bc473bba34780e95c02ff439d7d467481e478e2557440a57fa4\n"
+    },
+    "scope": "separate local integration, not the independent candidate tree or Windows runtime evidence"
+  },
+  "review": {
+    "status": "scope compliant; no remaining actionable blocker",
+    "reviewer": "independent media agent",
+    "commit": "89f31f6565fee83f72c3f3c6a44a1060b4e2d7f3",
+    "tree": "9d5db1f89eec80cd6f8b7f22f02c2ff422060082",
+    "replayed": {
+      "native_linux_checks": 122,
+      "production_host_checks": 535,
+      "mutation_checks": 26,
+      "required_mutation_failures": 1
+    },
+    "finding": "original host PollFds adapter did not retain EventFd references across wait; hardened retained-source adapter and deterministic mutation control resolve it",
+    "limits": "host adapters, local LSan ptrace exclusion, Windows/ART execution pending"
+  },
+  "overlap_audit": {
+    "73": {
+      "head": "537936e89a450107821b0bcf4cd40cec0d060f24",
+      "open": true,
+      "production_scope": "stdio/OFD output; no epoll virtual registry change"
+    },
+    "296": {
+      "head": "f6307ad47ba16d838770f100675e33f2eb84ed7a",
+      "open": true,
+      "production_scope": "native-fence receive flags; no virtual registry change"
+    },
+    "293": {
+      "head": "f881a737844efa5bbe0830378ac523ecbe1b71d6",
+      "open": true,
+      "explicit_composition": true
+    }
+  }
+}

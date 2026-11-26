@@ -28,6 +28,7 @@
 #include <future>
 #include <string>
 #include <thread>
+#include "snprintf_bounds_contract.inc"
 
 #if defined(_WIN32) && defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
@@ -50,6 +51,9 @@ using Orientation = int(SYSV*)(FILE*, int);
 using Close = int(SYSV*)(FILE*);
 using Reopen = FILE*(SYSV*)(const char*, const char*, FILE*);
 using Get = int(SYSV*)(FILE*);
+using GetDelimited = int64_t(SYSV*)(char**, size_t*, int, FILE*);
+using GetByteLine = char*(SYSV*)(char*, int, FILE*);
+using UngetByte = int(SYSV*)(int, FILE*);
 using GetWide = Wint(SYSV*)(FILE*);
 using GetWideLine = Wide*(SYSV*)(Wide*, int, FILE*);
 using PutWide = Wint(SYSV*)(Wide, FILE*);
@@ -80,6 +84,9 @@ struct Api {
   Clear clear;
   Position rewind_stream;
   Error errno_value;
+  GetDelimited delimited;
+  GetByteLine byte_line;
+  UngetByte unget_byte;
 };
 
 int assertions = 0;
@@ -109,7 +116,8 @@ Api Resolve() {
           Load<PutWide>("fputwc"), Load<UngetWide>("ungetwc"), Load<PutWideLine>("fputws"),
           Load<PrintWide>("fwprintf"), Load<PrintWideBuffer>("swprintf"), Load<Status>("feof"),
           Load<Status>("ferror"), Load<Clear>("clearerr"), Load<Position>("rewind"),
-          Load<Error>("__errno")};
+          Load<Error>("__errno"), Load<GetDelimited>("getdelim"),
+          Load<GetByteLine>("fgets_unlocked"), Load<UngetByte>("ungetc")};
 }
 int Fd(FILE* f) { return _fileno(f); }
 void NativeLock(FILE* f) { _lock_file(f); }
@@ -120,7 +128,7 @@ Api Resolve() {
   if (!std::setlocale(LC_CTYPE, "C.UTF-8")) std::abort();
   return {flockfile, funlockfile, ftrylockfile, fwide, fclose, freopen,
           fgetc, fgetwc, fgetws, fputwc, ungetwc, fputws, fwprintf, swprintf,
-          feof, ferror, clearerr, rewind, NativeErrno};
+          feof, ferror, clearerr, rewind, NativeErrno, getdelim, fgets_unlocked, ungetc};
 }
 int Fd(FILE* f) { return fileno(f); }
 void NativeLock(FILE* f) { flockfile(f); }
@@ -144,6 +152,39 @@ void Seed(FILE* f, const char* bytes, unsigned size) {
 #endif
   if (!written) std::abort();
   std::rewind(f);
+}
+
+void TestByteLines(const Api& api) {
+  FILE* stream = Stream();
+  const std::string data = std::string(8192, 'q') + "\n" + std::string("x\xffy\0z\nnext", 10);
+  Seed(stream, data.data(), static_cast<unsigned>(data.size()));
+  char* line = nullptr;
+  size_t capacity = 0;
+  Check("getdelim includes a multi-buffer record and terminator",
+        api.delimited(&line, &capacity, '\n', stream) == 8193 && capacity >= 8194 &&
+        std::memcmp(line, data.data(), 8193) == 0 && line[8193] == 0);
+  Check("getdelim delimiter -1 matches unsigned 255", api.delimited(&line, &capacity, -1, stream) == 2 &&
+        line[0] == 'x' && static_cast<unsigned char>(line[1]) == 255 && line[2] == 0);
+  Check("getdelim zero delimiter includes input NUL", api.delimited(&line, &capacity, 0, stream) == 2 &&
+        line[0] == 'y' && line[1] == 0 && line[2] == 0);
+  Check("getdelim pushback retains next descriptor bytes", api.unget_byte('!', stream) == '!' &&
+        api.delimited(&line, &capacity, '\n', stream) == 3 && std::memcmp(line, "!z\n", 4) == 0);
+  char bounded[12]{};
+  Check("unlocked fgets limit preserves subsequent bytes", api.byte_line(bounded, 3, stream) == bounded &&
+        std::memcmp(bounded, "ne", 3) == 0);
+  Check("unlocked fgets gets final unterminated record", api.byte_line(bounded, sizeof(bounded), stream) == bounded &&
+        std::memcmp(bounded, "xt", 3) == 0);
+  Check("getdelim after EOF reports -1", api.delimited(&line, &capacity, '\n', stream) == -1 && api.eof(stream));
+#if defined(_WIN32) || defined(__BIONIC__)
+  api.clear(stream);
+  Check("getdelim invalid output marks stream error", api.delimited(nullptr, &capacity, '\n', stream) == -1 &&
+        *api.errno_value() == EINVAL && api.error(stream));
+  api.clear(stream);
+  Check("getdelim invalid capacity marks stream error", api.delimited(&line, nullptr, '\n', stream) == -1 &&
+        *api.errno_value() == EINVAL && api.error(stream));
+#endif
+  std::free(line);
+  api.close(stream);
 }
 
 void ExpectBytes(FILE* f, const char* expected, unsigned size) {
@@ -355,7 +396,7 @@ void TestWideOutput(const Api& api) {
 }
 
 #if (defined(_WIN32) && !defined(__aarch64__)) || defined(__BIONIC__)
-int FatalFormatChild(const Api& api, bool narrow, bool positional = false) {
+int FatalFormatChild(const Api& api, bool narrow, bool positional = false, bool sizing = false) {
   int count = -1;
   if (narrow) {
     using Print = int(SYSV*)(char*, size_t, const char*, ...);
@@ -364,7 +405,9 @@ int FatalFormatChild(const Api& api, bool narrow, bool positional = false) {
 #else
     Print print = snprintf;
 #endif
-    char buffer[8]; print(buffer, sizeof(buffer), positional ? "ab%1$ln" : "ab%n", &count);
+    char buffer[8];
+    print(sizing ? nullptr : buffer, sizing ? 0 : sizeof(buffer),
+          positional ? "ab%1$ln" : "ab%n", &count);
   } else {
     const Wide format[] = {'a', 'b', '%', 'n', 0};
     const Wide numbered[] = {'a', 'b', '%', '1', '$', 'l', 'n', 0};
@@ -373,13 +416,14 @@ int FatalFormatChild(const Api& api, bool narrow, bool positional = false) {
   return 77;  // Reaching this sentinel means Android's fatal rule was lost.
 }
 
-bool FatalFormat(bool narrow, bool positional = false) {
+bool FatalFormat(bool narrow, bool positional = false, bool sizing = false) {
 #ifdef _WIN32
   wchar_t executable[32768];
   DWORD length = GetModuleFileNameW(nullptr, executable, sizeof(executable) / sizeof(*executable));
   if (length == 0 || length >= sizeof(executable) / sizeof(*executable)) return false;
   std::wstring command = std::wstring(L"\"") + executable + L"\" --fatal-" + (narrow ? L"narrow" : L"wide");
   if (positional) command += L"-positional";
+  if (sizing) command += L"-sizing";
   SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
   HANDLE reader = nullptr, writer = nullptr;
   if (!CreatePipe(&reader, &writer, &attributes, 0)) return false;
@@ -410,7 +454,7 @@ bool FatalFormat(bool narrow, bool positional = false) {
   if (child == 0) {
     close(fds[0]); dup2(fds[1], STDERR_FILENO); close(fds[1]);
     alarm(10);
-    _exit(FatalFormatChild(Resolve(), narrow, positional));
+    _exit(FatalFormatChild(Resolve(), narrow, positional, sizing));
   }
   close(fds[1]);
   if (child < 0) { close(fds[0]); return false; }
@@ -437,16 +481,34 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--fatal-wide") == 0) return FatalFormatChild(api, false);
   if (argc == 2 && std::strcmp(argv[1], "--fatal-narrow-positional") == 0) return FatalFormatChild(api, true, true);
   if (argc == 2 && std::strcmp(argv[1], "--fatal-wide-positional") == 0) return FatalFormatChild(api, false, true);
+  if (argc == 2 && std::strcmp(argv[1], "--fatal-narrow-sizing") == 0) return FatalFormatChild(api, true, false, true);
   Check("narrow printf %n is fatal with Bionic diagnostic", FatalFormat(true));
   Check("wide printf %n is fatal with Bionic diagnostic", FatalFormat(false));
   Check("positional narrow printf %n is fatal", FatalFormat(true, true));
   Check("positional wide printf %n is fatal", FatalFormat(false, true));
+  Check("zero-size snprintf still rejects %n fatally", FatalFormat(true, false, true));
 #else
   (void)argc; (void)argv;
 #endif
   TestLocks(api);
   TestWideInput(api);
   TestWideOutput(api);
+  TestByteLines(api);
+#if defined(_WIN32) && !defined(__aarch64__)
+  using Print = int(SYSV*)(char*, size_t, const char*, ...);
+  size_t bounded_checks = 0;
+  int previous_failures = failures;
+  auto bounded_check = [&](const char* name, bool success) {
+    ++bounded_checks;
+    if (!success) Check(name, false);
+  };
+  auto print = Load<Print>("snprintf");
+  gesher_snprintf_contract::Run(print, bounded_check);
+  using Describe = const char*(SYSV*)(int);
+  gesher_snprintf_contract::Errors(print, bounded_check, api.errno_value, Load<Describe>("strerror"));
+  std::printf("bionic_stdio: %zu bounded-format byte/count/guard checks\n", bounded_checks);
+  Check("exported Bionic bounded snprintf corpus", failures == previous_failures);
+#endif
   std::printf("bionic_stdio: %d assertions, %d failures\n", assertions, failures);
   if (failures == 0) std::puts("bionic_stdio_contract_test all passed");
   return failures == 0 ? 0 : 1;

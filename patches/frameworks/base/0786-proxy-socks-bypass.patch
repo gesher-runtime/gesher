@@ -1,0 +1,27 @@
+diff --git a/core/java/android/net/Proxy.java b/core/java/android/net/Proxy.java
+--- a/core/java/android/net/Proxy.java
++++ b/core/java/android/net/Proxy.java
+@@ -196,7 +196,8 @@
+     /**
+      * Set HTTP proxy configuration for the process to match the provided ProxyInfo.
+      *
+-     * If the provided ProxyInfo is null, the proxy configuration will be cleared.
++     * If the provided ProxyInfo is null, the HTTP proxy configuration will be cleared.
++     * Exclusions for an independently configured SOCKS proxy remain in effect.
+      * @hide
+      */
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+@@ -217,6 +218,13 @@
+     /** @hide */
+     public static void setHttpProxyConfiguration(String host, String port, String exclList,
+             Uri pacFileUrl) {
++        // Gesher: ActivityThread reapplies a null HTTP ProxyInfo for SOCKS-only settings.
++        // Keep that proxy's exclusions for libcore's HTTP(S) SOCKS fallback. An explicit
++        // HTTP/PAC proxy continues to own its own exclusions.
++        if (TextUtils.isEmpty(host) && exclList == null && Uri.EMPTY.equals(pacFileUrl)
++                && !TextUtils.isEmpty(System.getProperty("socksProxyHost"))) {
++            exclList = System.getProperty("socksNonProxyHosts");
++        }
+         if (exclList != null) exclList = exclList.replace(",", "|");
+         if (false) Log.d(TAG, "setHttpProxySystemProperty :"+host+":"+port+" - "+exclList);
+         if (host != null) {
