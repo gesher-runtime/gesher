@@ -6,17 +6,23 @@ import android.security.keystore.KeyProtection;
 import com.gesher.app.AndroidKeyStoreSecretKeys.Authorization;
 import com.gesher.app.AndroidKeyStoreSecretKeys.StoredKey;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.math.BigInteger;
+import java.nio.channels.FileLock;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.InvalidParameterException;
@@ -51,6 +57,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
+import java.util.function.Predicate;
 import java.util.TimeZone;
 import javax.crypto.KeyGeneratorSpi;
 import javax.crypto.SecretKey;
@@ -148,7 +156,8 @@ public final class AndroidKeyStore extends Provider {
     private static final int PRIVATE = 2;
     private static final int TRUSTED = 3;
     private static final int LEGACY_MAGIC = 0x474b5331;  // "GKS1"
-    private static final int MAGIC = 0x474b5332;  // "GKS2", optional symmetric authorization
+    private static final int AUTH_MAGIC = 0x474b5332;  // "GKS2", optional symmetric authorization
+    private static final int MAGIC = 0x474b5333;  // "GKS3", persistent revision
 
     /** One alias: a secret key, a private key and its chain, or a trusted certificate. */
     static final class Entry {
@@ -176,84 +185,109 @@ public final class AndroidKeyStore extends Provider {
         }
     }
 
-    /**
-     * The process's keys, shared by every KeyStore, KeyGenerator and KeyPairGenerator of
-     * this provider (on a device, keystore2's keys of the app's uid). Read again when
-     * another process of the app changed the file.
-     */
+    /** Every process of an app shares the same atomically published key snapshot. */
     private static final class Store {
-        private static Map<String, Entry> sEntries = new LinkedHashMap<>();
-        private static File sFile;     // the file read, null before the app's data directory
-        private static long sStamp;
-        private static long sLength;
+        private record Snapshot(UUID revision, Map<String, Entry> entries) { }
+
+        private static Snapshot sSnapshot = empty();
+        private static File sFile;
+
+        private static Snapshot empty() {
+            return new Snapshot(null, new LinkedHashMap<>());
+        }
 
         private static File file() {
-            try {
-                android.app.Application app = android.app.ActivityThread.currentApplication();
-                File dir = app != null ? app.getDataDir() : null;
-                return dir != null ? new File(dir, FILE) : null;
-            } catch (RuntimeException e) {
-                return null;
-            }
+            android.app.Application app = android.app.ActivityThread.currentApplication();
+            return app == null ? null : new File(app.getDataDir().getAbsoluteFile(), FILE);
         }
 
-        /** Brings the keys in memory up to date with the file. */
-        private static void sync() {
-            File f = file();
-            if (f == null) return;  // no app yet (or the system server): memory only
+        private static void sync() throws KeyStoreException {
             if (sFile == null) {
-                // The app's data directory is known now: the file's keys, then the ones made
-                // before (they win).
-                Map<String, Entry> merged = read(f);
-                boolean pending = !sEntries.isEmpty();
-                merged.putAll(sEntries);
-                sEntries = merged;
-                sFile = f;
-                if (pending) write();
-                else stamp();
-            } else if (sFile.lastModified() != sStamp || sFile.length() != sLength) {
-                sEntries = read(sFile);
-                stamp();
+                File file = file();
+                if (file == null) return;
+                if (sSnapshot.entries().isEmpty()) {
+                    sSnapshot = read(file, null);
+                } else {
+                    sSnapshot = update(file, entries -> {
+                        entries.putAll(sSnapshot.entries());
+                        return true;
+                    });
+                }
+                sFile = file;
+            } else {
+                sSnapshot = read(sFile, sSnapshot);
             }
         }
 
-        private static void stamp() {
-            sStamp = sFile.lastModified();
-            sLength = sFile.length();
+        private static Snapshot snapshot() {
+            try {
+                sync();
+                return sSnapshot;
+            } catch (KeyStoreException failure) {
+                throw new java.security.ProviderException("Cannot read AndroidKeyStore", failure);
+            }
         }
 
         static synchronized Entry get(String alias) {
-            sync();
-            return sEntries.get(alias);
+            return snapshot().entries().get(alias);
         }
 
         static synchronized List<String> aliases() {
-            sync();
-            return new ArrayList<>(sEntries.keySet());
+            return new ArrayList<>(snapshot().entries().keySet());
         }
 
         static synchronized void put(String alias, Entry entry) throws KeyStoreException {
-            sync();
-            encode(entry);  // only what can be written
-            sEntries.put(alias, entry);
-            write();
+            encode(entry);
+            if (sFile == null) sync();
+            if (sFile == null) {
+                sSnapshot.entries().put(alias, entry);
+                return;
+            }
+            sSnapshot = update(sFile, entries -> {
+                entries.put(alias, entry);
+                return true;
+            });
         }
 
-        static synchronized void remove(String alias) {
-            sync();
-            if (sEntries.remove(alias) != null) write();
+        static synchronized void remove(String alias) throws KeyStoreException {
+            if (sFile == null) sync();
+            if (sFile == null) {
+                sSnapshot.entries().remove(alias);
+                return;
+            }
+            sSnapshot = update(sFile, entries -> entries.remove(alias) != null);
         }
 
-        private static Map<String, Entry> read(File f) {
-            Map<String, Entry> out = new LinkedHashMap<>();
-            if (!f.exists()) return out;
-            try (DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(
-                    new FileInputStream(f)))) {
+        private static Snapshot update(File file, Predicate<Map<String, Entry>> change)
+                throws KeyStoreException {
+            File lock = new File(file.getPath() + ".lock");
+            try (FileOutputStream stream = new FileOutputStream(lock, true);
+                    FileLock ignored = stream.getChannel().lock()) {
+                // Reload while holding the process-shared lock. The other writer may
+                // have changed entries since this process last read the store.
+                Snapshot current = read(file, null);
+                if (!change.test(current.entries())) return current;
+                Snapshot next = new Snapshot(UUID.randomUUID(), current.entries());
+                write(file, next);
+                return next;
+            } catch (IOException failure) {
+                throw new KeyStoreException("Cannot update AndroidKeyStore", failure);
+            }
+        }
+
+        private static Snapshot read(File f, Snapshot cached) throws KeyStoreException {
+            try (DataInputStream in = new DataInputStream(new BufferedInputStream(
+                    Files.newInputStream(f.toPath())))) {
                 int magic = in.readInt();
-                if (magic != MAGIC && magic != LEGACY_MAGIC) {
+                if (magic != MAGIC && magic != AUTH_MAGIC && magic != LEGACY_MAGIC) {
                     throw new IOException("not a Gesher key store");
                 }
+                UUID revision = magic == MAGIC ? new UUID(in.readLong(), in.readLong()) : null;
+                if (cached != null && revision != null && revision.equals(cached.revision())) return cached;
+
                 int n = in.readInt();
+                if (n < 0 || n > in.available()) throw new IOException("Invalid AndroidKeyStore entry count");
+                Map<String, Entry> out = new LinkedHashMap<>();
                 CertificateFactory x509 = null;
                 for (int i = 0; i < n; i++) {
                     String alias = in.readUTF();
@@ -261,7 +295,11 @@ public final class AndroidKeyStore extends Provider {
                     Date created = new Date(in.readLong());
                     String algorithm = in.readUTF();
                     byte[] encoded = bytes(in);
-                    Certificate[] chain = new Certificate[in.readInt()];
+                    int count = in.readInt();
+                    if (count < 0 || count > in.available() / Integer.BYTES) {
+                        throw new IOException("Invalid AndroidKeyStore certificate count");
+                    }
+                    Certificate[] chain = new Certificate[count];
                     for (int c = 0; c < chain.length; c++) {
                         if (x509 == null) x509 = CertificateFactory.getInstance("X.509");
                         chain[c] = x509.generateCertificate(new ByteArrayInputStream(bytes(in)));
@@ -272,31 +310,37 @@ public final class AndroidKeyStore extends Provider {
                     } else if (kind == PRIVATE) {
                         key = KeyFactory.getInstance(algorithm)
                                 .generatePrivate(new PKCS8EncodedKeySpec(encoded));
+                    } else if (kind != TRUSTED) {
+                        throw new IOException("Invalid AndroidKeyStore entry kind");
                     }
                     Authorization authorization = null;
-                    if (magic == MAGIC && in.readBoolean()) {
+                    if (magic != LEGACY_MAGIC && in.readBoolean()) {
                         if (kind != SECRET) throw new IOException("Invalid symmetric authorization");
                         authorization = Authorization.read(in);
                     }
                     out.put(alias, new Entry(kind, key, chain, created, authorization));
                 }
-            } catch (IOException | java.security.GeneralSecurityException e) {
-                log("cannot read " + f + ", its keys are not used: " + e);
+                return new Snapshot(revision, out);
+            } catch (NoSuchFileException absent) {
+                return empty();
+            } catch (IOException | java.security.GeneralSecurityException | IllegalArgumentException failure) {
+                throw new KeyStoreException("Cannot load AndroidKeyStore", failure);
             }
-            return out;
         }
 
-        private static void write() {
-            if (sFile == null) return;
-            File tmp = new File(sFile.getPath() + ".tmp");
+        private static void write(File file, Snapshot next) throws IOException, KeyStoreException {
+            Path target = file.toPath();
+            Path tmp = Files.createTempFile(target.getParent(), FILE + "-", ".tmp");
             try {
-                try (DataOutputStream out = new DataOutputStream(new java.io.BufferedOutputStream(
-                        new FileOutputStream(tmp)))) {
+                try (FileOutputStream stream = new FileOutputStream(tmp.toFile());
+                        DataOutputStream out = new DataOutputStream(new BufferedOutputStream(stream))) {
                     out.writeInt(MAGIC);
-                    out.writeInt(sEntries.size());
-                    for (Map.Entry<String, Entry> e : sEntries.entrySet()) {
-                        Entry entry = e.getValue();
-                        out.writeUTF(e.getKey());
+                    out.writeLong(next.revision().getMostSignificantBits());
+                    out.writeLong(next.revision().getLeastSignificantBits());
+                    out.writeInt(next.entries().size());
+                    for (Map.Entry<String, Entry> item : next.entries().entrySet()) {
+                        Entry entry = item.getValue();
+                        out.writeUTF(item.getKey());
                         out.writeByte(entry.kind);
                         out.writeLong(entry.created.getTime());
                         out.writeUTF(entry.key != null ? entry.key.getAlgorithm() : "");
@@ -307,17 +351,17 @@ public final class AndroidKeyStore extends Provider {
                         out.writeBoolean(entry.authorization != null);
                         if (entry.authorization != null) entry.authorization.write(out);
                     }
+                    out.flush();
+                    stream.getFD().sync();
                 }
+                Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException | KeyStoreException | RuntimeException failure) {
                 try {
-                    java.nio.file.Files.move(tmp.toPath(), sFile.toPath(),
-                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                } catch (IOException | RuntimeException e) {
-                    if (!sFile.delete() && sFile.exists()) throw e;
-                    if (!tmp.renameTo(sFile)) throw new IOException("cannot rename " + tmp);
+                    Files.deleteIfExists(tmp);
+                } catch (IOException cleanup) {
+                    failure.addSuppressed(cleanup);
                 }
-                stamp();
-            } catch (IOException | KeyStoreException e) {
-                log("cannot write " + sFile + ", the keys stay in memory: " + e);
+                throw failure;
             }
         }
 
@@ -343,7 +387,9 @@ public final class AndroidKeyStore extends Provider {
         }
 
         private static byte[] bytes(DataInputStream in) throws IOException {
-            byte[] b = new byte[in.readInt()];
+            int length = in.readInt();
+            if (length < 0 || length > in.available()) throw new IOException("Invalid AndroidKeyStore field length");
+            byte[] b = new byte[length];
             in.readFully(b);
             return b;
         }
@@ -360,10 +406,6 @@ public final class AndroidKeyStore extends Provider {
             throw new InvalidKeyException("AndroidKeyStore key no longer exists");
         }
         return entry;
-    }
-
-    static void log(String message) {
-        System.err.println("gesher-keystore: " + message);
     }
 
     // --- KeyStore --------------------------------------------------------
@@ -428,7 +470,7 @@ public final class AndroidKeyStore extends Provider {
         }
 
         @Override
-        public void engineDeleteEntry(String alias) {
+        public void engineDeleteEntry(String alias) throws KeyStoreException {
             if (alias != null) Store.remove(alias);
         }
 
