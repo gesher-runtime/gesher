@@ -75,6 +75,18 @@
       "en": "Gesher account access",
       "he": "גשר — גישה לחשבון"
     },
+    "location_off_prompt": {
+      "en": "The application {0} needs Windows Location services (and desktop app location access), which are currently turned off.\r\n\r\nOpen Windows Location settings?",
+      "he": "היישום \u202a{0}\u202c זקוק לשירותי המיקום של Windows (ולגישת מיקום ליישומי שולחן עבודה), שכרגע כבויים.\r\n\r\nלפתוח את הגדרות המיקום של Windows?"
+    },
+    "location_off_open": {
+      "en": "Open settings",
+      "he": "פתח הגדרות"
+    },
+    "location_off_later": {
+      "en": "Not now",
+      "he": "לא כעת"
+    },
     "account_prefix": {
       "en": "Allow this Android application to access an account token?\n\nApplication: ",
       "he": "לאפשר ליישום Android זה לקבל אסימון גישה לחשבון?\n\nיישום: "
