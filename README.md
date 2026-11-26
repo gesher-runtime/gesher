@@ -106,6 +106,11 @@ SDK inventory that separates structural gaps from demonstrated failures.
 
 ## Building
 
+Experimental [ARM32 execution components](docs/arm32.md) have a standalone
+build and checked ELF32, address-space and calling-convention tests. ARM32-only
+and x86 32-bit Android applications are still unsupported; completing the
+Android runtime bridge is required before enabling those APKs.
+
 See the [build and package guide](docs/build-and-package.md) for source identity,
 complete installer suppliers and local validation.
 
