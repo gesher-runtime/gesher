@@ -40,3 +40,15 @@ The x86_64 APK SHA-256 is
 `4782af292e6c0a4682e5649b90b4f792d7efc9859292608a3d7a4be0e2ef0675`.
 Both fixture APKs used signer SHA-256
 `1a84f1c899b0eea9f68e6ff1c0b30d88e4de6b1ce4019d02a955e11460b2c5be`.
+
+The same fixture also calls the linked and dynamically resolved device APIs.
+It rejects unknown devices and invalid arguments. On a normal launch without
+a CAMERA grant it requires the permission error for an enumerated device.
+After granting CAMERA to this disposable test app, it requires a real open,
+the same ID after the manager is deleted, a successful close and a new open.
+Use an environment with an enumerated camera and ordinary Camera2 admission
+to run the positive phase. Device event callbacks come from the Camera2
+service; this fixture observes ordinary open and close, without creating a
+capture session or claiming hardware availability.
+
+The status and handle contract follows the pinned [NDK Camera2 open implementation](https://android.googlesource.com/platform/frameworks/av/+/refs/tags/android-16.0.0_r4/camera/ndk/impl/ACameraManager.cpp).

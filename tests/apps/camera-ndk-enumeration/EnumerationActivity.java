@@ -1,7 +1,9 @@
 /* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
 package org.gesher.contracts.camerandk;
 
+import android.Manifest;
 import android.app.Activity;
+import android.content.pm.PackageManager;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraManager;
 import android.os.Bundle;
@@ -10,6 +12,7 @@ import java.util.Arrays;
 
 public final class EnumerationActivity extends Activity {
     private static final String TAG = "CameraNdkEnumeration";
+    private static native void verifyOpen(String id, boolean granted);
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -23,6 +26,11 @@ public final class EnumerationActivity extends Activity {
                         + ", native=" + Arrays.toString(nativeIds)
                         + ", startup=" + Arrays.toString(startupIds));
             }
+            boolean allowed = checkSelfPermission(Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED;
+            verifyOpen(javaIds.length == 0 ? null : javaIds[0], allowed);
+            Log.i(TAG, "native open contract " + (javaIds.length == 0 ? "no-camera"
+                    : allowed ? "opened and reopened" : "permission denied"));
             String report = "verified " + javaIds.length + " camera IDs " + Arrays.toString(javaIds);
             System.out.println(TAG + " " + report);
             Log.i(TAG, report);

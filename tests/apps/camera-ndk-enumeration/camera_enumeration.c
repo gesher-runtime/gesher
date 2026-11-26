@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <jni.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <string.h>
 
 typedef camera_status_t (*GetIdList)(ACameraManager*, ACameraIdList**);
@@ -86,5 +87,74 @@ done:
         return NULL;
     }
     return output;
+#undef REQUIRE
+}
+
+
+static void disconnected(void* context, ACameraDevice* device) {
+    (void) device;
+    ++*(_Atomic int*)context;
+}
+
+static void device_error(void* context, ACameraDevice* device, int error) {
+    (void) device;
+    (void) error;
+    ++*(_Atomic int*)context;
+}
+
+JNIEXPORT void JNICALL Java_org_gesher_contracts_camerandk_EnumerationActivity_verifyOpen(
+        JNIEnv* env, jclass ignored, jstring selected, jboolean granted) {
+    (void) ignored;
+    const char* failure = NULL;
+    const char* id = selected != NULL ? (*env)->GetStringUTFChars(env, selected, NULL) : NULL;
+    if (selected != NULL && id == NULL) return;
+    ACameraManager* manager = ACameraManager_create();
+    ACameraDevice* device = NULL;
+    _Atomic int errors = 0;
+    ACameraDevice_StateCallbacks callbacks = {
+        .context = &errors, .onDisconnected = disconnected, .onError = device_error,
+    };
+    void* library = dlopen("libcamera2ndk.so", RTLD_NOW | RTLD_LOCAL);
+    typedef camera_status_t (*Open)(ACameraManager*, const char*, ACameraDevice_StateCallbacks*,
+                                    ACameraDevice**);
+    Open open = library != NULL ? (Open)dlsym(library, "ACameraManager_openCamera") : NULL;
+#define REQUIRE(condition, explanation) do { if (!(condition)) { failure = explanation; goto done; } } while (0)
+    REQUIRE(manager != NULL && open != NULL, "cannot resolve camera device open");
+    REQUIRE(ACameraManager_openCamera(NULL, "gesher-absent-camera", &callbacks, &device)
+            == ACAMERA_ERROR_INVALID_PARAMETER && device == NULL, "null manager did not fail");
+    REQUIRE(open(manager, "gesher-absent-camera", &callbacks, &device)
+            == ACAMERA_ERROR_INVALID_PARAMETER && device == NULL, "unknown camera did not fail");
+    REQUIRE(ACameraDevice_close(NULL) == ACAMERA_ERROR_INVALID_PARAMETER, "null close did not fail");
+    if (id == NULL) goto done;
+    if (!granted) {
+        REQUIRE(open(manager, id, &callbacks, &device) == ACAMERA_ERROR_PERMISSION_DENIED
+                && device == NULL, "app without camera permission was not denied");
+        goto done;
+    }
+
+    REQUIRE(open(manager, id, &callbacks, &device) == ACAMERA_OK && device != NULL,
+            "granted native device open failed");
+    ACameraManager_delete(manager);
+    manager = NULL;
+    const char* opened_id = ACameraDevice_getId(device);
+    REQUIRE(opened_id != NULL && strcmp(opened_id, id) == 0, "camera ID was not retained");
+    camera_status_t close_status = ACameraDevice_close(device);
+    device = NULL;
+    REQUIRE(close_status == ACAMERA_OK, "camera close failed");
+    manager = ACameraManager_create();
+    REQUIRE(manager != NULL && ACameraManager_openCamera(manager, id, &callbacks, &device)
+            == ACAMERA_OK && device != NULL, "cannot reopen the closed camera");
+    close_status = ACameraDevice_close(device);
+    device = NULL;
+    REQUIRE(close_status == ACAMERA_OK && errors == 0, "ordinary close posted a device error");
+done:
+    if (device != NULL) ACameraDevice_close(device);
+    ACameraManager_delete(manager);
+    if (library != NULL) dlclose(library);
+    if (id != NULL) (*env)->ReleaseStringUTFChars(env, selected, id);
+    if (failure != NULL) {
+        jclass error = (*env)->FindClass(env, "java/lang/AssertionError");
+        if (error != NULL) (*env)->ThrowNew(env, error, failure);
+    }
 #undef REQUIRE
 }
