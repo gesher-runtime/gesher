@@ -2979,7 +2979,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release -DGESHER_ARM32_WITH_DYNARMIC=ON \
             -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
             -DBoost_INCLUDE_DIR="$PWD/deps/boost_1_83_0" \
-            -DARM32_GUEST_FIXTURES="$PWD/out-fixtures/fixture-arm.so;$PWD/out-fixtures/fixture-thumb.so"
+            -DARM32_GUEST_FIXTURES="$PWD/out-fixtures/fixture-arm.so;$PWD/out-fixtures/fixture-thumb.so" \
+            -DARM32_GUEST_BIONIC_FIXTURES="$PWD/out-fixtures/bionic-arm.so;$PWD/out-fixtures/bionic-thumb.so"
           cmake --build out-arm32 --parallel 4
       - name: Execute component and compiler-generated ELF32 tests
         run: ctest --test-dir out-arm32 --output-on-failure
