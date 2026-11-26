@@ -113,6 +113,15 @@ void Run(const char* fixture) {
         static_cast<int32_t>(result.bits) == 35,
         "success after failed library transaction");
   Check(program.Initialize(&error), "successful constructors never rerun");
+  Check(program.Shutdown(&error), "run destructors and close program");
+  Check(program.Shutdown(&error), "repeat shutdown is idempotent");
+  Check(!program.CallExport(soname, "fixture_import",
+        {Value::Signed32(10)}, ValueKind::I32, &result, &error),
+        "closed program cannot run native calls");
+  Check(!program.LoadLibrary(soname, &error),
+        "closed program cannot reload a native library");
+  Check(!program.Initialize(&error),
+        "closed program cannot reinitialize");
 
   Program malformed([](std::string_view, std::vector<uint8_t>* output,
                        std::string*) {
