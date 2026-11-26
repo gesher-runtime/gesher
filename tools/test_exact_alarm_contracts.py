@@ -46,7 +46,8 @@ def main() -> None:
             'app/java/com/gesher/server/ActivityManagerService.java',
             'app/java/com/gesher/server/ActivityTaskManagerService.java',
             'tests/dex-services/gesher/services/ExactAlarmContractTest.java',
-            'tests/exact-alarm/ExactAlarmHost.java')]
+            'tests/exact-alarm/ExactAlarmHost.java',
+            'tests/exact-alarm/ExactAlarmPersistenceHost.java')]
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-cp', classpath, '-d', str(classes), *sources], check=True)
         cleaner = work / 'cleaner' / 'sun' / 'misc'
@@ -63,6 +64,13 @@ def main() -> None:
                         '-cp', str(classes) + os.pathsep + classpath,
                         'ExactAlarmHost', str(library)],
                        env=environment, check=True, timeout=90)
+        environment['ANDROID_DATA'] = str(work / 'persistence-data')
+        subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData',
+                        '-XX:+UnlockDiagnosticVMOptions', '-XX:-BytecodeVerificationRemote',
+                        '--patch-module', 'jdk.unsupported=' + str(work / 'cleaner'),
+                        '-cp', str(classes) + os.pathsep + classpath,
+                        'ExactAlarmPersistenceHost', str(library)],
+                       env=environment, check=True, timeout=45)
 
 if __name__ == '__main__':
     main()

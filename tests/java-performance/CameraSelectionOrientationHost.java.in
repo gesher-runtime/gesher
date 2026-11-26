@@ -57,6 +57,7 @@ public final class CameraSelectionOrientationHost {
         static final String FEATURE_CAMERA = "android.hardware.camera";
         static final String FEATURE_CAMERA_FRONT = "android.hardware.camera.front";
         static final String FEATURE_CAMERA_AUTOFOCUS = "android.hardware.camera.autofocus";
+        static final String FEATURE_CAMERA_EXTERNAL = "android.hardware.camera.external";
     }
 
     static final class android {
@@ -121,23 +122,38 @@ public final class CameraSelectionOrientationHost {
         check(!missing.get(0).isRearFacing() && !missing.get(1).isRearFacing(),
                 "disconnected selected device must not promote another camera");
 
-        sActiveRotation = Surface.ROTATION_0;
-        sDisplayRotation = Surface.ROTATION_270;
-        check(sensorOrientation() == 0,
-                "active window ROTATION_0 mismatch");
+        // The Activity using the camera decides, not the focused task's system display.
+        sDisplayRotation = Surface.ROTATION_0;
         sActiveRotation = Surface.ROTATION_90;
-        check(sensorOrientation() == 0,
-                "display rotation changed the stationary sensor geometry");
+        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
+                "own landscape Activity must win over another task's portrait display");
+        sDisplayRotation = Surface.ROTATION_90;
+        sActiveRotation = Surface.ROTATION_0;
+        check(sensorOrientation(true) == 0 && sensorOrientation(false) == 0,
+                "own portrait Activity must win over another task's landscape display");
         sActiveRotation = Surface.ROTATION_180;
-        check(sensorOrientation() == 0,
-                "active window ROTATION_180 changed sensor geometry");
+        check(sensorOrientation(true) == 180 && sensorOrientation(false) == 180,
+                "Activity ROTATION_180 mismatch");
         sActiveRotation = Surface.ROTATION_270;
-        check(sensorOrientation() == 0,
-                "active window ROTATION_270 changed sensor geometry");
+        check(sensorOrientation(true) == 270 && sensorOrientation(false) == 90,
+                "Activity ROTATION_270 mismatch");
+        // Android's own formulas then ask for no extra rotation, so preview sizes stay unswapped.
+        for (int r = Surface.ROTATION_0; r <= Surface.ROTATION_270; r++) {
+            sActiveRotation = r;
+            int d = r * 90;
+            check((sensorOrientation(true) - d + 360) % 360 == 0,
+                    "rear setDisplayOrientation formula must give 0 at rotation " + d);
+            check((360 - (sensorOrientation(false) + d) % 360) % 360 == 0,
+                    "front setDisplayOrientation formula must give 0 at rotation " + d);
+        }
+        // No Activity in the process (a service): the system display's rotation.
         sActiveRotation = WindowConfiguration.ROTATION_UNDEFINED;
         sDisplayRotation = Surface.ROTATION_90;
-        check(sensorOrientation() == 0,
-                "display fallback changed sensor geometry");
+        check(sensorOrientation(true) == 90 && sensorOrientation(false) == 270,
+                "without an Activity the system display rotation must be used");
+        sDisplayRotation = Surface.ROTATION_0;
+        check(sensorOrientation(true) == 0 && sensorOrientation(false) == 0,
+                "without an Activity on a natural display the orientation must be 0");
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> emptyFeat =
                 new android.util.ArrayMap<>();
@@ -150,7 +166,8 @@ public final class CameraSelectionOrientationHost {
         check(rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
                 && rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA)
                 && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
-                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
+                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS)
+                && !rearOnlyFeat.containsKey(PackageManager.FEATURE_CAMERA_EXTERNAL),
                 "rear-only feature map mismatch");
 
         android.util.ArrayMap<String, android.content.pm.FeatureInfo> dualFeat =
@@ -158,9 +175,18 @@ public final class CameraSelectionOrientationHost {
         addCameraFeatures(dualFeat, def);
         check(dualFeat.containsKey(PackageManager.FEATURE_CAMERA_ANY)
                 && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA)
-                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
-                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS),
-                "uncalibrated cameras invented directional or autofocus capabilities");
+                && dualFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
+                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_AUTOFOCUS)
+                && !dualFeat.containsKey(PackageManager.FEATURE_CAMERA_EXTERNAL),
+                "cameras not configured as rear must be front cameras, without autofocus");
+
+        android.util.ArrayMap<String, android.content.pm.FeatureInfo> mixedFeat =
+                new android.util.ArrayMap<>();
+        addCameraFeatures(mixedFeat, selected);
+        check(mixedFeat.containsKey(PackageManager.FEATURE_CAMERA)
+                && mixedFeat.containsKey(PackageManager.FEATURE_CAMERA_FRONT)
+                && !mixedFeat.containsKey(PackageManager.FEATURE_CAMERA_EXTERNAL),
+                "a rear and a front camera must report both features");
 
         System.out.println("Camera selection & orientation PASS: " + checks + " checks");
     }

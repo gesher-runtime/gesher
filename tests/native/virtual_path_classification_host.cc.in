@@ -56,6 +56,9 @@ static Match ToWindows(const std::wstring&, std::wstring*) { return Match::kUnre
 static bool DrivePath(const char*, std::wstring*) { return false; }
 namespace reserved_names { static void Encode(std::wstring*) {} }
 static void Lengthen(std::wstring*) {}
+// The frozen launch root is outside this classifier/allocation fixture.
+// Its real initialization is covered by storage_policy_host_test.
+[[maybe_unused]] static std::wstring ExternalStorageDataRoot() { return L"C:/runtime/data"; }
 
 @PRODUCTION@
 @REFERENCE@

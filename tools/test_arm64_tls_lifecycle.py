@@ -24,15 +24,20 @@ def section(source: str, begin: str, end: str) -> str:
     return source[source.index(begin):source.index(end, source.index(begin))]
 
 
-def render(source: str) -> str:
+def render(source: str, historical_fixture: str | None = None) -> str:
+    # The immutable pre-trimming measurement uses its matching fixture. Current
+    # source keeps the later signal, stack-publication and fork-retirement checks.
+    lease_begin = ("struct EnvRelease {" if historical_fixture is not None
+                   else "std::atomic<bool> g_fork_holds_all{false};")
     sections = {
         "@TLS@": section(source, "constexpr size_t kTcbSize =", "// --- the exclusive monitor"),
         "@ATTACH@": section(source, "  void Attach() {", "  // The thread is exiting."),
         "@DETACH@": section(source, "  void Detach() {", "  // Whether another thread may reuse"),
         "@PARK@": section(source, "  void Park() {", "  // One Jit per nesting depth:"),
-        "@LEASE@": section(source, "struct EnvRelease {", "uint64_t EnterGuest("),
+        "@LEASE@": section(source, lease_begin, "uint64_t EnterGuest("),
     }
-    template = (ROOT / "tests/native/arm64_tls_lifecycle_windows.cc.in").read_text(encoding="utf-8")
+    template = (historical_fixture if historical_fixture is not None else
+                (ROOT / "tests/native/arm64_tls_lifecycle_windows.cc.in").read_text(encoding="utf-8"))
     for marker, body in sections.items():
         if template.count(marker) != 1:
             raise ValueError(f"ARM64 TLS fixture marker changed: {marker}")
@@ -76,6 +81,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     parser.add_argument("--source-ref")
+    parser.add_argument("--fixture-ref", help="Matching immutable fixture for a historical --source-ref measurement")
     parser.add_argument("--measure", action="store_true")
     parser.add_argument("--compile-only", action="store_true")
     parser.add_argument("--output", type=Path)
@@ -87,6 +93,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.compile_only and args.output is None:
         parser.error("--compile-only requires --output")
+    if args.fixture_ref and (not args.source_ref or args.negative_controls):
+        parser.error("--fixture-ref requires --source-ref and cannot run current negative controls")
     if os.name != "nt" and not args.compile_only and not args.host_boundary:
         parser.error("this fixture exercises actual Windows virtual memory")
     if args.host_boundary and (os.name == "nt" or args.dll or args.compile_only):
@@ -96,6 +104,9 @@ def main() -> None:
     path = "compat/arm64/dll/translator.cc"
     source = (subprocess.check_output(["git", "show", f"{args.source_ref}:{path}"], cwd=ROOT, text=True)
               if args.source_ref else (ROOT / path).read_text(encoding="utf-8"))
+    historical_fixture = (subprocess.check_output(
+        ["git", "show", f"{args.fixture_ref}:tests/native/arm64_tls_lifecycle_windows.cc.in"],
+        cwd=ROOT, text=True) if args.fixture_ref else None)
     print("translator.cc source SHA256 " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     variants = [("production", source, None)]
     if args.negative_controls:
@@ -116,7 +127,7 @@ def main() -> None:
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]
         for name, variant, expected in variants:
-            cpp.write_text(render(variant), encoding="utf-8")
+            cpp.write_text(render(variant, historical_fixture), encoding="utf-8")
             subprocess.run(command, check=True, timeout=120)
             if args.compile_only:
                 print(f"Compiled ARM64 TLS fixture: {executable}", flush=True)
