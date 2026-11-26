@@ -759,6 +759,17 @@ bool FileWriteVector(int fd, const iovec* iov, int iovcnt, bool positioned,
 
 ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
   if (BadVector(fd, iovcnt)) return -1;
+  if (iovcnt == 0) {
+    // Linux still validates read access without issuing a receive. A
+    // zero-length Winsock receive can wait or consume a queued datagram.
+    pthread_testcancel();
+    auto snapshot = gesher::CaptureDescriptor(fd);
+    if (!snapshot) return -1;
+    const int flags = gesher::FileDescriptionIoFlags(snapshot);
+    if (flags < 0) return -1;
+    if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) return errno = EBADF, -1;
+    return 0;
+  }
   ssize_t total = 0;
   if (SocketIo(fd, iov, iovcnt, false, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
