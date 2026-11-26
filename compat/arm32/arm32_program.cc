@@ -126,13 +126,19 @@ bool Program::ReserveSpan(const std::vector<uint8_t>& bytes, uint32_t* bias,
       uint64_t{phnum} * 32 > bytes.size() - phoff)
     return Fail(error, "invalid ARM32 program header range");
 
-  uint64_t minimum = UINT64_MAX, maximum = 0;
+  uint64_t minimum = UINT64_MAX, maximum = 0, required_alignment = kPage;
   for (uint32_t i = 0; i < phnum; ++i) {
     const auto* ph = bytes.data() + phoff + uint64_t{i} * 32;
     if (Read32(ph) != 1) continue;  // PT_LOAD
     const uint64_t vaddr = Read32(ph + 8), length = Read32(ph + 20);
+    const uint32_t align = Read32(ph + 28);
     if (length == 0 || vaddr + length > UINT32_MAX)
       return Fail(error, "invalid ARM32 load segment extent");
+    if (align > 1 &&
+        ((align & (align - 1)) != 0 ||
+         ((Read32(ph + 8) - Read32(ph + 4)) & (align - 1)) != 0))
+      return Fail(error, "invalid ARM32 PT_LOAD alignment");
+    if (align > required_alignment) required_alignment = align;
     minimum = std::min(minimum, vaddr & ~(kPage - 1));
     maximum = std::max(maximum, RoundUp(vaddr + length));
   }
@@ -140,12 +146,19 @@ bool Program::ReserveSpan(const std::vector<uint8_t>& bytes, uint32_t* bias,
       maximum - minimum > kMaxFileBytes)
     return Fail(error, "invalid ARM32 load segment span");
 
-  uint64_t requested = std::max(RoundUp(next_image_), minimum);
+  // The loader requires load_bias (not guest_base) to be a multiple of
+  // every PT_LOAD p_align. With an unaligned first segment, guest_base and
+  // load_bias are different: rounding guest_base alone rejects valid DSOs.
+  const uint64_t base_candidate = std::max(RoundUp(next_image_), minimum);
+  const uint64_t bias_candidate = base_candidate - minimum;
+  const uint64_t load_bias = (bias_candidate + required_alignment - 1) &
+                             ~(required_alignment - 1);
+  const uint64_t requested = minimum + load_bias;
   const uint64_t span = maximum - minimum;
   if (requested >= kMaxImageEnd || span > kMaxImageEnd - requested ||
-      requested - minimum > UINT32_MAX)
+      load_bias > UINT32_MAX)
     return Fail(error, "ARM32 guest image address space exhausted");
-  *bias = static_cast<uint32_t>(requested - minimum);
+  *bias = static_cast<uint32_t>(load_bias);
   *base = static_cast<uint32_t>(requested);
   *size = span;
   next_image_ = requested + span + kPage;  // Guard gap between ELF objects.
