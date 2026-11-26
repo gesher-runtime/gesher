@@ -13,3 +13,12 @@ JNIEXPORT jint JNICALL Java_dalvik_system_VMRuntime_getNotifyNativeInterval(JNIE
 JNIEXPORT void JNICALL Java_dalvik_system_VMRuntime_notifyNativeAllocationsInternal(JNIEnv* env, jobject self) { }
 JNIEXPORT void JNICALL Java_dalvik_system_VMRuntime_registerNativeAllocation(JNIEnv* env, jobject self, jlong size) { }
 JNIEXPORT void JNICALL Java_dalvik_system_VMRuntime_registerNativeFree(JNIEnv* env, jobject self, jlong size) { }
+
+/* Preserve StrictMode around local package metadata reads in this process. */
+static _Thread_local jint strict_mode_policy;
+JNIEXPORT void JNICALL Java_android_os_Binder_setThreadStrictModePolicy(JNIEnv* env, jclass cls, jint policy) {
+    strict_mode_policy = policy;
+}
+JNIEXPORT jint JNICALL Java_android_os_Binder_getThreadStrictModePolicy(JNIEnv* env, jclass cls) {
+    return strict_mode_policy;
+}
