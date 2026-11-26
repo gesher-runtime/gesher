@@ -475,6 +475,67 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
           *out = {V, 0};
           return true;
         }, error) &&
+        Register("NewByteArray", Slot(offsetof(JNINativeInterface_, NewByteArray)),
+                 {P, I}, P, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          const int32_t length = static_cast<int32_t>(a[1].bits);
+          if (length < 0 || length > 1024 * 1024)
+            return Fail(e, "JNI32 byte array length exceeds bounded guest limit");
+          uint32_t token = 0;
+          if (!Adopt(real->NewByteArray(length), false, &token, e)) return false;
+          *out = Value::GuestPointer(token);
+          return true;
+        }, error) &&
+        Register("GetByteArrayRegion", Slot(offsetof(JNINativeInterface_, GetByteArrayRegion)),
+                 {P, P, I, I, P}, V, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 5, e)) return false;
+          jobject array = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &array, e) || !array)
+            return Fail(e, "JNI32 byte region has no valid array token");
+          const int32_t start = static_cast<int32_t>(a[2].bits);
+          const int32_t count = static_cast<int32_t>(a[3].bits);
+          if (start < 0 || count < 0 || count > 1024 * 1024)
+            return Fail(e, "JNI32 byte region has invalid bounds");
+          const uint32_t guest_buffer = static_cast<uint32_t>(a[4].bits);
+          auto& memory = program.Memory();
+          if (count && !memory.IsMapped(guest_buffer, count, MemoryPermission::kWrite))
+            return Fail(e, "JNI32 byte region destination is not writable guest memory");
+          std::vector<jbyte> bytes(static_cast<size_t>(count));
+          real->GetByteArrayRegion(static_cast<jbyteArray>(array), start, count,
+                                   count ? bytes.data() : nullptr);
+          // JNI reports out-of-array bounds by pending Java exception;
+          // never publish partial guest bytes if host JNI signalled one.
+          if (real->ExceptionCheck()) {
+            *out = {V, 0};
+            return true;
+          }
+          if (count && !memory.Write(guest_buffer, bytes.data(), bytes.size(), e))
+            return false;
+          *out = {V, 0};
+          return true;
+        }, error) &&
+        Register("SetByteArrayRegion", Slot(offsetof(JNINativeInterface_, SetByteArrayRegion)),
+                 {P, P, I, I, P}, V, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 5, e)) return false;
+          jobject array = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &array, e) || !array)
+            return Fail(e, "JNI32 byte region has no valid array token");
+          const int32_t start = static_cast<int32_t>(a[2].bits);
+          const int32_t count = static_cast<int32_t>(a[3].bits);
+          if (start < 0 || count < 0 || count > 1024 * 1024)
+            return Fail(e, "JNI32 byte region has invalid bounds");
+          const uint32_t guest_buffer = static_cast<uint32_t>(a[4].bits);
+          auto& memory = program.Memory();
+          if (count && !memory.IsMapped(guest_buffer, count, MemoryPermission::kRead))
+            return Fail(e, "JNI32 byte region source is not readable guest memory");
+          std::vector<jbyte> bytes(static_cast<size_t>(count));
+          if (count && !memory.Read(guest_buffer, bytes.data(), bytes.size(), e))
+            return false;
+          real->SetByteArrayRegion(static_cast<jbyteArray>(array), start, count,
+                                   count ? bytes.data() : nullptr);
+          *out = {V, 0};
+          return true;
+        }, error) &&
         Register("GetArrayLength", Slot(offsetof(JNINativeInterface_, GetArrayLength)),
                  {P, P}, I, [this](const auto& a, Value* out, std::string* e) {
           if (!Args(a, 2, e)) return false;
