@@ -51,6 +51,39 @@ def main() -> None:
                 raise RuntimeError(f"{output}: fixture lost its constructor or relocation coverage")
         print(f"Verified {mode} ELF32 fixture: {output}")
 
+        # The second fixture calls real libc symbols through the guest ELF
+        # import table. It is not linked to the host's libc or Android ART.
+        bionic_source = source.with_name("guest_bionic_fixture.c")
+        bionic_output = (args.out_dir / f"bionic-{mode}.so").resolve()
+        subprocess.run(compiler + [
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-sanitize=all",
+            "-fno-builtin", "-shared", "-fPIC", "-nostdlib",
+            "-fno-stack-protector", "-Wl,--hash-style=both",
+            "-Wl,-soname,gesher_arm32_bionic_fixture.so",
+            str(bionic_source), "-o", str(bionic_output),
+        ], check=True, timeout=120)
+        with bionic_output.open("rb") as stream:
+            elf = ELFFile(stream)
+            if elf.elfclass != 32 or not elf.little_endian or elf["e_machine"] != "EM_ARM":
+                raise RuntimeError(f"{bionic_output}: not ARM ELF32")
+            symbols = list(elf.get_section_by_name(".dynsym").iter_symbols())
+            functions = [symbol for symbol in symbols if symbol.name.startswith("bionic_")]
+            expected = {"bionic_heap", "bionic_copy", "bionic_strings", "bionic_invalid"}
+            if {symbol.name for symbol in functions} != expected or any(
+                    bool(symbol["st_value"] & 1) != (mode == "thumb")
+                    for symbol in functions):
+                raise RuntimeError(f"{bionic_output}: incorrect guest function state")
+            imports = {symbol.name for symbol in symbols
+                       if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
+            required_imports = {"malloc", "calloc", "realloc", "free", "strlen",
+                                "strnlen", "memcpy", "memmove", "memset",
+                                "memcmp", "strcmp", "strncmp"}
+            if imports != required_imports:
+                raise RuntimeError(
+                    f"{bionic_output}: unexpected guest libc imports {sorted(imports)}")
+        print(f"Verified {mode} ARM32 libc fixture: {bionic_output}")
+
 
 if __name__ == "__main__":
     main()
