@@ -1,0 +1,429 @@
+// gesher: JNI calls issued by a 32-bit ARM guest through an explicit host ABI.
+// This is a subset of the Android JNI table. Missing operations are not
+// simulated: their table pointers remain zero and guest execution faults.
+#include <gesher/arm32_jni.h>
+
+#include <gesher/arm32_abi.h>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstring>
+#include <map>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace gesher::arm32 {
+namespace {
+constexpr uint32_t kGuestEnv = 0xd0003000;
+constexpr uint32_t kGuestTable = 0xd0004000;
+constexpr uint64_t kStringStart = 0xd0100000;
+constexpr uint64_t kStringEnd = 0xd1000000;
+constexpr uint32_t kMaxUtfBytes = 1024 * 1024;
+constexpr auto kRW = MemoryPermission::kRead | MemoryPermission::kWrite;
+constexpr uint32_t kPage = GuestMemory::kPageSize;
+
+bool Fail(std::string* error, const char* message) {
+  if (error) *error = message;
+  return false;
+}
+
+bool ReadGuestString(GuestMemory& memory, uint32_t address,
+                     std::string* output, std::string* error) {
+  if (!address) return Fail(error, "JNI32 null guest string pointer");
+  std::string string;
+  for (uint32_t i = 0; i < kMaxUtfBytes; ++i) {
+    if (uint64_t{address} + i > UINT32_MAX)
+      return Fail(error, "JNI32 guest string address overflow");
+    uint8_t byte = 0;
+    if (!memory.Read8(address + i, &byte, error)) return false;
+    if (!byte) { *output = std::move(string); return true; }
+    string.push_back(static_cast<char>(byte));
+  }
+  return Fail(error, "JNI32 guest string exceeds limit");
+}
+
+constexpr size_t Slot(size_t offset) { return offset / sizeof(void*); }
+
+}  // namespace
+
+struct Jni32::State {
+  struct Ref {
+    jobject object = nullptr;
+    bool global = false;
+  };
+  struct UtfCopy {
+    uint32_t owner = 0;
+    uint32_t length = 0;
+    uint32_t mapped_size = 0;
+  };
+
+  Program& program;
+  JNIEnv* const real;
+  const std::thread::id owner = std::this_thread::get_id();
+  OpaqueHandleTable handles;
+  std::map<uint32_t, Ref> references;
+  std::map<uint32_t, UtfCopy> utf_copies;
+  uint64_t next_string = kStringStart;
+  bool active = false;
+  bool attempted = false;
+
+  State(Program& p, JNIEnv* e) : program(p), real(e) {}
+
+  bool CheckThread(std::string* error) const {
+    if (!active || !real || std::this_thread::get_id() != owner)
+      return Fail(error, "JNI32 call outside installed owning Java thread");
+    return true;
+  }
+
+  bool Args(const std::vector<Value>& a, size_t n, std::string* error) const {
+    if (!CheckThread(error)) return false;
+    if (a.size() != n || a.empty() || a[0].bits != kGuestEnv)
+      return Fail(error, "JNI32 invalid guest JNIEnv pointer or argument count");
+    return true;
+  }
+
+  bool Lookup(uint32_t token, jobject* object, std::string* error) const {
+    if (token == 0) { *object = nullptr; return true; }
+    uintptr_t value = 0;
+    if (!handles.Resolve(token, OpaqueHandleKind::Object, &value, error))
+      return false;
+    if (!references.contains(token))
+      return Fail(error, "JNI32 object token is not live");
+    *object = reinterpret_cast<jobject>(value);
+    return true;
+  }
+
+  bool Adopt(jobject object, bool global, uint32_t* result, std::string* error) {
+    if (object == nullptr) { *result = 0; return true; }
+    uint32_t token = 0;
+    if (!handles.Insert(reinterpret_cast<uintptr_t>(object),
+                        OpaqueHandleKind::Object, &token, error)) {
+      if (global) real->DeleteGlobalRef(object); else real->DeleteLocalRef(object);
+      return false;
+    }
+    try {
+      references.emplace(token, Ref{object, global});
+    } catch (...) {
+      handles.Remove(token, OpaqueHandleKind::Object);
+      if (global) real->DeleteGlobalRef(object); else real->DeleteLocalRef(object);
+      return Fail(error, "JNI32 cannot retain guest reference");
+    }
+    *result = token;
+    return true;
+  }
+
+  bool Delete(uint32_t token, bool global, std::string* error) {
+    if (token == 0) return true;
+    auto found = references.find(token);
+    if (found == references.end() || found->second.global != global)
+      return Fail(error, "JNI32 token has wrong reference scope");
+    if (!handles.Remove(token, OpaqueHandleKind::Object, error)) return false;
+    if (global) real->DeleteGlobalRef(found->second.object);
+    else real->DeleteLocalRef(found->second.object);
+    references.erase(found);
+    return true;
+  }
+
+  void ClearReferences(bool globals) {
+    for (auto it = references.begin(); it != references.end();) {
+      if (!globals && it->second.global) { ++it; continue; }
+      const uint32_t token = it->first;
+      (void)handles.Remove(token, OpaqueHandleKind::Object);
+      if (it->second.global) real->DeleteGlobalRef(it->second.object);
+      else real->DeleteLocalRef(it->second.object);
+      it = references.erase(it);
+    }
+  }
+
+  bool UtfBytes(jstring string, uint32_t owner_token, uint32_t is_copy,
+                uint32_t* guest_address, std::string* error) {
+    const char* host = real->GetStringUTFChars(string, nullptr);
+    if (!host) { *guest_address = 0; return true; } // real exception is pending
+    const jsize length = real->GetStringUTFLength(string);
+    if (length < 0 || static_cast<uint64_t>(length) > kMaxUtfBytes) {
+      real->ReleaseStringUTFChars(string, host);
+      return Fail(error, "JNI32 UTF payload exceeds supported memory limit");
+    }
+    const uint64_t allocation = (uint64_t{static_cast<uint32_t>(length)} + 1 +
+                                 kPage - 1) & ~(uint64_t{kPage} - 1);
+    const uint64_t address = next_string;
+    if (address >= kStringEnd || allocation > kStringEnd - address) {
+      real->ReleaseStringUTFChars(string, host);
+      return Fail(error, "JNI32 UTF allocation address space exhausted");
+    }
+    if (is_copy && !program.Memory().IsMapped(is_copy, 1, MemoryPermission::kWrite)) {
+      real->ReleaseStringUTFChars(string, host);
+      return Fail(error, "JNI32 isCopy is not writable guest memory");
+    }
+    const bool mapped = program.Memory().Map(static_cast<uint32_t>(address), allocation, kRW, error);
+    if (!mapped) { real->ReleaseStringUTFChars(string, host); return false; }
+    const bool written = program.Memory().Write(static_cast<uint32_t>(address),
+                                                host, static_cast<size_t>(length) + 1, error) &&
+                        (!is_copy || program.Memory().Write8(is_copy, 1, error));
+    real->ReleaseStringUTFChars(string, host);
+    if (!written) {
+      program.Memory().Unmap(static_cast<uint32_t>(address), allocation);
+      return false;
+    }
+    try {
+      utf_copies.emplace(static_cast<uint32_t>(address),
+                         UtfCopy{owner_token, static_cast<uint32_t>(length),
+                                 static_cast<uint32_t>(allocation)});
+    } catch (...) {
+      program.Memory().Unmap(static_cast<uint32_t>(address), allocation);
+      return Fail(error, "JNI32 UTF copy bookkeeping failed");
+    }
+    next_string += allocation + kPage;
+    *guest_address = static_cast<uint32_t>(address);
+    return true;
+  }
+
+  bool ReleaseUtf(uint32_t token, uint32_t address, std::string* error) {
+    auto found = utf_copies.find(address);
+    if (found == utf_copies.end() || found->second.owner != token)
+      return Fail(error, "JNI32 invalid string UTF release");
+    if (!program.Memory().Unmap(address, found->second.mapped_size, error)) return false;
+    utf_copies.erase(found);
+    return true;
+  }
+
+  bool Register(const char* name, size_t slot, std::vector<ValueKind> kinds,
+                ValueKind result, HostCallback callback, std::string* error) {
+    constexpr size_t slots = sizeof(JNINativeInterface_) / sizeof(void*);
+    if (slot >= slots || slot >= kPage / 4)
+      return Fail(error, "JNI32 slot is outside guest function table");
+    const std::string symbol = std::string("jni32.") + name;
+    if (!program.BindHostSymbol(symbol, std::move(kinds), result,
+                                std::move(callback), error)) return false;
+    uint32_t address = 0;
+    if (!program.HostSymbolAddress(symbol, &address))
+      return Fail(error, "JNI32 bound host thunk address is absent");
+    return program.Memory().Write32(kGuestTable + static_cast<uint32_t>(slot) * 4,
+                                    address, error);
+  }
+
+  bool Install(std::string* error) {
+    if (attempted) return Fail(error, "JNI32 installation may run only once");
+    attempted = true;
+    if (!real || std::this_thread::get_id() != owner)
+      return Fail(error, "JNI32 requires a real JNIEnv on its owning thread");
+    auto& memory = program.Memory();
+    if (!memory.Map(kGuestEnv, kPage, kRW, error)) return false;
+    if (!memory.Map(kGuestTable, kPage, kRW, error)) {
+      memory.Unmap(kGuestEnv, kPage);
+      return false;
+    }
+    if (!memory.Write32(kGuestEnv, kGuestTable, error)) return false;
+    active = true;
+    using K = ValueKind;
+    constexpr auto P = K::Pointer32, I = K::I32, U = K::U32, V = K::Void;
+    // Every implemented callback checks the guest JNIEnv pointer, the host
+    // Java thread and reference tokens. A failure stops the guest explicitly.
+    const bool ok =
+        Register("GetVersion", Slot(offsetof(JNINativeInterface_, GetVersion)),
+                 {P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 1, e)) return false;
+          *out = Value::Signed32(real->GetVersion());
+          return true;
+        }, error) &&
+        Register("ExceptionCheck", Slot(offsetof(JNINativeInterface_, ExceptionCheck)),
+                 {P}, U, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 1, e)) return false;
+          *out = Value::Unsigned32(real->ExceptionCheck() ? 1 : 0);
+          return true;
+        }, error) &&
+        Register("ExceptionClear", Slot(offsetof(JNINativeInterface_, ExceptionClear)),
+                 {P}, V, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 1, e)) return false;
+          real->ExceptionClear();
+          *out = {V, 0};
+          return true;
+        }, error) &&
+        Register("ExceptionOccurred", Slot(offsetof(JNINativeInterface_, ExceptionOccurred)),
+                 {P}, P, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 1, e)) return false;
+          uint32_t token = 0;
+          if (!Adopt(real->ExceptionOccurred(), false, &token, e)) return false;
+          *out = Value::GuestPointer(token);
+          return true;
+        }, error) &&
+        Register("FindClass", Slot(offsetof(JNINativeInterface_, FindClass)),
+                 {P, P}, P, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          std::string name;
+          if (!ReadGuestString(program.Memory(), static_cast<uint32_t>(a[1].bits), &name, e))
+            return false;
+          uint32_t token = 0;
+          if (!Adopt(real->FindClass(name.c_str()), false, &token, e)) return false;
+          *out = Value::GuestPointer(token);
+          return true;
+        }, error) &&
+        Register("NewLocalRef", Slot(offsetof(JNINativeInterface_, NewLocalRef)),
+                 {P, P}, P, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          jobject object = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &object, e)) return false;
+          uint32_t token = 0;
+          if (!Adopt(real->NewLocalRef(object), false, &token, e)) return false;
+          *out = Value::GuestPointer(token);
+          return true;
+        }, error) &&
+        Register("NewGlobalRef", Slot(offsetof(JNINativeInterface_, NewGlobalRef)),
+                 {P, P}, P, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          jobject object = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &object, e)) return false;
+          uint32_t token = 0;
+          if (!Adopt(real->NewGlobalRef(object), true, &token, e)) return false;
+          *out = Value::GuestPointer(token);
+          return true;
+        }, error) &&
+        Register("DeleteLocalRef", Slot(offsetof(JNINativeInterface_, DeleteLocalRef)),
+                 {P, P}, V, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e) || !Delete(static_cast<uint32_t>(a[1].bits), false, e))
+            return false;
+          *out = {V, 0};
+          return true;
+        }, error) &&
+        Register("DeleteGlobalRef", Slot(offsetof(JNINativeInterface_, DeleteGlobalRef)),
+                 {P, P}, V, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e) || !Delete(static_cast<uint32_t>(a[1].bits), true, e))
+            return false;
+          *out = {V, 0};
+          return true;
+        }, error) &&
+        Register("GetObjectClass", Slot(offsetof(JNINativeInterface_, GetObjectClass)),
+                 {P, P}, P, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          jobject object = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &object, e)) return false;
+          uint32_t token = 0;
+          if (!Adopt(real->GetObjectClass(object), false, &token, e)) return false;
+          *out = Value::GuestPointer(token);
+          return true;
+        }, error) &&
+        Register("IsSameObject", Slot(offsetof(JNINativeInterface_, IsSameObject)),
+                 {P, P, P}, U, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 3, e)) return false;
+          jobject left = nullptr, right = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &left, e) ||
+              !Lookup(static_cast<uint32_t>(a[2].bits), &right, e)) return false;
+          *out = Value::Unsigned32(real->IsSameObject(left, right) ? 1 : 0);
+          return true;
+        }, error) &&
+        Register("NewStringUTF", Slot(offsetof(JNINativeInterface_, NewStringUTF)),
+                 {P, P}, P, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          std::string str;
+          if (!ReadGuestString(program.Memory(), static_cast<uint32_t>(a[1].bits), &str, e))
+            return false;
+          uint32_t token = 0;
+          if (!Adopt(real->NewStringUTF(str.c_str()), false, &token, e)) return false;
+          *out = Value::GuestPointer(token);
+          return true;
+        }, error) &&
+        Register("GetStringUTFLength", Slot(offsetof(JNINativeInterface_, GetStringUTFLength)),
+                 {P, P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          jobject str = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &str, e) || !str)
+            return Fail(e, "JNI32 UTF string reference is null or invalid");
+          *out = Value::Signed32(real->GetStringUTFLength(static_cast<jstring>(str)));
+          return true;
+        }, error) &&
+        Register("GetStringLength", Slot(offsetof(JNINativeInterface_, GetStringLength)),
+                 {P, P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          jobject str = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &str, e) || !str)
+            return Fail(e, "JNI32 string reference is null or invalid");
+          *out = Value::Signed32(real->GetStringLength(static_cast<jstring>(str)));
+          return true;
+        }, error) &&
+        Register("GetStringUTFChars", Slot(offsetof(JNINativeInterface_, GetStringUTFChars)),
+                 {P, P, P}, P, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 3, e)) return false;
+          jobject str = nullptr;
+          const uint32_t owner = static_cast<uint32_t>(a[1].bits);
+          if (!Lookup(owner, &str, e) || !str)
+            return Fail(e, "JNI32 UTF string reference is null or invalid");
+          uint32_t pointer = 0;
+          if (!UtfBytes(static_cast<jstring>(str), owner,
+                        static_cast<uint32_t>(a[2].bits), &pointer, e)) return false;
+          *out = Value::GuestPointer(pointer);
+          return true;
+        }, error) &&
+        Register("ReleaseStringUTFChars", Slot(offsetof(JNINativeInterface_, ReleaseStringUTFChars)),
+                 {P, P, P}, V, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 3, e) ||
+              !ReleaseUtf(static_cast<uint32_t>(a[1].bits),
+                          static_cast<uint32_t>(a[2].bits), e)) return false;
+          *out = {V, 0};
+          return true;
+        }, error) &&
+        Register("GetArrayLength", Slot(offsetof(JNINativeInterface_, GetArrayLength)),
+                 {P, P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 2, e)) return false;
+          jobject array = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &array, e) || !array)
+            return Fail(e, "JNI32 array reference is null or invalid");
+          *out = Value::Signed32(real->GetArrayLength(static_cast<jarray>(array)));
+          return true;
+        }, error) &&
+        Register("ThrowNew", Slot(offsetof(JNINativeInterface_, ThrowNew)),
+                 {P, P, P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 3, e)) return false;
+          jobject klass = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &klass, e) || !klass)
+            return Fail(e, "JNI32 exception class reference is null or invalid");
+          std::string text;
+          if (!ReadGuestString(program.Memory(), static_cast<uint32_t>(a[2].bits),
+                               &text, e)) return false;
+          *out = Value::Signed32(real->ThrowNew(static_cast<jclass>(klass), text.c_str()));
+          return true;
+        }, error);
+
+    if (!ok ||
+        !memory.Protect(kGuestEnv, kPage, MemoryPermission::kRead, error) ||
+        !memory.Protect(kGuestTable, kPage, MemoryPermission::kRead, error)) {
+      active = false;
+      // BindHostSymbol has no unbind. Inert callbacks remain registered but
+      // cannot access a host JNIEnv; the installed guest pages are retired.
+      memory.Unmap(kGuestEnv, kPage);
+      memory.Unmap(kGuestTable, kPage);
+      return false;
+    }
+    if (error) error->clear();
+    return true;
+  }
+};
+
+Jni32::Jni32(Program& program, JNIEnv* real_env)
+    : state_(std::make_shared<State>(program, real_env)) {}
+Jni32::~Jni32() {
+  if (!state_) return;
+  state_->active = false;
+  if (state_->real && std::this_thread::get_id() == state_->owner) {
+    for (const auto& [address, copy] : state_->utf_copies) {
+      state_->program.Memory().Unmap(address, copy.mapped_size);
+    }
+    state_->utf_copies.clear();
+    state_->ClearReferences(true);
+  }
+}
+bool Jni32::Install(std::string* error) { return state_->Install(error); }
+uint32_t Jni32::GuestEnvironment() const {
+  return state_ && state_->active ? kGuestEnv : 0;
+}
+bool Jni32::ReleaseLocals(std::string* error) {
+  if (!state_ || !state_->CheckThread(error)) return false;
+  if (!state_->utf_copies.empty())
+    return Fail(error, "JNI32 unreleased GetStringUTFChars leases at frame exit");
+  state_->ClearReferences(false);
+  if (error) error->clear();
+  return true;
+}
+}  // namespace gesher::arm32
