@@ -279,6 +279,22 @@ void ValidImages() {
   CHECK(R32(image.bytes, 0x600) == 0x11640 && R32(image.bytes, 0x604) == 0x11201);
   CHECK((image.constructors == std::vector<uint32_t>{0x11201, 0x11201}));
 
+  // p_vaddr need not be page aligned when p_align is smaller than the host
+  // page. The image is still mapped from page_start(min(p_vaddr)), preserving
+  // the first PT_LOAD's actual offset and its file-backed dynamic metadata.
+  Fixture partial_first_page;
+  partial_first_page.Phdr(52, 1, 0x100, 0x100, 0x400, 0x400, 5, 0x100);
+  CHECK(LoadElf32(partial_first_page.file.data(), partial_first_page.file.size(),
+                  Options(), &image, &error));
+  CHECK(image.guest_base == 0x10000 && image.load_bias == 0x10000);
+  CHECK(image.bytes.size() == 0x880);
+  CHECK(std::all_of(image.bytes.begin(), image.bytes.begin() + 0x100,
+                    [](uint8_t byte) { return byte == 0; }));
+  CHECK(image.segments[0].address == 0x10100 &&
+        image.segments[0].size == 0x400);
+  CHECK(R32(image.bytes, 0x600) == 0x10640);
+  CHECK((image.constructors == std::vector<uint32_t>{0x10201, 0x10201}));
+
   Fixture protected_image;
   W16(protected_image.file, 44, 4);
   protected_image.Phdr(148, 0x6474e552, 0x600, 0x600, 0x200, 0x280, 4, 1);
