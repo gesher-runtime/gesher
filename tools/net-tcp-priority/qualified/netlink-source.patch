@@ -29,7 +29,7 @@ index a8fb022e2..760f24294 100644
 +}
 +
 diff --git a/compat/posix/src/socket.cc b/compat/posix/src/socket.cc
-index c28d77eda..ea0ebe90c 100644
+index c28d77eda..3a0ebb337 100644
 --- a/compat/posix/src/socket.cc
 +++ b/compat/posix/src/socket.cc
 @@ -3,0 +4 @@
@@ -108,7 +108,7 @@ index c28d77eda..ea0ebe90c 100644
 +      actual = static_cast<uint32_t>(capacity);
 +    }
 +    const ssize_t n = gesher::NetlinkRecv(
-+        *state.description->netlink, buffers, count, flags, addr,
++        state.description, buffers, count, flags, addr,
 +        addr != nullptr ? &actual : nullptr, state.description->nonblocking.load(), result_flags);
 +    if (n >= 0 && addr != nullptr && addrlen != nullptr) {
 +      const socklen_t out_len = static_cast<socklen_t>(actual);
@@ -162,7 +162,7 @@ index 00aaf9f45..260137af9 100644
 +              if (!state.description->netlink &&
 +                  !state.description->native_nonblocking_datagram &&
 diff --git a/compat/posix/src/winsock.cc b/compat/posix/src/winsock.cc
-index 86c44eb8c..b56606ce2 100644
+index 86c44eb8c..7b6f150b0 100644
 --- a/compat/posix/src/winsock.cc
 +++ b/compat/posix/src/winsock.cc
 @@ -25,0 +26 @@
@@ -190,7 +190,7 @@ index 86c44eb8c..b56606ce2 100644
 +  if (description && description->netlink) {
 +    if (rights != nullptr) *rights = {};
 +    if (credentials != nullptr) *credentials = {};
-+    return gesher::NetlinkRecv(*description->netlink, buffers, count, 0, nullptr, nullptr,
++    return gesher::NetlinkRecv(description, buffers, count, 0, nullptr, nullptr,
 +                               description->nonblocking.load() || dont_wait, result_flags);
 +  }
 @@ -1683,0 +1708,2 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob

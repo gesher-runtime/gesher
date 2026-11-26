@@ -1448,7 +1448,7 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
   if (description && description->netlink) {
     if (rights != nullptr) *rights = {};
     if (credentials != nullptr) *credentials = {};
-    return gesher::NetlinkRecv(*description->netlink, buffers, count, 0, nullptr, nullptr,
+    return gesher::NetlinkRecv(description, buffers, count, 0, nullptr, nullptr,
                                description->nonblocking.load() || dont_wait, result_flags);
   }
   if (description->unix_datagram_pair.load()) {

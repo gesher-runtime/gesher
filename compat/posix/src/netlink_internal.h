@@ -23,7 +23,8 @@ int NetlinkGetName(NetlinkState& state, void* addr, uint32_t* len, bool peer);
 
 ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count, int flags,
                     const void* addr, uint32_t addrlen);
-ssize_t NetlinkRecv(NetlinkState& state, ws::Buffer* buffers, size_t count, int flags, void* addr,
+ssize_t NetlinkRecv(std::shared_ptr<ws::SocketDescription>& description,
+                    ws::Buffer* buffers, size_t count, int flags, void* addr,
                     uint32_t* addrlen, bool nonblocking, int* result_flags = nullptr);
 
 int NetlinkSetSockOpt(NetlinkState& state, int level, int name, const void* value, uint32_t len);

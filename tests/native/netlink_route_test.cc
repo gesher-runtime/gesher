@@ -14,12 +14,14 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -397,6 +399,62 @@ void TestReceiveBufferLimit() {
   close(fd);
 }
 
+struct ReceiveWait {
+  int fd;
+  std::atomic<bool> started{false};
+  ssize_t result = 0;
+  int error = 0;
+};
+
+void* WaitForReply(void* opaque) {
+  auto* wait = static_cast<ReceiveWait*>(opaque);
+  char byte;
+  wait->started.store(true, std::memory_order_release);
+  wait->result = recv(wait->fd, &byte, sizeof(byte), 0);
+  wait->error = errno;
+  return nullptr;
+}
+
+void TestReceiveRetirement() {
+  for (bool cancel : {false, true}) {
+    int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    Check(fd >= 0, "open route socket for blocked receive retirement");
+    if (fd < 0) return;
+    const timeval fallback = {2, 0};
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &fallback, sizeof(fallback)) != 0) {
+      Check(false, "install receive timeout as a test safety bound");
+      close(fd);
+      return;
+    }
+    ReceiveWait wait{fd};
+    pthread_t reader;
+    const int started = pthread_create(&reader, nullptr, WaitForReply, &wait);
+    Check(started == 0, "start route socket reader");
+    if (started != 0) {
+      close(fd);
+      return;
+    }
+    while (!wait.started.load(std::memory_order_acquire)) std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(35));
+    void* result = nullptr;
+    const auto begin = std::chrono::steady_clock::now();
+    if (cancel) {
+      Check(pthread_cancel(reader) == 0, "cancel route socket reader");
+      Check(pthread_join(reader, &result) == 0 && result == PTHREAD_CANCELED,
+            "blocked receive joins as canceled");
+      Check(SendDumpRequest(fd, RTM_GETADDR, 12, AF_UNSPEC) > 0,
+            "canceled receive releases the socket lock");
+      Check(close(fd) == 0, "last close still succeeds after cancellation");
+    } else {
+      Check(close(fd) == 0, "close route socket while a receive is blocked");
+      Check(pthread_join(reader, &result) == 0 && wait.result < 0 && wait.error == EBADF,
+            "last close wakes receive with EBADF");
+    }
+    Check(std::chrono::steady_clock::now() - begin < std::chrono::seconds(1),
+          "reader retires before the socket timeout");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -404,6 +462,7 @@ int main() {
   TestInterfaceAddresses();
   TestFlagsPollTimeoutAndDup();
   TestReceiveBufferLimit();
+  TestReceiveRetirement();
 
   if (g_failures == 0) {
     std::printf("netlink_route_test all passed\n");

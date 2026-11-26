@@ -11,6 +11,7 @@
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <pthread.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -408,36 +409,64 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
   return static_cast<ssize_t>(req.size());
 }
 
-ssize_t NetlinkRecv(NetlinkState& state, ws::Buffer* buffers, size_t count, int flags, void* addr,
+namespace {
+
+void ReleaseNetlinkCaller(void* raw) {
+  // The deferred cancellation path may skip C++ destructors.
+  static_cast<std::shared_ptr<ws::SocketDescription>*>(raw)->reset();
+}
+
+}  // namespace
+
+ssize_t NetlinkRecv(std::shared_ptr<ws::SocketDescription>& description,
+                    ws::Buffer* buffers, size_t count, int flags, void* addr,
                     uint32_t* addrlen, bool nonblocking, int* result_flags) {
   if (count > 0 && buffers == nullptr) return errno = EFAULT, -1;
   for (size_t i = 0; i < count; ++i) {
     if (buffers[i].len > 0 && buffers[i].data == nullptr) return errno = EFAULT, -1;
   }
 
-  std::vector<uint8_t> pkt;
+  auto& state = *description->netlink;
+  using Clock = std::chrono::steady_clock;
+  auto deadline = Clock::time_point::max();
   {
-    std::unique_lock<std::mutex> lock(state.mu);
-    const auto ready = [&state] { return !state.queue.empty() || state.closed; };
-    if (!ready()) {
-      if (nonblocking || (flags & MSG_DONTWAIT) != 0) return errno = EAGAIN, -1;
-      if (state.rcv_timeout_ms > 0) {
-        if (!state.cv.wait_for(lock, std::chrono::milliseconds(state.rcv_timeout_ms), ready)) {
-          return errno = EAGAIN, -1;
-        }
-      } else {
-        state.cv.wait(lock, ready);
-      }
-    }
-    if (state.closed) return 0;
-    if (flags & MSG_PEEK) {
-      pkt = state.queue.front();
-    } else {
-      pkt = std::move(state.queue.front());
-      state.queue.pop_front();
-      state.queued_bytes -= pkt.size();
+    std::lock_guard<std::mutex> lock(state.mu);
+    if (state.rcv_timeout_ms > 0) {
+      deadline = Clock::now() + std::chrono::milliseconds(state.rcv_timeout_ms);
     }
   }
+
+  std::vector<uint8_t> pkt;
+  int error = 0;
+  pthread_cleanup_push(ReleaseNetlinkCaller, &description);
+  for (;;) {
+    // Like the Winsock datagram wait, check cancellation without a held lock
+    // or a retained temporary buffer. Data and close notify the wait directly.
+    pthread_testcancel();
+    std::unique_lock<std::mutex> lock(state.mu);
+    if (state.closed) {
+      error = EBADF;
+      break;
+    }
+    if (!state.queue.empty()) {
+      if (flags & MSG_PEEK) {
+        pkt = state.queue.front();
+      } else {
+        pkt = std::move(state.queue.front());
+        state.queue.pop_front();
+        state.queued_bytes -= pkt.size();
+      }
+      break;
+    }
+    const auto now = Clock::now();
+    if (nonblocking || (flags & MSG_DONTWAIT) != 0 || now >= deadline) {
+      error = EAGAIN;
+      break;
+    }
+    state.cv.wait_until(lock, std::min(deadline, now + std::chrono::milliseconds(10)));
+  }
+  pthread_cleanup_pop(0);
+  if (error) return errno = error, -1;
 
   size_t copied = 0;
   for (size_t i = 0; i < count && copied < pkt.size(); ++i) {
