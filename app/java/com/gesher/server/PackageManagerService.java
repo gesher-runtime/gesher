@@ -51,7 +51,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     // result objects remain the responsibility of each resolution under this monitor.
     private ProviderAuthorityIndex mProviderAuthorityIndex;
     private IntentPackageIndex mIntentPackageIndex;
-    private VisibilitySnapshot mVisibilitySnapshot; // guarded by this; metadata, never decisions
+    // Writes remain under this monitor; UID queries may borrow safely published metadata.
+    private volatile VisibilitySnapshot mVisibilitySnapshot; // metadata, never decisions
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
@@ -1695,14 +1696,42 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getNameForUid(int uid) {
-        return nameForUid(uid, false);
+        if (mPackages.size() < UID_INDEX_MIN_PACKAGES) return nameForUid(uid, false);
+        PackageVisibility metadata = uid == android.os.Process.SYSTEM_UID || uid == android.os.Process.SHELL_UID
+                ? null : uidMetadata();
+        return metadata == null ? nameForUid(uid, false)
+                : packageUidName(metadata.firstPackageForUid(uid), uid, false);
     }
+
+    private static final int UID_INDEX_MIN_PACKAGES = 16;
+    private static final int UID_BATCH_MIN_PACKAGES = 32;
+    private static final int UID_BATCH_MIN = 16;
 
     @Override
     public String[] getNamesForUids(int[] uids) {
         // AOSP distinguishes an absent input from positional unknown UID answers.
         if (uids == null || uids.length == 0) return null;
         String[] names = new String[uids.length];
+        if (mPackages.size() < UID_INDEX_MIN_PACKAGES) {
+            for (int i = 0; i < uids.length; i++) names[i] = nameForUid(uids[i], true);
+            return names;
+        }
+        PackageVisibility metadata = uidMetadata();
+        if (metadata != null) {
+            for (int i = 0; i < uids.length; i++) {
+                int uid = uids[i];
+                names[i] = uid == android.os.Process.SYSTEM_UID || uid == android.os.Process.SHELL_UID
+                        ? nameForUid(uid, true) : packageUidName(metadata.firstPackageForUid(uid), uid, true);
+            }
+            return names;
+        }
+        if (uids.length >= UID_BATCH_MIN) {
+            Map<String, ApkPackage> packages = mPackages;
+            if (packages.size() >= UID_BATCH_MIN_PACKAGES) {
+                fillUidNames(uids, names, packages);
+                return names;
+            }
+        }
         for (int i = 0; i < uids.length; i++) {
             names[i] = nameForUid(uids[i], true);
         }
@@ -1725,6 +1754,78 @@ public final class PackageManagerService extends IPackageManager.Default {
         return null;
     }
 
+    private static String packageUidName(ApkPackage pkg, int uid, boolean bulk) {
+        if (pkg == null) return null;
+        String shared = pkg.sharedUserId();
+        return shared == null || shared.isEmpty() ? pkg.packageName : sharedUidName(shared, uid, bulk);
+    }
+
+    /** One cold batch owns only its requested UID keys, never a retained registry index. */
+    private static void fillUidNames(int[] uids, String[] names, Map<String, ApkPackage> packages) {
+        int[] requested = null;
+        int count = 0, uniformUid = 0;
+        for (int i = 0; i < uids.length; i++) {
+            int uid = uids[i];
+            if (uid == android.os.Process.SYSTEM_UID) {
+                names[i] = sharedUidName("android.uid.system", uid, true);
+            } else if (uid == android.os.Process.SHELL_UID) {
+                names[i] = sharedUidName("android.uid.shell", uid, true);
+            } else {
+                if (count == 0) uniformUid = uid;
+                else if (requested == null && uid != uniformUid) {
+                    requested = new int[uids.length];
+                    java.util.Arrays.fill(requested, 0, count, uniformUid);
+                }
+                if (requested != null) requested[count] = uid;
+                count++;
+            }
+        }
+        if (count == 0) return;
+        if (requested == null) {
+            // A repeated UID, possibly mixed with core identities, needs one scan
+            // and no key/match arrays. Preserve the first admitted owner.
+            String name = null;
+            for (ApkPackage pkg : packages.values()) {
+                if (pkg.uid() == uniformUid) { name = packageUidName(pkg, uniformUid, true); break; }
+            }
+            for (int i = 0; i < names.length; i++) if (names[i] == null) names[i] = name;
+            return;
+        }
+        // Sort once and compact duplicates: reverse-ordered large inputs must
+        // not introduce quadratic sparse-array insertion or box every APK UID.
+        java.util.Arrays.sort(requested, 0, count);
+        int unique = 1;
+        for (int i = 1; i < count; i++) {
+            if (requested[i] != requested[unique - 1]) requested[unique++] = requested[i];
+        }
+        ApkPackage[] matches = new ApkPackage[unique];
+        int remaining = unique;
+        for (ApkPackage pkg : packages.values()) {
+            int index = java.util.Arrays.binarySearch(requested, 0, unique, pkg.uid());
+            if (index < 0 || matches[index] != null) continue;
+            matches[index] = pkg;
+            if (--remaining == 0) break;
+        }
+        for (int i = 0; i < uids.length; i++) {
+            if (names[i] != null) continue;
+            int index = java.util.Arrays.binarySearch(requested, 0, unique, uids[i]);
+            names[i] = packageUidName(index < 0 ? null : matches[index], uids[i], true);
+        }
+    }
+
+    /**
+     * Borrow only an already-built, current visibility index. UID ownership lasts
+     * until registry publication, so a filtered pending-removal view cannot serve
+     * these APIs. Cold and small queries keep the direct path; no view is built here.
+     */
+    private PackageVisibility uidMetadata() {
+        VisibilitySnapshot snapshot = mVisibilitySnapshot;
+        if (snapshot == null || !snapshot.uidLookupSuitable || snapshot.packages != mPackages
+                || snapshot.removing != mRemoving || !snapshot.removing.isEmpty()) return null;
+        PackageVisibility installed = snapshot.installedPackages;
+        return installed != null ? installed : snapshot.publicPackages;
+    }
+
     private static String sharedUidName(String shared, int uid, boolean bulk) {
         // AOSP distinguishes the singular UID identity from the bulk diagnostic name.
         return bulk ? "shared:" + shared : shared + ":" + android.os.UserHandle.getAppId(uid);
@@ -1734,6 +1835,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     public String[] getPackagesForUid(int uid) {
         if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
         if (uid == android.os.Process.SHELL_UID) return new String[] {"com.android.shell"};
+        PackageVisibility metadata = mPackages.size() < UID_INDEX_MIN_PACKAGES ? null : uidMetadata();
+        if (metadata != null) return metadata.installedPackageNamesForUid(uid);
         List<String> result = new ArrayList<>();
         for (ApkPackage pkg : mPackages.values()) if (pkg.uid() == uid) result.add(pkg.packageName);
         return result.isEmpty() ? null : result.toArray(new String[0]);
@@ -1800,11 +1903,17 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     private static final class VisibilitySnapshot {
         final Map<String, ApkPackage> packages, removing, visible;
-        PackageVisibility publicPackages, installedPackages;
+        final boolean uidLookupSuitable;
+        volatile PackageVisibility publicPackages, installedPackages;
 
         VisibilitySnapshot(Map<String, ApkPackage> packages, Map<String, ApkPackage> removing) {
             this.packages = packages;
             this.removing = removing;
+            // Visibility reserves android's table position before inserting APKs.
+            // A real non-system-UID owner must keep the registry's identity order.
+            ApkPackage platform = packages.get("android");
+            uidLookupSuitable = packages.size() >= UID_INDEX_MIN_PACKAGES
+                    && (platform == null || platform.uid() == android.os.Process.SYSTEM_UID);
             if (removing.isEmpty()) visible = packages;
             else {
                 visible = new LinkedHashMap<>(packages);
