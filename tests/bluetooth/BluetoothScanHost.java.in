@@ -102,6 +102,7 @@ public final class BluetoothScanHost {
                 "radio-off PendingIntent returns INTERNAL_ERROR before settings and permission checks");
 
         BluetoothHost.radioOn = true;
+        field(BluetoothLeScanner.class, "sThread").set(null, Thread.currentThread());
         Callback denied = new Callback();
         check(!callbackStart(supported, denied) && client(denied) == null,
                 "admitted callback still throws SecurityException before registration without permission");
@@ -123,6 +124,93 @@ public final class BluetoothScanHost {
                 && BluetoothHost.permissionChecks == before,
                 "duplicate callback fails before new settings and scan permission checks");
         reset();
+    }
+    private static boolean deniedBy(Runnable call) {
+        try {
+            call.run();
+            return false;
+        } catch (SecurityException denied) {
+            return true;
+        }
+    }
+    /** Android 16: a stop or flush reaches the permission-enforcing service only for an active scan. */
+    private static void stopWithoutPermission() throws Exception {
+        BluetoothHost.scanAllowed = false;
+        Callback never = new Callback();
+        int before = BluetoothHost.permissionChecks;
+        check(!deniedBy(() -> scanner.stopScan(never)) && !deniedBy(() -> scanner.flushPendingScanResults(never))
+                && BluetoothHost.permissionChecks == before,
+                "stopping or flushing a callback that never scanned is silent without scan permission");
+        PendingIntent idle = new PendingIntent();
+        check(deniedBy(() -> scanner.stopScan(idle)),
+                "PendingIntent stop with BLE on always reaches scan permission enforcement");
+
+        BluetoothHost.scanAllowed = true;
+        Callback active = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        PendingIntent activeIntent = new PendingIntent();
+        scanner.startScan(null, null, activeIntent);
+        BluetoothHost.scanAllowed = false;
+        check(deniedBy(() -> scanner.flushPendingScanResults(active)) && client(active) != null,
+                "flushing an active scan without permission throws and keeps the scan");
+        check(deniedBy(() -> scanner.stopScan(active)) && client(active) == null,
+                "stopping an active scan without permission throws after dropping its framework wrapper");
+        int checksAfterDenial = BluetoothHost.permissionChecks;
+        check(!deniedBy(() -> scanner.stopScan(active)) && !deniedBy(() -> scanner.flushPendingScanResults(active))
+                && BluetoothHost.permissionChecks == checksAfterDenial,
+                "stop and flush no longer reach the service after the wrapper was dropped");
+        deliver("after-denied-stop");
+        Handler.drain();
+        check(active.reports == 1, "a rejected stop leaves the service registration delivering results");
+        check(deniedBy(() -> scanner.stopScan(activeIntent)) && client(activeIntent) != null,
+                "an active PendingIntent scan is not stopped without permission");
+
+        BluetoothHost.scanAllowed = true;
+        scanner.startScan(active);
+        deliver("after-restart");
+        Handler.drain();
+        check(client(active) != null && active.reports == 3,
+                "a new wrapper for the same callback has its own independent service registration");
+        scanner.stopScan(active);
+        deliver("after-authorized-stop");
+        Handler.drain();
+        check(client(active) == null && active.reports == 4,
+                "an authorized stop unregisters only the current wrapper's registration");
+
+        // BLE off: nothing is enforced and the scans are dropped, as on service shutdown.
+        int intentReports = activeIntent.sends;
+        Callback offActive = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        BluetoothHost.scanAllowed = false;
+        BluetoothHost.radioOn = false;
+        before = BluetoothHost.permissionChecks;
+        check(!deniedBy(() -> scanner.stopScan(offActive)) && client(offActive) == null,
+                "BLE off: stopping an active callback scan forgets it without a permission check");
+        check(!deniedBy(() -> scanner.stopScan(activeIntent)) && client(activeIntent) == null,
+                "BLE off: stopping an active PendingIntent scan forgets it without a permission check");
+        check(!deniedBy(() -> scanner.flushPendingScanResults(null)) && BluetoothHost.permissionChecks == before,
+                "BLE off: flush returns before null and permission checks");
+        deliver("after-off-stop");
+        Handler.drain();
+        check(offActive.reports == 0 && offActive.errors == 0 && activeIntent.sends == intentReports
+                && active.reports == 4,
+                "BLE shutdown clears registered and detached scans without reporting failures");
+        Method result = BluetoothLeScanner.class.getDeclaredMethod("result", byte[].class, long[].class);
+        result.setAccessible(true);
+        check(result.invoke(null, new byte[0], new long[6]) == null
+                && BluetoothLeScanner.lastRssi(WindowsBluetooth.address(0)) == null,
+                "an advertisement from a retired watcher changes neither results nor the RSSI cache");
+        reset();
+        field(BluetoothLeScanner.class, "sThread").set(null, Thread.currentThread());
+        Callback detached = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
+        BluetoothHost.scanAllowed = false;
+        check(deniedBy(() -> scanner.stopScan(detached)), "prepare a detached service registration");
+        Method failAll = BluetoothLeScanner.class.getDeclaredMethod("failAll", int.class);
+        failAll.setAccessible(true);
+        failAll.invoke(null, ScanCallback.SCAN_FAILED_INTERNAL_ERROR);
+        Handler.drain();
+        check(detached.errors == 1 && detached.lastError == ScanCallback.SCAN_FAILED_INTERNAL_ERROR,
+                "a live watcher failure still reaches its detached service registration");
+        reset();
+        field(BluetoothLeScanner.class, "sThread").set(null, Thread.currentThread());
     }
     private static void unsupported(ScanSettings settings, String name) throws Exception {
         Callback callback = new Callback();
@@ -164,6 +252,7 @@ public final class BluetoothScanHost {
         // replaces only the native watcher thread; no host radio is fabricated.
         field(BluetoothLeScanner.class, "sThread").set(null, Thread.currentThread());
         permissionPrecedence();
+        stopWithoutPermission();
         Callback all = start(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, 0);
         for (int i = 0; i < 4096; i++) deliver("device-" + i);
         Handler.drain();
@@ -301,6 +390,7 @@ class SystemClock {
     static long elapsedRealtimeNanos() { return now * 1_000_000L; }
 }
 class Log {
+    static void d(String tag, String text) {}
     static void i(String tag, String text) {}
     static void w(String tag, String text) {}
 }

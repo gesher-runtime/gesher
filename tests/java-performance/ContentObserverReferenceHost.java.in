@@ -1,0 +1,87 @@
+// Test adapter (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0.
+package gesher.services;
+
+import android.content.ContentResolver;
+import android.content.IContentService;
+import android.database.IContentObserver;
+import android.net.Uri;
+import android.os.IBinder;
+import android.os.UserHandle;
+import java.util.ArrayList;
+
+/** The generated methods below are unchanged Android 16 r4 source, qualified by SHA-256. */
+public final class ContentObserverReferenceHost {
+    private static final boolean DEBUG = false;
+    private static final String TAG = "observer-reference";
+    private static final class Slog { static void d(String tag, String text) {} }
+    private static final class ObserverCollector {
+        int count;
+        void collect(IContentObserver observer, int uid, boolean self, Uri uri, int flags, int user) { count++; }
+    }
+    private static final class ObserverNode {
+        private static final class ObserverEntry {
+            final IContentObserver observer;
+            final boolean notifyForDescendants;
+            final int uid, userHandle;
+            ObserverEntry(IContentObserver observer, boolean descendants, Object lock, int uid, int pid, int user, Uri uri) {
+                this.observer = observer;
+                this.notifyForDescendants = descendants;
+                this.uid = uid;
+                this.userHandle = user;
+            }
+        }
+        private String mName;
+        private ArrayList<ObserverNode> mChildren = new ArrayList<>();
+        private ArrayList<ObserverEntry> mObservers = new ArrayList<>();
+        ObserverNode(String name) { mName = name; }
+        /* UPSTREAM_SELECTION_METHODS */
+    }
+
+    public static void main(String[] args) throws Exception {
+        System.load(args[0]);
+        String[] values = {
+            "content://alpha", "content://alpha/items", "content://alpha/items/child",
+            "content://alpha/items/child/deep", "content://alpha/items/sibling", "content://alpha/items2",
+            "content://beta/items", "content://alpha/a%2Fb", "content://alpha/a/b",
+            "content://alpha/%D7%90", "content://alpha/א", "content://alpha/items?query=yes#part"
+        };
+        int[] flags = {0, ContentResolver.NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS,
+                ContentResolver.NOTIFY_INSERT,
+                ContentResolver.NOTIFY_DELETE | ContentResolver.NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS};
+        var matcher = Class.forName("com.gesher.server.ContentService")
+                .getDeclaredMethod("matches", Uri.class, boolean.class, Uri.class, int.class);
+        matcher.setAccessible(true);
+        int checks = 0, mismatches = 0;
+        for (String registered : values) for (boolean descendants : new boolean[]{false, true}) {
+            IContentService service = ContentObserverDispatchTest.service();
+            var observer = new ContentObserverDispatchTest.Observer(0, null);
+            Uri registration = Uri.parse(registered);
+            service.registerContentObserver(registration, descendants, observer, 0, 36);
+            ObserverNode reference = new ObserverNode("");
+            reference.addObserverLocked(registration, observer, descendants, new Object(), 10000, 1, 0);
+            for (String changed : values) for (int flag : flags) for (int selfMode = 0; selfMode < 3; selfMode++) {
+                Uri uri = Uri.parse(changed);
+                IContentObserver self = selfMode == 0 ? null : observer;
+                boolean wantsSelf = selfMode == 2;
+                ObserverCollector collector = new ObserverCollector();
+                reference.collectObserversLocked(uri, 0, self, wantsSelf, flag, 0, collector);
+                long before = observer.calls;
+                service.notifyChange(new Uri[]{uri}, self, wantsSelf, flag, 0, 36, null);
+                if (observer.calls - before != collector.count) {
+                    if (mismatches < 8) System.out.println("Mismatch: " + registered + " descendants=" + descendants
+                            + " change=" + changed + " flags=" + flag + " selfMode=" + selfMode);
+                    mismatches++;
+                }
+                checks++;
+                if (selfMode == 0) {
+                    boolean actual = (Boolean) matcher.invoke(null, registration, descendants, uri, flag);
+                    if (actual != (collector.count != 0)) mismatches++;
+                    checks++;
+                }
+            }
+            service.unregisterContentObserver(observer);
+        }
+        System.out.println("Content observer Android source comparison: " + checks + " checks, " + mismatches + " mismatches");
+        if (mismatches != 0) throw new AssertionError("Android observer selection differs in " + mismatches + " cases");
+    }
+}

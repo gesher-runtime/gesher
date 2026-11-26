@@ -28,25 +28,6 @@ public class GoogleSignInAccount {
     private final long mExpirationTimeSecs;
     private final Set<Scope> mGrantedScopes;
 
-    public static GoogleSignInAccount createDefault() {
-        Set<Scope> scopes = new HashSet<>();
-        scopes.add(new Scope("email"));
-        scopes.add(new Scope("profile"));
-        scopes.add(new Scope("openid"));
-        return new GoogleSignInAccount(
-                "100000000000000000001",
-                "user@gesher.local",
-                "Gesher User",
-                "Gesher",
-                "User",
-                Uri.parse("https://lh3.googleusercontent.com/a/default-user"),
-                "dummy_id_token_gesher_local_jwt_header.payload.signature",
-                "dummy_auth_code_gesher_server_token_12345",
-                System.currentTimeMillis() / 1000 + 86400 * 30,
-                scopes
-        );
-    }
-
     public GoogleSignInAccount(String id, String email, String displayName, String givenName,
             String familyName, Uri photoUrl, String idToken, String serverAuthCode,
             long expirationTimeSecs, Set<Scope> grantedScopes) {

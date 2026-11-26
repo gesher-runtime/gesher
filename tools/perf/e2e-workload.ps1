@@ -20,7 +20,7 @@ $result = [ordered]@{
 }
 
 function InvokePerfFileIo([scriptblock] $Operation, [Diagnostics.Stopwatch] $Clock,
-                          [double] $TimeoutSeconds = 30) {
+                          [double] $TimeoutSeconds = 30, [switch] $MissingSnapshot) {
   if (-not $Clock) { $Clock = [Diagnostics.Stopwatch]::StartNew() }
   for ($attempt = 0; $attempt -lt 5; $attempt++) {
     if ($Clock.Elapsed.TotalSeconds -ge $TimeoutSeconds) { throw 'Workload protocol exceeded its existing deadline' }
@@ -28,11 +28,13 @@ function InvokePerfFileIo([scriptblock] $Operation, [Diagnostics.Stopwatch] $Clo
     catch {
       $cause = $_.Exception.GetBaseException()
       $nativeCode = $cause.HResult -band 0xffff
-      # Access denied can be permanent. Retry only native Windows transport
-      # errors, at most four times; the final error remains a failed workload.
+      # A mailbox can disappear between an existence check and an open during
+      # replacement. Only reads admit ERROR_FILE_NOT_FOUND; publication does not.
+      # Keep the same five-attempt bound and deadline, including permanent denial.
+      $retryable = $nativeCode -in @(5, 32) -or ($MissingSnapshot -and $nativeCode -eq 2)
       if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
           ($cause -isnot [IO.IOException] -and $cause -isnot [UnauthorizedAccessException]) -or
-          $nativeCode -notin @(5, 32) -or $attempt -eq 4) { throw }
+          -not $retryable -or $attempt -eq 4) { throw }
       $remaining = $TimeoutSeconds - $Clock.Elapsed.TotalSeconds
       if ($remaining -le 0) { throw 'Workload protocol exceeded its existing deadline' }
       $backoff = 10 * [Math]::Pow(2, $attempt)
@@ -46,7 +48,7 @@ function InvokePerfFileIo([scriptblock] $Operation, [Diagnostics.Stopwatch] $Clo
 
 function ReadPerfJson([string] $Path, [Diagnostics.Stopwatch] $Clock) {
   if (-not $Clock) { $Clock = [Diagnostics.Stopwatch]::StartNew() }
-  $text = InvokePerfFileIo -Clock $Clock -Operation {
+  $text = InvokePerfFileIo -Clock $Clock -MissingSnapshot -Operation {
     # Keep one complete file object open while allowing the peer to replace it.
     # In-place writes are denied. This is separate from post-failure diagnostics.
     $sharing = [IO.FileShare]::Read -bor [IO.FileShare]::Delete

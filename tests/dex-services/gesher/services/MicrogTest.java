@@ -41,10 +41,14 @@ public final class MicrogTest {
         Object pm = pmClass.getConstructor(java.util.Collection.class)
                 .newInstance(Collections.emptyList());
         Method get = pmClass.getMethod("getPackageInfo", String.class, long.class, int.class);
-        PackageInfo fallback = (PackageInfo) get.invoke(pm, "com.google.android.gms",
-                (long) PackageManager.GET_SIGNATURES, 0);
-        require(fallback != null && fallback.signatures.length == 1, "lost synthetic fallback");
-        System.out.println("MicrogTest: synthetic fallback preserved without installed GmsCore");
+        // Issue #335: without an installed GmsCore there is no Play services package.
+        require(get.invoke(pm, "com.google.android.gms", (long) PackageManager.GET_SIGNATURES, 0) == null,
+                "Play services reported without an installed GmsCore");
+        require(get.invoke(pm, "com.android.vending", (long) PackageManager.GET_SIGNATURES, 0) == null,
+                "Play Store reported without an installed Companion");
+        System.out.println("MicrogTest: no Play services or Play Store package without installed GmsCore");
+        android.content.pm.Signature google = (android.content.pm.Signature) Class
+                .forName("com.gesher.server.GmsPackageSupport").getMethod("getGoogleSignature").invoke(null);
 
         if (args.length > 1) {
             require((Boolean) verify.invoke(null, args[1]), "official APK integrity check failed");
@@ -60,15 +64,15 @@ public final class MicrogTest {
                     .invoke(apk, (long) (PackageManager.GET_SIGNATURES
                             | PackageManager.GET_SIGNING_CERTIFICATES));
             boolean enabled = (Boolean) gate.getMethod("isEnabled").invoke(null);
-            require(real.signatures[0].equals(fallback.signatures[0]) == enabled,
+            require(real.signatures[0].equals(google) == enabled,
                     "legacy signature did not respect the opt-in");
-            require(real.signingInfo.getApkContentsSigners()[0].equals(fallback.signatures[0])
+            require(real.signingInfo.getApkContentsSigners()[0].equals(google)
                             == enabled, "modern signature did not respect the opt-in");
             System.out.println("MicrogTest: official GmsCore signatures, enabled=" + enabled);
             Object realPm = pmClass.getConstructor(java.util.Collection.class)
                     .newInstance(Collections.singletonList(apk));
             require(get.invoke(realPm, "com.android.vending", 0L, 0) == null,
-                    "synthetic Companion hid the missing real addon");
+                    "Play Store reported without the real Companion addon");
             Class<?> am = Class.forName("com.gesher.server.ActivityManagerService");
             Class<?> accounts = Class.forName("com.gesher.server.AccountManagerService");
             Object service = accounts.getConstructor(am, pmClass).newInstance(null, realPm);

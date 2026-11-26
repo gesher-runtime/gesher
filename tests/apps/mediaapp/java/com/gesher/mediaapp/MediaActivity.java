@@ -56,6 +56,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *     twice: 1000 Hz, 3 x 0.2 s
  * <li>AudioTrack streaming, 16-bit mono 24000 Hz played at 48000 Hz (setPlaybackRate):
  *     600 Hz data heard at 1200 Hz, 0.6 s of data in 0.3 s
+ * <li>AudioTrack default-rate streaming, fully primed: 750 Hz, 0.3 s; a separate silent
+ *     transfer checks Builder's default minimum buffer without a timing guarantee
  * <li>AudioManager: STREAM_MUSIC at volume 7 of 15: 700 Hz, 0.3 s, at 7/15 of the level
  * <li>(none: a notification tone while the ringer is silent)
  * <li>AudioManager: STREAM_NOTIFICATION, the ringer back to normal: 1300 Hz, 0.3 s
@@ -320,6 +322,10 @@ public class MediaActivity extends Activity {
 
         // 7. AudioTrack.Builder's defaults (Signal Generator's track): no sample rate (the
         // output's), no buffer size (a single frame asked for; the minimum given).
+        // getMinBufferSize does not guarantee smooth playback under load. Keep this real
+        // minimum-capacity transfer silent, and measure the audible waveform separately
+        // with its complete payload primed before play(). See AudioTrack's getMinBufferSize
+        // and play contracts: https://developer.android.com/reference/android/media/AudioTrack
         {
             AudioTrack t = new AudioTrack.Builder()
                     .setAudioAttributes(new AudioAttributes.Builder()
@@ -331,20 +337,53 @@ public class MediaActivity extends Activity {
                     .build();
             int rate = t.getSampleRate();
             int frames = rate * 3 / 10;
-            short[] pcm = tone16(rate, 1, 750, frames, 0.5);
+            short[] pcm = new short[frames];
             int minFrames = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO,
                     AudioFormat.ENCODING_PCM_16BIT) / 2;
             boolean bufferOk = t.getBufferSizeInFrames() >= minFrames;
-            t.play();
-            long t0 = System.nanoTime();
-            int written = t.write(pcm, 0, pcm.length);
-            long ms = (System.nanoTime() - t0) / 1000000;
-            t.stop();
-            int pos = drain(t, frames, 3000);
-            say("audiotrack 7 builder defaults: rate " + rate + ", buffer at least the minimum "
-                    + bufferOk + ", wrote " + written + " in time " + (ms < 1000) + ", position "
-                    + pos + "/" + frames);
-            t.release();
+            try {
+                t.play();
+                long t0 = System.nanoTime();
+                int written = t.write(pcm, 0, pcm.length);
+                long ms = (System.nanoTime() - t0) / 1000000;
+                t.stop();
+                int pos = drain(t, frames, 3000);
+                say("audiotrack 7 builder defaults: rate " + rate + ", buffer at least the minimum "
+                        + bufferOk + ", wrote " + written + " in time " + (ms < 1000) + ", position "
+                        + pos + "/" + frames + ", silent transfer");
+            } finally {
+                t.release();
+            }
+
+            // Still omit the sample rate: the output chooses it. This finite waveform
+            // needs no producer scheduling after play, so a delayed mixer tick cannot
+            // drain a minimum-sized ring while its writer is waiting to refill it.
+            AudioTrack audible = new AudioTrack.Builder()
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                    .setAudioFormat(new AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                    .setBufferSizeInBytes(frames * 2)
+                    .build();
+            try {
+                int audibleRate = audible.getSampleRate();
+                int audibleFrames = audibleRate * 3 / 10;
+                short[] tone = tone16(audibleRate, 1, 750, audibleFrames, 0.5);
+                int primed = audible.write(tone, 0, tone.length, AudioTrack.WRITE_NON_BLOCKING);
+                if (primed != audibleFrames) {
+                    throw new IllegalStateException("default-rate waveform prefill " + primed
+                            + "/" + audibleFrames);
+                }
+                audible.play();
+                audible.stop();
+                int pos = drain(audible, audibleFrames, 3000);
+                say("audiotrack 7 default-rate waveform: rate " + audibleRate + ", prefilled "
+                        + primed + "/" + audibleFrames + ", position " + pos + "/" + audibleFrames);
+            } finally {
+                audible.release();
+            }
         }
         Thread.sleep(GAP_MS);
     }

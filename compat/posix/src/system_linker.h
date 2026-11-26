@@ -1,0 +1,63 @@
+// gesher-base: Gesher's x86-64 ELF loader under Android's name for the
+// dynamic linker, /system/bin/linker64 (system_linker.cc,
+// docs/decisions/0096-elf-loader-as-system-linker64.md).
+#pragma once
+
+#include <windows.h>
+
+#include <string>
+
+namespace gesher::system_linker {
+
+// The name: on a 64-bit Android device the dynamic linker, mapped in every
+// process.
+inline constexpr char kPath[] = "/system/bin/linker64";
+
+// The file's bytes: an ELF64 little-endian EM_X86_64 header (the machine
+// Gesher's loader loads natively) naming itself as Gesher's ELF loader. It has
+// no entry point and no code: run directly it fails to link, and exec of
+// /system/bin/linker64 is handled by name (exec_spawn.cc).
+std::string Image();
+
+// The Windows path of the file on disk holding Image(), under
+// $ANDROID_DATA/system/gesher-linker/<hash of the bytes>/linker64, written
+// once (image directories unused for a week and dead processes' temporary
+// files are pruned); empty when it cannot be written. Final
+// (GetFinalPathNameByHandleW) form, without a \\?\ prefix.
+const std::wstring& File();
+
+// Whether the Linux path `path` names kPath: absolute, with empty and "."
+// components dropped and ".." resolved, no trailing slash.
+bool IsName(const char* path);
+
+// For calls that would change the file or its name (open for writing or
+// truncation, unlink, rename, link, symlink, chmod, chown, utimes, xattrs):
+// -1 with errno EROFS when `path` IsName, as /system is a read-only file
+// system on Android; 0 otherwise.
+int RefuseChange(const char* path);
+
+// Whether `windows` (a Windows path, with or without \\?\) is the final path
+// of File(), so that /proc/self/maps, /proc/self/fd and readlink name it as
+// kPath. A process that has not used the name compares with the file where
+// File() puts it, if it exists, without writing it.
+bool IsFile(const std::wstring& windows);
+
+// The same by file identity (FileIdInfo: 64-bit volume serial number and
+// 128-bit file ID), whatever name or fd reached the file: a symbolic or hard
+// link to it, a descriptor of it. IsFilePath opens `windows` itself
+// (FILE_FLAG_OPEN_REPARSE_POINT) unless `follow`. `reprobe` looks for the
+// file again if this process found none before (for a write refused for
+// sharing, which a process holding the file causes).
+bool IsFileHandle(HANDLE h, bool reprobe = false);
+bool IsFilePath(const std::wstring& windows, bool follow = true, bool reprobe = false);
+
+// RefuseChange for calls on an fd or handle (fchmod, futimens, fsetxattr,
+// fremovexattr): -1 with errno EROFS when `h` is the file; 0 otherwise.
+int RefuseChangeHandle(HANDLE h);
+
+// Maps File() read-only for the rest of the process's life, once, as the
+// dynamic linker is mapped in every Android process. /proc/self/maps calls it
+// before it lists the mappings; nothing happens when File() is empty.
+void EnsureMapped();
+
+}  // namespace gesher::system_linker

@@ -2,7 +2,7 @@
 // (docs/native-libs.md, ADR 0057): POSIX semaphores, scheduling parameters,
 // pthread spinlocks/barriers and the timed and attribute forms the core lacks,
 // resource usage, utime/utimes, clock_nanosleep, sysinfo, prctl, getrandom,
-// memfd_create, madvise, dup3, tgkill, flock and lockf, statfs, the xattr
+// memfd_create, madvise, dup3, flock and lockf, statfs, the xattr
 // family, the mount table and mount. Registered (from
 // RegisterExtra) before the core files, so their definitions win.
 
@@ -11,6 +11,8 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/elf_loader.h>
 #include <gesher/clocks.h>
+#include <gesher/procfs_fd.h>
+#include <gesher/ptrace_state.h>
 #include <gesher/xattr.h>
 
 #include <windows.h>
@@ -39,6 +41,8 @@
 #include <cstring>
 #include <initializer_list>
 #include <string>
+
+extern "C" int gesher_is_socket(int fd);  // gesher-base (socket.cc)
 
 namespace gesher::bionic {
 
@@ -541,8 +545,13 @@ int BIONIC_SYSV Prctl(int option, uint64_t a2, uint64_t, uint64_t, uint64_t) {
       return error == 0 ? 0 : (errno = error, -1);
     }
     case 3:   // PR_GET_DUMPABLE
-      return 1;
-    case 4:   // PR_SET_DUMPABLE
+      return gesher::ptrace::GetDumpable();
+    case 4:             // PR_SET_DUMPABLE
+    case 0x59616d61: {  // PR_SET_PTRACER (Yama; ADR 0093)
+      const int error =
+          option == 4 ? gesher::ptrace::SetDumpable(a2) : gesher::ptrace::SetPtracer(a2);
+      return error == 0 ? 0 : (errno = -error, -1);
+    }
     case 1:   // PR_SET_PDEATHSIG
     case 29:  // PR_SET_TIMERSLACK
     case 38:  // PR_SET_NO_NEW_PRIVS
@@ -618,12 +627,6 @@ int BIONIC_SYSV PosixMadvise(void*, size_t, int) { return 0; }
 int BIONIC_SYSV Dup3(int oldfd, int newfd, int flags) {
   return dup3(oldfd, newfd, flags);
 }
-int BIONIC_SYSV Tgkill(int, int tid, int sig) {
-  if (tid != static_cast<int>(GetCurrentThreadId())) return errno = kESRCH, -1;
-  static auto raise_fn = Shim<int(BIONIC_SYSV*)(int)>("raise");
-  return raise_fn != nullptr ? raise_fn(sig) : (errno = kENOSYS, -1);
-}
-int BIONIC_SYSV Tkill(int tid, int sig) { return Tgkill(0, tid, sig); }
 int BIONIC_SYSV Flock(int fd, int op) { return flock(fd, op); }
 // lockf shares fcntl's process-owned record locks. The production descriptor
 // path implements nonblocking operations; blocking F_SETLKW is not wired yet.
@@ -777,8 +780,40 @@ void AddVolumeInfo(const wchar_t* path, BionicStatfs* out) {
 // statfs over gesher-base's statvfs, which takes the .so's path as the rest
 // of the shim's file calls do (an Android directory that is not on the disk,
 // such as /data, answers for the volume it would be on).
+// /proc and /sys are file systems of their own on Linux: statfs of their names
+// (and fstatfs of an fd open on one) reports procfs or sysfs, not the volume.
+constexpr uint64_t kProcSuperMagic = 0x9FA0;
+constexpr uint64_t kSysfsMagic = 0x62656572;
+constexpr uint64_t kStRelatime = 0x0400;
+constexpr uint64_t kPipefsMagic = 0x50495045;
+constexpr uint64_t kSockfsMagic = 0x534F434B;
+void FillVirtualStatfs(const std::string& linux_path, BionicStatfs* out) {
+  std::memset(out, 0, sizeof(*out));
+  out->f_type = linux_path.rfind("/sys", 0) == 0 ? kSysfsMagic : kProcSuperMagic;
+  out->f_bsize = 4096;
+  out->f_frsize = 4096;
+  out->f_namelen = 255;
+  // Android's init mounts both with no flags: only the default relatime.
+  out->f_flags = kStValid | kStRelatime;
+}
+
+int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out);
+
 int BIONIC_SYSV Statfs(const char* path, BionicStatfs* out) {
   if (path == nullptr || out == nullptr) return errno = kEFAULT, -1;
+  // statfs follows a link at the end of the path, /proc's too: the file
+  // system of /proc/self/exe's file, of fd n's for /proc/self/fd/<n>; EPERM
+  // for a map_files link, which Linux lets no ordinary process follow.
+  std::string virtual_path, target;
+  int link_fd = -1;
+  const int proc = ::gesher::ProcfsFollow(path, &virtual_path, &link_fd, &target);
+  if (proc < 0) return -1;
+  if (proc > 0) {
+    if (link_fd >= 0) return Fstatfs(link_fd, out);
+    if (!target.empty()) return Statfs(target.c_str(), out);
+    FillVirtualStatfs(virtual_path, out);
+    return 0;
+  }
   struct statvfs v;
   std::memset(&v, 0, sizeof(v));
   if (::statvfs(path, &v) != 0) return -1;
@@ -798,12 +833,35 @@ int BIONIC_SYSV Statfs(const char* path, BionicStatfs* out) {
 // file's own path, which it only takes for a directory, and fails on a file).
 int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
   if (out == nullptr) return errno = kEFAULT, -1;
+  std::string virtual_path;
+  bool directory;
+  if (::gesher::ProcfsDescriptor(fd, &virtual_path, &directory)) {
+    FillVirtualStatfs(virtual_path, out);
+    return 0;
+  }
   auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, -1;
+  // A FIFO is on the file system that holds its file, as on Linux (its
+  // descriptor's handle is a placeholder pipe): that file's volume.
+  std::wstring fifo_file;
+  bool fifo;
+  if (!::gesher::FifoFilePath(fd, &fifo_file, &fifo)) return -1;
+  // A pipe or a socket is on Linux's pipefs or sockfs.
+  const bool pipe = !fifo && GetFileType(h) == FILE_TYPE_PIPE;
+  if (pipe || gesher_is_socket(fd)) {
+    std::memset(out, 0, sizeof(*out));
+    out->f_type = pipe ? kPipefsMagic : kSockfsMagic;
+    out->f_bsize = 4096;
+    out->f_frsize = 4096;
+    out->f_namelen = 255;
+    out->f_flags = kStValid;
+    return 0;
+  }
   std::wstring w(32768, L'\0');
-  DWORD len =
-      GetFinalPathNameByHandleW(h, w.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  DWORD len = fifo ? static_cast<DWORD>(fifo_file.size())
+                   : GetFinalPathNameByHandleW(h, w.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (len == 0 || len >= 32768) return errno = kEBADF, -1;
+  if (fifo) w = fifo_file;
   w.resize(len);
   wchar_t root[MAX_PATH + 1];
   if (!GetVolumePathNameW(w.c_str(), root, MAX_PATH + 1)) return errno = kEBADF, -1;
@@ -1133,8 +1191,6 @@ void RegisterExtraSys(SymbolTable& t) {
   E("munlockall", Munlockall);
   E("mincore", Mincore);
   E("dup3", Dup3);
-  E("tgkill", Tgkill);
-  E("tkill", Tkill);
   E("flock", Flock);
   E("lockf", Lockf);
   E("lockf64", Lockf);

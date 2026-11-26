@@ -30,6 +30,10 @@
 #include "native_fence_internal.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 namespace {
@@ -182,7 +186,7 @@ bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt, bool close_o
     } else if (fence) {
       // Adoption consumes the handle and admits only an immutable, signaled,
       // read-only Gesher completion event (native_fence.cc).
-      fds->push_back(AdoptNativeFence(h, metadata));
+      fds->push_back(AdoptNativeFence(h, metadata, close_on_exec));
     } else {
       // Adoption consumes both handles, including on a failed/retired group.
       fds->push_back(AdoptFileDescription(h, shared, static_cast<DescriptorKind>(kind), close_on_exec));
@@ -340,3 +344,8 @@ bool RightsDue(uint16_t port, uint64_t end) {
 }
 
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_mutex);
+#endif

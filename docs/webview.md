@@ -37,7 +37,20 @@ this result does not establish arbitrary accessibility or screen-reader UX.
   would look for a WebView package, so `new WebView(context)`,
   `CookieManager.getInstance()`, `WebStorage.getInstance()`,
   `WebSettings.getDefaultUserAgent()` and `WebView.setWebContentsDebuggingEnabled`
-  work with no WebView APK and no `webviewupdate` service.
+  work with no WebView APK.
+- **The provider package.** The system server's `webviewupdate` service
+  (`com.gesher.server.WebViewUpdateService`) names the built-in provider, and
+  the device declares `android.software.webview` while the WebView2 Runtime is
+  installed (docs/system-features.md). So
+  `WebView.getCurrentWebViewPackage()` (which asks that service while no
+  provider APK is loaded in the process) returns a `PackageInfo` for
+  `com.gesher.webview` whose `versionName` is the installed WebView2 Runtime's
+  Chromium version (`158.0.4370.33`; `versionCode` build * 100000 + patch *
+  100, as Chrome numbers them). Apps that check the WebView's major version
+  before loading one (Capacitor's `Bridge.isMinimumWebViewInstalled`) work.
+  Without a runtime it is null, as on a device with no WebView package. The
+  provider is not an installed APK: `PackageManager` does not list
+  `com.gesher.webview`.
 - **One WebView = one WebView2 controller** (`GesherWebViewProvider`, which is
   the WebViewProvider, its ViewDelegate and ScrollDelegate). It is created
   with the WebView, parked in a hidden window of the WebView thread until the
@@ -150,6 +163,24 @@ current target SDKs is no). The app sees the `file:///` URLs everywhere
 (`getUrl`, `onPageStarted/Finished`, `WebResourceRequest`, console sources).
 Pages see the https origin: same-origin requests between assets work without
 `setAllowFileAccessFromFileURLs`; `location.protocol` is `https:`.
+
+For a page-initiated `intent:` navigation, Gesher lets the application's
+`shouldOverrideUrlLoading` handle the original URI first. When it declines,
+Gesher parses the URI with Android's `Intent.parseUri` and continues to a valid
+HTTP(S) `browser_fallback_url`, or to the intent's HTTP(S) data URI when the
+explicit fallback is unusable. The resolved destination is offered to the
+application as a redirect before it loads. A default client can also use the
+fallback. Unsupported or malformed targets keep the normal navigation failure
+behavior; this path does not launch an external application or report that one
+was launched.
+
+The fallback is decided and issued in one WebView Looper task. New app loads,
+stop/reload/history requests, destruction and an expired callback wait invalidate
+older fallback work. Application-initiated `loadUrl` and other API navigations
+retain their existing callback suppression. This is Gesher's handling of the
+[web intent fallback convention](https://developer.chrome.com/docs/android/intents),
+with the application's [navigation callback](https://developer.android.com/reference/android/webkit/WebViewClient#shouldOverrideUrlLoading(android.webkit.WebView,%20android.webkit.WebResourceRequest))
+retaining control of the actual destination.
 
 - `loadUrl(url, headers)`: `Navigate`, or `NavigateWithWebResourceRequest`
   with the extra headers; `javascript:` URLs run as scripts.

@@ -82,9 +82,12 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "freopen_mode_contract_test.inc"
 #include "file_description_contract_test.inc"
 #include "stdio_ofd_contract.inc"
+#define GESHER_STDIO_SCAN_NO_WIDE 1
+#include "stdio_scan_contract.inc"
 #include "statvfs_contract_test.inc"
 #include "sleep_contract_test.inc"
 #include "bionic_signal_range_contracts.h"
+#include "bionic_tgkill_contracts.h"
 #include "stream_device_contract_test.inc"
 #include "regex_scaling_contract.inc"
 
@@ -123,6 +126,16 @@ static void test_memory(void) {
   check("mallinfo: allocated fit in mapped, the rest is free",
         during.hblkhd >= during.uordblks && during.fordblks == during.hblkhd - during.uordblks);
   free(big);
+  // mallopt: purging unused memory succeeds (1); an option the heap does not
+  // support, or one no allocator knows, fails (0), as malloc.h specifies.
+  check("mallopt(M_PURGE) succeeds", mallopt(M_PURGE, 0) == 1);
+  check("mallopt(M_PURGE_ALL) succeeds", mallopt(M_PURGE_ALL, 0) == 1);
+  check("mallopt(unknown option) fails", mallopt(12345, 0) == 0);
+  // No memory tags: the NONE level holds already; a tagging level fails.
+  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, NONE) succeeds",
+        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE) == 1);
+  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, TBI) fails",
+        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_TBI) == 0);
 }
 
 static void test_strings(void) {
@@ -250,6 +263,38 @@ static void test_format(void) {
   int got = sscanf("12 34.5 abc 7000000000", "%d %lf %15s %ld", &i, &f, word, &l);
   check("sscanf", got == 4 && i == 12 && f == 34.5 && strcmp(word, "abc") == 0 &&
                       l == 7000000000L);
+}
+
+static void test_snprintf_bounds(void) {
+  // Volatile public entry keeps the real guest ABI call in both ELF targets.
+  int (*volatile print)(char*, size_t, const char*, ...) = snprintf;
+  char input[8193], expected[8206];
+  memset(input, 'x', sizeof(input) - 1);
+  input[0] = 'A'; input[257] = 'Q'; input[8191] = 'Z'; input[8192] = 0;
+  memcpy(expected, input, 8192);
+  memcpy(expected + 8192, ":00000123:2.5", 14);
+  const size_t capacities[] = {0, 1, 2, 15, 16, 17, 127, 128, 129};
+  for (size_t c = 0; c < sizeof(capacities) / sizeof(capacities[0]); ++c) {
+    unsigned char guarded[160]; memset(guarded, 0xa5, sizeof(guarded));
+    char* output = (char*)guarded + 8;
+    size_t capacity = capacities[c], kept = capacity ? capacity - 1 : 0;
+    int result = print(output, capacity, "%s:%08d:%.1f", input, 123, 2.5);
+    check("bounded snprintf complete count", result == 8205);
+    check("bounded snprintf exact retained bytes", memcmp(output, expected, kept) == 0);
+    check("bounded snprintf terminator", capacity == 0 || output[kept] == 0);
+    int intact = 1;
+    for (size_t i = 0; i < sizeof(guarded); ++i) {
+      int written = capacity != 0 && i >= 8 && i <= 8 + kept;
+      if (!written && guarded[i] != 0xa5) intact = 0;
+    }
+    check("bounded snprintf byte guards", intact);
+  }
+  check("sizing snprintf consumes complete guest arguments",
+        print(NULL, 0, "%s:%08d:%.1f", input, 123, 2.5) == 8205);
+  char complete[8207]; memset(complete, 0x5a, sizeof(complete));
+  check("complete snprintf preserves all bytes and final canary",
+        print(complete, 8206, "%s:%08d:%.1f", input, 123, 2.5) == 8205 &&
+        memcmp(complete, expected, sizeof(expected)) == 0 && complete[8206] == 0x5a);
 }
 
 static int scan_stream(FILE* stream, const char* format, ...) {
@@ -936,6 +981,7 @@ static void test_dl(void) {
 __attribute__((visibility("default"))) int gesher_selftest(void) {
   printf("libc_test: bionic libc through the shim\n");
   failures += BionicSignalRangeContracts();
+  failures += BionicTgkillContracts();
   test_memory();
   test_allocation_contracts();
   test_system_contracts();
@@ -956,6 +1002,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_freopen_mode_contracts();
   test_file_description_contracts();
   test_stdio_ofd_contracts();
+  test_stdio_scan_contracts();
   test_statvfs_contracts();
   test_sleep_contracts();
   test_timerfd_syscalls();
@@ -969,6 +1016,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_urandom_stdio();
   test_stream_device_contracts();
   test_format();
+  test_snprintf_bounds();
   test_scan_many_arguments();
   test_errno_files();
   test_statfs();
