@@ -98,7 +98,7 @@ import java.util.Properties;
  *     toast-activated   (run by COM) a click on an app's toast, given to the device
  *     apk-icon APK      (run by the .apk icon handler, gesher_shellext.dll) draw the APK's
  *                       app icon for Explorer without installing it (AppShell.apkIcon)
- *     apk-info APK OUT  (run by gesher-launch before it asks to install an APK opened from
+ *     apk-info APK OUT [SNAPSHOT_DIR]  (run by gesher-launch before it asks to install an APK opened from
  *                       Explorer) the APK's package, version, label and icon, and the
  *                       installed version, written to OUT as key=value lines, without
  *                       installing it (AppShell.apkInfo)
@@ -258,14 +258,17 @@ public final class Launcher {
                 boolean desktopShortcut = rest.remove("--desktop-shortcut");
                 String confirmedPackage = null;
                 String confirmedVersion = null;
-                if (rest.size() == 4 && "--confirmed".equals(rest.get(1))) {
+                String confirmedInputs = null;
+                if (rest.size() == 5 && "--confirmed".equals(rest.get(1))) {
                     confirmedPackage = rest.get(2);
                     confirmedVersion = rest.get(3);
+                    confirmedInputs = rest.get(4);
                 } else if (rest.size() != 1) {
                     return usage();
                 }
                 ensureDevice(true);
-                String pkg = install(gesher(), rest.get(0), true, confirmedPackage, confirmedVersion);
+                String pkg = install(gesher(), rest.get(0), true, confirmedPackage, confirmedVersion,
+                        confirmedInputs);
                 // Asked for by the user (gesher-launch's install confirmation): a failure is
                 // printed, but the package is installed all the same.
                 if (desktopShortcut) AppShell.createDesktopLinkQuietly(pkg);
@@ -325,10 +328,11 @@ public final class Launcher {
             }
             case "apk-info": {
                 // Not on the device either: gesher-launch asks before it installs anything.
-                if (rest.size() != 2) return usage();
+                if (rest.size() != 2 && rest.size() != 3) return usage();
                 File apk = new File(rest.get(0));
                 if (!apk.isFile()) throw new IllegalArgumentException(text("no_file", rest.get(0)));
-                AppShell.apkInfo(apk, new File(rest.get(1)));
+                File snapshot = rest.size() == 3 ? new File(rest.get(2)) : null;
+                AppShell.apkInfo(apk, new File(rest.get(1)), snapshot);
                 return 0;
             }
             default: return usage();
@@ -500,7 +504,7 @@ public final class Launcher {
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
                 + " | proxy [[PACKAGE] host:port|socks5://host:port|direct|windows] | windows PACKAGE separate|shared"
                 + " | special-access PACKAGE [OP allow|deny] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start"
-                + " | shutdown | apk-icon APK | apk-info APK OUT | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
+                + " | shutdown | apk-icon APK | apk-info APK OUT [SNAPSHOT_DIR] | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
                 + " | " + MobileDataCommands.USAGE);
         return 2;
     }
@@ -668,15 +672,17 @@ public final class Launcher {
 
     private static String install(GesherService.Client gesher, String apk, boolean explicitInstall)
             throws Exception {
-        return install(gesher, apk, explicitInstall, null, null);
+        return install(gesher, apk, explicitInstall, null, null, null);
     }
 
     private static String install(GesherService.Client gesher, String apk, boolean explicitInstall,
-            String confirmedPackage, String confirmedVersion)
+            String confirmedPackage, String confirmedVersion, String confirmedInputs)
             throws Exception {
         File f = new File(apk);
         if (!f.isFile()) throw new IllegalArgumentException(text("no_file", apk));
-        String[] r = gesher.install(f.getAbsolutePath(), explicitInstall);
+        String[] r = confirmedPackage == null ? gesher.install(f.getAbsolutePath(), explicitInstall)
+                : gesher.installConfirmed(f.getAbsolutePath(), confirmedPackage,
+                        Long.parseLong(confirmedVersion), confirmedInputs);
         if (confirmedPackage != null && (r == null || r.length < 4
                 || !confirmedPackage.equals(r[0]) || !confirmedVersion.equals(r[3]))) {
             throw new IllegalStateException("Installation result does not match the confirmed package "

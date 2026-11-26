@@ -215,8 +215,8 @@ Nothing is installed without the user's consent (issue 519,
 [ADR 0028's amendment](decisions/0028-shell-start-menu-apps.md)):
 
 1. A small progress window (the splash's painting: the file's name, "Reading…")
-   while Gesher copies the selected file to a private temporary directory and
-   `gesher-app.ps1 apk-info "<snapshot>" "<temp file>"` reads that copy
+   while `gesher-app.ps1 apk-info "<file>" "<report>" "<snapshot directory>"`
+   copies the installation inputs to a private directory and reads the copy
    without installing it or starting the device: its package, versionCode,
    versionName, label and icon,
    the installed versionCode and versionName when the package is installed, and
@@ -233,9 +233,11 @@ Nothing is installed without the user's consent (issue 519,
    exits with 1223 (`ERROR_CANCELLED`).
 4. Install: a progress window ("Installing <label>…") while `gesher-app.ps1
    install "<snapshot>"` runs, with `--desktop-shortcut` when the box was checked.
-   The snapshot is kept open for reading, without permitting writes or removal,
-   from the metadata read through installation. For a split app, open its bundle
-   so the snapshot contains all of the app's files.
+   A bundle is copied as one archive. For a loose APK the copy also includes
+   its adjacent split candidates and dex metadata, using the same discovery
+   rules as a command-line installation. The system server stages its own copy
+   and verifies the digest of the filenames and copied bytes, then checks the
+   package and version before committing the installation.
    The APK is installed (or updated) on the user's Gesher device as `gesher-app
    install` installs it; its Start menu shortcut is made as usual.
 5. After verifying the installation result's package and version against the

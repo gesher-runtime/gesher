@@ -43,7 +43,7 @@
 // portable Gesher.exe given a file) is never installed without the user's
 // consent (issue 519):
 //  1. A small progress window (the splash's painting: the file's name, "Reading...")
-//     while `gesher-app.ps1 apk-info <snapshot> <metadata file>` runs (apk_info_file.h
+//     while `gesher-app.ps1 apk-info <file> <metadata file> <snapshot dir>` runs (apk_info_file.h
 //     reads its key=value output; the file is deleted). Its X cancels (exit 1223).
 //  2. The same versionCode is installed: `launch <package>`, as its Start menu
 //     shortcut does (the splash, until the app's window is up).
@@ -55,7 +55,7 @@
 //     mode, with GESHER_SHORTCUTS=0 and when the recorded desktop shortcut
 //     exists). Cancel, Esc and X install nothing: exit 1223 (ERROR_CANCELLED).
 //  4. Install: the progress window ("Installing <label>...", no X) while
-//     `gesher-app.ps1 install <snapshot> --confirmed <package> <version>` runs.
+//     `gesher-app.ps1 install <snapshot> --confirmed <package> <version> <digest>` runs.
 //  5. After a matching installation result, the installed dialog, title install_done_title:
 //     Open (1002) runs `launch <package>` with the splash; Done (IDCANCEL = 2, the
 //     default and the initial focus), Esc and X end it (exit 0).
@@ -1169,8 +1169,8 @@ std::wstring NewInstallDirectory(const std::wstring& data) {
   return created ? dir : std::wstring();
 }
 
-// Protect the staged file from opens for write/delete while the shell and system server
-// read it. Directory handles pin the names used by those processes until the step ends.
+// Keep the launcher-owned directory and its copied files open through the dialog and
+// install. The host service also verifies their digest as it captures its own inputs.
 class InstallSnapshot {
  public:
   InstallSnapshot() = default;
@@ -1178,7 +1178,7 @@ class InstallSnapshot {
   InstallSnapshot& operator=(const InstallSnapshot&) = delete;
   ~InstallSnapshot() { Reset(); }
 
-  bool Create(const std::wstring& source, const std::wstring& name, const std::wstring& data) {
+  bool Create(const std::wstring& name, const std::wstring& data) {
     directory_ = NewInstallDirectory(data);
     if (directory_.empty()) return false;
     directory_lock_ = PinDirectory(directory_);
@@ -1188,30 +1188,71 @@ class InstallSnapshot {
     payload_ = payload;
     payload_lock_ = PinDirectory(payload_);
     if (payload_lock_ == INVALID_HANDLE_VALUE) return false;
+    apk_ = payload_ + L"\\" + name;
+    return true;
+  }
 
-    HANDLE input = CreateFileW(source.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                               OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-    if (input == INVALID_HANDLE_VALUE) return false;
-    bool ok = GetFileType(input) == FILE_TYPE_DISK && Copy(input, payload_ + L"\\" + name);
-    CloseHandle(input);
-    return ok;
+  bool PinInputs() {
+    bool found_apk = false;
+    WIN32_FIND_DATAW entry = {};
+    HANDLE entries = FindFirstFileW((payload_ + L"\\*").c_str(), &entry);
+    if (entries == INVALID_HANDLE_VALUE) return false;
+    bool valid = true;
+    do {
+      if (wcscmp(entry.cFileName, L".") != 0 && wcscmp(entry.cFileName, L"..") != 0) {
+        const std::wstring path = payload_ + L"\\" + entry.cFileName;
+        HANDLE handle = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                    OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+          valid = false;
+          break;
+        }
+        files_.push_back(handle);
+        FILE_ATTRIBUTE_TAG_INFO attributes = {};
+        if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attributes, sizeof(attributes)) ||
+            (attributes.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+          valid = false;
+          break;
+        }
+        if (CompareStringOrdinal(path.c_str(), -1, apk_.c_str(), -1, TRUE) == CSTR_EQUAL) {
+          apk_ = path;
+          found_apk = true;
+        }
+      }
+    } while (FindNextFileW(entries, &entry));
+    const bool complete = valid && GetLastError() == ERROR_NO_MORE_FILES;
+    FindClose(entries);
+    return complete && found_apk;
   }
 
   const std::wstring& apk() const { return apk_; }
+  const std::wstring& payload() const { return payload_; }
   std::wstring info() const { return directory_ + L"\\info.txt"; }
 
   void Reset() {
-    if (file_lock_ != INVALID_HANDLE_VALUE) CloseHandle(file_lock_);
-    if (!apk_.empty()) DeleteFileW(apk_.c_str());
-    if (payload_lock_ != INVALID_HANDLE_VALUE) CloseHandle(payload_lock_);
+    for (HANDLE file : files_) CloseHandle(file);
+    files_.clear();
+    if (!payload_.empty() && payload_lock_ != INVALID_HANDLE_VALUE) {
+      WIN32_FIND_DATAW entry = {};
+      HANDLE entries = FindFirstFileW((payload_ + L"\\*").c_str(), &entry);
+      if (entries != INVALID_HANDLE_VALUE) {
+        do {
+          if ((entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            DeleteFileW((payload_ + L"\\" + entry.cFileName).c_str());
+          }
+        } while (FindNextFileW(entries, &entry));
+        FindClose(entries);
+      }
+      CloseHandle(payload_lock_);
+    }
     if (!payload_.empty()) RemoveDirectoryW(payload_.c_str());
-    if (!directory_.empty()) {
+    if (!directory_.empty() && directory_lock_ != INVALID_HANDLE_VALUE) {
       DeleteFileW(info().c_str());
       DeleteFileW((directory_ + L"\\info.txt.ico").c_str());
+      CloseHandle(directory_lock_);
     }
-    if (directory_lock_ != INVALID_HANDLE_VALUE) CloseHandle(directory_lock_);
     if (!directory_.empty()) RemoveDirectoryW(directory_.c_str());
-    file_lock_ = payload_lock_ = directory_lock_ = INVALID_HANDLE_VALUE;
+    payload_lock_ = directory_lock_ = INVALID_HANDLE_VALUE;
     apk_.clear();
     payload_.clear();
     directory_.clear();
@@ -1219,7 +1260,7 @@ class InstallSnapshot {
 
  private:
   static HANDLE PinDirectory(const std::wstring& path) {
-    HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    HANDLE handle = CreateFileW(path.c_str(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                 nullptr, OPEN_EXISTING,
                                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
     if (handle == INVALID_HANDLE_VALUE) return handle;
@@ -1233,56 +1274,12 @@ class InstallSnapshot {
     return INVALID_HANDLE_VALUE;
   }
 
-  bool Copy(HANDLE input, const std::wstring& path) {
-    HANDLE output = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                                FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (output == INVALID_HANDLE_VALUE) return false;
-    apk_ = path;
-    std::vector<char> buffer(64 * 1024);
-    bool ok = true;
-    for (;;) {
-      MSG msg;
-      while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-      }
-      if (g_cancelled) {
-        ok = false;
-        break;
-      }
-      DWORD read = 0;
-      if (!ReadFile(input, buffer.data(), static_cast<DWORD>(buffer.size()), &read, nullptr)) {
-        ok = false;
-        break;
-      }
-      if (read == 0) break;
-      DWORD written = 0;
-      if (!WriteFile(output, buffer.data(), read, &written, nullptr) || written != read) {
-        ok = false;
-        break;
-      }
-    }
-    // A successful pin excludes open writers and deleters before any metadata is parsed.
-    BY_HANDLE_FILE_INFORMATION copied = {};
-    ok = ok && GetFileInformationByHandle(output, &copied);
-    CloseHandle(output);
-    if (!ok) return false;
-    file_lock_ = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                             FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-    if (file_lock_ == INVALID_HANDLE_VALUE) return false;
-    BY_HANDLE_FILE_INFORMATION locked = {};
-    return GetFileInformationByHandle(file_lock_, &locked) &&
-           (locked.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0 &&
-           copied.dwVolumeSerialNumber == locked.dwVolumeSerialNumber &&
-           copied.nFileIndexHigh == locked.nFileIndexHigh && copied.nFileIndexLow == locked.nFileIndexLow;
-  }
-
   std::wstring directory_;
   std::wstring payload_;
   std::wstring apk_;
   HANDLE directory_lock_ = INVALID_HANDLE_VALUE;
   HANDLE payload_lock_ = INVALID_HANDLE_VALUE;
-  HANDLE file_lock_ = INVALID_HANDLE_VALUE;
+  std::vector<HANDLE> files_;
 };
 
 // GetDataDirectory's portable layout: the marker beside `dir`, or beside the App folder it is.
@@ -1519,7 +1516,7 @@ int RunBareFile(const Runner& runner, const std::wstring& here, const std::wstri
   g_cancelled = false;
   HWND progress = ShowProgress(&reading);
   InstallSnapshot snapshot;
-  if (!snapshot.Create(apk, name, data)) {
+  if (!snapshot.Create(name, data)) {
     const int failure = g_cancelled
                             ? kExitCancelled
                             : FailStep(runner, L"Could not copy " + name + L" for installation.",
@@ -1528,8 +1525,8 @@ int RunBareFile(const Runner& runner, const std::wstring& here, const std::wstri
     return failure;
   }
   const std::wstring info_file = snapshot.info();
-  StepResult step = RunStep(runner, L"apk-info " + Quote(snapshot.apk()) + L" " + Quote(info_file),
-                            progress);
+  StepResult step = RunStep(runner, L"apk-info " + Quote(apk) + L" " + Quote(info_file) +
+                                       L" " + Quote(snapshot.payload()), progress);
   std::string bytes;
   const bool read = !step.cancelled && step.code == 0 && ReadBytes(info_file, &bytes);
   DeleteFileW(info_file.c_str());
@@ -1544,7 +1541,8 @@ int RunBareFile(const Runner& runner, const std::wstring& here, const std::wstri
                                 std::to_wstring(step.code) + L")."
                           : step.failure,
                       progress, step.code);
-  } else if (!read || !GesherParseApkInfo(bytes, &info)) {
+  } else if (!read || !GesherParseApkInfo(bytes, &info) || info.inputs_sha256.empty() ||
+             !snapshot.PinInputs()) {
     result = FailStep(runner, L"gesher-app apk-info gave no package information for " + name + L".",
                       progress, 1);
   }
@@ -1596,7 +1594,7 @@ int RunBareFile(const Runner& runner, const std::wstring& here, const std::wstri
   progress = ShowProgress(&installing);
   step = RunStep(runner,
                  L"install " + Quote(snapshot.apk()) + L" --confirmed " + Quote(info.package) +
-                     L" " + std::to_wstring(info.version_code) +
+                     L" " + std::to_wstring(info.version_code) + L" " + info.inputs_sha256 +
                      (confirm.shortcut ? L" --desktop-shortcut" : L""),
                  progress);
   if (step.cancelled || step.code != 0) {

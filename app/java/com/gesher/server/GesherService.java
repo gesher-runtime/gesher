@@ -46,6 +46,7 @@ public final class GesherService extends Binder {
     static final int SETTINGS_SHOWN = IBinder.FIRST_CALL_TRANSACTION + 13;
     static final int SETTINGS_VISIT_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 14;
     static final int SET_SPECIAL_ACCESS_VISIT = IBinder.FIRST_CALL_TRANSACTION + 15;
+    static final int INSTALL_CONFIRMED = IBinder.FIRST_CALL_TRANSACTION + 16;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -91,6 +92,10 @@ public final class GesherService extends Binder {
         default String[] install(String apk, boolean explicitInstall) throws Exception {
             if (explicitInstall) throw new UnsupportedOperationException("Explicit host installation unavailable");
             return install(apk);
+        }
+        default String[] installConfirmed(String apk, String pkg, long version, String digest)
+                throws Exception {
+            throw new UnsupportedOperationException("Confirmed host installation unavailable");
         }
         boolean uninstall(String packageName) throws Exception;
         String status();
@@ -181,6 +186,17 @@ public final class GesherService extends Binder {
                     // An updated launcher must not mistake an older server ignoring
                     // the extension for a completed explicit reinstall.
                     if (extended) reply.writeInt(explicitInstall ? 1 : 0);
+                    return true;
+                }
+                case INSTALL_CONFIRMED: {
+                    String apk = data.readString();
+                    String pkg = data.readString();
+                    long version = data.readLong();
+                    String digest = data.readString();
+                    data.enforceNoDataAvail();
+                    String[] result = mDevice.installConfirmed(apk, pkg, version, digest);
+                    reply.writeNoException();
+                    reply.writeStringArray(result);
                     return true;
                 }
                 case UNINSTALL: {
@@ -369,6 +385,28 @@ public final class GesherService extends Binder {
                             "Explicit host installation unavailable; restart the Gesher device after updating");
                 }
                 return result;
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        public String[] installConfirmed(String apk, String pkg, long version, String digest)
+                throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(apk);
+                data.writeString(pkg);
+                data.writeLong(version);
+                data.writeString(digest);
+                if (!mBinder.transact(INSTALL_CONFIRMED, data, reply, 0)) {
+                    throw new IllegalStateException(
+                            "Confirmed host installation unavailable; restart the Gesher device after updating");
+                }
+                reply.readException();
+                return reply.createStringArray();
             } finally {
                 data.recycle();
                 reply.recycle();

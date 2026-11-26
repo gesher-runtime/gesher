@@ -157,7 +157,7 @@ $ErrorActionPreference = 'Stop'
 # Every run's arguments, in order, for the case to check (the bare-file flow runs
 # apk-info, then install and/or launch).
 if ($env:SPLASH_PROBE_STEPS) { Add-Content -LiteralPath $env:SPLASH_PROBE_STEPS -Encoding utf8 -Value "step=$($args -join '|')" }
-# The bare-file flow's apk-info (Launcher's apk-info APK OUT): what SPLASH_PROBE_INFO
+# The bare-file flow's apk-info (Launcher's apk-info APK OUT SNAPSHOT_DIR): what SPLASH_PROBE_INFO
 # says is installed ('same': this version, 'older'/'older-desktop': an older one,
 # with its desktop shortcut there; 'fail': not an app).
 if ($args.Count -ge 1 -and $args[0] -eq 'apk-info') {
@@ -165,7 +165,8 @@ if ($args.Count -ge 1 -and $args[0] -eq 'apk-info') {
     [Console]::Error.WriteLine('gesher-app: probe.apk cannot be read as an Android app: splash probe')
     exit 3
   }
-  $info = @('package=com.gesher.splashprobe', 'version_code=2', 'version_name=2.0',
+  Copy-Item -LiteralPath $args[1] -Destination $args[3]
+  $info = @('package=com.gesher.splashprobe', 'version_code=2', 'version_name=2.0', ('inputs_sha256=' + ('a' * 64)),
     "label=Splash Probe $([char]0xE9)", "icon=$(Join-Path $PSScriptRoot 'gesher.ico')")
   switch ($env:SPLASH_PROBE_INFO) {
     'same' { $info += 'installed_version_code=2', 'installed_version_name=2.0' }
@@ -470,9 +471,10 @@ public static class SplashLifetimeProbe {
   $bare = "`"$probeApk`""
   # Only the bare-file flow replaces the original path with the private snapshot.
   $probePath = '(?:' + [regex]::Escape($probeApk) + '|' + [regex]::Escape([IO.Path]::GetFullPath($probeApk)) + ')'
-  $snapshotPath = '.+\\gesher-install-[0-9a-f-]+\\payload\\' + [regex]::Escape([IO.Path]::GetFileName($probeApk))
-  $apkInfoStep = '^apk-info\|' + $snapshotPath + '\|.+\\info\.txt$'
-  $installStep = '^install\|' + $snapshotPath + '\|--confirmed\|com\.gesher\.splashprobe\|2$'
+  $payloadPath = '.+\\gesher-install-[0-9a-f-]+\\payload'
+  $snapshotPath = $payloadPath + '\\' + [regex]::Escape([IO.Path]::GetFileName($probeApk))
+  $apkInfoStep = '^apk-info\|' + $probePath + '\|.+\\info\.txt\|' + $payloadPath + '$'
+  $installStep = '^install\|' + $snapshotPath + '\|--confirmed\|com\.gesher\.splashprobe\|2\|a{64}$'
   $desktopStep = $installStep.TrimEnd('$') + '\|--desktop-shortcut$'
   $launchStep = '^launch\|com\.gesher\.splashprobe$'
   $cases = @(
@@ -588,7 +590,7 @@ public static class SplashLifetimeProbe {
       for ($i = 0; $stepsOk -and $i -lt $steps.Count; $i++) { $stepsOk = $steps[$i] -match $case.Steps[$i] }
       if (-not $stepsOk) { $problems += "$($what): gesher-app.ps1 ran $($steps.Count) step(s): $($steps -join ' ; ')" }
       if ($stepsOk -and $case.Info) {
-        $readPath = ($steps[0] -split '\|')[1]
+        $readPath = Join-Path ($steps[0] -split '\|')[3] ([IO.Path]::GetFileName($probeApk))
         if ($steps.Count -gt 1 -and $steps[1].StartsWith('install|') -and
             ($steps[1] -split '\|')[1] -cne $readPath) {
           $problems += "$($what): install read a different snapshot than apk-info"

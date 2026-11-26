@@ -1940,6 +1940,55 @@ jobs:
             if ($problems) { throw "$ext open command: $($problems -join '; ')" }
           }
           'PASS  installer: split bundle associations; the registered open command asks before installing an APKM bundle and launches an installed APK+ bundle''s package directly' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The actual host install service must fail before installing unconfirmed input.
+          $loose = Join-Path $env:RUNNER_TEMP 'confirmed loose splits'
+          New-Item -ItemType Directory -Path $loose | Out-Null
+          $fixtures = [IO.Compression.ZipFile]::OpenRead("$PWD/dist/split-package-fixtures.zip")
+          $looseInputs = [ordered]@{
+            'base-signed.apk' = 'base.apk'
+            'core-signed.apk' = 'split_feature.core.apk'
+            'entry-signed.apk' = 'split_feature.entry.apk'
+          }
+          try {
+            foreach ($fixture in $looseInputs.Keys) {
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($fixtures.GetEntry($fixture),
+                (Join-Path $loose $looseInputs[$fixture]))
+            }
+          } finally { $fixtures.Dispose() }
+          $dm = [IO.Compression.ZipFile]::Open((Join-Path $loose 'base.dm'), 'Create')
+          try {
+            $profile = $dm.CreateEntry('primary.prof').Open()
+            try { $profile.WriteByte(0) } finally { $profile.Dispose() }
+          } finally { $dm.Dispose() }
+          $baseApk = Join-Path $loose 'base.apk'
+          $splitPackage = 'com.gesher.splitcontract'
+          $wrong = & "$app\gesher-app.cmd" install $baseApk --confirmed $splitPackage 1 ('0' * 64) 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0 -or $wrong -notmatch 'files differ from the confirmed installation') {
+            throw "host service did not reject an incorrect confirmation digest: $wrong"
+          }
+          $registry = Join-Path $stageParent 'packages.list'
+          if (Select-String -LiteralPath $registry -Pattern '^com\.gesher\.splitcontract\t' -Quiet) {
+            throw 'a mismatched digest published an installed package'
+          }
+          $run = Start-ApkOpen $baseApk
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -Done Done
+          $out = Complete-ApkOpen $run 'gesher-launch with loose splits and dex metadata'
+          if ($run.Process.ExitCode -ne 0 -or $answer.Problems.Count) {
+            throw "confirmed loose APK install failed: $out $($answer.Problems -join '; ')"
+          }
+          $row = @(Get-Content -LiteralPath $registry | Where-Object { $_.StartsWith("$splitPackage`t") })
+          if ($row.Count -ne 1) { throw 'confirmed loose APK did not publish an installed package' }
+          $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
+          $installedDir = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir"
+          foreach ($name in @($looseInputs.Values) + 'base.dm') {
+            if ((Get-FileHash -LiteralPath (Join-Path $installedDir $name)).Hash -ne
+                (Get-FileHash -LiteralPath (Join-Path $loose $name)).Hash) {
+              throw "confirmed loose APK install did not preserve $name"
+            }
+          }
+          & "$app\gesher-app.cmd" uninstall $splitPackage
+          if ($LASTEXITCODE -ne 0) { throw 'could not uninstall the loose split fixture' }
+          'PASS  installer: confirmation rejects a mismatched digest and preserves loose APKs, splits and dex metadata' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
           Write-Host "toast activator: $activator"
