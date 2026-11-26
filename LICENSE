@@ -1,202 +1,186 @@
-                                 Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
+GESHER COMMERCIAL END-USER LICENSE AGREEMENT
+Version 1.0
 
-   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+Copyright (c) 2026 The Gesher Authors (gesher-runtime). All Rights Reserved.
 
-   1. Definitions.
+1. Parties and scope
 
-      "License" shall mean the terms and conditions for use, reproduction,
-      and distribution as defined by Sections 1 through 9 of this document.
+This Agreement is between the person or entity acquiring the license ("you")
+and the copyright holder or authorized licensing entity identified as the
+licensor in your License Entitlement ("Licensor"). If you accept on behalf of
+an entity, you must have authority to bind that entity.
 
-      "Licensor" shall mean the copyright owner or entity authorized by
-      the copyright owner that is granting the License.
+"Software" means the Gesher software and accompanying documentation supplied
+with this Agreement, including any source code supplied. "Proprietary Software"
+means only those portions of the Software that Licensor is authorized to
+license under this Agreement, excluding materials governed by separate
+licenses as described in section 7.
 
-      "Legal Entity" shall mean the union of the acting entity and all
-      other entities that control, are controlled by, or are under common
-      control with that entity. For the purposes of this definition,
-      "control" means (i) the power, direct or indirect, to cause the
-      direction or management of such entity, whether by contract or
-      otherwise, or (ii) ownership of fifty percent (50%) or more of the
-      outstanding shares, or (iii) beneficial ownership of such entity.
+"License Entitlement" means an order, license certificate, redemption
+confirmation, published license offer or other written or electronic
+authorization issued or expressly approved by Licensor. It identifies Licensor,
+the licensee or eligible recipient group, the licensed product or edition, the
+permitted users, devices or other usage limits, the license duration (including
+whether it is perpetual or time-limited), and the fees, if any, and applicable
+payment terms. A published offer may grant the stated license to all eligible
+recipients who accept it, without an individually issued certificate. An
+authorized reseller may supply a License Entitlement on Licensor's behalf.
 
-      "You" (or "Your") shall mean an individual or Legal Entity
-      exercising permissions granted by this License.
+2. Acceptance, offers and payment
 
-      "Source" form shall mean the preferred form for making modifications,
-      including but not limited to software source code, documentation
-      source, and configuration files.
+To exercise rights under this Agreement, you must first receive and accept
+these terms and obtain a valid License Entitlement. Acceptance must be through
+an affirmative acceptance process or a signed agreement incorporating these
+terms. Merely accessing a repository or downloading files does not establish
+acceptance or grant a commercial license under this Agreement.
 
-      "Object" form shall mean any form resulting from mechanical
-      transformation or translation of a Source form, including but
-      not limited to compiled object code, generated documentation,
-      and conversions to other media types.
+Licensor may offer licenses for a fee, at a discount, at no charge, through
+coupons or promotional offers, or under a separate agreement. Your License
+Entitlement and any applicable agreement determine the fees, discounts or fee
+waivers, eligibility and scope. You must pay only the fees agreed there, when
+due; no payment is required for a valid no-charge license.
 
-      "Work" shall mean the work of authorship, whether in Source or
-      Object form, made available under the License, as indicated by a
-      copyright notice that is included in or attached to the work
-      (an example is provided in the Appendix below).
+Trials, evaluation licenses, complimentary licenses, coupons and promotional
+offers must be issued or expressly approved by Licensor. Their eligibility,
+redemption conditions, purpose and duration are those stated in the offer or
+License Entitlement. A coupon, discount or fee waiver does not by itself expand
+the permitted use, modification or distribution rights. Those rights change
+only if expressly granted in the License Entitlement or a separate agreement,
+subject to section 7.
 
-      "Derivative Works" shall mean any work, whether in Source or Object
-      form, that is based on (or derived from) the Work and for which the
-      editorial revisions, annotations, elaborations, or other modifications
-      represent, as a whole, an original work of authorship. For the purposes
-      of this License, Derivative Works shall not include works that remain
-      separable from, or merely link (or bind by name) to the interfaces of,
-      the Work and Derivative Works thereof.
+Possession of source code, an installer, a coupon or a license key alone does
+not establish a valid License Entitlement; any required acceptance, eligibility
+and redemption conditions must also be met. Receiving the Software at no charge
+does not by itself authorize its modification, forking or redistribution.
 
-      "Contribution" shall mean any work of authorship, including
-      the original version of the Work and any modifications or additions
-      to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
-      or by an individual or Legal Entity authorized to submit on behalf of
-      the copyright owner. For the purposes of this definition, "submitted"
-      means any form of electronic, verbal, or written communication sent
-      to the Licensor or its representatives, including but not limited to
-      communication on electronic mailing lists, source code control systems,
-      and issue tracking systems that are managed by, or on behalf of, the
-      Licensor for the purpose of discussing and improving the Work, but
-      excluding communication that is conspicuously marked or otherwise
-      designated in writing by the copyright owner as "Not a Contribution."
+3. License grant
 
-      "Contributor" shall mean Licensor and any individual or Legal Entity
-      on behalf of whom a Contribution has been received by Licensor and
-      subsequently incorporated within the Work.
+Subject to this Agreement and your License Entitlement, Licensor grants you a
+limited, non-exclusive, non-sublicensable and non-transferable license to
+install and run the Proprietary Software in the executable form supplied for
+end-user use, including scripts supplied for normal operation, for your own
+personal use or internal business purposes, within the agreed usage limits and
+license duration. Transfers are permitted where expressly authorized by Licensor
+or required by applicable law.
 
-   2. Grant of Copyright License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      copyright license to reproduce, prepare Derivative Works of,
-      publicly display, publicly perform, sublicense, and distribute the
-      Work and such Derivative Works in Source or Object form.
+You may make copies necessary for authorized installation and operation and
+a reasonable number of backup copies, retaining the applicable notices.
+Employees and contractors may use the Software on your behalf within your
+License Entitlement and subject to this Agreement; they receive no independent
+right to distribute it or use it for other customers.
 
-   3. Grant of Patent License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      (except as stated in this section) patent license to make, have made,
-      use, offer to sell, sell, import, and otherwise transfer the Work,
-      where such license applies only to those patent claims licensable
-      by such Contributor that are necessarily infringed by their
-      Contribution(s) alone or by combination of their Contribution(s)
-      with the Work to which such Contribution(s) was submitted. If You
-      institute patent litigation against any entity (including a
-      cross-claim or counterclaim in a lawsuit) alleging that the Work
-      or a Contribution incorporated within the Work constitutes direct
-      or contributory patent infringement, then any patent licenses
-      granted to You under this License for that Work shall terminate
-      as of the date such litigation is filed.
+4. Restrictions on Proprietary Software
 
-   4. Redistribution. You may reproduce and distribute copies of the
-      Work or Derivative Works thereof in any medium, with or without
-      modifications, and in Source or Object form, provided that You
-      meet the following conditions:
+Except as expressly permitted by this Agreement, your License Entitlement,
+separate written authorization from Licensor, or section 7, you must not:
 
-      (a) You must give any other recipients of the Work or
-          Derivative Works a copy of this License; and
+(a) copy, distribute, publish, sell, sublicense, lend, rent, transfer or make
+    the Proprietary Software available to third parties, in source or object
+    form, with or without modifications;
+(b) modify, adapt, translate or create derivative works of the Proprietary
+    Software, or develop or distribute a fork of it;
+(c) make the Proprietary Software available as a hosted service, service
+    bureau or shared offering for third parties;
+(d) reverse engineer, decompile or disassemble the Proprietary Software;
+(e) remove or alter copyright, license, trademark or other proprietary notices;
+    or
+(f) circumvent license or activation controls, use unauthorized license keys,
+    share credentials to exceed the licensed scope, or otherwise exceed the
+    usage limits in your License Entitlement.
 
-      (b) You must cause any modified files to carry prominent notices
-          stating that You changed the files; and
+These restrictions do not prevent using ordinary product settings or creating,
+running and sharing your own applications and data without distributing the
+Proprietary Software. Rights to applications, content and services used with
+Gesher must be obtained from their respective rightsholders where required.
 
-      (c) You must retain, in the Source form of any Derivative Works
-          that You distribute, all copyright, patent, trademark, and
-          attribution notices from the Source form of the Work,
-          excluding those notices that do not pertain to any part of
-          the Derivative Works; and
+5. Source access and contributions
 
-      (d) If the Work includes a "NOTICE" text file as part of its
-          distribution, then any Derivative Works that You distribute must
-          include a readable copy of the attribution notices contained
-          within such NOTICE file, excluding those notices that do not
-          pertain to any part of the Derivative Works, in at least one
-          of the following places: within a NOTICE text file distributed
-          as part of the Derivative Works; within the Source form or
-          documentation, if provided along with the Derivative Works; or,
-          within a display generated by the Derivative Works, if and
-          wherever such third-party notices normally appear. The contents
-          of the NOTICE file are for informational purposes only and
-          do not modify the License. You may add Your own attribution
-          notices within Derivative Works that You distribute, alongside
-          or as an addendum to the NOTICE text from the Work, provided
-          that such additional attribution notices cannot be construed
-          as modifying the License.
+Access to source code or build instructions does not by itself grant rights
+to build, modify or distribute the Proprietary Software. Development work on
+the Proprietary Software requires separate written authorization from
+Licensor, subject to section 7. A contributor agreement governs rights granted
+by a contributor; signing it alone does not grant a development or distribution
+license to the Proprietary Software.
 
-      You may add Your own copyright statement to Your modifications and
-      may provide additional or different license terms and conditions
-      for use, reproduction, or distribution of Your modifications, or
-      for any such Derivative Works as a whole, provided Your use,
-      reproduction, and distribution of the Work otherwise complies with
-      the conditions stated in this License.
+6. Ownership and branding
 
-   5. Submission of Contributions. Unless You explicitly state otherwise,
-      any Contribution intentionally submitted for inclusion in the Work
-      by You to the Licensor shall be under the terms and conditions of
-      this License, without any additional terms or conditions.
-      Notwithstanding the above, nothing herein shall supersede or modify
-      the terms of any separate license agreement you may have executed
-      with Licensor regarding such Contributions.
+The Proprietary Software is licensed, not sold. Licensor and the applicable
+rightsholders retain their intellectual property rights. Rights not expressly
+granted under this Agreement are reserved, subject to section 7. No ownership
+of your own applications or data transfers to Licensor under this Agreement.
+No license to Gesher names, logos or other marks is granted for branding or
+endorsing another product or service. Use of marks inherent in authorized
+operation of the Software and uses permitted by applicable law are unaffected.
 
-   6. Trademarks. This License does not grant permission to use the trade
-      names, trademarks, service marks, or product names of the Licensor,
-      except as required for reasonable and customary use in describing the
-      origin of the Work and reproducing the content of the NOTICE file.
+7. Separate licenses and mandatory rights
 
-   7. Disclaimer of Warranty. Unless required by applicable law or
-      agreed to in writing, Licensor provides the Work (and each
-      Contributor provides its Contributions) on an "AS IS" BASIS,
-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-      implied, including, without limitation, any warranties or conditions
-      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-      PARTICULAR PURPOSE. You are solely responsible for determining the
-      appropriateness of using or redistributing the Work and assume any
-      risks associated with Your exercise of permissions under this License.
+Third-party components and other materials subject to a separate valid license
+remain governed by that license, including its permissions, notice requirements
+and source-code obligations. Consult the applicable file headers and license
+and notice files supplied with the source code or distribution. Licensor must
+also comply with the obligations of those licenses when supplying the Software.
 
-   8. Limitation of Liability. In no event and under no legal theory,
-      whether in tort (including negligence), contract, or otherwise,
-      unless required by applicable law (such as deliberate and grossly
-      negligent acts) or agreed to in writing, shall any Contributor be
-      liable to You for damages, including any direct, indirect, special,
-      incidental, or consequential damages of any character arising as a
-      result of this License or out of the use or inability to use the
-      Work (including but not limited to damages for loss of goodwill,
-      work stoppage, computer failure or malfunction, or any and all
-      other commercial damages or losses), even if such Contributor
-      has been advised of the possibility of such damages.
+Nothing in this Agreement supersedes, revokes or restricts rights independently
+granted under an applicable separate license, or imposes these commercial fees
+or restrictions on the exercise of those rights. Where terms conflict, the
+separate license controls for the corresponding materials. Nothing in this
+Agreement limits rights or exceptions that cannot be excluded or restricted
+under applicable law, including applicable consumer protections and permitted
+interoperability activities.
 
-   9. Accepting Warranty or Additional Liability. While redistributing
-      the Work or Derivative Works thereof, You may choose to offer,
-      and charge a fee for, acceptance of support, warranty, indemnity,
-      or other liability obligations and/or rights consistent with this
-      License. However, in accepting such obligations, You may act only
-      on Your own behalf and on Your sole responsibility, not on behalf
-      of any other Contributor, and only if You agree to indemnify,
-      defend, and hold each Contributor harmless for any liability
-      incurred by, or claims asserted against, such Contributor by reason
-      of your accepting any such warranty or additional liability.
+8. Term and termination
 
-   END OF TERMS AND CONDITIONS
+Your license lasts for the duration stated in your License Entitlement. A
+perpetual license does not expire merely because a support or update period
+ends. A time-limited license expires at the end of its agreed term unless
+renewed. Renewal, additional fees and any automatic renewal require the terms
+agreed with you; this Agreement does not itself establish automatic renewal.
 
-   APPENDIX: How to apply the Apache License to your work.
+Licensor may terminate the rights granted under this Agreement for a material
+breach, including failure to pay fees when due, by written notice identifying
+the breach and allowing a reasonable opportunity to cure it where it can be
+cured. If it is cured within that opportunity, termination on that ground does
+not take effect. Termination remains subject to applicable law.
 
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "[]"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
+On expiry or valid termination, you must stop using and remove copies of the
+Proprietary Software licensed solely under this Agreement, except for copies
+you are legally required to retain, which may not be used for other purposes.
+This does not require deletion of your applications or data, or affect rights
+preserved by section 7. Payment obligations already accrued and provisions
+concerning ownership, restrictions, separate licenses and limits of liability
+survive only to the extent relevant after termination.
 
-   Copyright [yyyy] [name of copyright owner]
+9. Updates, support and changes to terms
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+Updates, upgrades, maintenance and support are included only to the extent
+stated in your License Entitlement or a separate agreement. An update does not
+extend the licensed scope or duration unless expressly agreed. Any different
+terms for an update must be provided for your acceptance before they apply.
+Posting a revised license text alone does not amend an accepted Agreement.
 
-       http://www.apache.org/licenses/LICENSE-2.0
+10. Warranties and liability
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+Except for express commitments in your License Entitlement or another agreement
+with Licensor, and to the extent permitted by applicable law, the Software is
+provided "AS IS" and "AS AVAILABLE", without warranties of merchantability,
+fitness for a particular purpose, non-infringement, uninterrupted operation or
+error-free operation. Compatibility with any particular application, device
+or service is not guaranteed unless expressly agreed.
 
+To the extent permitted by applicable law, Licensor and its suppliers are not
+liable under this Agreement for indirect, incidental, special or consequential
+loss, including lost profits or lost data. This exclusion does not override
+express liability commitments agreed with you, or exclude or limit liability
+that cannot lawfully be excluded or limited. Nothing here waives mandatory
+consumer rights, statutory warranties, cancellation rights, refunds or remedies.
+
+11. Relationship with other terms
+
+Your License Entitlement, including any applicable offer or coupon terms,
+specifies the commercial scope of this Agreement. A separate written or
+electronic agreement expressly agreed by Licensor and you may establish
+different commercial or license terms and controls to the extent it expressly
+varies this Agreement. Section 7 controls the treatment of separate licenses
+and mandatory rights. If a provision is unenforceable, it applies only to the
+extent permitted by law; the remaining provisions continue to apply to the
+extent legally possible.
