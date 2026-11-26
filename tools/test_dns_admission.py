@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument('--cxx', default=os.environ.get('CXX', 'cl' if os.name == 'nt' else 'c++'))
     parser.add_argument('--sanitize', action='store_true')
     parser.add_argument('--output', type=Path, help='retain generated source/binary without running')
+    parser.add_argument('--peer-ports-only', action='store_true', help='run only the real peer reservation controls')
     args = parser.parse_args()
     production = (subprocess.check_output(['git', 'show', args.source_ref + ':' + SOURCE],
             cwd=ROOT, text=True) if args.source_ref else (ROOT / SOURCE).read_text())
@@ -36,6 +37,9 @@ def main() -> None:
     source = template.replace('@PRODUCTION@', body).replace('@BOUNDED@',
             '0' if args.source_ref else '1')
     print(SOURCE + ' SHA256 ' + hashlib.sha256(production.encode()).hexdigest(), flush=True)
+    for relative in ('tests/native/dns_admission_host.cc.in', 'tests/native/dns_peer_ports.h',
+                     'tests/native/dns_peer_ports_test.h'):
+        print(relative + ' SHA256 ' + hashlib.sha256((ROOT / relative).read_bytes()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix='gesher-dns-admission-') as temporary:
         work = args.output or Path(temporary)
         work.mkdir(parents=True, exist_ok=True)
@@ -44,16 +48,18 @@ def main() -> None:
         cxx = shlex.split(args.cxx)
         if Path(cxx[0]).name.lower() in ('cl', 'cl.exe'):
             command = cxx + ['/nologo', '/std:c++17', '/EHsc', '/W4', '/WX',
+                    '/I' + str(ROOT / 'tests/native'),
                     '/D_WIN32_WINNT=0x0a00', '/DWINVER=0x0a00', str(cpp),
                     '/Fe:' + str(exe), '/Fo:' + str(work) + '/', 'ws2_32.lib', 'bcrypt.lib']
         else:
             command = cxx + ['-std=c++17', '-Wall', '-Wextra', '-Werror', '-O1', '-g',
+                    '-I' + str(ROOT / 'tests/native'),
                     '-pthread', str(cpp), '-o', str(exe)]
             if 'mingw' in cxx[0]: command += ['-static', '-lws2_32', '-lbcrypt']
             if args.sanitize: command += ['-fsanitize=address,undefined', '-fno-sanitize-recover=all']
         subprocess.run(command, check=True, timeout=120)
         if not args.output:
-            subprocess.run([str(exe)], check=True, timeout=75)
+            subprocess.run([str(exe)] + (['--peer-ports-only'] if args.peer_ports_only else []), check=True, timeout=75)
 
 
 if __name__ == '__main__':
