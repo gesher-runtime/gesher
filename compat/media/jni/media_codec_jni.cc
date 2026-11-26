@@ -1307,7 +1307,6 @@ class Codec {
   }
 
   uint8_t* NativeBuffer(size_t index, size_t* size, bool input) {
-    if (size != nullptr) *size = 0;
     std::lock_guard<std::mutex> lock(mu_);
     if (released_ || fatal_ || !started_ || index >= kSlots) return nullptr;
     Slot& slot = input ? inputs_[index] : outputs_[index];
@@ -1320,8 +1319,9 @@ class Codec {
 
   AMediaFormat* NativeFormat(bool input, std::optional<size_t> index = std::nullopt) {
     std::lock_guard<std::mutex> lock(mu_);
-    if (released_ || fatal_ || !configured_) return nullptr;
-    if (index && (*index >= kSlots || !outputs_[*index].client)) return nullptr;
+    // The NDK wraps an unavailable format in an owned, empty AMediaFormat.
+    if (released_ || fatal_ || !configured_ ||
+        (index && (*index >= kSlots || !outputs_[*index].client))) return AMediaFormat_new();
     if (!input) {
       if (entry_.encoder) return EncoderOutputFormatLocked().Release();
       if (output_known_) {
@@ -2302,6 +2302,10 @@ media_status_t GetName(Codec* codec, char** name) {
 }
 void ReleaseName(Codec*, char* name) { std::free(name); }
 
+// These are Android MediaCodec action codes, separate from its error status.
+bool IsActionRecoverable(int32_t action) { return action == 2; }
+bool IsActionTransient(int32_t action) { return action == 1; }
+
 #if defined(__x86_64__)
 #define CODEC_ELF_ABI __attribute__((sysv_abi))
 #elif defined(__aarch64__)
@@ -2347,6 +2351,10 @@ bool Register() {
   CODEC_ENTRY(getName, GetName);
   CODEC_ENTRY(releaseName, ReleaseName);
 #undef CODEC_ENTRY
+  AddBionicSymbol("AMediaCodecActionCode_isRecoverable",
+                  reinterpret_cast<void*>(&ElfCall<&IsActionRecoverable>::Call));
+  AddBionicSymbol("AMediaCodecActionCode_isTransient",
+                  reinterpret_cast<void*>(&ElfCall<&IsActionTransient>::Call));
   // Publish the pointer object's address for dlsym and ELF data relocations.
 #define CODEC_KEY(name) AddBionicSymbol(#name, &name)
   CODEC_KEY(AMEDIACODEC_KEY_HDR10_PLUS_INFO);

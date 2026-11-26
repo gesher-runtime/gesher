@@ -16,8 +16,10 @@ The fixture submits three different 128×96 I420 images to a real AVC encoder
 and passes its compressed access units and codec-specific data to a real AVC
 decoder. It checks each resulting image's luma, including the corresponding
 64-bit timestamp, dimensions, format ownership, slot return, EOS and flush. It
-also checks absent codecs, idle start and dequeue, and missing parameter
-handles.
+also checks absent codecs, idle start and dequeue, missing parameter handles,
+caller sizes on invalid buffer reads, and owned empty formats for unavailable
+codec state or output slots. The action-code helpers classify transient and
+recoverable actions independently of media status values.
 
 The live-parameter test waits for an ordinary AVC picture, submits
 `request-sync=0` and a `video-bitrate` target, then inspects the next picture's
@@ -33,6 +35,8 @@ for a running video encoder. [Android NDK parameter contract](https://developer.
 A second decode sends the same AVC access units to a YUV ImageReader surface.
 The test compares each submitted render timestamp and luma with the acquired
 image and verifies the first image remains readable after the decoder stops.
+The frame-rendered callback carries that frame’s presentation time and a guest
+monotonic timestamp. The fixture also checks callback unregistration.
 
 The encoder input test replaces a configured producer, writes a real frame
 to its successor, releases the caller's window references and waits for an
@@ -47,5 +51,5 @@ Windows fixture also checks repeat attachment by the current owner and
 rejects competing attachments and ordinary input windows.
 
 The fixtures cover synchronous CPU buffers, decoder output surfaces and
-ordinary and persistent encoder input surfaces. Asynchronous callbacks,
+ordinary and persistent encoder input surfaces. Asynchronous buffer callbacks,
 secure codecs and standalone Gesher ELF execution require separate work.

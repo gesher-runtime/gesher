@@ -116,6 +116,33 @@ static bool CheckCodecKeys(void) {
   return true;
 }
 
+static bool IsEmptyCodecFormat(AMediaFormat* format) {
+  if (format == NULL) return false;
+  const char* mime = NULL;
+  int32_t width = 0;
+  const bool empty = !AMediaFormat_getString(format, "mime", &mime) &&
+                     !AMediaFormat_getInt32(format, "width", &width);
+  AMediaFormat_delete(format);
+  return empty;
+}
+
+static bool InvalidBufferSizesUnchanged(AMediaCodec* codec) {
+  size_t input_size = 123;
+  size_t output_size = 234;
+  return AMediaCodec_getInputBuffer(codec, SIZE_MAX, &input_size) == NULL && input_size == 123 &&
+         AMediaCodec_getOutputBuffer(codec, SIZE_MAX, &output_size) == NULL && output_size == 234;
+}
+
+static bool ActionCodesAgree(void) {
+  const int32_t codes[] = {INT32_MIN, -1, 0, 1, 2, 3, INT32_MAX};
+  for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); ++i) {
+    const int32_t code = codes[i];
+    if (AMediaCodecActionCode_isRecoverable(code) != (code == 2) ||
+        AMediaCodecActionCode_isTransient(code) != (code == 1)) return false;
+  }
+  return true;
+}
+
 static bool Dimensions(AMediaFormat* format) {
   int32_t width = 0, height = 0;
   return format != NULL && AMediaFormat_getInt32(format, "width", &width) &&
@@ -319,6 +346,7 @@ static int RunCodec(void) {
   int packet_count = 0;
   bool eos = false, wrote_config = false;
   REQUIRED(CheckCodecKeys(), "parameter key data symbols match direct imports");
+  CHECK(ActionCodesAgree(), "recoverable and transient classify only the corresponding action codes");
   encoder = AMediaCodec_createEncoderByType("video/avc");
   decoder = AMediaCodec_createDecoderByType("video/avc");
   REQUIRED(encoder != NULL && decoder != NULL, "create AVC encoder and decoder by MIME");
@@ -329,6 +357,9 @@ static int RunCodec(void) {
   printf("NDK codec idle state start=%d dequeue=%zd\n", early_start, early_dequeue);
   CHECK(early_start == AMEDIA_ERROR_UNKNOWN, "start before configure reports the Android state error");
   CHECK(early_dequeue == AMEDIA_ERROR_UNKNOWN, "dequeue before start reports the Android state error");
+  CHECK(InvalidBufferSizesUnchanged(encoder), "invalid idle buffer reads preserve caller sizes");
+  CHECK(IsEmptyCodecFormat(AMediaCodec_getInputFormat(encoder)), "idle input format is owned and empty");
+  CHECK(IsEmptyCodecFormat(AMediaCodec_getOutputFormat(encoder)), "idle output format is owned and empty");
 
   parameters = AMediaFormat_new();
   REQUIRED(parameters != NULL, "allocate live encoder controls");
@@ -364,6 +395,9 @@ static int RunCodec(void) {
   AMediaCodec_releaseName(encoder, name);
   name = NULL;
   REQUIRED(AMediaCodec_start(encoder) == AMEDIA_OK, "start AVC encoder");
+  CHECK(InvalidBufferSizesUnchanged(encoder), "invalid running buffer reads preserve caller sizes");
+  CHECK(IsEmptyCodecFormat(AMediaCodec_getBufferFormat(encoder, SIZE_MAX)),
+        "invalid running output slot has an owned empty format");
 
   AMediaFormat_setInt32(parameters, AMEDIACODEC_KEY_VIDEO_BITRATE, 360000);
   REQUIRED(FeedPicture(encoder, 0) && FeedPicture(encoder, 1), "queue initial raw AVC frames");
@@ -434,6 +468,8 @@ static int RunCodec(void) {
                && sps != NULL && sps_size > 4, "decoder receives encoded codec-specific data");
   REQUIRED(AMediaCodec_stop(encoder) == AMEDIA_OK, "stop encoder");
   CHECK(AMediaCodec_dequeueInputBuffer(encoder, 0) == AMEDIA_ERROR_UNKNOWN, "stop invalidates slots");
+  CHECK(InvalidBufferSizesUnchanged(encoder), "invalid stopped buffer reads preserve caller sizes");
+  CHECK(IsEmptyCodecFormat(AMediaCodec_getOutputFormat(encoder)), "stopped output format is owned and empty");
 
 #ifndef CODEC_BUFFER_COMPONENT
   surface_format = AMediaFormat_new();
