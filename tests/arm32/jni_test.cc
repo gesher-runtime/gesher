@@ -168,11 +168,37 @@ void Run(const char* path) {
         "JNI32 has guest thunk entry and fails closed for missing methods");
   Check(!program.Memory().Write32(table + 4 * 4, 0),
         "JNI32 table is read-only to guest code");
+  uint32_t vm_table = 0, get_env = 0;
+  Check(bridge.GuestJavaVM() != 0 &&
+        program.Memory().Read32(bridge.GuestJavaVM(), &vm_table) &&
+        program.Memory().Read32(vm_table + 6 * 4, &get_env) &&
+        get_env != 0 &&
+        !program.Memory().Write32(vm_table + 6 * 4, 0),
+        "guest JavaVM GetEnv slot exists with read-only function table");
 
   if (!program.LoadLibrary("gesher_arm32_jni_fixture.so", &error))
     std::cerr << "load JNI32: " << error << '\n';
   Check(program.LibraryCount() == 1, "load compiled JNI32 guest ELF");
   Check(program.Initialize(&error), "initialize guest JNI library");
+
+  jint onload_version = 0;
+  if (!bridge.CallOnLoad("gesher_arm32_jni_fixture.so", &onload_version, &error))
+    std::cerr << "JNI32 OnLoad: " << error << '\n';
+  Check(onload_version == JNI_VERSION_1_6 && error.empty(),
+        "real guest JNI_OnLoad retrieves JNIEnv through 32-bit JavaVM");
+
+  Value vm_result;
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_vm_bad_version",
+          {Value::GuestPointer(bridge.GuestJavaVM())}, ValueKind::I32,
+          &vm_result, &error) &&
+        static_cast<int32_t>(vm_result.bits) == JNI_EVERSION,
+        "JavaVM GetEnv returns JNI_EVERSION for unsupported JNI version");
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_vm_attach",
+          {Value::GuestPointer(bridge.GuestJavaVM())}, ValueKind::I32,
+          &vm_result, &error) &&
+        static_cast<int32_t>(vm_result.bits) == 77,
+        "JavaVM attach returns the real owning JNI thread, detachment fails closed");
+
   auto call = [&](const char* name, Value* value) {
     return program.CallExport("gesher_arm32_jni_fixture.so", name,
             {Value::GuestPointer(bridge.GuestEnvironment())}, ValueKind::I32,
