@@ -291,17 +291,25 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
       memory.Unmap(kGuestEnv, kPage);
       return false;
     }
-    // All four pages are needed before any thunk is published. An error
-    // leaves no guest JNIEnv or JavaVM pointer reachable.
-    if (!memory.Map(kGuestVm, kPage, kRW, error) ||
-        !memory.Map(kGuestVmTable, kPage, kRW, error) ||
-        !memory.Write32(kGuestEnv, kGuestTable, error) ||
-        !memory.Write32(kGuestVm, kGuestVmTable, error)) {
+    // Do not unmap a pre-existing guest page if an address reservation
+    // collides: only pages this Install call successfully mapped are owned.
+    if (!memory.Map(kGuestVm, kPage, kRW, error)) {
       (void)memory.Unmap(kGuestEnv, kPage);
       (void)memory.Unmap(kGuestTable, kPage);
-      if (memory.IsMapped(kGuestVm, kPage)) (void)memory.Unmap(kGuestVm, kPage);
-      if (memory.IsMapped(kGuestVmTable, kPage))
-        (void)memory.Unmap(kGuestVmTable, kPage);
+      return false;
+    }
+    if (!memory.Map(kGuestVmTable, kPage, kRW, error)) {
+      (void)memory.Unmap(kGuestVm, kPage);
+      (void)memory.Unmap(kGuestEnv, kPage);
+      (void)memory.Unmap(kGuestTable, kPage);
+      return false;
+    }
+    if (!memory.Write32(kGuestEnv, kGuestTable, error) ||
+        !memory.Write32(kGuestVm, kGuestVmTable, error)) {
+      (void)memory.Unmap(kGuestVmTable, kPage);
+      (void)memory.Unmap(kGuestVm, kPage);
+      (void)memory.Unmap(kGuestEnv, kPage);
+      (void)memory.Unmap(kGuestTable, kPage);
       return false;
     }
     active = true;
