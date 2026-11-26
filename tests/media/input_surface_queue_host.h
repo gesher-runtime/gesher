@@ -52,7 +52,14 @@ struct SurfaceFrame {
 };
 class QueueSurface : public android::Surface {
  public:
-  QueueSurface(int w, int h) : width_(w), height_(h), pixels_(w * h) {}
+  inline static std::atomic<int> live{0}, created{0};
+  QueueSurface(int w, int h) : width_(w), height_(h), pixels_(w * h) { ++live; ++created; }
+  ~QueueSurface() override { --live; }
+  void SetDefaultSize(int w, int h) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (w > 0) width_ = w;
+    if (h > 0) height_ = h;
+  }
   void SetListener(std::function<void()> listener) {
     std::lock_guard<std::mutex> lock(mu_); listener_ = std::move(listener);
   }
@@ -70,6 +77,8 @@ class QueueSurface : public android::Surface {
     std::lock_guard<std::mutex> lock(mu_);
     if (abandoned_ || locked_) return -1;
     locked_ = true;
+    pixels_.resize(width_ * height_);
+    locked_width_ = width_; locked_height_ = height_;
     *buffer = {width_, height_, width_, pixels_.data()};
     return 0;
   }
@@ -81,7 +90,7 @@ class QueueSurface : public android::Surface {
       locked_ = false;
       if (abandoned_) return 0;
       auto frame = std::make_shared<SurfaceFrame>();
-      frame->width = width_; frame->height = height_; frame->pixels = pixels_;
+      frame->width = locked_width_; frame->height = locked_height_; frame->pixels = pixels_;
       latest_ = std::move(frame);
       ++frames_;
       listener = listener_;
@@ -92,6 +101,7 @@ class QueueSurface : public android::Surface {
  private:
   mutable std::mutex mu_;
   int width_, height_;
+  int locked_width_ = 0, locked_height_ = 0;
   std::vector<uint32_t> pixels_;
   std::shared_ptr<const SurfaceFrame> latest_;
   std::function<void()> listener_;

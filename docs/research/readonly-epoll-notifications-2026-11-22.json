@@ -1,0 +1,190 @@
+{
+  "schema": "readonly-epoll-local-research-v1",
+  "baseline": "972c2b42b40c4ac799e147f5e352d07ba615d0fb",
+  "scope": "N33/T12 timerfd and inotify producer notifications; partial roadmap leaf",
+  "production_sha256": {
+    "compat/posix/src/epoll.cc": "2af9393a8d467b53a64137226f71acb12200d07941434f4eb630b40cf070cf5e",
+    "compat/posix/src/event_internal.h": "84305a4c2449801b3bc01b79b2258603f97b630d73f07f53c892d86cfbc0e0d7",
+    "compat/posix/src/timerfd.cc": "1e29f03fb0017ca49e5ba8ba1c873a328691a6460d7e40b79ba3c2fc55529241",
+    "compat/posix/src/inotify.cc": "442c1cbeceeadb756232a5b0b4bce7761a9ab7bb7b2386850d83e6270cc268e5"
+  },
+  "baseline_production_sha256": {
+    "compat/posix/src/epoll.cc": "95cad52383150175108c9abba6ef9a2478b0c2410ee724f1aef2ed651fdfa548",
+    "compat/posix/src/event_internal.h": "c513b001d2c73a6a14755d1550917a176b6f049d6baa171e22425582d3837159",
+    "compat/posix/src/timerfd.cc": "3070ac319f1ab9bb1c47cb1f99df2f8e5f9dcdf91eeca2c9b6aac00c0c6e39be",
+    "compat/posix/src/inotify.cc": "afcc848db4ffc1e6e5a7cbee3c2284fe7dcfeb0e5c0e7c23a7e2ec93a949c99f"
+  },
+  "fixture_sha256": {
+    "tests/native/epoll_eventfd_edges_host.cc.in": "c0a07ceed81ace2651f6decdf5b5b2255cf20d82383361e463f387fac3bf8245",
+    "tests/native/epoll_readonly_edge_test.inc": "6aee4e79c7d4d659dd7a05c5963a5be278ecaf779744756144f4615f215dd027",
+    "tests/native/epoll_readonly_edges_host.cc.in": "026bd80551f95c738c5df8113bb12a4ef904b0e5ce9f6e559ad0c717225a80fe",
+    "tools/test_epoll_readonly_edges.py": "251a2bc91e1641c4cf034fb4a41ec916561a2e1a527df560361cacd8f0716367",
+    "tools/test_host_event_loop_contracts.py": "4cfe95e2d93352fd80297de8efefb54d3ecfab07449e439dbc1c51ba7f3dbfeb",
+    "probes/posix/epoll_probe.cc": "b378a9978a8097013816c0d61432d08ef615f9821688736398fab4f27662e1c0",
+    "tests/windows/run-tests.ps1": "7f6a57b9b4328e758d1422e7a3fbe7541ecb500d63b46164fae2e762b3fe5d95"
+  },
+  "primary_references": [
+    {
+      "path": "fs/timerfd.c",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/fs/timerfd.c",
+      "sha256": "ceaef3134a95b9194e702c53bd4ab7ce4a6751eb16b492c9238c87b105e08e6e"
+    },
+    {
+      "path": "fs/notify/notification.c",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/fs/notify/notification.c",
+      "sha256": "3a756d5c49b822aa8d88c198866d6ab74aac7252c7f2f632cddbecf9d646f981"
+    },
+    {
+      "path": "fs/notify/inotify/inotify_user.c",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/fs/notify/inotify/inotify_user.c",
+      "sha256": "cac727f91df58b4b7611e0f2c4ad75c48a7ec71df5b1b6d684c704f8a4a89b96"
+    },
+    {
+      "path": "fs/eventpoll.c",
+      "url": "https://android.googlesource.com/kernel/common/+/refs/tags/android16-6.12-2025-06_r38/fs/eventpoll.c",
+      "sha256": "bef423c5c795a317e9492581212f161aa75d2080071fd4e9e05439819fb70dc8"
+    }
+  ],
+  "environment": {
+    "kernel": "Linux 6.18.57 x86_64 GNU/Linux",
+    "compiler": "GCC 14.2.0",
+    "sanitizers": [
+      "AddressSanitizer",
+      "UndefinedBehaviorSanitizer"
+    ],
+    "local_only_environment": "ASAN_OPTIONS=detect_leaks=0 because executor ptrace blocks LeakSanitizer; no CI recipe change"
+  },
+  "work_measurements": [
+    {
+      "case": "unread timerfd",
+      "zero_time_waits_after_first_delivery": 10000,
+      "baseline_repeated_deliveries": 10000,
+      "changed_repeated_deliveries": 0
+    },
+    {
+      "case": "unread inotify",
+      "zero_time_waits_after_first_delivery": 10000,
+      "baseline_repeated_deliveries": 10000,
+      "changed_repeated_deliveries": 0
+    },
+    {
+      "case": "unread periodic timer",
+      "periods": 10000,
+      "baseline_callbacks": 10000,
+      "changed_callbacks": 1,
+      "baseline_arms_before_read": 10001,
+      "changed_arms_before_read": 1,
+      "baseline_read_ticks": 10000,
+      "changed_read_ticks": 10000
+    }
+  ],
+  "commands": [
+    {
+      "argv": [
+        "python3",
+        "tools/test_epoll_readonly_edges.py",
+        "--sanitize"
+      ],
+      "exit": 0,
+      "captured_stdout": "epoll.cc SHA256 2af9393a8d467b53a64137226f71acb12200d07941434f4eb630b40cf070cf5e\ntimerfd.cc SHA256 1e29f03fb0017ca49e5ba8ba1c873a328691a6460d7e40b79ba3c2fc55529241\ninotify.cc SHA256 442c1cbeceeadb756232a5b0b4bce7761a9ab7bb7b2386850d83e6270cc268e5\nreadonly work timerfd: idle_waits=10000 repeated_deliveries=0\nreadonly work inotify: idle_waits=10000 repeated_deliveries=0\nreadonly Linux overflow: capacity=16384 retained_markers=1\nreadonly edge contracts: complete\nreadonly edge Linux reference: 137 checks, 0 failures\nreadonly work timerfd: idle_waits=10000 repeated_deliveries=0\nreadonly work inotify: idle_waits=10000 repeated_deliveries=0\nreadonly edge contracts: complete\nreadonly work periodic: periods=10000 callbacks=1 arms=1 ticks=10000\nreadonly edge production host: 535 checks, 0 failures\n"
+    },
+    {
+      "argv": [
+        "python3",
+        "tools/test_epoll_readonly_edges.py",
+        "--sanitize",
+        "--source-ref",
+        "972c2b42b40c4ac799e147f5e352d07ba615d0fb"
+      ],
+      "exit": 1,
+      "expected_negative_control": true,
+      "captured_stdout": "epoll.cc SHA256 95cad52383150175108c9abba6ef9a2478b0c2410ee724f1aef2ed651fdfa548\ntimerfd.cc SHA256 3070ac319f1ab9bb1c47cb1f99df2f8e5f9dcdf91eeca2c9b6aac00c0c6e39be\ninotify.cc SHA256 afcc848db4ffc1e6e5a7cbee3c2284fe7dcfeb0e5c0e7c23a7e2ec93a949c99f\nreadonly work timerfd: idle_waits=10000 repeated_deliveries=0\nreadonly work inotify: idle_waits=10000 repeated_deliveries=0\nreadonly Linux overflow: capacity=16384 retained_markers=1\nreadonly edge contracts: complete\nreadonly edge Linux reference: 137 checks, 0 failures\nreadonly work timerfd: idle_waits=10000 repeated_deliveries=10000\nFAIL readonly persistent level does not republish an edge\nFAIL readonly consumed edge waits for its timeout\nFAIL readonly notification consumed once\nFAIL readonly MOD edge consumed\nFAIL readonly input band result\nFAIL readonly normal-only result\nreadonly work inotify: idle_waits=10000 repeated_deliveries=10000\nFAIL readonly persistent level does not republish an edge\nFAIL readonly consumed edge waits for its timeout\nFAIL readonly notification consumed once\nFAIL readonly MOD edge consumed\nFAIL periodic unread ticks are not new edges\nFAIL periodic gettime itself is not a notification\nreadonly edge contracts: complete\nreadonly work periodic: periods=10000 callbacks=10000 arms=10001 ticks=10000\nFAIL timer work defers unread callbacks\nFAIL queue coalesced duplicate is not an edge\nFAIL queue coalesced overflow is not an edge\nFAIL queue retained middle overflow suppresses another edge\nFAIL queue retained middle overflow remains single\nFAIL queue regular tail remains\nFAIL queue repeated backend loss retains single non-tail marker\nFAIL queue repeated backend loss preserves queue\nFAIL queue consumed edge blocks\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nFAIL race publication consumed\nFAIL race unread publication consumed\nreadonly edge production host: 10537 checks, 85 failures\nFAIL production-host: exit=1\n\n"
+    },
+    {
+      "argv": [
+        "python3",
+        "tools/test_host_event_loop_contracts.py",
+        "--sanitize"
+      ],
+      "exit": 0,
+      "captured_stdout": "epoll.cc 2af9393a8d467b53a64137226f71acb12200d07941434f4eb630b40cf070cf5e\nsystem.cc 6e7ed41adf58c9c5ce3bf5c841f6965825d0368262a7d5e9284d36b28185d09f\nfd.cc e6cb83d3c295dd92f5f279fb6707b5721aafda8b8c2bb5d953f29b83e14adcda\nselect.cc fc4c3c4be5bad8afe8ecca37a964f335aea305d907375a00a5faa4fd23d7c2ac\npoll_scratch.h 669038c41eb20231d58c371f1ad38ff2e340525a938c476635481d68e7e0d393\nproduction epoll fairness: 15 checks, 0 failures\nPASS epoll\nproduction vector routing: 85 checks, 0 failures\nPASS vector\nproduction host select: 28 checks, 0 failures\nPASS select\nMEASURE 64 mixed poll descriptors: calls=10000 allocations=0 bytes=0 elapsed_us=176090\nMEASURE one eventfd poll: calls=10000 allocations=0 bytes=0 elapsed_us=5662\nMEASURE 64-entry epoll wait: calls=10000 allocations=0 bytes=0 elapsed_us=441192\nMEASURE 64-entry epoll poll (private nested storage): calls=10000 allocations=140000 bytes=30480000 elapsed_us=421237\nouter poll scratch: 88 checks, 0 failures\nPASS scratch\nproduction epoll.cc sha256=2af9393a8d467b53a64137226f71acb12200d07941434f4eb630b40cf070cf5e\neventfd edge contracts: complete\neventfd edge Linux reference: 116 checks, 0 failures\neventfd edge contracts: complete\neventfd edge wait contracts: complete\neventfd edge production host: 153 checks, 0 failures\nepoll.cc SHA256 2af9393a8d467b53a64137226f71acb12200d07941434f4eb630b40cf070cf5e\ntimerfd.cc SHA256 1e29f03fb0017ca49e5ba8ba1c873a328691a6460d7e40b79ba3c2fc55529241\ninotify.cc SHA256 442c1cbeceeadb756232a5b0b4bce7761a9ab7bb7b2386850d83e6270cc268e5\nreadonly work timerfd: idle_waits=10000 repeated_deliveries=0\nreadonly work inotify: idle_waits=10000 repeated_deliveries=0\nreadonly Linux overflow: capacity=16384 retained_markers=1\nreadonly edge contracts: complete\nreadonly edge Linux reference: 137 checks, 0 failures\nreadonly work timerfd: idle_waits=10000 repeated_deliveries=0\nreadonly work inotify: idle_waits=10000 repeated_deliveries=0\nreadonly edge contracts: complete\nreadonly work periodic: periods=10000 callbacks=1 arms=1 ticks=10000\nreadonly edge production host: 535 checks, 0 failures\n"
+    },
+    {
+      "argv": [
+        "python3",
+        "tools/test_timerfd_contracts.py",
+        "--sanitize"
+      ],
+      "exit": 0,
+      "case_summaries": [
+        "timerfd ownership: 21 assertions, 0 failures",
+        "timerfd contracts: 24 assertions, 0 failures",
+        "timerfd deadlines: 21 assertions, 0 failures",
+        "timerfd quiescence: 11 assertions, 0 failures",
+        "timerfd suspend: 31 assertions, 0 failures",
+        "timerfd resume-lifetime: 19 assertions, 0 failures",
+        "timerfd resume-failure: 6 assertions, 0 failures",
+        "timerfd-syscall: 68 assertions, 0 failures"
+      ]
+    },
+    {
+      "argv": [
+        "python3",
+        "tools/net-tcp-priority/test-selected-policy.py",
+        "--selftest"
+      ],
+      "exit": 0,
+      "captured_stdout": "TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0\nTCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases=20\n"
+    }
+  ],
+  "windows_target_compile": {
+    "archive": "llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64.tar.xz",
+    "archive_sha256": "5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4",
+    "compiler": "Clang 23.1.3; unmodified publisher",
+    "flags": [
+      "-std=c++20",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-mno-ms-bitfields",
+      "-fno-exceptions",
+      "-fsized-deallocation",
+      "-DWIN32_LEAN_AND_MEAN",
+      "-DNOMINMAX",
+      "-DNOGDI",
+      "-D_USE_MATH_DEFINES",
+      "-D_WIN32_WINNT=0x0A00",
+      "-DWINVER=0x0A00",
+      "-D_FILE_OFFSET_BITS=64",
+      "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+      "-Icompat/posix/include"
+    ],
+    "exit": 0,
+    "captured_stdout": "x86_64 compat/posix/src/epoll.cc PASS 2af9393a8d467b53a64137226f71acb12200d07941434f4eb630b40cf070cf5e\nx86_64 compat/posix/src/timerfd.cc PASS 1e29f03fb0017ca49e5ba8ba1c873a328691a6460d7e40b79ba3c2fc55529241\nx86_64 compat/posix/src/inotify.cc PASS 442c1cbeceeadb756232a5b0b4bce7761a9ab7bb7b2386850d83e6270cc268e5\nx86_64 probes/posix/epoll_probe.cc PASS b378a9978a8097013816c0d61432d08ef615f9821688736398fab4f27662e1c0\naarch64 compat/posix/src/epoll.cc PASS 2af9393a8d467b53a64137226f71acb12200d07941434f4eb630b40cf070cf5e\naarch64 compat/posix/src/timerfd.cc PASS 1e29f03fb0017ca49e5ba8ba1c873a328691a6460d7e40b79ba3c2fc55529241\naarch64 compat/posix/src/inotify.cc PASS 442c1cbeceeadb756232a5b0b4bce7761a9ab7bb7b2386850d83e6270cc268e5\naarch64 probes/posix/epoll_probe.cc PASS b378a9978a8097013816c0d61432d08ef615f9821688736398fab4f27662e1c0\n",
+    "executed_windows_binary": false,
+    "selected_supplier_authority": false
+  },
+  "powershell": {
+    "version": "7.4.22",
+    "action": "Actual Parser.ParseFile on tests/windows/run-tests.ps1",
+    "exit": 0,
+    "executed_windows_runtime_tests": false
+  },
+  "full_log_sha256": {
+    "readonly": "ceedca13cac8a8cb4ba2b658d287087c04718295d6c9e38bdb127785a0b5685e",
+    "baseline": "f03fcab5b91e74ae72673893bc29a82aed54d6794ea114237b82d904d230b998",
+    "host-helper": "7229083ba2463d9c3626ef6f53e9edde61c07630ee873979593b41b8aa997fa8",
+    "existing-timer": "9dc4f97ad2a5e07f790847e5b7e6c3ba4ef3271062ae9e705be33d7735458d64",
+    "preservation": "1e8e093b258efc42e4234ab8aa794e848e73bebbfa9d0650a295d6e725440e2e",
+    "windows-compile": "98f7fd0cdf978f11855ff97129c43147bd7b53c0a8589ee558d18769c3a89276"
+  },
+  "limits": [
+    "Host Win32 event/CRT/PollFds boundaries",
+    "Controlled native timer clock/callback delivery",
+    "Exact inotify Emit/Read supplied raw records; Windows directory completion not simulated",
+    "Windows cross-compilation is not link/runtime evidence",
+    "No Android ART or physical suspend execution",
+    "Other EPOLLET targets, EPOLLEXCLUSIVE and watched-number-close-with-surviving-alias behavior remain open"
+  ]
+}

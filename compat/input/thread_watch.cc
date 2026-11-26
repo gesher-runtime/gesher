@@ -374,6 +374,20 @@ void DumpImeThreads(DWORD skip, std::vector<DWORD>* foreign) {
 
 }  // namespace
 
+uint64_t ThreadWatchClockMs() {
+  // Awake time, the clock Android's watchdogs measure with
+  // (SystemClock.uptimeMillis). GetTickCount64 also counts while the PC sleeps
+  // or hibernates, so a ping posted just before a sleep was reported after the
+  // resume as a wait of hours.
+  // QueryUnbiasedInterruptTime reads the unbiased interrupt time that Android's
+  // CLOCK_MONOTONIC follows here, at timer-tick resolution, which is ample for
+  // waits measured in seconds. It is kernel32's, so this file links without the
+  // POSIX layer's mincore import.
+  ULONGLONG ticks = 0;
+  QueryUnbiasedInterruptTime(&ticks);
+  return static_cast<uint64_t>(ticks / 10000);
+}
+
 class ThreadWatch {
  public:
   ThreadWatch(HWND hwnd, HANDLE thread, const char* name)
@@ -401,16 +415,16 @@ class ThreadWatch {
  private:
   void Run() {
     bool outstanding = false;
-    ULONGLONG posted_at = 0;
+    uint64_t posted_at = 0;
     int dumps = 0;
     std::unique_lock<std::mutex> lock(mutex_);
     while (!stop_) {
       cv_.wait_for(lock, std::chrono::seconds(1));
       if (stop_) break;
-      const ULONGLONG now = GetTickCount64();
+      const uint64_t now = ThreadWatchClockMs();
       if (outstanding) {
         if (answered_.exchange(false)) {
-          const ULONGLONG waited = now - posted_at;
+          const uint64_t waited = now - posted_at;
           if (waited >= 4000) {
             fprintf(stderr, "gesher-ime: the thread of window \"%s\" answered after %llu ms%s",
                     name_.c_str(), static_cast<unsigned long long>(waited), kNewline);
@@ -419,8 +433,8 @@ class ThreadWatch {
           outstanding = false;
           dumps = 0;
         } else {
-          const ULONGLONG waited = now - posted_at;
-          if (dumps < 4 && waited >= 5000 + static_cast<ULONGLONG>(dumps) * 60000) {
+          const uint64_t waited = now - posted_at;
+          if (dumps < 4 && waited >= 5000 + static_cast<uint64_t>(dumps) * 60000) {
             Dump(waited, dumps == 0);
             dumps++;
           }
@@ -438,7 +452,7 @@ class ThreadWatch {
 
   // The window thread's stack: suspended while its frames are unwound
   // (nothing that takes a lock the thread may hold), described after.
-  void Dump(ULONGLONG waited, bool first) {
+  void Dump(uint64_t waited, bool first) {
     DWORD64 pcs[64];
     const uint32_t msg = current_msg.load();
     const int n = Unwind(thread_handle_, pcs, 64);

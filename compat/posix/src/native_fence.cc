@@ -6,6 +6,9 @@
 #include "internal.h"
 #include "record_lock_descriptors.h"
 
+#include <gesher/clocks.h>
+#include <linux/sync_file.h>
+
 #include <bcrypt.h>
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -17,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <cwchar>
 #include <mutex>
 #include <new>
@@ -35,9 +39,17 @@ class NativeFence {
   HANDLE event = nullptr;
   uint64_t metadata = 0;
   std::atomic<FenceStatus> terminal{FenceStatus::kPending};
+  // CLOCK_MONOTONIC when this process first saw the event signaled (0: not
+  // yet), never before the completion itself: sync_file_info's timestamp.
+  std::atomic<int64_t> signaled_ns{0};
 };
 
 namespace {
+void NoteSignaled(NativeFence& fence) {
+  int64_t unset = 0;
+  fence.signaled_ns.compare_exchange_strong(unset, MonotonicNanos(), std::memory_order_acq_rel);
+}
+
 constexpr wchar_t kEventPrefix[] = L"Gesher.NativeFence.v1.";
 constexpr DWORD kReadOnlyEvent = SYNCHRONIZE | 0x0001;  // EVENT_QUERY_STATE
 constexpr uint64_t kForever = UINT64_MAX;
@@ -92,6 +104,8 @@ void CALLBACK Completed(void* argument, BOOLEAN) {
     std::lock_guard<std::mutex> lock(watch->mutex);
     wait = watch->wait;
   }
+  // The thread pool runs this as the event is signaled: its completion time.
+  NoteSignaled(*watch->fence);
   // Never wait for this callback itself. WT_EXECUTEONLYONCE prevents another.
   UnregisterWaitEx(wait, nullptr);
   // Exported native descriptors are already complete. Do not wake unrelated
@@ -100,9 +114,9 @@ void CALLBACK Completed(void* argument, BOOLEAN) {
 }
 
 void RetainUntilComplete(const std::shared_ptr<NativeFence>& fence) {
-  if (WaitForSingleObject(fence->event, 0) == WAIT_OBJECT_0) return;
+  if (WaitForSingleObject(fence->event, 0) == WAIT_OBJECT_0) { NoteSignaled(*fence); return; }
   auto* watch = new (std::nothrow) CompletionWatch;
-  if (!watch) { WaitForSingleObject(fence->event, INFINITE); return; }
+  if (!watch) { WaitForSingleObject(fence->event, INFINITE); NoteSignaled(*fence); return; }
   watch->fence = fence;
   bool registered;
   {
@@ -115,6 +129,7 @@ void RetainUntilComplete(const std::shared_ptr<NativeFence>& fence) {
     // Factories call this AFTER releasing ANGLE's mutex. The rare allocation
     // fallback sleeps here rather than leaking the event or signaling early.
     WaitForSingleObject(fence->event, INFINITE);
+    NoteSignaled(*fence);
     delete watch;
   }
 }
@@ -203,6 +218,7 @@ FenceStatus NativeFenceStatus(const std::shared_ptr<NativeFence>& fence) {
          : result == WAIT_TIMEOUT ? FenceStatus::kPending : FenceStatus::kFailed;
   // DXGI also signals on removal; that is not successful GPU completion.
   if (fence->device && FAILED(fence->device->GetDeviceRemovedReason())) status = FenceStatus::kFailed;
+  if (status == FenceStatus::kSignaled) NoteSignaled(*fence);  // before the watch's callback ran
   if (status != FenceStatus::kPending) {
     FenceStatus pending = FenceStatus::kPending;
     fence->terminal.compare_exchange_strong(pending, status, std::memory_order_acq_rel);
@@ -256,6 +272,7 @@ int ExportNativeFence(const std::shared_ptr<NativeFence>& fence) {
                        kReadOnlyEvent, FALSE, 0)) return FailWithLastError();
   completed->metadata = kTransferredCompletedFence;
   completed->terminal.store(FenceStatus::kSignaled, std::memory_order_relaxed);
+  completed->signaled_ns.store(fence->signaled_ns.load(std::memory_order_acquire), std::memory_order_relaxed);
   return Register(completed);
 }
 
@@ -301,12 +318,48 @@ int AdoptNativeFence(HANDLE owned, uint64_t metadata, bool close_on_exec) {
     result->event = owned;
     if (!CompletedEvent(owned)) return errno = EINVAL, -1;
     result->terminal.store(FenceStatus::kSignaled, std::memory_order_relaxed);
+    // The sender's completion time does not travel with the handle: this
+    // process saw it complete no later than now.
+    NoteSignaled(*result);
   } else {
     CloseHandle(owned);
     return errno = EINVAL, -1;
   }
   result->metadata = metadata;
   return Register(result, close_on_exec);
+}
+
+bool SyncFileIoctl(int fd, unsigned long request, void* argument, int* result) {
+  auto fence = LookupNativeFence(fd);
+  if (!fence) return false;
+  if (request != SYNC_IOC_FILE_INFO) { *result = (errno = ENOTTY, -1); return true; }
+  auto* info = static_cast<sync_file_info*>(argument);
+  if (info == nullptr) { *result = (errno = EFAULT, -1); return true; }
+  if (info->flags != 0 || info->pad != 0) { *result = (errno = EINVAL, -1); return true; }
+  // One fence per file: the GPU completion eglDupNativeFenceFDANDROID exported.
+  // A descriptor exists only for a completed fence (export waits for it,
+  // adoption takes a signaled event), so this is 1; 0 and -EIO keep the
+  // kernel's mapping for the other states.
+  const FenceStatus state = NativeFenceStatus(fence);
+  const int32_t status = state == FenceStatus::kSignaled ? 1 : state == FenceStatus::kPending ? 0 : -EIO;
+  if (info->num_fences != 0) {
+    // Linux: the caller's array must hold every fence; a file with fences
+    // reports the worst of their states.
+    auto* fences = reinterpret_cast<sync_fence_info*>(static_cast<uintptr_t>(info->sync_fence_info));
+    if (fences == nullptr) { *result = (errno = EFAULT, -1); return true; }
+    sync_fence_info one{};
+    std::strcpy(one.obj_name, "d3d11");
+    std::strcpy(one.driver_name, "gesher");
+    one.status = status;
+    one.timestamp_ns = status == 1 ? static_cast<uint64_t>(fence->signaled_ns.load(std::memory_order_acquire)) : 0;
+    std::memcpy(fences, &one, sizeof(one));
+  }
+  std::memset(info->name, 0, sizeof(info->name));
+  std::strcpy(info->name, "gesher-d3d11");
+  info->status = status;
+  info->num_fences = 1;
+  *result = 0;
+  return true;
 }
 
 short PollNativeFence(const std::shared_ptr<NativeFence>& fence, short events, HANDLE* wake) {

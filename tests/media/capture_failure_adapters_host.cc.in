@@ -98,6 +98,7 @@ class Recorder {
   bool Write(int, const std::vector<EncodedPacket>&, int64_t*) { return true; }
   bool prepared_ = true, started_ = false, running_ = false, paused_ = false, error_state_ = false;
   std::atomic<bool> finished_{false};
+  std::atomic<bool> has_rolled_over_{false};
   int error_requests_ = 0, completion_requests_ = 0;
   unsigned audio_epoch_ = 0, active_workers_ = 0;
   StopReason stop_reason_ = StopReason::kNone;

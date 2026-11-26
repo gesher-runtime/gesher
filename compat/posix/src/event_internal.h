@@ -47,6 +47,9 @@ void DupEventObject(int fd, int fd2);
 // (counter 1 while events are queued), so poll and epoll take it as one.
 struct Inotify;
 std::shared_ptr<EventFd> NewReadiness(bool nonblocking);
+// True publishes a producer notification, even if already readable. Inotify
+// calls this for each newly queued record; timerfd for an armed expiration,
+// not for accounting additional unread periodic ticks. False clears the level.
 void SetReadable(EventFd& readiness, bool readable);
 int RegisterInotify(std::shared_ptr<Inotify> inotify, std::shared_ptr<EventFd> readiness);
 int ReadInotify(Inotify& inotify, void* buf, unsigned int count);
@@ -62,7 +65,9 @@ int RegisterTimerFd(std::shared_ptr<TimerFd> timer, std::shared_ptr<EventFd> rea
 std::shared_ptr<TimerFd> LookupTimerFd(int fd);
 int ReadTimerFd(TimerFd& timer, void* buf, unsigned int count);
 
-// Takes a closed (or replaced) fd number out of every epoll interest list.
+// Retires the existing numeric registrations for non-virtual backends.
+// Virtual registrations instead belong to their shared event object: aliases
+// and actual in-flight I/O retain them, while epoll observations do not.
 void ForgetEpollEntries(int fd);
 
 // A pipe has no handle to wait for, and WSAPoll waits for sockets only, so a

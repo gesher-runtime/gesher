@@ -27,6 +27,11 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     private volatile Response info;
     private int initialHeaderCount;
     private int pendingCallbacks;
+    private int ioWorkers;
+    private boolean cleanupDone, terminalReleased;
+    private HttpException terminalError;
+    private boolean terminalCanceled;
+    private Response terminalInfo;
     private static final int TRANSFER_BYTES=32768;
     // Only the serial writer uses these bytes. Terminal publication drops its
     // reference without modifying a buffer still owned by an in-flight write.
@@ -70,10 +75,16 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         }
     }
     private void io(Action action, boolean writing) {
+        synchronized (this) { if (done) return; ioWorkers++; }
         try { (writing ? writer : engine.io).execute(() -> {
-            if (done) return;
-            try { action.run(); } catch (Exception e) { fail(e); }
-        }); } catch (RuntimeException e) { fail(e); }
+            try { if (!done) action.run(); }
+            catch (Exception e) { fail(e); }
+            finally { workerRetired(); }
+        }); } catch (RuntimeException e) { workerRetired(); fail(e); }
+    }
+    private void workerRetired() {
+        synchronized (this) { ioWorkers--; }
+        publishTerminal();
     }
     @Override public synchronized void start() {
         if (started) throw new IllegalStateException("Stream has already started");
@@ -82,7 +93,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
             // The current duplex transport requires HTTP/2. Fail through the
             // ordinary asynchronous callback path before opening a connection.
             if (!engine.http2Enabled) throw new ProtocolException("HTTP/2 is disabled for this engine");
-            Http2Transport opened=new Http2Transport();
+            Http2Transport opened=new Http2Transport(engine.http2Sessions, engine.brotliEnabled);
             synchronized (this) { if (done) { opened.close(); return; } transport=opened; }
             opened.connect(url,network);
             synchronized (this) { if (done) return; ready=true; }
@@ -92,7 +103,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     }
     private void sendHeaders() throws Exception {
         if (headersSent) return;
-        transport.start(url,method,headers.getAsList(),engine.agent,!writeEnded); headersSent=true;
+        transport.start(url,method,engine.contentHeaders(url,headers.getAsList()),engine.agent,!writeEnded); headersSent=true;
         io(() -> {
             List<Map.Entry<String,String>> received=transport.headers();
             initialHeaderCount=received.size();
@@ -106,11 +117,8 @@ final class JavaBidirectionalStream extends BidirectionalStream {
             }
             if (code<100) throw new java.io.IOException("HTTP/2 response is missing :status");
             trace("HTTP status "+code);
-            String encoding="";
-            for (Map.Entry<String,String> h:values) {
-                if (h.getKey().equalsIgnoreCase("content-encoding")) encoding=h.getValue();
-            }
-            transport.setResponseEncoding(encoding);
+            transport.setResponseEncoding(method.equals("HEAD") || code == 204 || code == 304
+                    ? "" : ContentDecoding.encoding(values));
             Response response=new Response(url.toExternalForm(),code,new JavaHttpEngine.Headers(values));
             synchronized (this) { if (done) return; info=response; }
             callback(() -> callback.onResponseHeadersReceived(this,response));
@@ -177,7 +185,9 @@ final class JavaBidirectionalStream extends BidirectionalStream {
     private void pump() throws Exception {
         byte[] bytes=new byte[TRANSFER_BYTES];
         for (;;) {
-            int length=transport.read(bytes,0,bytes.length);
+            int length;
+            try { length=transport.read(bytes,0,bytes.length); }
+            finally { info.received=transport.receivedBytes(); }
             if (done) return;
             if (length<0) {
                 List<Map.Entry<String,String>> all=transport.headers();
@@ -212,7 +222,7 @@ final class JavaBidirectionalStream extends BidirectionalStream {
                     if (done) return;
                     buffer=pendingRead; pendingRead=null; readPending=false;
                     int count=Math.min(buffer.remaining(),length-offset);
-                    buffer.put(bytes,offset,count); offset+=count; info.received+=count;
+                    buffer.put(bytes,offset,count); offset+=count;
                 }
                 callback(() -> callback.onReadCompleted(this,info,buffer,false));
             }
@@ -238,22 +248,37 @@ final class JavaBidirectionalStream extends BidirectionalStream {
         @Override public boolean isImmediatelyRetryable() { return false; }
     },false); }
     private void finish(HttpException error, boolean canceled) {
-        final Response terminalInfo;
         synchronized (this) {
             if (done) return;
-            done=true; terminalInfo=info; writes.clear(); pendingRead=null; writeScratch=null; notifyAll();
+            done=true; terminalInfo=info; terminalError=error; terminalCanceled=canceled;
+            writes.clear(); pendingRead=null; writeScratch=null; notifyAll();
+            ioWorkers++;
         }
         trace(canceled ? "canceled" : error==null ? "succeeded" : "failed");
-        try { engine.io.execute(() -> { Http2Transport t=transport; if (t!=null) try { t.close(); } catch (Exception ignored) {} }); }
-        catch (RuntimeException ignored) {}
+        Runnable cleanup=() -> {
+            try { Http2Transport t=transport; if (t!=null) t.close(); }
+            catch (Exception ignored) { }
+            finally {
+                synchronized (this) { cleanupDone=true; }
+                workerRetired();
+            }
+        };
+        try { engine.io.execute(cleanup); }
+        catch (RuntimeException rejected) { cleanup.run(); }
+    }
+    private void publishTerminal() {
+        synchronized (this) {
+            if (!done || !cleanupDone || ioWorkers!=0 || terminalReleased) return;
+            terminalReleased=true;
+        }
         engine.release(this);
         try { callbacks.execute(() -> {
             try {
-                if (canceled) callback.onCanceled(this,terminalInfo);
-                else if (error!=null) callback.onFailed(this,terminalInfo,error);
+                if (terminalCanceled) callback.onCanceled(this,terminalInfo);
+                else if (terminalError!=null) callback.onFailed(this,terminalInfo,terminalError);
                 else callback.onSucceeded(this,terminalInfo);
-            } catch (RuntimeException ignored) {}
-        }); } catch (RuntimeException ignored) {}
+            } catch (RuntimeException ignored) { }
+        }); } catch (RuntimeException ignored) { }
     }
     private static final class Write {
         final ByteBuffer buffer; final boolean end;

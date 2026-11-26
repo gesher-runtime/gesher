@@ -10,6 +10,10 @@
 #include <memory>
 #include <mutex>
 #include <string>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 struct prop_info {
   std::string name;
@@ -32,13 +36,21 @@ extern "C" int __system_property_get(const char* name, char* value) {
   value[size] = 0;
   return static_cast<int>(size);
 }
+static std::mutex& PropertyInfoMutex() {
+  static auto* mutex = new std::mutex;
+  return *mutex;
+}
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): property lookups in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, PropertyInfoMutex());
+#endif
+
 extern "C" const prop_info* __system_property_find(const char* name) {
   std::string value;
   uint32_t serial = 0;
   if (!name || !gesher::properties::Get(name, &value, &serial)) return nullptr;
-  static auto* mutex = new std::mutex;
   static auto* infos = new std::map<std::string, std::unique_ptr<prop_info>>;
-  std::lock_guard lock(*mutex);
+  std::lock_guard lock(PropertyInfoMutex());
   auto& info = (*infos)[name];
   if (!info) info = std::make_unique<prop_info>(prop_info{name, std::move(value), serial});
   return info.get();

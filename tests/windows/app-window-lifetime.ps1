@@ -109,12 +109,37 @@ public static class GesherAppTaskMenu {
       $Role, $process.Id, $entry.Generation, $entry.Uid, $entry.Task, $window.ToInt64(), $Separate)
     return $entry
   }
+  function AWClickTarget($Entry) {
+    AWRequire (-not $Entry.Process.HasExited -and
+      $Entry.Process.StartTime.ToUniversalTime().Ticks -eq $Entry.Generation) "Click target process retired or changed: $($Entry.Role)"
+    [uint32]$ownerPid = 0
+    AWRequire ([GesherWin32]::GetWindowThreadProcessId($Entry.Window, [ref]$ownerPid) -ne 0 -and
+      $ownerPid -eq $Entry.Process.Id) "Click target HWND owner changed: $($Entry.Role)"
+    AWRequire ([GesherWin32]::IsWindowVisible($Entry.Window) -and
+      -not [GesherW3Win32]::IsIconic($Entry.Window)) "Click target is hidden or minimized: $($Entry.Role)"
+  }
   function AWClick($Entry, [string] $Button) {
     $pattern = "WINDOW_BUTTONS role=$($Entry.Role) pid=$($Entry.Process.Id) [^\r\n]*?$Button=(\d+),(\d+)"
     AWRequire ((W3Wait $read 0 $pattern 30).Success) "No actual button layout for $($Entry.Role).$Button"
     $matches = [regex]::Matches("$(& $read)", $pattern)
     $point = $matches[$matches.Count - 1]
-    [GesherWin32]::Click($Entry.Window, [int]$point.Groups[1].Value, [int]$point.Groups[2].Value)
+    Write-Host ("APP_WINDOW_CLICK role={0} button={1} pid={2} hwnd={3:x} foreground={4:x}" -f
+      $Entry.Role, $Button, $Entry.Process.Id, $Entry.Window.ToInt64(), [ImeInput]::GetForegroundWindow().ToInt64())
+    # Prepare this retained, visible owner for one click; never restore or relaunch it.
+    AWClickTarget $Entry
+    $prepared = [ImeInput]::Foreground($Entry.Window)
+    AWClickTarget $Entry
+    $foreground = [ImeInput]::GetForegroundWindow()
+    Write-Host ("APP_WINDOW_CLICK_FOREGROUND role={0} pid={1} hwnd={2:x} foreground={3:x} prepared={4}" -f
+      $Entry.Role, $Entry.Process.Id, $Entry.Window.ToInt64(), $foreground.ToInt64(), $prepared)
+    AWRequire ($prepared -and $foreground -eq $Entry.Window) "Click target did not retain native foreground: $($Entry.Role)"
+    $x = [int]$point.Groups[1].Value; $y = [int]$point.Groups[2].Value
+    $at = [IntPtr](($y -shl 16) -bor ($x -band 0xffff))
+    $down = [GesherWin32]::PostMessageW($Entry.Window, 0x0201, [IntPtr]1, $at)
+    $up = [GesherWin32]::PostMessageW($Entry.Window, 0x0202, [IntPtr]::Zero, $at)
+    Write-Host ("APP_WINDOW_CLICK_QUEUE role={0} pid={1} hwnd={2:x} down={3} up={4}" -f
+      $Entry.Role, $Entry.Process.Id, $Entry.Window.ToInt64(), $down, $up)
+    AWRequire ($down -and $up) "Click messages were not both accepted: $($Entry.Role).$Button"
   }
   function AWMenu($Entry, [string[]] $Roles, [string] $Selected) {
     $items = @()

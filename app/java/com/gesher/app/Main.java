@@ -95,6 +95,8 @@ public final class Main {
     }
 
     public static void main(String[] args) {
+        // stdout/stderr may be a persisted log file: no credentials (docs/logging.md).
+        LogRedaction.installStandardStreams();
         int code;
         try {
             code = run(args);
@@ -236,6 +238,9 @@ public final class Main {
             }
             log("starting " + intent.toShortString(false, true, true, false)
                     + " through the system server");
+            // The zygote's specialisation of this app process: not dumpable unless
+            // debuggable (ADR 0093).
+            ProcessSpecialization.apply(ProcessSpecialization.runtimeFlagsFor(appInfo), "gesher-app");
             // With a window the run ends when it is closed (the task stays).
             GesherAppProcess.run(intent, appInfo.targetSdkVersion, !keepTask && !window,
                     !window ? WindowMode.HEADLESS
@@ -369,6 +374,12 @@ public final class Main {
             });
         }
 
+        // Android's MIME map, as RuntimeInit.commonInit installs it, in place of
+        // libcore's minimal default: MimeMap.setDefaultSupplier(DefaultMimeMapFactory::create).
+        // Like AOSP it is built lazily on first use; a failure there is logged and
+        // libcore's minimal map stays in effect rather than failing that caller.
+        installMimeMap(tag);
+
         // 2b. The default locales: Windows' languages and regional format, or
         //     $GESHER_LOCALES (com.gesher.app.locale.SystemLocale, docs/fonts.md).
         com.gesher.app.locale.SystemLocale.applyDefault();
@@ -392,6 +403,21 @@ public final class Main {
     }
 
     /** The system server's package manager, waited for through servicemanager. */
+    private static void installMimeMap(String tag) {
+        // libcore's own hard-coded map, built once now, is the logged fallback.
+        libcore.content.type.MimeMap minimal = libcore.content.type.MimeMap.getDefault();
+        libcore.content.type.MimeMap.setDefaultSupplier(() -> {
+            try {
+                return android.content.type.DefaultMimeMapFactory.create();
+            } catch (RuntimeException | LinkageError failure) {
+                System.err.println(tag + ": Android MIME map unavailable, using libcore's minimal map: "
+                        + failure);
+                System.err.flush();
+                return minimal;
+            }
+        });
+    }
+
     private static IPackageManager remotePackageManager() throws InterruptedException {
         if (System.getenv("GESHER_BINDER") == null) {
             throw new IllegalStateException("--system-server needs $GESHER_BINDER (binderd,"

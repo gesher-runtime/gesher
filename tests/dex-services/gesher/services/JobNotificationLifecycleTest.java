@@ -143,7 +143,7 @@ public final class JobNotificationLifecycleTest {
             Object run = make(runType, new Class<?>[]{schedulerType, jobType}, scheduler, job);
             synchronized (scheduler) {
                 field(jobType, "run").set(job, run);
-                ((List<Object>) field(schedulerType, "mJobs").get(scheduler)).add(job);
+                method(schedulerType, "addJobLocked", jobType).invoke(scheduler, job);
                 Field running = field(schedulerType, "mRunning"); running.setInt(scheduler, running.getInt(scheduler) + 1);
             }
             DelayedStop service = new DelayedStop();
@@ -278,6 +278,53 @@ public final class JobNotificationLifecycleTest {
         stopping.callback.acknowledgeStopMessage(stopping.id, false); f.removed(801, removedKey);
         require(!f.inUse("jobs-a") && f.associations() == 0 && field(f.schedulerType, "mRunning").getInt(f.scheduler) == 0,
                 "Completed/canceled runs retained notification ownership or running slots");
+
+        pendingAssociation(f, false);
+        pendingAssociation(f, true);
+    }
+
+    /** Actual Run completion/releaseNotification while publication is preparing. */
+    private static void pendingAssociation(Fixture f, boolean sharedUij) throws Exception {
+        int id = sharedUij ? 902 : 901;
+        JobHandle survivor = sharedUij ? f.run(715, true) : null;
+        if (survivor != null) survivor.post(id, f.notification("jobs-a"), DETACH);
+        JobHandle preparing = f.run(sharedUij ? 716 : 714, true);
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch resume = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        Field hook = field(NotificationManagerService.class, "mBeforePostPublication");
+        hook.set(f.notifications, (Runnable)() -> {
+            entered.countDown();
+            try {
+                if (!resume.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("Job image preparation did not resume");
+            } catch (InterruptedException interrupted) { throw new AssertionError(interrupted); }
+        });
+        Thread posting = new Thread(() -> {
+            try { preparing.post(id, f.notification("jobs-a"), sharedUij ? REMOVE : DETACH); }
+            catch (Throwable problem) { failure.compareAndSet(null, problem); }
+        }, "job-pending-notification");
+        Thread finishing = new Thread(() -> {
+            try { preparing.finish(); finished.countDown(); }
+            catch (Throwable problem) { failure.compareAndSet(null, problem); }
+        }, "job-finish-during-preparation");
+        posting.setDaemon(true); finishing.setDaemon(true);
+        boolean completed;
+        posting.start();
+        try {
+            require(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "Job did not reach image publication barrier");
+            finishing.start();
+            completed = finished.await(5, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            resume.countDown(); posting.join(5000); finishing.join(5000); hook.set(f.notifications, null);
+        }
+        require(!posting.isAlive() && !finishing.isAlive(), "Job notification race left a caller blocked");
+        if (failure.get() != null) throw new AssertionError("Job notification race failed", failure.get());
+        require(completed, "Job completion joined image preparation under the lifecycle fence");
+        f.visible(id, sharedUij);
+        require(f.associations() == (sharedUij ? 1 : 0), "Pending notification retained the completed job association");
+        if (survivor != null) { survivor.finish(); f.visible(id, false); }
+        f.clear(id);
     }
 
     public static void main(String[] args) throws Exception {

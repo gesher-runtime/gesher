@@ -24,6 +24,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * {@code gesher.bluetooth}: the part of Android's Bluetooth stack that belongs to the device
@@ -604,24 +609,89 @@ public final class BluetoothManagerService extends Binder {
         return mDiscovering;
     }
 
-    /** Asks the device for its SDP records again, then broadcasts ACTION_UUID. */
+    // --- SDP lookups ---------------------------------------------------------------------
+
+    private static final int SDP_THREADS = 2;
+    /** Distinct devices waiting for a free lookup thread; further ones are refused. */
+    private static final int SDP_QUEUE = 64;
+    private static final long SDP_KEEP_ALIVE_SECONDS = 15;
+    private final Object mSdpLock = new Object();
+    /** Devices with a lookup queued or running, and how many fetchUuids calls it answers. */
+    private final Map<Long, Integer> mSdpInFlight = new HashMap<>();
+    private final ThreadPoolExecutor mSdpExecutor = newSdpExecutor();
+
+    private static ThreadPoolExecutor newSdpExecutor() {
+        AtomicInteger count = new AtomicInteger();
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(SDP_THREADS, SDP_THREADS,
+                SDP_KEEP_ALIVE_SECONDS, TimeUnit.SECONDS, new LinkedBlockingQueue<>(SDP_QUEUE),
+                task -> {
+                    Thread t = new Thread(task, "gesher-bluetooth-sdp-" + count.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                });
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    /**
+     * Asks the device for its SDP records again, then broadcasts ACTION_UUID. Calls for a
+     * device whose lookup is already queued or running share that one lookup, and each of
+     * them still gets its broadcast. False while the radio is off, or when too many other
+     * devices are waiting for a lookup.
+     */
     public boolean fetchUuids(String address) {
         long value = WindowsBluetooth.address(address);
         if (value < 0) throw new IllegalArgumentException(address + " is not a Bluetooth address");
         if (state() != BluetoothAdapter.STATE_ON) return false;
-        Thread t = new Thread(() -> {
-            List<UUID> uuids = WindowsBluetooth.remoteUuids(value, true);
-            Intent i = new Intent(BluetoothDevice.ACTION_UUID);
-            i.putExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.createFromHost(address,
-                    BluetoothDevice.ADDRESS_TYPE_PUBLIC));
-            Parcelable[] list = new Parcelable[uuids.size()];
-            for (int k = 0; k < list.length; k++) list[k] = new ParcelUuid(uuids.get(k));
-            i.putExtra(BluetoothDevice.EXTRA_UUID, list);
-            send(i);
-        }, "gesher-bluetooth-sdp");
-        t.setDaemon(true);
-        t.start();
+        synchronized (mSdpLock) {
+            Integer waiting = mSdpInFlight.get(value);
+            if (waiting != null) {
+                mSdpInFlight.put(value, waiting + 1);
+                return true;
+            }
+            // Mark the device before submitting: the lookup may finish (and read this
+            // entry) before execute() returns.
+            mSdpInFlight.put(value, 1);
+            try {
+                mSdpExecutor.execute(() -> lookUpUuids(address, value));
+            } catch (RejectedExecutionException e) {
+                mSdpInFlight.remove(value);
+                return false;
+            }
+        }
         return true;
+    }
+
+    /** Ends the device's lookup; the number of calls it answered. */
+    private int finishSdp(long value) {
+        synchronized (mSdpLock) {
+            Integer waiting = mSdpInFlight.remove(value);
+            return waiting == null ? 0 : waiting;
+        }
+    }
+
+    private void lookUpUuids(String address, long value) {
+        boolean finished = false;
+        try {
+            List<UUID> uuids = WindowsBluetooth.remoteUuids(value, true);
+            // From here a new fetchUuids starts its own lookup.
+            int callers = finishSdp(value);
+            finished = true;
+            for (int n = 0; n < callers; n++) {
+                Intent i = new Intent(BluetoothDevice.ACTION_UUID);
+                i.putExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.createFromHost(address,
+                        BluetoothDevice.ADDRESS_TYPE_PUBLIC));
+                Parcelable[] list = new Parcelable[uuids.size()];
+                for (int k = 0; k < list.length; k++) list[k] = new ParcelUuid(uuids.get(k));
+                i.putExtra(BluetoothDevice.EXTRA_UUID, list);
+                send(i);
+            }
+        } catch (RuntimeException e) {
+            SystemServer.log("bluetooth: SDP lookup of " + address + " failed: " + e);
+        } finally {
+            // A failed lookup must not leave the device marked busy.
+            if (!finished) finishSdp(value);
+        }
     }
 
     // --- the app side ------------------------------------------------------------------------

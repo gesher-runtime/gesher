@@ -142,6 +142,7 @@ target_sources(hwui PRIVATE ${CMAKE_SOURCE_DIR}/compat/hwui/text/text_natives.cc
 target_sources(hwui PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/hwui/surfaces/surfaces_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/hwui/surfaces/bitmap_parcel.cc
+  ${CMAKE_SOURCE_DIR}/compat/hwui/surfaces/shared_bitmap.cc
   ${CMAKE_SOURCE_DIR}/compat/hwui/surfaces/yuv_image.cc)
 target_include_directories(hwui BEFORE PRIVATE
   ${CMAKE_BINARY_DIR}/gen/hwui-gl

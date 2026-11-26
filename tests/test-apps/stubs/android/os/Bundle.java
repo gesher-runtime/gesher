@@ -25,6 +25,7 @@ public class Bundle {
     public void putLong(String key, long value) { mMap.put(key, value); }
     public long getLong(String key) { Object v = mMap.get(key); return v instanceof Long ? (Long) v : 0L; }
     public Object get(String key) { return mMap.get(key); }
+    public <T> T getParcelable(String key, Class<T> type) { Object v = mMap.get(key); return type.isInstance(v) ? type.cast(v) : null; }
     public Set<String> keySet() { return mMap.keySet(); }
     public void putAll(Bundle b) { if (b != null) mMap.putAll(b.mMap); }
     public void remove(String key) { mMap.remove(key); }

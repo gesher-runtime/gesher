@@ -15,5 +15,8 @@ bool TransferNativeFence(int fd, uintptr_t* handle, uint64_t* metadata,
 // Consumes owned on every outcome. Binder keeps the default; SCM_RIGHTS
 // supplies the receiving message's MSG_CMSG_CLOEXEC choice explicitly.
 int AdoptNativeFence(HANDLE owned, uint64_t metadata, bool close_on_exec = true);
+// Linux's sync_file ioctls on a native fence fd (<linux/sync_file.h>):
+// SYNC_IOC_FILE_INFO; others fail with ENOTTY. False: fd is not a native fence.
+bool SyncFileIoctl(int fd, unsigned long request, void* argument, int* result);
 short PollNativeFence(const std::shared_ptr<NativeFence>& fence, short events, HANDLE* wake);
 }  // namespace gesher

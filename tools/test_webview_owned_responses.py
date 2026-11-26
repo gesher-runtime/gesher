@@ -2,14 +2,17 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 """Exercise exact WebView document publication/answering and measure owned-body copies.
 
-Copies production loadDataWithBaseURL, onResourceRequest, claimData, answerRequest, blocked, readAll, headers,
-navigation, onEvent, onNavigationStarting, pending-data state and ApiNavigations. Native
+Copies production load/navigation/stop/history/destroy methods, onResourceRequest,
+claimData, answerRequest, blocked, readAll, headers, onEvent, onNavigationStarting,
+pending-data state and ApiNavigations. Native
 host/JNI (a model of webview_host.cc's navigation events), the UI thread and file-resource
 loading are declared boundaries; file/byte streams, concurrency and Java allocations are
 real.
 --framework-classes runs real Android WebResourceResponse/Base64 implementations;
-otherwise small declared Android adapters keep this host preflight standalone.
-Only the pending-data read boundary is instrumented to force concurrent changes.
+adding --core-classes runs the real IntentFallback/Intent parser too. Otherwise a
+finite URL mapping is a declared parser boundary, not another parser. The UI queue
+and wait duration are controlled for lifecycle checks. Only the pending-data read
+boundary is instrumented inside the extracted production code.
 """
 from __future__ import annotations
 
@@ -55,8 +58,22 @@ BASE64_ADAPTER = r'''
 package android.util;
 public final class Base64 {
     public static final int DEFAULT = 0;
+    public static final int NO_WRAP = 2;
     public static byte[] decode(String value, int flags) {
         return java.util.Base64.getMimeDecoder().decode(value);
+    }
+    public static String encodeToString(byte[] value, int flags) {
+        return java.util.Base64.getEncoder().encodeToString(value);
+    }
+}
+'''
+INTENT_FALLBACK_BOUNDARY = r'''
+package com.gesher.app.webview;
+/** One declared parser result for lifecycle checks; no Intent URI parsing here. */
+final class IntentFallback {
+    static String httpUrl(String url) {
+        return WebViewOwnedResponsesHost.INTENT_URL.equals(url)
+                ? WebViewOwnedResponsesHost.FALLBACK_URL : null;
     }
 }
 '''
@@ -66,10 +83,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--java-home', type=Path, required=True)
     parser.add_argument('--framework-classes', type=Path)
+    parser.add_argument('--core-classes', type=Path)
     parser.add_argument('--source-ref')
     parser.add_argument('--case', choices=('all', 'behavior', 'concurrency', 'measurement'), default='all')
     parser.add_argument('--measure', action='store_true', help='omit new allocation/identity gates')
     args = parser.parse_args()
+    if args.core_classes and not args.framework_classes:
+        parser.error('--core-classes requires --framework-classes')
 
     def read(path: str) -> str:
         if args.source_ref:
@@ -79,7 +99,17 @@ def main() -> None:
 
     production = read('app/java/com/gesher/app/webview/GesherWebViewProvider.java')
     pieces = [method(production, marker) for marker in (
+        'public void loadUrl(String url, Map<String, String> additionalHttpHeaders)',
+        'public void loadUrl(String url)',
+        'public void postUrl(String url, byte[] postData)',
+        'public void loadData(String data, String mimeType, String encoding)',
         'public void loadDataWithBaseURL(String baseUrl, String data, String mimeType,',
+        'public void stopLoading()',
+        'public void reload()',
+        'public void goBack()',
+        'public void goForward()',
+        'public void goBackOrForward(int steps)',
+        'public void destroy()',
         'private void navigate(String webView2Url, String headers)',
         'private void navigate(String webView2Url, String headers, PendingData data)',
         'public void onEvent(int type, long id, int arg, String a, String b, String c, byte[] bytes)',
@@ -94,7 +124,20 @@ def main() -> None:
     pieces += [method(production, marker) for marker in (
         'private static long number(String decimal)',
         'private PendingData claimData(String url, int context, boolean mainFrame)',
+        'private boolean canUseIntentFallback(long generation)',
     ) if marker in production]
+    for field in ('private final AtomicLong mNavigationGeneration = new AtomicLong();',
+                  'private boolean mDestroyed;'):
+        if field in production:
+            if production.count(field) != 1:
+                raise ValueError('navigation lifecycle state changed: ' + field)
+            pieces.append(field)
+    # The original PR had a provider-local parser. Old-source controls use the
+    # same declared parsing boundary as the repaired provider, retaining its
+    # exact navigation/callback/scheduling code.
+    if 'private static String intentFallbackUrl(String url)' in production:
+        pieces.append('private static String intentFallbackUrl(String url) { '
+                      'return IntentFallback.httpUrl(url); }')
     if 'private static final class PendingData' in production:
         fields = ['private final AtomicReference<PendingData> mPendingData = new AtomicReference<>();',
                   'private final ApiNavigations mApiNavigations = new ApiNavigations();',
@@ -118,6 +161,15 @@ def main() -> None:
         inspections = {'@BODY@': 'return mData;', '@MIME@': 'return mDataMime;', '@URL@': 'return mDataUrl;'}
         atomic = False
     exact = '\n'.join(pieces)
+    if 'private void traceNavigation(String message)' in production:
+        trace_flag = re.findall(r'private static final boolean TRACE_NAVIGATION\s*=\s*'
+                               r'"1"\.equals\(System.getenv\("GESHER_TRACE_WEBVIEW_NAVIGATION"\)\);',
+                               production)
+        if len(trace_flag) != 1:
+            raise ValueError('navigation diagnostic flag changed')
+        pieces += [method(production, 'private void traceNavigation(String message)'),
+                   trace_flag[0]]
+        exact = '\n'.join(pieces)
     print('WebView response production SHA256 ' + hashlib.sha256(exact.encode()).hexdigest(), flush=True)
     if atomic:
         boundary = 'PendingData data = mPendingData.get();'
@@ -146,6 +198,8 @@ def main() -> None:
     generated = generated.replace('@NATIVE_DOCUMENT_MATCH@', native_match)
     generated = generated.replace('@STARTING_HANDED@',
         ', handed' if 'boolean redirect, long handed)' in production else '')
+    generated = generated.replace('@DIRECT_HANDED@',
+        ', 0' if 'boolean redirect, long handed)' in production else '')
     for marker, value in inspections.items():
         generated = generated.replace(marker, value)
     if re.search(r'@[A-Z_]+@', generated):
@@ -165,6 +219,15 @@ def main() -> None:
             for name, adapter in [('WebResourceResponse', RESPONSE_ADAPTER), ('Base64', BASE64_ADAPTER)]:
                 path = work / (name + '.java'); path.write_text(adapter, encoding='utf-8'); sources.append(str(path))
             print('Android metadata/Base64: declared portable adapters', flush=True)
+        fallback = work / 'IntentFallback.java'
+        if args.core_classes:
+            classpath.append(str(args.core_classes.resolve()))
+            fallback.write_text(read('app/java/com/gesher/app/webview/IntentFallback.java'), encoding='utf-8')
+            print('Intent fallback: actual production helper and Android parser', flush=True)
+        else:
+            fallback.write_text(INTENT_FALLBACK_BOUNDARY, encoding='utf-8')
+            print('Intent fallback: declared finite mapping boundary (not a parser test)', flush=True)
+        sources.append(str(fallback))
         cp = os.pathsep.join(classpath)
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-source', '11',
                         '-target', '11', '-Xlint:-options', '-encoding', 'UTF-8', '-cp', cp,

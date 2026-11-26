@@ -21,6 +21,7 @@
 #include "jni_util.h"
 #include "media_jni.h"
 #include "receiver_lease.h"
+#include "persistent_input_surface.h"
 
 namespace gesher::media {
 namespace {
@@ -277,6 +278,23 @@ void JNICALL MR_setOutputFile(JNIEnv* env, jobject thiz, jobject fd) {
   c.fd = copy;
 }
 
+void JNICALL MR_setNextOutputFile(JNIEnv* env, jobject thiz, jobject fd) {
+  // Pinned Android JNI checks the argument before resolving the receiver.
+  if (fd == nullptr) {
+    jniThrow(env, "java/lang/IllegalArgumentException", "null file descriptor");
+    return;
+  }
+  auto r = Get(env, thiz);
+  if (r == nullptr) return;
+  const int f = FdOf(env, fd);
+  if (env->ExceptionCheck()) return;
+  std::string error;
+  bool invalid_state = false;
+  if (!r->recorder->SetNextOutputFile(f, &error, &invalid_state)) {
+    jniThrow(env, invalid_state ? "java/lang/IllegalStateException" : "java/io/IOException", error.c_str());
+  }
+}
+
 void JNICALL MR_setParameter(JNIEnv* env, jobject thiz, jstring pair) {
   if (pair == nullptr) return;
   auto r = GetConfigurable(env, thiz);
@@ -346,13 +364,22 @@ void JNICALL MR_prepare(JNIEnv* env, jobject thiz) {
   }
 }
 
+void JNICALL MR_setInputSurface(JNIEnv* env, jobject thiz, jobject surface) {
+  auto r = GetConfigurable(env, thiz);
+  if (r == nullptr) return;
+  auto source = GetPersistentInputSurface(env, surface);
+  if (source == nullptr) return;
+  RequireState(env, r->recorder->SetInputSurface(std::move(source)),
+               "setInputSurface(): recorder is not configurable");
+}
+
 jobject JNICALL MR_getSurface(JNIEnv* env, jobject thiz) {
   auto r = Get(env, thiz);
   if (r == nullptr) return nullptr;
   auto* input = r->recorder->input_surface();
   if (input == nullptr) {
     jniThrow(env, "java/lang/IllegalStateException",
-             "getSurface(): no video source SURFACE, or before prepare()");
+             "getSurface(): requires prepared video source SURFACE without setInputSurface()");
     return nullptr;
   }
   if (r->surface == nullptr) {
@@ -452,8 +479,10 @@ const JNINativeMethod kMethods[] = {
     {"setVideoSize", "(II)V", GESHER_NATIVE(MR_setVideoSize)},
     {"setMaxFileSize", "(J)V", GESHER_NATIVE(MR_setMaxFileSize)},
     {"_setOutputFile", "(Ljava/io/FileDescriptor;)V", GESHER_NATIVE(MR_setOutputFile)},
+    {"_setNextOutputFile", "(Ljava/io/FileDescriptor;)V", GESHER_NATIVE(MR_setNextOutputFile)},
     {"setParameter", "(Ljava/lang/String;)V", GESHER_NATIVE(MR_setParameter)},
     {"_prepare", "()V", GESHER_NATIVE(MR_prepare)},
+    {"native_setInputSurface", "(Landroid/view/Surface;)V", GESHER_NATIVE(MR_setInputSurface)},
     {"getSurface", "()Landroid/view/Surface;", GESHER_NATIVE(MR_getSurface)},
     {"start", "()V", GESHER_NATIVE(MR_start)},
     {"stop", "()V", GESHER_NATIVE(MR_stop)},

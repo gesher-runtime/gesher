@@ -14,13 +14,14 @@ $source = if ($SourceRef) { (& git -C $repo show "${SourceRef}:tools/package/ges
 $tokens = $null; $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
-foreach ($name in 'Get-FileStamp', 'Get-AppFilesStamp', 'Get-PanelAppIcon', 'Update-AppsView', 'Get-SeparateWindowApps') {
+foreach ($name in 'Get-FileStamp', 'Get-AppFilesStamp', 'Get-PanelAppIcon', 'Update-AppsView', 'Update-AppsFilter', 'Get-SeparateWindowApps', 'Get-InstalledApps', 'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes', 'Get-ProxySettings', 'Get-ProxyDisplayText') {
     $definitions = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $false))
     if ($definitions.Count -eq 0 -and $SourceRef -and $name -eq 'Get-PanelAppIcon') { continue }
     if ($definitions.Count -eq 0 -and $SourceRef -and $name -eq 'Get-SeparateWindowApps') { continue }
+    if ($definitions.Count -eq 0 -and $SourceRef -and $name -in 'ConvertTo-ProxyValue', 'Read-ProxyProperties', 'ConvertFrom-PropertiesEscapes', 'Get-ProxySettings', 'Get-ProxyDisplayText') { continue }
     if ($definitions.Count -ne 1) { throw "Expected one production function: $name" }
     $definition = $definitions[0].Extent.Text
     if ($name -eq 'Get-FileStamp') { $definition = $definition.Replace('function Get-FileStamp(', 'function Get-UncountedFileStamp(') }
@@ -54,6 +55,8 @@ $scratch = Join-Path $scratchRoot ('gesher-panel-icons-' + [Guid]::NewGuid().ToS
 $root = $scratch
 # The per-app windows setting (production reader; no file: no app has separate windows).
 $script:AppWindowsFile = Join-Path $root 'system/app-windows.properties'
+# Gesher's proxy (production reader; no file: no app has a proxy of its own).
+$script:ProxyFile = Join-Path $root 'system/proxy.properties'
 $icoFile = Join-Path $root 'gesher.ico'
 $appsList = [PSCustomObject]@{ ItemsSource = $null }
 $script:ViewState = @{ AppFiles = @(); Icons = @{}; AppsSignature = $null }
@@ -84,7 +87,7 @@ try {
     "Panel icon measurement: apps=120 unchanged_images_reused=$reused watched_file_stats_per_poll=$pollStats"
     if (-not $Measure) {
         Assert-Icons ($reused -eq 120) 'Label-only refresh decoded unchanged icons again'
-        Assert-Icons ($pollStats -eq 241) 'Polling repeated file stats for duplicate icon paths'
+        Assert-Icons ($pollStats -eq 361) 'Polling repeated file stats for duplicate icon paths'
         Assert-Icons ([Object]::ReferenceEquals($appsList.ItemsSource[100].IconImage, $appsList.ItemsSource[119].IconImage)) 'Default icons were decoded separately'
         Assert-Icons ($script:ViewState.Icons.Count -eq 101) 'Icon cache does not match current unique icon set'
     }
@@ -116,6 +119,23 @@ try {
     }
     Update-AppsView @()
     if (-not $Measure) { Assert-Icons ($script:ViewState.Icons.Count -eq 0) 'Empty app list retained cached icon images' }
+    if (-not $Measure) {
+        # The production parser must retain an unavailable external declaration
+        # without decoding it. Once created, the actual WPF decoder selects it.
+        $root = Join-Path $scratch 'late-runtime'
+        $script:AppWindowsFile = Join-Path $root 'data/system/app-windows.properties'
+        $packages = Join-Path $root 'data/system/packages.list'
+        $shortcut = Join-Path $root 'data/data/late.app/gesher-shell/shortcut.properties'
+        $lateIcon = Join-Path $scratch 'late-external/icon.png'
+        foreach ($path in $packages, $shortcut) { [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path)) }
+        [IO.File]::WriteAllText($packages, "late.app`n")
+        [IO.File]::WriteAllText($shortcut, "label=Late icon`nicon=$lateIcon`n")
+        Update-AppsView (Get-InstalledApps)
+        Assert-Icons ($script:ViewState.AppFiles -contains $lateIcon -and (Get-IconColor $appsList.ItemsSource[0].IconImage) -eq '0,255,0,255') 'Unavailable declaration was lost or displaced the decoded default image'
+        Write-TestIcon $lateIcon ([Drawing.Color]::Red)
+        Update-AppsView (Get-InstalledApps)
+        Assert-Icons ((Get-IconColor $appsList.ItemsSource[0].IconImage) -eq '0,0,255,255' -and $script:ViewState.Icons.Count -eq 1) 'Late external icon did not decode or retained the old fallback cache'
+    }
     "PASS: control panel icon reuse contracts ($script:Checks checks)"
 } finally {
     # The target is the exact GUID directory created above, never a computed parent.

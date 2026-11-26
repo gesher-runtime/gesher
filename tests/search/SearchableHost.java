@@ -109,7 +109,10 @@ public final class SearchableHost {
             caller = record(source, UID_A); target = record(destination, targetUid);
             installed.put(A, caller); installed.put(B, target);
             packages = (PackageManagerService)unsafe.allocateInstance(PackageManagerService.class);
-            set(packages, "mPackages", installed); set(packages, "mRemoving", Map.of());
+            set(packages, "mPackages", new LinkedHashMap<>(installed)); set(packages, "mRemoving", Map.of());
+            var policy = Class.forName("com.gesher.server.PermissionPolicy")
+                    .getDeclaredConstructor(PackageManagerService.class);
+            policy.setAccessible(true); set(packages, "mPermissions", policy.newInstance(packages));
             ActivityTaskManagerService activities = (ActivityTaskManagerService)unsafe.allocateInstance(ActivityTaskManagerService.class);
             Class<?> processClass = Class.forName("com.gesher.server.ActivityTaskManagerService$ProcessRecord");
             Object process = unsafe.allocateInstance(processClass);
@@ -128,6 +131,15 @@ public final class SearchableHost {
             set(client, "mService", service);
         }
         SearchableInfo lookup(String name) { return client.getSearchableInfo(new ComponentName(B, B + "." + name)); }
+        void publishInstalled() {
+            // PMS publishes whole registry generations. Never mutate a previously
+            // published map or bypass the real index/visibility invalidation path.
+            try {
+                var publish = PackageManagerService.class.getDeclaredMethod("publishPackages", Map.class);
+                publish.setAccessible(true);
+                synchronized (packages) { publish.invoke(packages, new LinkedHashMap<>(installed)); }
+            } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+        }
         void enabled(String name, int state) throws Exception {
             var method = ApkPackage.class.getDeclaredMethod("setComponentEnabledState", String.class, int.class);
             method.setAccessible(true); method.invoke(target, B + "." + name, state);
@@ -241,16 +253,16 @@ public final class SearchableHost {
             };
             check(f.lookup("Search") == null, "Disable during resource read published stale metadata");
             f.enabled("Search", PackageManager.COMPONENT_ENABLED_STATE_ENABLED);
-            f.reader = info -> { f.installed.remove(B); return metadata(info); };
+            f.reader = info -> { f.installed.remove(B); f.publishInstalled(); return metadata(info); };
             check(f.lookup("Search") == null, "Uninstall during resource read published stale metadata");
         });
         Fixture replaced = new Fixture(visibleClient(), target(), UID_B);
         ApkPackage newTarget = record(target(), UID_B);
-        replaced.reader = info -> { replaced.installed.put(B, newTarget); return metadata(info); };
+        replaced.reader = info -> { replaced.installed.put(B, newTarget); replaced.publishInstalled(); return metadata(info); };
         as(UID_A, PID, () -> check(replaced.lookup("Search") == null, "Replacement published old APK metadata"));
         Fixture revoked = new Fixture(visibleClient(), target(), UID_B);
         ApkPackage noQueries = record(manifest(A), UID_A);
-        revoked.reader = info -> { revoked.installed.put(A, noQueries); return metadata(info); };
+        revoked.reader = info -> { revoked.installed.put(A, noQueries); revoked.publishInstalled(); return metadata(info); };
         as(UID_A, PID, () -> check(revoked.lookup("Search") == null, "Visibility revoked during parsing still published metadata"));
         Fixture removing = new Fixture(visibleClient(), target(), UID_B);
         set(removing.packages, "mRemoving", Map.of(B, removing.target));

@@ -42,6 +42,13 @@ class Muxer {
                            std::string* error) = 0;
   // Writes what is left (the MPEG-4 moov, the WebM cues); the file is complete after it.
   virtual bool Stop(std::string* error) = 0;
+  // MediaRecorder's MP4 rollover. Finalize the current file and start the
+  // caller's next file (duplicated) with the same track definitions. This
+  // does not recreate or replace any capture source or encoder.
+  virtual bool SwitchFile(int fd, std::string* error) {
+    *error = "next output file is unavailable for this container writer";
+    return false;
+  }
   virtual void SetOrientationHint(int degrees) {}
   virtual void SetLocation(int latitude_e4, int longitude_e4) {}
   virtual int64_t BytesWritten() const = 0;
@@ -61,6 +68,9 @@ class Muxer {
  protected:
   virtual bool SupportsFileSizeLimit() const { return false; }
   bool HasFileSizeLimit() const { return max_file_size_ != 0; }
+  void ResetFileSizeStatus() {
+    size_limit_reached_ = size_limit_approaching_ = false;
+  }
   bool AdmitFinalSize(uint64_t bytes, bool approaching_notification = false) {
     if (max_file_size_ == 0) return true;
     if (bytes >= max_file_size_) {

@@ -12,7 +12,7 @@ Phase 1 items closed by the posix track (branch `wip/posix`). Design:
 | Other drives | `compat/posix/src/path.cc` | `/mnt/<drive>/...` is `<DRIVE>:\...`; `getcwd`, `realpath`, `readlink` give it back for a drive other than the current one, so no Linux path has a colon |
 | Path calls | `src/fsops.cc`, `src/links.cc`, `src/path.cc`, `src/stat.cc`, `src/dirent.cc`, `src/ftw.cc` | `access`/`faccessat`, `rename`/`renameat`/`renameat2` (atomic replace, POSIX semantics), `remove`, `unlink`/`unlinkat`/`rmdir` (POSIX delete, read-only files too), `chdir`/`fchdir`, `chmod`/`fchmod`/`fchmodat` (owner write bit = read-only attribute), `creat`, `open`'s mode and `O_NOFOLLOW`, `fopen`/`freopen` (over `open`, binary, `x`/`e`), `symlink`/`readlink`/`link` and their `*at` forms, `lstat` and `fstatat(AT_SYMLINK_NOFOLLOW)` of symbolic links, `mkdtemp`/`mkstemp`/`mkostemp`/`mkstemps`, `nftw`/`ftw`, `fdopendir`/`dirfd`/`readdir_r`/`telldir`/`seekdir`; UTF-8 names and paths past `MAX_PATH` everywhere |
 | Reserved characters | `include/gesher/reserved_names.h`, `src/path.cc`, `src/dirent.cc`, `src/links.cc`, `src/inotify.cc` | a name with `< > : " \| ? *` or a control character (Firebase's `frc_...:android:..._settings.xml`, Play Store's `<package>:<process>` directories) is stored with each such character as U+F000 + c, as Cygwin does, and read back as given; the Windows root of a path (`C:` before a separator, `\\?\`, UNC) keeps its own ([ADR 0083](decisions/0083-reserved-file-name-characters.md)) |
-| /proc | `src/procfs.cc` | `/proc/self` (and `/proc/<own pid>`): `cmdline comm environ status stat statm maps mounts`, `fd/<n>` links, `task/<tid>/{comm,stat,status}`, `exe`, `cwd`; `/proc/meminfo cpuinfo uptime mounts` |
+| /proc | `src/procfs.cc` | `/proc/self` (and `/proc/<own pid>`): `cmdline comm environ status stat statm maps mounts`, `fd/<n>` links, `map_files/<start>-<end>` links, `task/<tid>/{comm,stat,status}`, `exe`, `cwd`; `/proc/meminfo cpuinfo uptime mounts`. An fd open on a name stays a /proc file or directory (`fstat`, `fstatfs`, `readlink` of `/proc/self/fd/<n>`, `getdents64`, the `*at` calls) |
 | Time zones | `src/windows_zones.cc`, `gen_windows_zones.py`, `compat/libcore/collect-tzdata.sh` | `/etc/timezone` = Windows' zone as an IANA id (CLDR windowsZones from the pinned ICU, by the user's region), which libcore's `TimeZone.getDefault()` reads; the tzdata module's files from `system/timezone` in `dist/tzdata` and the installer (`ANDROID_TZDATA_ROOT`) |
 | inotify | `src/inotify.cc`, `<sys/inotify.h>` | over `ReadDirectoryChangesExW`, an fd that `poll`/`epoll` wait on; libopenjdk's `LinuxWatchService.c` (`WatchService`) and libandroid_runtime's FileObserver natives are linked in |
 | Processes | `src/process.cc`, `src/misc.cc` | `getppid`; `kill` to other processes (signal mailbox), `SIGKILL`/`SIGSTOP`/`SIGCONT` to any; `$GESHER_UID`; `getrlimit`/`setrlimit`/`prlimit`/`getrusage`; `prctl(PR_SET_NAME)` names the Windows thread too |
@@ -36,6 +36,17 @@ generation takes the shared area's mutex before decoding. Writers publish the
 generation atomically after the payload and metadata. Log writes remain best
 effort, with rollback attempted after an incomplete append; they do not promise
 a durable disk flush on each line.
+
+Loggability caches 64 tag priorities in at most 20 KiB per process, keyed by
+both property-area identity and its atomically published generation. A miss
+records the revision returned with the property snapshot, so a concurrent
+writer or device switch cannot attach new values to an old revision. Explicit
+tag lengths are preserved; tags longer than 247 bytes use the uncached lookup.
+Minimum priority and caller fallback remain per-call decisions. Common unchanged
+session/root/destination environment values are compared without temporary heap
+strings. Record assembly uses at most 8232 stack bytes and keeps one synchronous
+append; it introduces no queue, batching, retained data handle or weaker fatal
+visibility. See [NATIVE-13 measurements](performance/native13-logging.md).
 
 Benchmarks from an implementation that retained data handles do not describe
 this implementation. Performance must be measured again with these file
@@ -71,6 +82,12 @@ inheritance at thread creation is not implemented here.
   names; two writers delete and recreate a log while one stays alive and idle;
   rotation/replacement, cross-process clear, 16 MiB rollover and a log path
   longer than 2200 characters retain complete records.
+- `tools/test_structured_logging.py`: complete production logger with a separate
+  priority oracle, counted allocations and explicit short/failed-write injection.
+  Linux declares its Win32/property adapters and runs ASan/UBSan. The native
+  Windows CI shard runs the same contracts with actual mapped property areas,
+  files and mutexes, cross-process priority publication, equal-generation device
+  switches, inherited-root repair and immediate-exit fatal visibility.
 - `tests/native/bionic_key_exit_test.cc` (mandatory native-libs track) also
   exercises the registered pthread/prctl name adapters on joinable and detached
   bionic threads, host pthreads and Windows threads, including remote getters,
@@ -172,10 +189,109 @@ closed three of this layer's leftovers:
   `IN_OPEN`, `IN_ACCESS` and `IN_CLOSE_NOWRITE` never come; `IN_MOVE_SELF`
   only for a watched file; a watched directory moved elsewhere is not
   reported.
+- `fsync`/`fdatasync` without write access (`src/unistd.cc`). Linux flushes a
+  regular file through any descriptor, an `O_RDONLY` one included;
+  `FlushFileBuffers` needs a writable handle. A read-only descriptor is
+  flushed through a second handle opened for writing (`ReOpenFile`), else
+  through another descriptor of this process open for writing on the same
+  file. When neither exists (the file is read-only, mode `0444`, or an ACL
+  denies writing, or another open does not share writing, or the volume is
+  read-only, and this process has no writable descriptor for it), `fsync`
+  returns 0 after writing the cached data back through a read-only mapping
+  (`FlushViewOfFile`). That waits for the data to reach the device, but **does
+  not make NTFS commit the file's metadata** (its size and times in the
+  directory entry are updated later, lazily) **and does not flush the
+  device's write cache**. A power loss right after such an `fsync` can lose
+  what the call promised on Linux. Windows offers no stronger flush without
+  write access; failing instead would return an error (`EACCES`) that Linux
+  never gives for this call. `file_flags_ofd_test` covers the second handle,
+  the writable alias (mode `0444` and a denying ACL) and the read-only mapping
+  (mode `0444`, a denying ACL and an open that does not share writing); the
+  read-only volume (`ERROR_WRITE_PROTECT`) shares the alias and mapping code
+  but is not tested, since CI has no read-only volume to open.
 - `signal()` is still the CRT's; signal dispositions set with it are not seen
   by `kill` from another process (use `sigaction`).
 - `/proc/<pid>` exists only for this process; `/proc/self/maps` has no
-  `[anon:...]` names and its inode/device fields are 0.
+  `[anon:...]` names, and its device and inode fields are those `stat`
+  reports for a mapped file (0 for anonymous memory). Its first read maps
+  `/system/bin/linker64` (Gesher's ELF loader under Android's name, ADR 0096)
+  for the rest of the process's life, so the list has it, as every process on
+  a 64-bit device has its linker; `/proc/self/maps` and `/proc/self/fd` name
+  that file `/system/bin/linker64`, as `realpath` does; changes through that
+  name fail with `EROFS`.
+- An fd open on a `/proc` (or `/sys`) name is a snapshot in an anonymous file
+  that carries the name's Linux path (the extended attribute
+  `GESHER.PROCFS`): `fstat` reports what `stat` of the name does (size 0,
+  procfs's device, the same inode, mode and times: the process's start for
+  `/proc/<pid>/...`, boot for the rest), `fstatfs`/`statfs` report procfs
+  (`0x9fa0`) or sysfs, and `readlink` of `/proc/self/fd/<n>` gives
+  `/proc/<pid>/maps`. `statfs` follows a link at the end of the path as
+  Linux does: `/proc/self/exe` reports the executable's volume,
+  `/proc/self/fd/<n>` fd n's. A `/proc` directory opens as a directory fd
+  that serves `getdents64` and the `*at` calls; `read` of it returns 0 bytes
+  rather than `EISDIR`, and `fchdir` to it fails with `ENOTDIR` (the current
+  directory is a Windows one; `chdir("/proc")` fails the same way).
+  `O_PATH | O_NOFOLLOW` on a `/proc` link (`exe`, `fd/<n>`, `map_files/*`,
+  `/proc/self`) opens the link itself: `fstat` reports the link. When the
+  temp volume keeps no extended attributes (FAT), a `/proc` directory or
+  link cannot be opened (`EOPNOTSUPP`), and a `/proc` file opens as a plain
+  snapshot of its content.
+- An fd keeps the `/proc/<pid>` it was opened on, as Linux's does: after
+  `fork` or `exec` it names the parent's process. Gesher serves
+  `/proc/<pid>` only for the process itself, so in the child the `*at`
+  calls and `getdents64` on such a directory fd fail with `ENOENT`, as
+  `/proc/<parent pid>/...` by name does (on Linux, only once the parent has
+  exited). This does not depend on what the parent read before the fork: a
+  child never reads on from the parent's listing, it opens the directory
+  again at the shared position. `fstat`, `readlink` and the shared position
+  still work.
+- `/proc/self/map_files` (`dr-x------`) lists a link per file-backed line of
+  `maps` (named `%lx-%lx`, as Linux names them; a name in uppercase hex is the
+  same link, as the kernel parses it). `readlink` and `lstat` look the one
+  mapping up directly (`VirtualQuery`), whatever the number of mappings. A
+  link's mode is its file's open mode: `0600` when `mmap` was given an fd open
+  for writing, `0400` otherwise; an fd opened on the link (`O_PATH |
+  O_NOFOLLOW`) keeps the mode it had then, after a `munmap` too, as the
+  procfs inode does. `readlinkat(fd, "")` on such a link fd (any `/proc`
+  link, or a symbolic link on disk) reads the link. Following one (`open`, `stat`, `access`,
+  `realpath`, `statfs`) fails with `EPERM`, as Linux refuses it to a process
+  without `CAP_CHECKPOINT_RESTORE`.
+- `getdents64` keeps a stream on the open file description. On disk it is a
+  directory handle of its own (the fd's directory opened by its 128-bit file
+  ID, not inheritable) that it enumerates with `GetFileInformationByHandleEx`, with a
+  4 KB first batch, then 64 KB, freed once the listing ends. For `/proc` it
+  is the directory's entries. A call that continues where the last one
+  stopped reads on; one at a position the stream did not stop at (`lseek`, a
+  process sharing the description after `fork`) makes a new source,
+  enumerated from the start and skipped to that position, with no lock held,
+  and swaps it in. The stream and its handle go when the last fd on the
+  description closes. Calls on one description take turns, as Linux's
+  per-file `f_pos_lock` makes them, so threads reading one fd share its
+  entries out between them; calls on other fds do not wait. A call resolves
+  its fd once, so a `close` and `open` of that number by another thread does
+  not turn it to another file. Nothing of a stream is in the fork set, so a
+  fork never waits for a `getdents64`. Each stream handle lives in a slot
+  registered (under a leaf lock held only to add or remove a slot) before
+  the handle is opened, and is stored in it as soon as it is open; a forked
+  child closes the slots' handles it inherited and gets new streams, which
+  open the directory again at the shared position. Only a fork in the few
+  instructions between an open's return and that store, or between a
+  slot's removal and its close, leaves the child one stream handle. A
+  directory removed while the fd is open lists as empty. The fd's file
+  position is the index of the next entry (`d_off` is that ordinal); `d_ino`
+  is the inode `stat` reports as `st_ino`: the file ID on disk, procfs's
+  inode of the name for `/proc`.
+- Positions are ordinals, not cookies: after an `lseek` to a `d_off`, or in a
+  forked child, the stream counts entries from the start again, so an entry
+  removed before that point meanwhile shifts the rest and one live entry may
+  be skipped. A listing read straight through (`readdir`, `rm -rf`) is not
+  affected.
+- `fstatfs` of a pipe reports pipefs (`0x50495045`), of a socket sockfs
+  (`0x534f434b`), of a FIFO the volume that holds its file (as Linux reports
+  the FIFO inode's file system; after a rename or unlink, the volume it was
+  on when opened), and `statfs` of `/proc/self/fd/<n>` the same
+  for them. `fstat` of an fd opened `O_PATH | O_NOFOLLOW` on a symbolic link
+  on disk reports the link.
 - Permissions are the read-only attribute only: regular files show
   `0755` (`0555` read-only) and `access(X_OK)` holds for every file (native2,
   ADR 0057), as on an NTFS volume mounted on Linux; `chmod` changes only the

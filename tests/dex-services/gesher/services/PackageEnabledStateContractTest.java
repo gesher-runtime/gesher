@@ -147,8 +147,19 @@ public final class PackageEnabledStateContractTest {
                 check(!Thread.holdsLock(service), "Event callback held the package monitor");
                 events.add(intent);
             });
-            // Unsafe allocation skips the listener list's field initializer.
+            // Unsafe allocation skips normal lifecycle collections. Storage policy
+            // synchronization may construct AppOpsService, which registers here.
             if (persistent) {
+                // The manifest-only fixture has no Windows URI associations. Reflect the
+                // field type so the public-API negative control still compiles before it existed.
+                try {
+                    Field handlers = field(PackageManagerService.class, "mUriHandlers");
+                    handlers.set(service, handlers.getType()
+                            .getDeclaredConstructor(java.util.function.Predicate.class)
+                            .newInstance(new Object[] { null }));
+                } catch (NoSuchFieldException beforeUriHandlers) { }
+                set(service, "mPackageRemoval", new ArrayList<Consumer<String>>());
+                set(service, "mPackageChanges", new CopyOnWriteArrayList<Consumer<ApkPackage>>());
                 try {
                     set(service, "mPackageEventListeners", new CopyOnWriteArrayList<Consumer<Intent>>());
                 } catch (NoSuchFieldException oldImplementation) { }
@@ -402,9 +413,10 @@ public final class PackageEnabledStateContractTest {
                 && reopened.client.getComponentEnabledSetting(component(a, "Alias")) == 1, "Restart lost enabled states");
         invoke(reopened.service, "add", new Class<?>[]{ApkPackage.class}, record(a, true));
         check(reopened.client.getApplicationEnabledSetting(a) == 3, "APK update lost installed state");
-        // Settle the successful package update's permission notification before
-        // testing that the failed enabled-state write queues no further work.
+        // The successful update queues its permission publication. Complete that
+        // operation before measuring whether the following failed write adds work.
         reopened.drain();
+        check(reopened.tasks.isEmpty(), "Successful APK publication did not settle before the failed-write phase");
         Path file = Path.of(System.getenv("ANDROID_DATA"), "system/package-enabled-state");
         Path saved = file.resolveSibling("enabled-state.saved"); Files.move(file, saved); Files.createDirectory(file);
         try {
