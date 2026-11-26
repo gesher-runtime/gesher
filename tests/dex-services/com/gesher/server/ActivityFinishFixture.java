@@ -464,7 +464,7 @@ public final class ActivityFinishFixture {
         for (boolean replaceDuringFailure : List.of(false, true)) {
             Harness h = new Harness();
             int receiverTask = 76;
-            Object receiver = h.record("Receiver", receiverTask, "receiver", "STOPPED");
+            Object receiver = h.record("Receiver", receiverTask, "receiver", "STOPPING");
             Object source = h.record("Child", 77, "sender", "STOPPED", receiver, "resume-result", 45);
             Bundle saved = new Bundle();
             saved.putString("state", "saved before the result");

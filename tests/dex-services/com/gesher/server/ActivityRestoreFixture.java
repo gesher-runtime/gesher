@@ -335,7 +335,7 @@ public final class ActivityRestoreFixture {
 
     private static void testSavedStatePreservedAcrossProcessDeath() throws Exception {
         Harness h = new Harness();
-        Object r1 = h.record("MainAct", 1, "a", "RESUMED");
+        Object r1 = h.record("MainAct", 1, "a", "STOPPING");
 
         Bundle saved = new Bundle();
         saved.putString("saved_text", "user_entered_form_data");
@@ -345,6 +345,7 @@ public final class ActivityRestoreFixture {
         h.activityStopped(r1, saved, persist);
         check(get(r1, "savedState") == saved, "activityStopped did not retain savedState on record");
         check(get(r1, "persistentState") == persist, "activityStopped did not retain persistentState on record");
+        set(r1, "state", state("STOPPING"));
         h.activityStopped(r1, null, null);
         check(get(r1, "savedState") == saved, "Stop timeout discarded saved state");
         check(get(r1, "persistentState") == persist, "Null stop discarded persistent state");
@@ -423,7 +424,7 @@ public final class ActivityRestoreFixture {
     private static void testFinishingActivitiesCleanedUpWhileNonFinishingPreserved() throws Exception {
         Harness h = new Harness();
         // Task 2: Root (non-finishing) and Top (finishing)
-        Object root = h.record("RootAct", 2, "a", "STOPPED");
+        Object root = h.record("RootAct", 2, "a", "STOPPING");
         Object top = h.record("TopAct", 2, "a", "RESUMED");
         set(top, "finishing", true);
 
@@ -464,7 +465,7 @@ public final class ActivityRestoreFixture {
 
     private static void testPendingResultsPreservedAcrossProcessDeath() throws Exception {
         Harness h = new Harness();
-        Object parent = h.record("ParentAct", 4, "a", "STOPPED");
+        Object parent = h.record("ParentAct", 4, "a", "STOPPING");
 
         Bundle parentState = new Bundle();
         parentState.putString("screen", "parent_step_2");
@@ -520,7 +521,7 @@ public final class ActivityRestoreFixture {
 
     private static void testMoveTaskToFrontRelaunch() throws Exception {
         Harness h = new Harness();
-        Object root = h.record("TaskRoot", 5, "a", "STOPPED");
+        Object root = h.record("TaskRoot", 5, "a", "STOPPING");
         Bundle state = new Bundle();
         state.putString("session_token", "token_xyz");
         h.activityStopped(root, state, null);
@@ -547,7 +548,7 @@ public final class ActivityRestoreFixture {
 
     private static void testActivityPausedFinishingRelaunchesUnderlying() throws Exception {
         Harness h = new Harness();
-        Object bottom = h.record("BottomAct", 6, "a", "STOPPED");
+        Object bottom = h.record("BottomAct", 6, "a", "STOPPING");
         Bundle state = new Bundle();
         state.putString("bottom_key", "bottom_val");
         h.activityStopped(bottom, state, null);
@@ -584,7 +585,7 @@ public final class ActivityRestoreFixture {
 
     private static void testFailedRestoreDelivery() throws Exception {
         Harness h = new Harness();
-        Object record = h.record("MainAct", 10, "a", "STOPPED");
+        Object record = h.record("MainAct", 10, "a", "STOPPING");
         Bundle saved = new Bundle(); saved.putString("retry", "snapshot");
         h.activityStopped(record, saved, null);
         h.processDied(h.process);
@@ -602,6 +603,46 @@ public final class ActivityRestoreFixture {
         check("snapshot".equals(((Bundle)field(LaunchActivityItem.class, "mState").get(delivered)).getString("retry")),
                 "Retry lost original snapshot");
         check(get(record, "savedState") == null, "Successful resumed acknowledgment did not release snapshot");
+    }
+
+    private static void testLateStopDoesNotRestoreStaleState() throws Exception {
+        Harness h = new Harness();
+        Object record = h.record("MainAct", 11, "a", "STOPPING");
+        Bundle saved = new Bundle();
+        saved.putString("form", "saved text");
+        PersistableBundle persistent = new PersistableBundle();
+        persistent.putString("document", "committed");
+
+        h.asApp(() -> h.controller.activityStopped(token(record), saved, persistent, null, null));
+        check(get(record, "state") == state("STOPPED"), "Current stop did not complete");
+        check("saved text".equals(((Bundle) get(record, "savedState")).getString("form")),
+                "Current stop did not commit transient state");
+
+        h.thread.autoAck = false;
+        h.moveTaskToFront(11);
+        check(get(record, "state") == state("RESUMING"), "Front task did not schedule resume");
+        Event resume = h.thread.pending.removeFirst();
+        check(resume.token == token(record) && resume.item instanceof ResumeActivityItem,
+                "Nothing was sent to resume the stopped activity");
+
+        Bundle stale = new Bundle();
+        stale.putString("form", "outdated text");
+        PersistableBundle stalePersistent = new PersistableBundle();
+        stalePersistent.putString("document", "outdated");
+        h.asApp(() -> h.controller.activityStopped(token(record), stale, stalePersistent, null, null));
+        check("saved text".equals(((Bundle) get(record, "savedState")).getString("form")),
+                "Superseded stop replaced transient state during resume");
+        h.asApp(() -> h.thread.acknowledge(resume));
+        check(get(record, "state") == state("RESUMED"), "Resume acknowledgment did not complete");
+        check(get(record, "savedState") == null, "Resume did not clear transient state");
+
+        h.asApp(() -> h.controller.activityStopped(token(record), stale, stalePersistent, null, null));
+        check(get(record, "savedState") == null, "Late stop repopulated transient state after resume");
+        check("committed".equals(((PersistableBundle) get(record, "persistentState")).getString("document")),
+                "Late stop replaced the committed persistent state");
+
+        h.processDied(h.process);
+        check(!h.records.contains(record), "Process death retained activity using a late snapshot");
     }
 
     private static void testForceStopLiveSavedRecord() throws Exception {
@@ -631,6 +672,7 @@ public final class ActivityRestoreFixture {
             testForceStopLiveSavedRecord();
         }
         if (group.equals("all") || group.equals("results")) testPendingResultsPreservedAcrossProcessDeath();
+        if (group.equals("all") || group.equals("late-stop")) testLateStopDoesNotRestoreStaleState();
         if (group.equals("all") || group.equals("movetask")) testMoveTaskToFrontRelaunch();
         if (group.equals("all") || group.equals("paused")) testActivityPausedFinishingRelaunchesUnderlying();
         return checks;
