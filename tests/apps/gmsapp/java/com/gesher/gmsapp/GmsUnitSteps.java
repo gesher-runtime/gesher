@@ -6,6 +6,7 @@ package com.gesher.gmsapp;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
+import android.accounts.AuthenticatorException;
 import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
@@ -14,10 +15,12 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 
 import com.google.android.gms.auth.GoogleAuthUtil;
+import com.google.android.gms.auth.GooglePlayServicesAvailabilityException;
 import com.google.android.gms.auth.api.signin.GoogleSignIn;
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
 import com.google.android.gms.auth.api.signin.GoogleSignInClient;
@@ -25,6 +28,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.GoogleApiAvailability;
 import com.google.android.gms.common.GooglePlayServicesUtil;
+import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.gcm.GoogleCloudMessaging;
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
@@ -35,7 +39,6 @@ import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.messaging.FirebaseMessaging;
 
-import java.lang.reflect.Method;
 import java.util.List;
 
 public final class GmsUnitSteps {
@@ -49,7 +52,7 @@ public final class GmsUnitSteps {
         testClientSdkFromApk();
         testProviderInstallerCode();
         testGoogleApiAvailability();
-        testPackageManagerSyntheticGms();
+        testPackageManagerWithoutGms();
         testFusedLocationProviderClient();
         testGoogleSignInAndAccountManager();
         testFirebaseAndFcmRouting();
@@ -91,29 +94,29 @@ public final class GmsUnitSteps {
     }
 
     /**
-     * Play services' code, as the client library's ProviderInstaller loads it (Gmail
-     * refuses its mail servers without): the package context with CONTEXT_INCLUDE_CODE,
-     * its class loader, ProviderInstallerImpl's insertProvider and reportRequestStats2.
+     * What the client library's ProviderInstaller loads: Play services' package context
+     * with CONTEXT_INCLUDE_CODE. Without Play services there is no such package, and
+     * createPackageContext throws NameNotFoundException, as on Android (#335).
      */
     public void testProviderInstallerCode() throws Exception {
-        Context gms = mActivity.createPackageContext("com.google.android.gms",
-                Context.CONTEXT_INCLUDE_CODE | Context.CONTEXT_IGNORE_SECURITY);
-        Class<?> impl = gms.getClassLoader().loadClass("com.google.android.gms.common.security.ProviderInstallerImpl");
-        Method insert = impl.getMethod("insertProvider", Context.class);
-        insert.invoke(null, gms);
-        Method stats = impl.getMethod("reportRequestStats2", Context.class, long.class, long.class);
-        stats.invoke(null, mActivity, 0L, 1L);
-        Report.line("ProviderInstaller: Play services' code loads from its package context, insertProvider runs");
+        try {
+            mActivity.createPackageContext("com.google.android.gms",
+                    Context.CONTEXT_INCLUDE_CODE | Context.CONTEXT_IGNORE_SECURITY);
+            throw new AssertionError("Play services' package context exists without Play services");
+        } catch (PackageManager.NameNotFoundException expected) {
+            // as on Android without Play services
+        }
+        Report.line("ProviderInstaller: no Play services package context without Play services (NameNotFoundException)");
     }
 
     public void testGoogleApiAvailability() throws Exception {
         GoogleApiAvailability api = GoogleApiAvailability.getInstance();
         int code = api.isGooglePlayServicesAvailable(mActivity);
-        if (code != ConnectionResult.SUCCESS) {
-            throw new AssertionError("isGooglePlayServicesAvailable returned " + code + ", expected SUCCESS");
+        if (code != ConnectionResult.SERVICE_MISSING) {
+            throw new AssertionError("isGooglePlayServicesAvailable returned " + code + ", expected SERVICE_MISSING");
         }
         int utilCode = GooglePlayServicesUtil.isGooglePlayServicesAvailable(mActivity);
-        if (utilCode != ConnectionResult.SUCCESS) {
+        if (utilCode != ConnectionResult.SERVICE_MISSING) {
             throw new AssertionError("GooglePlayServicesUtil returned " + utilCode);
         }
 
@@ -127,73 +130,31 @@ public final class GmsUnitSteps {
         }
 
         Task<Void> task = api.makeGooglePlayServicesAvailable(mActivity);
-        Tasks.await(task);
-        if (!task.isSuccessful()) {
-            throw new AssertionError("makeGooglePlayServicesAvailable task was not successful");
+        try {
+            Tasks.await(task);
+            throw new AssertionError("makeGooglePlayServicesAvailable succeeded without Play services");
+        } catch (java.util.concurrent.ExecutionException expected) {
+            // the task fails: nothing installed Play services
         }
-        Report.line("GoogleApiAvailability: isGooglePlayServicesAvailable SUCCESS (0)");
-        Report.line("GoogleApiAvailability: makeGooglePlayServicesAvailable completed");
+        Report.line("GoogleApiAvailability: isGooglePlayServicesAvailable SERVICE_MISSING (1)");
+        Report.line("GoogleApiAvailability: makeGooglePlayServicesAvailable failed without Play services");
     }
 
-    public void testPackageManagerSyntheticGms() throws Exception {
+    /** Without microG, Play services and the Play Store are not installed packages (#335). */
+    public void testPackageManagerWithoutGms() throws Exception {
         PackageManager pm = mActivity.getPackageManager();
-
-        // Check com.google.android.gms
-        PackageInfo gmsInfo = pm.getPackageInfo("com.google.android.gms",
-                PackageManager.GET_SIGNATURES | PackageManager.GET_SERVICES);
-        if (gmsInfo == null) {
-            throw new AssertionError("getPackageInfo(com.google.android.gms) returned null");
+        for (String name : new String[] {"com.google.android.gms", "com.android.vending"}) {
+            try {
+                pm.getPackageInfo(name, PackageManager.GET_SIGNATURES | PackageManager.GET_SERVICES);
+                throw new AssertionError(name + " reported without being installed");
+            } catch (PackageManager.NameNotFoundException expected) {
+                // as on Android without the package
+            }
+            for (PackageInfo pi : pm.getInstalledPackages(0)) {
+                if (name.equals(pi.packageName)) throw new AssertionError(name + " listed as installed");
+            }
         }
-        if (!"com.google.android.gms".equals(gmsInfo.packageName)) {
-            throw new AssertionError("unexpected package name: " + gmsInfo.packageName);
-        }
-        if (gmsInfo.versionCode < 233013000) {
-            throw new AssertionError("unexpected gms versionCode: " + gmsInfo.versionCode);
-        }
-        if (gmsInfo.signatures == null || gmsInfo.signatures.length == 0) {
-            throw new AssertionError("com.google.android.gms has no signatures");
-        }
-        // Google's own certificate, which the real client libraries' GoogleSignatureVerifier
-        // requires (Gmail: "signature is invalid", error 9, with any other).
-        byte[] sha1 = java.security.MessageDigest.getInstance("SHA-1")
-                .digest(gmsInfo.signatures[0].toByteArray());
-        StringBuilder hex = new StringBuilder();
-        for (byte b : sha1) hex.append(String.format("%02x", b & 0xff));
-        if (!"38918a453d07199354f8b19af05ec6562ced5788".equals(hex.toString())) {
-            throw new AssertionError("com.google.android.gms is not signed with Google's certificate: "
-                    + hex);
-        }
-        if (gmsInfo.applicationInfo == null || !gmsInfo.applicationInfo.enabled) {
-            throw new AssertionError("com.google.android.gms applicationInfo not enabled");
-        }
-
-        // Check com.android.vending
-        PackageInfo vendingInfo = pm.getPackageInfo("com.android.vending", PackageManager.GET_SIGNATURES);
-        if (vendingInfo == null) {
-            throw new AssertionError("getPackageInfo(com.android.vending) returned null");
-        }
-        if (!"com.android.vending".equals(vendingInfo.packageName)) {
-            throw new AssertionError("unexpected vending package: " + vendingInfo.packageName);
-        }
-        if (vendingInfo.signatures == null || vendingInfo.signatures.length == 0) {
-            throw new AssertionError("com.android.vending has no signatures");
-        }
-
-        // Check installed packages
-        List<PackageInfo> installed = pm.getInstalledPackages(0);
-        boolean hasGms = false;
-        boolean hasVending = false;
-        for (PackageInfo pi : installed) {
-            if ("com.google.android.gms".equals(pi.packageName)) hasGms = true;
-            if ("com.android.vending".equals(pi.packageName)) hasVending = true;
-        }
-        if (!hasGms || !hasVending) {
-            throw new AssertionError("installed packages missing synthetic GMS/Vending: gms="
-                    + hasGms + " vending=" + hasVending);
-        }
-
-        Report.line("PackageManager: com.google.android.gms synthetic package present, enabled, valid signatures (Google's certificate)");
-        Report.line("PackageManager: com.android.vending synthetic package present, enabled");
+        Report.line("PackageManager: com.google.android.gms and com.android.vending absent without microG");
     }
 
     public void testFusedLocationProviderClient() throws Exception {
@@ -231,66 +192,76 @@ public final class GmsUnitSteps {
         Report.line("FusedLocationProviderClient: connected to LocationManagerService, updates received");
     }
 
+    /**
+     * Without microG nobody is signed in and there is no Google account or token (#335):
+     * the client fixture reports Play services missing, and the system's AccountManager
+     * has no com.google account and no authenticator to issue a token ("bind failure",
+     * AuthenticatorException), as Android answers without one.
+     */
     public void testGoogleSignInAndAccountManager() throws Exception {
         GoogleSignInOptions options = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestEmail()
-                .requestIdToken("dummy_client_id.apps.googleusercontent.com")
                 .build();
-
         GoogleSignInClient client = GoogleSignIn.getClient(mActivity, options);
-        Intent signInIntent = client.getSignInIntent();
-        if (signInIntent == null) {
-            throw new AssertionError("getSignInIntent returned null");
+        try {
+            Tasks.await(client.silentSignIn());
+            throw new AssertionError("silentSignIn signed someone in without Play services");
+        } catch (java.util.concurrent.ExecutionException expected) {
+            int code = ((ApiException) expected.getCause()).getStatusCode();
+            if (code != ConnectionResult.SERVICE_MISSING) {
+                throw new AssertionError("silentSignIn status " + code + ", expected SERVICE_MISSING");
+            }
+        }
+        if (GoogleSignIn.getLastSignedInAccount(mActivity) != null) {
+            throw new AssertionError("a signed-in account exists before any sign-in");
         }
 
-        Task<GoogleSignInAccount> accountTask = client.silentSignIn();
-        GoogleSignInAccount account = Tasks.await(accountTask);
-        if (account == null) {
-            throw new AssertionError("silentSignIn returned null account");
-        }
-        if (!"user@gesher.local".equals(account.getEmail())) {
-            throw new AssertionError("unexpected account email: " + account.getEmail());
-        }
-        if (account.getIdToken() == null || account.getIdToken().isEmpty()) {
-            throw new AssertionError("empty idToken");
-        }
-
-        GoogleSignInAccount last = GoogleSignIn.getLastSignedInAccount(mActivity);
-        if (last == null || !account.getEmail().equals(last.getEmail())) {
-            throw new AssertionError("getLastSignedInAccount mismatch");
-        }
-
-        // Test AccountManager
         AccountManager am = AccountManager.get(mActivity);
         Account[] accounts = am.getAccountsByType("com.google");
-        if (accounts == null || accounts.length == 0) {
-            throw new AssertionError("AccountManager returned 0 com.google accounts");
+        if (accounts.length != 0) {
+            throw new AssertionError("AccountManager returned " + accounts.length + " com.google accounts");
         }
-        if (!"user@gesher.local".equals(accounts[0].name)) {
-            throw new AssertionError("unexpected AccountManager account: " + accounts[0].name);
+        Account google = new Account("someone@example.org", "com.google");
+        try {
+            Bundle result = am.getAuthToken(google, "oauth2:profile", null, false, null, null).getResult();
+            throw new AssertionError("a token without an authenticator: " + result);
+        } catch (AuthenticatorException expected) {
+            // as Android answers without an authenticator for the type
+        }
+        try {
+            String token = GoogleAuthUtil.getToken(mActivity, google, "oauth2:profile");
+            throw new AssertionError("GoogleAuthUtil returned a token: " + token);
+        } catch (GooglePlayServicesAvailabilityException expected) {
+            // the client library's answer without Play services
         }
 
-        String token = GoogleAuthUtil.getToken(mActivity, accounts[0], "oauth2:profile");
-        if (token == null || !token.startsWith("dummy_oauth2_token_gesher_")) {
-            throw new AssertionError("unexpected GoogleAuthUtil token: " + token);
-        }
-
-        Report.line("GoogleSignIn: dummy account " + account.getEmail() + " signed in with idToken");
-        Report.line("AccountManager: com.google account and dummy auth token returned");
+        Report.line("GoogleSignIn: no signed-in account without Play services (SERVICE_MISSING)");
+        Report.line("AccountManager: no com.google account; getAuthToken fails without an authenticator");
     }
 
+    /**
+     * Without microG there is no push provider: FCM's token task and GCM's registration
+     * fail with SERVICE_NOT_AVAILABLE (#335). A RECEIVE broadcast the app sends itself
+     * still reaches its own receiver.
+     */
     public void testFirebaseAndFcmRouting() throws Exception {
-        FirebaseMessaging fcm = FirebaseMessaging.getInstance();
-        Task<String> tokenTask = fcm.getToken();
-        String fcmToken = Tasks.await(tokenTask);
-        if (fcmToken == null || fcmToken.isEmpty()) {
-            throw new AssertionError("FirebaseMessaging returned empty token");
+        Task<String> tokenTask = FirebaseMessaging.getInstance().getToken();
+        try {
+            String token = Tasks.await(tokenTask);
+            throw new AssertionError("FirebaseMessaging returned a token without a push provider: " + token);
+        } catch (java.util.concurrent.ExecutionException expected) {
+            if (!(expected.getCause() instanceof java.io.IOException)
+                    || !"SERVICE_NOT_AVAILABLE".equals(expected.getCause().getMessage())) {
+                throw new AssertionError("FCM failure: " + expected.getCause());
+            }
         }
-
-        GoogleCloudMessaging gcm = GoogleCloudMessaging.getInstance(mActivity);
-        String gcmToken = gcm.register("1234567890");
-        if (gcmToken == null || gcmToken.isEmpty()) {
-            throw new AssertionError("GCM returned empty token");
+        try {
+            String registration = GoogleCloudMessaging.getInstance(mActivity).register("1234567890");
+            throw new AssertionError("GCM registration without a push provider: " + registration);
+        } catch (java.io.IOException expected) {
+            if (!GoogleCloudMessaging.ERROR_SERVICE_NOT_AVAILABLE.equals(expected.getMessage())) {
+                throw new AssertionError("GCM failure: " + expected.getMessage());
+            }
         }
 
         // Send a broadcast intent with com.google.android.c2dm.intent.RECEIVE
@@ -301,6 +272,6 @@ public final class GmsUnitSteps {
         receiveIntent.putExtra("google.message_id", "msg_test_001");
         mActivity.sendBroadcast(receiveIntent);
 
-        Report.line("FirebaseMessaging: token obtained, com.google.android.c2dm.intent.RECEIVE routed and received");
+        Report.line("FirebaseMessaging: no token without a push provider (SERVICE_NOT_AVAILABLE); app's own RECEIVE broadcast routed");
     }
 }

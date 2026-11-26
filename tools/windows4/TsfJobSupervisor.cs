@@ -63,6 +63,7 @@ public static class TsfJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32First(IntPtr snapshot,ref ProcessEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32Next(IntPtr snapshot,ref ProcessEntry entry);
   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern IntPtr CreateFile(string path,uint access,uint share,ref SA sa,uint creation,uint flags,IntPtr template);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr ReOpenFile(IntPtr file,uint access,uint share,uint flags);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileSizeEx(IntPtr handle,out long length);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool InitializeProcThreadAttributeList(IntPtr list,int count,uint flags,ref UIntPtr bytes);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool UpdateProcThreadAttribute(IntPtr list,uint flags,IntPtr attr,IntPtr value,UIntPtr size,IntPtr previous,IntPtr returned);
@@ -109,6 +110,15 @@ public static class TsfJobSupervisor {
     owned[index]=IntPtr.Zero; r.ClosedHandles++; return true;
   }
   static Accounting Count(IntPtr h) { Accounting a; Check(QueryInformationJobObject(h,1,out a,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero),"QueryInformationJobObject"); return a; }
+  static IntPtr OpenSizeObserver(IntPtr writer) {
+    // Inheritance/duplication shares the synchronous file object's I/O lock.
+    // A pending child write must not serialize our deadline/output-cap polling
+    // behind that lock. Reopen the same file with metadata-only access and its
+    // own file object; do not inherit it or reopen by a replaceable path.
+    IntPtr observer=ReOpenFile(writer,0x80,3,0); // FILE_READ_ATTRIBUTES, SHARE_READ|WRITE.
+    if(!Valid(observer)) throw Native("Reopen output size observer");
+    return observer;
+  }
   static string Snapshot(string path,Result r) {
     // Called only after every owned process is gone; at most cap bytes allocated/read.
     using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.None)) {
@@ -256,7 +266,7 @@ public static class TsfJobSupervisor {
     if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="console-invalid" && fault!="console-missing" && fault!="console-changed" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited" && fault!="diag-inherit-limited" && fault!="diag-inherit-unlimited")) throw new ArgumentException();
     Result r=new Result(); var owned=new List<IntPtr>();
     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
-    IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero,changedProcess=IntPtr.Zero,changedThread=IntPtr.Zero;
+    IntPtr output=IntPtr.Zero,error=IntPtr.Zero,outputSize=IntPtr.Zero,errorSize=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero,changedProcess=IntPtr.Zero,changedThread=IntPtr.Zero;
     bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
     bool race=arguments=="race";
     bool limited=arguments=="limit";
@@ -272,6 +282,7 @@ public static class TsfJobSupervisor {
       SA sa=new SA {size=Marshal.SizeOf(typeof(SA)),inherit=1};
       output=own(CreateFile(stdout,0x40000000,3,ref sa,1,0x100,IntPtr.Zero));
       error=own(CreateFile(stderr,0x40000000,3,ref sa,1,0x100,IntPtr.Zero));
+      outputSize=own(OpenSizeObserver(output)); errorSize=own(OpenSizeObserver(error));
       IntPtr input=own(CreateFile("NUL",0x80000000,3,ref sa,3,0,IntPtr.Zero));
       job=own(CreateJobObject(IntPtr.Zero,null)); query=job; r.JobHandleValue=job.ToInt64();
       Extended limits=new Extended(); limits.basic.flags=0x2000; // KILL_ON_JOB_CLOSE; neither breakaway flag allowed.
@@ -383,7 +394,7 @@ public static class TsfJobSupervisor {
         uint wait=WaitForSingleObject(root,(uint)Math.Min(25,remaining));
         if(wait==WAIT_OBJECT_0) { r.Reason="exit"; break; }
         if(wait!=WAIT_TIMEOUT) throw Native("Root wait");
-        Check(GetFileSizeEx(output,out r.StdoutBytes),"Stdout size"); Check(GetFileSizeEx(error,out r.StderrBytes),"Stderr size");
+        Check(GetFileSizeEx(outputSize,out r.StdoutBytes),"Stdout size"); Check(GetFileSizeEx(errorSize,out r.StderrBytes),"Stderr size");
         if(r.StdoutBytes>OutputCap || r.StderrBytes>OutputCap) { r.Reason="output-limit"; break; }
       }
     } catch(Exception ex) { r.Errors.Add(ex.Message); r.Reason="controller-error"; }
@@ -444,8 +455,8 @@ public static class TsfJobSupervisor {
         if(r.JobEmpty && r.TotalProcesses!=r.Processes.Count) r.Errors.Add("Cumulative associations do not match captured unique identities: total="+r.TotalProcesses+" identities="+r.Processes.Count);
         if(limited && r.JobEmpty && r.TotalProcesses!=1) r.Errors.Add("Single-process job accumulated unexpected associations: "+r.TotalProcesses);
       }
-      if(Valid(output) && Valid(error)) {
-        try { Check(GetFileSizeEx(output,out r.StdoutBytes),"Final stdout size"); Check(GetFileSizeEx(error,out r.StderrBytes),"Final stderr size");
+      if(Valid(outputSize) && Valid(errorSize)) {
+        try { Check(GetFileSizeEx(outputSize,out r.StdoutBytes),"Final stdout size"); Check(GetFileSizeEx(errorSize,out r.StderrBytes),"Final stderr size");
           if(r.Reason=="exit" && (r.StdoutBytes>OutputCap || r.StderrBytes>OutputCap)) r.Reason="output-limit";
         } catch(Exception ex) { r.Errors.Add(ex.Message); }
       }

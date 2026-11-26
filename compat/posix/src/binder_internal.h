@@ -13,6 +13,9 @@ bool BinderDeviceExists();
 int OpenBinder(int flags);
 
 bool IsBinderFd(int fd);
+// Whether this process opened binder fd `fd` (a forked child inherits its
+// parent's, which it cannot use: ADR 0092).
+bool BinderFdOwnedHere(int fd);
 
 // mmap of a binder fd: the anonymous mapping (mman.cc) where binder.cc puts
 // the transactions the process receives.

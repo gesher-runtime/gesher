@@ -1,0 +1,179 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package com.gesher.server;
+
+import android.content.Intent;
+import android.net.Uri;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
+
+/** Production request sequencing; only the Windows UI/shell and executor are boundaries. */
+public final class DialRequestContracts {
+    private static int checks;
+    private static void check(boolean condition, String message) {
+        if (!condition) throw new AssertionError(message);
+        checks++;
+    }
+
+    private static Intent dial(String number) { return new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + number)); }
+
+    private static final class Queue implements Executor {
+        final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
+        boolean reject;
+        @Override public void execute(Runnable task) {
+            if (reject) throw new RejectedExecutionException();
+            tasks.add(task);
+        }
+        void run() { tasks.remove().run(); }
+    }
+
+    private static final class Windows implements DialRequests.Backend {
+        final List<String> events = new ArrayList<>();
+        boolean approve = true, shellAccepts = true, fail;
+        Runnable whileOpen = () -> { };
+        BooleanSupplier observedLifetime;
+        String number, uri;
+        @Override public boolean confirm(String pkg, String shown, int pid, BooleanSupplier active) {
+            check("caller".equals(pkg) || pkg.startsWith("queued"), "authenticated package reaches UI");
+            check(pid == 27, "owner PID reaches UI");
+            events.add("confirm");
+            number = shown;
+            observedLifetime = active;
+            if (fail) throw new UnsatisfiedLinkError("no UI");
+            whileOpen.run();
+            return approve;
+        }
+        @Override public boolean open(String value) {
+            events.add("open");
+            uri = value;
+            return shellAccepts;
+        }
+    }
+
+    private static final class Fixture {
+        final Queue queue = new Queue();
+        final Windows windows = new Windows();
+        final DialRequests requests = new DialRequests(queue, windows);
+        final AtomicBoolean live = new AtomicBoolean(true), handler = new AtomicBoolean(true);
+        final List<Boolean> results = new ArrayList<>();
+        void request(Intent intent, String pkg) {
+            requests.request(intent, pkg, 27, live::get, handler::get,
+                    () -> windows.events.add("pause"), results::add);
+        }
+        void request() { request(dial("+15551234"), "caller"); }
+    }
+
+    private static void confirmationIsAsynchronousAndExact() {
+        Fixture f = new Fixture();
+        Intent intent = dial("+1555%201234;ext=9");
+        f.request(intent, "caller");
+        check(f.windows.events.isEmpty() && f.results.isEmpty(), "request returns before any dialog or shell work");
+        intent.setData(Uri.parse("tel:+19999999"));
+        f.queue.run();
+        check(f.windows.events.equals(List.of("pause", "confirm", "open")), "pause, confirmation, then open");
+        check("+1555 1234;ext=9".equals(f.windows.number), "review shows actual decoded phone number and extension");
+        check("tel:+1555%201234;ext=9".equals(f.windows.uri), "only original confirmed URI is launched");
+        check(f.results.equals(List.of(true)), "one real shell acceptance reaches completion");
+        check("+1555\\u000A\\u0000\\u202E123".equals(
+                DialRequests.displayNumber("tel:+1555%0A%00%E2%80%AE123")),
+                "control and bidi characters cannot hide or replace the reviewed address");
+        f = new Fixture();
+        Intent nul = dial("+1555\0;ext=9");
+        check(DialRequests.handles(nul), "malformed DIAL stays out of direct URL fallback");
+        f.request(nul, "caller");
+        check(f.queue.tasks.isEmpty() && f.windows.events.isEmpty() && f.results.equals(List.of(false)),
+                "literal NUL is canceled instead of truncating the reviewed address at ShellExecute");
+    }
+
+    private static void cancellationAndRevocation() {
+        Fixture f = new Fixture();
+        f.windows.approve = false;
+        f.request(); f.queue.run();
+        check(!f.windows.events.contains("open") && f.results.equals(List.of(false)), "Cancel never launches tel");
+
+        f = new Fixture(); f.live.set(false); f.request(); f.queue.run();
+        check(f.windows.events.equals(List.of("pause")) && f.results.equals(List.of(false)), "retired caller has no UI or launch");
+        f = new Fixture(); f.handler.set(false); f.request(); f.queue.run();
+        check(f.windows.events.equals(List.of("pause")) && f.results.equals(List.of(false)), "missing handler has no UI or launch");
+
+        Fixture retired = new Fixture();
+        retired.windows.whileOpen = () -> {
+            retired.live.set(false);
+            check(!retired.windows.observedLifetime.getAsBoolean(), "native timer observes caller retirement");
+        };
+        retired.request(); retired.queue.run();
+        check(!retired.windows.events.contains("open") && retired.results.equals(List.of(false)), "approval after retirement is ignored");
+
+        Fixture removed = new Fixture();
+        removed.windows.whileOpen = () -> {
+            removed.handler.set(false);
+            check(!removed.windows.observedLifetime.getAsBoolean(), "native timer observes handler removal");
+        };
+        removed.request(); removed.queue.run();
+        check(!removed.windows.events.contains("open") && removed.results.equals(List.of(false)), "handler is rechecked after approval");
+
+        f = new Fixture(); f.windows.shellAccepts = false; f.request(); f.queue.run();
+        check(f.windows.events.contains("open") && f.results.equals(List.of(false)), "shell failure remains failure");
+    }
+
+    private static void boundedAdmissionAndCleanup() {
+        Fixture f = new Fixture();
+        f.request(); f.request();
+        check(f.queue.tasks.size() == 1 && f.results.equals(List.of(false)), "duplicate caller cannot queue another dialog");
+        f.queue.run(); f.request(); f.queue.run();
+        check(f.results.equals(List.of(false, true, true)), "completed request releases admission exactly once");
+
+        f = new Fixture();
+        for (int i = 0; i < 17; i++) f.request(dial("+1555" + i), "queued" + i);
+        check(f.queue.tasks.size() == 16 && f.results.equals(List.of(false)), "pending dialog queue is bounded");
+        while (!f.queue.tasks.isEmpty()) f.queue.run();
+        check(f.results.size() == 17, "each admitted or rejected request completes once");
+
+        f = new Fixture(); f.queue.reject = true; f.request();
+        check(f.results.equals(List.of(false)), "executor rejection cancels");
+        f.queue.reject = false; f.request(); f.queue.run();
+        check(f.results.equals(List.of(false, true)), "executor rejection releases admission");
+
+        f = new Fixture(); f.windows.fail = true; f.request(); f.queue.run();
+        check(!f.windows.events.contains("open") && f.results.equals(List.of(false)), "missing native UI fails closed");
+        f.windows.fail = false; f.request(); f.queue.run();
+        check(f.results.equals(List.of(false, true)), "native failure releases admission");
+
+        f = new Fixture();
+        f.requests.request(dial("+15551234"), "caller", 27, f.live::get, f.handler::get,
+                () -> { throw new IllegalStateException("pause failed"); }, f.results::add);
+        f.queue.run();
+        check(f.results.equals(List.of(false)) && f.windows.events.isEmpty(), "preparation failure cancels without UI");
+    }
+
+    private static void onlyDialUsesConfirmation() {
+        check(!DialRequests.handles(new Intent(Intent.ACTION_VIEW, Uri.parse("tel:+1555"))), "ACTION_VIEW keeps direct delegation");
+        check(!DialRequests.handles(new Intent(Intent.ACTION_CALL, Uri.parse("tel:+1555"))), "ACTION_CALL is not granted dialing permission");
+        check(!DialRequests.handles(dial("")), "empty number has no confirmation");
+        check(!DialRequests.handles(new Intent(Intent.ACTION_DIAL, Uri.parse("mailto:x@example.com"))), "other protocol is not dialed");
+        Fixture f = new Fixture();
+        try {
+            f.request(new Intent(Intent.ACTION_VIEW, Uri.parse("tel:+1555")), "caller");
+            throw new AssertionError("non-DIAL request admitted");
+        } catch (IllegalArgumentException expected) {
+            check(f.queue.tasks.isEmpty() && f.windows.events.isEmpty(), "invalid action queues nothing");
+        }
+    }
+
+    public static void main(String[] args) {
+        confirmationIsAsynchronousAndExact();
+        cancellationAndRevocation();
+        boundedAdmissionAndCleanup();
+        onlyDialUsesConfirmation();
+        System.out.println("Dial requests: " + checks + " checks passed");
+    }
+}
+

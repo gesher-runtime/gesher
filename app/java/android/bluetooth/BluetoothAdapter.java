@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * BluetoothAdapter with the Bluetooth module's public API over the host's radio
@@ -92,6 +93,7 @@ public final class BluetoothAdapter {
     public static final int STATE_DISCONNECTING = 3;
 
     private static BluetoothAdapter sAdapter;
+    private static final AtomicBoolean sLoggedAdapter = new AtomicBoolean();
 
     private final Context mContext;
     private BluetoothLeScanner mScanner;
@@ -99,6 +101,9 @@ public final class BluetoothAdapter {
 
     BluetoothAdapter(Context context) {
         mContext = context;
+        if (sLoggedAdapter.compareAndSet(false, true)) {
+            Log.i(TAG, "host adapter: " + BluetoothHost.adapter().describe());
+        }
         // Start the system's event watch even for apps that only read adapter/device
         // state. Those apps still need broadcasts when Windows changes the radio or
         // a paired device connects; they need not start discovery or pairing first.
@@ -186,9 +191,13 @@ public final class BluetoothAdapter {
         return DEFAULT_MAC_ADDRESS;
     }
 
+    // As Android 16, the scan-mode and discovery calls answer a radio that is not on before
+    // reaching the service; the service enforces BLUETOOTH_SCAN when the radio is on.
+
     public int getScanMode() {
+        if (!isEnabled()) return SCAN_MODE_NONE;
         BluetoothHost.enforceScan(mContext);
-        return isEnabled() ? SCAN_MODE_CONNECTABLE : SCAN_MODE_NONE;
+        return SCAN_MODE_CONNECTABLE;
     }
 
     // --- devices ---------------------------------------------------------------------------
@@ -224,20 +233,21 @@ public final class BluetoothAdapter {
     }
 
     public boolean startDiscovery() {
-        BluetoothHost.enforceScan(mContext);
         if (!isEnabled()) return false;
+        BluetoothHost.enforceScan(mContext);
         return BluetoothManagerService.Client.startDiscovery();
     }
 
     public boolean cancelDiscovery() {
-        BluetoothHost.enforceScan(mContext);
         if (!isEnabled()) return false;
+        BluetoothHost.enforceScan(mContext);
         return BluetoothManagerService.Client.cancelDiscovery();
     }
 
     public boolean isDiscovering() {
+        if (!isEnabled()) return false;
         BluetoothHost.enforceScan(mContext);
-        return isEnabled() && BluetoothManagerService.Client.isDiscovering();
+        return BluetoothManagerService.Client.isDiscovering();
     }
 
     // --- LE ------------------------------------------------------------------------------
@@ -355,17 +365,20 @@ public final class BluetoothAdapter {
 
     @Deprecated
     public void stopLeScan(LeScanCallback callback) {
+        // As Android 16: nothing with BLE off or for a callback that never started; the
+        // scanner enforces BLUETOOTH_SCAN when an active scan is stopped.
+        BluetoothLeScanner scanner = getBluetoothLeScanner();
+        if (scanner == null) return;
         ScanCallback wrapper;
         synchronized (mLeScans) {
             wrapper = mLeScans.remove(callback);
         }
-        BluetoothLeScanner scanner = getBluetoothLeScanner();
-        if (wrapper != null && scanner != null) scanner.stopScan(wrapper);
+        if (wrapper != null) scanner.stopScan(wrapper);
     }
 
     // --- profiles ----------------------------------------------------------------------
 
-    /** A2DP and headset proxies; other profiles are not available. */
+    /** A2DP, headset, and LE Audio proxies; other profiles are not available. */
     public boolean getProfileProxy(Context context, BluetoothProfile.ServiceListener listener,
             int profile) {
         if (context == null || listener == null) return false;
@@ -376,6 +389,9 @@ public final class BluetoothAdapter {
                 break;
             case BluetoothProfile.HEADSET:
                 proxy = new BluetoothHeadset(context);
+                break;
+            case BluetoothProfile.LE_AUDIO:
+                proxy = new BluetoothLeAudio(context);
                 break;
             default:
                 Log.i(TAG, "profile " + profile + " is not available");

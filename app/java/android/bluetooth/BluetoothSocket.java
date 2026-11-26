@@ -16,7 +16,9 @@ import java.util.UUID;
  * BluetoothSocket with the Bluetooth module's public API: RFCOMM over Winsock's AF_BTH
  * sockets ({@link WindowsBluetooth}; docs/bluetooth.md). {@link #connect()} looks the
  * service UUID up in the device's SDP records (Windows does) or uses the channel of
- * createRfcommSocket. As on Android, reading at the end of the stream throws IOException.
+ * createRfcommSocket. Reading after the socket closes or the connection drops returns -1 for apps
+ * targeting Android 17 (API 37) and up, and throws IOException for older targets, as on
+ * Android. Other native failures still throw IOException.
  *
  * <p>Windows applies its own security: a device must be paired with Windows (Settings,
  * Bluetooth &amp; devices) for most RFCOMM services; "insecure" sockets skip the explicit
@@ -32,6 +34,8 @@ public final class BluetoothSocket implements Closeable {
     public static final int TYPE_LE = TYPE_L2CAP_LE;
     /** RFCOMM's default frame size, what Android reports for RFCOMM sockets. */
     private static final int RFCOMM_PACKET = 990;
+    /** First target SDK (Android 17) whose streams report closure/disconnection as -1. */
+    private static final int EOF_RETURNS_MINUS_ONE_SDK = 37;
 
     private final BluetoothDevice mDevice;
     private final UUID mUuid;
@@ -43,6 +47,8 @@ public final class BluetoothSocket implements Closeable {
     private boolean mConnecting;
     private boolean mSecureCounted;
     private boolean mClosed;
+    /** The connection reached EOF or dropped; with mLock held. */
+    private boolean mPeerEof;
     private final InputStream mInput = new Input();
     private final OutputStream mOutput = new Output();
 
@@ -61,13 +67,19 @@ public final class BluetoothSocket implements Closeable {
     }
 
     public void connect() throws IOException {
+        long previous;
         synchronized (mLock) {
             if (mClosed) throw new IOException("socket closed");
             if (mConnected) throw new IOException("already connected");
             if (mConnecting) throw new IOException("connection already in progress");
             mConnecting = true;
+            previous = mNative;
+            mNative = 0;
         }
         try {
+            // A disconnected socket may be reconnected. Retire its registry
+            // entry before replacing the handle, also ending outstanding reads.
+            if (previous != 0) WindowsBluetooth.nativeRfcommClose(previous);
             connectOnce();
         } finally {
             synchronized (mLock) {
@@ -101,6 +113,7 @@ public final class BluetoothSocket implements Closeable {
                 throw failed(result);
             }
             mChannel = channel[0];
+            mPeerEof = false;  // EOF belongs to the previous connection only.
             mConnected = true;
             if (mSecure) {
                 secureLink(mDevice.getAddress(), 1);
@@ -198,27 +211,61 @@ public final class BluetoothSocket implements Closeable {
         }
     }
 
+    /** Android 17 includes local close and dropped connections in stream EOF. */
+    private boolean eofReturnsMinusOne() {
+        return BluetoothHost.targetSdk(BluetoothHost.context(mDevice.context()))
+                >= EOF_RETURNS_MINUS_ONE_SDK;
+    }
+
+    private static boolean disconnected(int result) {
+        // The native boundary returns negated Winsock error codes. These
+        // errors terminate an established stream; buffer, argument and resource
+        // failures are not EOF. See the Win32 recv contract.
+        return result == 0 || result == -10052 /* WSAENETRESET */
+                || result == -10053 /* WSAECONNABORTED */
+                || result == -10054 /* WSAECONNRESET */
+                || result == -10057 /* WSAENOTCONN */
+                || result == -10058 /* WSAESHUTDOWN */
+                || result == -10060 /* WSAETIMEDOUT */;
+    }
+
     private final class Input extends InputStream {
+        private final byte[] mSingleByte = new byte[1];
+
         @Override
-        public int read() throws IOException {
-            byte[] one = new byte[1];
-            int n = read(one, 0, 1);
-            return n < 0 ? -1 : one[0] & 0xff;
+        public synchronized int read() throws IOException {
+            // Serialize only users of this buffer. Socket.close() does not take
+            // this monitor and can still interrupt a blocked native read.
+            int n = read(mSingleByte, 0, 1);
+            return n < 0 ? -1 : mSingleByte[0] & 0xff;
         }
 
         @Override
         public int read(byte[] b, int off, int len) throws IOException {
             if (off < 0 || len < 0 || len > b.length - off) throw new IndexOutOfBoundsException();
             if (len == 0) return 0;
-            int n = WindowsBluetooth.nativeRfcommRead(handle(), b, off, len);
-            if (n <= 0) {
-                synchronized (mLock) {
+            boolean modernEof = eofReturnsMinusOne();
+            long reading;
+            synchronized (mLock) {
+                // EOF is sticky, including reads made after local close on API 37+.
+                if ((mPeerEof || mClosed) && modernEof) return -1;
+                // Capture atomically with the closed-state check above.
+                reading = handle();
+            }
+            int n = WindowsBluetooth.nativeRfcommRead(reading, b, off, len);
+            if (n > 0) return n;
+            boolean eof;
+            synchronized (mLock) {
+                eof = mClosed || disconnected(n);
+                // A second read from the old connection can finish after a
+                // successful reconnect. Its EOF must not poison the new link.
+                if (mNative == reading) {
+                    if (eof) mPeerEof = true;
                     dropLink();
                 }
-                // The module throws at the end of the stream too.
-                throw new IOException("bt socket closed, read return: " + (n == 0 ? -1 : n));
             }
-            return n;
+            if (eof && modernEof) return -1;
+            throw new IOException("bt socket closed, read return: " + (n == 0 ? -1 : n));
         }
 
         @Override
@@ -233,19 +280,26 @@ public final class BluetoothSocket implements Closeable {
     }
 
     private final class Output extends OutputStream {
+        private final byte[] mSingleByte = new byte[1];
+
         @Override
-        public void write(int b) throws IOException {
-            write(new byte[] {(byte) b}, 0, 1);
+        public synchronized void write(int b) throws IOException {
+            mSingleByte[0] = (byte) b;
+            write(mSingleByte, 0, 1);
         }
 
         @Override
         public void write(byte[] b, int off, int len) throws IOException {
             if (off < 0 || len < 0 || len > b.length - off) throw new IndexOutOfBoundsException();
             if (len == 0) return;
-            int n = WindowsBluetooth.nativeRfcommWrite(handle(), b, off, len);
+            long writing = handle();
+            int n = WindowsBluetooth.nativeRfcommWrite(writing, b, off, len);
             if (n < 0) {
                 synchronized (mLock) {
-                    dropLink();
+                    if (mNative == writing) {
+                        if (disconnected(n)) mPeerEof = true;
+                        dropLink();
+                    }
                 }
                 throw new IOException("bt socket closed, write return: " + n);
             }

@@ -35,11 +35,18 @@ jobs:
             'tests/windows/helpers/geocoder-winrt-fixture.ps1' = 'cbde2ac48b603f3cc12e544a3e42d744d9b58864'
             'tests/windows/helpers/geocoder-roslyn-worker.ps1' = '31491e2cb20bf72e78c49476c9ab874649fee6c9'
             'tests/windows/helpers/geocoder-compiler-host.ps1' = '43f5fc28e1c0a19e8d8c5e1df1a3d823f734f16f'
-            'tests/windows/helpers/geocoder-compile.ps1' = '90fceedc449a2ec11dfa80809e05163c89bcf2fa'
+            # The reviewed helper adds only the PID-census diagnostic invocation;
+            # pin both of its new inputs as well as all existing WinRT sources.
+            'tests/windows/helpers/geocoder-compile.ps1' = 'cfe4a083d76e6ce2f88d53bcd4d72cbdbc8ce44c'
+            'tests/windows/helpers/pid-census-exit-probe.ps1' = '21926a098bfc48e86b5723765ae3f4234615b5ab'
+            'tests/windows/helpers/PidCensusExitProbe.cs' = 'c7f7f2d8eafa6c561a6f1b07891ddd5f9c4277f9'
             'tests/windows/helpers/run-geocoder-winrt-component.ps1' = '1277bcc858c9c52eb8b24476831aadb286831418'
-            # The reviewed shared track also runs the camera callback-admission gate;
-            # its geocoder implementation and the other nine pins are unchanged.
-            'tests/windows/tracks/58-devices.ps1' = 'b912825df72db2afdd06c65edf760cc03c78e650'
+            # The reviewed shared track includes sensor flush, current camera grant
+            # admission, explicit fixture permissions, the camera callback-admission
+            # gate, the stationary accelerometer and the camera autofocus contract
+            # checks. Its geocoder implementation and the other nine source pins are
+            # unchanged.
+            'tests/windows/tracks/58-devices.ps1' = '7efd80e6d775a98775d311f433398275c15b5e98'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path

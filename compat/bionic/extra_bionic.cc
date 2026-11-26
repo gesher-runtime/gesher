@@ -44,6 +44,10 @@
 #include <mutex>
 #include <string>
 #include <vector>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher::bionic {
 
@@ -700,6 +704,10 @@ int BIONIC_SYSV AtQuickExit(void (BIONIC_SYSV* fn)()) {
   }
   for (auto it = fns.rbegin(); it != fns.rend(); ++it) (*it)();
   std::fflush(nullptr);
+#ifdef GESHER_FORK_LOCK
+  // A forked child runs no DLL detach routines (ADR 0092).
+  if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code) & 0xff);
+#endif
   ExitProcess(static_cast<UINT>(code));
 }
 
@@ -1851,3 +1859,11 @@ void RegisterExtra(SymbolTable& t) {
 }
 
 }  // namespace gesher::bionic
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): properties and the shim's other tables in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::bionic::g_rand48_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::bionic::g_quick_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::bionic::g_prop_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::bionic::g_dirs_mutex);
+#endif

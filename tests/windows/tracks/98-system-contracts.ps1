@@ -113,7 +113,9 @@ try {
   Check 'services: intent candidates preserve Android matching and package generations' {
     $global:LASTEXITCODE = $intentIndexCode
     $intentIndexOut
-  } @('IntentCandidateIndexTest contracts passed', 'INTENT_WORK packages=1000 kind=PROVIDER queries=32')
+  } @('IntentCandidateIndexTest contracts passed', 'INTENT_WORK packages=1000 kind=PROVIDER queries=32',
+    'Component query metadata contracts passed', 'COMPONENT_METADATA_WORK kind=SERVICE components=64 queries=8',
+    'Component query enabled-snapshot contracts passed')
 
   $microgLibsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'MicrogAddonNativeLibsTest') 90
   $microgLibsCode = $LASTEXITCODE
@@ -122,12 +124,26 @@ try {
     $microgLibsOut
   } @('MicrogAddonNativeLibsTest all passed')
 
+  $identityDigestOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'IdentityDigestContractTest') 90
+  $identityDigestCode = $LASTEXITCODE
+  Check 'services: complete digest identities preserve input framing, signers and live split files' {
+    $global:LASTEXITCODE = $identityDigestCode
+    $identityDigestOut
+  } @('IdentityDigestContractTest all passed:')
+
   $callLogOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'CallLogContractTest') 120
   $callLogCode = $LASTEXITCODE
   Check 'services: CallLog provider CRUD, strict SQL, phone matching, voicemail, AppOps and admission' {
     $global:LASTEXITCODE = $callLogCode
     $callLogOut
   } @('CallLogContractTest all passed')
+
+  $contactsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'ContactsProviderContractTest') 120
+  $contactsCode = $LASTEXITCODE
+  Check 'services: ContactsProvider persistence, strict SQL, E.164, phone lookup, applyBatch, sync, Profile and permissions' {
+    $global:LASTEXITCODE = $contactsCode
+    $contactsOut
+  } @('ContactsProviderContractTest all passed')
 
   # Constructed package metadata uses the existing synthetic-fixture capability.
   $env:GESHER_MICROG_SPOOF = '1'
