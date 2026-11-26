@@ -55,6 +55,15 @@ window reference after the second submission, before signalling EOS. The
 Windows fixture also checks repeat attachment by the current owner and
 rejects competing attachments and ordinary input windows.
 
-The fixtures cover synchronous CPU buffers, decoder output surfaces and
-ordinary and persistent encoder input surfaces. Asynchronous buffer callbacks,
-secure codecs and standalone Gesher ELF execution require separate work.
+Pass `async` after the executable name or JNI library path to register input,
+output, format and error callbacks through direct linkage and `dlsym`. Each run rejects synchronous dequeue, checks that
+flush pauses input callbacks until restart, resubmits the codec configuration
+after the early flush, and verifies the actual decoded
+luma, timestamps, EOS and worker thread identity. Callback-owned buffers keep
+the same slot rules as synchronous buffers. The client owns a format received
+by its format callback, and output info is borrowed during the call.
+[Android NDK callback contract](https://developer.android.com/ndk/reference/group/media#amediacodec_setasyncnotifycallback).
+
+The fixtures cover synchronous and asynchronous CPU decoding, decoder output
+surfaces, and ordinary and persistent encoder input surfaces. Secure codecs
+and standalone Gesher ELF execution require separate work.

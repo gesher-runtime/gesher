@@ -50,6 +50,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 #include <pthread.h>
 #include <sys/types.h>
@@ -468,21 +469,53 @@ uint8_t* CpuOutputBytes(JNIEnv* env, Slot& slot) {
 
 class Codec;
 
-#if defined(__x86_64__)
-using FrameRenderedCallback = void (__attribute__((sysv_abi)) *)(Codec*, void*, int64_t, int64_t);
-#elif defined(__aarch64__)
-using FrameRenderedCallback = void (*)(Codec*, void*, int64_t, int64_t);
-#endif
+struct BufferInfo {
+  int32_t offset;
+  int32_t size;
+  int64_t presentation_time_us;
+  uint32_t flags;
+};
+static_assert(sizeof(BufferInfo) == 24 && offsetof(BufferInfo, flags) == 16);
 
-// Android delivers these samples on one NDK thread. The dispatcher owns no
-// codec buffers and drops intermediate timing samples if the client is slow.
-class NativeFrameCallbacks {
+#if defined(__x86_64__)
+#define NDK_CALLBACK_ABI __attribute__((sysv_abi))
+#elif defined(__aarch64__)
+#define NDK_CALLBACK_ABI
+#endif
+using FrameRenderedCallback = void (NDK_CALLBACK_ABI*)(Codec*, void*, int64_t, int64_t);
+using InputAvailableCallback = void (NDK_CALLBACK_ABI*)(Codec*, void*, int32_t);
+using OutputAvailableCallback = void (NDK_CALLBACK_ABI*)(Codec*, void*, int32_t, BufferInfo*);
+using FormatChangedCallback = void (NDK_CALLBACK_ABI*)(Codec*, void*, AMediaFormat*);
+using AsyncErrorCallback = void (NDK_CALLBACK_ABI*)(Codec*, void*, media_status_t, int32_t, const char*);
+#undef NDK_CALLBACK_ABI
+
+// Matches AMediaCodecOnAsyncNotifyCallback in the public NDK header.
+struct AsyncCallbacks {
+  InputAvailableCallback input = nullptr;
+  OutputAvailableCallback output = nullptr;
+  FormatChangedCallback format = nullptr;
+  AsyncErrorCallback error = nullptr;
+  bool enabled() const { return input || output || format || error; }
+};
+static_assert(sizeof(AsyncCallbacks) == 32);
+
+struct AsyncInput { int32_t index; };
+struct AsyncOutput { int32_t index; BufferInfo info; };
+struct AsyncFormat { Format format; };
+struct AsyncError { media_status_t status; int32_t action; std::string detail; };
+using AsyncEvent = std::variant<AsyncInput, AsyncOutput, AsyncFormat, AsyncError>;
+
+// One NDK thread delivers codec events. Slot notifications are ordered and
+// actionable. Frame timing samples are informational and may be coalesced.
+class NativeCodecCallbacks {
  public:
-  explicit NativeFrameCallbacks(Codec* codec) : state_(std::make_shared<State>(codec)) {}
+  explicit NativeCodecCallbacks(Codec* codec) : state_(std::make_shared<State>(codec)) {}
   void Close() {
     {
       std::lock_guard<std::mutex> lock(state_->mutex);
       state_->closed = true;
+      state_->events.clear();
+      state_->latest.reset();
       if (!worker_started_) return;
       state_->changed.notify_all();
     }
@@ -494,36 +527,76 @@ class NativeFrameCallbacks {
     }
   }
 
-  media_status_t Set(FrameRenderedCallback callback, void* userdata) {
+  media_status_t SetFrameRendered(FrameRenderedCallback callback, void* userdata) {
     std::unique_lock<std::mutex> lock(state_->mutex);
-    if (worker_started_ && pthread_equal(worker_, pthread_self()))
-      return AMEDIA_ERROR_INVALID_OPERATION;
+    if (OnCallbackThread()) return AMEDIA_ERROR_INVALID_OPERATION;
     if (state_->closed) return AMEDIA_ERROR_INVALID_OBJECT;
     state_->latest.reset();
-    state_->callback = nullptr;
-    state_->changed.wait(lock, [this] { return !state_->calling || state_->closed; });
+    state_->frame_callback = nullptr;
+    state_->changed.wait(lock, [this] { return !state_->calling_frame || state_->closed; });
     if (state_->closed) return AMEDIA_ERROR_INVALID_OBJECT;
-    if (callback != nullptr && !worker_started_) {
-      if (pthread_create(&worker_, nullptr, Run, this) != 0)
-        return AMEDIACODEC_ERROR_INSUFFICIENT_RESOURCE;
-      worker_started_ = true;
-    }
+    if (callback != nullptr && !StartWorker()) return AMEDIACODEC_ERROR_INSUFFICIENT_RESOURCE;
     state_->latest.reset();
-    state_->callback = callback;
-    state_->userdata = userdata;
+    state_->frame_callback = callback;
+    state_->frame_userdata = userdata;
     return AMEDIA_OK;
   }
 
-  void Post(int64_t media_time_us, int64_t system_nanos) {
+  // The caller holds the codec lock while changing async mode. WaitForAsync
+  // runs after that lock is released so an admitted callback can call the codec.
+  media_status_t SetAsync(AsyncCallbacks callbacks, void* userdata, uint64_t* retired) {
     std::lock_guard<std::mutex> lock(state_->mutex);
-    if (state_->closed || state_->callback == nullptr) return;
+    if (OnCallbackThread()) return AMEDIA_ERROR_INVALID_OPERATION;
+    if (state_->closed) return AMEDIA_ERROR_INVALID_OBJECT;
+    if (callbacks.enabled() && !StartWorker()) return AMEDIACODEC_ERROR_INSUFFICIENT_RESOURCE;
+    state_->events.clear();
+    *retired = state_->async_generation++;
+    state_->async = callbacks;
+    state_->async_userdata = userdata;
+    return AMEDIA_OK;
+  }
+
+  uint64_t RetireAsync() {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->events.clear();
+    state_->async = {};
+    state_->async_userdata = nullptr;
+    return state_->async_generation++;
+  }
+
+  void WaitForAsync(uint64_t retired) {
+    const auto state = state_;
+    std::unique_lock<std::mutex> lock(state->mutex);
+    if (OnCallbackThread()) return;
+    state->changed.wait(lock, [&] {
+      return !state->calling_async || *state->calling_async > retired;
+    });
+  }
+
+  void PostFrame(int64_t media_time_us, int64_t system_nanos) {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    if (state_->closed || state_->frame_callback == nullptr) return;
     state_->latest = Sample{media_time_us, system_nanos};
     state_->changed.notify_one();
+  }
+
+  void PostAsync(AsyncEvent event) {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    if (state_->closed) return;
+    state_->events.push_back(std::move(event));
+    state_->changed.notify_one();
+  }
+
+  uint64_t DiscardAsync() {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->events.clear();
+    return state_->async_generation++;
   }
 
   void DiscardPending() {
     std::lock_guard<std::mutex> lock(state_->mutex);
     state_->latest.reset();
+    state_->events.clear();
   }
 
  private:
@@ -539,41 +612,85 @@ class NativeFrameCallbacks {
     std::mutex mutex;
     std::condition_variable changed;
     std::optional<Sample> latest;
-    FrameRenderedCallback callback = nullptr;
-    void* userdata = nullptr;
-    bool calling = false;
+    std::deque<AsyncEvent> events;
+    FrameRenderedCallback frame_callback = nullptr;
+    void* frame_userdata = nullptr;
+    AsyncCallbacks async;
+    void* async_userdata = nullptr;
+    uint64_t async_generation = 0;
+    std::optional<uint64_t> calling_async;
+    bool calling_frame = false;
     bool closed = false;
   };
 
+  // Caller holds the dispatcher mutex.
+  bool OnCallbackThread() const {
+    return worker_started_ && pthread_equal(worker_, pthread_self());
+  }
+
+  bool StartWorker() {
+    if (!worker_started_) worker_started_ = pthread_create(&worker_, nullptr, Run, this) == 0;
+    return worker_started_;
+  }
+
+  static void Deliver(AsyncInput& event, Codec* codec, const AsyncCallbacks& callback, void* userdata) {
+    if (callback.input != nullptr) callback.input(codec, userdata, event.index);
+  }
+  static void Deliver(AsyncOutput& event, Codec* codec, const AsyncCallbacks& callback, void* userdata) {
+    if (callback.output != nullptr) callback.output(codec, userdata, event.index, &event.info);
+  }
+  static void Deliver(AsyncFormat& event, Codec* codec, const AsyncCallbacks& callback, void* userdata) {
+    if (callback.format != nullptr) callback.format(codec, userdata, event.format.Release());
+  }
+  static void Deliver(AsyncError& event, Codec* codec, const AsyncCallbacks& callback, void* userdata) {
+    if (callback.error != nullptr) {
+      callback.error(codec, userdata, event.status, event.action, event.detail.c_str());
+    }
+  }
+
   static void* Run(void* context) {
-    const auto state = static_cast<NativeFrameCallbacks*>(context)->state_;
+    const auto state = static_cast<NativeCodecCallbacks*>(context)->state_;
     gesher::bionic::EnterLoadedCode();
     std::unique_lock<std::mutex> lock(state->mutex);
     for (;;) {
-      state->changed.wait(lock, [&] { return state->closed || state->latest.has_value(); });
+      state->changed.wait(lock, [&] {
+        return state->closed || state->latest.has_value() || !state->events.empty();
+      });
       if (state->closed) return nullptr;
-      const Sample sample = *state->latest;
-      state->latest.reset();
-      const auto callback = state->callback;
-      void* userdata = state->userdata;
-      state->calling = true;
-      lock.unlock();
-      callback(state->codec, userdata, sample.media_time_us, sample.system_nanos);
-      lock.lock();
-      state->calling = false;
+      if (!state->events.empty()) {
+        auto event = std::move(state->events.front());
+        state->events.pop_front();
+        auto callback = state->async;
+        void* userdata = state->async_userdata;
+        state->calling_async = state->async_generation;
+        lock.unlock();
+        std::visit([&](auto& payload) { Deliver(payload, state->codec, callback, userdata); }, event);
+        lock.lock();
+        state->calling_async.reset();
+      } else {
+        const Sample sample = *state->latest;
+        state->latest.reset();
+        const auto callback = state->frame_callback;
+        void* userdata = state->frame_userdata;
+        state->calling_frame = true;
+        lock.unlock();
+        callback(state->codec, userdata, sample.media_time_us, sample.system_nanos);
+        lock.lock();
+        state->calling_frame = false;
+      }
       state->changed.notify_all();
     }
   }
 
   const std::shared_ptr<State> state_;
   pthread_t worker_{};
-  bool worker_started_ = false;  // Set holds state_->mutex.
+  bool worker_started_ = false;  // Accessed under state_->mutex.
 };
 
 class Codec {
  public:
   explicit Codec(const CodecEntry& entry)
-      : entry_(entry), native_frame_callbacks_(std::make_unique<NativeFrameCallbacks>(this)) {}
+      : entry_(entry), native_callbacks_(std::make_unique<NativeCodecCallbacks>(this)) {}
   Codec(JNIEnv* env, jobject thiz, const CodecEntry& entry)
       : entry_(entry), self_(std::make_shared<WeakRef>(env, thiz)) {}
   ~Codec() {
@@ -868,10 +985,24 @@ class Codec {
 
   void EnableFrameRendered(bool enable) { frame_rendered_ = enable; }
 
-  void CloseNativeFrameCallbacks() { native_frame_callbacks_->Close(); }
+  void CloseNativeCodecCallbacks() { native_callbacks_->Close(); }
 
   media_status_t SetNativeFrameRendered(FrameRenderedCallback callback, void* userdata) {
-    return native_frame_callbacks_->Set(callback, userdata);
+    return native_callbacks_->SetFrameRendered(callback, userdata);
+  }
+
+  media_status_t SetNativeAsync(AsyncCallbacks callbacks, void* userdata) {
+    uint64_t retired;
+    {
+      std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
+      std::lock_guard<std::mutex> lock(mu_);
+      if (released_ || fatal_ || started_) return AMEDIA_ERROR_UNKNOWN;
+      const auto result = native_callbacks_->SetAsync(callbacks, userdata, &retired);
+      if (result != AMEDIA_OK) return result;
+      async_ = callbacks.enabled();
+    }
+    native_callbacks_->WaitForAsync(retired);
+    return AMEDIA_OK;
   }
 
   bool Start(std::string* error) {
@@ -894,7 +1025,7 @@ class Codec {
       for (int i = 0; i < kSlots; i++) {
         if (!inputs_[i].client) {
           inputs_[i].client = true;
-          PostLocked(kCbInputAvailable, i, nullptr);
+          PostInputAvailable(i);
         }
       }
     }
@@ -904,7 +1035,7 @@ class Codec {
 
   void Stop(int* status = nullptr, bool require_configured = false) {
     if (status != nullptr) *status = android::OK;
-    std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
+    std::unique_lock<std::mutex> lifecycle(lifecycle_mu_);
     {
       std::lock_guard<std::mutex> lock(mu_);
       if (fatal_ || (require_configured && (!configured_ || released_))) {
@@ -912,12 +1043,14 @@ class Codec {
         return;
       }
     }
-    StopLocked();
+    const auto retired = StopLocked();
+    lifecycle.unlock();
+    if (retired) native_callbacks_->WaitForAsync(*retired);
   }
 
   // Start, stop, reset and release serialize worker ownership with
   // lifecycle_mu_. Blocking dequeues/flushes never take that mutex.
-  void StopLocked() {
+  std::optional<uint64_t> StopLocked(bool retire_callbacks = true) {
     StopWorker();
     // Abandon waits for an in-flight producer callback, which takes mu_.
     if (input_surface_ != nullptr) input_surface_->Abandon();
@@ -928,6 +1061,11 @@ class Codec {
     std::lock_guard<std::mutex> lock(mu_);
     retired_input = std::move(input_surface_);
     configured_ = false;
+    std::optional<uint64_t> retired;
+    if (native_callbacks_ != nullptr && retire_callbacks) {
+      async_ = false;
+      retired = native_callbacks_->RetireAsync();
+    }
     video_scaling_mode_ = 1;
     video_enc_.reset();
     audio_enc_.reset();
@@ -953,6 +1091,7 @@ class Codec {
     pending_config_.clear();
     flush_requested_ = false;
     flushed_ = false;
+    return retired;
   }
 
   void Reset() {
@@ -977,6 +1116,8 @@ class Codec {
     const uint64_t generation = ++wait_generation_;
     // The worker finishes the sample it is decoding, then flushes.
     flush_requested_ = true;
+    const std::optional<uint64_t> retired = native_callbacks_ != nullptr
+        ? std::optional<uint64_t>(native_callbacks_->DiscardAsync()) : std::nullopt;
     work_.clear();
     cv_.notify_all();
     done_cv_.notify_all();
@@ -998,6 +1139,8 @@ class Codec {
     }
     // Asynchronous codecs wait for start() again; synchronous ones go on.
     if (async_) flushed_ = true;
+    lock.unlock();
+    if (retired) native_callbacks_->WaitForAsync(*retired);
   }
 
   int DequeueInput(int64_t timeout_us, int* status = nullptr) {
@@ -1158,10 +1301,10 @@ class Codec {
     // AOSP consumes the output for other render failures, but does not report
     // that a frame was rendered. Obsolete consumers are the fatal exception.
     if (delivery_status == android::OK) {
-      const int64_t delivered_at = native_frame_callbacks_ != nullptr ? gesher::MonotonicNanos() : 0;
+      const int64_t delivered_at = native_callbacks_ != nullptr ? gesher::MonotonicNanos() : 0;
       std::lock_guard<std::mutex> lock(mu_);
       if (execution_generation == execution_generation_ && started_ && !fatal_) {
-        if (native_frame_callbacks_ != nullptr) native_frame_callbacks_->Post(time_us, delivered_at);
+        if (native_callbacks_ != nullptr) native_callbacks_->PostFrame(time_us, delivered_at);
         if (frame_rendered_) PostFrameRendered(time_us);
       }
     }
@@ -1192,9 +1335,9 @@ class Codec {
       cv_.notify_all();
       done_cv_.notify_all();
     }
-    // Only JNI release-output calls reach this helper; it never runs on the
-    // decode worker. Join without mu_ before destroying its decoder state.
-    StopLocked();
+    // Release-output calls never run on the decode worker. Keep the native
+    // callback registration until its fatal error can be reported.
+    StopLocked(/*retire_callbacks=*/false);
     if (input_surface_ != nullptr) {
       input_surface_->Abandon();
       input_surface_.reset();
@@ -1399,7 +1542,7 @@ class Codec {
       quit_ = true;
       ++execution_generation_;
       ++wait_generation_;
-      if (native_frame_callbacks_ != nullptr) native_frame_callbacks_->DiscardPending();
+      if (native_callbacks_ != nullptr) native_callbacks_->DiscardPending();
       cv_.notify_all();
       done_cv_.notify_all();
     }
@@ -1408,6 +1551,14 @@ class Codec {
     worker_running_ = false;
     flush_requested_ = false;
     done_cv_.notify_all();
+  }
+
+  void PostInputAvailable(int index) {
+    if (native_callbacks_ != nullptr) {
+      native_callbacks_->PostAsync(AsyncInput{index});
+    } else {
+      PostLocked(kCbInputAvailable, index, nullptr);
+    }
   }
 
   // With mu_ held: posts an event to Java (from any thread).
@@ -1486,7 +1637,7 @@ class Codec {
       // The slot is free again.
       if (async_ && !flushed_) {
         in.client = true;
-        PostLocked(kCbInputAvailable, index, nullptr);
+        PostInputAvailable(index);
       }
       cv_.notify_all();
       if (flags & kFlagCodecConfig) {
@@ -1547,7 +1698,9 @@ class Codec {
   void Fail(const std::string& error) {
     MEDIA_LOGE("MediaCodec %s: %s", entry_.name.c_str(), error.c_str());
     failed_ = true;
-    if (async_) {
+    if (async_ && native_callbacks_ != nullptr) {
+      native_callbacks_->PostAsync(AsyncError{AMEDIA_ERROR_UNKNOWN, 2, error});
+    } else if (async_) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       jstring m = env->NewStringUTF(error.c_str());
@@ -1589,6 +1742,10 @@ class Codec {
   // With mu_ held, after the worker has stopped: CCodec reports UNKNOWN_ERROR
   // for this fatal component event; the release call itself returns NO_INIT.
   void PostFatalErrorLocked(const std::string& error) {
+    if (native_callbacks_ != nullptr) {
+      native_callbacks_->PostAsync(AsyncError{AMEDIA_ERROR_UNKNOWN, 0, error});
+      return;
+    }
     JNIEnv* env = AttachedEnv("gesher-codec");
     if (env == nullptr) return;
     jstring message = env->NewStringUTF(error.c_str());
@@ -1626,7 +1783,9 @@ class Codec {
     output_known_ = true;
     out_width_ = width;
     out_height_ = height;
-    if (async_) {
+    if (async_ && native_callbacks_ != nullptr) {
+      native_callbacks_->PostAsync(AsyncFormat{OutputFormatLocked().ToFormat()});
+    } else if (async_) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       env->PushLocalFrame(64);
@@ -1643,6 +1802,12 @@ class Codec {
     if (async_) {
       Slot& s = outputs_[index];
       s.client = true;
+      if (native_callbacks_ != nullptr) {
+        native_callbacks_->PostAsync(
+            AsyncOutput{index, BufferInfo{0, s.size, s.time_us, static_cast<uint32_t>(s.flags)}});
+        cv_.notify_all();
+        return;
+      }
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       // A local frame: the worker is a native thread, its local references never go away.
@@ -1878,7 +2043,9 @@ class Codec {
       csd_.push_back(config.data);
     }
     output_known_ = true;
-    if (async_) {
+    if (async_ && native_callbacks_ != nullptr) {
+      native_callbacks_->PostAsync(AsyncFormat{EncoderOutputFormatLocked()});
+    } else if (async_) {
       JNIEnv* env = AttachedEnv("gesher-codec");
       if (env == nullptr) return;
       env->PushLocalFrame(64);
@@ -1999,7 +2166,7 @@ class Codec {
         const int flags = in.flags;
         if (async_ && !flushed_) {
           in.client = true;
-          PostLocked(kCbInputAvailable, index, nullptr);
+          PostInputAvailable(index);
         }
         cv_.notify_all();
         const bool key = force_key_;
@@ -2069,7 +2236,7 @@ class Codec {
   bool failed_ = false;
   std::optional<CodecMetrics> metrics_;
   std::atomic<bool> frame_rendered_{false};
-  std::unique_ptr<NativeFrameCallbacks> native_frame_callbacks_;
+  std::unique_ptr<NativeCodecCallbacks> native_callbacks_;
   Format input_format_;
   ANativeWindow* window_ = nullptr;
   int video_scaling_mode_ = 1;
@@ -2108,13 +2275,6 @@ class Codec {
 // MediaCodec. No Java MediaCodec object or Java callback state is needed.
 namespace ndk_codec {
 
-struct BufferInfo {
-  int32_t offset;
-  int32_t size;
-  int64_t presentation_time_us;
-  uint32_t flags;
-};
-static_assert(sizeof(BufferInfo) == 24 && offsetof(BufferInfo, flags) == 16);
 static_assert(sizeof(size_t) == 8 && sizeof(ssize_t) == 8);
 
 // AMediaCodec in Android 16 maps codec state and slot errors to UNKNOWN.
@@ -2132,7 +2292,7 @@ Codec* CreateEncoder(const char* mime) { return mime != nullptr ? Create(FindByT
 media_status_t Delete(Codec* codec) {
   // An in-flight callback may be inside the codec. Retire its dispatcher
   // before destroying the handle, without holding either codec mutex.
-  if (codec != nullptr) codec->CloseNativeFrameCallbacks();
+  if (codec != nullptr) codec->CloseNativeCodecCallbacks();
   delete codec;
   return AMEDIA_OK;
 }
@@ -2249,15 +2409,39 @@ media_status_t ReleaseOutput(Codec* codec, size_t index, bool render) {
 media_status_t ReleaseOutputAtTime(Codec* codec, size_t index, int64_t timestamp_ns) {
   return Release(codec, index, true, true, timestamp_ns);
 }
+template <class Callback>
+bool ResolveGuestCallback(Callback* callback) {
+  auto* address = reinterpret_cast<void*>(*callback);
+  if (address == nullptr || !gesher::arm64::IsGuestCode(address)) return true;
+  address = gesher::arm64::HostEntry(address);
+  if (address == nullptr) return false;
+  *callback = reinterpret_cast<Callback>(address);
+  return true;
+}
+
 media_status_t SetOnFrameRenderedCallback(Codec* codec, FrameRenderedCallback callback, void* userdata) {
   if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
-  void* address = reinterpret_cast<void*>(callback);
-  if (address != nullptr && gesher::arm64::IsGuestCode(address)) {
-    address = gesher::arm64::HostEntry(address);
-    if (address == nullptr) return AMEDIA_ERROR_UNKNOWN;
-  }
-  return codec->SetNativeFrameRendered(reinterpret_cast<FrameRenderedCallback>(address), userdata);
+  if (!ResolveGuestCallback(&callback)) return AMEDIA_ERROR_UNKNOWN;
+  return codec->SetNativeFrameRendered(callback, userdata);
 }
+
+media_status_t SetAsyncNotifyCallback(Codec* codec, AsyncCallbacks callbacks, void* userdata) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (!ResolveGuestCallback(&callbacks.input) || !ResolveGuestCallback(&callbacks.output) ||
+      !ResolveGuestCallback(&callbacks.format) || !ResolveGuestCallback(&callbacks.error)) {
+    return AMEDIA_ERROR_UNKNOWN;
+  }
+  return codec->SetNativeAsync(callbacks, userdata);
+}
+
+#if defined(__x86_64__)
+// AAPCS64 passes a structure this large by reference in X1; SysV x64
+// copies it to the stack. The translated guest binds this pointer form.
+media_status_t SetAsyncNotifyCallbackArm64(Codec* codec, const AsyncCallbacks* callbacks, void* userdata) {
+  if (callbacks == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  return SetAsyncNotifyCallback(codec, *callbacks, userdata);
+}
+#endif
 
 media_status_t SetOutputSurface(Codec* codec, ANativeWindow* window) {
   return codec != nullptr ? ToMediaStatus(codec->SetNativeOutputSurface(window))
@@ -2351,6 +2535,11 @@ bool Register() {
   CODEC_ENTRY(releaseOutputBufferAtTime, ReleaseOutputAtTime);
   CODEC_ENTRY(setOutputSurface, SetOutputSurface);
   CODEC_ENTRY(setOnFrameRenderedCallback, SetOnFrameRenderedCallback);
+  CODEC_ENTRY(setAsyncNotifyCallback, SetAsyncNotifyCallback);
+#if defined(__x86_64__)
+  AddBionicSymbol("__gesher_arm64_AMediaCodec_setAsyncNotifyCallback",
+                   reinterpret_cast<void*>(&ElfCall<&SetAsyncNotifyCallbackArm64>::Call));
+#endif
   CODEC_ENTRY(createInputSurface, CreateInputSurface);
   CODEC_ENTRY(createPersistentInputSurface, CreatePersistentInputSurface);
   CODEC_ENTRY(setInputSurface, SetInputSurface);

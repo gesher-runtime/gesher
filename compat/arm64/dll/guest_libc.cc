@@ -1020,6 +1020,9 @@ bool InitGuestLibc() {
     Override(name, bridge ? bridge : reinterpret_cast<void*>(&MissingArm64DnsBridge));
   }
 
+  Override("AMediaCodec_setAsyncNotifyCallback",
+           Host("__gesher_arm64_AMediaCodec_setAsyncNotifyCallback"));
+
   g_pthread_create = reinterpret_cast<ThreadCreate>(Host("pthread_create"));
   if (g_pthread_create) Override("pthread_create", reinterpret_cast<void*>(&GuestPthreadCreate));
   if (void* getattr = Host("__gesher_arm64_pthread_getattr_np"))

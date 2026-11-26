@@ -360,7 +360,224 @@ cleanup:
 }
 #endif
 
-static int RunCodec(void) {
+#if !defined(_WIN32) && !defined(CODEC_BUFFER_COMPONENT)
+enum AsyncEventType { ASYNC_INPUT, ASYNC_OUTPUT, ASYNC_FORMAT };
+struct AsyncEvent {
+  enum AsyncEventType type;
+  int32_t index;
+  AMediaCodecBufferInfo info;
+};
+struct AsyncDecode {
+  pthread_mutex_t mutex;
+  pthread_cond_t changed;
+  AMediaCodec* codec;
+  pthread_t submitting_thread;
+  pthread_t callback_thread;
+  struct AsyncEvent events[64];
+  size_t head, tail;
+  int received;
+  bool ok;
+};
+
+static void PostAsyncEvent(AMediaCodec* codec, struct AsyncDecode* test, struct AsyncEvent event) {
+  const pthread_t thread = pthread_self();
+  pthread_mutex_lock(&test->mutex);
+  if (test->received++ == 0) test->callback_thread = thread;
+  if (codec != test->codec || pthread_equal(thread, test->submitting_thread) ||
+      !pthread_equal(thread, test->callback_thread) ||
+      test->tail >= sizeof(test->events) / sizeof(test->events[0])) {
+    test->ok = false;
+  } else {
+    test->events[test->tail++] = event;
+  }
+  pthread_cond_broadcast(&test->changed);
+  pthread_mutex_unlock(&test->mutex);
+}
+
+static void OnAsyncInput(AMediaCodec* codec, void* userdata, int32_t index) {
+  PostAsyncEvent(codec, userdata, (struct AsyncEvent){.type = ASYNC_INPUT, .index = index});
+}
+
+static void OnAsyncOutput(AMediaCodec* codec, void* userdata, int32_t index,
+                          AMediaCodecBufferInfo* info) {
+  PostAsyncEvent(codec, userdata, (struct AsyncEvent){.type = ASYNC_OUTPUT, .index = index, .info = *info});
+}
+
+static void OnAsyncFormat(AMediaCodec* codec, void* userdata, AMediaFormat* format) {
+  const bool dimensions = Dimensions(format);
+  AMediaFormat_delete(format);
+  PostAsyncEvent(codec, userdata, (struct AsyncEvent){.type = ASYNC_FORMAT, .index = dimensions ? 1 : 0});
+}
+
+static void OnAsyncError(AMediaCodec* codec, void* userdata, media_status_t error,
+                         int32_t action, const char* detail) {
+  (void)codec;
+  struct AsyncDecode* test = userdata;
+  fprintf(stderr, "NDK async codec error %d, action %" PRId32 ": %s\n", error, action, detail);
+  pthread_mutex_lock(&test->mutex);
+  test->ok = false;
+  pthread_cond_broadcast(&test->changed);
+  pthread_mutex_unlock(&test->mutex);
+}
+
+static bool NextAsyncEvent(struct AsyncDecode* test, struct AsyncEvent* event) {
+  struct timespec deadline;
+  if (clock_gettime(CLOCK_REALTIME, &deadline) != 0) return false;
+  deadline.tv_sec += 5;
+  pthread_mutex_lock(&test->mutex);
+  while (test->ok && test->head == test->tail) {
+    if (pthread_cond_timedwait(&test->changed, &test->mutex, &deadline) != 0) {
+      test->ok = false;
+      break;
+    }
+  }
+  const bool ok = test->ok;
+  if (ok) *event = test->events[test->head++];
+  pthread_mutex_unlock(&test->mutex);
+  return ok;
+}
+
+static bool QueueAsyncInput(AMediaCodec* codec, int32_t index, const uint8_t* data,
+                            size_t size, uint64_t time, uint32_t flags) {
+  size_t capacity = 0;
+  uint8_t* input = AMediaCodec_getInputBuffer(codec, (size_t)index, &capacity);
+  if (input == NULL || size > capacity) return false;
+  if (size != 0) memcpy(input, data, size);
+  return AMediaCodec_queueInputBuffer(codec, (size_t)index, 0, size, time, flags) == AMEDIA_OK;
+}
+
+static bool CheckAsyncOutput(AMediaCodec* codec, const struct AsyncEvent* event,
+                             bool format_seen, unsigned* decoded) {
+  const AMediaCodecBufferInfo* info = &event->info;
+  if (info->size > 0) {
+    const uint8_t* bytes = AMediaCodec_getOutputBuffer(codec, (size_t)event->index, NULL);
+    const uint64_t time = (uint64_t)info->presentationTimeUs;
+    const uint64_t ordinal = (time - kFirstTime) / kInterval;
+    if (!format_seen || bytes == NULL || info->offset < 0 || info->size < kWidth ||
+        time < kFirstTime || ordinal >= kFrames || time != kFirstTime + ordinal * kInterval ||
+        (*decoded & (1U << ordinal)) != 0) return false;
+    if (abs(bytes[info->offset + kWidth / 2] - kLuma[ordinal]) > 8) return false;
+    *decoded |= 1U << ordinal;
+  }
+  return AMediaCodec_releaseOutputBuffer(codec, (size_t)event->index, false) == AMEDIA_OK;
+}
+
+static bool DecodeWithAsyncCallbacks(AMediaFormat* format, const struct Packet packets[kFrames],
+                                     bool lookup) {
+  AMediaCodec* codec = AMediaCodec_createDecoderByType("video/avc");
+  if (codec == NULL) return false;
+  struct AsyncDecode test = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .changed = PTHREAD_COND_INITIALIZER,
+    .codec = codec,
+    .submitting_thread = pthread_self(),
+    .ok = true,
+  };
+  const AMediaCodecOnAsyncNotifyCallback callbacks = {
+    OnAsyncInput, OnAsyncOutput, OnAsyncFormat, OnAsyncError,
+  };
+  const char* operation = "register";
+  void* library = NULL;
+  bool ok = false;
+  unsigned decoded = 0;
+  if (lookup) {
+    library = dlopen("libmediandk.so", RTLD_NOW);
+    if (library == NULL) goto cleanup;
+    media_status_t (*set_async)(AMediaCodec*, AMediaCodecOnAsyncNotifyCallback, void*) =
+        dlsym(library, "AMediaCodec_setAsyncNotifyCallback");
+    if (set_async == NULL || set_async(codec, callbacks, &test) != AMEDIA_OK) goto cleanup;
+  } else if (AMediaCodec_setAsyncNotifyCallback(codec, callbacks, &test) != AMEDIA_OK) {
+    goto cleanup;
+  }
+
+  operation = "configure and observe initially owned input";
+  struct AsyncEvent event;
+  if (AMediaCodec_configure(codec, format, NULL, NULL, 0) != AMEDIA_OK ||
+      AMediaCodec_start(codec) != AMEDIA_OK ||
+      !NextAsyncEvent(&test, &event) || event.type != ASYNC_INPUT) goto cleanup;
+
+  operation = "reject synchronous dequeue in callback mode";
+  AMediaCodecBufferInfo info = {0};
+  if (AMediaCodec_dequeueInputBuffer(codec, 0) != AMEDIA_ERROR_UNKNOWN ||
+      AMediaCodec_dequeueOutputBuffer(codec, &info, 0) != AMEDIA_ERROR_UNKNOWN) goto cleanup;
+
+  operation = "flush without starting new input callbacks";
+  if (AMediaCodec_flush(codec) != AMEDIA_OK) goto cleanup;
+  pthread_mutex_lock(&test.mutex);
+  const int input_count = test.received;
+  test.head = test.tail = 0;
+  pthread_mutex_unlock(&test.mutex);
+  const struct timespec quiet = {.tv_nsec = 50000000};
+  nanosleep(&quiet, NULL);
+  pthread_mutex_lock(&test.mutex);
+  const bool no_callbacks = test.received == input_count;
+  pthread_mutex_unlock(&test.mutex);
+  if (!no_callbacks) goto cleanup;
+
+  // A flush before the first output-format notification can discard the
+  // codec-specific data accepted at configure. Resubmit it with its flag.
+  void* csd[2] = {NULL, NULL};
+  size_t csd_size[2] = {0, 0};
+  AMediaFormat_getBuffer(format, "csd-0", &csd[0], &csd_size[0]);
+  AMediaFormat_getBuffer(format, "csd-1", &csd[1], &csd_size[1]);
+  int next_csd = 0;
+  operation = "restart and read decoded frames through callback slots";
+  if (AMediaCodec_start(codec) != AMEDIA_OK) goto cleanup;
+  bool format_seen = false;
+  bool eos = false;
+  int next = 0;
+  while (!eos) {
+    if (!NextAsyncEvent(&test, &event)) goto cleanup;
+    switch (event.type) {
+      case ASYNC_INPUT:
+        while (next_csd < 2 && csd_size[next_csd] == 0) ++next_csd;
+        if (next_csd < 2) {
+          if (!QueueAsyncInput(codec, event.index, csd[next_csd], csd_size[next_csd], 0,
+                               AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG)) goto cleanup;
+          ++next_csd;
+        } else if (next < kFrames) {
+          const struct Packet* packet = &packets[next++];
+          if (!QueueAsyncInput(codec, event.index, packet->data, packet->size, packet->time, 0)) {
+            goto cleanup;
+          }
+        } else if (next == kFrames) {
+          if (!QueueAsyncInput(codec, event.index, NULL, 0, kFirstTime + kFrames * kInterval,
+                               AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM)) goto cleanup;
+          ++next;
+        }
+        break;
+      case ASYNC_OUTPUT:
+        if (!CheckAsyncOutput(codec, &event, format_seen, &decoded)) goto cleanup;
+        eos = (event.info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
+        break;
+      case ASYNC_FORMAT:
+        if (!event.index) goto cleanup;
+        format_seen = true;
+        break;
+    }
+  }
+  if (!format_seen || decoded != (1U << kFrames) - 1) goto cleanup;
+
+  operation = "stop then unregister callback";
+  if (AMediaCodec_stop(codec) != AMEDIA_OK ||
+      AMediaCodec_setAsyncNotifyCallback(codec, (AMediaCodecOnAsyncNotifyCallback){0}, NULL) != AMEDIA_OK) {
+    goto cleanup;
+  }
+  ok = true;
+
+cleanup:
+  AMediaCodec_delete(codec);
+  if (library != NULL) dlclose(library);
+  pthread_cond_destroy(&test.changed);
+  pthread_mutex_destroy(&test.mutex);
+  printf("NDK async AVC (%s): %s (%s), callbacks=%d frames=%#x\n",
+         lookup ? "dlsym" : "direct", ok ? "passed" : "failed", operation, test.received, decoded);
+  return ok;
+}
+#endif
+
+static int RunCodec(bool async_only) {
+  (void)async_only;
   int checks = 0, failures = 0;
 #if defined(__aarch64__)
   puts("NDK codec ABI: arm64-v8a");
@@ -524,6 +741,13 @@ static int RunCodec(void) {
   REQUIRED(surface_format != NULL && AMediaFormat_copy(surface_format, encoded) == AMEDIA_OK,
            "retain a separate decoder format for the real ImageReader pass");
 #endif
+#if !defined(_WIN32) && !defined(CODEC_BUFFER_COMPONENT)
+  if (async_only) {
+    CHECK(DecodeWithAsyncCallbacks(surface_format, packets, false), "decode through direct NDK callbacks");
+    CHECK(DecodeWithAsyncCallbacks(surface_format, packets, true), "decode through dynamically resolved NDK callbacks");
+    goto cleanup;
+  }
+#endif
   REQUIRED(AMediaCodec_configure(decoder, encoded, NULL, NULL, 0) == AMEDIA_OK, "configure AVC decoder");
   AMediaFormat_delete(encoded);
   encoded = NULL;
@@ -596,11 +820,21 @@ cleanup:
 }
 
 #ifdef CODEC_STANDALONE
-int main(void) { return RunCodec(); }
+#ifdef _WIN32
+int main(void) { return RunCodec(false); }
 #else
+int main(int argc, char** argv) { return RunCodec(argc > 1 && strcmp(argv[1], "async") == 0); }
+#endif
+#else
+JNIEXPORT jint JNICALL Java_gesher_NdkCodecTest_runAsync(JNIEnv* env, jclass type) {
+  (void)env;
+  (void)type;
+  return RunCodec(true);
+}
+
 JNIEXPORT jint JNICALL Java_gesher_NdkCodecTest_run(JNIEnv* env, jclass type) {
   (void)env;
   (void)type;
-  return RunCodec();
+  return RunCodec(false);
 }
 #endif
