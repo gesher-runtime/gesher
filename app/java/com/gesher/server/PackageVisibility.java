@@ -49,7 +49,7 @@ final class PackageVisibility {
     private final Predicate<String> mPlatformProtectedBroadcast;
 
     PackageVisibility(Map<String, ApkPackage> installed, boolean browser,
-            boolean gms, boolean vending, Predicate<String> protectedBroadcast) {
+            Predicate<String> protectedBroadcast) {
         mPlatformProtectedBroadcast = protectedBroadcast;
         mPackages.put("android", new Entry("android", Process.SYSTEM_UID, null, 36));
         for (ApkPackage apk : installed.values()) {
@@ -60,10 +60,6 @@ final class PackageVisibility {
         // Preserve the identity of the existing host definitions. These entries
         // do not supply an installed APK manifest or any additional visibility edge.
         if (browser) addHost(BrowserPackageSupport.createApplicationInfo(0));
-        if (gms) addHost(GmsPackageSupport.createSyntheticApplicationInfo(
-                GmsPackageSupport.PACKAGE_GMS, 0));
-        if (vending) addHost(GmsPackageSupport.createSyntheticApplicationInfo(
-                GmsPackageSupport.PACKAGE_VENDING, 0));
     }
 
     private void addHost(ApplicationInfo info) {

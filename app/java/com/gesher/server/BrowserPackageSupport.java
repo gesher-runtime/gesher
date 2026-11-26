@@ -21,9 +21,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The Windows default browser as a synthetic package, {@code com.gesher.browser}, as
- * {@link GmsPackageSupport} models Google Play services: one activity with the filter of a
- * browser (VIEW, BROWSABLE and DEFAULT, http and https, any host). Apps that look for a
+ * The Windows default browser as a synthetic package, {@code com.gesher.browser}: one
+ * activity with the filter of a browser (VIEW, BROWSABLE and DEFAULT, http and https, any host). Apps that look for a
  * browser before they open a page (AppAuth's BrowserSelector: queryIntentActivities with
  * GET_RESOLVED_FILTER, then getPackageInfo with GET_SIGNATURES) find it; nothing else
  * of an app runs in it. ActivityTaskManagerService starts no activity for it: a VIEW of an

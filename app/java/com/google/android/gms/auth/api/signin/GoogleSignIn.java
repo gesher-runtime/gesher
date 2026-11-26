@@ -8,7 +8,9 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 
+import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.Scope;
+import com.google.android.gms.common.api.Status;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 
@@ -17,10 +19,11 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Entry point for Google Sign-In in Gesher.
+ * Google Sign-In for the gmsapp test fixture. Nobody is signed in until a sign-in result
+ * says so; this fixture has no sign-in service, so none does (issue #335).
  */
 public final class GoogleSignIn {
-    private static GoogleSignInAccount sLastAccount = GoogleSignInAccount.createDefault();
+    private static GoogleSignInAccount sLastAccount;
 
     private GoogleSignIn() {
     }
@@ -37,8 +40,10 @@ public final class GoogleSignIn {
         return sLastAccount;
     }
 
+    /** No sign-in activity of this fixture returns an account: the result is a failure. */
     public static Task<GoogleSignInAccount> getSignedInAccountFromIntent(Intent data) {
-        return Tasks.forResult(sLastAccount != null ? sLastAccount : GoogleSignInAccount.createDefault());
+        return Tasks.forException(new ApiException(new Status(GoogleSignInStatusCodes.SIGN_IN_FAILED,
+                "no sign-in result")));
     }
 
     public static boolean hasPermissions(GoogleSignInAccount account, Scope... scopes) {
