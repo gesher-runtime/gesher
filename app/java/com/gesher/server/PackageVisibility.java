@@ -15,7 +15,6 @@ import com.android.internal.pm.pkg.component.ParsedMainComponent;
 import com.android.internal.pm.pkg.component.ParsedPermission;
 import com.android.internal.pm.pkg.component.ParsedProvider;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +34,7 @@ final class PackageVisibility {
         final int uid;
         final ApkPackage apk;
         final int targetSdk;
+        Entry nextAppId; // linked only during construction, immutable after publication
 
         Entry(String name, int uid, ApkPackage apk, int targetSdk) {
             this.name = name;
@@ -44,13 +44,79 @@ final class PackageVisibility {
         }
     }
 
-    private final Map<String, Entry> mPackages = new LinkedHashMap<>();
+    private final Map<String, Entry> mPackages;
+    /** One primitive-key group index; constructed privately, then read-only. */
+    private static final class AppIdIndex {
+        private int[] keys;
+        private Entry[] heads;
+        private int size;
+
+        AppIdIndex(int expectedEntries) {
+            // Start below the package count: isolated inventories avoid repeated
+            // small rehashes, while shared-UID inventories can compact at finish.
+            int capacity = Math.max(8, Integer.highestOneBit(expectedEntries));
+            keys = new int[capacity]; heads = new Entry[capacity];
+        }
+
+        private int slot(int key) {
+            int hash = key ^ (key >>> 16);
+            int slot = hash & (heads.length - 1);
+            while (heads[slot] != null && keys[slot] != key) slot = (slot + 1) & (heads.length - 1);
+            return slot;
+        }
+
+        Entry get(int key) { return heads[slot(key)]; }
+
+        void prepend(Entry entry) {
+            int key = UserHandle.getAppId(entry.uid), slot = slot(key);
+            if (heads[slot] == null) {
+                if (size >= (long)heads.length * 2 / 3) {
+                    grow(); slot = slot(key);
+                }
+                keys[slot] = key; size++;
+            }
+            entry.nextAppId = heads[slot]; heads[slot] = entry;
+        }
+
+        private void grow() {
+            if (heads.length >= (1 << 29)) throw new OutOfMemoryError("Too many package app-ID groups");
+            rehash(heads.length * 2);
+        }
+
+        private void rehash(int capacity) {
+            int[] oldKeys = keys; Entry[] oldHeads = heads;
+            keys = new int[capacity]; heads = new Entry[capacity];
+            for (int i = 0; i < oldHeads.length; i++) if (oldHeads[i] != null) {
+                int slot = slot(oldKeys[i]); keys[slot] = oldKeys[i]; heads[slot] = oldHeads[i];
+            }
+        }
+
+        void finish() {
+            int capacity = 8;
+            while (size > (long)capacity * 2 / 3) {
+                if (capacity >= (1 << 29)) throw new OutOfMemoryError("Too many package app-ID groups");
+                capacity *= 2;
+            }
+            if (capacity < heads.length) rehash(capacity);
+            for (int i = 0; i < heads.length; i++) {
+                Entry reversed = null;
+                for (Entry entry = heads[i]; entry != null;) {
+                    Entry next = entry.nextAppId;
+                    entry.nextAppId = reversed; reversed = entry; entry = next;
+                }
+                heads[i] = reversed;
+            }
+        }
+    }
+
+    private final AppIdIndex mPackagesByAppId;
     private final Set<String> mProtectedBroadcasts = new HashSet<>();
     private final Predicate<String> mPlatformProtectedBroadcast;
 
     PackageVisibility(Map<String, ApkPackage> installed, boolean browser,
             Predicate<String> protectedBroadcast) {
         mPlatformProtectedBroadcast = protectedBroadcast;
+        mPackages = new LinkedHashMap<>(installed.size() + 4);
         mPackages.put("android", new Entry("android", Process.SYSTEM_UID, null, 36));
         for (ApkPackage apk : installed.values()) {
             mPackages.put(apk.packageName, new Entry(apk.packageName, apk.uid(), apk,
@@ -60,6 +126,13 @@ final class PackageVisibility {
         // Preserve the identity of the existing host definitions. These entries
         // do not supply an installed APK manifest or any additional visibility edge.
         if (browser) addHost(BrowserPackageSupport.createApplicationInfo(0));
+        mPackagesByAppId = new AppIdIndex(mPackages.size());
+        for (Entry entry : mPackages.values()) {
+            mPackagesByAppId.prepend(entry);
+        }
+        // Reverse each group once to retain installed-package order, without a
+        // separate list object/backing array for every isolated application UID.
+        mPackagesByAppId.finish();
     }
 
     private void addHost(ApplicationInfo info) {
@@ -74,6 +147,30 @@ final class PackageVisibility {
     ApkPackage apk(String name) {
         Entry entry = mPackages.get(name);
         return entry == null ? null : entry.apk;
+    }
+
+    /** Exact admitted UID identity; host definitions and other users confer no ownership. */
+    ApkPackage firstPackageForUid(int uid) {
+        for (Entry entry = mPackagesByAppId.get(UserHandle.getAppId(uid)); entry != null;
+                entry = entry.nextAppId) {
+            if (entry.uid == uid && entry.apk != null) return entry.apk;
+        }
+        return null;
+    }
+
+    String[] installedPackageNamesForUid(int uid) {
+        Entry first = mPackagesByAppId.get(UserHandle.getAppId(uid));
+        int count = 0;
+        for (Entry entry = first; entry != null; entry = entry.nextAppId) {
+            if (entry.uid == uid && entry.apk != null) count++;
+        }
+        if (count == 0) return null;
+        String[] names = new String[count];
+        int index = 0;
+        for (Entry entry = first; entry != null; entry = entry.nextAppId) {
+            if (entry.uid == uid && entry.apk != null) names[index++] = entry.name;
+        }
+        return names;
     }
 
     /** Legacy Binder uses one compatibility UID for unrelated installed APKs. */
@@ -95,24 +192,24 @@ final class PackageVisibility {
                 || targetAppId < Process.FIRST_APPLICATION_UID
                 || callingAppId == targetAppId) return true;
 
-        List<Entry> sources = new ArrayList<>();
-        for (Entry entry : mPackages.values()) {
-            if (UserHandle.getAppId(entry.uid) != callingAppId) continue;
-            sources.add(entry);
+        Entry sources = mPackagesByAppId.get(callingAppId);
+        if (sources == null) return false;
+        for (Entry entry = sources; entry != null; entry = entry.nextAppId) {
             if (queriesAll(entry)) return true;
         }
-        if (sources.isEmpty()) return false;
         if (isStaticSharedLibrary(target)) return true;
         // Force-queryable is shared by all packages with the target app ID, as in
         // AppsFilter's app-ID set. Only real system addons can opt in via metadata.
-        for (Entry entry : mPackages.values()) {
-            if (UserHandle.getAppId(entry.uid) == targetAppId && forceQueryable(entry)) return true;
+        Entry targets = mPackagesByAppId.get(targetAppId);
+        for (Entry entry = targets; entry != null; entry = entry.nextAppId) {
+            if (forceQueryable(entry)) return true;
         }
         // Manifest edges are app-ID pairs too: declaring or matching one installed
         // sibling exposes every package that actually shares that UID.
-        for (Entry sibling : mPackages.values()) {
-            if (UserHandle.getAppId(sibling.uid) != targetAppId) continue;
-            for (Entry source : sources) if (declaresVisibility(source, sibling)) return true;
+        for (Entry sibling = targets; sibling != null; sibling = sibling.nextAppId) {
+            for (Entry source = sources; source != null; source = source.nextAppId) {
+                if (declaresVisibility(source, sibling)) return true;
+            }
         }
         return false;
     }

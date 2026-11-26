@@ -340,6 +340,18 @@ reported only together with that enforcement. Its
 binder interface is `com.gesher.net.IConnectivity` (written as AIDL would
 generate it).
 
+Observation belongs to active ConnectivityManager subscriptions, registered
+`CONNECTIVITY_ACTION` receivers, and scheduled/running jobs with a network
+constraint. Removing the final owner invalidates the shared snapshot and retires
+the Java watcher after its outstanding native wait drains, without another
+snapshot. A new owner refreshes current state and reuses a still-draining watcher;
+query-only calls read current state without owning a watcher. Resume refreshes
+active observation even if Windows reports no interface change. The 15-second
+Network List Manager fallback remains while observation is required. The existing
+native event and three Windows notification registrations still have process
+lifetime; their native teardown is outside this Java ownership change. See
+[the JAVA-03 connectivity evidence](research/perf178-java03-connectivity.md).
+
 `android.net.ConnectivityManager` (gesher-app.jar; framework.jar compiles
 against the Connectivity module's API and lacks it) is its client, with the
 module's public API: `getActiveNetwork`, `getAllNetworks`,
@@ -431,8 +443,9 @@ processes of packages without it; gesher-app applies it in its own process
   not given it: without the app's own `ProxyController` override (androidx.webkit, ADR
   0058) the process's WebView2 environment gets no proxy arguments and uses Windows'
   settings.
-- **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
-  sticky query, as BatteryService's battery broadcast) and sends it when the default
+- **CONNECTIVITY_ACTION**: the connectivity service provides its current sticky value
+  on query, without subscribing a null receiver, and sends it to active registered
+  receivers when the default
   network (its netId or kind) changes: EXTRA_NETWORK_INFO, EXTRA_NETWORK_TYPE,
   EXTRA_NO_CONNECTIVITY.
 - **PendingIntent requests and listens** (`requestNetwork`, `registerNetworkCallback` with

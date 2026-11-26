@@ -1608,6 +1608,32 @@ public final class WifiServiceHost {
             await(() -> !h.radio.stored.contains(leftover), "A new system server deletes its device's leftovers at once");
         }
     }
+    /** Location-off scan blocks notify once per permission-holding app without blocking connection info. */
+    private static void locationBlockedNotification() throws Exception {
+        try (Harness h = new Harness(36, false)) {
+            List<String> blocked = new ArrayList<>();
+            WifiService service = new WifiService(h.am, h.atm, h.pm, () -> h.location,
+                    h.radio, h.ui, blocked::add);
+            h.location = false;
+            h.grant(h.owner, ACCESS, CHANGE);
+            h.owner.call(() -> {
+                check(!service.startScan(h.owner.name(), "wifi"), "Scan blocked without location grant");
+                check(service.getScanResults(h.owner.name(), "wifi").isEmpty(), "Results empty without location grant");
+            });
+            check(blocked.isEmpty(), "App without location permission does not trigger Windows location prompt");
+
+            h.grant(h.owner, FINE);
+            h.owner.call(() -> service.getConnectionInfo(h.owner.name(), "wifi"));
+            check(blocked.isEmpty(), "getConnectionInfo does not trigger Windows location prompt");
+
+            h.owner.call(() -> {
+                check(!service.startScan(h.owner.name(), "wifi"), "Scan blocked when location toggle is off");
+                check(service.getScanResults(h.owner.name(), "wifi").isEmpty(), "Results blocked when location toggle is off");
+            });
+            check(blocked.size() == 2 && h.owner.name().equals(blocked.get(0)),
+                    "Scan and getScanResults notify location-blocked callback when location grant is held");
+        }
+    }
     public static void main(String[] args) throws Exception {
         System.load(args[0]); setOwnUid(Process.SYSTEM_UID);
         android.app.PropertyInvalidatedCache.setTestMode(true);
@@ -1619,6 +1645,7 @@ public final class WifiServiceHost {
         absentInterfaceProfiles(); disallowThenRemove(); disallowAfterAdapterChange();
         adapterNewIndex(); leftoverProfiles(); activeRequestKept(); deadInterfaceNoRetry(); disallowHungRead();
         disallowThenRemoveQueued(); pendingNoPostConnection(); otherDeviceUntouched(); startupPass();
+        locationBlockedNotification();
         System.out.println("WifiServiceHost passed: " + checks + " checks; real permission/AppOps/broadcast Java, radio=fixture");
     }
 }
