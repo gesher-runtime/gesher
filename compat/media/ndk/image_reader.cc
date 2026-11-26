@@ -36,7 +36,7 @@ using gesher::media::QueueSurface;
 using gesher::media::SurfaceFrame;
 using gesher::media::VideoFrame;
 
-constexpr uint64_t kUsage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+constexpr uint64_t kDefaultUsage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
 constexpr int32_t kMaxImages = 64;
 constexpr size_t kPendingFrames = 3;
 constexpr int32_t kPixelStride = 4;
@@ -87,9 +87,9 @@ struct ReaderState {
 // buffer dequeue because those slots require graphics handles and fence reuse.
 class ReaderWindow final : public QueueSurface {
  public:
-  ReaderWindow(int32_t width, int32_t height, int32_t format,
+  ReaderWindow(int32_t width, int32_t height, int32_t format, uint64_t usage,
                const std::shared_ptr<ReaderState>& state)
-      : QueueSurface(width, height), width(width), height(height), format(format), state(state) {}
+      : QueueSurface(width, height), width(width), height(height), format(format), usage(usage), state(state) {}
 
   int lock(ANativeWindow_Buffer* buffer, ARect* dirty) override {
     return format == AIMAGE_FORMAT_RGBA_8888 ? QueueSurface::lock(buffer, dirty) : -ENOSYS;
@@ -108,6 +108,7 @@ class ReaderWindow final : public QueueSurface {
   const int32_t width;
   const int32_t height;
   const int32_t format;
+  const uint64_t usage;
   const std::weak_ptr<ReaderState> state;
 
  protected:
@@ -146,7 +147,7 @@ class ReaderWindow final : public QueueSurface {
         break;
       }
       case NATIVE_WINDOW_GET_CONSUMER_USAGE64:
-        *va_arg(probe, uint64_t*) = kUsage;
+        *va_arg(probe, uint64_t*) = usage;
         va_end(probe);
         return 0;
     }
@@ -180,7 +181,7 @@ int Enqueue(ReaderState& state, std::unique_ptr<ImageFrame> frame) {
   return 0;
 }
 
-int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame) {
+int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame, uint64_t usage) {
   auto state = weak.lock();
   if (state == nullptr) return -ENODEV;
 
@@ -188,7 +189,7 @@ int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame) {
   std::unique_ptr<ImageFrame> image;
   if (valid_size) {
     auto* storage = static_cast<AHardwareBuffer*>(
-        ahb::AllocateRgbaBuffer(frame.width, frame.height, false));
+        ahb::AllocateRgbaBuffer(frame.width, frame.height, false, usage));
     if (storage != nullptr) {
       image = std::make_unique<ImageFrame>();
       image->storage.reset(storage);
@@ -222,9 +223,9 @@ ReaderWindow* YuvWindow(ANativeWindow* window) {
 
 int32_t ChromaSize(int32_t extent) { return extent / 2 + extent % 2; }
 
-std::unique_ptr<ImageFrame> NewYuvFrame(int width, int height, int64_t timestamp_ns) {
+std::unique_ptr<ImageFrame> NewYuvFrame(int width, int height, int64_t timestamp_ns, uint64_t usage) {
   auto image = std::make_unique<ImageFrame>();
-  image->storage.reset(ahb::AllocateYuv420Buffer(width, height, &image->planes));
+  image->storage.reset(ahb::AllocateYuv420Buffer(width, height, usage, &image->planes));
   if (!image->storage) return nullptr;
   image->width = width;
   image->height = height;
@@ -259,7 +260,7 @@ std::optional<int> ReaderWindow::PostVideoFrame(const VideoFrame& frame, int64_t
 
   const int width = frame.visible_width(), height = frame.visible_height();
   if (!ValidSize(width, height)) return -EINVAL;
-  auto image = NewYuvFrame(width, height, timestamp_ns);
+  auto image = NewYuvFrame(width, height, timestamp_ns, usage);
   if (image == nullptr) return -ENOMEM;
   const size_t y_offset = static_cast<size_t>(frame.crop_top) * frame.stride_y + frame.crop_left;
   const size_t c_offset =
@@ -293,7 +294,7 @@ std::optional<int> QueueNdkReaderCameraFrame(ANativeWindow* window, const uint8_
   if (size < y_bytes + y_bytes / 2) return -EINVAL;
 
   const int target_width = reader->width, target_height = reader->height;
-  auto image = NewYuvFrame(target_width, target_height, timestamp_ns);
+  auto image = NewYuvFrame(target_width, target_height, timestamp_ns, reader->usage);
   if (image == nullptr) return -ENOMEM;
   const auto* uv = nv12 + y_bytes;
   for (int plane = 0; plane < 3; ++plane) {
@@ -343,14 +344,14 @@ media_status_t BIONIC_SYSV NewWithUsage(int32_t width, int32_t height, int32_t f
                                       uint64_t usage, int32_t max_images, AImageReader** out) {
   if (out == nullptr || !ValidSize(width, height) || max_images < 1 || max_images > kMaxImages ||
       (format != AIMAGE_FORMAT_RGBA_8888 && format != AIMAGE_FORMAT_YUV_420_888) ||
-      usage != kUsage) {
+      (usage != kDefaultUsage && usage != AHARDWAREBUFFER_USAGE_CPU_READ_RARELY)) {
     return AMEDIA_ERROR_INVALID_PARAMETER;
   }
   auto state = std::make_shared<ReaderState>();
-  auto window = android::sp<ReaderWindow>::make(width, height, format, state);
+  auto window = android::sp<ReaderWindow>::make(width, height, format, usage, state);
   window->SetForwardingListener(
-      [weak = std::weak_ptr<ReaderState>(state), format](const SurfaceFrame& frame) {
-        return format == AIMAGE_FORMAT_RGBA_8888 ? Publish(weak, frame) : -EINVAL;
+      [weak = std::weak_ptr<ReaderState>(state), format, usage](const SurfaceFrame& frame) {
+        return format == AIMAGE_FORMAT_RGBA_8888 ? Publish(weak, frame, usage) : -EINVAL;
       });
   *out = new (std::nothrow) AImageReader{width, height, max_images, format, std::move(state),
                                         std::move(window), {}, false};
@@ -359,7 +360,7 @@ media_status_t BIONIC_SYSV NewWithUsage(int32_t width, int32_t height, int32_t f
 
 media_status_t BIONIC_SYSV New(int32_t width, int32_t height, int32_t format, int32_t max_images,
                              AImageReader** out) {
-  return NewWithUsage(width, height, format, kUsage, max_images, out);
+  return NewWithUsage(width, height, format, kDefaultUsage, max_images, out);
 }
 
 void BIONIC_SYSV DeleteReader(AImageReader* reader) {

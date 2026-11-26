@@ -31,8 +31,13 @@ image used by `tests/windows/tracks/30-graphics.ps1`. Substitute
 `libimage-reader-x86_64.so` or `libimage-reader-aarch64.so`. Each run should exit
 zero and print `NDK image reader: ... checks passed`.
 
-The `AImageReader` implementation in this slice provides CPU-read-often
-RGBA_8888 via the native window's CPU lock/post path. Producer pixels are
+The `AImageReader` implementation provides CPU-readable RGBA_8888 via the
+native window's CPU lock/post path. `AImageReader_newWithUsage` accepts both
+CPU_READ_OFTEN and CPU_READ_RARELY for RGBA and YUV. Gesher preserves the chosen
+usage in the producer's query and in the allocated hardware buffer. Android's
+allocator can combine the requested usage with the producer's requirements. The
+portable fixtures check CPU-readable buffers and real pixels, and the Windows
+components also check their allocated buffers retain CPU_READ_RARELY. Producer pixels are
 copied synchronously into the existing CPU-accessible native hardware buffer
 before the reader publishes them. An acquired image keeps its own buffer
 reference. Async acquisition returns the completed CPU pixels with no fence.
@@ -67,7 +72,7 @@ crop, plane layout and color samples seen through AImage and
 AHardwareBuffer_lockPlanes. It holds the first image while the second is
 delivered and checks its pixels again afterward.
 
-The CPU-read-often YUV_420_888 reader accepts I420 from the video decoder and
+The CPU-readable YUV_420_888 reader accepts I420 from the video decoder and
 NV12 from the in-process Camera2 service. It owns the Y, Cb and Cr planes of
 each published image. The camera path requires a camera and an Android camera
 grant. This fixture exercises the decoder path. Native GPU dequeue and

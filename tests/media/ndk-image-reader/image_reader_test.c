@@ -138,7 +138,7 @@ static void expect_listener(void) {
     AImageReader_ImageListener listener = {&callback, on_image};
 
     CHECK(AImageReader_newWithUsage(kWidth, kHeight, AIMAGE_FORMAT_RGBA_8888,
-                                   AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, 2, &reader) == AMEDIA_OK);
+                                   AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2, &reader) == AMEDIA_OK);
     CHECK(AImageReader_getWindow(reader, &window) == AMEDIA_OK && window != NULL);
     CHECK(AImageReader_setImageListener(reader, &listener) == AMEDIA_OK);
     post(window, color);
@@ -153,6 +153,18 @@ static void expect_listener(void) {
     CHECK(callback.status == AMEDIA_OK && !callback.same_thread);
     CHECK(pthread_mutex_unlock(&callback.mutex) == 0);
     expect_image(callback.image, color);
+    AHardwareBuffer* storage = NULL;
+    CHECK(AImage_getHardwareBuffer(callback.image, &storage) == AMEDIA_OK && storage != NULL);
+    AHardwareBuffer_Desc desc = {0};
+    AHardwareBuffer_describe(storage, &desc);
+    const uint64_t read_usage = desc.usage & AHARDWAREBUFFER_USAGE_CPU_READ_MASK;
+#ifdef IMAGE_READER_COMPONENT
+    CHECK(read_usage == AHARDWAREBUFFER_USAGE_CPU_READ_RARELY);
+#else
+    // The producer can add usage, which may promote Android's gralloc allocation.
+    CHECK(read_usage == AHARDWAREBUFFER_USAGE_CPU_READ_RARELY ||
+          read_usage == AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+#endif
     AImage_delete(callback.image);
     CHECK(AImageReader_setImageListener(reader, NULL) == AMEDIA_OK);
     AImageReader_delete(reader);

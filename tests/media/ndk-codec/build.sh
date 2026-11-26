@@ -11,7 +11,7 @@ done
 for abi in x86_64 aarch64; do
   compiler="$llvm/bin/$abi-linux-android33-clang"
   if [ -f "$compiler.cmd" ]; then compiler=$compiler.cmd; fi
-  common=(-std=c17 -O2 -Wall -Wextra -Werror "$here/codec_test.c" -lmediandk -ldl)
+  common=(-std=c17 -O2 -Wall -Wextra -Werror "$here/codec_test.c" -lmediandk -landroid -ldl)
   "$compiler" -DCODEC_STANDALONE -fPIE -pie "${common[@]}" -o "$out/ndk-codec-$abi"
   "$compiler" -DCODEC_PARAMETER_CONTROL_COMPONENT -fPIC -shared "${common[@]}" -o "$out/libndk-codec-$abi.so"
   compiler="$llvm/bin/$abi-linux-android29-clang"

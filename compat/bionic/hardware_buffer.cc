@@ -1101,14 +1101,14 @@ void Register() {
 
 constexpr uint64_t kReleaseFenceTimeoutNs = 2000ull * 1000 * 1000;
 
-AHardwareBuffer* AllocateYuv420Buffer(int32_t width, int32_t height,
+AHardwareBuffer* AllocateYuv420Buffer(int32_t width, int32_t height, uint64_t usage,
                                       AHardwareBuffer_Planes* planes) {
   AHardwareBuffer_Desc desc{};
   desc.width = width;
   desc.height = height;
   desc.layers = 1;
   desc.format = AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
-  desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+  desc.usage = usage;
   AHardwareBuffer* buffer = nullptr;
   if (Allocate(&desc, &buffer) != 0) return nullptr;
   GetPlanar420Planes(FromApp(buffer), planes);
@@ -1120,12 +1120,16 @@ void ReleaseImageBuffer(AHardwareBuffer* buffer) {
 }
 
 void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
+  return AllocateRgbaBuffer(width, height, gpu_form, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+}
+
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form, uint64_t cpu_usage) {
   AHardwareBuffer_Desc desc{};
   desc.width = width;
   desc.height = height;
   desc.layers = 1;
   desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
-  desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+  desc.usage = cpu_usage;
   // A reader nothing samples on the GPU (a camera QR scanner's) is CPU-only, and
   // reports that usage: Served() would start ANGLE and the GPU thread for it.
   if (!gpu_form) {
@@ -1139,7 +1143,7 @@ void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
     // eglCreateImageKHR refuses cleanly (no GPU usage).
     static std::atomic<bool> said{false};
     LogOnce(&said, "no GPU form for ImageReader buffers: they are CPU-only");
-    desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+    desc.usage = cpu_usage;
   }
   AHardwareBuffer* app = nullptr;
   if (Allocate(&desc, &app) != 0) return nullptr;

@@ -3,6 +3,7 @@
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
 #ifndef CODEC_BUFFER_COMPONENT
+#include <android/hardware_buffer.h>
 #include <media/NdkImageReader.h>
 #ifdef _WIN32
 #include <gesher/awake_clock.h>
@@ -165,6 +166,19 @@ static bool CheckSurfaceImage(AImage* image, int ordinal, int64_t expected_time)
            " expected=%" PRId64 "\n", ordinal, width, height, stride, length, timestamp, expected_time);
     return false;
   }
+  AHardwareBuffer* storage = NULL;
+  if (AImage_getHardwareBuffer(image, &storage) != AMEDIA_OK || storage == NULL) return false;
+  AHardwareBuffer_Desc desc = {0};
+  AHardwareBuffer_describe(storage, &desc);
+  const uint64_t read_usage = desc.usage & AHARDWAREBUFFER_USAGE_CPU_READ_MASK;
+  bool usable_read_usage = read_usage == AHARDWAREBUFFER_USAGE_CPU_READ_RARELY;
+#ifndef CODEC_PARAMETER_CONTROL_COMPONENT
+  usable_read_usage = usable_read_usage || read_usage == AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+#endif
+  if (!usable_read_usage) {
+    printf("NDK codec surface image %d has unexpected buffer usage=0x%" PRIx64 "\n", ordinal, desc.usage);
+    return false;
+  }
   const int luma = plane[stride + kWidth / 2];
   printf("NDK codec surface frame=%d luma=%d timestamp=%" PRId64 "\n", ordinal, luma, timestamp);
   return abs(luma - kLuma[ordinal]) <= 8;
@@ -248,7 +262,8 @@ static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFr
   if (codec == NULL ||
       AMediaCodec_setOnFrameRenderedCallback(codec, (AMediaCodecOnFrameRendered)OnFrameRendered,
                                              &events) != AMEDIA_OK ||
-      AImageReader_new(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888, 2, &reader) != AMEDIA_OK ||
+      AImageReader_newWithUsage(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888,
+                                AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2, &reader) != AMEDIA_OK ||
       AImageReader_getWindow(reader, &window) != AMEDIA_OK ||
       AMediaCodec_configure(codec, format, window, NULL, 0) != AMEDIA_OK ||
       AMediaCodec_start(codec) != AMEDIA_OK) {
