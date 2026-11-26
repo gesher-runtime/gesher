@@ -1,7 +1,10 @@
 package com.gesher.app;
 
 import android.security.keystore.KeyGenParameterSpec;
-import android.security.keystore.KeyProperties;
+import android.security.keystore.KeyProtection;
+
+import com.gesher.app.AndroidKeyStoreSecretKeys.Authorization;
+import com.gesher.app.AndroidKeyStoreSecretKeys.StoredKey;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -15,6 +18,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.math.BigInteger;
 import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
 import java.security.InvalidParameterException;
 import java.security.Key;
 import java.security.KeyFactory;
@@ -64,17 +68,16 @@ import javax.security.auth.x500.X500Principal;
  *
  * <p>This provider keeps the same API over software keys: KeyStore "AndroidKeyStore",
  * KeyGenerator AES and HmacSHA* and KeyPairGenerator RSA and EC, initialized with a
- * KeyGenParameterSpec (or the older KeyPairGeneratorSpec). Keys are plain
- * javax.crypto/java.security keys (SecretKeySpec, Conscrypt's RSA and EC keys), so the
- * Cipher, Signature and Mac of the other providers use them. Key pairs get a self-signed
- * certificate from the spec's subject, serial and validity, as KeyMint gives them.
+ * KeyGenParameterSpec (or the older KeyPairGeneratorSpec). New symmetric keys are
+ * JCA handles. The provider checks their stored authorizations, then delegates the
+ * requested AES or HMAC operation to the platform crypto provider. Older symmetric
+ * keys have no saved authorizations. RSA and EC keys still use the platform JCA
+ * provider directly and get a self-signed certificate.
  *
- * <p>The keys of an app are in its data directory ({@value #FILE}), unencrypted: the
- * Windows user's profile protects them, nothing binds them to the hardware or to the
- * user's authentication. Secret key generation validates the algorithm parameters.
- * The keys are still used through other providers, without operation-time
- * authorization. Before the app's Application exists, keys are kept in memory
- * and written to the file once it does.
+ * <p>The keys of an app are in its data directory ({@value #FILE}) without encryption
+ * or a hardware or user-authentication binding. The handles keep raw symmetric keys
+ * out of the public JCA encoding API. They are not an OS isolation boundary. Before
+ * the app's Application exists, keys are kept in memory and written once it does.
  */
 public final class AndroidKeyStore extends Provider {
     static final String NAME = "AndroidKeyStore";
@@ -91,6 +94,7 @@ public final class AndroidKeyStore extends Provider {
         put("KeyGenerator.HmacSHA512", HmacSha512.class.getName());
         put("KeyPairGenerator.RSA", Rsa.class.getName());
         put("KeyPairGenerator.EC", Ec.class.getName());
+        AndroidKeyStoreSecretKeys.register(this);
     }
 
     /**
@@ -117,20 +121,32 @@ public final class AndroidKeyStore extends Provider {
     private static final int SECRET = 1;
     private static final int PRIVATE = 2;
     private static final int TRUSTED = 3;
-    private static final int MAGIC = 0x474b5331;  // "GKS1"
+    private static final int LEGACY_MAGIC = 0x474b5331;  // "GKS1"
+    private static final int MAGIC = 0x474b5332;  // "GKS2", optional symmetric authorization
 
     /** One alias: a secret key, a private key and its chain, or a trusted certificate. */
-    private static final class Entry {
+    static final class Entry {
         final int kind;
         final Key key;               // SECRET, PRIVATE
         final Certificate[] chain;   // PRIVATE: the key's chain; TRUSTED: the certificate
         final Date created;
+        final Authorization authorization;
 
         Entry(int kind, Key key, Certificate[] chain, Date created) {
+            this(kind, key, chain, created, null);
+        }
+
+        Entry(int kind, Key key, Certificate[] chain, Date created, Authorization authorization) {
             this.kind = kind;
             this.key = key;
             this.chain = chain;
             this.created = created;
+            this.authorization = authorization;
+        }
+
+        Key appKey(String alias) {
+            return authorization == null ? key
+                    : new StoredKey(alias, authorization.id, key.getAlgorithm());
         }
     }
 
@@ -207,7 +223,10 @@ public final class AndroidKeyStore extends Provider {
             if (!f.exists()) return out;
             try (DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(
                     new FileInputStream(f)))) {
-                if (in.readInt() != MAGIC) throw new IOException("not a Gesher key store");
+                int magic = in.readInt();
+                if (magic != MAGIC && magic != LEGACY_MAGIC) {
+                    throw new IOException("not a Gesher key store");
+                }
                 int n = in.readInt();
                 CertificateFactory x509 = null;
                 for (int i = 0; i < n; i++) {
@@ -228,7 +247,12 @@ public final class AndroidKeyStore extends Provider {
                         key = KeyFactory.getInstance(algorithm)
                                 .generatePrivate(new PKCS8EncodedKeySpec(encoded));
                     }
-                    out.put(alias, new Entry(kind, key, chain, created));
+                    Authorization authorization = null;
+                    if (magic == MAGIC && in.readBoolean()) {
+                        if (kind != SECRET) throw new IOException("Invalid symmetric authorization");
+                        authorization = Authorization.read(in);
+                    }
+                    out.put(alias, new Entry(kind, key, chain, created, authorization));
                 }
             } catch (IOException | java.security.GeneralSecurityException e) {
                 log("cannot read " + f + ", its keys are not used: " + e);
@@ -254,6 +278,8 @@ public final class AndroidKeyStore extends Provider {
                         writeBytes(out, parts[0]);
                         out.writeInt(parts.length - 1);
                         for (int i = 1; i < parts.length; i++) writeBytes(out, parts[i]);
+                        out.writeBoolean(entry.authorization != null);
+                        if (entry.authorization != null) entry.authorization.write(out);
                     }
                 }
                 try {
@@ -302,6 +328,14 @@ public final class AndroidKeyStore extends Provider {
         }
     }
 
+    static Entry resolveSecret(StoredKey key) throws InvalidKeyException {
+        Entry entry = Store.get(key.alias);
+        if (entry == null || entry.authorization == null || !entry.authorization.id.equals(key.id)) {
+            throw new InvalidKeyException("AndroidKeyStore key no longer exists");
+        }
+        return entry;
+    }
+
     static void log(String message) {
         System.err.println("gesher-keystore: " + message);
     }
@@ -313,7 +347,7 @@ public final class AndroidKeyStore extends Provider {
         @Override
         public Key engineGetKey(String alias, char[] password) {
             Entry e = alias != null ? Store.get(alias) : null;
-            return e != null ? e.key : null;
+            return e != null ? e.appKey(alias) : null;
         }
 
         @Override
@@ -339,7 +373,7 @@ public final class AndroidKeyStore extends Provider {
                 Certificate[] chain) throws KeyStoreException {
             if (alias == null || key == null) throw new KeyStoreException("alias and key needed");
             if (key instanceof SecretKey) {
-                Store.put(alias, new Entry(SECRET, key, new Certificate[0], new Date()));
+                importSecret(alias, (SecretKey) key, null);
             } else if (key instanceof PrivateKey) {
                 if (chain == null || chain.length == 0) {
                     throw new KeyStoreException("a private key needs its certificate chain");
@@ -434,7 +468,7 @@ public final class AndroidKeyStore extends Provider {
             if (e == null) return null;
             switch (e.kind) {
                 case SECRET:
-                    return new KeyStore.SecretKeyEntry((SecretKey) e.key);
+                    return new KeyStore.SecretKeyEntry((SecretKey) e.appKey(alias));
                 case PRIVATE:
                     return new KeyStore.PrivateKeyEntry((PrivateKey) e.key, e.chain.clone());
                 default:
@@ -442,13 +476,12 @@ public final class AndroidKeyStore extends Provider {
             }
         }
 
-        /** Imports a key or certificate; the protection (KeyProtection) is not enforced. */
+        /** Imports a key or certificate. Symmetric imports require KeyProtection. */
         @Override
         public void engineSetEntry(String alias, KeyStore.Entry entry,
                 KeyStore.ProtectionParameter param) throws KeyStoreException {
             if (entry instanceof KeyStore.SecretKeyEntry) {
-                engineSetKeyEntry(alias, ((KeyStore.SecretKeyEntry) entry).getSecretKey(), null,
-                        null);
+                importSecret(alias, ((KeyStore.SecretKeyEntry) entry).getSecretKey(), param);
             } else if (entry instanceof KeyStore.PrivateKeyEntry) {
                 KeyStore.PrivateKeyEntry p = (KeyStore.PrivateKeyEntry) entry;
                 engineSetKeyEntry(alias, p.getPrivateKey(), null, p.getCertificateChain());
@@ -457,6 +490,42 @@ public final class AndroidKeyStore extends Provider {
                         ((KeyStore.TrustedCertificateEntry) entry).getTrustedCertificate());
             } else {
                 throw new KeyStoreException("unsupported entry: " + entry);
+            }
+        }
+
+        private static void importSecret(String alias, SecretKey key,
+                KeyStore.ProtectionParameter param) throws KeyStoreException {
+            if (alias == null) throw new KeyStoreException("alias needed");
+            if (key instanceof StoredKey stored) {
+                if (!alias.equals(stored.alias) || param != null) {
+                    throw new KeyStoreException("Cannot move or reauthorize an AndroidKeyStore key");
+                }
+                try {
+                    resolveSecret(stored);
+                } catch (InvalidKeyException e) {
+                    throw new KeyStoreException(e);
+                }
+                return;
+            }
+            if (!(param instanceof KeyProtection protection)) {
+                throw new KeyStoreException("Secret key import requires KeyProtection");
+            }
+            byte[] encoded = key.getEncoded();
+            if (!"RAW".equals(key.getFormat()) || encoded == null) {
+                throw new KeyStoreException("Expected a RAW secret key");
+            }
+            try {
+                String algorithm = AndroidKeyStoreSecretKeys.canonicalAlgorithm(key.getAlgorithm());
+                if (encoded.length > 64
+                        || !AndroidKeyStoreSecretKeys.validSize(algorithm, encoded.length * 8)) {
+                    throw new InvalidAlgorithmParameterException("Unsupported secret key size");
+                }
+                Authorization authorization = AndroidKeyStoreSecretKeys.imported(
+                        algorithm, encoded.length * 8, protection);
+                Store.put(alias, new Entry(SECRET, new SecretKeySpec(encoded, algorithm),
+                        new Certificate[0], new Date(), authorization));
+            } catch (InvalidAlgorithmParameterException e) {
+                throw new KeyStoreException(e);
             }
         }
 
@@ -479,19 +548,13 @@ public final class AndroidKeyStore extends Provider {
     abstract static class SecretKeyGenerator extends KeyGeneratorSpi {
         private final String algorithm;
         private final int defaultBits;
-        private final String hmacDigest;
         private String alias;
-        private int bits;
+        private Authorization authorization;
         private SecureRandom random;
 
-        SecretKeyGenerator(String algorithm, int defaultBits, String hmacDigest) {
+        SecretKeyGenerator(String algorithm, int defaultBits) {
             this.algorithm = algorithm;
             this.defaultBits = defaultBits;
-            this.hmacDigest = hmacDigest;
-        }
-
-        boolean validSize(int bits) {
-            return bits >= 64 && bits % 8 == 0 && bits <= 512;
         }
 
         @Override
@@ -517,101 +580,65 @@ public final class AndroidKeyStore extends Provider {
                         + KeyGenParameterSpec.class.getName() + " parameter");
             }
             int size = spec.getKeySize() == -1 ? defaultBits : spec.getKeySize();
-            if (!validSize(size)) {
+            if (!AndroidKeyStoreSecretKeys.validSize(algorithm, size)) {
                 throw new InvalidAlgorithmParameterException("Unsupported key size: " + size);
             }
-            validateParameters(spec);
+            authorization = AndroidKeyStoreSecretKeys.generated(algorithm, size, spec);
             alias = spec.getKeystoreAlias();
-            bits = size;
             this.random = random != null ? random : new SecureRandom();
-        }
-
-        private void validateParameters(KeyGenParameterSpec spec)
-                throws InvalidAlgorithmParameterException {
-            try {
-                KeyProperties.Purpose.allToKeymaster(spec.getPurposes());
-                KeyProperties.EncryptionPadding.allToKeymaster(spec.getEncryptionPaddings());
-                if (spec.getSignaturePaddings().length != 0) {
-                    throw new InvalidAlgorithmParameterException(
-                            "Signature paddings not supported for symmetric key algorithms");
-                }
-                String[] blockModes = spec.getBlockModes();
-                KeyProperties.BlockMode.allToKeymaster(blockModes);
-                if ((spec.getPurposes() & KeyProperties.PURPOSE_ENCRYPT) != 0
-                        && spec.isRandomizedEncryptionRequired()) {
-                    for (String mode : blockModes) {
-                        if (KeyProperties.BLOCK_MODE_ECB.equalsIgnoreCase(mode)) {
-                            throw new InvalidAlgorithmParameterException(
-                                    "Randomized encryption required but ECB was specified");
-                        }
-                    }
-                }
-                if (spec.isDigestsSpecified()) {
-                    int[] digests = KeyProperties.Digest.allToKeymaster(spec.getDigests());
-                    if (hmacDigest != null && (digests.length != 1
-                            || digests[0] != KeyProperties.Digest.toKeymaster(hmacDigest))) {
-                        throw new InvalidAlgorithmParameterException(
-                                "Only " + hmacDigest + " is supported for " + algorithm);
-                    }
-                }
-            } catch (IllegalArgumentException e) {
-                throw new InvalidAlgorithmParameterException(e);
-            }
         }
 
         @Override
         protected SecretKey engineGenerateKey() {
             if (alias == null) throw new IllegalStateException("Not initialized");
-            byte[] raw = new byte[bits / 8];
+            // Repeated calls on an initialized generator must create distinct alias entries.
+            Authorization policy = authorization.forNewKey();
+            byte[] raw = new byte[policy.bits / 8];
             random.nextBytes(raw);
-            SecretKey key = new SecretKeySpec(raw, algorithm);
+            Entry entry = new Entry(SECRET, new SecretKeySpec(raw, algorithm),
+                    new Certificate[0], new Date(), policy);
             try {
-                Store.put(alias, new Entry(SECRET, key, new Certificate[0], new Date()));
+                Store.put(alias, entry);
             } catch (KeyStoreException e) {
                 throw new java.security.ProviderException("Failed to store " + alias, e);
             }
-            return key;
+            return (SecretKey) entry.appKey(alias);
         }
     }
 
     public static final class Aes extends SecretKeyGenerator {
         public Aes() {
-            super("AES", 128, null);
-        }
-
-        @Override
-        boolean validSize(int bits) {
-            return bits == 128 || bits == 192 || bits == 256;
+            super("AES", 128);
         }
     }
 
     public static final class HmacSha1 extends SecretKeyGenerator {
         public HmacSha1() {
-            super("HmacSHA1", 160, KeyProperties.DIGEST_SHA1);
+            super("HmacSHA1", 160);
         }
     }
 
     public static final class HmacSha224 extends SecretKeyGenerator {
         public HmacSha224() {
-            super("HmacSHA224", 224, KeyProperties.DIGEST_SHA224);
+            super("HmacSHA224", 224);
         }
     }
 
     public static final class HmacSha256 extends SecretKeyGenerator {
         public HmacSha256() {
-            super("HmacSHA256", 256, KeyProperties.DIGEST_SHA256);
+            super("HmacSHA256", 256);
         }
     }
 
     public static final class HmacSha384 extends SecretKeyGenerator {
         public HmacSha384() {
-            super("HmacSHA384", 384, KeyProperties.DIGEST_SHA384);
+            super("HmacSHA384", 384);
         }
     }
 
     public static final class HmacSha512 extends SecretKeyGenerator {
         public HmacSha512() {
-            super("HmacSHA512", 512, KeyProperties.DIGEST_SHA512);
+            super("HmacSHA512", 512);
         }
     }
 

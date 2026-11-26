@@ -4,18 +4,30 @@
  */
 package com.gesher.keystore;
 
+import android.security.keystore.KeyExpiredException;
 import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyInfo;
+import android.security.keystore.KeyNotYetValidException;
 import android.security.keystore.KeyProperties;
+import android.security.keystore.KeyProtection;
+
+import java.security.InvalidKeyException;
 
 import java.security.InvalidAlgorithmParameterException;
 import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.ProviderException;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.function.Consumer;
 
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.Mac;
 import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 
 public final class KeySpecCases {
     private static final String PROVIDER = "AndroidKeyStore";
@@ -108,6 +120,164 @@ public final class KeySpecCases {
                             store.getKey(first.getKeystoreAlias(), null))), "replaced the prior key");
                 }
             });
+            checks.run("opaque-aes-and-key-info", () -> {
+                SecretKey key = generate(AES, aes("info", KeyProperties.BLOCK_MODE_GCM)
+                        .setKeySize(192).build());
+                require(key.getEncoded() == null && key.getFormat() == null, "exportable key");
+                SecretKey reloaded = (SecretKey) store.getKey(PREFIX + "info", null);
+                require(reloaded.getEncoded() == null, "exportable retrieved key");
+                KeyInfo info = keyInfo(reloaded);
+                require(info.getKeystoreAlias().equals(PREFIX + "info")
+                        && info.getOrigin() == KeyProperties.ORIGIN_GENERATED
+                        && info.getKeySize() == 192
+                        && info.getPurposes() == ENCRYPT_DECRYPT
+                        && Arrays.equals(info.getBlockModes(), new String[] {"GCM"})
+                        && Arrays.equals(info.getEncryptionPaddings(), new String[] {"NoPadding"})
+                        && !info.isUserAuthenticationRequired(), "incorrect AES metadata");
+            });
+            checks.run("aes-purpose", () -> {
+                SecretKey key = generate(AES, spec("decrypt-purpose", KeyProperties.PURPOSE_DECRYPT)
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());
+                rejectKey(InvalidKeyException.class, () -> Cipher.getInstance("AES/GCM/NoPadding")
+                        .init(Cipher.ENCRYPT_MODE, key));
+            });
+            checks.run("aes-block-mode", () -> {
+                SecretKey key = generate(AES, aes("authorize-mode", "GCM").build());
+                rejectKey(InvalidKeyException.class, () -> Cipher.getInstance("AES/CBC/NoPadding")
+                        .init(Cipher.ENCRYPT_MODE, key));
+            });
+            checks.run("aes-padding", () -> {
+                SecretKey key = generate(AES, aes("authorize-padding", "CBC").build());
+                rejectKey(InvalidKeyException.class, () -> Cipher.getInstance("AES/CBC/PKCS7Padding")
+                        .init(Cipher.ENCRYPT_MODE, key));
+            });
+            checks.run("aes-cbc-pkcs7", () -> {
+                SecretKey key = generate(AES, spec("cbc-pkcs7", ENCRYPT_DECRYPT)
+                        .setBlockModes("CBC").setEncryptionPaddings("PKCS7Padding").build());
+                Cipher encrypt = Cipher.getInstance("AES/CBC/PKCS7Padding");
+                encrypt.init(Cipher.ENCRYPT_MODE, key);
+                byte[] encrypted = encrypt.doFinal(MESSAGE);
+                Cipher decrypt = Cipher.getInstance("AES/CBC/PKCS7Padding");
+                decrypt.init(Cipher.DECRYPT_MODE, key, encrypt.getParameters());
+                require(Arrays.equals(MESSAGE, decrypt.doFinal(encrypted)), "CBC round trip");
+            });
+            checks.run("aes-iv-cannot-be-reused", () -> {
+                SecretKey key = generate(AES, aes("cbc-iv-reuse", "CBC").build());
+                Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
+                cipher.init(Cipher.ENCRYPT_MODE, key);
+                byte[] firstIv = cipher.getIV();
+                require(cipher.doFinal(new byte[16]).length == 16, "first encryption failed");
+                try {
+                    cipher.doFinal(new byte[16]);
+                    throw new AssertionError("reused IV in an independent operation");
+                } catch (IllegalStateException expected) {
+                    // Encryption with the old IV is unavailable after finishing.
+                }
+                cipher.init(Cipher.ENCRYPT_MODE, key);
+                require(!Arrays.equals(firstIv, cipher.getIV())
+                        && cipher.doFinal(new byte[16]).length == 16, "failed to start a new IV");
+            });
+            checks.run("aes-caller-iv", () -> {
+                SecretKey key = generate(AES, aes("authorize-iv", "GCM").build());
+                try {
+                    Cipher.getInstance("AES/GCM/NoPadding").init(Cipher.ENCRYPT_MODE, key,
+                            new GCMParameterSpec(128, new byte[12]));
+                    throw new AssertionError("accepted caller IV for randomized encryption");
+                } catch (InvalidAlgorithmParameterException expected) {
+                    // The parameters are valid GCM parameters, but forbidden by the key.
+                }
+            });
+            checks.run("aes-caller-iv-opt-out", () -> {
+                SecretKey key = generate(AES, aes("allow-iv", "GCM")
+                        .setRandomizedEncryptionRequired(false).build());
+                Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                byte[] iv = new byte[12];
+                iv[11] = 42;
+                cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(128, iv));
+                require(Arrays.equals(iv, cipher.getIV())
+                        && cipher.doFinal(MESSAGE).length == MESSAGE.length + 16, "wrong IV");
+            });
+            checks.run("aes-not-yet-valid", () -> {
+                Date future = new Date(System.currentTimeMillis() + 86_400_000);
+                SecretKey key = generate(AES, aes("future", "GCM").setKeyValidityStart(future)
+                        .build());
+                rejectKey(KeyNotYetValidException.class,
+                        () -> Cipher.getInstance("AES/GCM/NoPadding").init(Cipher.ENCRYPT_MODE, key));
+            });
+            checks.run("aes-import-origination-end", () -> {
+                Date past = new Date(System.currentTimeMillis() - 86_400_000);
+                SecretKey raw = new SecretKeySpec(new byte[16], AES);
+                Cipher encrypt = Cipher.getInstance("AES/GCM/NoPadding");
+                encrypt.init(Cipher.ENCRYPT_MODE, raw);
+                byte[] encrypted = encrypt.doFinal(MESSAGE);
+                SecretKey key = importAes(store, "import-expired", raw,
+                        new KeyProtection.Builder(ENCRYPT_DECRYPT).setBlockModes("GCM")
+                                .setEncryptionPaddings("NoPadding")
+                                .setKeyValidityForOriginationEnd(past).build());
+                require(key.getEncoded() == null && keyInfo(key).getOrigin()
+                        == KeyProperties.ORIGIN_IMPORTED, "wrong imported key metadata");
+                require(keyInfo(key).getKeyValidityForOriginationEnd() != null
+                        && keyInfo(key).getKeyValidityForConsumptionEnd() == null,
+                        "mixed up origination and consumption");
+                rejectKey(KeyExpiredException.class, () -> Cipher.getInstance("AES/GCM/NoPadding")
+                        .init(Cipher.ENCRYPT_MODE, key));
+                Cipher decrypt = Cipher.getInstance("AES/GCM/NoPadding");
+                decrypt.init(Cipher.DECRYPT_MODE, key, encrypt.getParameters());
+                require(Arrays.equals(MESSAGE, decrypt.doFinal(encrypted)), "imported key changed");
+            });
+            checks.run("aes-consumption-end", () -> {
+                Date past = new Date(System.currentTimeMillis() - 86_400_000);
+                SecretKey key = generate(AES, aes("consume-expired", "GCM")
+                        .setKeyValidityForConsumptionEnd(past).build());
+                Cipher encrypt = Cipher.getInstance("AES/GCM/NoPadding");
+                encrypt.init(Cipher.ENCRYPT_MODE, key);
+                require(encrypt.doFinal(MESSAGE).length == MESSAGE.length + 16, "origination denied");
+                rejectKey(KeyExpiredException.class, () -> Cipher.getInstance("AES/GCM/NoPadding")
+                        .init(Cipher.DECRYPT_MODE, key, encrypt.getParameters()));
+            });
+            checks.run("protected-import-required", () -> {
+                String alias = PREFIX + "missing-protection";
+                try {
+                    store.setEntry(alias, new KeyStore.SecretKeyEntry(
+                            new SecretKeySpec(new byte[16], AES)), null);
+                    throw new AssertionError("imported key without authorizations");
+                } catch (KeyStoreException expected) {
+                    require(!store.containsAlias(alias), "stored an unauthorized import");
+                }
+            });
+            checks.run("hmac-operation-digest-purpose", () -> {
+                SecretKey key = generate(HMAC, spec("hmac-operation", KeyProperties.PURPOSE_SIGN)
+                        .build());
+                require(key.getEncoded() == null && Arrays.equals(keyInfo(key).getDigests(),
+                        new String[] {KeyProperties.DIGEST_SHA256}), "wrong HMAC metadata");
+                rejectKey(InvalidKeyException.class, () -> Mac.getInstance("HmacSHA512").init(key));
+                SecretKey verify = generate(HMAC,
+                        spec("hmac-verify-only", KeyProperties.PURPOSE_VERIFY).build());
+                rejectKey(InvalidKeyException.class, () -> Mac.getInstance(HMAC).init(verify));
+            });
+            checks.run("hmac-rechecks-after-final", () -> {
+                SecretKey key = generate(HMAC, spec("hmac-recheck", KeyProperties.PURPOSE_SIGN)
+                        .build());
+                Mac mac = Mac.getInstance(HMAC);
+                mac.init(key);
+                byte[] before = mac.doFinal(MESSAGE);
+                require(Arrays.equals(before, mac.doFinal(MESSAGE)), "MAC did not reset");
+                store.deleteEntry(PREFIX + "hmac-recheck");
+                try {
+                    mac.doFinal(MESSAGE);
+                    throw new AssertionError("reused MAC after deleting its key");
+                } catch (ProviderException expected) {
+                    // A reused MAC must open a fresh authorized operation.
+                }
+            });
+            checks.run("deleted-handle", () -> {
+                SecretKey key = generate(AES, aes("deleted", "GCM").build());
+                store.deleteEntry(PREFIX + "deleted");
+                generate(AES, aes("deleted", "GCM").build());
+                rejectKey(InvalidKeyException.class, () -> Cipher.getInstance("AES/GCM/NoPadding")
+                        .init(Cipher.ENCRYPT_MODE, key));
+            });
         } finally {
             for (String alias : java.util.Collections.list(store.aliases())) {
                 if (alias.startsWith(PREFIX)) store.deleteEntry(alias);
@@ -151,6 +321,28 @@ public final class KeySpecCases {
         Mac mac = Mac.getInstance(HMAC);
         mac.init(key);
         return mac.doFinal(MESSAGE);
+    }
+
+    private static SecretKey importAes(KeyStore store, String suffix, SecretKey key,
+            KeyProtection protection) throws Exception {
+        String alias = PREFIX + suffix;
+        store.setEntry(alias, new KeyStore.SecretKeyEntry(key), protection);
+        return ((KeyStore.SecretKeyEntry) store.getEntry(alias, null)).getSecretKey();
+    }
+
+    private static KeyInfo keyInfo(SecretKey key) throws Exception {
+        return (KeyInfo) SecretKeyFactory.getInstance(key.getAlgorithm(), PROVIDER)
+                .getKeySpec(key, KeyInfo.class);
+    }
+
+    private static void rejectKey(Class<? extends InvalidKeyException> type, Case test)
+            throws Exception {
+        try {
+            test.run();
+            throw new AssertionError("used a key outside its authorizations");
+        } catch (InvalidKeyException expected) {
+            if (!type.isInstance(expected)) throw expected;
+        }
     }
 
     private static void require(boolean condition, String message) {
