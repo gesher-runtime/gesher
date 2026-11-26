@@ -17,7 +17,7 @@ CASES = frozenset((
     "ce_database", "de_database",
     "dex_parent_cannot_resolve_plugin", "dex_memory_loader_executes", "dex_archive_loader_executes",
     "dex_loaders_have_distinct_class_identity", "dex_invalid_memory_does_not_resolve",
-    "dex_direct_slice_executes",
+    "dex_direct_slice_executes", "dex_writable_policy_matches_target",
 ))
 MAX_LOG_SIZE = 4 * 1024 * 1024
 

@@ -18,7 +18,12 @@ archive is made read-only before its data is written to follow the
 The Android contract is documented by
 [Direct Boot](https://developer.android.com/privacy-and-security/direct-boot)
 and [Context.createDeviceProtectedStorageContext](https://developer.android.com/reference/android/content/Context#createDeviceProtectedStorageContext()).
-This fixture covers F50, K09 and T02 in [issue #56](https://github.com/gesher-runtime/gesher/issues/56).
+An independent writable copy exercises the target SDK boundary of the same
+rule. Android 16 is expected to execute the owned fixture archive at target 33
+and reject it with `SecurityException` at target 36. The same signed variant
+must be used on both platforms for each comparison.
+
+This fixture covers F48, F50, K09 and T02 in [issue #56](https://github.com/gesher-runtime/gesher/issues/56).
 A locked-user boot, user unlock transition, migration and multi-user storage
 require separate cases.
 
@@ -29,7 +34,8 @@ Build Tools 36.0.0.
 
 ```sh
 mkdir -p out
-./build.sh "$ANDROID_SDK_ROOT" out/storage.apk out/test.p12
+./build.sh "$ANDROID_SDK_ROOT" out/storage.apk out/test.p12 36
+./build.sh "$ANDROID_SDK_ROOT" out/storage-target33.apk out/test.p12 33
 python3 -m unittest -v
 ```
 
@@ -92,6 +98,9 @@ Compare independent captures with the matching lower-case APK digests.
 python3 compare.py --android out/android.log --windows out/windows.log \
     --android-apk-sha256 "$ANDROID_APK_SHA256" --windows-apk-sha256 "$WINDOWS_APK_SHA256"
 ```
+
+Repeat from a clean install and a fresh profile for the target 33 variant,
+passing `--target-sdk 33` and its own APK digests to the comparator.
 
 The comparator requires every storage and class-loader check in both phases and verifies that the
 startup IDs differ while the storage token persists within each platform.

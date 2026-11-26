@@ -24,19 +24,7 @@ final class DexContract {
         }
         File jar = File.createTempFile("plugin-", ".jar", context.getCodeCacheDir());
         try {
-            try (FileOutputStream output = new FileOutputStream(jar);
-                 InputStream asset = context.getAssets().open("plugin.jar")) {
-                // Android 14+ requires app-written DEX containers to be read-only
-                // before writing the bytes through the previously opened handle.
-                if (!jar.setReadOnly()) {
-                    throw new IOException("Could not mark DEX archive read-only");
-                }
-                byte[] chunk = new byte[4096];
-                int count;
-                while ((count = asset.read(chunk)) != -1) {
-                    output.write(chunk, 0, count);
-                }
-            }
+            writeArchive(context, jar, true);
             ClassLoader memoryLoader = new InMemoryDexClassLoader(
                     ByteBuffer.wrap(dex), parent);
             ClassLoader archiveLoader = new DexClassLoader(
@@ -62,9 +50,48 @@ final class DexContract {
                     memoryClass != archiveClass && directClass != memoryClass && directClass != archiveClass);
             checks.put("dex_invalid_memory_does_not_resolve",
                     missing(new InMemoryDexClassLoader(ByteBuffer.wrap(new byte[32]), parent)));
+            checks.put("dex_writable_policy_matches_target", writablePolicy(context, parent));
         } finally {
             // A loader can retain the backing file on Windows for its lifetime.
             // Keeping it in code cache lets the runtime/user reclaim it afterwards.
+            jar.delete();
+        }
+    }
+
+    private static void writeArchive(Context context, File jar, boolean readOnly) throws IOException {
+        try (FileOutputStream output = new FileOutputStream(jar);
+             InputStream asset = context.getAssets().open("plugin.jar")) {
+            // Android 14+ requires app-written DEX containers to be read-only
+            // before writing the bytes through the previously opened handle.
+            if (readOnly && !jar.setReadOnly()) {
+                throw new IOException("Could not mark DEX archive read-only");
+            }
+            byte[] chunk = new byte[4096];
+            int count;
+            while ((count = asset.read(chunk)) != -1) {
+                output.write(chunk, 0, count);
+            }
+        }
+    }
+
+    private static boolean writablePolicy(Context context, ClassLoader parent) throws Exception {
+        File jar = File.createTempFile("writable-control-", ".jar", context.getCodeCacheDir());
+        try {
+            writeArchive(context, jar, false);
+            if (!jar.canWrite()) {
+                throw new IOException("DEX control archive was not writable");
+            }
+            boolean requiresReadOnly = context.getApplicationInfo().targetSdkVersion >= 34;
+            try {
+                ClassLoader loader = new DexClassLoader(
+                        jar.getPath(), context.getCodeCacheDir().getPath(), null, parent);
+                Class<?> plugin = loader.loadClass(PLUGIN);
+                return !requiresReadOnly && plugin.getClassLoader() == loader
+                        && Integer.valueOf(1).equals(plugin.getMethod("next").invoke(null));
+            } catch (SecurityException expectedForModernTarget) {
+                return requiresReadOnly;
+            }
+        } finally {
             jar.delete();
         }
     }
