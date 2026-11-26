@@ -685,6 +685,14 @@ static void remote_capabilities(const char* path) {
 
 int main(int argc, char** argv) {
   if (argc < 2) return 2;
+  if (strcmp(argv[1], "self-kill") == 0) {
+    if (kill(getpid(), 0) != 0) return 3;
+    puts("realtime contract: self SIGKILL");
+    if (fflush(stdout) != 0) return 4;
+    kill(getpid(), SIGKILL);
+    puts("FAIL self SIGKILL returned");
+    return 1;
+  }
   if (strcmp(argv[1], "--child-remote-capability") == 0) {
 #if !defined(_WIN32)
     if (write(3, "R", 1) != 1) return 4;

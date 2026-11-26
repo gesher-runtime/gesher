@@ -25,7 +25,7 @@ def main():
                '-pthread', str(source), '-o', str(binary)]
     subprocess.run(command, check=True, timeout=60)
     cases = ['fifo', 'ignore', 'quota', 'priority', 'timeout', 'thread', 'handler',
-             'cross', 'stop', 'status']
+             'cross', 'stop', 'status', 'self-kill']
     results = []
     for case in cases:
         started = time.monotonic()
@@ -38,8 +38,10 @@ def main():
             timedout = True
             os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate(timeout=5)
-        passed = (not timedout and process.returncode == 0 and
-                  'realtime contract: 0 failures' in stdout and
+        expected_exit = -signal.SIGKILL if case == 'self-kill' else 0
+        sentinel = 'realtime contract: self SIGKILL' if case == 'self-kill' else 'realtime contract: 0 failures'
+        passed = (not timedout and process.returncode == expected_exit and
+                  sentinel in stdout and
                   not any(line.startswith('FAIL') for line in stdout.splitlines()))
         result = dict(case=case, exit=process.returncode, timeout=timedout,
                       elapsed_seconds=time.monotonic() - started, stdout=stdout,

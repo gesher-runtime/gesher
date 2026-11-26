@@ -53,8 +53,10 @@ function Invoke-RealtimeCase([string] $Role, [string] $Case, [string] $Executabl
     $record.stderr = $stderr.Result
     $record.exit = $process.ExitCode
     $sentinel = if ($Case -eq 'legacy') { 'realtime_signals: 73 assertions, 0 failures' }
+                elseif ($Case -eq 'self-kill') { 'realtime contract: self SIGKILL' }
                 else { 'realtime contract: 0 failures' }
-    $record.pass = -not $record.timeout -and $record.exit -eq 0 -and
+    $expectedExit = if ($Case -eq 'self-kill') { 137 } else { 0 }
+    $record.pass = -not $record.timeout -and $record.exit -eq $expectedExit -and
         $record.stdout.Contains($sentinel) -and $record.stdout -notmatch '(?m)^FAIL'
   } catch {
     $record.infrastructure_error = $true
@@ -79,6 +81,7 @@ $within = @('fifo', 'ignore', 'quota', 'priority', 'timeout', 'capabilities',
 $reference = @('thread', 'handler')
 if (-not $GuestOnly) {
   Invoke-RealtimeCase 'windows-posix' 'legacy' (Join-Path $Dir 'realtime_signals_test.exe') @()
+  Invoke-RealtimeCase 'windows-posix' 'self-kill' (Join-Path $Dir 'realtime_signal_contract_test.exe') @('self-kill')
   foreach ($case in $within) {
     Invoke-RealtimeCase 'windows-posix' $case (Join-Path $Dir 'realtime_signal_contract_test.exe') @($case)
   }

@@ -40,6 +40,8 @@ typedef void* pthread_t;
 #include <new>
 #include <gesher/fork.h>
 
+#include "internal.h"
+
 // The underlying winpthreads functions; callers use the POSIX adapters.
 #undef pthread_create
 #undef pthread_kill
@@ -255,6 +257,12 @@ int Send(pid_t pid, int signum, int code, const union sigval* value, bool to_thr
     return gesher_kill_other(pid, signum);
   }
   if (signum == 0) return 0;
+  // SIGKILL ends this process without waiting for a signal consumer or
+  // running exit handlers. Keep the status encoding used by the parent.
+  if (signum == SIGKILL) {
+    TerminateProcess(GetCurrentProcess(), gesher::SignalExitCode(signum));
+    return gesher::FailWithLastError();
+  }
   auto& own = CurrentPending();
   State& s = state();
   {
