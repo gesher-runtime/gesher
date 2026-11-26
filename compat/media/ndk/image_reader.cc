@@ -83,9 +83,10 @@ struct ReaderState {
   bool closed = false;
 };
 
-// The RGBA producer supports native window CPU writes. The YUV producer takes
-// typed frames directly from camera and codec output. Neither exposes raw GPU
-// buffer dequeue because those slots require graphics handles and fence reuse.
+// RGBA and PRIVATE producers accept the RGBA frames posted by QueueSurface.
+// A PRIVATE consumer gets only the GPU-sampled hardware buffer of each image.
+// YUV receives typed frames from camera and codec output. These producers do
+// not expose raw GPU buffer dequeue slots.
 class ReaderWindow final : public QueueSurface {
  public:
   ReaderWindow(int32_t width, int32_t height, int32_t format, uint64_t usage,
@@ -93,11 +94,11 @@ class ReaderWindow final : public QueueSurface {
       : QueueSurface(width, height), width(width), height(height), format(format), usage(usage), state(state) {}
 
   int lock(ANativeWindow_Buffer* buffer, ARect* dirty) override {
-    return format == AIMAGE_FORMAT_RGBA_8888 ? QueueSurface::lock(buffer, dirty) : -ENOSYS;
+    return format != AIMAGE_FORMAT_YUV_420_888 ? QueueSurface::lock(buffer, dirty) : -ENOSYS;
   }
 
   int query(int what, int* value) const override {
-    if (what == NATIVE_WINDOW_FORMAT) {
+    if (what == NATIVE_WINDOW_FORMAT && format == AIMAGE_FORMAT_YUV_420_888) {
       *value = format;
       return 0;
     }
@@ -129,10 +130,11 @@ class ReaderWindow final : public QueueSurface {
     va_list probe;
     va_copy(probe, args);
     bool supported = true;
+    const int producer_format = format == AIMAGE_FORMAT_PRIVATE ? AIMAGE_FORMAT_RGBA_8888 : format;
     switch (operation) {
       case NATIVE_WINDOW_SET_BUFFERS_FORMAT: {
         const int format = va_arg(probe, int);
-        supported = format == 0 || format == this->format;
+        supported = format == 0 || format == producer_format;
         break;
       }
       case NATIVE_WINDOW_SET_BUFFERS_DIMENSIONS:
@@ -143,7 +145,7 @@ class ReaderWindow final : public QueueSurface {
         supported = (width == 0 && height == 0) || ValidSize(width, height);
         if (operation == NATIVE_WINDOW_SET_BUFFERS_GEOMETRY) {
           const int format = va_arg(probe, int);
-          supported = supported && (format == 0 || format == this->format);
+          supported = supported && (format == 0 || format == producer_format);
         }
         break;
       }
@@ -182,24 +184,30 @@ int Enqueue(ReaderState& state, std::unique_ptr<ImageFrame> frame) {
   return 0;
 }
 
-int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame, uint64_t usage) {
+int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame,
+            int32_t format, uint64_t usage) {
   auto state = weak.lock();
   if (state == nullptr) return -ENODEV;
 
   const bool valid_size = ValidSize(frame.width, frame.height);
+  const bool gpu_only = format == AIMAGE_FORMAT_PRIVATE;
   std::unique_ptr<ImageFrame> image;
   if (valid_size) {
+    const uint64_t cpu_usage = gpu_only ? AHARDWAREBUFFER_USAGE_CPU_READ_NEVER : usage;
     auto* storage = static_cast<AHardwareBuffer*>(
-        ahb::AllocateRgbaBuffer(frame.width, frame.height, false, usage));
+        ahb::AllocateRgbaBuffer(frame.width, frame.height, gpu_only, cpu_usage));
     if (storage != nullptr) {
       image = std::make_unique<ImageFrame>();
       image->storage.reset(storage);
       auto* pixels = ahb::RgbaBufferPixels(storage);
       std::memcpy(pixels, frame.pixels.data(), frame.pixels.size() * sizeof(uint32_t));
       ahb::MarkRgbaWritten(storage);
-      image->planes.planeCount = 1;
-      image->planes.planes[0] = {
-          pixels, kPixelStride, static_cast<uint32_t>(frame.width * kPixelStride)};
+      if (!gpu_only) {
+        image->planes.planeCount = 1;
+        image->planes.planes[0] = {
+            pixels, kPixelStride, static_cast<uint32_t>(frame.width * kPixelStride)};
+      }
+      image->format = format;
       image->width = frame.width;
       image->height = frame.height;
       image->timestamp_ns = frame.timestamp_ns;
@@ -343,16 +351,23 @@ struct AImage {
 namespace {
 media_status_t BIONIC_SYSV NewWithUsage(int32_t width, int32_t height, int32_t format,
                                       uint64_t usage, int32_t max_images, AImageReader** out) {
-  if (out == nullptr || !ValidSize(width, height) || max_images < 1 || max_images > kMaxImages ||
-      (format != AIMAGE_FORMAT_RGBA_8888 && format != AIMAGE_FORMAT_YUV_420_888) ||
-      (usage != kDefaultUsage && usage != AHARDWAREBUFFER_USAGE_CPU_READ_RARELY)) {
+  if (out == nullptr || !ValidSize(width, height) || max_images < 1 || max_images > kMaxImages) {
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  }
+  if (format == AIMAGE_FORMAT_PRIVATE) {
+    if (usage != AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE ||
+        !ahb::SupportsGpuRgbaBuffer(width, height)) {
+      return AMEDIA_ERROR_INVALID_PARAMETER;
+    }
+  } else if ((format != AIMAGE_FORMAT_RGBA_8888 && format != AIMAGE_FORMAT_YUV_420_888) ||
+             (usage != kDefaultUsage && usage != AHARDWAREBUFFER_USAGE_CPU_READ_RARELY)) {
     return AMEDIA_ERROR_INVALID_PARAMETER;
   }
   auto state = std::make_shared<ReaderState>();
   auto window = android::sp<ReaderWindow>::make(width, height, format, usage, state);
   window->SetForwardingListener(
       [weak = std::weak_ptr<ReaderState>(state), format, usage](const SurfaceFrame& frame) {
-        return format == AIMAGE_FORMAT_RGBA_8888 ? Publish(weak, frame, usage) : -EINVAL;
+        return format != AIMAGE_FORMAT_YUV_420_888 ? Publish(weak, frame, format, usage) : -EINVAL;
       });
   *out = new (std::nothrow) AImageReader{width, height, max_images, format, std::move(state),
                                         std::move(window), {}, false};
@@ -582,6 +597,7 @@ media_status_t BIONIC_SYSV GetPlaneCount(const AImage* image, int32_t* out) {
 // Callers validate the output and hold the reader mutex while the image is used.
 media_status_t CheckPlane(const AImage& image, int plane) {
   if (!image.frame) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (image.frame->format == AIMAGE_FORMAT_PRIVATE) return AMEDIA_IMGREADER_CANNOT_LOCK_IMAGE;
   if (plane < 0 || static_cast<uint32_t>(plane) >= image.frame->planes.planeCount)
     return AMEDIA_ERROR_INVALID_PARAMETER;
   return AMEDIA_OK;

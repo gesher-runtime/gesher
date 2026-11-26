@@ -77,3 +77,20 @@ NV12 from the in-process Camera2 service. It owns the Y, Cb and Cr planes of
 each published image. The camera path requires a camera and an Android camera
 grant. This fixture exercises the decoder path. Native GPU dequeue and
 cross-process YUV surface producers still require integration.
+
+## PRIVATE GPU-sampled reader
+
+Pass `private` to the public NDK PIE, or after the JNI library path to
+`gesher.NdkImageReaderTest`. The fixture renders red and blue through the
+reader's EGL window, acquires both images with their fences, and samples
+their hardware buffers as external EGL textures. It also samples the
+retained first image again after the second post. The fixture requires EGL
+native buffers and `GL_OES_EGL_image_external`.
+
+`AImageReader_newWithUsage` supports `AIMAGE_FORMAT_PRIVATE` with
+`AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE` when the Windows GPU can supply
+a sampled buffer. The in-process producer uses RGBA staging and the existing
+D3D-backed hardware buffer import path. The consumer gets zero planes,
+and the hardware buffer denies CPU locks. Each acquired image owns its
+buffer until release. Raw GPU dequeue slots and video-encoder usage are
+outside this path.

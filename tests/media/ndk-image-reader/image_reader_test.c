@@ -17,10 +17,11 @@
 #include <time.h>
 #include <unistd.h>
 
-#if defined(IMAGE_READER_STANDALONE) && !defined(IMAGE_READER_COMPONENT)
+#ifndef IMAGE_READER_COMPONENT
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #endif
 
 #ifndef IMAGE_READER_STANDALONE
@@ -355,6 +356,154 @@ static int make_release_fence(void) {
 }
 #endif
 
+#ifndef IMAGE_READER_COMPONENT
+static GLuint compile_shader(GLenum type, const char* source) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    GLint compiled = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    CHECK(compiled == GL_TRUE);
+    return shader;
+}
+
+static GLuint private_sample_program(void) {
+    GLuint vertex = compile_shader(GL_VERTEX_SHADER,
+        "attribute vec2 pos; void main() { gl_Position = vec4(pos, 0.0, 1.0); }");
+    GLuint fragment = compile_shader(GL_FRAGMENT_SHADER,
+        "#extension GL_OES_EGL_image_external : require\n"
+        "precision mediump float; uniform samplerExternalOES source;"
+        "void main() { gl_FragColor = texture2D(source, vec2(0.5)); }");
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glBindAttribLocation(program, 0, "pos");
+    glLinkProgram(program);
+    GLint linked = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    CHECK(linked == GL_TRUE);
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+    return program;
+}
+
+static void check_private_pixels(GLuint program, int red) {
+    const GLfloat vertices[] = {-1.0f, -1.0f, 3.0f, -1.0f, -1.0f, 3.0f};
+    glUseProgram(program);
+    glUniform1i(glGetUniformLocation(program, "source"), 0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, vertices);
+    glEnableVertexAttribArray(0);
+    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    uint8_t pixel[4] = {};
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    CHECK(glGetError() == GL_NO_ERROR);
+    if ((red && (pixel[0] < 250 || pixel[2] > 5)) ||
+        (!red && (pixel[0] > 5 || pixel[2] < 250)) || pixel[1] > 5 || pixel[3] < 250) {
+        fprintf(stderr, "NDK PRIVATE ImageReader: wanted %s, got RGBA %u %u %u %u\n",
+                red ? "red" : "blue", pixel[0], pixel[1], pixel[2], pixel[3]);
+        exit(1);
+    }
+}
+
+static int run_private_test(void) {
+    checks = 0;
+    AImageReader* reader = NULL;
+    const uint64_t gpu_usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
+    CHECK(AImageReader_newWithUsage(kWidth, kHeight, AIMAGE_FORMAT_PRIVATE,
+              gpu_usage, 2, &reader) == AMEDIA_OK);
+    ANativeWindow* window = NULL;
+    int32_t format = 0;
+    CHECK(AImageReader_getWindow(reader, &window) == AMEDIA_OK && window != NULL);
+    CHECK(AImageReader_getFormat(reader, &format) == AMEDIA_OK && format == AIMAGE_FORMAT_PRIVATE);
+
+    EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    CHECK(display != EGL_NO_DISPLAY && eglInitialize(display, NULL, NULL));
+    const EGLint config_attributes[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE,
+    };
+    const EGLint context_attributes[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+    EGLConfig config;
+    EGLint count = 0;
+    CHECK(eglChooseConfig(display, config_attributes, &config, 1, &count) && count == 1);
+    EGLSurface surface = eglCreateWindowSurface(display, config, window, NULL);
+    CHECK(surface != EGL_NO_SURFACE);
+    EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attributes);
+    CHECK(context != EGL_NO_CONTEXT);
+    CHECK(eglMakeCurrent(display, surface, surface, context));
+
+    PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC native_buffer =
+        (PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC)eglGetProcAddress("eglGetNativeClientBufferANDROID");
+    PFNEGLCREATEIMAGEKHRPROC create_image =
+        (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    PFNEGLDESTROYIMAGEKHRPROC destroy_image =
+        (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC bind_image =
+        (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+    CHECK(native_buffer != NULL && create_image != NULL && destroy_image != NULL && bind_image != NULL);
+    GLuint program = private_sample_program();
+    GLuint textures[2] = {};
+    EGLImageKHR egl_images[2] = {};
+    AImage* images[2] = {};
+    glGenTextures(2, textures);
+    for (int i = 0; i < 2; ++i) {
+        glClearColor(i == 0, 0.0f, i == 1, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        CHECK(eglSwapBuffers(display, surface));
+        int fence = -2;
+        CHECK(AImageReader_acquireNextImageAsync(reader, &images[i], &fence) == AMEDIA_OK);
+        wait_for_pixels(fence);
+        int32_t value = -1;
+        uint8_t* data = NULL;
+        int length = 0;
+        CHECK(AImage_getFormat(images[i], &value) == AMEDIA_OK && value == AIMAGE_FORMAT_PRIVATE);
+        CHECK(AImage_getWidth(images[i], &value) == AMEDIA_OK && value == kWidth);
+        CHECK(AImage_getHeight(images[i], &value) == AMEDIA_OK && value == kHeight);
+        CHECK(AImage_getNumberOfPlanes(images[i], &value) == AMEDIA_OK && value == 0);
+        CHECK(AImage_getPlaneData(images[i], 0, &data, &length) == AMEDIA_IMGREADER_CANNOT_LOCK_IMAGE);
+        CHECK(AImage_getPlaneRowStride(images[i], 0, &value) == AMEDIA_IMGREADER_CANNOT_LOCK_IMAGE);
+        CHECK(AImage_getPlanePixelStride(images[i], 0, &value) == AMEDIA_IMGREADER_CANNOT_LOCK_IMAGE);
+        AHardwareBuffer* buffer = NULL;
+        CHECK(AImage_getHardwareBuffer(images[i], &buffer) == AMEDIA_OK && buffer != NULL);
+        AHardwareBuffer_Desc desc = {};
+        AHardwareBuffer_describe(buffer, &desc);
+        CHECK((desc.usage & gpu_usage) != 0);
+        void* mapped = NULL;
+        CHECK(AHardwareBuffer_lock(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+                                   -1, NULL, &mapped) != 0);
+        EGLClientBuffer client = native_buffer(buffer);
+        CHECK(client != NULL);
+        const EGLint image_attributes[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+        egl_images[i] = create_image(display, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID,
+                                     client, image_attributes);
+        CHECK(egl_images[i] != EGL_NO_IMAGE_KHR);
+        glBindTexture(GL_TEXTURE_EXTERNAL_OES, textures[i]);
+        bind_image(GL_TEXTURE_EXTERNAL_OES, (GLeglImageOES)egl_images[i]);
+        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        check_private_pixels(program, i == 0);
+    }
+    // The reader still owns the first image. The following frame did not overwrite it.
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, textures[0]);
+    check_private_pixels(program, 1);
+    glDeleteTextures(2, textures);
+    glDeleteProgram(program);
+    for (int i = 0; i < 2; ++i) {
+        CHECK(destroy_image(display, egl_images[i]));
+        AImage_delete(images[i]);
+    }
+    CHECK(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    CHECK(eglDestroyContext(display, context));
+    CHECK(eglDestroySurface(display, surface));
+    CHECK(eglTerminate(display));
+    AImageReader_delete(reader);
+    printf("NDK PRIVATE image reader: %d checks and red/blue/retained GPU pixels passed\n", checks);
+    return 0;
+}
+#endif
+
 static int run_test(void) {
     checks = 0;
     void* library = dlopen("libmediandk.so", RTLD_NOW | RTLD_LOCAL);
@@ -454,10 +603,22 @@ static int run_test(void) {
 }
 
 #ifdef IMAGE_READER_STANDALONE
+#ifdef IMAGE_READER_COMPONENT
 int main(void) {
     return run_test();
 }
 #else
+int main(int argc, char** argv) {
+    return argc > 1 && strcmp(argv[1], "private") == 0 ? run_private_test() : run_test();
+}
+#endif
+#else
+JNIEXPORT jint JNICALL Java_gesher_NdkImageReaderTest_nativeRunPrivate(JNIEnv* env, jclass cls) {
+    (void)env;
+    (void)cls;
+    return run_private_test();
+}
+
 JNIEXPORT jint JNICALL Java_gesher_NdkImageReaderTest_nativeRun(JNIEnv* env, jclass cls) {
     (void)env;
     (void)cls;

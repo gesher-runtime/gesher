@@ -1128,21 +1128,25 @@ void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
   return AllocateRgbaBuffer(width, height, gpu_form, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
 }
 
-void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form, uint64_t cpu_usage) {
+static AHardwareBuffer_Desc RgbaDescription(uint32_t width, uint32_t height, uint64_t usage) {
   AHardwareBuffer_Desc desc{};
   desc.width = width;
   desc.height = height;
   desc.layers = 1;
   desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
-  desc.usage = cpu_usage;
-  // A reader nothing samples on the GPU (a camera QR scanner's) is CPU-only, and
-  // reports that usage: Served() would start ANGLE and the GPU thread for it.
-  if (!gpu_form) {
-    AHardwareBuffer* app = nullptr;
-    return Allocate(&desc, &app) == 0 ? app : nullptr;
-  }
-  desc.usage |= AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
-  if (!Served(&desc)) {
+  desc.usage = usage;
+  return desc;
+}
+
+bool SupportsGpuRgbaBuffer(uint32_t width, uint32_t height) {
+  auto desc = RgbaDescription(width, height, AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE);
+  return Served(&desc);
+}
+
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form, uint64_t cpu_usage) {
+  const uint64_t gpu_usage = gpu_form ? AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE : 0;
+  auto desc = RgbaDescription(width, height, cpu_usage | gpu_usage);
+  if (gpu_form && cpu_usage != AHARDWAREBUFFER_USAGE_CPU_READ_NEVER && !Served(&desc)) {
     // No GPU device (ANGLE/Direct3D 11 unavailable) or a size it cannot take: the
     // reader still delivers frames, in a CPU-only buffer that an app's
     // eglCreateImageKHR refuses cleanly (no GPU usage).
