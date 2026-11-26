@@ -1,0 +1,110 @@
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cwchar>
+#ifdef _WIN32
+#include <windows.h>
+#else
+using DWORD = uint32_t;
+using HWND = void*;
+using HMONITOR = void*;
+struct MONITORINFO { DWORD cbSize; };
+struct MONITORINFOEXW { DWORD cbSize; wchar_t szDevice[32]; };
+struct DEVMODEW { uint16_t dmSize = 0; DWORD dmDisplayFrequency = 0; };
+constexpr DWORD MONITOR_DEFAULTTOPRIMARY = 1, ENUM_CURRENT_SETTINGS = static_cast<DWORD>(-1);
+#endif
+
+int checks = 0, failures = 0, queries = 0;
+void Check(bool condition, const char* message) {
+  ++checks;
+  if (!condition) { ++failures; std::fprintf(stderr, "FAIL refresh: %s\n", message); }
+}
+HWND foreground = reinterpret_cast<HWND>(uintptr_t{1});
+HWND helper = reinterpret_cast<HWND>(uintptr_t{2});
+HWND selected = nullptr;
+DWORD owner = 42, frequency = 60;
+HMONITOR monitor = reinterpret_cast<HMONITOR>(uintptr_t{3});
+bool info_ok = true, mode_ok = true;
+HWND TestForeground() { return foreground; }
+DWORD TestPid() { return 42; }
+DWORD TestOwner(HWND window, DWORD* process) {
+  Check(window == foreground, "foreground PID queried for the foreground window");
+  *process = owner;
+  return 7;
+}
+HMONITOR TestMonitor(HWND window, DWORD flags) {
+  Check(flags == MONITOR_DEFAULTTOPRIMARY, "monitor fallback is explicitly primary");
+  selected = window;
+  return monitor;
+}
+int TestInfo(HMONITOR input, MONITORINFO* info) {
+  Check(input == monitor && info->cbSize == sizeof(MONITORINFOEXW), "extended monitor info sized correctly");
+  auto* extended = reinterpret_cast<MONITORINFOEXW*>(info);
+  std::wcscpy(extended->szDevice, L"DISPLAY_TEST");
+  return info_ok;
+}
+int TestMode(const wchar_t* device, DWORD setting, DEVMODEW* mode) {
+  ++queries;
+  Check(std::wcscmp(device, L"DISPLAY_TEST") == 0 && setting == ENUM_CURRENT_SETTINGS &&
+            mode->dmSize == sizeof(DEVMODEW), "current monitor mode queried with initialized DEVMODEW");
+  mode->dmDisplayFrequency = frequency;
+  return mode_ok;
+}
+#define GetForegroundWindow TestForeground
+#define GetCurrentProcessId TestPid
+#define GetWindowThreadProcessId TestOwner
+#define MonitorFromWindow TestMonitor
+#define GetMonitorInfoW TestInfo
+#define EnumDisplaySettingsW TestMode
+@PRODUCTION@
+#undef GetForegroundWindow
+#undef GetCurrentProcessId
+#undef GetWindowThreadProcessId
+#undef MonitorFromWindow
+#undef GetMonitorInfoW
+#undef EnumDisplaySettingsW
+
+int main() {
+  using namespace std::chrono;
+  using gesher::bionic::gl::DisplayRefresh;
+  auto now = steady_clock::time_point{};
+  DisplayRefresh refresh;
+  Check(refresh.Period(helper, now).count() == 16666667 && selected == foreground,
+        "same-process foreground display supplies 60 Hz period");
+  frequency = 120;
+  const int before = queries;
+  Check(refresh.Period(helper, now + milliseconds(500)).count() == 16666667 && queries == before,
+        "stable monitor is cached across frames");
+  Check(refresh.Period(helper, now + seconds(1)).count() == 8333333 && queries == before + 1,
+        "same-monitor refresh change is observed after one second");
+  frequency = 144;
+  monitor = reinterpret_cast<HMONITOR>(uintptr_t{4});
+  Check(refresh.Period(helper, now + milliseconds(1100)).count() == 6944444,
+        "monitor change re-queries immediately");
+  owner = 99;
+  refresh.Period(helper, now + milliseconds(1200));
+  Check(selected == helper, "another process's foreground monitor is ignored");
+  foreground = nullptr;
+  refresh.Period(helper, now + milliseconds(1300));
+  Check(selected == helper, "missing foreground uses helper/default monitor");
+  for (DWORD invalid : {DWORD{0}, DWORD{1}}) {
+    DisplayRefresh fallback;
+    frequency = invalid;
+    Check(fallback.Period(helper, now).count() == 16666667, "default/unknown display frequency falls back to 60 Hz");
+  }
+  frequency = 90;
+  DisplayRefresh ninety;
+  Check(ninety.Period(helper, now).count() == 11111111, "90 Hz conversion keeps nanosecond precision");
+  mode_ok = false;
+  DisplayRefresh bad_mode;
+  Check(bad_mode.Period(helper, now).count() == 16666667, "display settings failure falls back");
+  mode_ok = true; info_ok = false;
+  DisplayRefresh bad_info;
+  Check(bad_info.Period(helper, now).count() == 16666667, "monitor info failure falls back");
+  info_ok = true; monitor = nullptr;
+  DisplayRefresh headless;
+  Check(headless.Period(nullptr, now).count() == 16666667, "headless null monitor falls back");
+  std::printf("display refresh contracts: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}

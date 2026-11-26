@@ -66,9 +66,9 @@ import java.util.Set;
  * where it touches media files: MediaPlayer.setDataSource(FileDescriptor, ...)
  * goes through FileUtils.convertToModernFd, which asks
  * getOriginalMediaFormatFileDescriptor for a transcoding-free descriptor (docs/media.md).
- * Gesher has no media provider: there is nothing to transcode, nothing is
- * scanned, and the content URIs name collections no provider answers. When a module jar
- * on the boot class path brings the real class, it wins.
+ * The system server's MediaStoreProvider answers content://media (docs/media-provider.md);
+ * there is nothing to transcode. When a module jar on the boot class path brings the real
+ * class, it wins.
  */
 public final class MediaStore {
     private static final String TAG = "MediaStore";
@@ -188,24 +188,49 @@ public final class MediaStore {
     }
 
     public static String getVersion(Context context) {
-        return "0";
+        return getVersion(context, VOLUME_EXTERNAL_PRIMARY);
     }
 
+    /** Android 16's MediaStore.getVersion: the provider's get_version call. */
     public static String getVersion(Context context, String volumeName) {
-        return "0";
+        final ContentResolver resolver = context.getContentResolver();
+        try (ContentProviderClient client = resolver.acquireContentProviderClient(AUTHORITY)) {
+            final Bundle in = new Bundle();
+            in.putString(android.content.Intent.EXTRA_TEXT, volumeName);
+            final Bundle out = client.call("get_version", null, in);
+            return out.getString(android.content.Intent.EXTRA_TEXT);
+        } catch (RemoteException e) {
+            throw e.rethrowAsRuntimeException();
+        }
     }
 
     public static long getGeneration(Context context, String volumeName) {
-        return 0;
+        return getGeneration(context.getContentResolver(), volumeName);
+    }
+
+    /** Android 16's MediaStore.getGeneration: the provider's get_generation call. */
+    public static long getGeneration(ContentResolver resolver, String volumeName) {
+        final Bundle in = new Bundle();
+        in.putString(android.content.Intent.EXTRA_TEXT, volumeName);
+        final Bundle out = resolver.call(AUTHORITY, "get_generation", null, in);
+        if (out == null) {
+            throw new IllegalStateException("Failed to get generation for volume '"
+                    + volumeName + "'. The ContentResolver call returned null.");
+        }
+        return out.getLong(android.content.Intent.EXTRA_INDEX);
     }
 
     public static Uri getMediaScannerUri() {
         return AUTHORITY_URI.buildUpon().appendPath("none").appendPath("media_scanner").build();
     }
 
-    /** Nothing scans: no URI for the file. */
+    /**
+     * Android 16's MediaStore.scanFile (MediaScannerConnection's path): the provider's
+     * scan_file call indexes the file and answers its content URI.
+     */
     public static Uri scanFile(ContentResolver resolver, File file) {
-        return null;
+        final Bundle out = resolver.call(AUTHORITY, "scan_file", file.getAbsolutePath(), null);
+        return out.getParcelable(android.content.Intent.EXTRA_STREAM);
     }
 
     /** No trash without a media provider: the path is not moved (null, as for a failure). */

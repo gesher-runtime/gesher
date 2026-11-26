@@ -31,6 +31,9 @@
 #include "poll_scratch.h"
 #include "socket_internal.h"
 @HAS_SCRATCH@
+@VIRTUAL_OWNER@
+
+namespace { void check(const char* text, bool passed); }
 @HAS_PIPE_SNAPSHOT@
 
 namespace allocation {
@@ -196,6 +199,11 @@ void WakePollers();
 @EVENTFD_STATE@
 @EPOLL_STATE@
 @EPOLL_CONVERSION@
+#ifdef HAS_VIRTUAL_OWNER
+// Registration is a numeric Linux boundary in this scratch/outer-poll fixture.
+// The complete-source owner gate separately executes virtual identity sampling.
+static int SampleVirtualEntries(EpollPollScratch&, bool) { return 0; }
+#endif
 using PollObserver = void (*)(void*);
 static std::mutex registry_mutex;
 static std::map<int, std::shared_ptr<EventFd>> events;
@@ -237,9 +245,11 @@ struct OpenFileDescription {
   bool KnownPipeStatus() const { return ::fcntl(fd, F_GETFL) >= 0; }
   int Flags() const { return ::fcntl(fd, F_GETFL); }
 };
+enum class DescriptorKind { kFile, kFifo };
 struct DescriptorSnapshot {
   HANDLE handle = INVALID_HANDLE_VALUE;
   std::shared_ptr<OpenFileDescription> description;
+  DescriptorKind kind = DescriptorKind::kFile;
   ~DescriptorSnapshot() {
     if (handle != INVALID_HANDLE_VALUE) { ::close(HostFd(handle)); --live_pipe_snapshots; }
   }
@@ -276,6 +286,8 @@ static int QueryPipe(HANDLE handle, void* output, ULONG size, FILE_INFORMATION_C
       static_cast<ULONG>(bytes), static_cast<ULONG>(capacity - bytes)};
   return 0;
 }
+// FIFO descriptors (fifo.cc) are outside this host pipe boundary.
+[[maybe_unused]] static int PollFifo(const DescriptorSnapshotPtr&, short, short*) { std::abort(); }
 @PIPE_ADMISSION@
 @PIPE_POLL@
 #endif

@@ -33,6 +33,10 @@ using HANDLE = intptr_t;
 constexpr HANDLE INVALID_HANDLE_VALUE = -1;
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+// Stream identity/retirement is tested with storage access granted. Actual
+// storage authorization and live revocation run in storage_policy_host_test.
+enum class AccessKind { kStat, kRead, kWrite };
+static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 enum class Device { kZero, kRandom };
 enum class DescriptorKind { kFile, kZero, kRandom };
 // The complete executable-owned OFD implementation is exercised by the OFD

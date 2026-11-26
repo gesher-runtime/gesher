@@ -1,0 +1,139 @@
+// Compiled after the declared encoder/capture fixture, with the complete real
+// Recorder, InputSurface and MP4 writer. Queue storage is the explicit host seam.
+@ALLOCATE@
+@CLAMP@
+#define RgbaToI420 ProductionRgbaToI420
+@CONVERT@
+#undef RgbaToI420
+static std::atomic<int> persistent_conversions{0};
+void RgbaToI420(const uint32_t* rgba, int w, int h, VideoFrame* frame) {
+  ++persistent_conversions;
+  ProductionRgbaToI420(rgba, w, h, frame);
+}
+}  // namespace gesher::media
+
+#include "compat/media/surface/queue_surface.h"
+#include <android_runtime/android_view_Surface.h>
+namespace {
+using namespace gesher::media;
+thread_local android::sp<QueueSurface> captured;
+int checks = 0;
+void Require(bool ok, const char* why) {
+  ++checks;
+  if (!ok) { std::fprintf(stderr, "FAIL recorder persistent: %s\n", why); std::abort(); }
+}
+android::sp<QueueSurface> Producer(const std::shared_ptr<PersistentInputSurface>& source) {
+  source->NewJavaSurface(nullptr);
+  auto result = captured; captured = nullptr;
+  return result;
+}
+void Post(QueueSurface* producer) {
+  ANativeWindow_Buffer buffer{};
+  Require(producer->lock(&buffer, nullptr) == 0, "persistent producer remains connected");
+  std::fill_n(static_cast<uint32_t*>(buffer.bits), buffer.width * buffer.height, 0xff0000ff);
+  Require(producer->unlockAndPost() == 0, "real input publication succeeds");
+}
+void Configure(Recorder& recorder, const std::string& path) {
+  auto& config = recorder.config();
+  config.output_format = 2; config.video_source = 2; config.video_encoder = 2;
+  config.width = config.height = 32;
+  config.fd = open(path.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+  Require(config.fd >= 0, "fixture output opened");
+}
+void WaitForVideo(int frames) {
+  std::unique_lock<std::mutex> lock(persistent_encoder_mu);
+  Require(persistent_encoder_cv.wait_for(lock, 5s, [&] { return persistent_encoded >= frames; }),
+          "actual recorder worker reaches the encoder boundary");
+}
+void PrepareAndRetire(const std::string& directory) {
+  auto source = CreatePersistentInputSurface();
+  auto producer = Producer(source);
+  Recorder first({}), second({});
+  std::string error;
+  Require(first.SetInputSurface(source) && second.SetInputSurface(source),
+          "setInputSurface stores a source before configuration without consuming it");
+  auto available = source->Attach(32, 32);
+  Require(available != nullptr, "unprepared recorders hold no active lease");
+  available.reset();
+  Configure(first, directory + "/prepared.mp4");
+  Require(first.Prepare(&error), "prepare attaches persistent source");
+  Require(first.input_surface() == nullptr, "getSurface is unavailable after persistent prepare");
+  Require(!first.SetInputSurface(source), "persistent setter fails after prepare");
+  Require(source->Attach(32, 32) == nullptr, "prepared recorder owns the single consumer lease");
+  Configure(second, directory + "/conflict.mp4");
+  Require(!second.Prepare(&error) && second.InError() && error.find("consumer") != std::string::npos,
+          "conflicting recorder prepare fails and enters error");
+  second.Reset();
+  first.Reset();
+  Require(first.CanConfigure(), "reset restores configuration state");
+  Post(producer.get());
+  available = source->Attach(32, 32);
+  Require(available != nullptr, "reset relinquishes consumer without abandoning producer");
+  available.reset();
+
+  Configure(first, directory + "/failed.mp4");
+  Require(first.SetInputSurface(source), "failed-prepare session accepts source");
+  // Inject a real dup failure after the real input consumer was attached.
+  close(first.config().fd);
+  Require(!first.Prepare(&error) && first.InError(), "output failure fails the real pipeline");
+  available = source->Attach(32, 32);
+  Require(available != nullptr, "failed pipeline detaches its persistent consumer");
+  available.reset(); first.Reset();
+  Post(producer.get());
+}
+void RecordAndReuse(const std::string& directory) {
+  auto source = CreatePersistentInputSurface();
+  auto producer = Producer(source);
+  const int created = QueueSurface::created;
+  for (int session = 0; session < 2; ++session) {
+    Recorder recorder({});
+    std::string error;
+    Configure(recorder, directory + "/persistent-" + std::to_string(session) + ".mp4");
+    Require(recorder.SetInputSurface(source) && recorder.Prepare(&error), "successive recorder prepares source");
+    persistent_conversions = 0;
+    persistent_encoded = 0;
+    Post(producer.get());
+    Require(persistent_conversions == 0 && persistent_encoded == 0, "before-start frames are discarded before conversion");
+    Require(recorder.Start(&error), "persistent recorder starts");
+    Require(!recorder.SetInputSurface(source), "persistent setter fails during recording");
+    Post(producer.get()); WaitForVideo(1);
+    Require(recorder.Pause(&error), "recording pauses");
+    Post(producer.get());
+    Require(persistent_conversions == 1, "paused input performs no conversion");
+    Require(recorder.Resume(&error), "recording resumes");
+    Post(producer.get()); WaitForVideo(2);
+    Post(producer.get()); WaitForVideo(3);
+    Require(recorder.Stop(&error), "stop drains and finalizes real MP4 writer");
+    Require(persistent_conversions == 3 && persistent_encoded == 3, "only three actual admitted frames reach encoder");
+    Post(producer.get());
+    Require(persistent_conversions == 3, "stop removed callback before next producer publication");
+    Require(recorder.CanConfigure() && recorder.input_surface() == nullptr, "successful stop clears public session");
+  }
+  Require(QueueSurface::created == created, "recorder reuse does not create another producer");
+  std::weak_ptr<PersistentInputSurface> observed = source;
+  Recorder pending({});
+  Require(pending.SetInputSurface(source), "pending recorder stores strong source reference");
+  source.reset();
+  Require(!observed.expired(), "application release cannot revoke pending native configuration");
+  pending.Reset();
+  Require(observed.expired(), "recorder reset releases pending native source reference");
+  ANativeWindow_Buffer buffer{};
+  Require(producer->lock(&buffer, nullptr) != 0, "last native owner abandons released producer");
+}
+}  // namespace
+
+namespace android {
+jobject android_view_Surface_createFromSurface(JNIEnv*, const sp<Surface>& surface) {
+  captured = static_cast<gesher::media::QueueSurface*>(surface.get()); return nullptr;
+}
+}  // namespace android
+
+int main(int argc, char** argv) {
+  Require(argc == 3, "AVC fixture and output directory supplied");
+  std::ifstream input(argv[1], std::ios::binary);
+  gesher::media::avc_access_unit.assign(std::istreambuf_iterator<char>(input), {});
+  Require(!gesher::media::avc_access_unit.empty(), "explicit genuine AVC packet loaded");
+  PrepareAndRetire(argv[2]); RecordAndReuse(argv[2]);
+  Require(gesher::media::QueueSurface::live == 0, "all native source and producer references released");
+  std::printf("recorder persistent input contracts: %d checks, no live producers\n", checks);
+}

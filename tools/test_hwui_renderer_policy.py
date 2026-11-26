@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Regression gates for automatic HWUI GPU selection and Ganesh qualification.
 
+Also the OpenGL ES version declared for the default EGL display
+(compat/bionic/egl_gles_version.h): ES 3.0 only on a hardware Direct3D 11
+device, with a negative control that must fail.
+
 The real C++ production selector is compiled against test-only adapters.
 The probe suite additionally extracts the production ANGLE/Skia qualification
 function, reproducing MakeGL failures and verifying EGL cleanup/fallback.
@@ -23,14 +27,18 @@ def main():
     args = parser.parse_args()
     compiler = shlex.split(args.cxx)
     with tempfile.TemporaryDirectory(prefix="gesher-hwui-") as tmp:
-        for name, sources in (
-            ("policy", ["tests/native/hwui_renderer_policy_test.cc"]),
+        for name, sources, defines, passes in (
+            ("policy", ["tests/native/hwui_renderer_policy_test.cc"], [], True),
             ("selector", ["compat/hwui/gl/pipeline_select.cc",
-                          "tests/hwui-renderer/selector_test.cc"]),
+                          "tests/hwui-renderer/selector_test.cc"], [], True),
+            ("gles-version", ["tests/native/egl_gles_version_test.cc"], [], True),
+            # Negative control: ES 3.0 declared on WARP must be caught.
+            ("gles-version-negative", ["tests/native/egl_gles_version_test.cc"],
+             ["-DGESHER_EGL_VERSION_NEGATIVE_CONTROL"], False),
         ):
             exe = str(Path(tmp) / (name + (".exe" if os.name == "nt" else "")))
             cmd = compiler + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
-                              "-fno-exceptions",
+                              "-fno-exceptions", *defines,
                               "-I", str(ROOT / "tests/hwui-renderer/stubs"),
                               "-I", str(ROOT), *(str(ROOT / src) for src in sources),
                               "-o", exe]
@@ -38,7 +46,11 @@ def main():
                 cmd += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
                         "-fno-omit-frame-pointer"]
             subprocess.run(cmd, cwd=ROOT, check=True, timeout=120)
-            subprocess.run([exe], cwd=ROOT, check=True, timeout=30)
+            # The negative control's own FAIL lines are expected; keep them out of the log.
+            run = subprocess.run([exe], cwd=ROOT, timeout=30, capture_output=not passes)
+            if (run.returncode == 0) != passes:
+                raise SystemExit(f"{name}: exit {run.returncode}, expected "
+                                 + ("success" if passes else "failure (negative control)"))
     probe = [sys.executable, str(ROOT / "tools/test_ganesh_probe.py"),
              "--cxx", args.cxx]
     if args.sanitize:
@@ -48,7 +60,7 @@ def main():
     if args.sanitize:
         trim.append("--sanitize")
     subprocess.run(trim, cwd=ROOT, check=True, timeout=180)
-    print("hwui GPU policy, selector and actual Ganesh preflight all passed")
+    print("hwui GPU policy, selector, EGL ES version and actual Ganesh preflight all passed")
 
 if __name__ == "__main__":
     main()

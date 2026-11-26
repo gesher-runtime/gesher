@@ -58,6 +58,7 @@ include(cmake/aosp/boringssl.cmake)
 include(cmake/aosp/libcore_native.cmake)
 # Conscrypt's libjavacrypto and compat/net: TLS, Windows' trusted roots (docs/network.md).
 include(cmake/aosp/conscrypt.cmake)
+include(cmake/aosp/brotli.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)
@@ -80,12 +81,16 @@ include(cmake/aosp/graphics.cmake)
 include(compat/windows/windows.cmake)
 # Input (docs/input.md): libinput, the input natives, Win32 messages to Android events.
 include(cmake/aosp/input.cmake)
+# Legacy RenderScript (docs/renderscript.md): libRS's CPU runtime and librs_jni.so.
+include(cmake/aosp/renderscript.cmake)
 # Media (docs/media.md): the audio engine and the framework's media natives.
 include(cmake/aosp/media.cmake)
 # Link Windows audio and video APIs when building media components.
 target_link_libraries(dalvikvm PRIVATE ole32 mmdevapi)
 # Devices (docs/devices.md): location, sensors and cameras over Windows' APIs.
 include(compat/devices/devices.cmake)
+# Printing (docs/print.md): Windows printers for android.print; uses devices' winrt.cc.
+include(compat/print/print.cmake)
 # Camera (compat/camera): Media Foundation webcam capture and Camera2 delivery
 include(compat/camera/camera.cmake)
 target_link_libraries(framework_runtime PUBLIC mfplat mfreadwrite mfuuid)
@@ -133,6 +138,25 @@ target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
 add_executable(posix_probe probes/posix/posix_probe.cc)
 target_compile_options(posix_probe PRIVATE -Wall -Wextra -Werror)
 
+# Isolated DLLs for actual Windows dlopen path/search and reference ownership.
+# They live outside executable search directories and are never installed.
+add_library(dlopen_fixture_dependency SHARED tests/native/dlopen_fixture_dependency.c)
+set_target_properties(dlopen_fixture_dependency PROPERTIES
+  PREFIX "" OUTPUT_NAME "gesher-dlopen-dependency" LINK_LIBRARIES "" INTERFACE_LINK_LIBRARIES ""
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dlopen-fixtures")
+target_compile_options(dlopen_fixture_dependency PRIVATE -Wall -Wextra -Werror)
+add_library(dlopen_fixture SHARED tests/native/dlopen_fixture.c)
+set_target_properties(dlopen_fixture PROPERTIES
+  PREFIX "" OUTPUT_NAME "gesher-dlopen-fixture" LINK_LIBRARIES "dlopen_fixture_dependency"
+  INTERFACE_LINK_LIBRARIES ""
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dlopen-fixtures")
+target_compile_options(dlopen_fixture PRIVATE -Wall -Wextra -Werror)
+add_executable(dlopen_windows_test tests/native/dlopen_windows_test.cc)
+target_compile_options(dlopen_windows_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(dlopen_windows_test PRIVATE -municode)
+target_link_libraries(dlopen_windows_test PRIVATE gesher_posix)
+add_dependencies(dlopen_windows_test dlopen_fixture)
+
 # Virtual procfs and sysfs contracts (Roadmap N04, Issue #56).
 add_executable(procfs_sysfs_contract_test tests/native/procfs_sysfs_contract_test.cc)
 target_compile_options(procfs_sysfs_contract_test PRIVATE -Wall -Wextra -Werror)
@@ -146,6 +170,10 @@ target_link_libraries(filesystem_metadata_host_test PRIVATE gesher_posix)
 add_executable(xattr_fd_host_test tests/native/xattr_fd_host_test.cc)
 target_compile_options(xattr_fd_host_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(xattr_fd_host_test PRIVATE gesher_posix advapi32)
+
+add_executable(storage_policy_host_test tests/native/storage_policy_host_test.cc)
+target_compile_options(storage_policy_host_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(storage_policy_host_test PRIVATE gesher_posix sqlite)
 
 add_executable(sqlite_path_test tests/native/sqlite_path_test.cc)
 target_compile_options(sqlite_path_test PRIVATE -Wall -Wextra -Werror)
@@ -168,6 +196,10 @@ target_link_libraries(file_flags_ofd_test PRIVATE gesher_posix)
 add_executable(stdio_ofd_test tests/native/stdio_ofd_test.cc)
 target_compile_options(stdio_ofd_test PRIVATE -Wall -Wextra -Werror -fno-builtin)
 target_link_libraries(stdio_ofd_test PRIVATE gesher_posix)
+
+add_executable(udp_pktinfo_test tests/native/udp_pktinfo_test.cc)
+target_compile_options(udp_pktinfo_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(udp_pktinfo_test PRIVATE gesher_posix)
 
 add_executable(pipe_kernel_test tests/native/pipe_kernel_test.cc)
 target_compile_options(pipe_kernel_test PRIVATE -Wall -Wextra -Werror)
@@ -242,6 +274,11 @@ target_link_libraries(pthread_attributes_target_test PRIVATE gesher_bionic geshe
 add_executable(art_shim_test tests/native/art_shim_test.cc)
 target_compile_options(art_shim_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(art_shim_test PRIVATE gesher_bionic gesher_elf)
+# ADR 0086: the arm64 stand-ins loaded by LoadArtShimArm64 and run by the arm64
+# translator (gesher_arm64.dll), their imports bound to recording host fakes.
+add_executable(art_shim_arm64_test tests/native/art_shim_arm64_test.cc)
+target_compile_options(art_shim_arm64_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(art_shim_arm64_test PRIVATE gesher_bionic gesher_elf)
 
 # Actual Bionic truncate exports, access rights and shared cursor contracts.
 add_executable(bionic_ftruncate_test tests/native/bionic_ftruncate_test.cc)
@@ -264,6 +301,13 @@ add_executable(elf_deferred_code_test tests/native/elf_deferred_code_test.cc)
 target_include_directories(elf_deferred_code_test PRIVATE compat/elf)
 target_compile_options(elf_deferred_code_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(elf_deferred_code_test PRIVATE gesher_elf)
+
+# Gesher's ELF loader as /system/bin/linker64 (ADR 0096): the file, its
+# /proc/self/maps line and exec of linker64, through gesher-base and exec_spawn.
+add_executable(system_linker_test tests/native/system_linker_test.cc)
+target_compile_options(system_linker_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(system_linker_test PRIVATE gesher_exec_spawn gesher_elf)
+add_dependencies(system_linker_test gesher-exec)
 
 # Live CRT environment storage after host and guest mutations (exec4).
 add_executable(exec4_environment_test tests/exec/environment-host-test.cc)
@@ -288,6 +332,18 @@ target_link_libraries(binary128_concurrency PRIVATE gesher_bionic_binary128)
 add_executable(clock_domains_windows_test tests/native/clock_domains_windows_test.cc)
 target_compile_options(clock_domains_windows_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(clock_domains_windows_test PRIVATE gesher_posix)
+
+# dlopen()'s dlerror() text: Android's linker wording for app paths.
+add_executable(dlopen_errors_test tests/native/dlopen_errors_test.cc)
+target_compile_options(dlopen_errors_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(dlopen_errors_test PRIVATE gesher_posix)
+
+# The window-thread watch's clock (compat/input/thread_watch.cc): awake time.
+add_executable(thread_watch_clock_test tests/native/thread_watch_clock_test.cc
+  compat/input/thread_watch.cc)
+target_include_directories(thread_watch_clock_test PRIVATE compat/input)
+target_compile_options(thread_watch_clock_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(thread_watch_clock_test PRIVATE user32)
 
 add_executable(native3_cpu_clock_test tests/native/native3_cpu_clock_test.cc)
 target_compile_options(native3_cpu_clock_test PRIVATE -Wall -Wextra -Werror)

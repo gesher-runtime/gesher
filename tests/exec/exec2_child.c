@@ -201,6 +201,13 @@ int main(int argc, char** argv) {
     write_log(atoi(argv[3]), argv[2], argv[4]);
     return 0;
   }
+  // One message formatted from four arguments, as a credential split across them.
+  if (strcmp(mode, "log-print") == 0 && argc > 7) {
+    int (*print_log)(int, const char*, const char*, ...) = dlsym(RTLD_DEFAULT, "__android_log_print");
+    if (!print_log) return 5;
+    print_log(atoi(argv[3]), argv[2], "%s%s%s%s", argv[4], argv[5], argv[6], argv[7]);
+    return 0;
+  }
   if (strcmp(mode, "echo") == 0) {
     for (int i = 2; i < argc; ++i) printf("%s%s", i > 2 ? " " : "", argv[i]);
     printf("\n");
