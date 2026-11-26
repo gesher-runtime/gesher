@@ -21,13 +21,20 @@ std::vector<uint8_t> ReadFile(const char* path) {
   Check(static_cast<bool>(stream), "fixture must exist");
   return {std::istreambuf_iterator<char>(stream), {}};
 }
-void Run(const char* fixture) {
+void Run(const char* fixture, const char* aligned_fixture) {
   const auto guest = ReadFile(fixture);
+  const auto aligned = aligned_fixture ? ReadFile(aligned_fixture)
+                                      : std::vector<uint8_t>{};
   const std::string soname = "gesher_arm32_fixture.so";
+  const std::string aligned_name = "gesher_arm32_aligned_fixture.so";
   unsigned opens = 0;
   Program program([&](std::string_view name, std::vector<uint8_t>* bytes,
                       std::string* error) {
     ++opens;
+    if (name == aligned_name && !aligned.empty()) {
+      *bytes = aligned;
+      return true;
+    }
     if (name != soname) {
       if (error) *error = "unexpected guest library name";
       return false;
@@ -113,6 +120,26 @@ void Run(const char* fixture) {
         static_cast<int32_t>(result.bits) == 35,
         "success after failed library transaction");
   Check(program.Initialize(&error), "successful constructors never rerun");
+
+  if (!aligned.empty()) {
+    // Load after the first DSO so next_image_ is deliberately no longer
+    // aligned to 64 KiB. The second DSO's p_align requires correcting its
+    // load bias; a page-only alignment will fail in the ELF32 validator.
+    Check(program.LoadLibrary(aligned_name, &error) &&
+          program.LibraryCount() == 2,
+          "second real DSO with 64-KiB PT_LOAD alignment loads");
+    Check(!program.CallExport(aligned_name, "fixture_add",
+          {Value::Signed32(11), Value::Signed32(13)}, ValueKind::I32,
+          &result, &error),
+          "newly loaded DSO requires its own constructors");
+    Check(program.Initialize(&error),
+          "run constructors for late 64-KiB-aligned guest DSO");
+    Check(program.CallExport(aligned_name, "fixture_add",
+          {Value::Signed32(11), Value::Signed32(13)}, ValueKind::I32,
+          &result, &error) &&
+          static_cast<int32_t>(result.bits) == 66,
+          "late DSO executes relocations and ARM/Thumb code with aligned load bias");
+  }
   Check(program.Shutdown(&error), "run destructors and close program");
   Check(program.Shutdown(&error), "repeat shutdown is idempotent");
   Check(!program.CallExport(soname, "fixture_import",
@@ -150,8 +177,9 @@ void Run(const char* fixture) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  Check(argc == 2, "one compiled ARM/Thumb ELF fixture path required");
-  Run(argv[1]);
+  Check(argc == 2 || argc == 3,
+        "compiled ARM/Thumb ELF fixture and optional 64-KiB alignment fixture");
+  Run(argv[1], argc == 3 ? argv[2] : nullptr);
   std::cout << "ARM32 linked program and guest ABI tests passed\n";
   return 0;
 }
