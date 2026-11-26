@@ -4,7 +4,9 @@
 Extract the complete production waiter and exit-status mapper. The host fixture
 replaces JNI/Win32/CRT boundaries, deterministically schedules an app writer
 after the first sink write, and models fragmented stdio emission. It does not
-replace the producer, its format, child cleanup, or exit-code mapping.
+replace the producer, its format, child cleanup, or exit-code mapping. The
+production argument summary of the start and failure records (bounded, quoted,
+one line) is extracted and checked as well.
 
 --source-root runs this same fixture against another source tree (the original
 fprintf producer is the negative control). Real Windows E2E retains the exact
@@ -40,6 +42,8 @@ def main():
         "@WAIT_FOR_PROCESS_EXIT@": between(
             process, "jint JNICALL WaitForProcessExit(", "// Process.destroy():"),
         "@EXIT_STATUS@": between(spawn, "int ExitStatus(DWORD code)", "int WaitStatus(DWORD code)"),
+        "@EXEC_LOG_ARGUMENTS@": between(
+            process, "constexpr size_t kExecLogArgumentBytes", "void ThrowIOException("),
     }
     for name, source in [("process.cc", process), ("exec_spawn.cc", spawn)]:
         print(name, hashlib.sha256(source.encode()).hexdigest(), flush=True)

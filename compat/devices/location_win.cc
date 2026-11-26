@@ -2,7 +2,10 @@
 
 #include "location_win.h"
 
+#include <cfgmgr32.h>
+
 #include <cmath>
+#include <vector>
 
 #include "winrt.h"
 
@@ -90,6 +93,37 @@ bool Optional(IReference<double>* ref, double* value) {
 }
 
 }  // namespace
+
+// GUID_DEVINTERFACE_GNSS (gnssdriver.h): the interface GNSS drivers expose.
+const GUID kGnssInterface = {0x3336E5E4, 0x018A, 0x4669,
+                             {0x84, 0xC5, 0xBD, 0x05, 0xF3, 0xBD, 0x36, 0x8B}};
+
+bool HasGnssReceiver(HRESULT* hr) {
+  *hr = S_OK;
+  GUID guid = kGnssInterface;
+  // The list can grow between the two calls (a receiver plugged in): retry.
+  for (int attempt = 0; attempt < 3; attempt++) {
+    ULONG length = 0;
+    CONFIGRET cr = CM_Get_Device_Interface_List_SizeW(&length, &guid, nullptr,
+                                                      CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+    if (cr != CR_SUCCESS) {
+      *hr = HRESULT_FROM_WIN32(CM_MapCrToWin32Err(cr, ERROR_GEN_FAILURE));
+      return false;
+    }
+    if (length <= 1) return false;  // an empty multi-string: no present interface
+    std::vector<wchar_t> list(length);
+    cr = CM_Get_Device_Interface_ListW(&guid, nullptr, list.data(), length,
+                                       CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+    if (cr == CR_BUFFER_SMALL) continue;
+    if (cr != CR_SUCCESS) {
+      *hr = HRESULT_FROM_WIN32(CM_MapCrToWin32Err(cr, ERROR_GEN_FAILURE));
+      return false;
+    }
+    return list[0] != L'\0';
+  }
+  *hr = HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+  return false;
+}
 
 Access RequestAccess(HRESULT* hr) {
   IGeolocatorStatics* statics = nullptr;

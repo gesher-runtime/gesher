@@ -22,7 +22,7 @@ def main() -> None:
         parser.add_argument("--" + option, required=True, type=Path)
     parser.add_argument("--source-ref")
     parser.add_argument("--cc", help="Host C compiler (llvm-mingw on Windows)")
-    parser.add_argument("--case", default="all", choices=["all", "basic", "identity", "timeouts", "teardown", "subscriptions", "pending", "pending-cancel", "freshness"])
+    parser.add_argument("--case", default="all", choices=["all", "basic", "identity", "timeouts", "teardown", "subscriptions", "pending", "pending-cancel", "freshness", "cost"])
     args = parser.parse_args()
     cc = args.cc or shutil.which("cc")
     if not cc:

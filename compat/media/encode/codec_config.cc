@@ -1,23 +1,43 @@
 // Pure codec configuration helpers shared by encoders and native muxers.
 #include "codec_config.h"
 
+#include <cstring>
+
 namespace gesher::media {
 
 std::vector<std::pair<const uint8_t*, size_t>> SplitAnnexB(const uint8_t* p, size_t n) {
   std::vector<std::pair<const uint8_t*, size_t>> nals;
   size_t i = 0, start = SIZE_MAX;
-  while (i + 3 <= n) {
-    if (p[i] == 0 && p[i + 1] == 0 && p[i + 2] == 1) {
-      if (start != SIZE_MAX) {
-        size_t end = i;
-        while (end > start && p[end - 1] == 0) end--;  // a 4-byte start code's zero
-        nals.emplace_back(p + start, end - start);
+  while (n - i >= 3) {
+    if (p[i] == 0) {
+      if (p[i + 1] == 0 && p[i + 2] == 1) {
+        if (start != SIZE_MAX) {
+          size_t end = i;
+          while (end > start && p[end - 1] == 0) end--;  // a 4-byte start code's zero
+          nals.emplace_back(p + start, end - start);
+        }
+        i += 3;
+        start = i;
+      } else {
+        i++;
       }
-      i += 3;
-      start = i;
-    } else {
-      i++;
+      continue;
     }
+    // Every possible start code begins with a zero. Skip a complete word only
+    // when none of its bytes can start one; use the original scalar checks
+    // above for zero bytes. Only a nonzero byte can enter this probe. The mask
+    // is a boolean, never a position map (subtraction can borrow across bytes).
+    if (n - i >= sizeof(uint64_t)) {
+      uint64_t word;
+      std::memcpy(&word, p + i, sizeof(word));
+      constexpr uint64_t low = 0x0101010101010101ULL;
+      constexpr uint64_t high = 0x8080808080808080ULL;
+      if (((word - low) & ~word & high) == 0) {
+        i += sizeof(word);
+        continue;
+      }
+    }
+    i++;
   }
   if (start != SIZE_MAX && start < n) nals.emplace_back(p + start, n - start);
   return nals;

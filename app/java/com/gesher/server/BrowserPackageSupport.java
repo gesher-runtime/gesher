@@ -95,7 +95,8 @@ public final class BrowserPackageSupport {
         ai.targetSdkVersion = 34;
         ai.sourceDir = "/system/app/GesherBrowser.apk";
         ai.publicSourceDir = ai.sourceDir;
-        ai.dataDir = "/data/data/" + PACKAGE;
+        // Under $ANDROID_DATA, never created (see ApklessDataDirs).
+        ApklessDataDirs.describe(ai);
         return ai;
     }
 

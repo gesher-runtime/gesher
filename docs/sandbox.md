@@ -26,6 +26,14 @@ See the M1 results below for the launch dependencies the experiment exposes.
   sandbox on installs and launches `lifecycle.apk`, records the app process's
   token and prints the logs. `-NoSandbox` runs the same as a baseline.
 
+The CI probe also holds one AppContainer process open while the broker changes
+shared storage from modify to read-only to scoped, and removes own-directory
+grants at uninstall. It checks fresh opens of existing and host-created shared
+files, denial of other packages' private directories, the package's own
+directories, Windows owner cleanup, and readability of successive atomically
+replaced policy files. This tests Windows ACLs and the native grant functions;
+it does not establish a complete Android app launch in M1.
+
 ## Design
 
 | Process | Token |
@@ -58,6 +66,20 @@ See the M1 results below for the launch dependencies the experiment exposes.
   INTERNET adds `internetClient` and `privateNetworkClientServer` (Android's
   INTERNET covers the local network too). Nothing else yet: devices stay with
   the system server's services.
+- **External storage** (when this experiment is enabled): policy publication
+  updates the package's live storage ACEs, including downgrades and revocation.
+  Shared grants inherit into newly created files. `Android/data` and
+  `Android/obb` have protected DACLs retaining Windows user/SYSTEM access;
+  each package receives a separate explicit grant on its own directories.
+  Policy files receive their read ACE before atomic replacement so a running
+  container can read the replacement inode. ACL errors abort publication and
+  are reported, rather than treating a requested permission as applied.
+  `MEDIA_RO` uses a coarse read ACL; media-type selection is enforced by the
+  storage policy layer, not by Windows ACLs. This remains the optional M1
+  experiment, not isolation for arbitrary native code. Existing open Windows
+  handles retain the access the kernel already granted, protected/imported
+  child ACLs can prevent inheritance, and Windows can skip propagation into
+  children held without compatible sharing. The remaining M2 work still applies.
 - **binderd** (sandbox on): clients open the pipe for read, `FILE_WRITE_DATA` and
   `FILE_WRITE_ATTRIBUTES` only (`kPipeClientAccess`), and the capability gets just
   that: never `FILE_CREATE_PIPE_INSTANCE`, so a container cannot serve an

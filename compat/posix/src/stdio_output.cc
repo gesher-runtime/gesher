@@ -16,6 +16,10 @@
 #include "record_lock_descriptors.h"
 #include "../../bionic/stdio_windows_lock.h"
 #include <gesher/file_description.h>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 #include <windows.h>
 #include <fcntl.h>
@@ -791,3 +795,44 @@ extern "C" {
 int (*__imp_fseeko64)(FILE*, long long, int) = gesher_fseeko64;
 long long (*__imp_ftello64)(FILE*) = gesher_ftello64;
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the stream registry. A stream's own lock is not
+// waited for (another thread may hold it across a blocking read, and Linux's
+// fork waits for no stream): in the child every stream's lock is made anew,
+// free, unless the forking thread itself held it (flockfile around fork),
+// which keeps it at that depth. A stream another thread was writing at that
+// moment may hold part of that write in the child's copy of its buffer.
+namespace {
+DWORD g_stdio_fork_thread = 0;
+bool StdioTryLock(void*) {
+  using namespace gesher::stdio;
+  if (registry == nullptr) return true;
+  if (!registry->mutex.try_lock()) return false;
+  g_stdio_fork_thread = GetCurrentThreadId();
+  return true;
+}
+void StdioUnlock(void*) {
+  using namespace gesher::stdio;
+  if (registry != nullptr) registry->mutex.unlock();
+}
+void StdioChild(void*) {
+  using namespace gesher::stdio;
+  if (registry == nullptr) return;
+  for (auto& entry : registry->streams) {
+    auto* section = reinterpret_cast<CRITICAL_SECTION*>(&entry.second->mutex);
+    const bool ours = reinterpret_cast<uintptr_t>(section->OwningThread) == g_stdio_fork_thread;
+    const LONG depth = ours ? section->RecursionCount : 0;
+    InitializeCriticalSection(section);
+    for (LONG i = 0; i < depth; ++i) EnterCriticalSection(section);
+  }
+  new (&registry->mutex) std::mutex();
+}
+const gesher::ForkLockOps kStdioForkOps = {&StdioTryLock, &StdioUnlock, &StdioChild};
+// Registered with a non-null object: the registry may be made later.
+int g_stdio_fork_anchor = 0;
+const gesher::ForkLockRegistration g_fork_stdio(gesher::kForkOrderSubsystem, "stdio streams",
+                                                []() -> void* { return &g_stdio_fork_anchor; },
+                                                &kStdioForkOps);
+}  // namespace
+#endif

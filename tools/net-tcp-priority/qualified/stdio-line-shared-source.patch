@@ -1,5 +1,5 @@
 diff --git a/compat/bionic/stdio_bionic.cc b/compat/bionic/stdio_bionic.cc
-index 0f46ab7c..3d943fe6 100644
+index 10ce0edbceb371735fdebabf99ca1a45de05b071..3753e6f9d38e342b1cd791e17c8a736018bb5399 100644
 --- a/compat/bionic/stdio_bionic.cc
 +++ b/compat/bionic/stdio_bionic.cc
 @@ -570,27 +570,11 @@ int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return static_cast<int>(g
@@ -53,7 +53,7 @@ index 0f46ab7c..3d943fe6 100644
  
  size_t BIONIC_SYSV Fread(void* buf, size_t size, size_t n, void* f) {
 diff --git a/compat/posix/include/gesher/stdio.h b/compat/posix/include/gesher/stdio.h
-index 2f1f0446..058b904f 100644
+index 2f1f0446b23506cd99d1c2735594c36453d7939c..058b904ffae0257ed17774fe35403df0fd9207b2 100644
 --- a/compat/posix/include/gesher/stdio.h
 +++ b/compat/posix/include/gesher/stdio.h
 @@ -33,6 +33,8 @@ int TryLock(FILE* stream);
@@ -66,10 +66,10 @@ index 2f1f0446..058b904f 100644
  int Put(int value, FILE* stream, bool unlocked = false);
  int Flush(FILE* stream, bool unlocked = false);
 diff --git a/compat/posix/src/misc.cc b/compat/posix/src/misc.cc
-index f185d98a..0120cd6c 100644
+index 5de4efc3a9419a0c0b067f7016eb5be90b665e89..39cc86a3957c09d3014ddcabe4599ff4e8e6bfaa 100644
 --- a/compat/posix/src/misc.cc
 +++ b/compat/posix/src/misc.cc
-@@ -233,35 +233,8 @@ char* hasmntopt(const struct mntent* mnt, const char* opt) {
+@@ -245,35 +245,8 @@ char* hasmntopt(const struct mntent* mnt, const char* opt) {
  
  // Reads up to and including `delim` into *lineptr, growing it with realloc.
  ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
@@ -108,10 +108,10 @@ index f185d98a..0120cd6c 100644
  
  ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
 diff --git a/compat/posix/src/stdio_output.cc b/compat/posix/src/stdio_output.cc
-index 83ab9abc..3a7dbf1c 100644
+index 966a54384515b75f67fbc26007263caa3e21ed42..9f9f9eda691f648c829cd7c1f0a66815f27a6c0b 100644
 --- a/compat/posix/src/stdio_output.cc
 +++ b/compat/posix/src/stdio_output.cc
-@@ -296,17 +296,16 @@ char* LineLocal(char* bytes, int count, FILE* stream, bool unlocked) {
+@@ -300,17 +300,16 @@ char* LineLocal(char* bytes, int count, FILE* stream, bool unlocked) {
    if (count <= 0) std::abort();  // Bionic fgets rejects a nonpositive bound fatally.
    AccessStream state(stream, unlocked);
    if (!state) return nullptr;
@@ -138,7 +138,7 @@ index 83ab9abc..3a7dbf1c 100644
  }
  int UngetLocal(int character, FILE* stream) {
    AccessStream state(stream, false);
-@@ -540,6 +539,12 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
+@@ -544,6 +543,12 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
        PrintLocal, PrintWideLocal, ScanLocal, ScanWideLocal, BionicMetadataLocal};
    return &api;
  }
@@ -151,7 +151,7 @@ index 83ab9abc..3a7dbf1c 100644
  namespace {
  // Register before ordinary application constructors register their destructors
  // or atexit callbacks. A lazy registration during the first fopen would flush
-@@ -575,6 +580,13 @@ size_t Write(const void* bytes, size_t size, size_t count, FILE* stream, bool un
+@@ -579,6 +584,13 @@ size_t Write(const void* bytes, size_t size, size_t count, FILE* stream, bool un
    return Owner()->write(bytes, size, count, stream, unlocked);
  }
  char* ReadLine(char* bytes, int count, FILE* stream, bool unlocked) { return Owner()->line(bytes, count, stream, unlocked); }
@@ -166,7 +166,7 @@ index 83ab9abc..3a7dbf1c 100644
    unsigned char value;
    return Read(&value, 1, 1, stream, unlocked) == 1 ? value : EOF;
 diff --git a/compat/posix/src/stdio_stream_buffer.h b/compat/posix/src/stdio_stream_buffer.h
-index 1d28bef5..963a1cde 100644
+index 1d28bef5063184a796851f584e7e420f704ca280..963a1cde5af281c552c33763ddf6e3c5ada6be69 100644
 --- a/compat/posix/src/stdio_stream_buffer.h
 +++ b/compat/posix/src/stdio_stream_buffer.h
 @@ -10,9 +10,33 @@
