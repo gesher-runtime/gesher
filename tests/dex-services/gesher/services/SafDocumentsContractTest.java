@@ -613,8 +613,11 @@ public final class SafDocumentsContractTest {
             check(((String[])get(dialog.request, "mimeTypes")).length == 65,
                     "Native request retains every MIME filter");
             check(result.mResultCode == Activity.RESULT_OK && result.mData.getData() == null
-                    && result.mData.getClipData().getItemCount() == paths.length,
-                    "AOSP multiple selection returns all 257 ordinary short-path documents");
+                    && result.mData.getType() == null
+                    && result.mData.getClipData().getItemCount() == paths.length
+                    && result.mData.getClipData().getDescription().getMimeTypeCount() == mimes.length
+                    && mimes[64].equals(result.mData.getClipData().getDescription().getMimeType(64)),
+                    "AOSP multiple selection returns all documents with the requested MIME alternatives");
             for (int i = 0; i < paths.length; i++) {
                 Uri uri = document(new File(paths[i]));
                 check(result.mData.getClipData().getItemAt(i).getUri().equals(uri)
@@ -712,7 +715,9 @@ public final class SafDocumentsContractTest {
                 && "text/plain".equals(libcore.content.type.MimeMap.getDefault()
                     .guessMimeTypeFromExtension((String)get(save.request, "extension"))),
                 "Save mode, name and MIME extension reach native boundary");
-        check(saved.mResultCode == Activity.RESULT_OK, "Actual create succeeds");
+        check(saved.mResultCode == Activity.RESULT_OK && saved.mData.getData() != null
+                && saved.mData.getType() == null && saved.mData.getClipData() == null,
+                "Create returns a single untyped data URI");
         Uri made = saved.mData.getData();
         File madeFile = new File(DocumentsContract.getDocumentId(made));
         check(!made.equals(document(existing)) && madeFile.isFile() && madeFile.length() == 0
@@ -727,8 +732,9 @@ public final class SafDocumentsContractTest {
         Dialog get = new Dialog(); get.install(content);
         content.start(new Intent(Intent.ACTION_GET_CONTENT).setType("text/plain"), source);
         ResultInfo got = finishSelection(content, get, existing.getPath());
-        check(got.mResultCode == Activity.RESULT_OK && got.mData.getData().equals(document(existing)),
-                "GET_CONTENT returns selected real document");
+        check(got.mResultCode == Activity.RESULT_OK && got.mData.getData().equals(document(existing))
+                && got.mData.getType() == null && got.mData.getClipData() == null,
+                "GET_CONTENT returns a single untyped data URI for the selected real document");
         check((got.mData.getFlags() & (READ | WRITE | PERSIST | PREFIX)) == READ
                 && !content.grants.canAccess(content.client, document(existing), WRITE, 0),
                 "GET_CONTENT delegates read access only");
@@ -742,7 +748,8 @@ public final class SafDocumentsContractTest {
         tree.start(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), treeSource);
         ResultInfo picked = finishSelection(tree, folder, dir.getPath());
         check(picked.mResultCode == Activity.RESULT_OK && DocumentsContract.isTreeUri(picked.mData.getData())
-                && (picked.mData.getFlags() & PREFIX) != 0, "Tree selection returns actual prefix grant");
+                && picked.mData.getType() == null && picked.mData.getClipData() == null
+                && (picked.mData.getFlags() & PREFIX) != 0, "Tree selection returns a data URI and real prefix grant");
         Uri child = DocumentsContract.buildDocumentUriUsingTree(picked.mData.getData(), existing.getCanonicalPath());
         try (Cursor cursor = tree.query(child, null)) { check(cursor.moveToFirst(), "Selected tree opens existing descendant through AOSP transport"); }
         tree.grants.flush();

@@ -338,26 +338,36 @@ final class DocumentPicker {
                 uris.add(request.mode == TREE
                         ? DocumentsContract.buildTreeDocumentUri(DocumentsStorageProvider.AUTHORITY, file.getPath())
                         : DocumentsContract.buildDocumentUri(DocumentsStorageProvider.AUTHORITY, file.getPath()));
-                mimeTypes.add(DocumentsStorageProvider.mimeType(file));
+                if (request.pickImages) mimeTypes.add(DocumentsStorageProvider.mimeType(file));
             }
-            int flags = Intent.FLAG_GRANT_READ_URI_PERMISSION;
-            if (request.pickImages) {
-                flags |= Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
-            } else if (!request.getContent) {
-                flags |= Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
-            }
-            if (request.mode == TREE) flags |= Intent.FLAG_GRANT_PREFIX_URI_PERMISSION;
-            Intent data = new Intent().addFlags(flags);
-            if (uris.size() == 1) data.setDataAndType(uris.get(0), mimeTypes.iterator().next());
-            ClipData clip = new ClipData("documents", mimeTypes.toArray(new String[0]), new ClipData.Item(uris.get(0)));
-            for (int i = 1; i < uris.size(); i++) clip.addItem(new ClipData.Item(uris.get(i)));
-            data.setClipData(clip);
-            Result result = new Result(data, uris, created, createdKey);
+            Result result = new Result(resultIntent(request, uris, mimeTypes), uris, created, createdKey);
             complete = true;
             return result;
         } finally {
             if (!complete) abandonCreated(created, createdKey);
         }
+    }
+
+    private static Intent resultIntent(Request request, List<Uri> uris, Set<String> mediaMimeTypes) {
+        int flags = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        if (request.pickImages) {
+            flags |= Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+        } else if (!request.getContent) {
+            flags |= Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+        }
+        if (request.mode == TREE) flags |= Intent.FLAG_GRANT_PREFIX_URI_PERMISSION;
+        Intent data = new Intent().addFlags(flags);
+        if (uris.size() == 1) {
+            if (!request.pickImages) return data.setData(uris.get(0));
+            data.setDataAndType(uris.get(0), mediaMimeTypes.iterator().next());
+        }
+        // DocumentsUI uses the requested MIME alternatives in its multi-pick
+        // envelope. The provider still supplies the selected document's type.
+        String[] types = request.pickImages ? mediaMimeTypes.toArray(new String[0]) : request.mimeTypes;
+        ClipData clip = new ClipData(request.pickImages ? "documents" : null,
+                types, new ClipData.Item(uris.get(0)));
+        for (int i = 1; i < uris.size(); i++) clip.addItem(new ClipData.Item(uris.get(i)));
+        return data.setClipData(clip);
     }
 
     static boolean isBlockedTreeRoot(File file) {
