@@ -18,10 +18,11 @@ import shlex
 import subprocess
 import tempfile
 
+from codec_contract_source import ENGINE, JNI, member, shared
+
 ROOT = Path(__file__).resolve().parents[1]
 VIDEO = 'compat/media/video/video_decoder.cc'
 ENCODER = 'compat/media/encode/soft_avc_encoder.cc'
-CODEC = 'compat/media/jni/media_codec_jni.cc'
 RECORDER = 'compat/media/record/recorder.cc'
 
 
@@ -47,13 +48,15 @@ def function(source, signature):
 
 
 def generate(output, ref=None, instrument=True, mutation=None):
-    sources = {p: read_source(p, ref) for p in (VIDEO, ENCODER, CODEC, RECORDER)}
+    codec = ENGINE if shared(ref) else JNI
+    sources = {p: read_source(p, ref) for p in (VIDEO, ENCODER, codec, RECORDER)}
     video = sources[VIDEO]
     if mutation:
         before, after = mutation
         assert video.count(before) == 1, before
         video = video.replace(before, after)
-    callback = function(sources[CODEC], 'void OnSurfaceFrame(')
+    callback = member(sources[codec], 'OnSurfaceFrame') if codec == ENGINE else (
+        function(sources[codec], 'void OnSurfaceFrame('))
     recorder = function(sources[RECORDER], 'void Recorder::OnFrame(').replace('Recorder::OnFrame', 'OnFrame', 1)
     clock = function(sources[RECORDER], 'int64_t Recorder::NowUs() const').replace('Recorder::NowUs', 'NowUs', 1)
     template = (ROOT / 'tests/media/rgba_i420_callbacks.h.in').read_text()
