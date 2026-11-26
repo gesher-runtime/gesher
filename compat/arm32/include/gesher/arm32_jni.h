@@ -19,6 +19,20 @@ namespace gesher::arm32 {
 // must end the guest JNI frame using ReleaseLocals() before returning to ART.
 // This component does NOT install native methods in ART, translate callbacks,
 // provide JavaVM attach/detach, or constitute full JNI32 support.
+// A parsed ILP32 JNINativeMethod. guest_entry is a 32-bit ARM/Thumb
+// executable guest address, NOT a host function pointer. A real integration
+// must install a host-width ART trampoline that calls this entry via Program.
+struct RegisteredNative32 {
+  std::string name;
+  std::string descriptor;
+  uint32_t guest_entry = 0;
+};
+
+using NativeRegistrationHandler =
+    std::function<bool(jclass declaring_class,
+                       const std::vector<RegisteredNative32>& methods,
+                       std::string* error)>;
+
 class Jni32 {
  public:
   Jni32(Program& program, JNIEnv* real_env);
@@ -30,6 +44,15 @@ class Jni32 {
   // pages and binds the implemented slots to typed guest SVC thunks. All
   // unimplemented slots stay null. Failed setup is not retryable.
   bool Install(std::string* error = nullptr);
+
+  // Install an ART-side registration handler before the guest enters
+  // JNI_OnLoad. RegisterNatives returns JNI_ERR if no handler is installed.
+  // A handler must register real callable host trampolines: acknowledging a
+  // method without doing so is an error in its implementation. The callback
+  // receives fully validated, owned strings; no guest pointer is narrowed.
+  // Set only on the bridge's owning Java thread between guest calls.
+  bool SetNativeRegistrationHandler(NativeRegistrationHandler handler,
+                                    std::string* error = nullptr);
 
   // Return the guest address of JNIEnv's first word (function-table pointer).
   // Must be called after Install(); no host pointer is returned.
