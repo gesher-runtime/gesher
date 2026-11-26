@@ -3691,7 +3691,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     continue;
                 }
                 ActivityRecord root = rootOf(task);
-                if (root == null) continue;
+                // A singleInstance activity owns its task. Its affinity can
+                // never make that task a destination for a different activity.
+                if (root == null || root.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE) {
+                    continue;
+                }
                 boolean component = root.component().equals(intent.getComponent());
                 if (info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE_PER_TASK && !component) continue;
                 if ((flags & Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0) {

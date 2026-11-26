@@ -571,6 +571,31 @@ public final class TaskStackContractTest {
                 "Top-only identity sharing disclosed the source to parent history");
     }
 
+    /** A singleInstance task stays exclusive even when ordinary activities share its affinity. */
+    private static void singleInstanceTaskIsolation() throws Exception {
+        Harness h = new Harness();
+        check(h.start(launch("Instance"), launch("Root"), launch("Top"))
+                        == ActivityManager.START_SUCCESS,
+                "A stack starting with a singleInstance activity was rejected");
+        Object instance = h.record("Instance");
+        Object root = h.record("Root");
+        Object top = h.record("Top");
+        int isolatedTaskId = (Integer)get(instance, "taskId");
+        int ordinaryTaskId = (Integer)get(root, "taskId");
+        check(isolatedTaskId != ordinaryTaskId && ordinaryTaskId == (Integer)get(top, "taskId"),
+                "The same-affinity stack joined the singleInstance task");
+        check(h.thread.launches(instance) == 1 && h.thread.launches(root) == 0
+                        && h.thread.launches(top) == 1,
+                "The stack did not realize the top of each independent task");
+
+        h.startOne(launch("Instance"), null);
+        check(h.record("Instance") == instance && h.records().size() == 3,
+                "Relaunching singleInstance created another instance or displaced ordinary history");
+        h.startOne(launch("Other").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), instance);
+        check((Integer)get(h.record("Other"), "taskId") == ordinaryTaskId,
+                "NEW_TASK from singleInstance failed to reuse the eligible same-affinity task");
+    }
+
     /** Ordinary starts must reuse tasks even when no startActivities batch is active. */
     private static void ordinaryTaskReuse() throws Exception {
         for (String state : List.of("resumed", "stopped", "pausing")) {
@@ -2180,7 +2205,10 @@ public final class TaskStackContractTest {
     private static int runSelected(String selected) throws Exception {
         if (selected.equals("all") || selected.equals("history")) { fullStack(); acceptedHistoryLifetimes(); disabledDeferredHistory(); }
         if (selected.equals("all") || selected.equals("validation")) invalidBatch();
-        if (selected.equals("all") || selected.equals("tasks")) { taskFlags(); reorderedUriOwner(); abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris(); }
+        if (selected.equals("all") || selected.equals("tasks")) {
+            taskFlags(); singleInstanceTaskIsolation(); reorderedUriOwner();
+            abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris();
+        }
         if (selected.equals("all") || selected.equals("ordinary")) {
             ordinaryTaskReuse(); ordinaryWaitReuse(); ordinaryClearTop(); ordinaryRootAndMultipleTasks();
             ordinaryNewTaskResult(); ordinaryDocumentResult(); ordinaryReuseAdmission(); ordinaryAuthenticatorCompletion();
