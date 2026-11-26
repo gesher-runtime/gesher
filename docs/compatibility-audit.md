@@ -135,6 +135,17 @@ have separate states. The summary, hashed inputs and complete JSONL are under
 `out/compat-audit/java-members`; this remains structural comparison, not method
 body, constant-value, generic/source-access or behavioral conformance.
 
+Each member row records the input ID and `classesN.dex` entry for the SDK
+member's declaring class and any resolved member definitions. Input IDs map to
+archive SHA-256 values in the summary. With `--loader-name` and one or more
+ordered `--loader-jar` inputs, the report also models a named parent-first child
+class path. Child definitions can inherit boot definitions, while references from
+boot definitions remain limited to boot. Run a separate comparison for each
+independent library class path. Use the corresponding SDK `optional` JAR to
+measure an optional SDK library, such as `android.test.base`. Class loading in an
+actual process, package-manager assignments and shared-library dependency graphs
+require runtime observations.
+
 `tools/native_api_inventory.py` compares pinned NDK API 36 exports with actual
 `dlopen`/`dlsym` results in disposable x86_64 and ARM64 guest VMs. It requires
 the verified reference subset, runtime/boot inputs and an NDK compiler. The
