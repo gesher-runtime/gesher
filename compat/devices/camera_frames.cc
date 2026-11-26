@@ -450,7 +450,7 @@ jobject Image_getHardwareBuffer(JNIEnv* env, jobject thiz) {
   // An existing GPU form (an EGLImage the app kept from an earlier frame in this
   // buffer) takes this frame's pixels now, when the app asks for the image.
   gesher::bionic::ahb::FlushRgbaToGpu(image->rgba);
-  return gesher::media::ReaderHardwareBuffer(env, image->rgba, image->width, image->height);
+  return gesher::media::ReaderHardwareBuffer(env, image->rgba);
 }
 
 // --- frames into a reader ----------------------------------------------------------------

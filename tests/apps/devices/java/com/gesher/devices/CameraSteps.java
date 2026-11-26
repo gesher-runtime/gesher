@@ -182,7 +182,7 @@ final class CameraSteps {
             return;
         }
         CameraCaptureSession[] session = new CameraCaptureSession[1];
-        device[0].createCaptureSession(new SessionConfiguration(
+        SessionConfiguration config = new SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
                 List.of(new OutputConfiguration(preview.getSurface()),
                         new OutputConfiguration(still.getSurface())),
@@ -197,7 +197,14 @@ final class CameraSteps {
                     public void onConfigureFailed(CameraCaptureSession s) {
                         mEvents.add("configure failed");
                     }
-                }));
+                });
+        try {
+            Report.line("camera: isSessionConfigurationSupported "
+                    + device[0].isSessionConfigurationSupported(config));
+        } catch (UnsupportedOperationException e) {
+            Report.line("camera: isSessionConfigurationSupported unavailable");
+        }
+        device[0].createCaptureSession(config);
         Report.line("camera: createCaptureSession " + next("configure", 10000));
         if (session[0] == null) {
             device[0].close();

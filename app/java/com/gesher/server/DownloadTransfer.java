@@ -13,6 +13,8 @@ import java.net.ProtocolException;
 import java.net.URL;
 import java.security.GeneralSecurityException;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * One execution of one DownloadManager request: the HTTP part of AOSP DownloadThread
@@ -39,6 +41,9 @@ final class DownloadTransfer {
     static final int DEFAULT_TIMEOUT = 20_000;
     private static final int HTTP_TEMP_REDIRECT = 307;
     private static final int HTTP_REQUESTED_RANGE_NOT_SATISFIABLE = 416;
+    private static final int MAX_RANGES_PER_RUN = 32;
+    private static final Pattern CONTENT_RANGE = Pattern.compile(
+            "bytes ([0-9]+)-([0-9]+)/([0-9]+|\\*)", Pattern.CASE_INSENSITIVE);
 
     /** DownloadThread.DownloadInfoDelta: the mutable part of a download's row. */
     static final class State {
@@ -95,15 +100,17 @@ final class DownloadTransfer {
     private final State mState;
     private final Network mNetwork;
     private final Row mRow;
+    private final long mInitialBytes;
     private volatile boolean mShutdown;
     private volatile boolean mPolicyDirty;
-    private boolean mMadeProgress;
+    private long mDurableBytes;
     private long mLastUpdateBytes, mLastUpdateTime;
 
     DownloadTransfer(State state, Network network, Row row) {
         mState = state;
         mNetwork = network;
         mRow = row;
+        mInitialBytes = mDurableBytes = mLastUpdateBytes = state.currentBytes;
     }
 
     /** DownloadThread.requestShutdown: the running request stops with a retryable error. */
@@ -123,16 +130,18 @@ final class DownloadTransfer {
             mState.status = Downloads.Impl.STATUS_SUCCESS;
             if (mState.totalBytes == -1) mState.totalBytes = mState.currentBytes;
         } catch (Stop e) {
+            mState.currentBytes = mDurableBytes;
             mState.status = e.status;
             mState.errorMsg = e.getMessage();
             if (isStatusRetryable(mState.status)) {
-                if (mMadeProgress) mState.numFailed = 1;
+                boolean madeProgress = mDurableBytes > mInitialBytes;
+                if (madeProgress) mState.numFailed = 1;
                 else mState.numFailed += 1;
                 if (mState.numFailed < MAX_RETRIES) {
                     mState.status = mNetwork.refusal(mState.totalBytes) == null
                             ? Downloads.Impl.STATUS_WAITING_TO_RETRY
                             : Downloads.Impl.STATUS_WAITING_FOR_NETWORK;
-                    if (mState.etag == null && mMadeProgress) {
+                    if (mState.currentBytes != 0 && !isStrongEtag(mState.etag)) {
                         // Data was written and nothing can verify a later range against it.
                         mState.status = Downloads.Impl.STATUS_CANNOT_RESUME;
                     }
@@ -143,6 +152,7 @@ final class DownloadTransfer {
                 mState.status = Downloads.Impl.STATUS_QUEUED_FOR_WIFI;
             }
         } catch (RuntimeException | Error t) {
+            mState.currentBytes = mDurableBytes;
             mState.status = Downloads.Impl.STATUS_UNKNOWN_ERROR;
             mState.errorMsg = t.toString();
         } finally {
@@ -163,7 +173,6 @@ final class DownloadTransfer {
     }
 
     private void execute() throws Stop {
-        boolean resuming = mState.currentBytes != 0;
         URL url;
         try {
             url = new URL(mState.uri);
@@ -171,7 +180,13 @@ final class DownloadTransfer {
             throw new Stop(Downloads.Impl.STATUS_BAD_REQUEST, e.getMessage(), e);
         }
         int redirects = 0;
-        while (redirects++ < MAX_REDIRECTS) {
+        int ranges = 0;
+        while (true) {
+            checkShutdown();
+            boolean resuming = mState.currentBytes != 0;
+            if (resuming && !isStrongEtag(mState.etag)) {
+                throw new Stop(Downloads.Impl.STATUS_CANNOT_RESUME, "Partial file has no strong ETag");
+            }
             String protocol = url.getProtocol();
             if (!"http".equalsIgnoreCase(protocol) && !"https".equalsIgnoreCase(protocol)) {
                 throw new Stop(Downloads.Impl.STATUS_BAD_REQUEST, "Unsupported scheme " + protocol);
@@ -206,19 +221,31 @@ final class DownloadTransfer {
                                     "Expected partial, but received OK");
                         }
                         parseOkHeaders(conn);
-                        transferData(conn);
+                        transferData(conn, mState.totalBytes, false);
                         return;
-                    case HttpURLConnection.HTTP_PARTIAL:
+                    case HttpURLConnection.HTTP_PARTIAL: {
                         if (!resuming) {
                             throw new Stop(Downloads.Impl.STATUS_CANNOT_RESUME,
                                     "Expected OK, but received partial");
                         }
-                        transferData(conn);
-                        return;
+                        long end = parsePartialHeaders(conn);
+                        checkConnectivity();
+                        transferData(conn, end, true);
+                        if (end == mState.totalBytes) return;
+                        checkpointOrThrow();
+                        if (++ranges == MAX_RANGES_PER_RUN) {
+                            throw new Stop(Downloads.Impl.STATUS_HTTP_DATA_ERROR,
+                                    "More ranges remain after the transfer work limit");
+                        }
+                        continue;
+                    }
                     case HttpURLConnection.HTTP_MOVED_PERM:
                     case HttpURLConnection.HTTP_MOVED_TEMP:
                     case HttpURLConnection.HTTP_SEE_OTHER:
                     case HTTP_TEMP_REDIRECT: {
+                        if (++redirects >= MAX_REDIRECTS) {
+                            throw new Stop(Downloads.Impl.STATUS_TOO_MANY_REDIRECTS, "Too many redirects");
+                        }
                         String location = conn.getHeaderField("Location");
                         if (location == null) {
                             throw new Stop(Downloads.Impl.STATUS_UNHANDLED_REDIRECT,
@@ -251,7 +278,6 @@ final class DownloadTransfer {
                 if (conn != null) conn.disconnect();
             }
         }
-        throw new Stop(Downloads.Impl.STATUS_TOO_MANY_REDIRECTS, "Too many redirects");
     }
 
     /** StopRequestException.throwUnhandledHttpError; HTTP 308 is unhandled there too. */
@@ -271,8 +297,8 @@ final class DownloadTransfer {
         conn.setRequestProperty("Accept-Encoding", "identity");
         conn.setRequestProperty("Connection", "close");
         if (resuming) {
-            if (mState.etag != null) conn.addRequestProperty("If-Match", mState.etag);
-            conn.addRequestProperty("Range", "bytes=" + mState.currentBytes + "-");
+            conn.setRequestProperty("If-Match", mState.etag);
+            conn.setRequestProperty("Range", "bytes=" + mState.currentBytes + "-");
         }
     }
 
@@ -290,9 +316,56 @@ final class DownloadTransfer {
         if (mState.mimeType == null) mState.mimeType = normalizeMimeType(conn.getContentType());
         mState.totalBytes = conn.getHeaderField("Transfer-Encoding") == null
                 ? headerLong(conn, "Content-Length", -1) : -1;
-        mState.etag = conn.getHeaderField("ETag");
+        mState.etag = identityEncoded(conn) ? conn.getHeaderField("ETag") : null;
         checkpointOrThrow();
         checkConnectivity();
+    }
+
+    private long parsePartialHeaders(HttpURLConnection conn) throws Stop {
+        String etag = conn.getHeaderField("ETag");
+        if (etag != null && !etag.equals(mState.etag)) {
+            throw new Stop(Downloads.Impl.STATUS_CANNOT_RESUME, "Partial response changed the ETag");
+        }
+        if (!identityEncoded(conn)
+                || "multipart/byteranges".equals(normalizeMimeType(conn.getContentType()))) {
+            throw new Stop(Downloads.Impl.STATUS_CANNOT_RESUME, "Expected a single identity range");
+        }
+        String header = conn.getHeaderField("Content-Range");
+        Matcher match = CONTENT_RANGE.matcher(header == null ? "" : header.trim());
+        if (!match.matches()) {
+            throw new Stop(Downloads.Impl.STATUS_CANNOT_RESUME, "Missing or invalid Content-Range");
+        }
+        try {
+            long first = Long.parseLong(match.group(1));
+            long last = Long.parseLong(match.group(2));
+            String size = match.group(3);
+            long total = "*".equals(size) ? mState.totalBytes : Long.parseLong(size);
+            String length = conn.getHeaderField("Content-Length");
+            if (first != mState.currentBytes || last < first || last >= total
+                    || (mState.totalBytes != -1 && mState.totalBytes != total)
+                    || (length != null && Long.parseLong(length) != last - first + 1)) {
+                throw new Stop(Downloads.Impl.STATUS_CANNOT_RESUME, "Inconsistent Content-Range");
+            }
+            mState.totalBytes = total;
+            return last + 1;
+        } catch (NumberFormatException e) {
+            throw new Stop(Downloads.Impl.STATUS_CANNOT_RESUME, "Invalid range size", e);
+        }
+    }
+
+    private static boolean identityEncoded(HttpURLConnection conn) {
+        String encoding = conn.getHeaderField("Content-Encoding");
+        return encoding == null || "identity".equalsIgnoreCase(encoding.trim());
+    }
+
+    private static boolean isStrongEtag(String value) {
+        if (value == null || value.length() < 2 || value.charAt(0) != '"'
+                || value.charAt(value.length() - 1) != '"') return false;
+        for (int i = 1; i < value.length() - 1; i++) {
+            char c = value.charAt(i);
+            if (c <= ' ' || c == '"' || c == 0x7f || c > 0xff) return false;
+        }
+        return true;
     }
 
     /** Intent.normalizeMimeType: lower case, without parameters. */
@@ -309,11 +382,10 @@ final class DownloadTransfer {
         mState.retryAfter = (int) (retryAfter * 1000);
     }
 
-    private void transferData(HttpURLConnection conn) throws Stop {
-        boolean hasLength = mState.totalBytes != -1;
+    private void transferData(HttpURLConnection conn, long end, boolean range) throws Stop {
         boolean close = "close".equalsIgnoreCase(conn.getHeaderField("Connection"));
         boolean chunked = "chunked".equalsIgnoreCase(conn.getHeaderField("Transfer-Encoding"));
-        if (!hasLength && !close && !chunked) {
+        if (end == -1 && !close && !chunked) {
             throw new Stop(Downloads.Impl.STATUS_CANNOT_RESUME, "can't know size of download, giving up");
         }
         if (mState.fileName == null) {
@@ -327,66 +399,79 @@ final class DownloadTransfer {
         }
         File file = new File(mState.fileName);
         try (InputStream body = in) {
-            FileOutputStream out;
-            try {
-                // Never create a file the reservation did not make; a removed partial
-                // file cannot be resumed as if its bytes were still there.
-                if (!file.isFile() || file.length() < mState.currentBytes) {
-                    throw new IOException("Partial file is missing or shorter than recorded");
-                }
-                out = new FileOutputStream(file, true);
-                out.getChannel().truncate(mState.currentBytes);
-                out.getChannel().position(mState.currentBytes);
-            } catch (IOException e) {
+            // Never recreate a missing partial file or trust bytes beyond its checkpoint.
+            if (!file.isFile() || file.length() < mState.currentBytes) {
                 throw new Stop(mState.currentBytes != 0 ? Downloads.Impl.STATUS_CANNOT_RESUME
-                        : Downloads.Impl.STATUS_FILE_ERROR, String.valueOf(e), e);
+                        : Downloads.Impl.STATUS_FILE_ERROR, "Partial file is missing or shorter than recorded");
             }
-            try (FileOutputStream output = out) {
+            try (FileOutputStream output = new FileOutputStream(file, true)) {
+                output.getChannel().truncate(mState.currentBytes);
+                output.getChannel().position(mState.currentBytes);
                 if (mState.totalBytes > 0 && file.getParentFile() != null
                         && file.getParentFile().getUsableSpace() < mState.totalBytes - mState.currentBytes) {
                     throw new Stop(Downloads.Impl.STATUS_INSUFFICIENT_SPACE_ERROR,
                             "Insufficient space for the reported length");
                 }
-                byte[] buffer = new byte[BUFFER_SIZE];
-                while (true) {
-                    if (mPolicyDirty) {
-                        // Clear before querying: a later notification must remain pending.
-                        mPolicyDirty = false;
-                        checkConnectivity();
-                    }
-                    if (mShutdown) {
-                        throw new Stop(Downloads.Impl.STATUS_HTTP_DATA_ERROR, "Local halt requested");
-                    }
-                    int length;
-                    try {
-                        length = body.read(buffer);
-                    } catch (IOException e) {
-                        throw new Stop(Downloads.Impl.STATUS_HTTP_DATA_ERROR,
-                                "Failed reading response: " + e, e);
-                    }
-                    if (length == -1) break;
-                    try {
-                        output.write(buffer, 0, length);
-                        mMadeProgress = true;
-                        mState.currentBytes += length;
-                        updateProgress(output);
-                    } catch (IOException e) {
-                        throw new Stop(Downloads.Impl.STATUS_FILE_ERROR, String.valueOf(e), e);
-                    }
-                }
-                if (mState.totalBytes != -1 && mState.currentBytes != mState.totalBytes) {
-                    throw new Stop(Downloads.Impl.STATUS_HTTP_DATA_ERROR, "Content length mismatch; found "
-                            + mState.currentBytes + " instead of " + mState.totalBytes);
-                }
                 try {
-                    output.flush();
-                    output.getFD().sync();
-                } catch (IOException e) {
-                    throw new Stop(Downloads.Impl.STATUS_FILE_ERROR, String.valueOf(e), e);
+                    copyBody(body, output, end, range);
+                } catch (Stop failure) {
+                    if (!Downloads.Impl.isStatusError(failure.status) || isStatusRetryable(failure.status)) {
+                        try {
+                            syncProgress(output);
+                        } catch (IOException syncFailure) {
+                            failure.addSuppressed(syncFailure);
+                        }
+                    }
+                    throw failure;
                 }
+                syncProgress(output);
             }
         } catch (IOException closeFailure) {
             throw new Stop(Downloads.Impl.STATUS_FILE_ERROR, String.valueOf(closeFailure), closeFailure);
+        }
+    }
+
+    private void copyBody(InputStream body, FileOutputStream output, long end, boolean range)
+            throws IOException, Stop {
+        byte[] buffer = new byte[BUFFER_SIZE];
+        while (true) {
+            if (mPolicyDirty) {
+                // Clear before querying: a later notification must remain pending.
+                mPolicyDirty = false;
+                checkConnectivity();
+            }
+            checkShutdown();
+            int length;
+            try {
+                length = body.read(buffer);
+            } catch (IOException e) {
+                throw new Stop(Downloads.Impl.STATUS_HTTP_DATA_ERROR, "Failed reading response: " + e, e);
+            }
+            if (length == -1) break;
+            if (end != -1 && length > end - mState.currentBytes) {
+                throw new Stop(range ? Downloads.Impl.STATUS_CANNOT_RESUME
+                        : Downloads.Impl.STATUS_HTTP_DATA_ERROR, "Response exceeded its declared range");
+            }
+            output.write(buffer, 0, length);
+            mState.currentBytes += length;
+            updateProgress(output);
+        }
+        if (end != -1 && mState.currentBytes != end) {
+            throw new Stop(Downloads.Impl.STATUS_HTTP_DATA_ERROR, "Content length mismatch; found "
+                    + mState.currentBytes + " instead of " + end);
+        }
+    }
+
+    private void checkShutdown() throws Stop {
+        if (mShutdown) {
+            throw new Stop(Downloads.Impl.STATUS_HTTP_DATA_ERROR, "Local halt requested");
+        }
+    }
+
+    private void syncProgress(FileOutputStream output) throws IOException {
+        if (mState.currentBytes != mDurableBytes) {
+            output.getFD().sync();
+            mDurableBytes = mState.currentBytes;
         }
     }
 
@@ -396,8 +481,7 @@ final class DownloadTransfer {
         long timeDelta = now - mLastUpdateTime;
         if (bytesDelta > MIN_PROGRESS_STEP && timeDelta > MIN_PROGRESS_TIME) {
             // Persist only bytes that are durable, so a resume never trusts lost data.
-            out.flush();
-            out.getFD().sync();
+            syncProgress(out);
             checkpointOrThrow();
             mLastUpdateBytes = mState.currentBytes;
             mLastUpdateTime = now;

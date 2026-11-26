@@ -17,6 +17,7 @@ in apps), following AOSP's MediaProvider module at `android-16.0.0_r4`.
 | `resolver.openFileDescriptor(item, "w")`, write, close | `FileNotFoundException`: no provider | a descriptor on `<volume>/<RELATIVE_PATH>/<name>` (`.pending-<expires>-<name>` while pending); on close `_size`, `date_modified` and, for PNG/JPEG/GIF/BMP/WebP, `width`/`height` are read from the file |
 | `resolver.update(item, IS_PENDING=0)` | `IllegalArgumentException` | the file is renamed to its display name and the row becomes visible to other readers |
 | `resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, ...)` | `null` cursor | the caller's own published rows; every published image with `READ_MEDIA_IMAGES` (API 33+) or `READ_EXTERNAL_STORAGE` (below 33) |
+| `resolver.loadThumbnail(uri, size, signal)` for an image or video | the full image was passed to the client decoder, or the request failed for a video | an aspect-preserving thumbnail decoded from the indexed file or from a video frame, with the item's read and pending/trashed checks |
 | update/delete of another app's image | n/a | `SecurityException("<pkg> has no access to <uri>")` unless the caller is a legacy writer or holds `MANAGE_EXTERNAL_STORAGE`, or a URI grant covers it |
 | `MediaScannerConnection.scanFile(context, paths, ...)` | callback with `null` URI for every path (`MediaStore.scanFile` was a placeholder that returned `null`) | the file is indexed with metadata read from it and the callback gets its `content://media/external_primary/{images,video,audio}/media/<id>` or `.../file/<id>` URI |
 | `sendBroadcast(ACTION_MEDIA_SCANNER_SCAN_FILE, file://...)` | nothing | the file is scanned as above |
@@ -315,7 +316,12 @@ stubs for the Gesher server classes they call. That checks the API use only.
   integration beyond the existing `ACTION_PICK_IMAGES` Windows dialog.
 - Location redaction (see above: unverifiable files are refused, not redacted), HEIF
   and transcoding (`getOriginalMediaFormatFileDescriptor` still answers `null`).
-- Thumbnails (`Images.Thumbnails`, `Video.Thumbnails`, `loadThumbnail`), album art.
+- Legacy thumbnail collection tables and audio/album artwork remain unavailable.
+  Image and video item URIs support `ContentResolver.loadThumbnail`: the provider
+  uses the requested bounds (up to 1024 pixels per side) and exports freshly
+  encoded pixels through a seekable, read-only descriptor. The original and its
+  EXIF/XMP metadata are not sent to the client. Ordinary file opens use their
+  existing location-permission handling. Unsupported decoders return an error.
 - Audio metadata (artist, album, duration, genres) and video duration/resolution: the
   scanner reads no media containers; those columns stay `NULL` unless the app supplied
   them while the item was pending. Image `datetaken` and orientation are not read from

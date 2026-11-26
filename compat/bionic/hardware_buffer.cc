@@ -182,8 +182,9 @@ bool Served(const AHardwareBuffer_Desc* desc) {
   const Format* f = FindFormat(desc->format);
   if (f == nullptr || desc->layers != 1) return false;
   if ((desc->usage & ~kServedUsage) != 0) return false;
-  const uint64_t bytes = static_cast<uint64_t>(desc->width) * desc->height * f->bytes;
-  if (bytes > (1ULL << 30)) return false;
+  // Check the allocation cap before multiplying by the bytes per pixel.
+  const uint64_t pixels = static_cast<uint64_t>(desc->width) * desc->height;
+  if (pixels > (1ULL << 30) / static_cast<uint32_t>(f->bytes)) return false;
   if ((desc->usage & kGpuUsage) != 0) {
     if (!f->gpu) return false;
     gpu::Thread* thread = gpu::Thread::Get();
@@ -585,6 +586,8 @@ void Release(Buffer* b) {
 }
 
 const AHardwareBuffer_Desc& Desc(const Buffer* b) { return b->desc; }
+uint64_t BufferId(const Buffer* b) { return b->id; }
+size_t AllocationSize(const Buffer* b) { return BufferBytes(b->desc, b->format); }
 
 EGLImageKHR AcquireAppImage(Buffer* b, EGLDisplay display, EGLint* egl_error) {
   if (!b->format->gpu || (b->desc.usage & kGpuUsage) == 0) {
@@ -1015,6 +1018,15 @@ void Register() {
 [[maybe_unused]] const bool g_registered = (Register(), true);
 
 }  // namespace
+
+bool IsBufferSupported(const AHardwareBuffer_Desc& desc) {
+  return IsSupported(&desc) != 0;
+}
+
+Buffer* AllocateBuffer(const AHardwareBuffer_Desc& desc) {
+  AHardwareBuffer* app = nullptr;
+  return Allocate(&desc, &app) == 0 ? reinterpret_cast<Buffer*>(app) : nullptr;
+}
 
 constexpr uint64_t kReleaseFenceTimeoutNs = 2000ull * 1000 * 1000;
 
