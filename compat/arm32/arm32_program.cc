@@ -165,11 +165,13 @@ bool Program::LoadRecursive(const std::string& name, std::string* error) {
 
   // Persist modules only after complete ELF validation and mapping. Any
   // failure after a child was mapped is rolled back by the root transaction.
+  const uint64_t mapped_length = RoundUp(image.bytes.size());
   try {
     modules_.push_back({name, std::move(image), false});
   } catch (...) {
-    const uint64_t rounded = RoundUp(image.bytes.size());
-    memory_.Unmap(expected_base, rounded);
+    // A move may have emptied image.bytes before the allocation failed;
+    // retain the complete mapping length separately for reliable rollback.
+    memory_.Unmap(expected_base, mapped_length);
     return Fail(error, "cannot retain ARM32 loaded library");
   }
   return true;
