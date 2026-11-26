@@ -24,10 +24,13 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     source = Path(__file__).with_name("guest_fixture.c")
     compiler = [args.zig] if args.zig else [sys.executable, "-m", "ziglang"]
+    # A thumb-prefixed target triple is NOT sufficient: Clang can still emit
+    # ARM-state instructions unless -mthumb is explicit. Always force the
+    # requested instruction state and inspect ELF function entry bits below.
     for mode in ("arm", "thumb"):
         output = (args.out_dir / f"fixture-{mode}.so").resolve()
         subprocess.run(compiler + [
-            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9", "-mthumb" if mode == "thumb" else "-marm",
             "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-sanitize=all",
             "-shared", "-fPIC", "-nostdlib", "-fno-stack-protector",
             "-Wl,--hash-style=both", "-Wl,-soname,gesher_arm32_fixture.so",
@@ -56,7 +59,7 @@ def main() -> None:
         bionic_source = source.with_name("guest_bionic_fixture.c")
         bionic_output = (args.out_dir / f"bionic-{mode}.so").resolve()
         subprocess.run(compiler + [
-            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9", "-mthumb" if mode == "thumb" else "-marm",
             "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-sanitize=all",
             "-fno-builtin", "-shared", "-fPIC", "-nostdlib",
             "-fno-stack-protector", "-Wl,--hash-style=both",
@@ -89,7 +92,7 @@ def main() -> None:
         jni_source = source.with_name("guest_jni_fixture.c")
         jni_output = (args.out_dir / f"jni-{mode}.so").resolve()
         subprocess.run(compiler + [
-            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9", "-mthumb" if mode == "thumb" else "-marm",
             "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-builtin",
             "-fno-stack-protector", "-shared", "-fPIC", "-nostdlib",
             "-Wl,--hash-style=both", "-Wl,-soname,gesher_arm32_jni_fixture.so",
@@ -131,7 +134,7 @@ def main() -> None:
         dependency = (args.out_dir / f"dependency-{mode}.so").resolve()
         consumer = (args.out_dir / f"consumer-{mode}.so").resolve()
         common_flags = [
-            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9", "-mthumb" if mode == "thumb" else "-marm",
             "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-builtin",
             "-shared", "-fPIC", "-nostdlib", "-fno-stack-protector",
             "-Wl,--hash-style=both",
