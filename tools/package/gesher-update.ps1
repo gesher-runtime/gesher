@@ -352,13 +352,17 @@ function Start-GesherUpdateInstaller([object] $Download, [string] $InstallDirect
     if ($installPath.IndexOfAny([char[]] @([char] 0, [char] 10, [char] 13, [char] 34)) -ge 0) { throw 'Invalid installation directory.' }
     # Escape trailing backslashes before the closing quote using Windows argv rules.
     $quotedDirectory = '"' + [regex]::Replace($installPath, '(\\+)$', '$1$1') + '"'
+    . (Join-Path $PSScriptRoot 'gesher-runtime-files.ps1')
+    # Keep both supported portable layouts in place: a flat Setup directory or
+    # the ZIP's App runtime. Setup resolves the marker root before writing Data.
+    $mode = if (Get-GesherPortableRoot $installPath) { ' /PORTABLE' } else { '' }
     $installerStream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     try {
         # Keep the read handle open until CreateProcess returns: Windows cannot
         # replace or modify the verified bytes between validation and launch.
         Assert-GesherUpdateInstaller -Path $path -Release $releaseInfo -Stream $installerStream -CancellationToken $CancellationToken
         $CancellationToken.ThrowIfCancellationRequested()
-        return Start-GesherUpdateProcess -Path $path -Arguments ('/NORESTART /DIR=' + $quotedDirectory) -WorkingDirectory $directory
+        return Start-GesherUpdateProcess -Path $path -Arguments ('/NORESTART' + $mode + ' /DIR=' + $quotedDirectory) -WorkingDirectory $directory
     } finally { $installerStream.Dispose() }
 }
 

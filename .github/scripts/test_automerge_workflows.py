@@ -169,7 +169,8 @@ class QueueWorkflows(unittest.TestCase):
         self.assertEqual(token['with']['owner'], '${{ github.repository_owner }}')
         self.assertEqual({key: value for key, value in token['with'].items()
                           if key.startswith('permission-')},
-                         {'permission-contents': 'write', 'permission-pull-requests': 'write',
+                         {'permission-contents': 'write', 'permission-issues': 'write',
+                          'permission-pull-requests': 'write',
                           'permission-workflows': 'write',
                           'permission-statuses': "${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}"})
         self.assertNotIn('skip-token-revoke', token['with'])

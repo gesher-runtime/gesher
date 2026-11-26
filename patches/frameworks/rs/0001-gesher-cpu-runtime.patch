@@ -1,0 +1,219 @@
+diff --git a/cpu_ref/rsCpuCore.cpp b/cpu_ref/rsCpuCore.cpp
+index 0485433..e61b4ff 100644
+--- a/cpu_ref/rsCpuCore.cpp
++++ b/cpu_ref/rsCpuCore.cpp
+@@ -971,8 +971,10 @@ extern RsdCpuScriptImpl * rsdIntrinsic_Histogram(RsdCpuReferenceImpl *ctx,
+                                                  const Script *s, const Element *e);
+ extern RsdCpuScriptImpl * rsdIntrinsic_Resize(RsdCpuReferenceImpl *ctx,
+                                               const Script *s, const Element *e);
++#ifndef GESHER
+ extern RsdCpuScriptImpl * rsdIntrinsic_BLAS(RsdCpuReferenceImpl *ctx,
+                                               const Script *s, const Element *e);
++#endif
+ 
+ RsdCpuReference::CpuScript * RsdCpuReferenceImpl::createIntrinsic(const Script *s,
+                                     RsScriptIntrinsicID iid, Element *e) {
+@@ -1010,7 +1012,13 @@ RsdCpuReference::CpuScript * RsdCpuReferenceImpl::createIntrinsic(const Script *
+         i = rsdIntrinsic_Resize(this, s, e);
+         break;
+     case RS_SCRIPT_INTRINSIC_ID_BLAS:
++#ifdef GESHER
++        // Gesher: no BLAS (rsCpuIntrinsicBLAS.cpp needs libblasV8 and
++        // gemmlowp); the intrinsic is not created (docs/renderscript.md).
++        ALOGE("ScriptIntrinsicBLAS is not supported by Gesher's CPU driver");
++#else
+         i = rsdIntrinsic_BLAS(this, s, e);
++#endif
+         break;
+ 
+     default:
+diff --git a/cpu_ref/rsCpuScript.cpp b/cpu_ref/rsCpuScript.cpp
+index a495246..6f5b392 100644
+--- a/cpu_ref/rsCpuScript.cpp
++++ b/cpu_ref/rsCpuScript.cpp
+@@ -422,6 +422,16 @@ bool RsdCpuScriptImpl::init(char const *resName, char const *cacheDir,
+ 
+     mBitcodeFilePath.assign(bcFileName.c_str());
+ 
++#elif defined(GESHER)
++    // Gesher: a script's kernels are compiled bitcode (bcc, libclcore), which
++    // Gesher does not have, and the compatibility library's precompiled
++    // librs.<name>.so is an Android ELF object a Windows process does not call
++    // into. The script is not created: ScriptC reports "Loading of ScriptC
++    // script failed." as Android does for a script that does not load
++    // (docs/renderscript.md).
++    ALOGE("ScriptC %s: Gesher has no RenderScript bitcode compiler; the script is not loaded",
++          resName);
++    goto error;
+ #else  // RS_COMPATIBILITY_LIB is defined
+     const char *nativeLibDir = mCtx->getContext()->getNativeLibDir();
+     mScriptSO = SharedLibraryUtils::loadSharedLibrary(cacheDir, resName, nativeLibDir);
+diff --git a/driver/rsdAllocation.cpp b/driver/rsdAllocation.cpp
+index 475d9fc..2f75737 100644
+--- a/driver/rsdAllocation.cpp
++++ b/driver/rsdAllocation.cpp
+@@ -1228,7 +1228,7 @@ void rsdAllocationUpdateCachedObject(const Context *rsc,
+                                      rs_allocation *obj)
+ {
+     obj->p = alloc;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdBcc.cpp b/driver/rsdBcc.cpp
+index 0e07aaf..b156853 100644
+--- a/driver/rsdBcc.cpp
++++ b/driver/rsdBcc.cpp
+@@ -182,7 +182,7 @@ void rsdScriptUpdateCachedObject(const Context *rsc,
+                                  rs_script *obj)
+ {
+     obj->p = script;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdCore.cpp b/driver/rsdCore.cpp
+index cd48340..6039734 100644
+--- a/driver/rsdCore.cpp
++++ b/driver/rsdCore.cpp
+@@ -320,7 +320,8 @@ static bool loadIOSuppLibSyms() {
+ extern "C" bool rsdHalInit(RsContext c, uint32_t version_major,
+                            uint32_t version_minor) {
+     Context *rsc = (Context*) c;
+-#ifdef RS_COMPATIBILITY_LIB
++#if defined(RS_COMPATIBILITY_LIB) && !defined(GESHER)
++    // Gesher: no libRSSupportIO.so (Surface I/O, which Gesher's allocations refuse).
+     if (loadIOSuppLibSyms()) {
+         rsc->mHal.funcs.allocation.destroy = sAllocationDestroy;
+         rsc->mHal.funcs.allocation.ioSend = sAllocationIoSend;
+diff --git a/driver/rsdElement.cpp b/driver/rsdElement.cpp
+index 349e3e6..0123e35 100644
+--- a/driver/rsdElement.cpp
++++ b/driver/rsdElement.cpp
+@@ -34,7 +34,7 @@ void rsdElementUpdateCachedObject(const Context *rsc,
+                                   rs_element *obj)
+ {
+     obj->p = element;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdSampler.cpp b/driver/rsdSampler.cpp
+index 8c4ac58..e047bc7 100644
+--- a/driver/rsdSampler.cpp
++++ b/driver/rsdSampler.cpp
+@@ -46,7 +46,7 @@ void rsdSamplerUpdateCachedObject(const Context *rsc,
+                                   rs_sampler *obj)
+ {
+     obj->p = alloc;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdScriptGroup.cpp b/driver/rsdScriptGroup.cpp
+index c7d10b6..82eb107 100644
+--- a/driver/rsdScriptGroup.cpp
++++ b/driver/rsdScriptGroup.cpp
+@@ -64,7 +64,7 @@ void rsdScriptGroupUpdateCachedObject(const Context *rsc,
+                                       rs_script_group *obj)
+ {
+     obj->p = sg;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/driver/rsdType.cpp b/driver/rsdType.cpp
+index ba845be..7e6363e 100644
+--- a/driver/rsdType.cpp
++++ b/driver/rsdType.cpp
+@@ -42,7 +42,7 @@ void rsdTypeDestroy(const Context *rsc, const Type *t) {
+ void rsdTypeUpdateCachedObject(const Context *rsc, const Type *t,
+                                rs_type *obj) {
+     obj->p = t;
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+     obj->unused1 = nullptr;
+     obj->unused2 = nullptr;
+     obj->unused3 = nullptr;
+diff --git a/rsAllocation.cpp b/rsAllocation.cpp
+index a210435..b9d93a1 100644
+--- a/rsAllocation.cpp
++++ b/rsAllocation.cpp
+@@ -61,6 +61,16 @@ void Allocation::operator delete(void* ptr) {
+ Allocation * Allocation::createAllocationStrided(Context *rsc, const Type *type, uint32_t usages,
+                                                  RsAllocationMipmapControl mc, void * ptr,
+                                                  size_t requiredAlignment) {
++#ifdef GESHER
++    // Gesher: no Surface I/O (a BufferQueue producer or consumer behind the
++    // allocation), so an IO_INPUT or IO_OUTPUT allocation is not created, and
++    // Allocation reports "Allocation creation failed." (docs/renderscript.md).
++    if (usages & (RS_ALLOCATION_USAGE_IO_INPUT | RS_ALLOCATION_USAGE_IO_OUTPUT)) {
++        rsc->setError(RS_ERROR_BAD_VALUE,
++                      "USAGE_IO_INPUT and USAGE_IO_OUTPUT are not supported by this driver");
++        return nullptr;
++    }
++#endif
+     // Allocation objects must use allocator specified by the driver
+     void* allocMem = rsc->mHal.funcs.allocRuntimeMem(sizeof(Allocation), 0);
+ 
+diff --git a/rsComponent.cpp b/rsComponent.cpp
+index c3e0d13..0950ee4 100644
+--- a/rsComponent.cpp
++++ b/rsComponent.cpp
+@@ -127,7 +127,7 @@ void Component::set(RsDataType dt, RsDataKind dk, bool norm, uint32_t vecSize) {
+         rsAssert(mVectorSize == 1);
+         rsAssert(mNormalized == false);
+         rsAssert(mKind == RS_KIND_USER);
+-#ifdef __LP64__
++#if defined(__LP64__) || (defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+         // Large object pointers on 64-bit targets.
+         mBits = 256;
+         mTypeBits = 256;
+diff --git a/rsScriptIntrinsic.cpp b/rsScriptIntrinsic.cpp
+index 7908dd5..18d7651 100644
+--- a/rsScriptIntrinsic.cpp
++++ b/rsScriptIntrinsic.cpp
+@@ -37,7 +37,16 @@ bool ScriptIntrinsic::init(Context *rsc, RsScriptIntrinsicID iid, Element *e) {
+     mSlots = new ObjectBaseRef<Allocation>[2];
+     mTypes = new ObjectBaseRef<const Type>[2];
+ 
++#ifdef GESHER
++    // Gesher: an intrinsic the driver does not create (ScriptIntrinsicBLAS)
++    // is not created, rather than left without a driver script for forEach
++    // to run (docs/renderscript.md).
++    if (!rsc->mHal.funcs.script.initIntrinsic(rsc, this, iid, e)) {
++        return false;
++    }
++#else
+     rsc->mHal.funcs.script.initIntrinsic(rsc, this, iid, e);
++#endif
+ 
+ 
+     return true;
+diff --git a/rs_hal.h b/rs_hal.h
+index 06a9b57..19182cd 100644
+--- a/rs_hal.h
++++ b/rs_hal.h
+@@ -107,7 +107,7 @@ class FBOCache;
+ // RS_BASE_OBJ must have the same layout as _RS_OBJECT_DECL defined in
+ // script_api/rs_object_types.spec.
+ // TODO(jeanluc) Look at unifying.
+-#ifndef __LP64__
++#if !defined(__LP64__) && !(defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+ #define RS_BASE_OBJ(_t_) typedef struct { const _t_* p; } __attribute__((packed, aligned(4)))
+ #define RS_BASE_NULL_OBJ {0}
+ #else
+@@ -123,7 +123,7 @@ RS_BASE_OBJ(Sampler) rs_sampler;
+ RS_BASE_OBJ(Script) rs_script;
+ RS_BASE_OBJ(ScriptGroup) rs_script_group;
+ 
+-#ifndef __LP64__
++#if !defined(__LP64__) && !(defined(GESHER) && __SIZEOF_POINTER__ == 8)  // Gesher: LLP64 Windows has 64-bit pointers
+ typedef struct { const int* p; } __attribute__((packed, aligned(4))) rs_mesh;
+ typedef struct { const int* p; } __attribute__((packed, aligned(4))) rs_program_fragment;
+ typedef struct { const int* p; } __attribute__((packed, aligned(4))) rs_program_vertex;

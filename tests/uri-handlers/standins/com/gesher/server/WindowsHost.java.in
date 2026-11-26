@@ -1,0 +1,11 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+package com.gesher.server;
+import java.util.function.BooleanSupplier;
+// Native boundaries only; an accidental use of the real backend fails the suite.
+final class WindowsHost {
+    static boolean confirmDial(String pkg, String number, int pid, BooleanSupplier active) {
+        throw new AssertionError("uninjected Windows dialog");
+    }
+    static boolean openUrl(String uri) { throw new AssertionError("uninjected Windows shell"); }
+}

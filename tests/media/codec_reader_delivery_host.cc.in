@@ -27,6 +27,13 @@ thread_local std::function<void(size_t)> allocation_hook;
   std::abort();
 }
 [[gnu::noinline]] void* operator new[](size_t size) { return ::operator new(size); }
+// The nothrow forms too (an allocator that replaces only the throwing ones leaves
+// these to the sanitizer's, whose blocks the deletes below would free() as ours).
+// The throwing ones abort on exhaustion, so these never return null.
+[[gnu::noinline]] void* operator new(size_t size, const std::nothrow_t&) noexcept { return ::operator new(size); }
+[[gnu::noinline]] void* operator new[](size_t size, const std::nothrow_t&) noexcept { return ::operator new(size); }
+[[gnu::noinline]] void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 [[gnu::noinline]] void operator delete(void* p) noexcept { std::free(p); }
 [[gnu::noinline]] void operator delete[](void* p) noexcept { std::free(p); }
 [[gnu::noinline]] void operator delete(void* p, size_t) noexcept { std::free(p); }
@@ -113,10 +120,54 @@ int ANativeWindow_unlockAndPost(ANativeWindow*) { return -19; }
 namespace gesher::media { struct ReaderSurface { void Close() {} }; }
 namespace gesher::devices::camera { struct TraceSample { explicit TraceSample(int) {} void Step(int) {} }; }
 
+// Host adapter for <gesher/rgba_buffers.h>: a real reference-counted CPU buffer
+// (the pixels are a counted heap allocation, freed with the last reference), as
+// the AHardwareBuffer behind it is. There is no GPU here: an EGLImage of a buffer
+// is stood in for by `app_images`, and "flush to the GPU form" only clears the
+// memory-newer mark. Leaks and use after release show up under ASan and in
+// `rgba_buffers_live`.
+namespace gesher::bionic::ahb {
+struct HostRgbaBuffer {
+  std::atomic<int> refs{1};
+  std::atomic<int> app_images{0};
+  uint32_t width, height;
+  bool memory_newer = false;
+  std::unique_ptr<uint8_t[]> pixels;
+};
+std::atomic<int> rgba_buffers_live{0}, rgba_gpu_form_buffers{0}, rgba_cpu_only_buffers{0};
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
+  (gpu_form ? rgba_gpu_form_buffers : rgba_cpu_only_buffers)++;
+  auto* b = new (std::nothrow) HostRgbaBuffer();
+  if (b == nullptr) return nullptr;
+  b->width = width;
+  b->height = height;
+  b->pixels.reset(new (std::nothrow) uint8_t[static_cast<size_t>(width) * height * 4]());
+  if (b->pixels == nullptr) { delete b; return nullptr; }
+  ++rgba_buffers_live;
+  return b;
+}
+void RetainRgbaBuffer(void* buffer) { static_cast<HostRgbaBuffer*>(buffer)->refs.fetch_add(1); }
+void ReleaseRgbaBuffer(void* buffer) {
+  auto* b = static_cast<HostRgbaBuffer*>(buffer);
+  if (b->refs.fetch_sub(1) == 1) { --rgba_buffers_live; delete b; }
+}
+bool RgbaBufferUnshared(void* buffer) { return static_cast<HostRgbaBuffer*>(buffer)->refs.load() == 1; }
+bool RgbaBufferReusable(void* buffer) {
+  auto* b = static_cast<HostRgbaBuffer*>(buffer);
+  return b->refs.load() - b->app_images.load() == 1;
+}
+uint8_t* RgbaBufferPixels(void* buffer) { return static_cast<HostRgbaBuffer*>(buffer)->pixels.get(); }
+void MarkRgbaWritten(void* buffer) { static_cast<HostRgbaBuffer*>(buffer)->memory_newer = true; }
+void FlushRgbaToGpu(void* buffer) { static_cast<HostRgbaBuffer*>(buffer)->memory_newer = false; }
+void NoteRgbaAppReleased(void*) {}
+}  // namespace gesher::bionic::ahb
+
 namespace android {
-constexpr int OK = 0, NO_INIT = -19, BAD_VALUE = -22, UNKNOWN_ERROR = -2147483647, NO_MEMORY = -12;
+constexpr int OK = 0, NO_INIT = -19, BAD_VALUE = -22, UNKNOWN_ERROR = -2147483647;
+[[maybe_unused]] constexpr int NO_MEMORY = -12;  // origin/main uses it
 namespace {
 constexpr int kHalBlob = 0x21, kHalRgba8888 = 1;
+[[maybe_unused]] constexpr int kHalPrivate = 0x22;  // origin/main has no PRIVATE route
 @TYPES@
 struct { int readerContext = 0, imageBuffer = 1, imageTimestamp = 2, imageDataSpace = 3,
              imageTransform = 4, imageScalingMode = 5, readerClass = 1, postEvent = 1; } gIr;
@@ -193,9 +244,17 @@ VideoFrame Frame(int w, int h, int left, int top, int padding, int seed) {
   return f;
 }
 
-void Pixels(const Image& image, const VideoFrame& frame, int seed) {
+// The image's pixels: a pooled RGBA buffer (Image::bytes) where the source has
+// one, else the image's own vector.
+template <class T> uint8_t* ImageBytes(T& image) {
+  if constexpr (requires { image.bytes(); }) return image.bytes();
+  else return image.data.data();
+}
+bool IsRgbaFormat(int format) { return format == 1 || (PRIVATE_IS_RGBA && format == 0x22); }
+
+void Pixels(Image& image, const VideoFrame& frame, int seed) {
   const int w = frame.visible_width() & ~1, h = frame.visible_height() & ~1;
-  if (image.halFormat == 1) {
+  if (IsRgbaFormat(image.halFormat)) {
     Check(image.planes.size() == 1, "RGBA one plane");
     for (int ty = 0; ty < image.height; ++ty) {
       const int y = ty * h / image.height;
@@ -207,13 +266,13 @@ void Pixels(const Image& image, const VideoFrame& frame, int seed) {
         const uint8_t expected[] = {static_cast<uint8_t>(std::clamp((298*Y+409*V+128)>>8,0,255)),
           static_cast<uint8_t>(std::clamp((298*Y-100*U-208*V+128)>>8,0,255)),
           static_cast<uint8_t>(std::clamp((298*Y+516*U+128)>>8,0,255)), 255};
-        Check(std::memcmp(image.data.data() + (static_cast<size_t>(ty)*image.width+tx)*4, expected, 4) == 0,
+        Check(std::memcmp(ImageBytes(image) + (static_cast<size_t>(ty)*image.width+tx)*4, expected, 4) == 0,
               "RGBA bytes equal old NV12 route");
       }
     }
     return;
   }
-  Check(image.planes.size() == 3, "YUV/PRIVATE retain three native planes");
+  Check(image.planes.size() == 3, "YUV retains three native planes");
   for (int p = 0; p < 3; ++p) {
     const int dw = p ? (image.width + 1) / 2 : image.width;
     const int dh = p ? (image.height + 1) / 2 : image.height;
@@ -225,7 +284,7 @@ void Pixels(const Image& image, const VideoFrame& frame, int seed) {
           "tight independent planar layout");
     for (int y = 0; y < dh; ++y)
       for (int x = 0; x < dw; ++x)
-        Check(image.data[plane.offset + static_cast<size_t>(y)*dw+x] ==
+        Check(ImageBytes(image)[plane.offset + static_cast<size_t>(y)*dw+x] ==
               Pattern(left+x*sw/dw, top+y*sh/dh, p, seed), "exact crop/scale plane byte");
   }
 }
@@ -241,7 +300,14 @@ void PixelCases() {
           auto frame = Frame(d[0],d[1],crop,crop,pad,7);
           const auto old = frame.data;
           const int64_t timestamp = crop == 0 ? 0 : crop == 1 ? -9000000000000001LL : 9000000000000001LL;
+          const int gpu_before = gesher::bionic::ahb::rgba_gpu_form_buffers, cpu_before = gesher::bionic::ahb::rgba_cpu_only_buffers;
           Check(target.Deliver(frame,timestamp) == OK, "valid delivery accepted");
+          if (PRIVATE_IS_RGBA && IsRgbaFormat(format)) {
+            // A reader nothing samples on the GPU (no usage bits, not PRIVATE) gets CPU-only buffers.
+            Check(gesher::bionic::ahb::rgba_gpu_form_buffers - gpu_before == (format == 0x22 ? 1 : 0) &&
+                  gesher::bionic::ahb::rgba_cpu_only_buffers - cpu_before == (format == 0x22 ? 0 : 1),
+                  "GPU form only for PRIVATE or GPU_SAMPLED readers");
+          }
           auto* image = target.Acquire();
           Check(image != nullptr, "Image available");
           if (!image) continue;
@@ -249,7 +315,7 @@ void PixelCases() {
                 "dimensions and timestamp unchanged");
           Pixels(*image,frame,7);
           Check(frame.data == old, "decoder bytes unchanged");
-          image->data[0] ^= 0xff;
+          ImageBytes(*image)[0] ^= 0xff;
           Check(frame.data == old, "writable image cannot mutate decoder frame");
           ReleaseImage(target.reader,image);
         }
@@ -360,10 +426,10 @@ void Measure(int w, int h) {
   }
   std::printf("MEASURE {\"width\":%d,\"height\":%d,\"frames\":%d,\"checksum\":%llu,"
               "\"retained_image_bytes\":%llu,\"native_allocated_bytes\":%llu,"
-              "\"java_array_bytes\":%llu,\"java_copy_bytes\":%llu}\n", w,h,frames,
+              "\"java_array_bytes\":%llu,\"java_copy_bytes\":%llu,\"image_struct_bytes\":%zu}\n", w,h,frames,
               static_cast<unsigned long long>(checksum),static_cast<unsigned long long>(retained),
               static_cast<unsigned long long>(native_allocated_bytes),static_cast<unsigned long long>(java_array_bytes),
-              static_cast<unsigned long long>(java_copy_bytes));
+              static_cast<unsigned long long>(java_copy_bytes), sizeof(Image));
 }
 
 int main(int argc, char**) {
@@ -371,6 +437,7 @@ int main(int argc, char**) {
   PixelCases(); Lifetimes();
   Measure(1280,720); Measure(1920,1080); Measure(3840,2160);
   Check(gReaders.empty(), "all native reader owners retired");
+  Check(gesher::bionic::ahb::rgba_buffers_live.load() == 0, "every pooled RGBA buffer is released");
   std::printf("%d codec reader checks; %d failures\n",checks,failures);
   return failures ? 1 : 0;
 }

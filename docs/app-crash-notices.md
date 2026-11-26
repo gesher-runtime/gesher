@@ -14,7 +14,8 @@ The helper uses Gesher's host language (English/Hebrew, including RTL flags),
 identifies the package, and displays the path of its text report and event ID.
 The package report appends complete event records under a nonblocking file lock;
 retries and sibling processes cannot truncate an older notice's evidence. Each
-stack trace is capped at 128 KiB of characters with a truncation marker. There
+stack trace is capped at 128 KiB of characters with a truncation marker, and
+credential values in it are redacted ([logging.md](logging.md)). There
 is one append-only report file per package, following the existing package-log
 lifetime; old records are retained until the user clears the logs. It accepts
 only known diagnosis kinds and never starts PowerShell or relaunches the app.
