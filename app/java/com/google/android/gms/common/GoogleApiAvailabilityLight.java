@@ -7,6 +7,9 @@ package com.google.android.gms.common;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 
 /**
  * Helper for verifying that Google Play Services is available and up to date.
@@ -29,8 +32,23 @@ public class GoogleApiAvailabilityLight {
         return isGooglePlayServicesAvailable(context, GOOGLE_PLAY_SERVICES_VERSION_CODE);
     }
 
+    /**
+     * What the client library reads from the package manager: the installed Play services
+     * package (none: SERVICE_MISSING), its enabled state and its version. This test
+     * fixture has no signature verifier; it never reports a package that is not there.
+     */
     public int isGooglePlayServicesAvailable(Context context, int minApkVersion) {
-        // Gesher's compatibility layer provides full GMS availability
+        PackageInfo info;
+        try {
+            info = context.getPackageManager().getPackageInfo(GOOGLE_PLAY_SERVICES_PACKAGE, 0);
+        } catch (PackageManager.NameNotFoundException e) {
+            return ConnectionResult.SERVICE_MISSING;
+        }
+        ApplicationInfo app = info.applicationInfo;
+        if (app != null && !app.enabled) return ConnectionResult.SERVICE_DISABLED;
+        if (info.getLongVersionCode() < minApkVersion) {
+            return ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED;
+        }
         return ConnectionResult.SUCCESS;
     }
 
@@ -68,7 +86,12 @@ public class GoogleApiAvailabilityLight {
     }
 
     public int getApkVersion(Context context) {
-        return GOOGLE_PLAY_SERVICES_VERSION_CODE;
+        try {
+            return (int) context.getPackageManager()
+                    .getPackageInfo(GOOGLE_PLAY_SERVICES_PACKAGE, 0).getLongVersionCode();
+        } catch (PackageManager.NameNotFoundException e) {
+            return 0;
+        }
     }
 
     public int getClientVersion(Context context) {
