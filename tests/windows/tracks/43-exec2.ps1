@@ -27,6 +27,8 @@ Check 'exec2: native processes from native code (system, popen, posix_spawn, sig
     'exec2: PASS waitpid decodes an exit code',
     'exec2: PASS wait notification fixture observes a live child',
     'exec2: PASS WNOHANG retains live-child status',
+    'exec2: PASS non-restarting signal interrupts a live child wait',
+    'exec2: PASS restarting signals leave both child waits active',
     'exec2: PASS competing waiters collect one child once and both retire',
     'exec2: PASS reaped child cannot be collected again',
     'exec2: PASS any-child wait retains fast-exit identities and statuses',
@@ -34,7 +36,7 @@ Check 'exec2: native processes from native code (system, popen, posix_spawn, sig
     'exec2: PASS kill() to another process runs its SIGUSR1 and SIGTERM handlers',
     'exec2: PASS signal 0 finds a running process',
     'exec2: PASS SIGKILL ends a process (WIFSIGNALED)',
-    'exec2: SUMMARY pass=16 fail=0')
+    'exec2: SUMMARY pass=18 fail=0')
 
 # exec*() outside a fork replaces the image: the launcher process exits with the
 # child's status (17).

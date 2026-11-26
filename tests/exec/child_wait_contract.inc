@@ -3,17 +3,35 @@
 // Public Bionic process/thread entries. The shared exec2 driver supplies the
 // real child program and assertion reporter; no watcher or clock is replaced.
 #include <pthread.h>
+#include <stdatomic.h>
 
 struct child_wait_result {
   pid_t child, result;
   int status, error;
+  atomic_int entered, done;
 };
 static void* collect_shared_child(void* value) {
   struct child_wait_result* result = value;
   errno = 0;
+  atomic_store(&result->entered, 1);
   result->result = waitpid(result->child, &result->status, 0);
   result->error = errno;
+  atomic_store(&result->done, 1);
   return NULL;
+}
+
+static atomic_int observed_wait_signals;
+static void observe_wait_signal(int sig) {
+  (void)sig;
+  atomic_fetch_add(&observed_wait_signals, 1);
+}
+
+static int await_count(atomic_int* counter, int count) {
+  for (int attempt = 0; attempt < 300; ++attempt) {
+    if (atomic_load(counter) >= count) return 1;
+    usleep(10000);
+  }
+  return 0;
 }
 
 static void child_wait_notification_contract(const char* child) {
@@ -46,20 +64,50 @@ static void child_wait_notification_contract(const char* child) {
     ok("WNOHANG retains live-child status", waitpid(pid, &status,
         WNOHANG | WUNTRACED | WCONTINUED) == 0 && status == 0x2468,
         "live child has no eligible exit/stop/continue result");
-    struct child_wait_result results[2] = {{pid, -2, -1, 0}, {pid, -2, -1, 0}};
+    struct sigaction observe = {0}, saved;
+    observe.sa_handler = observe_wait_signal;
+    sigemptyset(&observe.sa_mask);
+    atomic_store(&observed_wait_signals, 0);
+    int observe_active = sigaction(SIGUSR1, &observe, &saved) == 0;
+    struct child_wait_result interrupted = {.child = pid, .status = 0x2468};
+    pthread_t interrupt_thread;
+    int interrupt_started = observe_active
+        && pthread_create(&interrupt_thread, NULL, collect_shared_child, &interrupted) == 0;
+    int interrupted_live = interrupt_started && await_count(&interrupted.entered, 1)
+        && pthread_kill(interrupt_thread, SIGUSR1) == 0 && await_count(&interrupted.done, 1);
+    if (interrupt_started && !interrupted_live) kill(pid, SIGTERM);
+    if (interrupt_started) pthread_join(interrupt_thread, NULL);
+    ok("non-restarting signal interrupts a live child wait",
+        interrupted_live && atomic_load(&observed_wait_signals) == 1
+            && interrupted.result == -1 && interrupted.error == EINTR && interrupted.status == 0x2468,
+        "waitpid returns EINTR before child exit");
+
+    observe.sa_flags = SA_RESTART;
+    int restart_active = observe_active && sigaction(SIGUSR1, &observe, NULL) == 0;
+    atomic_store(&observed_wait_signals, 0);
+    struct child_wait_result results[2] = {{.child = pid, .status = -1}, {.child = pid, .status = -1}};
     pthread_t threads[2];
     int started[2];
     for (int i = 0; i < 2; ++i) started[i] = pthread_create(&threads[i], NULL, collect_shared_child, &results[i]) == 0;
+    // On the Windows x86-64 shim, the handler can run only when the worker is in waitpid.
+    // Requiring delivery while the child is still alive makes both contenders exercise waiting.
+    int restarted = restart_active && started[0] && started[1]
+        && await_count(&results[0].entered, 1) && await_count(&results[1].entered, 1)
+        && pthread_kill(threads[0], SIGUSR1) == 0 && pthread_kill(threads[1], SIGUSR1) == 0
+        && await_count(&observed_wait_signals, 2)
+        && !atomic_load(&results[0].done) && !atomic_load(&results[1].done);
+    ok("restarting signals leave both child waits active", restarted, "SA_RESTART while the child is alive");
     int killed = kill(pid, SIGTERM) == 0;
     for (int i = 0; i < 2; ++i) if (started[i]) pthread_join(threads[i], NULL);
     if (!started[0] && !started[1]) waitpid(pid, NULL, 0);
+    if (observe_active) sigaction(SIGUSR1, &saved, NULL);
     int collected = 0, exhausted = 0;
     for (int i = 0; i < 2; ++i) {
       if (results[i].result == pid && WIFEXITED(results[i].status) && WEXITSTATUS(results[i].status) == 43) ++collected;
       if (results[i].result == -1 && results[i].error == ECHILD) ++exhausted;
     }
     ok("competing waiters collect one child once and both retire",
-        started[0] && started[1] && killed && collected == 1 && exhausted == 1,
+        restarted && killed && collected == 1 && exhausted == 1,
         "exit notification and final-removal notification");
     errno = 0;
     ok("reaped child cannot be collected again", waitpid(pid, NULL, WNOHANG) == -1 && errno == ECHILD,
