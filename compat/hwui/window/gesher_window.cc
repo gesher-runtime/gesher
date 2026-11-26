@@ -22,6 +22,7 @@
 #include "layered_bitmap.h"
 #include "input_pane.h"
 #include "drop_target.h"
+#include "window_frame.h"
 
 namespace gesher {
 namespace {
@@ -184,71 +185,13 @@ std::string Narrow(const std::wstring& w) {
   return out;
 }
 
-// The Back bar: an Android navigation bar's Back button under a top-level
-// window's client area. It is non-client area, so the client area stays the
-// app's display; the X closes the app's task, Back goes one screen back.
-constexpr int kBackBarDip = 40;
-constexpr LRESULT kHitBack = HTOBJECT;  // the Back button's hit-test code
 constexpr wchar_t kBackStateProp[] = L"GesherBackState";  // 1 hot, 2 pressed
-
-int BackBarHeight(HWND hwnd) {
-  return MulDiv(kBackBarDip, static_cast<int>(GetDpiForWindow(hwnd)), 96);
-}
-
-// The bar, in window coordinates.
-RECT BackBarRect(HWND hwnd) {
-  RECT client = {}, window = {};
-  POINT origin = {0, 0};
-  GetClientRect(hwnd, &client);
-  ClientToScreen(hwnd, &origin);
-  GetWindowRect(hwnd, &window);
-  const int left = origin.x - window.left, top = origin.y - window.top + client.bottom;
-  return {left, top, left + client.right, top + BackBarHeight(hwnd)};
-}
-
-// The Back button: the middle of the bar, as wide as two bar heights.
-RECT BackButtonRect(HWND hwnd) {
-  RECT bar = BackBarRect(hwnd);
-  const int h = bar.bottom - bar.top, middle = (bar.left + bar.right) / 2;
-  return {middle - h, bar.top, middle + h, bar.bottom};
-}
-
 int BackState(HWND hwnd) {
   return static_cast<int>(reinterpret_cast<intptr_t>(GetPropW(hwnd, kBackStateProp)));
 }
 
 void PaintBackBar(HWND hwnd) {
-  if (IsIconic(hwnd)) return;
-  const RECT bar = BackBarRect(hwnd);
-  if (bar.right <= bar.left || bar.bottom <= bar.top) return;
-  HDC dc = GetWindowDC(hwnd);
-  if (dc == nullptr) return;
-  HBRUSH fill = CreateSolidBrush(RGB(0x20, 0x20, 0x20));
-  FillRect(dc, &bar, fill);
-  DeleteObject(fill);
-  const int h = bar.bottom - bar.top;
-  const int cx = (bar.left + bar.right) / 2, cy = (bar.top + bar.bottom) / 2;
-  HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-  HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
-  if (int state = BackState(hwnd)) {
-    // Hot or pressed: a circle behind the button, as Android's ripple.
-    HBRUSH ripple = CreateSolidBrush(state == 2 ? RGB(0x55, 0x55, 0x55) : RGB(0x3a, 0x3a, 0x3a));
-    SelectObject(dc, ripple);
-    const int r = h * 2 / 5;
-    Ellipse(dc, cx - r, cy - r, cx + r + 1, cy + r + 1);
-    SelectObject(dc, GetStockObject(NULL_BRUSH));
-    DeleteObject(ripple);
-  }
-  // Android's Back: an outlined triangle pointing left.
-  const int a = h / 4;
-  POINT triangle[3] = {{cx - a * 4 / 5, cy}, {cx + a * 3 / 5, cy - a}, {cx + a * 3 / 5, cy + a}};
-  HPEN pen = CreatePen(PS_SOLID, h / 20 > 1 ? h / 20 : 1, RGB(0xe8, 0xe8, 0xe8));
-  SelectObject(dc, pen);
-  Polygon(dc, triangle, 3);
-  SelectObject(dc, old_pen);
-  SelectObject(dc, old_brush);
-  DeleteObject(pen);
-  ReleaseDC(hwnd, dc);
+  window_presentation::PaintBackBar(hwnd, BackState(hwnd));
 }
 
 void SetBackState(HWND hwnd, int state) {
@@ -406,16 +349,14 @@ void Window::Run(std::wstring title, int width, int height) {
   HRESULT com = SUCCEEDED(ole) ? ole
                                : CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
   // A popup (CreatePopup): no frame, owned, so no taskbar button.
-  DWORD style = popup_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
-  RECT r = {0, 0, width, height};
-  AdjustWindowRectEx(&r, style, FALSE, 0);
-  int x = popup_ ? 0 : CW_USEDEFAULT, y = popup_ ? 0 : CW_USEDEFAULT;
+  auto frame = window_presentation::BuildInitialFrame(popup_, width, height);
+  const RECT& r = frame.bounds;
   POINT splash;
   if (!popup_ && SplashClientOrigin(ProcessAppUserModelId(), &splash)) {
-    x = splash.x + r.left;  // r.left, r.top: minus the frame's left and top
-    y = splash.y + r.top;
+    frame.x = splash.x + r.left;  // r.left, r.top: minus the frame's left and top
+    frame.y = splash.y + r.top;
   }
-  HWND hwnd = CreateWindowExW(0, kClassName, title.c_str(), style, x, y, r.right - r.left,
+  HWND hwnd = CreateWindowExW(0, kClassName, title.c_str(), frame.style, frame.x, frame.y, r.right - r.left,
                               r.bottom - r.top, static_cast<HWND>(owner_hwnd_), nullptr,
                               GetModuleHandleW(nullptr), this);
   const DWORD create_error = hwnd == nullptr ? GetLastError() : 0;
@@ -578,11 +519,7 @@ void Window::SetResizable(bool resizable) {
 
 void Window::SetClientSize(int width, int height) {
   HWND hwnd = static_cast<HWND>(hwnd_);
-  RECT r = {0, 0, width, height};
-  AdjustWindowRectExForDpi(&r, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)), FALSE,
-                           static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
-                           GetDpiForWindow(hwnd));
-  if (!popup_) r.bottom += BackBarHeight(hwnd);
+  RECT r = window_presentation::ClientFrameRect(hwnd, popup_, width, height);
   // SetWindowPos from another thread waits for the window's thread, which
   // handles WM_SIZE (the new client size) before it returns.
   SetWindowPos(hwnd, nullptr, 0, 0, r.right - r.left, r.bottom - r.top,
@@ -652,22 +589,32 @@ void Window::ResizeBuffer(int width, int height) {
   pixels_.swap(pixels);
   buffer_width_ = width;
   buffer_height_ = height;
+  ++buffer_version_;
+  layered_full_dirty_ = true;
 }
 
-uint8_t* Window::Lock(int* width, int* height, int* stride) {
+uint8_t* Window::Lock(int* width, int* height, int* stride, uint64_t* version) {
   buffer_mutex_.lock();
   ResizeBuffer(client_width_, client_height_);
   *width = buffer_width_;
   *height = buffer_height_;
   *stride = buffer_width_;
+  if (version != nullptr) *version = buffer_version_;
   return pixels_.data();
 }
 
 void Window::Unlock() {
+  ++buffer_version_;
+  layered_full_dirty_ = true;
   buffer_mutex_.unlock();
 }
 
-void Window::UnlockAndPost() {
+void Window::UnlockAndPost(const PixelRect* dirty) {
+  PixelRect damage = dirty != nullptr ? dirty->Clip(buffer_width_, buffer_height_) : PixelRect{};
+  const bool full = damage.empty();
+  if (full) layered_full_dirty_ = true;
+  else layered_dirty_.Unite(damage);
+  ++buffer_version_;
   frames_++;
   buffer_mutex_.unlock();
   if (translucent_) {
@@ -675,7 +622,8 @@ void Window::UnlockAndPost() {
     PostMessageW(static_cast<HWND>(hwnd_), kMsgPresentLayered, 0, 0);
     return;
   }
-  InvalidateRect(static_cast<HWND>(hwnd_), nullptr, FALSE);
+  RECT rect = {damage.left, damage.top, damage.right, damage.bottom};
+  InvalidateRect(static_cast<HWND>(hwnd_), full ? nullptr : &rect, FALSE);
 }
 
 int Window::width() const {
@@ -822,15 +770,10 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
     case WM_MOVE:
       if (input_pane_screen_[3] > input_pane_screen_[1]) UpdateInputPane();
       return -1;
-    case WM_NCCALCSIZE: {
+    case WM_NCCALCSIZE:
+    case WM_NCHITTEST:
       if (popup_) return -1;
-      LRESULT r = DefWindowProcW(hwnd, msg, wparam, lparam);
-      RECT* client = wparam ? &reinterpret_cast<NCCALCSIZE_PARAMS*>(lparam)->rgrc[0]
-                            : reinterpret_cast<RECT*>(lparam);
-      client->bottom -= BackBarHeight(hwnd);
-      if (client->bottom < client->top) client->bottom = client->top;
-      return r;
-    }
+      return window_presentation::FrameMessage(hwnd, msg, wparam, lparam);
     case WM_NCPAINT:
     case WM_NCACTIVATE: {
       if (popup_) return -1;
@@ -838,19 +781,9 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       PaintBackBar(hwnd);
       return r;
     }
-    case WM_NCHITTEST: {
-      if (popup_) return -1;
-      LRESULT r = DefWindowProcW(hwnd, msg, wparam, lparam);
-      if (r == HTCLIENT || IsIconic(hwnd)) return r;
-      RECT window, button = BackButtonRect(hwnd), bar = BackBarRect(hwnd);
-      GetWindowRect(hwnd, &window);
-      POINT p = {GET_X_LPARAM(lparam) - window.left, GET_Y_LPARAM(lparam) - window.top};
-      if (PtInRect(&button, p)) return kHitBack;
-      return PtInRect(&bar, p) ? HTNOWHERE : r;
-    }
     case WM_NCMOUSEMOVE:
       if (popup_) return -1;
-      if (wparam == static_cast<WPARAM>(kHitBack)) {
+      if (wparam == static_cast<WPARAM>(window_presentation::kHitBack)) {
         TRACKMOUSEEVENT track = {sizeof track, TME_LEAVE | TME_NONCLIENT, hwnd, 0};
         TrackMouseEvent(&track);
         if (BackState(hwnd) == 0) SetBackState(hwnd, 1);
@@ -864,11 +797,11 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       return -1;
     case WM_NCLBUTTONDOWN:
     case WM_NCLBUTTONDBLCLK:
-      if (popup_ || wparam != static_cast<WPARAM>(kHitBack)) return -1;
+      if (popup_ || wparam != static_cast<WPARAM>(window_presentation::kHitBack)) return -1;
       SetBackState(hwnd, 2);
       return 0;
     case WM_NCLBUTTONUP:
-      if (popup_ || wparam != static_cast<WPARAM>(kHitBack)) return -1;
+      if (popup_ || wparam != static_cast<WPARAM>(window_presentation::kHitBack)) return -1;
       if (BackState(hwnd) == 2) {
         // Back, pressed and released (KEYCODE_BACK: VK_BROWSER_BACK).
         e.type = WindowEvent::kKeyDown;
@@ -940,11 +873,7 @@ intptr_t Window::HandleMessage(unsigned msg, uintptr_t wparam, intptr_t lparam) 
       // The app's minimum (SetMinClientSize), as a window size.
       const int min_w = min_client_width_, min_h = min_client_height_;
       if (min_w > 0 || min_h > 0) {
-        RECT r = {0, 0, min_w, min_h};
-        AdjustWindowRectExForDpi(&r, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE)),
-                                 FALSE, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)),
-                                 GetDpiForWindow(hwnd));
-        if (!popup_) r.bottom += BackBarHeight(hwnd);
+        RECT r = window_presentation::ClientFrameRect(hwnd, popup_, min_w, min_h);
         if (min_w > 0) info->ptMinTrackSize.x = r.right - r.left;
         if (min_h > 0) info->ptMinTrackSize.y = r.bottom - r.top;
       }

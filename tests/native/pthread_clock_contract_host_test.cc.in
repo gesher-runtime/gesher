@@ -78,6 +78,13 @@ int64_t MonotonicNanos() {
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 void DeliverPendingSignals() {}
+// No fixture thread has signal state (signal_bionic.cc); for such a thread
+// InterruptibleAddressWait is the plain address wait.
+bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
+                              unsigned long ms) {
+  return WaitOnAddress(address, const_cast<void*>(compare), size, static_cast<DWORD>(ms)) ||
+         GetLastError() != ERROR_TIMEOUT;
+}
 @DEADLINE@
 void* LookupBionicSymbol(const char*);
 namespace pthread_code {

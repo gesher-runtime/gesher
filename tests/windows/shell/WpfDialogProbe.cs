@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 
 namespace Gesher.Tests {
@@ -26,6 +27,11 @@ namespace Gesher.Tests {
         public List<string> Texts { get; private set; }
         public string CancelText { get; private set; }
         public bool CancelIsCancel { get; private set; }
+        public bool CancelIsDefault { get; private set; }
+        public bool CancelHasFocus { get; private set; }
+        public string ConfirmVisibility { get; private set; }
+        public bool ConfirmIsEnabled { get; private set; }
+        public bool ConfirmIsDefault { get; private set; }
         public string OkText { get; private set; }
         public bool OkIsCancel { get; private set; }
 
@@ -34,7 +40,8 @@ namespace Gesher.Tests {
             this.action = action;
             this.messageDialog = messageDialog;
             Texts = new List<string>();
-            timer = new DispatcherTimer(DispatcherPriority.Normal, owner.Dispatcher);
+            // Inspect after the production ContentRendered handler has set initial focus.
+            timer = new DispatcherTimer(DispatcherPriority.ApplicationIdle, owner.Dispatcher);
             timer.Interval = TimeSpan.FromMilliseconds(20);
             timer.Tick += Tick;
         }
@@ -75,12 +82,26 @@ namespace Gesher.Tests {
                     if (cancel == null) throw new InvalidOperationException("Confirmation has no cancel button");
                     CancelText = Convert.ToString(cancel.Content);
                     CancelIsCancel = cancel.IsCancel;
+                    CancelIsDefault = cancel.IsDefault;
+                    CancelHasFocus = Object.ReferenceEquals(FocusManager.GetFocusedElement(modal), cancel);
                     button = modal.FindName("BtnConfirm") as Button;
                     if (button == null) throw new InvalidOperationException("Confirmation has no confirm button");
+                    ConfirmVisibility = button.Visibility.ToString();
+                    ConfirmIsEnabled = button.IsEnabled;
+                    ConfirmIsDefault = button.IsDefault;
                 }
 
                 if (action == "Close") {
                     modal.Close();
+                } else if (action == "Enter" || action == "Escape") {
+                    // Exercise WPF's registered default/cancel key route, including
+                    // Button.OnClick and IsCancel, without injecting native keyboard input.
+                    string key = action == "Enter" ? "\r" : "\x1b";
+                    PresentationSource scope = PresentationSource.FromVisual(modal);
+                    if (scope == null || !AccessKeyManager.IsKeyRegistered(scope, key)) {
+                        throw new InvalidOperationException("Modal has no registered " + action + " action");
+                    }
+                    AccessKeyManager.ProcessKey(scope, key, false);
                 } else if (action == "Cancel") {
                     // Invoke OnClick, including WPF's IsCancel behavior.
                     Button cancel = (Button)modal.FindName("BtnCancel");

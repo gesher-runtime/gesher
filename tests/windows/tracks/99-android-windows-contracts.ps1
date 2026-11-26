@@ -171,3 +171,11 @@ try {
     }
   }
 }
+
+# Production Windows frame helpers, isolated from Android/ART on a private desktop.
+$frameOut = RunTimed "$Dir/window_frame_test.exe" @() 30
+$frameCode = $LASTEXITCODE
+Check 'window: native frame geometry, Back hit testing and GDI drawing' {
+  $global:LASTEXITCODE = $frameCode
+  $frameOut
+} @('window_frame_test:', ' checks, 0 failures')

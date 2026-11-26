@@ -17,10 +17,12 @@
 #include <string_view>
 
 #include "internal.h"
+#include "storage_policy.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_liveness.h"
 #include "xattr_access.h"
 #include "xattr_security_policy.h"
+#include "system_linker.h"
 
 namespace {
 
@@ -397,12 +399,16 @@ int CheckTarget(Target* target, const Request& request) {
   return 0;
 }
 
-int PinPath(const char* path, bool follow, Target* target) {
+int PinPath(const char* path, bool follow, bool mutates, Target* target) {
   char stable_path[4096];
   int error = ReadString(path, stable_path, sizeof(stable_path), ENAMETOOLONG);
   if (error) return error;
   std::wstring windows;
   if (!gesher::DiskPath(stable_path, &windows, EOPNOTSUPP)) return errno;
+  if (!gesher::CheckExternalStorageAccess(
+          windows, mutates ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) {
+    return errno;
+  }
   // Open the link itself when requested. Zero desired access pins the actual
   // object without letting an EA/data permission denial preempt argument
   // preparation. Classification and current authorization follow below.
@@ -433,6 +439,8 @@ int PinFd(int fd, bool allow_path, Target* target) {
 }
 
 int AuthorizeTarget(Target* target, const Request& request) {
+  if (!gesher::CheckExternalStorageHandle(target->original.value,
+          request.Mutates() ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) return errno;
   int error = 0;
   if (target->path_only) {
     // Bionic's fget/fset/flist fallback follows /proc/self/fd, which pins the
@@ -620,10 +628,20 @@ ssize_t Perform(const Target& target, const Request& request, const PreparedRequ
   return error ? (errno = error, -1) : 0;
 }
 
+// Gesher's ELF loader (/system/bin/linker64) is on Android's read-only /system,
+// whatever name or fd reaches it (system_linker.h).
+int RefuseLinkerChange(const Target& target, const Request& request) {
+  if (request.operation != Operation::kSet && request.operation != Operation::kRemove) return 0;
+  return gesher::system_linker::IsFileHandle(target.original.value) ? EROFS : 0;
+}
+
 ssize_t PathRequest(const char* path, bool follow, const Request& request) {
   Target target;
   PreparedRequest prepared;
-  int error = PinPath(path, follow, &target);
+  const bool mutates =
+      request.operation == Operation::kSet || request.operation == Operation::kRemove;
+  int error = PinPath(path, follow, mutates, &target);
+  if (!error) error = RefuseLinkerChange(target, request);
   if (!error) error = PrepareRequest(request, &prepared);
   if (!error) error = AuthorizeTarget(&target, request);
   return error ? (errno = error, -1) : Perform(target, request, prepared);
@@ -633,6 +651,7 @@ ssize_t FdRequest(int fd, const Request& request, bool allow_path = false) {
   Target target;
   PreparedRequest prepared;
   int error = PinFd(fd, allow_path, &target);
+  if (!error) error = RefuseLinkerChange(target, request);
   if (!error) error = PrepareRequest(request, &prepared);
   if (!error) error = AuthorizeTarget(&target, request);
   return error ? (errno = error, -1) : Perform(target, request, prepared);

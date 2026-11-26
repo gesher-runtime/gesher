@@ -1,0 +1,336 @@
+{
+  "schema": 1,
+  "date_utc": "2026-11-23",
+  "scope": "Actual production HEVC output wrapper with pinned libhevc and FFmpeg oracle; provider C/reference storage and downstream conversion excluded from byte/allocation counters",
+  "issue_mapping": [
+    "56:M08",
+    "56:T12"
+  ],
+  "base_commit": "d38b5549dc3963f8d491e9205f9b2743bb6d3745",
+  "timestamp_only_baseline_commit": "2c050a982639f029a3bfb9cafd1d28eec2c1f7ad",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "host_compiler": "c++ (Debian 14.2.0-19) 14.2.0",
+  "windows_toolchain": "llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64",
+  "libhevc_revision": "c83a76b084498d55f252f48b2e3786804cdf24b7",
+  "header_dependency_revisions": {
+    "libvpx": "f698661427ae51eb06effb1c274b9ad0c1a4fd64",
+    "libdav1d": "0dd0432c832430dc94ec66c67e4e8a3de6e044fa"
+  },
+  "current_source_sha256": {
+    "compat/media/video/soft_video.cc": "fa5a94a85f741baa7e88765ad138ac55f5c4c34047435a91d9085104ba35ead7",
+    "compat/media/video/video_decoder.cc": "b05dd3d584f4ed9b7bc80676968b5a78ea6d02451a0ca7d305567b9dc1c48487",
+    "tests/media/soft_hevc_output_test.cc": "57f43612c6ab51c9bb1a1cd0029280cad173c755a3d7d2e2bc6d7fe58d8698d5",
+    "tests/media/decoder-host/include/media/NdkMediaFormat.h": "55d96d04abd138de5fee86de597411fb4e1338947009da9692e88d4175eb03fd",
+    "tools/test_soft_hevc_output.py": "1d04fa1e445059b5c59fc3a4590e3350f62fd5aa77f541e7f2c04cec9c452044",
+    "cmake/aosp/media_video_codecs.cmake": "c034e225b3ff0259f36b3ae4e2c2df2b95865f22ed783ddf975d394748cdec44"
+  },
+  "measurement_scope": {
+    "copied_bytes": "Complete wrapper Decode/Drain memcpy calls; excludes provider-internal conversion and downstream rendering",
+    "large_cpp_allocations": "Allocations at least as large as the visible frame inside production calls, including later deletion; excludes provider C and test/oracle/input allocations",
+    "full_workload": "All access units and complete drain; consumed output cleared between calls",
+    "steady": "Output-producing calls after first six access units; separate full-workload peak is also recorded",
+    "retained_output_corpus": "Independent pixel/PTS/lifetime correctness checks with all frames retained; not the measured release-between-calls workload"
+  },
+  "fixtures": {
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "clips": {
+      "small": {
+        "width": 384,
+        "height": 256,
+        "frames": 12,
+        "fixture_sha256": "f13441aa27f6c3f498df407fb2c5e6d15029cbb40269c87ffb91640644b880c3",
+        "reference_sha256": "bb8c93f756f1c9b043efa66e61f3dfb5856b63cb61620eb84649e4439e7afa45",
+        "display_picture_types": [
+          "I",
+          "B",
+          "B",
+          "P",
+          "B",
+          "B",
+          "P",
+          "P",
+          "I",
+          "B",
+          "B",
+          "P"
+        ]
+      },
+      "cropped": {
+        "width": 318,
+        "height": 238,
+        "frames": 12,
+        "fixture_sha256": "a043464e6488e86ffad80f22e3e80de345cde48609af1878ce2c5474dab95528",
+        "reference_sha256": "d035bcf1c1b775813d475f162edbfda0188d62c6171f4c80c3331611086e886c",
+        "display_picture_types": [
+          "I",
+          "B",
+          "B",
+          "P",
+          "B",
+          "B",
+          "P",
+          "P",
+          "I",
+          "B",
+          "B",
+          "P"
+        ]
+      },
+      "720p": {
+        "width": 1280,
+        "height": 720,
+        "frames": 24,
+        "fixture_sha256": "0f24d95959c226bd5335668155d7557fc85f0cfea86b1cdb364c073b20210e4f",
+        "reference_sha256": "d0ed65e0f29427ff47087f0aa6253d36474cd4fc69b7ee1fe82697116d1c85cb",
+        "display_picture_types": [
+          "I",
+          "B",
+          "B",
+          "P",
+          "B",
+          "B",
+          "P",
+          "P",
+          "I",
+          "B",
+          "B",
+          "P",
+          "B",
+          "B",
+          "P",
+          "P",
+          "I",
+          "B",
+          "B",
+          "P",
+          "B",
+          "B",
+          "P",
+          "P"
+        ]
+      },
+      "1080p": {
+        "width": 1920,
+        "height": 1080,
+        "frames": 12,
+        "fixture_sha256": "0022e8565a74c14638cce09c68145862cdc4055ba2386e9d6aaac777c3423465",
+        "reference_sha256": "a1d4118e8af69374d35b77b70a3d25d2f9d3b0a173832774284340f3d57161ba",
+        "display_picture_types": [
+          "I",
+          "B",
+          "B",
+          "P",
+          "B",
+          "B",
+          "P",
+          "P",
+          "I",
+          "B",
+          "B",
+          "P"
+        ]
+      },
+      "4k": {
+        "width": 3840,
+        "height": 2160,
+        "frames": 8,
+        "fixture_sha256": "d0a1453107e71c04be48adca57e9d4ae5131db8aeb892677ee0758d202f7c0ab",
+        "reference_sha256": "58d1270a2fbd3b53ccf7aebc2c0d2fd7e86ae4b5ef23fd7dd685e83ffdd15454",
+        "display_picture_types": [
+          "I",
+          "B",
+          "B",
+          "P",
+          "B",
+          "B",
+          "P",
+          "P"
+        ]
+      }
+    }
+  },
+  "runs": [
+    {
+      "label": "timestamp-only baseline",
+      "source_sha256": "5ac9728cae83b041dc88284fce46bccc35acd197ab170dc2a9682dd59b67a9be",
+      "checks": 12092,
+      "measure_only": true,
+      "metrics": [
+        {
+          "name": "small",
+          "frames": 12,
+          "copied_bytes": 1769472,
+          "peak_raw_bytes": 294912,
+          "raw_allocations": 13,
+          "steady_frames": 6,
+          "steady_copied_bytes": 884736,
+          "steady_peak_raw_bytes": 294912,
+          "steady_raw_allocations": 6,
+          "drain_frames": 1
+        },
+        {
+          "name": "cropped",
+          "frames": 12,
+          "copied_bytes": 1362312,
+          "peak_raw_bytes": 251766,
+          "raw_allocations": 13,
+          "steady_frames": 6,
+          "steady_copied_bytes": 681156,
+          "steady_peak_raw_bytes": 251766,
+          "steady_raw_allocations": 6,
+          "drain_frames": 1
+        },
+        {
+          "name": "720p",
+          "frames": 24,
+          "copied_bytes": 33177600,
+          "peak_raw_bytes": 2764800,
+          "raw_allocations": 25,
+          "steady_frames": 18,
+          "steady_copied_bytes": 24883200,
+          "steady_peak_raw_bytes": 2764800,
+          "steady_raw_allocations": 18,
+          "drain_frames": 1
+        },
+        {
+          "name": "1080p",
+          "frames": 12,
+          "copied_bytes": 37324800,
+          "peak_raw_bytes": 6243840,
+          "raw_allocations": 13,
+          "steady_frames": 6,
+          "steady_copied_bytes": 18662400,
+          "steady_peak_raw_bytes": 6243840,
+          "steady_raw_allocations": 6,
+          "drain_frames": 1
+        },
+        {
+          "name": "4k",
+          "frames": 8,
+          "copied_bytes": 99532800,
+          "peak_raw_bytes": 24883200,
+          "raw_allocations": 9,
+          "steady_frames": 2,
+          "steady_copied_bytes": 24883200,
+          "steady_peak_raw_bytes": 24883200,
+          "steady_raw_allocations": 2,
+          "drain_frames": 1
+        }
+      ],
+      "log": "libhevc revision c83a76b084498d55f252f48b2e3786804cdf24b7\nsoft_video.cc SHA256 5ac9728cae83b041dc88284fce46bccc35acd197ab170dc2a9682dd59b67a9be\nmetric,small,frames=12,copied_bytes=1769472,peak_raw_bytes=294912,raw_allocations=13,steady_frames=6,steady_copied_bytes=884736,steady_peak_raw_bytes=294912,steady_raw_allocations=6,drain_frames=1\nmetric,cropped,frames=12,copied_bytes=1362312,peak_raw_bytes=251766,raw_allocations=13,steady_frames=6,steady_copied_bytes=681156,steady_peak_raw_bytes=251766,steady_raw_allocations=6,drain_frames=1\nmetric,720p,frames=24,copied_bytes=33177600,peak_raw_bytes=2764800,raw_allocations=25,steady_frames=18,steady_copied_bytes=24883200,steady_peak_raw_bytes=2764800,steady_raw_allocations=18,drain_frames=1\nmetric,1080p,frames=12,copied_bytes=37324800,peak_raw_bytes=6243840,raw_allocations=13,steady_frames=6,steady_copied_bytes=18662400,steady_peak_raw_bytes=6243840,steady_raw_allocations=6,drain_frames=1\nmetric,4k,frames=8,copied_bytes=99532800,peak_raw_bytes=24883200,raw_allocations=9,steady_frames=2,steady_copied_bytes=24883200,steady_peak_raw_bytes=24883200,steady_raw_allocations=2,drain_frames=1\nHEVC output: 12092 checks, real reordered pixels and owned output storage passed\nGesherMedia E: soft hevc (libhevc): error 0x402b\nAll 68 frames byte-identical to independent FFmpeg decoding; retained/lifecycle cases also passed.\n"
+    },
+    {
+      "label": "ownership-transfer candidate",
+      "source_sha256": "fa5a94a85f741baa7e88765ad138ac55f5c4c34047435a91d9085104ba35ead7",
+      "checks": 12098,
+      "measure_only": false,
+      "metrics": [
+        {
+          "name": "small",
+          "frames": 12,
+          "copied_bytes": 0,
+          "peak_raw_bytes": 294912,
+          "raw_allocations": 13,
+          "steady_frames": 6,
+          "steady_copied_bytes": 0,
+          "steady_peak_raw_bytes": 147456,
+          "steady_raw_allocations": 6,
+          "drain_frames": 1
+        },
+        {
+          "name": "cropped",
+          "frames": 12,
+          "copied_bytes": 1362312,
+          "peak_raw_bytes": 251766,
+          "raw_allocations": 13,
+          "steady_frames": 6,
+          "steady_copied_bytes": 681156,
+          "steady_peak_raw_bytes": 251766,
+          "steady_raw_allocations": 6,
+          "drain_frames": 1
+        },
+        {
+          "name": "720p",
+          "frames": 24,
+          "copied_bytes": 0,
+          "peak_raw_bytes": 2764800,
+          "raw_allocations": 25,
+          "steady_frames": 18,
+          "steady_copied_bytes": 0,
+          "steady_peak_raw_bytes": 1382400,
+          "steady_raw_allocations": 18,
+          "drain_frames": 1
+        },
+        {
+          "name": "1080p",
+          "frames": 12,
+          "copied_bytes": 37324800,
+          "peak_raw_bytes": 6243840,
+          "raw_allocations": 13,
+          "steady_frames": 6,
+          "steady_copied_bytes": 18662400,
+          "steady_peak_raw_bytes": 6243840,
+          "steady_raw_allocations": 6,
+          "drain_frames": 1
+        },
+        {
+          "name": "4k",
+          "frames": 8,
+          "copied_bytes": 0,
+          "peak_raw_bytes": 24883200,
+          "raw_allocations": 9,
+          "steady_frames": 2,
+          "steady_copied_bytes": 0,
+          "steady_peak_raw_bytes": 12441600,
+          "steady_raw_allocations": 2,
+          "drain_frames": 1
+        }
+      ],
+      "negative_controls": [
+        {
+          "name": "always-copy",
+          "source_sha256": "d014dd7489aea7698255f59a54a45b6b612f3b5fdfc0b67126b4358adf832a75",
+          "assertion": "bytes == 0 && full_bytes == 0",
+          "returncode": -6
+        },
+        {
+          "name": "ignore-y-ownership",
+          "source_sha256": "0baf7e89a1977338dd57f6cb5be5d3cfe8be09c4ee7912050411c30a5366ae2b",
+          "assertion": "Hash(frame.data.data(), frame.data.size()) == clip.hashes[index]",
+          "returncode": -6
+        },
+        {
+          "name": "ignore-u-ownership",
+          "source_sha256": "50a0dba4afd2d4edbe1df6d3f5b6840cf523bb7b2c9424e598a61a4dc783edee",
+          "assertion": "Hash(frame.data.data(), frame.data.size()) == clip.hashes[index]",
+          "returncode": -6
+        },
+        {
+          "name": "ignore-v-ownership",
+          "source_sha256": "48a2c24cad2e63fcb075481e3ba7f7d8c303522d0b55fc330b24f9d79541b790",
+          "assertion": "Hash(frame.data.data(), frame.data.size()) == clip.hashes[index]",
+          "returncode": -6
+        }
+      ],
+      "log": "libhevc revision c83a76b084498d55f252f48b2e3786804cdf24b7\nsoft_video.cc SHA256 fa5a94a85f741baa7e88765ad138ac55f5c4c34047435a91d9085104ba35ead7\nmetric,small,frames=12,copied_bytes=0,peak_raw_bytes=294912,raw_allocations=13,steady_frames=6,steady_copied_bytes=0,steady_peak_raw_bytes=147456,steady_raw_allocations=6,drain_frames=1\nmetric,cropped,frames=12,copied_bytes=1362312,peak_raw_bytes=251766,raw_allocations=13,steady_frames=6,steady_copied_bytes=681156,steady_peak_raw_bytes=251766,steady_raw_allocations=6,drain_frames=1\nmetric,720p,frames=24,copied_bytes=0,peak_raw_bytes=2764800,raw_allocations=25,steady_frames=18,steady_copied_bytes=0,steady_peak_raw_bytes=1382400,steady_raw_allocations=18,drain_frames=1\nmetric,1080p,frames=12,copied_bytes=37324800,peak_raw_bytes=6243840,raw_allocations=13,steady_frames=6,steady_copied_bytes=18662400,steady_peak_raw_bytes=6243840,steady_raw_allocations=6,drain_frames=1\nmetric,4k,frames=8,copied_bytes=0,peak_raw_bytes=24883200,raw_allocations=9,steady_frames=2,steady_copied_bytes=0,steady_peak_raw_bytes=12441600,steady_raw_allocations=2,drain_frames=1\nHEVC output: 12098 checks, real reordered pixels and owned output storage passed\nGesherMedia E: soft hevc (libhevc): error 0x402b\nPASS negative control always-copy: bytes == 0 && full_bytes == 0\nPASS negative control ignore-y-ownership: Hash(frame.data.data(), frame.data.size()) == clip.hashes[index]\nPASS negative control ignore-u-ownership: Hash(frame.data.data(), frame.data.size()) == clip.hashes[index]\nPASS negative control ignore-v-ownership: Hash(frame.data.data(), frame.data.size()) == clip.hashes[index]\nAll 68 frames byte-identical to independent FFmpeg decoding; retained/lifecycle cases also passed.\n"
+    }
+  ],
+  "original_timestamp_failure": {
+    "source_sha256": "4f01ad58f426d114f099d567b156f772ac2e7b40ef039d6841096c4444176ef9",
+    "stream_transition": "384x256 to1280x720, retained old frames then a new timestamp epoch",
+    "actual_first_new_pts_us": 366670,
+    "expected_first_new_pts_us": 10000007,
+    "assertion": "frame.time_us == int64_t(index) * 33333 + 7 + offset",
+    "status": "original main fails; timestamp-only baseline and candidate both pass strict independent PTS"
+  },
+  "reproduction": [
+    "python3 tools/test_soft_hevc_output.py --libhevc-root third_party/aosp/external/libhevc --vpx-root third_party/aosp/external/libvpx --dav1d-root third_party/aosp/external/libdav1d --sanitize --negative-controls --output-dir out/media-hevc-output-fixtures",
+    "python3 tools/test_soft_hevc_output.py --libhevc-root third_party/aosp/external/libhevc --vpx-root third_party/aosp/external/libvpx --dav1d-root third_party/aosp/external/libdav1d --sanitize --source-ref 2c050a982639f029a3bfb9cafd1d28eec2c1f7ad --measure-only --output-dir out/media-hevc-output-before"
+  ],
+  "local_lsan": "detect_leaks=0 required only by traced local executor; committed CI keeps default sanitizer settings",
+  "windows_compile": "Complete production soft_video.cc compiles for x86_64 and aarch64; real x64 provider and full probe link",
+  "windows_runtime": "pending required full fork CI; not established by local crosscompile",
+  "cpu": null,
+  "latency": null,
+  "rss": null
+}

@@ -78,7 +78,9 @@ public final class IconBundleTest {
         try (Inputs inputs = Inputs.open(bundle)) {
             temp = new File(inputs.base).getParentFile();
             check(inputs.paths.length == 2, "base plus density APK");
-            check(new File(inputs.base).getName().equals("0.apk"), "base moved first and generated path");
+            check(inputs.paths[0].equals(inputs.base)
+                    && new File(inputs.base).getName().matches("[0-9]+\\.apk"),
+                    "base moved first and uses a generated path");
             ApkPackage p = ApkPackage.parse(inputs.base);
             AppIcon icon = AppIcon.load(inputs.paths, p.applicationInfo(0), null);
             check(icon.source.contains("xxxhdpi"), "best-density resource from split");
@@ -92,6 +94,15 @@ public final class IconBundleTest {
             for (String name : names) {
                 out.putNextEntry(new ZipEntry(name));
                 out.write(7);
+                out.closeEntry();
+            }
+        }
+    }
+    private static void zipApks(File target, String[] names, File... apks) throws IOException {
+        try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(target.toPath()))) {
+            for (int i = 0; i < names.length; i++) {
+                out.putNextEntry(new ZipEntry(names[i]));
+                Files.copy(apks[i].toPath(), out);
                 out.closeEntry();
             }
         }
@@ -114,8 +125,17 @@ public final class IconBundleTest {
         check(color(ico(full, new File(output, "ordinary.ico"))) == red, "ordinary APK icon preserved");
         check(color(ico(new File(fixtures, "icon-base.apk"), new File(output, "base-only.ico"))) != red,
                 "causal control: base alone lacks xxxhdpi red asset");
-        for (String name : new String[] {"icon-bundle.apks", "icon-bundle.xapk"}) {
-            File bundle = new File(fixtures, name);
+        File base = new File(fixtures, "icon-base.apk");
+        File density = new File(fixtures, "icon-density.apk");
+        File nested = new File(output, "icon-bundle.APK+");
+        zipApks(nested, new String[] {"apks/assets.apk", "apks/application.apk"}, density, base);
+        for (String extension : new String[] {".apks", ".xapk", ".apkm", ".APK+"}) {
+            String name = "icon-bundle" + extension;
+            File bundle = extension.equals(".APK+") ? nested : new File(fixtures, name);
+            if (!bundle.isFile() && extension.equals(".apkm")) {
+                bundle = new File(output, name);
+                Files.copy(new File(fixtures, "icon-bundle.apks").toPath(), bundle.toPath());
+            }
             check(color(bundleIco(bundle, new File(output, name + ".ico"))) == red,
                     "bundle split pixels match the ordinary APK");
             check(AppShell.apkIcon(bundle) == 0, "real icon command reads bundle");
@@ -127,6 +147,46 @@ public final class IconBundleTest {
             String leaf = iconPath.replace('\\', '/');
             leaf = leaf.substring(leaf.lastIndexOf('/') + 1);
             check(color(new File(Device.dataDir(), "system/apk-icons/" + leaf)) == red, "published cached pixels");
+        }
+        // framework-res.apk, Gesher's own file beside the runtime: the platform package,
+        // recorded with Gesher's icon and no app package (it was "not read" before).
+        File frameworkRes = new File(root + "/framework/framework-res.apk");
+        check(AppShell.apkIcon(frameworkRes) == 0, "framework-res.apk is recorded");
+        String frameworkKey = frameworkRes.length() + "\t" + frameworkRes.lastModified() + "\t";
+        String[] frameworkRow = Files.readAllLines(new File(Device.dataDir(), "system/apk-icons.list")
+                .toPath()).stream().filter(x -> x.startsWith(frameworkKey)).findFirst().orElseThrow()
+                .split("\t", -1);
+        check(frameworkRow.length == 4 && frameworkRow[2].endsWith("\\gesher.ico")
+                && "-".equals(frameworkRow[3]), "framework-res.apk is no app: Gesher's icon");
+        String log = new String(Files.readAllBytes(new File(Device.logsDir(), "apk-icons.log").toPath()),
+                java.nio.charset.StandardCharsets.UTF_8);
+        check(log.contains("the Android platform's resources (package android), not an app"),
+                "framework-res.apk is logged as the platform's resources");
+        // Its whole manifest parses: android:featureFlag elements are read through
+        // android.os.flagging.AconfigPackage, which framework.jar does not contain (a
+        // NoClassDefFoundError before); only then is the reserved name refused.
+        try {
+            ApkPackage.parse(frameworkRes.getAbsolutePath());
+            throw new AssertionError("the platform package was admitted as an app");
+        } catch (SecurityException expected) {
+            check(String.valueOf(expected.getMessage()).contains("platform package name is reserved"),
+                    "framework-res.apk's manifest parses through its feature flags");
+        }
+        // The flag values answered are the ones Gesher's framework runs with.
+        check(android.os.flagging.AconfigPackage.load("android.content.res")
+                        .getBooleanFlagValue("manifest_flagging", !android.content.res.Flags.manifestFlagging())
+                        == android.content.res.Flags.manifestFlagging(),
+                "aconfig flag value is the framework's own");
+        check(android.os.flagging.AconfigPackage.load("android.content.res")
+                        .getBooleanFlagValue("no_such_flag_in_gesher", true),
+                "undeclared aconfig flag answers the caller's default");
+        try {
+            android.os.flagging.AconfigPackage.load("com.gesher.no.such.flag.package");
+            throw new AssertionError("an aconfig package Gesher lacks was loaded");
+        } catch (android.os.flagging.AconfigStorageReadException expected) {
+            check(expected.getErrorCode()
+                    == android.os.flagging.AconfigStorageReadException.ERROR_PACKAGE_NOT_FOUND,
+                    "missing aconfig package is ERROR_PACKAGE_NOT_FOUND");
         }
         // A first launch must remember its installed identity even without a drawn icon.
         String installedPackage = ApkPackage.parse(full.getAbsolutePath()).packageName;
@@ -141,17 +201,32 @@ public final class IconBundleTest {
         check(!new File(Device.dataDir(), "system/packages.list").exists(), "no package installation registry");
         check(!Device.stateFile().exists(), "no device/server started");
         File bad = new File(output, "bad.apks");
-        zip(bad, "base.apk", "nested/base-master.apk"); rejects(bad);
+        zipApks(bad, new String[] {"base.apk", "nested/base-master.apk"}, base, base); rejects(bad);
         zip(bad, "one.apk", "two.apk"); rejects(bad);
-        zip(bad, "config.xxxhdpi.apk"); rejects(bad);
+        zipApks(bad, new String[] {"config.xxxhdpi.apk"}, density); rejects(bad);
         String[] tooMany = new String[513];
         tooMany[0] = "base.apk";
         for (int i = 1; i < tooMany.length; i++) tooMany[i] = "config." + i + ".apk";
         zip(bad, tooMany); rejects(bad);
-        Files.write(bad.toPath(), new byte[] {1, 2, 3}); rejects(bad);
-        zip(bad, "../../base.apk", "../config.xxxhdpi.apk");
+        // Content, not the suffix, makes a bundle: these are single APK inputs.
+        Files.write(bad.toPath(), new byte[] {1, 2, 3});
+        try (Inputs single = Inputs.open(bad)) {
+            check(single.paths.length == 1 && single.base.equals(bad.getAbsolutePath()),
+                    "a file that is not a ZIP is read as an APK, not a bundle");
+        }
+        File plainXapk = new File(output, "plain.xapk");
+        Files.copy(full.toPath(), plainXapk.toPath());
+        try (Inputs single = Inputs.open(plainXapk)) {
+            check(single.paths.length == 1 && single.base.equals(plainXapk.getAbsolutePath()),
+                    "an APK saved as .xapk is read as the APK it is");
+        }
+        check(color(ico(plainXapk, new File(output, "plain.xapk.ico"))) == red, "APK named .xapk draws its icon");
+        File bundleApk = new File(output, "icon-bundle-saved-as.apk");
+        Files.copy(new File(fixtures, "icon-bundle.xapk").toPath(), bundleApk.toPath());
+        check(color(bundleIco(bundleApk, new File(output, "bundle-as-apk.ico"))) == red,
+                "a bundle saved as .apk is read as the bundle it is");
         File temporary;
-        try (Inputs inputs = Inputs.open(bad)) {
+        try (Inputs inputs = Inputs.open(nested)) {
             temporary = new File(inputs.base).getParentFile();
             for (String path : inputs.paths) {
                 check(new File(path).getParentFile().equals(temporary), "archive paths cannot escape generated directory");

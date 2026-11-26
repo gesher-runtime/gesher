@@ -40,5 +40,7 @@ angle_build_vulkan_system_info = false
 # contexts of different share groups. With this option every GL call takes
 # the global EGL mutex and, when the calling context is not the one that made
 # the previous call, marks all of its state dirty first, so each context's
-# state is applied before it draws.
+# state is applied before it draws. eglDestroyContext switches contexts inside
+# ANGLE without recording it; compat/angle/patches/0001 makes it forget the
+# last context (issue #485).
 angle_force_context_check_every_call = true
