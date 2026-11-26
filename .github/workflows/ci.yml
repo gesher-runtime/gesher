@@ -2979,15 +2979,20 @@ jobs:
         run: python tests/arm32/build_guest_fixture.py --out-dir out-fixtures
       - name: Build checked memory, ELF32, ABI and A32 executor
         run: |
+          set -euo pipefail
+          fixture_dir="$PWD/out-fixtures"
+          if [ "${RUNNER_OS:-Linux}" = "Windows" ]; then
+            fixture_dir="$(cygpath -m "$fixture_dir")"
+          fi
           cmake -S compat/arm32 -B out-arm32 -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DGESHER_ARM32_WITH_DYNARMIC=ON \
             -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
             -DBoost_INCLUDE_DIR="$PWD/deps/boost_1_83_0" \
-            -DARM32_GUEST_FIXTURES="$PWD/out-fixtures/fixture-arm.so;$PWD/out-fixtures/fixture-thumb.so" \
-            -DARM32_GUEST_BIONIC_FIXTURES="$PWD/out-fixtures/bionic-arm.so;$PWD/out-fixtures/bionic-thumb.so" \
-            -DARM32_GUEST_JNI_FIXTURES="$PWD/out-fixtures/jni-arm.so;$PWD/out-fixtures/jni-thumb.so" \
-            -DARM32_GUEST_DEPENDENCY_DIR="$PWD/out-fixtures" \
-            -DARM32_ALIGNED_FIXTURE_DIR="$PWD/out-fixtures"
+            -DARM32_GUEST_FIXTURES="$fixture_dir/fixture-arm.so;$fixture_dir/fixture-thumb.so" \
+            -DARM32_GUEST_BIONIC_FIXTURES="$fixture_dir/bionic-arm.so;$fixture_dir/bionic-thumb.so" \
+            -DARM32_GUEST_JNI_FIXTURES="$fixture_dir/jni-arm.so;$fixture_dir/jni-thumb.so" \
+            -DARM32_GUEST_DEPENDENCY_DIR="$fixture_dir" \
+            -DARM32_ALIGNED_FIXTURE_DIR="$fixture_dir"
           cmake --build out-arm32 --parallel 4
       - name: Execute component and compiler-generated ELF32 tests
         run: ctest --test-dir out-arm32 --output-on-failure
