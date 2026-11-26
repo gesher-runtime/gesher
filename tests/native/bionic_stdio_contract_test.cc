@@ -28,6 +28,7 @@
 #include <future>
 #include <string>
 #include <thread>
+#include "snprintf_bounds_contract.inc"
 
 #if defined(_WIN32) && defined(__x86_64__)
 #define SYSV __attribute__((sysv_abi))
@@ -395,7 +396,7 @@ void TestWideOutput(const Api& api) {
 }
 
 #if (defined(_WIN32) && !defined(__aarch64__)) || defined(__BIONIC__)
-int FatalFormatChild(const Api& api, bool narrow, bool positional = false) {
+int FatalFormatChild(const Api& api, bool narrow, bool positional = false, bool sizing = false) {
   int count = -1;
   if (narrow) {
     using Print = int(SYSV*)(char*, size_t, const char*, ...);
@@ -404,7 +405,9 @@ int FatalFormatChild(const Api& api, bool narrow, bool positional = false) {
 #else
     Print print = snprintf;
 #endif
-    char buffer[8]; print(buffer, sizeof(buffer), positional ? "ab%1$ln" : "ab%n", &count);
+    char buffer[8];
+    print(sizing ? nullptr : buffer, sizing ? 0 : sizeof(buffer),
+          positional ? "ab%1$ln" : "ab%n", &count);
   } else {
     const Wide format[] = {'a', 'b', '%', 'n', 0};
     const Wide numbered[] = {'a', 'b', '%', '1', '$', 'l', 'n', 0};
@@ -413,13 +416,14 @@ int FatalFormatChild(const Api& api, bool narrow, bool positional = false) {
   return 77;  // Reaching this sentinel means Android's fatal rule was lost.
 }
 
-bool FatalFormat(bool narrow, bool positional = false) {
+bool FatalFormat(bool narrow, bool positional = false, bool sizing = false) {
 #ifdef _WIN32
   wchar_t executable[32768];
   DWORD length = GetModuleFileNameW(nullptr, executable, sizeof(executable) / sizeof(*executable));
   if (length == 0 || length >= sizeof(executable) / sizeof(*executable)) return false;
   std::wstring command = std::wstring(L"\"") + executable + L"\" --fatal-" + (narrow ? L"narrow" : L"wide");
   if (positional) command += L"-positional";
+  if (sizing) command += L"-sizing";
   SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
   HANDLE reader = nullptr, writer = nullptr;
   if (!CreatePipe(&reader, &writer, &attributes, 0)) return false;
@@ -450,7 +454,7 @@ bool FatalFormat(bool narrow, bool positional = false) {
   if (child == 0) {
     close(fds[0]); dup2(fds[1], STDERR_FILENO); close(fds[1]);
     alarm(10);
-    _exit(FatalFormatChild(Resolve(), narrow, positional));
+    _exit(FatalFormatChild(Resolve(), narrow, positional, sizing));
   }
   close(fds[1]);
   if (child < 0) { close(fds[0]); return false; }
@@ -477,10 +481,12 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--fatal-wide") == 0) return FatalFormatChild(api, false);
   if (argc == 2 && std::strcmp(argv[1], "--fatal-narrow-positional") == 0) return FatalFormatChild(api, true, true);
   if (argc == 2 && std::strcmp(argv[1], "--fatal-wide-positional") == 0) return FatalFormatChild(api, false, true);
+  if (argc == 2 && std::strcmp(argv[1], "--fatal-narrow-sizing") == 0) return FatalFormatChild(api, true, false, true);
   Check("narrow printf %n is fatal with Bionic diagnostic", FatalFormat(true));
   Check("wide printf %n is fatal with Bionic diagnostic", FatalFormat(false));
   Check("positional narrow printf %n is fatal", FatalFormat(true, true));
   Check("positional wide printf %n is fatal", FatalFormat(false, true));
+  Check("zero-size snprintf still rejects %n fatally", FatalFormat(true, false, true));
 #else
   (void)argc; (void)argv;
 #endif
@@ -488,6 +494,21 @@ int main(int argc, char** argv) {
   TestWideInput(api);
   TestWideOutput(api);
   TestByteLines(api);
+#if defined(_WIN32) && !defined(__aarch64__)
+  using Print = int(SYSV*)(char*, size_t, const char*, ...);
+  size_t bounded_checks = 0;
+  int previous_failures = failures;
+  auto bounded_check = [&](const char* name, bool success) {
+    ++bounded_checks;
+    if (!success) Check(name, false);
+  };
+  auto print = Load<Print>("snprintf");
+  gesher_snprintf_contract::Run(print, bounded_check);
+  using Describe = const char*(SYSV*)(int);
+  gesher_snprintf_contract::Errors(print, bounded_check, api.errno_value, Load<Describe>("strerror"));
+  std::printf("bionic_stdio: %zu bounded-format byte/count/guard checks\n", bounded_checks);
+  Check("exported Bionic bounded snprintf corpus", failures == previous_failures);
+#endif
   std::printf("bionic_stdio: %d assertions, %d failures\n", assertions, failures);
   if (failures == 0) std::puts("bionic_stdio_contract_test all passed");
   return failures == 0 ? 0 : 1;

@@ -471,11 +471,45 @@ def preceding_composed_scan_sources(current_sources=None):
 
 # Normalize the scanner before line input; shared-stdio then receives its
 # unchanged complete inputs. Every stage is independently reversible and pinned.
-def preceding_stdio_feature_sources():
+def current_stdio_line_inputs():
  scan=preceding_composed_scan_sources()
+ assert SNPRINTF_BOUNDS_SOURCE not in scan,'formatter/scanner source qualifications overlap'
  current={path:scan[path] if path in scan else (ROOT/path).read_bytes() for path in COMPOSED_STDIO_PATHS}
- return preceding_composed_stdio_sources(current)
+ current[SNPRINTF_BOUNDS_SOURCE]=preceding_snprintf_bounds_source()
+ return current
 
+def preceding_stdio_feature_sources():
+ return preceding_composed_stdio_sources(current_stdio_line_inputs())
+
+# The guest snprintf prefix accumulator changes only this formatter source.
+# Reverse its exact transition to the reviewed line-input integration checkpoint.
+# The line-input and original shared-stdio transitions then restore every OFD
+# digest. This grants no supplier, controller or native runtime approval.
+SNPRINTF_BOUNDS_SOURCE='compat/bionic/stdio_bionic.cc'
+SNPRINTF_BOUNDS_BASELINE='dec85ab146a0b95994efa9abd65910693d0019fb'
+SNPRINTF_BOUNDS_SHA256='96a90eb52ad6e4b91e1ee0e16c526894e5426a16f3a65e61e11e001a1caed75f'
+SNPRINTF_BOUNDS_PREVIOUS_SHA256='5bb5e959e3a32cbc2ce0ab594724b7207b6fd921c6310e8c28766faf34bad13a'
+SNPRINTF_BOUNDS_PATCH_SHA256='416b44106f476ea5c4dcd519bb8b0c100cb3d614e0afdcef0be334cfd4ec7208'
+def preceding_snprintf_bounds_source():
+ path=SNPRINTF_BOUNDS_SOURCE
+ current=(ROOT/path).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==SNPRINTF_BOUNDS_SHA256,path
+ patch=(ROOT/'tools/net-tcp-priority/qualified/snprintf-bounds-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==SNPRINTF_BOUNDS_PATCH_SHA256,'snprintf bounds transition changed'
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
+ with tempfile.TemporaryDirectory(prefix='gesher-snprintf-qualification-') as temporary:
+  work=Path(temporary)
+  (work/path).parent.mkdir(parents=True)
+  (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous=(work/path).read_bytes()
+  expected=subprocess.check_output(['git','-C',str(ROOT),'show',SNPRINTF_BOUNDS_BASELINE+':'+path])
+  assert previous==expected and hashlib.sha256(previous).hexdigest()==SNPRINTF_BOUNDS_PREVIOUS_SHA256,('snprintf bounds reverse endpoint',path)
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/path).read_bytes()==current,'snprintf bounds forward reconstruction changed'
+ return previous
 # NATIVE-13 adds a revision snapshot and allocation-free area lookup to the
 # property file already qualified with #118's shared environment owner. Reverse
 # only that exact transition to main 1a3a5c244d643c7c93b621326857c6b8c858d5bb;
@@ -1089,6 +1123,16 @@ STDIO_SCAN_NEGATIVE_CASES=[
   ('tools/net-tcp-priority/qualified/stdio-scan-shared-source.patch',b'@@',b'@x'),
 ]
 
+SNPRINTF_BOUNDS_NEGATIVE_CASES=[
+  (SNPRINTF_BOUNDS_SOURCE,b'return bytes.size() + omitted;',b'return bytes.size();'),
+  (SNPRINTF_BOUNDS_SOURCE,b'size_t kept = count < Remaining() ? count : Remaining();',b'size_t kept = count;'),
+  (SNPRINTF_BOUNDS_SOURCE,b'out->bytes.resize(offset + kept);',b'out->bytes.resize(offset);'),
+  (SNPRINTF_BOUNDS_SOURCE,b'if (!valid) return -1;\n  if (n != 0) {',b'if (!valid) { if (n) buf[0] = 0; return -1; }\n  if (n != 0) {'),
+  # An unrelated unbounded formatter remains protected by the original digest.
+  (SNPRINTF_BOUNDS_SOURCE,b'std::memcpy(buf, s.c_str(), s.size() + 1);\n  return static_cast<int>(s.size());\n}\nint BIONIC_SYSV gesher_bionic_vfprintf',b'std::memcpy(buf, s.c_str(), s.size());\n  return static_cast<int>(s.size());\n}\nint BIONIC_SYSV gesher_bionic_vfprintf'),
+  ('tools/net-tcp-priority/qualified/snprintf-bounds-source.patch',b'@@',b'@x'),
+]
+
 def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
@@ -1136,6 +1180,7 @@ def transition_negative_controls():
   (MEMFD_LEASE_PATCH,b'+constexpr int kLockAttempts = 5000;',b'+constexpr int kLockAttempts = 50;'),
   *STDIO_LINE_NEGATIVE_CASES,
   *STDIO_SCAN_NEGATIVE_CASES,
+  *SNPRINTF_BOUNDS_NEGATIVE_CASES,
  ]
  def memfd_lease_repin(name,data):
   # Refresh only the receipt's digest of the mutated file (and the receipt's
@@ -1179,8 +1224,7 @@ def transition_negative_controls():
  # Exercise each original leaf at its exact normalized input, in addition
  # to the complete-chain mutations above. Repinning an outer-stage digest must
  # not hide the failure in a different stage before the intended guard executes.
- scan_previous=preceding_composed_scan_sources()
- line_current={path:scan_previous[path] if path in scan_previous else original(ROOT/path) for path in COMPOSED_STDIO_PATHS}
+ line_current=current_stdio_line_inputs()
  repinned_composed=0
  for name,before,after in STDIO_LINE_NEGATIVE_CASES:
   if name not in COMPOSED_STDIO_PATHS:continue
@@ -1222,6 +1266,20 @@ def transition_negative_controls():
   except (AssertionError,subprocess.CalledProcessError):rejected=True
  assert rejected,'repinned scanner runtime approval accepted'
  print('COMPOSED_SCAN_REPINNED_CONTROLS_PASS current=4 historical=4 runtime_approval=1')
+ # Merely refreshing the new source hash must not admit changed parser,
+ # destination-publication, capacity or unrelated unbounded-formatting bytes.
+ # The exact reverse patch and published baseline independently reject them.
+ target=ROOT/SNPRINTF_BOUNDS_SOURCE
+ for name,before,after in SNPRINTF_BOUNDS_NEGATIVE_CASES[:-1]:
+  assert ROOT/name==target and original(target).count(before)==1
+  changed_source=original(target).replace(before,after,1)
+  def repinned(path):return changed_source if path==target else original(path)
+  rejected=None
+  with patch.object(Path,'read_bytes',repinned), patch.dict(globals(),SNPRINTF_BOUNDS_SHA256=hashlib.sha256(changed_source).hexdigest()):
+   try:preceding_snprintf_bounds_source()
+   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+  assert rejected is not None and str(rejected)!=name,'repinned snprintf mutation accepted or rejected by stale pin: '+before.decode()
+ print('SNPRINTF_BOUNDS_REPINNED_CONTROLS_PASS cases=5')
  print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease))
 if __name__=='__main__':
  import sys

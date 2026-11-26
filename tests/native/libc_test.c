@@ -264,6 +264,38 @@ static void test_format(void) {
                       l == 7000000000L);
 }
 
+static void test_snprintf_bounds(void) {
+  // Volatile public entry keeps the real guest ABI call in both ELF targets.
+  int (*volatile print)(char*, size_t, const char*, ...) = snprintf;
+  char input[8193], expected[8206];
+  memset(input, 'x', sizeof(input) - 1);
+  input[0] = 'A'; input[257] = 'Q'; input[8191] = 'Z'; input[8192] = 0;
+  memcpy(expected, input, 8192);
+  memcpy(expected + 8192, ":00000123:2.5", 14);
+  const size_t capacities[] = {0, 1, 2, 15, 16, 17, 127, 128, 129};
+  for (size_t c = 0; c < sizeof(capacities) / sizeof(capacities[0]); ++c) {
+    unsigned char guarded[160]; memset(guarded, 0xa5, sizeof(guarded));
+    char* output = (char*)guarded + 8;
+    size_t capacity = capacities[c], kept = capacity ? capacity - 1 : 0;
+    int result = print(output, capacity, "%s:%08d:%.1f", input, 123, 2.5);
+    check("bounded snprintf complete count", result == 8205);
+    check("bounded snprintf exact retained bytes", memcmp(output, expected, kept) == 0);
+    check("bounded snprintf terminator", capacity == 0 || output[kept] == 0);
+    int intact = 1;
+    for (size_t i = 0; i < sizeof(guarded); ++i) {
+      int written = capacity != 0 && i >= 8 && i <= 8 + kept;
+      if (!written && guarded[i] != 0xa5) intact = 0;
+    }
+    check("bounded snprintf byte guards", intact);
+  }
+  check("sizing snprintf consumes complete guest arguments",
+        print(NULL, 0, "%s:%08d:%.1f", input, 123, 2.5) == 8205);
+  char complete[8207]; memset(complete, 0x5a, sizeof(complete));
+  check("complete snprintf preserves all bytes and final canary",
+        print(complete, 8206, "%s:%08d:%.1f", input, 123, 2.5) == 8205 &&
+        memcmp(complete, expected, sizeof(expected)) == 0 && complete[8206] == 0x5a);
+}
+
 static int scan_stream(FILE* stream, const char* format, ...) {
   va_list args;
   va_start(args, format);
@@ -982,6 +1014,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_urandom_stdio();
   test_stream_device_contracts();
   test_format();
+  test_snprintf_bounds();
   test_scan_many_arguments();
   test_errno_files();
   test_statfs();
