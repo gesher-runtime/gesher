@@ -62,6 +62,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "event_loop_contract_test.inc"
 #include "allocation_test.inc"
 #include "memmem_test.inc"
+#include "memrchr_contract.inc"
 #include "system_contract_test.inc"
 #include "socket_control_test.inc"
 #include "socket_timeout_contract_test.inc"
@@ -970,6 +971,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_timerfd_syscalls();
   test_strings();
   test_memmem_contracts();
+  test_memrchr_contracts(memrchr, (memrchr_checked_function)dlsym(RTLD_DEFAULT, "__memrchr_chk"));
   test_fnmatch();
   test_regex_scaling_contracts(regcomp, regexec, regfree);
   test_getrlimit_fault();
