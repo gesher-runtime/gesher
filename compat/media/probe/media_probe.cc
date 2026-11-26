@@ -16,6 +16,7 @@
 //                                  GESHER_AUDIO_SOURCE, the default capture endpoint,
 //                                  or silence) at 44100 Hz stereo, into out.wav
 //   media_probe capture-buffers    an unread stall with small/one-second rings
+//   media_probe resampler-phases   real engine half/integer-phase output and events
 //
 // The engine's own tests: what the framework adds on top (AudioTrack and the rest)
 // is tested through test apps.
@@ -24,6 +25,7 @@
 #include <objbase.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -218,6 +220,53 @@ int Tones() {
   Sleep(300);
   printf("%s\n", failures == 0 ? "media_probe tones: all passed" : "media_probe tones: failed");
   return failures == 0 ? 0 : 1;
+}
+
+int ResamplerPhases() {
+  const OutputInfo info = GetOutputInfo();
+  printf("resampler-phases output: %s\n", info.description.c_str());
+  Expect(info.sample_rate == 48000, "resampler-phases uses the actual 48000 Hz capture sink");
+  struct Case { const char* name; PcmFormat format; uint32_t channels, rate; float speed; double hz, seconds; };
+  const Case cases[] = {
+      {"half-speed stereo", PcmFormat::kFloat, 2, 48000, 0.5f, 750, 0.375},
+      {"one-and-half-speed mono", PcmFormat::kS16, 1, 48000, 1.5f, 750, 0.375},
+      {"integer-rate stereo", PcmFormat::kS32, 2, 96000, 1.0f, 440, 0.4},
+  };
+  struct Observation { std::atomic<unsigned> ends{0}, markers{0}, updates{0}, marker_position{0}; };
+  for (const Case& c : cases) {
+    const size_t frames = static_cast<size_t>(c.rate * c.seconds);
+    TrackParams p; p.sample_rate = c.rate; p.channels = c.channels; p.format = c.format;
+    p.capacity_frames = frames; p.is_static = true; p.name = c.name;
+    std::string error;
+    auto track = CreateTrack(p, &error);
+    if (!track) { Expect(false, std::string(c.name) + ": " + error); continue; }
+    // The event thread owns its captured state until every queued callback
+    // returns, including a failed bounded wait followed by Track::Release.
+    auto observed = std::make_shared<Observation>();
+    TrackEvents events;
+    events.end = [observed] { ++observed->ends; };
+    events.marker = [observed](uint32_t value) { observed->marker_position = value; ++observed->markers; };
+    events.new_position = [observed](uint32_t) { ++observed->updates; };
+    track->SetEvents(std::move(events));
+    track->SetMarker(static_cast<uint32_t>(frames / 2));
+    track->SetUpdatePeriod(static_cast<uint32_t>(frames / 3));
+    track->SetSpeed(c.speed);
+    const auto input = Tone(c.format, c.channels, c.rate, c.hz, frames, 0.5);
+    Expect(track->Write(input.data(), input.size(), false) == static_cast<ssize_t>(input.size()),
+           std::string(c.name) + ": all actual PCM is owned before playback");
+    Expect(track->Start() == kOk, std::string(c.name) + ": actual engine starts");
+    const ULONGLONG deadline = GetTickCount64() + 4000;
+    while ((observed->ends.load() == 0 || observed->markers.load() == 0 || observed->updates.load() < 3) &&
+           GetTickCount64() < deadline) Sleep(2);
+    const uint32_t position = track->Position();
+    Expect(position == frames && observed->ends == 1 && observed->markers == 1 &&
+               observed->marker_position == frames / 2 && observed->updates == 3,
+           std::string(c.name) + ": exact source position and all real callbacks are delivered");
+    track->Stop(); track->Release();
+    Sleep(300);
+  }
+  printf("%s\n", failures == 0 ? "media_probe resampler-phases: all passed" : "media_probe resampler-phases: failed");
+  return failures ? 1 : 0;
 }
 
 // --- WAV analysis ------------------------------------------------------------------------
@@ -567,11 +616,12 @@ int Capture(const char* out_path) {
 int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   if (argc >= 2 && strcmp(argv[1], "tones") == 0) return Tones();
+  if (argc >= 2 && strcmp(argv[1], "resampler-phases") == 0) return ResamplerPhases();
   if (argc >= 3 && strcmp(argv[1], "analyze") == 0) return Analyze(argv[2]);
   if (argc >= 2 && strcmp(argv[1], "wasapi") == 0) return Wasapi();
   if (argc >= 2 && strcmp(argv[1], "mf") == 0) return MediaFoundation();
   if (argc >= 2 && strcmp(argv[1], "capture") == 0) return Capture(argc >= 3 ? argv[2] : nullptr);
   if (argc >= 2 && strcmp(argv[1], "capture-buffers") == 0) return CaptureBuffers();
-  fprintf(stderr, "usage: media_probe tones | analyze <wav> | wasapi\n");
+  fprintf(stderr, "usage: media_probe tones | resampler-phases | analyze <wav> | wasapi\n");
   return 2;
 }

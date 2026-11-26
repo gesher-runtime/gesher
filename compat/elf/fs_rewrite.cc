@@ -23,9 +23,14 @@
 
 #include "tls.h"
 #include "x86_decode.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 // Internal POSIX mapper outcome, consumed immediately after a failed mmap.
 extern "C" int gesher_mmap_replaced_private_pages(void);
+extern "C" int gesher_mmap_fixed_replaces(const void* addr, size_t length);
 
 namespace gesher::elf {
 
@@ -1863,23 +1868,63 @@ int ProtectLoadedMemory(void* addr, size_t len, int prot, bool raw_syscall) {
   return ok ? 0 : -1;
 }
 
+namespace {
+
+// The requests MapLoadedMemory hands straight to the base layer, which
+// rejects them.
+bool BasicInvalidMapping(void* addr, size_t len, int flags, int fd, int64_t offset) {
+  const auto hint = reinterpret_cast<uintptr_t>(addr);
+  const bool enforced = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
+  const int type = flags & 0x0f;
+  return len == 0 || len > SIZE_MAX - (kPage - 1) ||
+         (enforced && ((hint & (kPage - 1)) != 0 ||
+                       ((len + kPage - 1) & ~(kPage - 1)) > UINTPTR_MAX - hint)) ||
+         offset < 0 || (static_cast<uint64_t>(offset) & (kPage - 1)) != 0 ||
+         (type != MAP_SHARED && type != MAP_PRIVATE && type != MAP_SHARED_VALIDATE) ||
+         (type == MAP_SHARED_VALIDATE && (flags & MAP_ANONYMOUS) != 0) ||
+         ((flags & MAP_ANONYMOUS) == 0 && (fd < 0 || _get_osfhandle(fd) == -1));
+}
+
+void* MapLoadedMemoryImpl(void* addr, size_t len, int prot, int flags, int fd, int64_t offset,
+                          bool raw_syscall);
+
+}  // namespace
+
+// MAP_FIXED over an object loaded into a caller's reservation (android_dlopen_ext)
+// takes the object out of every list (ForgetReservedMappings). Before the
+// mapping when it is sure to replace the pages there - a valid anonymous
+// request whose range is one of gesher-base's mappings
+// (gesher_mmap_fixed_replaces), which then fails only for want of resources
+// - so no lookup reads the replaced pages in between. A file mapping can
+// also fail on the file (its access mode, an executable view, seals,
+// revocation), so then only once it succeeded: between the replacement and
+// that, a lookup on another thread can still read the replaced pages. A
+// request that fails leaves the object listed.
 void* MapLoadedMemory(void* addr, size_t len, int prot, int flags, int fd, int64_t offset,
                       bool raw_syscall) {
+  const bool replace = (flags & MAP_FIXED) != 0 && (flags & MAP_FIXED_NOREPLACE) == 0;
+  bool forgotten = false;
+  if (replace && (flags & MAP_ANONYMOUS) != 0 && !BasicInvalidMapping(addr, len, flags, fd, offset) &&
+      gesher_mmap_fixed_replaces(addr, (len + kPage - 1) & ~(kPage - 1)) != 0) {
+    ForgetReservedMappings(addr, len);
+    forgotten = true;
+  }
+  void* p = MapLoadedMemoryImpl(addr, len, prot, flags, fd, offset, raw_syscall);
+  if (replace && !forgotten && p != MAP_FAILED) ForgetReservedMappings(p, len);
+  return p;
+}
+
+namespace {
+
+void* MapLoadedMemoryImpl(void* addr, size_t len, int prot, int flags, int fd, int64_t offset,
+                          bool raw_syscall) {
   const auto hint = reinterpret_cast<uintptr_t>(addr);
   const bool fixed = (flags & MAP_FIXED) != 0;
-  const bool enforced = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
   const bool replace = fixed && (flags & MAP_FIXED_NOREPLACE) == 0;
   const bool exec = (prot & PROT_EXEC) != 0;
-  const int type = flags & 0x0f;
   // Delegate these basic invalid requests before synchronizing a copy. The
   // base layer still decides access rights and allocation-time failures.
-  if (len == 0 || len > SIZE_MAX - (kPage - 1) ||
-      (enforced && ((hint & (kPage - 1)) != 0 ||
-                  ((len + kPage - 1) & ~(kPage - 1)) > UINTPTR_MAX - hint)) ||
-      offset < 0 || (static_cast<uint64_t>(offset) & (kPage - 1)) != 0 ||
-      (type != MAP_SHARED && type != MAP_PRIVATE && type != MAP_SHARED_VALIDATE) ||
-      (type == MAP_SHARED_VALIDATE && (flags & MAP_ANONYMOUS) != 0) ||
-      ((flags & MAP_ANONYMOUS) == 0 && (fd < 0 || _get_osfhandle(fd) == -1))) {
+  if (BasicInvalidMapping(addr, len, flags, fd, offset)) {
     return mmap(addr, len, prot, flags, fd, static_cast<off_t>(offset));
   }
   AcquireSRWLockExclusive(&g_lazy_lock);
@@ -1950,6 +1995,8 @@ void* MapLoadedMemory(void* addr, size_t len, int prot, int flags, int fd, int64
   return p;
 }
 
+}  // namespace
+
 int SyncLoadedMemory(void* addr, size_t len, int flags) {
   const auto start = reinterpret_cast<uintptr_t>(addr);
   // Invalid flags, alignment or unmapped pages must not publish copy changes.
@@ -1969,6 +2016,12 @@ int UnmapLoadedMemory(void* addr, size_t len) {
     errno = EINVAL;
     return -1;
   }
+  // A valid munmap over an object loaded into a caller's reservation
+  // (android_dlopen_ext, which the caller may unmap after dlclose): the
+  // object leaves every list first, so no lookup reads its pages once they
+  // are gone. Only a native failure after this point (or a shared copy that
+  // cannot be written back) leaves it unlisted but still mapped.
+  ForgetReservedMappings(addr, len);
   const uintptr_t end = PageEnd(start, len);
   AcquireSRWLockExclusive(&g_lazy_lock);
   if (!SharedCopies().empty() && !WriteBackLocked(start, end)) {
@@ -2001,3 +2054,9 @@ int UnmapLoadedMemory(void* addr, size_t len) {
 }
 
 }  // namespace gesher::elf
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, SRWLOCK, gesher::elf::g_lock);
+GESHER_FORK_LOCK(gesher::kForkOrderLoader, SRWLOCK, gesher::elf::g_lazy_lock);
+#endif

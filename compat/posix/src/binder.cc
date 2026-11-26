@@ -28,6 +28,10 @@
 
 #include <linux/android/binder.h>
 #include <gesher/file_description.h>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 #include "binder_internal.h"
 #include "binder_file_descriptions.h"
@@ -142,6 +146,10 @@ struct BinderFile {
   uint32_t proc_id = 0;
   uint64_t key = 0;
   bool non_block = false;
+  // The process that opened it. A forked child (gesher/fork.h, ADR 0092)
+  // shares the parent's broker connections and has no copy of its binder
+  // mapping: as Android's libbinder, binder is not usable there.
+  DWORD owner = GetCurrentProcessId();
 
   std::mutex mutex;  // guards what follows
   uint8_t* map = nullptr;
@@ -800,9 +808,14 @@ int OpenBinder(int flags) {
 
 bool IsBinderFd(int fd) { return Lookup(fd) != nullptr; }
 
+bool BinderFdOwnedHere(int fd) {
+  std::shared_ptr<BinderFile> file = Lookup(fd);
+  return file != nullptr && file->owner == GetCurrentProcessId();
+}
+
 void SetBinderMapping(int fd, void* addr, size_t size) {
   std::shared_ptr<BinderFile> file = Lookup(fd);
-  if (file == nullptr) return;
+  if (file == nullptr || file->owner != GetCurrentProcessId()) return;
   std::lock_guard<std::mutex> lock(file->mutex);
   if (file->map != nullptr) return;  // the first mapping is the receive buffer
   file->map = static_cast<uint8_t*>(addr);
@@ -814,6 +827,11 @@ void SetBinderMapping(int fd, void* addr, size_t size) {
 bool BinderIoctl(int fd, unsigned long request, void* arg, int* result) {
   std::shared_ptr<BinderFile> file = Lookup(fd);
   if (file == nullptr) return false;
+  if (file->owner != GetCurrentProcessId()) {
+    errno = EINVAL;
+    *result = -1;
+    return true;
+  }
   uint32_t req = static_cast<uint32_t>(request);
   switch (req) {
     case BINDER_WRITE_READ:
@@ -882,3 +900,8 @@ void DupBinder(int fd, int fd2) {
 }
 
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the binder file table in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::files_mutex);
+#endif

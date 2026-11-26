@@ -5,15 +5,19 @@ import android.util.Base64;
 import android.webkit.WebResourceResponse;
 import java.io.*;
 import java.lang.management.ManagementFactory;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** JNI/native copying, file-resource loading, the UI thread and app callbacks are declared boundaries. */
@@ -21,6 +25,9 @@ import java.util.function.Supplier;
 public final class WebViewOwnedResponsesHost {
     private static final int CONTEXT_DOCUMENT = 1, CONTEXT_IMAGE = 3;
     private static final String TAG = "fixture", BASE = "https://owned.example/document";
+    static final String INTENT_URL = "intent://open/item#Intent;scheme=app;"
+            + "S.browser_fallback_url=https%3A%2F%2Ffallback.example%2Fpage;end";
+    static final String FALLBACK_URL = "https://fallback.example/page";
     private static int checks;
     private static final class FixtureRequests {
         final ArrayDeque<Runnable> queued = new ArrayDeque<>();
@@ -37,12 +44,34 @@ public final class WebViewOwnedResponsesHost {
     private String mOriginalUrl;
     private boolean mInterceptsRequests;
     private volatile boolean mOverridesNavigation;
-    private static final long WAIT_FOR_UI_MS = 5000;
+    // Declared wait boundary: normal cases retain the production duration;
+    // queued timeout cases use zero, without blocking the suite for five seconds.
+    private long WAIT_FOR_UI_MS = 5000;
     private final Ui mUi = new Ui();
     private final FixtureContext mContext = new FixtureContext();
     private final Settings mSettings = new Settings();
     private final WebViewClient mClient = new WebViewClient(this);
-    private final Object mView = new Object();
+    private final FixtureView mView = new FixtureView();
+    private final class FixtureView {
+        void loadUrl(String url) { WebViewOwnedResponsesHost.this.loadUrl(url); }
+    }
+    private final Map<Object,Object> mPagePorts = new HashMap<>();
+    private boolean mCanGoBack = true, mCanGoForward = true;
+    private static final class History { int entryId(int steps) { return steps == 2 ? 42 : -1; } }
+    private final History mHistory = new History();
+    private static final class Geolocation { void pageGone() {} }
+    private final Geolocation mGeolocation = new Geolocation();
+    private void retirePagePorts() {}
+    private void removeListeners() {}
+    private void devTools(String method, String params, Object callback) {
+        if (mHost != null) mHost.commands.add(method);
+    }
+    private void evaluateJavaScript(String script, Object callback) {}
+    private static final class Uri {
+        static String decode(String value) {
+            return URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8);
+        }
+    }
 
     private static final class Delivery {
         final long id;
@@ -67,15 +96,24 @@ public final class WebViewOwnedResponsesHost {
                     body != null && nativeCopy ? body.clone() : body));
         }
         final ArrayList<String> navigations = new ArrayList<>();
+        final ArrayList<String> commands = new ArrayList<>();
+        static final int STOP = 1, RELOAD = 2, GO_BACK = 3, GO_FORWARD = 4;
+        boolean destroyed;
+        void run(int command) {
+            commands.add("run " + command);
+            if (command == RELOAD) reload();
+        }
+        void destroy() { destroyed = true; commands.add("destroy"); }
         void navigate(String url, String headers) { navigate(url, headers, 0); }
         void navigate(String url, String headers, long number) {
             navigated = url; navigationHeaders = headers; navigations.add(url);
+            commands.add("load " + url);
             queued.add(new Object[] {url, number});
         }
         void navigate(String url, String headers, String method, byte[] body, long number) {
             navigate(url, headers, number);
         }
-        void navigateToString(String value) { html = value; }
+        void navigateToString(String value) { html = value; commands.add("html"); }
 
         // webview_host.cc's navigation state, a declared boundary model: Host::Navigate
         // (with its number) runs later on the WebView thread, its
@@ -147,7 +185,11 @@ public final class WebViewOwnedResponsesHost {
     }
     { mHost.client = this; }
     // onEvent's other boundaries: the bridge, parking, synchronous results, the UI thread.
-    private static final class Dispatcher { int started; void navigationStarted() { ++started; } }
+    private static final class Dispatcher {
+        int started;
+        void navigationStarted() { ++started; }
+        void close() {}
+    }
     private final Dispatcher mBridgeDispatcher = new Dispatcher();
     private volatile CountDownLatch mParked;
     private static final class Sync {
@@ -168,26 +210,52 @@ public final class WebViewOwnedResponsesHost {
     }
     private static final class Request {
         final String url, method;
-        final boolean mainFrame;
+        final boolean mainFrame, redirect, gesture;
         final Map<String,String> headers;
         Request(String url, boolean mainFrame, boolean redirect, boolean gesture, String method, Map<String,String> headers) {
             this.url = url; this.mainFrame = mainFrame; this.method = method; this.headers = headers;
+            this.redirect = redirect; this.gesture = gesture;
         }
     }
-    /** The WebView's Looper: runs what is posted at once (the waiting WebView thread is the caller). */
-    private static final class Ui { boolean post(Runnable r) { r.run(); return true; } }
+    /** Declared Looper boundary: immediate by default, explicitly queued for lifecycle cases. */
+    private static final class Ui {
+        final LinkedBlockingQueue<Runnable> queued = new LinkedBlockingQueue<>();
+        boolean deferred, reject;
+        boolean post(Runnable r) {
+            if (reject) return false;
+            if (deferred) queued.add(r); else r.run();
+            return true;
+        }
+        Runnable next() {
+            try {
+                Runnable task = queued.poll(5, TimeUnit.SECONDS);
+                if (task == null) throw new AssertionError("no UI task was queued");
+                return task;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        }
+        void runAll() {
+            Runnable task;
+            while ((task = queued.poll()) != null) task.run();
+        }
+    }
     private static final class WebViewClient {
         final WebViewOwnedResponsesHost owner;
         final AtomicInteger calls = new AtomicInteger(), overrides = new AtomicInteger();
         volatile Supplier<WebResourceResponse> response;
         volatile Request request;
         volatile boolean takes;
+        Predicate<Request> navigationDecision;
+        final ArrayList<Request> navigationRequests = new ArrayList<>();
         Runnable duringOverride;
         WebViewClient(WebViewOwnedResponsesHost owner) { this.owner = owner; }
         boolean shouldOverrideUrlLoading(Object view, Request request) {
             overrides.incrementAndGet(); this.request = request;
+            navigationRequests.add(request);
             if (duringOverride != null) duringOverride.run();
-            return takes;
+            return navigationDecision != null ? navigationDecision.test(request) : takes;
         }
         WebResourceResponse shouldInterceptRequest(Object view, Request request) {
             if (Thread.holdsLock(owner)) throw new AssertionError("app callback ran under a provider lock");
@@ -634,6 +702,200 @@ public final class WebViewOwnedResponsesHost {
         if (scenarioFailures != 0) throw new AssertionError(scenarioFailures + " navigation scenarios failed");
     }
     private void loadUrl0(String url) { navigate(FileUrls.toWebView2(url), ""); }
+
+    /** Invoke the exact production callback with a controlled pending UI task. */
+    private static boolean queuedNavigation(WebViewOwnedResponsesHost provider,
+            Runnable beforeUi, Runnable afterUi) {
+        provider.mUi.deferred = true;
+        FutureTask<Boolean> navigation = new FutureTask<>(() ->
+                provider.onNavigationStarting(INTENT_URL, true, false@DIRECT_HANDED@));
+        Thread thread = new Thread(navigation, "fixture WebView navigation");
+        thread.setDaemon(true);
+        thread.start();
+        Runnable uiTask = provider.mUi.next();
+        if (beforeUi != null) beforeUi.run();
+        uiTask.run();
+        try {
+            boolean canceled = navigation.get(5, TimeUnit.SECONDS);
+            thread.join(5000);
+            check(!thread.isAlive(), "navigation waiter did not finish");
+            if (afterUi != null) afterUi.run();
+            // The original PR queued a second load here. Drain it so an old-source
+            // control cannot hide the newer-load/stop regression behind the fixture.
+            provider.mUi.runAll();
+            return canceled;
+        } catch (Exception e) {
+            throw new AssertionError("queued navigation failed", e);
+        }
+    }
+
+    private static WebViewOwnedResponsesHost intentClient() {
+        WebViewOwnedResponsesHost provider = new WebViewOwnedResponsesHost();
+        provider.mOverridesNavigation = true;
+        return provider;
+    }
+
+    private static void intentNavigationCases() {
+        scenario("intent fallback works with the default inherited client", () -> {
+            WebViewOwnedResponsesHost provider = new WebViewOwnedResponsesHost();
+            check(provider.mHost.starting(INTENT_URL, true, false) < 0,
+                    "original intent navigation was not canceled for its fallback");
+            check(provider.mHost.navigations.equals(Arrays.asList(FALLBACK_URL))
+                            && provider.mClient.overrides.get() == 0,
+                    "default client skipped or was unnecessarily asked about fallback");
+        });
+        scenario("intent override keeps ownership and does not load fallback", () -> {
+            WebViewOwnedResponsesHost provider = taking(new WebViewOwnedResponsesHost());
+            check(provider.mHost.starting(INTENT_URL, true, false) < 0
+                            && provider.mHost.navigations.isEmpty()
+                            && provider.mClient.overrides.get() == 1,
+                    "an application-handled intent was replaced");
+        });
+        scenario("resolved HTTP fallback is offered to the client before loading", () -> {
+            WebViewOwnedResponsesHost provider = intentClient();
+            provider.mClient.navigationDecision = request -> request.url.equals(FALLBACK_URL);
+            check(provider.mHost.starting(INTENT_URL, true, false) < 0
+                            && provider.mClient.overrides.get() == 2
+                            && provider.mHost.navigations.isEmpty(),
+                    "resolved HTTP destination bypassed the client's override");
+        });
+        scenario("accepted fallback preserves request flags and has one native load", () -> {
+            WebViewOwnedResponsesHost provider = intentClient();
+            WebView2Host host = provider.mHost;
+            check(host.starting(INTENT_URL, false, false) < 0, "intent was not replaced");
+            check(provider.mClient.navigationRequests.size() == 2,
+                    "original and fallback were not both offered");
+            Request original = provider.mClient.navigationRequests.get(0);
+            Request fallback = provider.mClient.navigationRequests.get(1);
+            check(original.url.equals(INTENT_URL) && original.mainFrame && !original.redirect
+                            && !original.gesture && original.method.equals("GET"),
+                    "original callback metadata changed");
+            check(fallback.url.equals(FALLBACK_URL) && fallback.mainFrame && fallback.redirect
+                            && !fallback.gesture && fallback.method.equals("GET"),
+                    "fallback lost its redirect metadata or invented a user gesture");
+            check(host.navigations.equals(Arrays.asList(FALLBACK_URL)), "fallback loaded more than once");
+            host.execute();
+            check(host.starting(FALLBACK_URL, false, false) > 0
+                            && provider.mClient.overrides.get() == 2,
+                    "already-approved fallback got a duplicate native callback");
+            check(host.starting("https://next.example/", false, true) > 0
+                            && provider.mClient.overrides.get() == 3,
+                    "a subsequent HTTP redirect skipped the client");
+        });
+        scenario("ordinary and unresolvable URLs keep normal navigation", () -> {
+            for (String url : new String[] {BASE, "intent://open/item#Intent;scheme=app;end"}) {
+                WebViewOwnedResponsesHost provider = intentClient();
+                check(provider.mHost.starting(url, true, false) > 0
+                                && provider.mHost.navigations.isEmpty()
+                                && provider.mClient.overrides.get() == 1,
+                        "URL without an HTTP fallback was rewritten or double-called: " + url);
+            }
+        });
+        scenario("explicit app intent load retains its existing API-load behavior", () -> {
+            WebViewOwnedResponsesHost provider = taking(new WebViewOwnedResponsesHost());
+            provider.loadUrl(INTENT_URL);
+            provider.mHost.execute();
+            check(provider.mHost.starting(INTENT_URL, false, false) > 0
+                            && provider.mClient.overrides.get() == 0
+                            && provider.mHost.navigations.equals(Arrays.asList(INTENT_URL)),
+                    "the runtime changed an explicit app load into a page fallback");
+        });
+        scenario("newer app load after the callback wins over fallback", () -> {
+            WebViewOwnedResponsesHost provider = intentClient();
+            WebView2Host host = provider.mHost;
+            check(queuedNavigation(provider, null, () -> provider.loadUrl(BASE)),
+                    "intent replacement did not cancel the original");
+            check(host.navigated.equals(BASE), "queued fallback overtook the newer app load");
+        });
+        scenario("stop after the callback does not restart fallback loading", () -> {
+            WebViewOwnedResponsesHost provider = intentClient();
+            WebView2Host host = provider.mHost;
+            queuedNavigation(provider, null, provider::stopLoading);
+            check(host.commands.get(host.commands.size() - 1).equals("run " + WebView2Host.STOP),
+                    "queued fallback restarted after stopLoading");
+        });
+        String[] replacements = {"loadUrl", "postUrl", "loadData", "inlineData", "baseData",
+                "stop", "reload", "back", "forward", "history", "destroy"};
+        for (String replacement : replacements) {
+            scenario("app " + replacement + " before queued intent decision supersedes fallback", () -> {
+                WebViewOwnedResponsesHost provider = intentClient();
+                WebView2Host host = provider.mHost;
+                queuedNavigation(provider, () -> replaceNavigation(provider, replacement), null);
+                check(!host.navigations.contains(FALLBACK_URL), "pending fallback ignored " + replacement);
+            });
+            scenario("app " + replacement + " in original callback supersedes fallback", () -> {
+                WebViewOwnedResponsesHost provider = intentClient();
+                WebView2Host host = provider.mHost;
+                provider.mClient.duringOverride = () -> {
+                    provider.mClient.duringOverride = null;
+                    replaceNavigation(provider, replacement);
+                };
+                check(host.starting(INTENT_URL, true, false) < 0
+                                && !host.navigations.contains(FALLBACK_URL),
+                        "original callback's " + replacement + " was overwritten");
+            });
+        }
+        scenario("fallback callback's replacement load remains authoritative", () -> {
+            WebViewOwnedResponsesHost provider = intentClient();
+            provider.mClient.navigationDecision = request -> {
+                if (request.url.equals(FALLBACK_URL)) provider.loadUrl(BASE);
+                return false;
+            };
+            check(provider.mHost.starting(INTENT_URL, true, false) < 0
+                            && provider.mHost.navigations.equals(Arrays.asList(BASE)),
+                    "replacement issued by fallback callback was overwritten");
+        });
+        scenario("timed-out queued callback cannot later load fallback", () -> {
+            WebViewOwnedResponsesHost provider = intentClient();
+            provider.mUi.deferred = true;
+            provider.WAIT_FOR_UI_MS = 0;
+            check(!provider.onNavigationStarting(INTENT_URL, true, false@DIRECT_HANDED@),
+                    "timeout changed ordinary navigation fallback behavior");
+            provider.mUi.runAll();
+            check(provider.mHost.navigations.isEmpty() && provider.mClient.overrides.get() == 0,
+                    "expired decision later ran callbacks or a fallback load");
+        });
+        scenario("rejected UI post does not load fallback", () -> {
+            WebViewOwnedResponsesHost provider = intentClient();
+            provider.mUi.reject = true;
+            provider.WAIT_FOR_UI_MS = 0;
+            check(!provider.onNavigationStarting(INTENT_URL, true, false@DIRECT_HANDED@)
+                            && provider.mHost.navigations.isEmpty(),
+                    "unavailable Looper produced a replacement load");
+        });
+        scenario("interrupted navigation waiter preserves interruption and retires fallback", () -> {
+            WebViewOwnedResponsesHost provider = intentClient();
+            provider.mUi.deferred = true;
+            Thread.currentThread().interrupt();
+            try {
+                check(!provider.onNavigationStarting(INTENT_URL, true, false@DIRECT_HANDED@)
+                                && Thread.currentThread().isInterrupted(),
+                        "navigation wait consumed the interruption");
+            } finally {
+                Thread.interrupted();
+            }
+            provider.mUi.runAll();
+            check(provider.mHost.navigations.isEmpty(), "interrupted callback later loaded fallback");
+        });
+        if (scenarioFailures != 0) throw new AssertionError(scenarioFailures + " navigation scenarios failed");
+    }
+
+    private static void replaceNavigation(WebViewOwnedResponsesHost provider, String replacement) {
+        switch (replacement) {
+            case "loadUrl": provider.loadUrl(BASE); break;
+            case "postUrl": provider.postUrl(BASE, bytes("body")); break;
+            case "loadData": provider.loadData("<b>new</b>", "text/html", "UTF-8"); break;
+            case "inlineData": provider.loadDataWithBaseURL(null, "new", "text/html", "UTF-8", null); break;
+            case "baseData": provider.loadDataWithBaseURL(BASE, "new", "text/html", "UTF-8", null); break;
+            case "stop": provider.stopLoading(); break;
+            case "reload": provider.reload(); break;
+            case "back": provider.goBack(); break;
+            case "forward": provider.goForward(); break;
+            case "history": provider.goBackOrForward(2); break;
+            case "destroy": provider.destroy(); break;
+            default: throw new AssertionError(replacement);
+        }
+    }
     private static final class TrackingBytes extends ByteArrayInputStream {
         int reads, closes;
         boolean transform, failRead, failClose, zeroFirst;
@@ -728,6 +990,70 @@ public final class WebViewOwnedResponsesHost {
         failure.mHost.failRespond = true;
         try { answer(failure, 12, BASE, CONTEXT_DOCUMENT); throw new AssertionError("native failure swallowed"); }
         catch (IllegalStateException expected) { check(failure.pendingBody() != null, "a failed response dropped the published document"); }
+        // Streams whose available() under-reports (16 B for 40 KiB, 16 B for 17 B / 16400 B),
+        // over-reports (4096 B for 10 B and 0 B), or returns 0 across multi-chunk growth.
+        for (int bodyLen : new int[] {40 * 1024, 17, 16 + 16384}) {
+            byte[] underBody = new byte[bodyLen];
+            for (int i = 0; i < underBody.length; ++i) underBody[i] = (byte) (i * 31 + 5);
+            AtomicInteger underCloses = new AtomicInteger();
+            InputStream underStream = new ByteArrayInputStream(underBody) {
+                @Override public synchronized int available() { return Math.min(16, super.available()); }
+                @Override public void close() throws IOException { underCloses.incrementAndGet(); super.close(); }
+            };
+            WebViewOwnedResponsesHost under = new WebViewOwnedResponsesHost();
+            under.mInterceptsRequests = true;
+            under.mClient.response = () -> new WebResourceResponse("application/octet-stream", null, underStream);
+            answer(under, 13, "https://under.example/", CONTEXT_DOCUMENT);
+            check(underCloses.get() == 1 && Arrays.equals(last(under).body, underBody),
+                    "under-reporting available() stream corrupted bytes or skipped close (len=" + bodyLen + ")");
+        }
+        for (int bodyLen : new int[] {10, 0}) {
+            byte[] overBody = new byte[bodyLen];
+            for (int i = 0; i < overBody.length; ++i) overBody[i] = (byte) (0xa0 + i);
+            AtomicInteger overCloses = new AtomicInteger();
+            InputStream overStream = new ByteArrayInputStream(overBody) {
+                @Override public synchronized int available() { return 4096; }
+                @Override public void close() throws IOException { overCloses.incrementAndGet(); super.close(); }
+            };
+            WebViewOwnedResponsesHost over = new WebViewOwnedResponsesHost();
+            over.mInterceptsRequests = true;
+            over.mClient.response = () -> new WebResourceResponse("application/octet-stream", null, overStream);
+            answer(over, 14, "https://over.example/", CONTEXT_DOCUMENT);
+            check(overCloses.get() == 1 && Arrays.equals(last(over).body, overBody),
+                    "over-reporting available() stream corrupted bytes or skipped close (len=" + bodyLen + ")");
+        }
+        byte[] zeroAvailBody = new byte[90 * 1024 + 7];
+        for (int i = 0; i < zeroAvailBody.length; ++i) zeroAvailBody[i] = (byte) (i * 17 + 3);
+        AtomicInteger zeroAvailCloses = new AtomicInteger();
+        InputStream zeroAvailStream = new ByteArrayInputStream(zeroAvailBody) {
+            @Override public synchronized int available() { return 0; }
+            @Override public void close() throws IOException { zeroAvailCloses.incrementAndGet(); super.close(); }
+        };
+        WebViewOwnedResponsesHost zeroAvail = new WebViewOwnedResponsesHost();
+        zeroAvail.mInterceptsRequests = true;
+        zeroAvail.mClient.response = () -> new WebResourceResponse("application/octet-stream", null, zeroAvailStream);
+        answer(zeroAvail, 15, "https://zeroavail.example/", CONTEXT_DOCUMENT);
+        check(zeroAvailCloses.get() == 1 && Arrays.equals(last(zeroAvail).body, zeroAvailBody),
+                "zero-available multi-chunk stream corrupted bytes or skipped close");
+        byte[] unknownLengthBody = bytes("readable stream without an available hint");
+        AtomicInteger unknownLengthCloses = new AtomicInteger();
+        InputStream unknownLengthStream = new ByteArrayInputStream(unknownLengthBody) {
+            @Override public synchronized int available() {
+                throw new UnsupportedOperationException("length is not available");
+            }
+            @Override public void close() throws IOException {
+                unknownLengthCloses.incrementAndGet();
+                super.close();
+            }
+        };
+        WebViewOwnedResponsesHost unknownLength = new WebViewOwnedResponsesHost();
+        unknownLength.mInterceptsRequests = true;
+        unknownLength.mClient.response = () ->
+                new WebResourceResponse("application/octet-stream", null, unknownLengthStream);
+        answer(unknownLength, 16, "https://unknown-length.example/", CONTEXT_DOCUMENT);
+        check(unknownLengthCloses.get() == 1
+                        && Arrays.equals(last(unknownLength).body, unknownLengthBody),
+                "an unavailable optional length hint discarded readable response bytes");
     }
     private static void fallback(WebViewOwnedResponsesHost provider) {
         provider.mInterceptsRequests = true;
@@ -819,14 +1145,40 @@ public final class WebViewOwnedResponsesHost {
         System.out.println("WebView owned response: bytes=" + length + " allocated_bytes=" + allocated
                 + " original_private_array=" + (response.body == privateBody)
                 + " (unchanged native JNI/COM copies excluded)");
+        WebViewOwnedResponsesHost streamWarm = new WebViewOwnedResponsesHost();
+        streamWarm.mInterceptsRequests = true;
+        streamWarm.mHost.nativeCopy = false;
+        streamWarm.mClient.response = () -> new WebResourceResponse("application/octet-stream", null,
+                new ByteArrayInputStream(bytes("warmup-stream")));
+        answer(streamWarm, 2, "https://stream.example/warm", CONTEXT_DOCUMENT);
+        int streamLength = 2 * 1024 * 1024;
+        byte[] streamExpected = new byte[streamLength];
+        for (int i = 0; i < streamLength; ++i) streamExpected[i] = (byte) (i * 29 + 7);
+        WebViewOwnedResponsesHost streamProvider = new WebViewOwnedResponsesHost();
+        streamProvider.mInterceptsRequests = true;
+        streamProvider.mHost.nativeCopy = false;
+        streamProvider.mHost.deliveries.ensureCapacity(4);
+        WebResourceResponse streamResponse = new WebResourceResponse(
+                "application/octet-stream", null, new ByteArrayInputStream(streamExpected));
+        streamProvider.mClient.response = () -> streamResponse;
+        long streamBefore = bean.getThreadAllocatedBytes(Thread.currentThread().getId());
+        answer(streamProvider, 3, "https://stream.example/body", CONTEXT_DOCUMENT);
+        long streamAllocated = bean.getThreadAllocatedBytes(Thread.currentThread().getId()) - streamBefore;
+        Delivery streamReply = last(streamProvider);
+        check(Arrays.equals(streamReply.body, streamExpected), "2 MiB stream response bytes changed");
+        System.out.println("WebView stream readAll: bytes=" + streamLength
+                + " allocated_bytes=" + streamAllocated
+                + " (unchanged native JNI/COM copies excluded)");
         if (gate) {
             check(response.body == privateBody, "owned private response was copied through an InputStream");
             check(allocated < 64 * 1024, "owned response allocated full-body aggregation storage");
+            check(streamAllocated < streamLength + 64 * 1024,
+                    "2 MiB ByteArrayInputStream readAll allocated intermediate copy buffers: " + streamAllocated);
         }
     }
     public static void main(String[] args) throws Exception {
         switch (args[0]) {
-            case "behavior": ownedCases(); streamsAndHeaders(); navigationCases(); break;
+            case "behavior": ownedCases(); streamsAndHeaders(); navigationCases(); intentNavigationCases(); break;
             case "concurrency": concurrency(); break;
             case "measurement": measurement(args[1].equals("gate")); break;
             default: throw new IllegalArgumentException(args[0]);

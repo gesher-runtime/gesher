@@ -358,7 +358,10 @@ public final class ProviderSecurityTest {
         // Restore the fixture for the URI revocation checks below.
         exiting.setBoolean(ownerProcess, false);
         reaped.setBoolean(ownerProcess, false);
+        method(cpType, "providersFor", processType, ApplicationInfo.class).invoke(providers, ownerProcess, bindInfo);
         publish.invoke(providers, ownerProcess, List.of(holder(provider)));
+        require(((java.util.Map<?, ?>) field(cpType, "mPublished").get(providers)).containsKey(authority),
+                "The readmitted fixture owner did not restore its actual provider");
         System.out.println("ProviderSecurityTest: provider counts, connection ownership, lock order and atomic retirement passed");
         as(31701, ownerUid, () -> revoke.invoke(grants, senderName, uri, read, 0));
         require((Integer) check.invoke(grants, uri, 31702, senderUid, read, 0) == PackageManager.PERMISSION_DENIED,

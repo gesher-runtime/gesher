@@ -2,6 +2,11 @@
 // test interface. Win32 primitives are the explicitly isolated Linux boundary.
 #include "fs_rewrite.cc"
 #include <array>
+// This binary links no loader (elf_loader.cc), so no loaded object is listed
+// for MAP_FIXED or munmap to drop.
+namespace gesher::elf {
+void ForgetReservedMappings(const void*, size_t) {}
+}  // namespace gesher::elf
 namespace elf = gesher::elf;
 namespace {
 int checks;

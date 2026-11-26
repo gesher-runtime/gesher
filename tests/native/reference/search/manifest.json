@@ -1,0 +1,30 @@
+{
+  "repository": "https://android.googlesource.com/platform/bionic",
+  "tag": "android-16.0.0_r4",
+  "tag_object": "2ae67d60dd95c0f0c8fe12c30907be36f2ac17ff",
+  "commit": "f22516cbc67e81c13cf943ce02f01b8929a98726",
+  "files": [
+    {
+      "file": "tsearch.c",
+      "path": "libc/upstream-openbsd/lib/libc/stdlib/tsearch.c",
+      "sha256": "eec949a3d62808435839b3d9ea89d230d10d5675d61a912e548bc2cfe72591b0",
+      "bytes": 3356,
+      "license": "Public domain"
+    },
+    {
+      "file": "tfind.c",
+      "path": "libc/upstream-openbsd/lib/libc/stdlib/tfind.c",
+      "sha256": "bba90cc2eec1cabe0b3f86e728d1e8e1555f691612623ac8a64f3a56da74ac5d",
+      "bytes": 1010,
+      "license": "Public domain"
+    },
+    {
+      "file": "tdestroy.cpp",
+      "path": "libc/bionic/tdestroy.cpp",
+      "sha256": "8cf1fed9e55d94660bef5bc9b76edbd5a60cf575631ccb76071250f42d4d3435",
+      "bytes": 1204,
+      "license": "Apache-2.0"
+    }
+  ],
+  "execution_scope": "Unmodified supplier source compiled for the Linux host; not Android execution. Different valid tree shapes are expected."
+}

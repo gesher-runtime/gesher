@@ -8,6 +8,7 @@
 # WASAPI capture path must either open real hardware or report unavailable.
 # Synthetic recordings below use separately named, default-OFF fixture builds.
 . "$PSScriptRoot/../helpers/FixturePermissions.ps1"
+. "$PSScriptRoot/../helpers/SharedLogBytes.ps1"
 
 $m3Tmp = Join-Path $env:RUNNER_TEMP 'gesher-media3'
 New-Item -ItemType Directory -Force $m3Tmp | Out-Null
@@ -15,7 +16,7 @@ $captureProbe = Join-Path $Dir 'media_probe-media-capture-test.exe'
 $captureRuntime = Join-Path $Dir 'dalvikvm-media-capture-test.exe'
 Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
 CheckTimed 'media3: actual WASAPI packet and disconnect status contracts' "$Dir/capture_wasapi_contract_test.exe" @() @('WASAPI capture contracts:') 20
-foreach ($case in @('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'last-owner', 'stale-peer', 'fixture-env',
+foreach ($case in @('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'event-signal', 'event-command', 'event-wake', 'last-owner', 'stale-peer', 'fixture-env',
                     'opensl-missing', 'opensl-permission', 'opensl-descriptors', 'opensl-start', 'opensl-disconnect', 'recorder-start', 'recorder-disconnect', 'jni-read')) {
   CheckTimed "media3: unavailable/disconnected capture contract ($case)" "$Dir/capture_failure_contract_test.exe" @($case) @("capture failure ${case}:") 20
 }
@@ -168,13 +169,16 @@ $recordChecks = @(
   @{ Name = 'MediaRecorder, video from its Surface (Canvas) with the microphone: H.264 and AAC in MPEG-4, every color in order, the frame at 1.25 s, the tones'
      P = @("${t}recorder surface: getSurface the same true, 2 track\(s\) \[video/avc 320x240, audio/mp4a-latm 44100 Hz 1 ch\], [12]\.\d s; video 45\+ frames, colors \[red, lime, blue, white\], frame at 1\.25 s 320x240 blue; audio 750 Hz then 1250 Hz") },
   @{ Name = 'MediaRecorder, video from the camera (Camera2: GESHER_CAMERA_TEST''s camera, a repeating request into getSurface()): H.264 in MPEG-4 with the test picture'
-     P = @("${t}recorder camera \d+: 1 track\(s\) \[video/avc 320x240\], [12]\.\d s; video 30\+ frames, ordered true, the test picture true") },
+     P = @("${t}recorder camera \d+: 1 track\(s\) \[video/avc 320x240\], [12]\.\d s; video 30\+ frames, ordered true, the test picture true",
+           "${t}recorder camera ready: completed recording sequence true") },
   @{ Name = 'Camera2 close delivers onClosed exactly once before its callback thread quits'
      P = @("${t}recorder camera close: onClosed exactly once before callback thread quit true, callback thread stopped true") },
   @{ Name = 'MediaCodec output into an ImageReader''s Surface: YUV pixels and default or explicit timestamps'
      P = @("${t}imagereader: decoder rendered 60 frames into the reader's surface; images 40\+ \(35 320x240 3 planes\), colors \[red, lime, blue, white\]",
            "${t}imagereader timestamps: pass",
-           "${t}imagereader retained image: pass") }
+           "${t}imagereader retained image: pass") },
+  @{ Name = 'Gesher MediaCodec to ImageReader floor-resize path: exact decoded planes at four sizes, timestamps and owned teardown'
+     P = @("${t}imagereader plane scaling: pass 4 sizes, exact decoded planes and timestamps, owned teardown") }
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
@@ -308,7 +312,7 @@ if (Test-Path "$Dir/recordapp.apk") {
       '--activity', 'com.gesher.recordapp.PersistentInputActivity', '--ez', 'persistent.remote', 'true', '--headless', '--keep-task')) 180
     $persistentCode = $LASTEXITCODE
     if (Test-Path -LiteralPath $persistentLog) {
-      $persistentBytes = [IO.File]::ReadAllBytes($persistentLog)
+      $persistentBytes = Read-SharedLogBytes $persistentLog
       if ($persistentBytes.Length -ge $persistentOffset) {
         $persistentOut += "`n" + [Text.Encoding]::UTF8.GetString($persistentBytes, [int]$persistentOffset,
           [int]($persistentBytes.Length - $persistentOffset))
@@ -349,7 +353,7 @@ if (Test-Path "$Dir/recordapp.apk") {
       '--activity', 'com.gesher.recordapp.RecorderRolloverActivity', '--headless', '--keep-task')) 180
     $rolloverCode = $LASTEXITCODE
     if (Test-Path -LiteralPath $rolloverLog) {
-      $rolloverBytes = [IO.File]::ReadAllBytes($rolloverLog)
+      $rolloverBytes = Read-SharedLogBytes $rolloverLog
       if ($rolloverBytes.Length -ge $rolloverOffset) {
         $rolloverOut += "`n" + [Text.Encoding]::UTF8.GetString($rolloverBytes, [int]$rolloverOffset,
           [int]($rolloverBytes.Length - $rolloverOffset))
