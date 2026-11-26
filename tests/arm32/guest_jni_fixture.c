@@ -98,3 +98,35 @@ jobject32 Java_gesher_Test_echo(JNIEnv32* env, jobject32 receiver, jobject32 str
 long long Java_gesher_Test_critical(long long value, int adjustment) {
   return value + adjustment;
 }
+
+// A genuine guest JNI_OnLoad using an ILP32 JavaVM invoke table.
+typedef struct { u32 functions; } JavaVM32;
+typedef int (*VmGetEnv)(JavaVM32*, JNIEnv32**, int);
+typedef int (*VmAttach)(JavaVM32*, JNIEnv32**, void*);
+typedef int (*VmDetach)(JavaVM32*);
+static const u32* vm_functions(JavaVM32* vm) {
+  return (const u32*)(unsigned long)vm->functions;
+}
+#define VMAPI(vm, slot, kind) ((kind)(unsigned long)vm_functions(vm)[slot])
+
+int JNI_OnLoad(JavaVM32* vm, void* reserved) {
+  if (!vm || reserved) return -1;
+  JNIEnv32* env = 0;
+  if (VMAPI(vm, 6, VmGetEnv)(vm, &env, 0x10006) != 0 || !env)
+    return -1;
+  if (API(env, 4, GetVersion)(env) != 0x10006) return -1;
+  return 0x10006;
+}
+
+int jni32_vm_bad_version(JavaVM32* vm) {
+  JNIEnv32* env = 0;
+  return VMAPI(vm, 6, VmGetEnv)(vm, &env, 0x10008);
+}
+int jni32_vm_attach(JavaVM32* vm) {
+  JNIEnv32* env = 0;
+  if (VMAPI(vm, 4, VmAttach)(vm, &env, 0) != 0 || !env)
+    return -1;
+  if (API(env, 4, GetVersion)(env) != 0x10006) return -2;
+  if (VMAPI(vm, 5, VmDetach)(vm) != -1) return -3;
+  return 77;
+}
