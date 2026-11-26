@@ -68,6 +68,14 @@
 // libandroid_runtime's host ANativeWindow_fromSurface.
 struct ANativeWindow;
 extern "C" {
+const char* AMEDIACODEC_KEY_HDR10_PLUS_INFO = AMEDIAFORMAT_KEY_HDR10_PLUS_INFO;
+const char* AMEDIACODEC_KEY_LOW_LATENCY = AMEDIAFORMAT_KEY_LOW_LATENCY;
+const char* AMEDIACODEC_KEY_OFFSET_TIME = "time-offset-us";
+const char* AMEDIACODEC_KEY_REQUEST_SYNC_FRAME = "request-sync";
+const char* AMEDIACODEC_KEY_SUSPEND = "drop-input-frames";
+const char* AMEDIACODEC_KEY_SUSPEND_TIME = "drop-start-time-us";
+const char* AMEDIACODEC_KEY_VIDEO_BITRATE = "video-bitrate";
+
 ANativeWindow* ANativeWindow_fromSurface(JNIEnv* env, jobject surface);
 void ANativeWindow_acquire(ANativeWindow* window);
 void ANativeWindow_release(ANativeWindow* window);
@@ -2339,6 +2347,16 @@ bool Register() {
   CODEC_ENTRY(getName, GetName);
   CODEC_ENTRY(releaseName, ReleaseName);
 #undef CODEC_ENTRY
+  // Publish the pointer object's address for dlsym and ELF data relocations.
+#define CODEC_KEY(name) AddBionicSymbol(#name, &name)
+  CODEC_KEY(AMEDIACODEC_KEY_HDR10_PLUS_INFO);
+  CODEC_KEY(AMEDIACODEC_KEY_LOW_LATENCY);
+  CODEC_KEY(AMEDIACODEC_KEY_OFFSET_TIME);
+  CODEC_KEY(AMEDIACODEC_KEY_REQUEST_SYNC_FRAME);
+  CODEC_KEY(AMEDIACODEC_KEY_SUSPEND);
+  CODEC_KEY(AMEDIACODEC_KEY_SUSPEND_TIME);
+  CODEC_KEY(AMEDIACODEC_KEY_VIDEO_BITRATE);
+#undef CODEC_KEY
   return true;
 }
 

@@ -24,6 +24,7 @@ foreach ($codecAbi in @(@{ Name = 'x86_64'; Triple = 'x86_64' },
       ($codecVm + @('-cp', (NoDrive $codecDex), 'gesher.NdkCodecTest', (NoDrive $codecDll))) `
       @("NDK codec ABI: $($codecAbi.Name)", 'NDK codec AVC frame pts=4294971956',
         'NDK codec AVC frame pts=4295005289', 'NDK codec AVC frame pts=4295038622',
+        'NDK codec parameter keys: all passed',
         'NDK codec live controls: idr=1 output-bitrate=360000',
         'NDK codec frame rendered: valid=1 invalid=0',
         'NDK codec surface: all passed', 'NDK codec AVC: all passed') 45 -Publish

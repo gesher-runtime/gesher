@@ -12,6 +12,12 @@
 #include <time.h>
 #endif
 
+#ifndef _WIN32
+#include <dlfcn.h>
+#else
+void* CodecFixtureFindSymbol(const char* name);
+#endif
+
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +72,48 @@ static bool FeedPicture(AMediaCodec* encoder, int ordinal) {
   memset(frame, kLuma[ordinal], kLumaBytes);
   memset(frame + kLumaBytes, 128, sizeof(frame) - kLumaBytes);
   return Feed(encoder, frame, sizeof(frame), kFirstTime + ordinal * kInterval, 0);
+}
+
+static bool CheckCodecKeys(void) {
+  struct CodecKey {
+    const char* name;
+    const char* value;
+    const char* const* imported;
+  };
+#define KEY(name, value) {#name, value, &name}
+  const struct CodecKey keys[] = {
+      KEY(AMEDIACODEC_KEY_HDR10_PLUS_INFO, "hdr10-plus-info"),
+      KEY(AMEDIACODEC_KEY_LOW_LATENCY, "low-latency"),
+      KEY(AMEDIACODEC_KEY_OFFSET_TIME, "time-offset-us"),
+      KEY(AMEDIACODEC_KEY_REQUEST_SYNC_FRAME, "request-sync"),
+      KEY(AMEDIACODEC_KEY_SUSPEND, "drop-input-frames"),
+      KEY(AMEDIACODEC_KEY_SUSPEND_TIME, "drop-start-time-us"),
+      KEY(AMEDIACODEC_KEY_VIDEO_BITRATE, "video-bitrate"),
+  };
+#undef KEY
+#ifndef _WIN32
+  void* library = dlopen("libmediandk.so", RTLD_NOW);
+  if (library == NULL) return false;
+#endif
+  int failures = 0;
+  for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+    const struct CodecKey* key = &keys[i];
+#ifdef _WIN32
+    const char* const* slot = CodecFixtureFindSymbol(key->name);
+#else
+    const char* const* slot = dlsym(library, key->name);
+#endif
+    if (slot == NULL || slot != key->imported || *slot == NULL || strcmp(*slot, key->value) != 0) {
+      ++failures;
+      printf("NDK codec parameter key invalid: %s\n", key->name);
+    }
+  }
+#ifndef _WIN32
+  dlclose(library);
+#endif
+  if (failures != 0) return false;
+  puts("NDK codec parameter keys: all passed");
+  return true;
 }
 
 static bool Dimensions(AMediaFormat* format) {
@@ -270,6 +318,7 @@ static int RunCodec(void) {
   struct Packet packets[kFrames] = {{0}};
   int packet_count = 0;
   bool eos = false, wrote_config = false;
+  REQUIRED(CheckCodecKeys(), "parameter key data symbols match direct imports");
   encoder = AMediaCodec_createEncoderByType("video/avc");
   decoder = AMediaCodec_createDecoderByType("video/avc");
   REQUIRED(encoder != NULL && decoder != NULL, "create AVC encoder and decoder by MIME");
@@ -283,7 +332,7 @@ static int RunCodec(void) {
 
   parameters = AMediaFormat_new();
   REQUIRED(parameters != NULL, "allocate live encoder controls");
-  AMediaFormat_setInt32(parameters, "request-sync", 0);
+  AMediaFormat_setInt32(parameters, AMEDIACODEC_KEY_REQUEST_SYNC_FRAME, 0);
   CHECK(AMediaCodec_setParameters(NULL, parameters) == AMEDIA_ERROR_INVALID_PARAMETER &&
         AMediaCodec_setParameters(encoder, NULL) == AMEDIA_ERROR_INVALID_PARAMETER,
         "reject missing parameter handles");
@@ -316,7 +365,7 @@ static int RunCodec(void) {
   name = NULL;
   REQUIRED(AMediaCodec_start(encoder) == AMEDIA_OK, "start AVC encoder");
 
-  AMediaFormat_setInt32(parameters, "video-bitrate", 360000);
+  AMediaFormat_setInt32(parameters, AMEDIACODEC_KEY_VIDEO_BITRATE, 360000);
   REQUIRED(FeedPicture(encoder, 0) && FeedPicture(encoder, 1), "queue initial raw AVC frames");
 
   for (int attempt = 0; attempt < 24 && !eos; ++attempt) {
