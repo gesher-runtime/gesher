@@ -18,7 +18,7 @@ public final class CrashReport {
         BoundedText stack = new BoundedText();
         failure.printStackTrace(new PrintWriter(stack));
         String record = "\n>>> Gesher crash event " + event + " package " + pkg + " at "
-                + System.currentTimeMillis() + "\n" + stack.text
+                + System.currentTimeMillis() + "\n" + LogRedaction.redact(stack.text.toString())
                 + (stack.truncated ? "\n[stack trace truncated]\n" : "")
                 + "<<< End crash event " + event + "\n";
         file.getParentFile().mkdirs();

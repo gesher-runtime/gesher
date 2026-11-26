@@ -54,7 +54,8 @@ public final class WifiScannerUnsupportedTest {
         check(!supported(context, true), "Previously failed scanner reported supported");
         check(context.getSystemService("wifiscanner") == null, "Named lookup fabricated a hardware scanner");
         check(context.getSystemService(WifiScanner.class) == null, "Typed lookup fabricated a hardware scanner");
-        check(!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI), "Scanner type declared Wi-Fi hardware");
+        check(context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI)
+                == com.gesher.net.WindowsWifi.hardware().present(), "FEATURE_WIFI differs from the real WLAN census");
         check(WifiScanner.class.getClassLoader() == Object.class.getClassLoader(), "Scanner type is not the production boot class");
         WifiManager wifi = context.getSystemService(WifiManager.class);
         check(wifi != null, "Wi-Fi manager fallback is missing");

@@ -35,6 +35,10 @@ static void check(const char* name,bool value) {
 }
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+// This lifecycle fixture grants the separate storage boundary; the native
+// storage_policy_host_test owns policy and live-revocation coverage.
+enum class AccessKind { kStat, kRead, kWrite };
+static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 void ForgetStreamDevice(int,bool) {}
 static constexpr int INVALID_HANDLE_VALUE = -1;
 int HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? fd : INVALID_HANDLE_VALUE; }

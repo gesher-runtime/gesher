@@ -22,17 +22,12 @@ import android.os.IBinder;
 import android.os.IDeviceIdentifiersPolicyService;
 import android.os.ServiceSpecificException;
 import android.os.IThermalService;
-import android.telephony.SubscriptionManager;
 import android.view.ISensitiveContentProtectionManager;
 
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.appwidget.IAppWidgetHost;
 import com.android.internal.appwidget.IAppWidgetService;
 import com.android.internal.os.IDropBoxManagerService;
-import com.android.internal.telephony.IPhoneSubInfo;
-import com.android.internal.telephony.ISub;
-import com.android.internal.telephony.ITelephony;
-import com.android.internal.telephony.ITelephonyRegistry;
 
 /**
  * System services real apps look up as soon as they start (docs/e2e.md), which the
@@ -179,38 +174,6 @@ final class DeviceServices {
     }
 
     /**
-     * {@code phone}: Telephony service stand-in for ITelephony. Reports no phone / no SIM
-     * and returns safe fallbacks for device ID / network info.
-     */
-    static final class TelephonyService extends ITelephony.Default {
-        /**
-         * No SIM: TelephonyManager.getSimState's answer on a phone with an empty slot.
-         * Default's 0 is SIM_STATE_UNKNOWN, "still loading", which apps wait on.
-         */
-        @Override
-        public int getSimStateForSlotIndex(int slotIndex) {
-            return android.telephony.TelephonyManager.SIM_STATE_ABSENT;
-        }
-
-        /**
-         * No cellular network: TelephonyManager.getNetworkCountryIso() is @NonNull and
-         * returns "" when unavailable (including when ITelephony is absent); Default's
-         * null trips Kotlin non-null checks in apps such as Meta Muse.
-         */
-        @Override
-        public String getNetworkCountryIsoForPhone(int phoneId) {
-            return "";
-        }
-    }
-
-    /**
-     * {@code iphonesubinfo}: Phone subscriber info service stand-in. Returns null for
-     * device ID, subscriber ID, and phone number queries.
-     */
-    static final class PhoneSubInfoService extends IPhoneSubInfo.Default {
-    }
-
-    /**
      * {@code device_identifiers}: Build.getSerial()'s service. The serial is
      * {@link Build#UNKNOWN}, as an app without the privileged phone permission sees it
      * through device_info_plus (Flutter's RustDesk); without the service getSerial threw
@@ -225,75 +188,6 @@ final class DeviceServices {
         @Override
         public String getSerialForPackage(String callingPackage, String callingFeatureId) {
             return Build.UNKNOWN;
-        }
-    }
-
-    /**
-     * {@code isub}: SubscriptionManager service stand-in. Reports no active subscriptions
-     * and invalid subscription IDs so apps treat the device as having no cellular SIMs.
-     */
-    static final class SubscriptionService extends ISub.Default {
-        // Generated Default answers 0, which is a valid subscription identifier.
-        // No SIMs are installed here: expose the same absent identifiers as AOSP's
-        // empty subscription database, including the user-specific entry points.
-        @Override public int getDefaultSubId() {
-            return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
-        }
-        @Override public int getDefaultSubIdAsUser(int userId) { return getDefaultSubId(); }
-        @Override public int getDefaultDataSubId() { return getDefaultSubId(); }
-        @Override public int getDefaultVoiceSubId() { return getDefaultSubId(); }
-        @Override public int getDefaultVoiceSubIdAsUser(int userId) { return getDefaultSubId(); }
-        @Override public int getDefaultSmsSubId() { return getDefaultSubId(); }
-        @Override public int getDefaultSmsSubIdAsUser(int userId) { return getDefaultSubId(); }
-        @Override public int getActiveDataSubscriptionId() { return getDefaultSubId(); }
-        @Override public int getPreferredDataSubscriptionId() {
-            // AOSP falls back to the default data subscription without PhoneSwitcher.
-            return getDefaultDataSubId();
-        }
-        @Override public int getSubId(int slotIndex) { return getDefaultSubId(); }
-        @Override public int getSlotIndex(int subId) {
-            return SubscriptionManager.INVALID_SIM_SLOT_INDEX;
-        }
-        @Override public int getPhoneId(int subId) {
-            if (subId == SubscriptionManager.DEFAULT_SUBSCRIPTION_ID) subId = getDefaultSubId();
-            // AOSP retains the default-phone sentinel for a valid but unmapped ID;
-            // it is neither an installed modem index nor an active subscription.
-            return subId > SubscriptionManager.INVALID_SUBSCRIPTION_ID
-                    ? SubscriptionManager.DEFAULT_PHONE_INDEX : SubscriptionManager.INVALID_PHONE_INDEX;
-        }
-        @Override public int getEnabledSubscriptionId(int slotIndex) {
-            if (!SubscriptionManager.isValidSlotIndex(slotIndex)) {
-                throw new IllegalArgumentException("Invalid slot index " + slotIndex);
-            }
-            return getDefaultSubId();
-        }
-        @Override public int[] getActiveSubIdList(boolean visibleOnly) { return new int[0]; }
-    }
-
-    /**
-     * {@code telephony.registry}: TelephonyRegistry service stand-in for event callbacks.
-     */
-    static final class TelephonyRegistryService extends ITelephonyRegistry.Default {
-        /**
-         * TelephonyRegistry tells a new listener the current subscriptions at once (they
-         * were published at boot); SubscriptionManager users wait for that first call.
-         * There is no SIM, so nothing changes after it.
-         */
-        @Override
-        public void addOnSubscriptionsChangedListener(String callingPackage,
-                String callingFeatureId,
-                com.android.internal.telephony.IOnSubscriptionsChangedListener callback) {
-            if (callback == null) return;
-            try {
-                callback.onSubscriptionsChanged();
-            } catch (android.os.RemoteException | RuntimeException e) {
-                // The listener's process is gone: as TelephonyRegistry drops such a record.
-            }
-        }
-
-        @Override
-        public void removeOnSubscriptionsChangedListener(String callingPackage,
-                com.android.internal.telephony.IOnSubscriptionsChangedListener callback) {
         }
     }
 

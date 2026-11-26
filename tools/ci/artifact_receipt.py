@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from artifact_candidates import read_artifacts, select_artifact
+from artifact_candidates import _timestamp, read_artifacts, select_artifact
 from github_read import get_json
 from github_jobs import get_jobs
 from receipt_identity import (exact_run, failed_installer_allowed, installer_uploaded,
@@ -56,7 +56,7 @@ def read_jobs(value):
     return jobs
 
 
-def select_producer(value, jobs, name, suffix=False, allow_failed=False):
+def producer_record(value, jobs, name, suffix, allow_failed):
     rows = [x for x in jobs['jobs'] if x['name'] == name or (suffix and x['name'].endswith(' / ' + name))]
     allowed = {'success', 'failure'} if allow_failed else {'success'}
     identity_record('producer', {'run_id': value['run_id'], 'attempt': value['attempt'],
@@ -72,6 +72,11 @@ def select_producer(value, jobs, name, suffix=False, allow_failed=False):
     if (job['status'] != 'completed' or job['conclusion'] not in allowed or job['head_sha'] != value['head']
             or str(job['run_id']) != value['run_id'] or str(job['run_attempt']) != value['attempt']):
         raise RuntimeError('Producer source/attempt/conclusion mismatch')
+    return job
+
+
+def select_producer(value, jobs, name, suffix=False, allow_failed=False):
+    job = producer_record(value, jobs, name, suffix, allow_failed)
     if allow_failed and not installer_uploaded(job):
         raise RuntimeError('Installer upload did not complete successfully')
     return job
@@ -109,6 +114,64 @@ def receipt(value, item, job):
           f"attempt={value['attempt']}", flush=True)
 
 
+def original_installer_execution(value, copied):
+    """Resolve the copied job to its exact original execution with upload steps."""
+    endpoint = f"repos/{value['repo']}/actions/runs/{value['run_id']}"
+    ids = {copied['id']}
+    execution = ('name', 'status', 'conclusion', 'head_sha', 'started_at', 'completed_at')
+    for attempt in range(int(value['attempt']) - 1, 0, -1):
+        original = {**value, 'attempt': str(attempt)}
+        run = get_json(f'{endpoint}/attempts/{attempt}')
+        if (not exact_run(run, original['run_id'], original['attempt'], original['head'],
+                          original['repo_id'], original['head_repo'], original['repo'], original['workflow'])
+                or run.get('status') != 'completed' or run.get('path') != '.github/workflows/ci.yml'
+                or run.get('event') != os.environ['GITHUB_EVENT_NAME']):
+            raise RuntimeError('Original installer run identity mismatch')
+        job = producer_record(original, read_jobs(original), 'package', False, True)
+        if (type(job['id']) is not int or job['id'] <= 0 or job['id'] in ids
+                or any(job[key] != copied[key] for key in execution)):
+            raise RuntimeError('Copied package does not match the original installer execution')
+        ids.add(job['id'])
+        if job['steps'] == []:
+            continue
+        if not installer_uploaded(job):
+            break
+        return original, job
+    raise RuntimeError('Installer upload did not complete successfully')
+
+
+def retained_installer_snapshot(value, copied):
+    original, job = original_installer_execution(value, copied)
+    inventory = read_artifacts(f"repos/{value['repo']}/actions/runs/{value['run_id']}/artifacts", name='gesher-setup')
+    item = select_supplier(value, inventory, 'gesher-setup', copied)
+    if select_supplier(original, inventory, 'gesher-setup', job) != item:
+        raise RuntimeError('Copied package selected a different installer artifact')
+    upload = next(step for step in job['steps'] if step['name'] == 'Upload tested installer artifact')
+    if not (_timestamp(job['started_at']) <= _timestamp(upload['started_at']) <= _timestamp(item['created_at'])
+            <= _timestamp(upload['completed_at']) <= _timestamp(job['completed_at'])):
+        raise RuntimeError('Installer artifact was created outside the original successful upload step')
+    return original, job, item
+
+
+def stage_retained_installer(value, copied, destination):
+    original, job, item = retained_installer_snapshot(value, copied)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=destination.name + '-stage-', dir=destination.parent) as temporary:
+        staged = Path(temporary) / 'installer'
+        download(item, staged)
+        live = producer_record(value, read_jobs(value), 'package', False, True)
+        if live != copied or retained_installer_snapshot(value, live) != (original, job, item):
+            raise RuntimeError('Retained installer evidence changed before publication')
+        check_run(value)
+        check_checkout(value)
+        if os.path.lexists(destination):
+            raise RuntimeError('Installer destination already exists')
+        os.rename(staged, destination)
+    print(f"CI_RETAINED_INSTALLER original_attempt={original['attempt']} original_producer_id={job['id']}", flush=True)
+    receipt(value, item, copied)
+
+
 def single(args):
     if args.allow_failed_producer and not failed_installer_allowed(
             os.environ.get('GITHUB_WORKFLOW'), os.environ.get('GITHUB_JOB'),
@@ -116,8 +179,12 @@ def single(args):
         raise RuntimeError('Failed producer exception is restricted to canonical e2e installer')
     value = context()
     check_run(value)
-    job = select_producer(value, read_jobs(value), args.producer,
+    job = producer_record(value, read_jobs(value), args.producer,
                           args.producer_suffix, args.allow_failed_producer)
+    if args.allow_failed_producer and not installer_uploaded(job):
+        if job['steps'] == [] and int(value['attempt']) > 1:
+            return stage_retained_installer(value, job, args.destination)
+        raise RuntimeError('Installer upload did not complete successfully')
     inventory = read_artifacts(f"repos/{value['repo']}/actions/runs/{value['run_id']}/artifacts", name=args.name)
     item = select_supplier(value, inventory, args.name, job)
     download(item, args.destination)
@@ -185,21 +252,26 @@ def supplier_identity(selected):
              'created_at', 'workflow_run')})
 
 
-def batch(args):
-    raw_manifest = Path(args.batch).read_bytes()
-    specs = batch_manifest(raw_manifest)
-    destination = Path(args.destination).absolute()
+def _linked(path):
+    return path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction())
+
+
+def new_destination(path):
+    destination = Path(path).absolute()
     try:
         destination.resolve().relative_to(ROOT.resolve())
     except ValueError:
         raise RuntimeError('Batch destination is outside the checked-out repository') from None
     for parent in (destination, *destination.parents):
-        if parent.is_symlink() or (hasattr(parent, 'is_junction') and parent.is_junction()):
+        if _linked(parent):
             raise RuntimeError('Batch destination has a linked path component')
     if os.path.lexists(destination):
         raise RuntimeError('Batch destination already exists')
-    value = context()
-    manifest = Path(args.batch).resolve()
+    return destination
+
+
+def committed_manifest(path, raw_manifest, value):
+    manifest = Path(path).resolve()
     try:
         relative = manifest.relative_to(ROOT.resolve()).as_posix()
     except ValueError:
@@ -209,6 +281,15 @@ def batch(args):
     # conversion is permitted; the bytes parsed above remain bound to the blob.
     if raw_manifest.replace(b'\r\n', b'\n') != committed.replace(b'\r\n', b'\n'):
         raise RuntimeError('Batch manifest differs from the exact checkout')
+    return relative, committed
+
+
+def batch(args):
+    raw_manifest = Path(args.batch).read_bytes()
+    specs = batch_manifest(raw_manifest)
+    destination = new_destination(args.destination)
+    value = context()
+    relative, committed = committed_manifest(args.batch, raw_manifest, value)
     selected = batch_snapshot(value, specs)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=destination.name + '-stage-', dir=destination.parent) as temporary:
@@ -235,7 +316,169 @@ def batch(args):
     print(f'CI_ARTIFACT_BATCH version=1 count={len(specs)} manifest_sha256={hashlib.sha256(committed).hexdigest()} '
           f'source={value["head"]} checkout={value["checkout"]} run={value["run_id"]} '
           f'attempt={value["attempt"]} destination={destination / "artifacts"}', flush=True)
+    # Other callers (component_producer.py) pass a namespace without a ledger flag.
+    if getattr(args, 'ledger', False):
+        write_ledger(destination, value, specs, relative, committed, current)
     return current
+
+
+# A supplier bundle carries one verified batch to many consumers of the same
+# run: the batch is received once, with every check above, and its published
+# tree is uploaded whole as one artifact. Each consumer then receipts that one
+# artifact from its exact producer job and checks the ledger below against the
+# same committed manifest, the current run/source and every extracted byte.
+LEDGER = 'receipts.json'
+_LEDGER_LIMIT = 16 * 1024 * 1024
+_LEDGER_KEYS = {'version', 'manifest', 'manifest_sha256', 'repository', 'repository_id',
+                'head_repository_id', 'workflow', 'run_id', 'attempt', 'source', 'checkout',
+                'suppliers', 'files'}
+_SHA256 = re.compile(r'[0-9a-f]{64}')
+
+
+def tree_digests(root):
+    """SHA-256 of every regular file below root; links and other types are refused."""
+    files = {}
+    for path in sorted(Path(root).rglob('*')):
+        if _linked(path):
+            raise RuntimeError('Supplier bundle contains a link')
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise RuntimeError('Supplier bundle contains a non-regular file')
+        digest = hashlib.sha256()
+        with path.open('rb') as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+        files[path.relative_to(root).as_posix()] = digest.hexdigest()
+    return files
+
+
+def write_ledger(destination, value, specs, relative, committed, current):
+    suppliers = []
+    for spec in specs:
+        job, item = current[spec['name']]
+        suppliers.append({**spec,
+            'artifact': {key: item[key] for key in ('id', 'digest', 'size_in_bytes', 'created_at')},
+            'producer_job': {key: job[key] for key in ('id', 'name', 'conclusion', 'started_at', 'completed_at')}})
+    files = {'artifacts/' + name: digest for name, digest in tree_digests(destination / 'artifacts').items()}
+    ledger = {'version': 1, 'manifest': relative, 'manifest_sha256': hashlib.sha256(committed).hexdigest(),
+              'repository': value['repo'], 'repository_id': value['repo_id'],
+              'head_repository_id': value['head_repo'], 'workflow': value['workflow'],
+              'run_id': value['run_id'], 'attempt': value['attempt'], 'source': value['head'],
+              'checkout': value['checkout'], 'suppliers': suppliers, 'files': files}
+    # Exclusive creation: a ledger is written once, beside the published batch.
+    with (destination / LEDGER).open('x', encoding='utf-8', newline='\n') as stream:
+        json.dump(ledger, stream, ensure_ascii=True, sort_keys=True, indent=1)
+    print(f'CI_ARTIFACT_LEDGER version=1 count={len(specs)} files={len(files)} '
+          f'manifest_sha256={ledger["manifest_sha256"]} run={value["run_id"]} attempt={value["attempt"]}',
+          flush=True)
+
+
+def _positive(value):
+    return type(value) is int and value > 0
+
+
+def verify_bundle(staging, specs, relative, committed, value):
+    """Accept an extracted bundle only if it is exactly the ledgered batch."""
+    if {entry.name for entry in staging.iterdir()} != {'artifacts', LEDGER}:
+        raise RuntimeError('Supplier bundle layout differs from a published batch')
+    ledger_path = staging / LEDGER
+    if _linked(ledger_path) or not ledger_path.is_file() or ledger_path.stat().st_size > _LEDGER_LIMIT:
+        raise RuntimeError('Supplier bundle ledger is not a bounded regular file')
+    try:
+        ledger = json.loads(ledger_path.read_bytes(), object_pairs_hook=_unique_object,
+                            parse_constant=_invalid_constant)
+    except ValueError as error:
+        raise RuntimeError(f'Supplier bundle ledger is not strict JSON: {error}') from None
+    if (not isinstance(ledger, dict) or set(ledger) != _LEDGER_KEYS
+            or type(ledger['version']) is not int or ledger['version'] != 1):
+        raise RuntimeError('Supplier bundle ledger has invalid fields')
+    expected = {'manifest': relative, 'manifest_sha256': hashlib.sha256(committed).hexdigest(),
+                'repository': value['repo'], 'repository_id': value['repo_id'],
+                'head_repository_id': value['head_repo'], 'workflow': value['workflow'],
+                'run_id': value['run_id'], 'source': value['head'], 'checkout': value['checkout']}
+    if any(ledger[key] != item for key, item in expected.items()):
+        raise RuntimeError('Supplier bundle ledger is bound to another manifest, run or source')
+    # A partial rerun can reuse the bundle job of an earlier attempt of this
+    # run, exactly as it reuses that attempt's producers; never a later one.
+    attempt = ledger['attempt']
+    if (not isinstance(attempt, str) or not re.fullmatch(r'[1-9][0-9]{0,9}', attempt)
+            or int(attempt) > int(value['attempt'])):
+        raise RuntimeError('Supplier bundle ledger attempt is invalid')
+    suppliers = ledger['suppliers']
+    if not isinstance(suppliers, list) or len(suppliers) != len(specs):
+        raise RuntimeError('Supplier bundle ledger does not match the manifest')
+    for spec, entry in zip(specs, suppliers):
+        if (not isinstance(entry, dict) or set(entry) != {*spec, 'artifact', 'producer_job'}
+                or any(entry[key] != spec[key] for key in spec)):
+            raise RuntimeError('Supplier bundle ledger does not match the manifest')
+        artifact, job = entry['artifact'], entry['producer_job']
+        if (not isinstance(artifact, dict) or set(artifact) != {'id', 'digest', 'size_in_bytes', 'created_at'}
+                or not _positive(artifact['id']) or not _positive(artifact['size_in_bytes'])
+                or not isinstance(artifact['digest'], str)
+                or not re.fullmatch(r'sha256:[0-9a-f]{64}', artifact['digest'])
+                or not isinstance(job, dict)
+                or set(job) != {'id', 'name', 'conclusion', 'started_at', 'completed_at'}
+                or not _positive(job['id']) or job['name'] != spec['producer']
+                or job['conclusion'] != 'success'):
+            raise RuntimeError('Supplier bundle ledger has an unverified supplier')
+    artifacts = staging / 'artifacts'
+    if _linked(artifacts) or not artifacts.is_dir():
+        raise RuntimeError('Supplier bundle layout differs from a published batch')
+    owners = list(artifacts.iterdir())
+    if (any(_linked(owner) or not owner.is_dir() for owner in owners)
+            or sorted(owner.name for owner in owners) != sorted(spec['destination'] for spec in specs)):
+        raise RuntimeError('Supplier bundle members differ from the manifest')
+    files = ledger['files']
+    if (not isinstance(files, dict)
+            or not all(isinstance(digest, str) and _SHA256.fullmatch(digest) for digest in files.values())):
+        raise RuntimeError('Supplier bundle ledger has invalid file digests')
+    actual = {'artifacts/' + name: digest for name, digest in tree_digests(artifacts).items()}
+    if actual != files:
+        raise RuntimeError('Supplier bundle files differ from the verified batch')
+    return ledger
+
+
+def bundle(args):
+    raw_manifest = Path(args.bundle_of).read_bytes()
+    specs = batch_manifest(raw_manifest)
+    destination = new_destination(args.destination)
+    value = context()
+    relative, committed = committed_manifest(args.bundle_of, raw_manifest, value)
+    check_run(value)
+    job = select_producer(value, read_jobs(value), args.producer)
+    endpoint = f"repos/{value['repo']}/actions/runs/{value['run_id']}/artifacts"
+    item = select_supplier(value, read_artifacts(endpoint, name=args.name), args.name, job)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=destination.name + '-stage-', dir=destination.parent) as temporary:
+        staging = Path(temporary) / 'bundle'
+        download(item, staging)
+        ledger = verify_bundle(staging, specs, relative, committed, value)
+        # As for a batch, re-read live evidence after the download: the bundle
+        # producer, its artifact and the current run attempt must be unchanged.
+        current_job = select_producer(value, read_jobs(value), args.producer)
+        current_item = select_supplier(value, read_artifacts(endpoint, name=args.name), args.name, current_job)
+        check_run(value)
+        if supplier_identity((job, item)) != supplier_identity((current_job, current_item)):
+            raise RuntimeError('Supplier bundle identity changed before publication')
+        check_checkout(value)
+        destination.mkdir(mode=0o700)
+        try:
+            os.rename(staging / 'artifacts', destination / 'artifacts')
+        except BaseException:
+            destination.rmdir()
+            raise
+    for entry in ledger['suppliers']:
+        print(f"CI_ARTIFACT_BUNDLE_MEMBER name={entry['name']} id={entry['artifact']['id']} "
+              f"digest={entry['artifact']['digest']} producer={entry['producer_job']['name']} "
+              f"producer_id={entry['producer_job']['id']} source={value['head']} run={value['run_id']} "
+              f"attempt={ledger['attempt']} bundle={item['id']}", flush=True)
+    receipt(value, item, current_job)
+    print(f"CI_ARTIFACT_BUNDLE version=1 count={len(specs)} files={len(ledger['files'])} "
+          f"manifest_sha256={ledger['manifest_sha256']} bundle={item['id']} digest={item['digest']} "
+          f"source={value['head']} checkout={value['checkout']} run={value['run_id']} "
+          f"attempt={value['attempt']} destination={destination / 'artifacts'}", flush=True)
+    return ledger
 
 
 def main(argv=None):
@@ -247,15 +490,27 @@ def main(argv=None):
     parser.add_argument('--producer-suffix', action='store_true')
     parser.add_argument('--destination', required=True)
     parser.add_argument('--allow-failed-producer', action='store_true')
+    parser.add_argument('--ledger', action='store_true',
+                        help='also write a supplier bundle ledger beside the published batch')
+    parser.add_argument('--bundle-of', metavar='MANIFEST',
+                        help='receive --name as a supplier bundle of this committed batch manifest')
     args = parser.parse_args(argv)
     if args.batch:
-        if args.producer is not None or args.producer_suffix or args.allow_failed_producer:
+        if (args.producer is not None or args.producer_suffix or args.allow_failed_producer
+                or args.bundle_of is not None):
             parser.error('Batch suppliers require exact successful producers')
         batch(args)
     else:
         if not args.producer:
             parser.error('--producer is required for a single artifact')
-        single(args)
+        if args.ledger:
+            parser.error('--ledger requires --batch')
+        if args.bundle_of is not None:
+            if args.producer_suffix or args.allow_failed_producer:
+                parser.error('A supplier bundle requires its exact successful producer')
+            bundle(args)
+        else:
+            single(args)
 
 
 if __name__ == '__main__':
