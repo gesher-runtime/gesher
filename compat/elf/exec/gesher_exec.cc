@@ -289,7 +289,9 @@ DWORD WINAPI ProgramThread(void*) {
   elf::LoadOptions options;
   options.main_executable = true;
   for (const std::string& e : p.env) {
-    if (e.rfind("LD_LIBRARY_PATH=", 0) == 0) options.search_paths = LibraryPath(e.substr(16));
+    if (e.rfind("LD_LIBRARY_PATH=", 0) == 0) {
+      options.environment_search_paths = LibraryPath(e.substr(16));
+    }
   }
   std::string program = ex::Narrow(p.path);
   size_t slash = program.find_last_of("\\/");

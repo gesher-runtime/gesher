@@ -122,6 +122,16 @@ int tx_identity(void) { return TX_ROLE; }
 int tx_first_only(void) { return 290; }
 #elif TX_ROLE == 30
 int tx_identity(void) { return TX_ROLE; }
+#elif TX_ROLE == 31
+int tx_runpath_leaf(void) { return 31; }
+#elif TX_ROLE == 32
+extern int tx_runpath_leaf(void);
+int tx_runpath_mid(void) { return tx_runpath_leaf() + 1; }
+#elif TX_ROLE == 33
+extern int tx_runpath_mid(void);
+int tx_runpath_root(void) { return tx_runpath_mid() + 1; }
+#elif TX_ROLE == 34 || TX_ROLE == 35
+int tx_runpath_mid(void) { return TX_ROLE; }
 #else
 #error Unknown TX_ROLE
 #endif

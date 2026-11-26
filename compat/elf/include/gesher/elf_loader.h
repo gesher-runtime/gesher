@@ -36,9 +36,11 @@ void SetBionicResolver(SymbolResolver resolver);
 
 // Options for a load.
 struct LoadOptions {
-  // Directories searched for a DT_NEEDED soname, in order, before the resolver.
+  // Default directories for a DT_NEEDED soname, after the requester's RUNPATH.
   // The APK's extracted lib/x86_64 goes here.
   std::vector<std::string> search_paths;
+  // The executable's LD_LIBRARY_PATH takes priority over RUNPATH.
+  std::vector<std::string> environment_search_paths;
   // When true, missing DT_NEEDED libraries that the bionic resolver can satisfy
   // symbol-by-symbol (libc.so, libm.so, libdl.so, liblog.so, libandroid.so,
   // libc++_shared.so provided by the shim) are not an error.

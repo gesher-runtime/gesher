@@ -52,9 +52,13 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   - applies relocations — `R_X86_64_RELATIVE`/`RELATIVE64`, `RELR`,
     `GLOB_DAT`, `JUMP_SLOT`, `64`, `IRELATIVE`, and the TLS relocations
     `DTPMOD64`/`DTPOFF64`/`TPOFF64`;
-  - resolves `DT_NEEDED` against already-loaded objects, the APK's extracted
-    `lib/x86_64` (search paths), or the bionic shim (which provides the
-    standard libraries' symbols without a real `.so`);
+  - resolves `DT_NEEDED` against already-loaded objects, the executable's
+    `LD_LIBRARY_PATH`, the requesting object's `DT_RUNPATH`, the configured
+    library directories and the bionic shim. A file-backed object expands
+    `$ORIGIN` to its canonical parent directory. Both supported guest ABIs
+    expand `$LIB` to `lib64`. Each object's RUNPATH applies to its own
+    dependencies. Class-loader namespaces and paths inside ZIP archives
+    remain separate gaps;
   - runs `DT_INIT`/`DT_INIT_ARRAY`, and finds exports (`JNI_OnLoad`, `Java_*`)
     by GNU/SysV hash for the JNI layer.
 
@@ -485,8 +489,7 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
   per-thread proxy. The `.so` only sees proxy `JNIEnv`/`JavaVM` objects whose
   System V tables forward to ART's Microsoft-ABI ones; variadic and `va_list`
   calls are turned into `jvalue` arrays by the method's parameter types.
-  DT_NEEDED libraries are looked up next to the library (an APK's
-  `libc++_shared.so`).
+  The APK's extracted library directory is a default DT_NEEDED search path.
 
 - **gesher-app** copies the APK's `lib/x86_64/*.so` into
   `ApplicationInfo.nativeLibraryDir` before launching

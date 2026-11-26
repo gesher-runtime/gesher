@@ -24,6 +24,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <windows.h>
@@ -1140,8 +1141,31 @@ void RegisterGuestCode(Library* lib, const uint8_t* data) {
   }
 }
 
+// Resolves an on-disk dynamic string without reading past DT_STRSZ or the
+// file-backed part of its PT_LOAD segment.
+std::optional<std::string_view> DynamicString(const Library& lib, const uint8_t* data,
+                                              uint64_t offset) {
+  if (lib.strtab == nullptr || offset >= lib.strtab_size) return std::nullopt;
+  const uintptr_t table = reinterpret_cast<uintptr_t>(lib.strtab) -
+                          reinterpret_cast<uintptr_t>(lib.load_bias);
+  for (size_t i = 0; i < lib.file_phnum; ++i) {
+    const auto& ph = lib.file_phdr[i];
+    if (ph.p_type != PT_LOAD || table < ph.p_vaddr) continue;
+    const uint64_t table_offset = table - ph.p_vaddr;
+    if (table_offset >= ph.p_filesz || offset >= ph.p_filesz - table_offset) continue;
+    const size_t remaining =
+        std::min<uint64_t>(lib.strtab_size - offset, ph.p_filesz - table_offset - offset);
+    const char* start = reinterpret_cast<const char*>(data + ph.p_offset + table_offset + offset);
+    if (const void* end = std::memchr(start, 0, remaining)) {
+      return std::string_view(start, static_cast<const char*>(end) - start);
+    }
+  }
+  return std::nullopt;
+}
+
 // Parses PT_DYNAMIC and PT_TLS.
-void ParseDynamic(Library* lib, const uint8_t* data) {
+bool ParseDynamic(Library* lib, const uint8_t* data, std::string_view* runpath,
+                  std::string* error) {
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
   const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
   const Elf64_Dyn* dyn = nullptr;
@@ -1174,7 +1198,7 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
       lib->tls.align = phdr[i].p_align ? phdr[i].p_align : 1;
     }
   }
-  if (dyn == nullptr) return;
+  if (dyn == nullptr) return true;
 
   size_t pltrel_size = 0;
   for (const Elf64_Dyn* d = dyn; d->d_tag != DT_NULL; ++d) {
@@ -1231,15 +1255,23 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
   }
   lib->jmprel_count = pltrel_size / sizeof(Elf64_Rela);
 
-  // SONAME and NEEDED now that strtab is set.
+  // Dynamic strings now that strtab is set.
   for (const Elf64_Dyn* d = dyn; d->d_tag != DT_NULL; ++d) {
     if (d->d_tag == DT_SONAME && lib->strtab) {
       lib->soname = lib->strtab + d->d_un.d_val;
     } else if (d->d_tag == DT_NEEDED && lib->strtab) {
       lib->needed.emplace_back(lib->strtab + d->d_un.d_val);
+    } else if (d->d_tag == DT_RUNPATH) {
+      auto path = DynamicString(*lib, data, d->d_un.d_val);
+      if (!path) {
+        Fail(error, lib->name + ": invalid DT_RUNPATH string");
+        return false;
+      }
+      *runpath = *path;
     }
   }
   if (lib->soname.empty()) lib->soname = lib->name;
+  return true;
 }
 
 // Applies one RELA relocation. Returns false and sets *error if a needed symbol
@@ -1863,6 +1895,58 @@ bool IsPending(const std::string& name, const std::optional<ImageIdentity>& id) 
   return false;
 }
 
+bool ExpandRunpathDirectory(std::string& directory, std::string_view origin) {
+  const std::pair<std::string_view, std::string_view> tokens[] = {
+      {"${ORIGIN}", origin}, {"$ORIGIN", origin}, {"${LIB}", "lib64"}, {"$LIB", "lib64"}};
+  for (size_t pos = 0; (pos = directory.find('$', pos)) != std::string::npos;) {
+    const auto suffix = std::string_view(directory).substr(pos);
+    const auto* token = std::find_if(std::begin(tokens), std::end(tokens),
+                                    [&](const auto& item) { return suffix.starts_with(item.first); });
+    if (token == std::end(tokens)) {
+      ++pos;
+      continue;
+    }
+    if (token->second.empty()) return false;
+    auto replacement = token->second;
+    // "$ORIGIN/foo" at the filesystem root is "/foo". A double leading
+    // slash would request UNC on Windows.
+    if (replacement.ends_with('/') && suffix.substr(token->first.size()).starts_with('/')) {
+      replacement.remove_suffix(1);
+    }
+    directory.replace(pos, token->first.size(), replacement);
+    pos += replacement.size();
+  }
+  return true;
+}
+
+// Expand after splitting so a drive colon in the Windows location of the
+// object remains in its path. Both supported guest ABIs use lib64.
+std::vector<std::string> RunpathDirectories(std::string_view runpath, std::string_view origin) {
+  std::vector<std::string> result;
+  while (!runpath.empty()) {
+    const size_t separator = runpath.find(':');
+    std::string directory(runpath.substr(0, separator));
+    if (!directory.empty() && ExpandRunpathDirectory(directory, origin)) {
+      result.push_back(std::move(directory));
+    }
+    if (separator == std::string_view::npos) break;
+    runpath.remove_prefix(separator + 1);
+  }
+  return result;
+}
+
+std::string FindDependencyPath(const std::string& name, const LoadOptions& options,
+                               const std::vector<std::string>& runpaths) {
+  for (const auto* paths : {&options.environment_search_paths, &runpaths, &options.search_paths}) {
+    for (const auto& directory : *paths) {
+      std::string candidate = directory + (directory.ends_with('/') ? "" : "/") + name;
+      struct stat st {};
+      if (stat(candidate.c_str(), &st) == 0) return candidate;
+    }
+  }
+  return {};
+}
+
 class LoadTransaction {
  public:
   LoadTransaction() { g_pending_scopes.push_back(&scope_); }
@@ -1972,7 +2056,14 @@ class LoadTransaction {
     node->options = options;
     node->image = std::move(image);
     if (!MapSegments(lib, data, size, file ? file->fd : -1, options, error)) return nullptr;
-    ParseDynamic(lib, data);
+    std::string_view runpath;
+    if (!ParseDynamic(lib, data, &runpath, error)) return nullptr;
+    std::string_view origin;
+    if (path != nullptr) {
+      const size_t slash = lib->path.find_last_of("/\\");
+      if (slash != std::string::npos) origin = std::string_view(lib->path).substr(0, slash == 0 ? 1 : slash);
+    }
+    const auto runpaths = RunpathDirectories(runpath, origin);
     TraceMapping(*lib);
     nodes_.push_back(std::move(node));
     scope_.push_back(lib);
@@ -1983,16 +2074,7 @@ class LoadTransaction {
       Library* dep = by_name ? FindSoname(Loaded(), soname) : nullptr;
       if (dep == nullptr && by_name) dep = FindSoname(scope_, soname);
       if (dep == nullptr) {
-        std::string found;
-        if (by_name) {
-          for (const std::string& dir : options.search_paths) {
-            std::string candidate = dir + "/" + soname;
-            struct stat st {};
-            if (stat(candidate.c_str(), &st) == 0) { found = candidate; break; }
-          }
-        } else {
-          found = soname;
-        }
+        const std::string found = by_name ? FindDependencyPath(soname, options, runpaths) : soname;
         if (found.empty()) {
           if (options.allow_shimmed_needed) continue;
           Fail(error, lib->name + ": cannot find needed library " + soname);

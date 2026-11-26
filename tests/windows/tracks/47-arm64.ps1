@@ -87,6 +87,9 @@ foreach ($transactionExe in 'elf_load_transaction_test.exe', 'elf_load_transacti
     A64Run "$a64/$transactionExe" @((NoDrive "$a64/elf-load-transaction-arm64"), '--arm64') 120
   } @('elf_load_transaction_test all passed')
 }
+Check 'arm64: LD_LIBRARY_PATH takes priority over the requesting object RUNPATH' {
+  A64Run "$a64/elf_load_transaction_test.exe" @((NoDrive "$a64/elf-load-transaction-arm64"), '--arm64', '--runpath-environment') 120
+} @('elf_load_transaction_test all passed')
 
 # Read-only relocations are applied before guest constructors execute. This
 # goes through the bounded guest runner and cannot pass with a missing fixture.

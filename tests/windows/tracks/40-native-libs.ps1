@@ -39,6 +39,9 @@ foreach ($transactionExe in 'elf_load_transaction_test.exe', 'elf_load_transacti
     & "$Dir/$transactionExe" (NoDrive "$Dir/elf-load-transaction")
   } @('elf_load_transaction_test all passed')
 }
+Check 'ELF loader: LD_LIBRARY_PATH takes priority over the requesting object RUNPATH' {
+  & "$Dir/elf_load_transaction_test.exe" (NoDrive "$Dir/elf-load-transaction") '--runpath-environment'
+} @('elf_load_transaction_test all passed')
 
 # textrel.so contains dynamic relocations into a read-only pointer table.
 # Its constructor and selftest both require the relocated pointers to work.

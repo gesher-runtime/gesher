@@ -1,7 +1,8 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 // Execute real, original ELF dependency graphs through the public loader API.
-// Usage: elf_load_transaction_test <fixture-root> [--arm64] [--reentry-only | --identity-only]
+// Usage: elf_load_transaction_test <fixture-root> [--arm64] [--runpath-only | --runpath-environment |
+//                                                       --reentry-only | --identity-only]
 // The Linux host runner substitutes Win32 primitives explicitly. Windows CI
 // uses the production mapping/rewrite/TLS implementations and optional ARM64
 // translator. No application-specific behavior or production failure switch.
@@ -43,7 +44,7 @@ using namespace std::chrono_literals;
 namespace {
 int checks, failures;
 std::string complete_dir, incomplete_dir;
-std::array<std::atomic<int>, 32> initialized{};
+std::array<std::atomic<int>, 36> initialized{};
 std::mutex events_lock;
 std::vector<int> events;
 std::atomic<bool> supply_missing{false}, inject_protection{false}, fail_protection_once{false};
@@ -402,6 +403,51 @@ void FileIdentity(const std::string& root) {
         "constructors and program-header entries are unique per file");
 }
 
+template <typename OptionsType>
+void SetEnvironmentSearchPath(OptionsType& options, const std::string& directory) {
+  // The historical loader snapshot used by test_elf_atomic_load.py may
+  // predate the option. Its ordinary graph negative control still compiles.
+  if constexpr (requires { options.environment_search_paths; }) {
+    options.environment_search_paths.push_back(directory);
+  } else {
+    Check(false, "loader supports environment search-path ordering");
+  }
+}
+
+void Runpath(const std::string& base, bool environment) {
+  const size_t initial_count = Count();
+  std::string error;
+  if (!environment) {
+    elf::LoadOptions isolated;
+    isolated.allow_shimmed_needed = false;
+    isolated.stub_unresolved_functions = false;
+    auto* legacy = Load(base + "/runpath/root", "tx_runpath_legacy.so", isolated, &error);
+    Check(legacy == nullptr && error.find("tx_runpath_mid.so") != std::string::npos,
+          "DT_RPATH alone does not supply the dependency");
+    error.clear();
+    auto* bad = Load(base + "/noinherit/root", "tx_runpath_root.so", isolated, &error);
+    Check(bad == nullptr && error.find("tx_runpath_leaf.so") != std::string::npos,
+          "RUNPATH is not inherited by a dependency's dependency");
+    Check(Count() == initial_count && initialized[31] == 0 &&
+              initialized[32] == 0 && initialized[33] == 0,
+          "missing RUNPATH dependencies leave no published objects or constructors");
+  }
+  auto options = Options(base + "/runpath/default");
+  if (environment) SetEnvironmentSearchPath(options, base + "/runpath/environment");
+  error.clear();
+  auto* root = Load(base + "/runpath/root", "tx_runpath_root.so", options, &error);
+  if (!root) std::printf("RUNPATH load error: %s\n", error.c_str());
+  Check(root != nullptr && Call(root, "tx_runpath_root") == (environment ? 36 : 33),
+        "RUNPATH search executes the selected graph's real exports");
+  Check(initialized[33] == 1 && initialized[34] == 0 &&
+            initialized[35] == (environment ? 1 : 0) &&
+            initialized[31] == (environment ? 0 : 1) &&
+            initialized[32] == (environment ? 0 : 1),
+        "environment precedes RUNPATH and RUNPATH precedes default paths");
+  Check(Count() == initial_count + (environment ? 2 : 3),
+        "publication includes only the selected dependency graph");
+}
+
 void IfuncDependencyTls() {
   std::string error;
   auto* root = Load(complete_dir, "tx_ifunc_tls_root.so", Options(complete_dir), &error);
@@ -509,17 +555,23 @@ int main(int argc, char** argv) {
   bool arm64 = false;
   bool reentry_only = false;
   bool identity_only = false;
+  bool runpath_only = false;
+  bool runpath_environment = false;
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--arm64") == 0) arm64 = true;
     else if (std::strcmp(argv[i], "--reentry-only") == 0) reentry_only = true;
     else if (std::strcmp(argv[i], "--identity-only") == 0) identity_only = true;
+    else if (std::strcmp(argv[i], "--runpath-only") == 0) runpath_only = true;
+    else if (std::strcmp(argv[i], "--runpath-environment") == 0) runpath_environment = true;
     else {
       std::fprintf(stderr, "unknown option: %s\n", argv[i]);
       return 2;
     }
   }
-  if (argc < 2 || (reentry_only && identity_only)) {
-    std::fprintf(stderr, "usage: %s <fixture-root> [--arm64] [--reentry-only | --identity-only]\n", argv[0]);
+  if (argc < 2 || reentry_only + identity_only + runpath_only + runpath_environment > 1) {
+    std::fprintf(stderr, "usage: %s <fixture-root> [--arm64] "
+                         "[--reentry-only | --identity-only | --runpath-only | --runpath-environment]\n",
+                 argv[0]);
     return 2;
   }
   Watchdog watchdog;
@@ -537,6 +589,8 @@ int main(int argc, char** argv) {
   elf::SetBionicResolver(Resolve);
   if (identity_only) {
     FileIdentity(argv[1]);
+  } else if (runpath_only || runpath_environment) {
+    Runpath(argv[1], runpath_environment);
   } else if (reentry_only) {
     ConstructorReentry();
     ConstructorReentryIntoLinkedSiblings();
@@ -545,6 +599,7 @@ int main(int argc, char** argv) {
     MissingDependencyAndRetry();
     RelocationFailureAndRetry();
     DiamondAndCycle();
+    Runpath(argv[1], false);
     ConstructorReentry();
     ConstructorReentryIntoLinkedSiblings();
     IfuncFileAndMemory();
