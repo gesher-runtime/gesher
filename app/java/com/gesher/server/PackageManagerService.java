@@ -1237,8 +1237,8 @@ public final class PackageManagerService extends IPackageManager.Default {
             new android.util.ArrayMap<>();
 
     static {
-        for (String name : new String[] {PackageManager.FEATURE_APP_WIDGETS,
-                PackageManager.FEATURE_TOUCHSCREEN,
+        // Advertise App Widgets once the runtime can discover providers and bind widgets.
+        for (String name : new String[] {PackageManager.FEATURE_TOUCHSCREEN,
                 PackageManager.FEATURE_FAKETOUCH, PackageManager.FEATURE_SCREEN_PORTRAIT,
                 PackageManager.FEATURE_SCREEN_LANDSCAPE}) {
             android.content.pm.FeatureInfo f = new android.content.pm.FeatureInfo();
