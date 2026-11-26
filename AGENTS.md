@@ -6,6 +6,10 @@ asks for a general code review without repeating the policy.
 
 ## Implementation
 
+- Apply the [edition policy](CONTRIBUTING.md#free-and-paid-editions) when adding
+  capabilities. Record their classification, app-visible behavior, enforcement
+  and validation when the change crosses an edition boundary.
+
 - Gesher runs Android applications on Windows so that the user gets the
   experience each application was built to give. Windows APIs, real hardware,
   desktop presentation and different internal mechanisms are the expected way

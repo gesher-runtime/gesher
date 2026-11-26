@@ -73,6 +73,18 @@ target_include_directories(appcontainer_probe PRIVATE
 target_compile_options(appcontainer_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(appcontainer_probe PRIVATE advapi32 ole32)
 
+# Manual Windows network qualification, using the production AppContainer
+# launcher. Reachable public and LAN test endpoints depend on the lab.
+add_executable(appcontainer_network_probe EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/sandbox/appcontainer-network-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
+set_property(TARGET appcontainer_network_probe PROPERTY LINK_LIBRARIES "")
+target_include_directories(appcontainer_network_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework)
+target_compile_options(appcontainer_network_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(appcontainer_network_probe PRIVATE -municode)
+target_link_libraries(appcontainer_network_probe PRIVATE advapi32 ole32 userenv ws2_32)
+
 add_executable(exec3_property_host_probe ${CMAKE_SOURCE_DIR}/tests/exec/property-host-probe.cc)
 target_compile_options(exec3_property_host_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(exec3_property_host_probe PRIVATE utils)

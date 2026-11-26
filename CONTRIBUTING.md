@@ -83,6 +83,30 @@ Routine compatibility work needs no separate scope approval. A change that
 replaces the requested operation or reports a false result blocks merging until
 it is removed or redesigned.
 
+## Free and paid editions
+
+The [edition plan](docs/store-editions-plan.md) defines the agreed Free baseline
+and the conditions for releasing both editions. Classify a new capability
+exposed to Android apps or Gesher users before merging it. New capabilities
+default to Paid. Expanding Free or moving a Free capability to Paid requires
+the maintainer's decision, recorded with the capability. Classify observable
+operations and their Android contracts, including entry points that can reach
+the same operation through services, native code, or a Windows integration.
+
+Fixes to existing behavior follow the existing capability's classification.
+Isolation, security fixes, consent, lifecycle correctness and data integrity
+required for a Free capability apply to both editions. Paid settings preserve
+the shared minimum isolation. Keep unimplemented and unavailable operations
+unavailable in both editions. Show an upgrade for a tier restriction only when
+the installed build implements the operation in Paid. Continue to give apps
+truthful feature discovery and the Android contract's result when access is
+unavailable or denied.
+
+For changes that cross an edition boundary, identify the classification, the
+app-visible result in both editions, the enforcement point, and validation
+through the relevant production entry point. Continue applying the project
+scope policy above in each edition.
+
 ## Preparing a contribution
 
 - Describe the Android API or system contract being implemented or repaired.
