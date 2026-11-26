@@ -251,7 +251,7 @@ void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
   image->dataSpace = r->dataSpace;
   image->halFormat = r->halFormat;
   auto* output = reinterpret_cast<uint32_t*>(RgbaStorage(r, image));
-  if (width == r->width && height == r->height) {
+  if (width == r->width && height == r->height && width > 0 && height > 0) {
     memcpy(output, pixels, static_cast<size_t>(width) * height * 4);
   } else {
     for (int y = 0; y < r->height; y++)
