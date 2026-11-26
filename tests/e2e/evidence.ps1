@@ -99,6 +99,7 @@ function New-E2eEvidence($ManifestData, [string] $ManifestPath, [string[]] $Only
     }
     runtime = [ordered]@{
       installer_sha256 = $null; installation_mode = $null
+      installer_exit_code = $null; provenance_sha256 = $null
       installed_files = [ordered]@{}; declared_properties = [ordered]@{}
       source_revision = $null; aosp_tag = $null; modules = $null
       providers = $null; hardware_profile = $null; android_reference = $null
@@ -147,6 +148,21 @@ function Set-E2eRuntime([string] $InstallationDirectory) {
       }
     }
   }
+  Write-E2eEvidence
+}
+
+function Set-E2eRuntimeProvenance([string] $InstallationDirectory, [string] $Installer) {
+  $arguments = @((Join-Path $PSScriptRoot 'runtime_provenance.py'), 'verify',
+    '--installed-runtime', $InstallationDirectory, '--installer', $Installer)
+  $provenance = & python @arguments
+  if ($LASTEXITCODE -ne 0) { throw 'Installed runtime provenance verification failed' }
+  $measured = $provenance | ConvertFrom-Json -AsHashtable
+  if ($measured.installer_sha256 -cne $script:E2eEvidence.runtime.installer_sha256) {
+    throw 'Installer changed after the invocation measured it'
+  }
+  $script:E2eEvidence.runtime.installed_files = $measured.installed_files
+  $script:E2eEvidence.runtime.source_revision = $measured.source_revision
+  $script:E2eEvidence.runtime.provenance_sha256 = $measured.provenance_sha256
   Write-E2eEvidence
 }
 

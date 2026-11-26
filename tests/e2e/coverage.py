@@ -17,6 +17,8 @@ from pathlib import Path
 import re
 import sys
 
+from runtime_provenance import ci_source, verify_runtime
+
 STATUSES = {"not_run", "running", "passed", "failed", "blocked", "skipped"}
 INTEGRATION = ("association", "shortcut")
 SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
@@ -102,7 +104,8 @@ def identity_errors(identity: object, app: dict, observed: dict) -> list[str]:
 
 def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
               expected_run: dict | None = None, expected_invocation: str | None = None,
-              require_apk_identity: bool = False) -> dict:
+              require_apk_identity: bool = False, require_runtime_provenance: bool = False,
+              verified_runtime: dict | None = None) -> dict:
     errors: list[str] = []
     if not isinstance(manifest, dict):
         raise ValueError("manifest must be an object")
@@ -315,6 +318,21 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
     if not isinstance(runtime, dict):
         errors.append("runtime must be an object")
         runtime = {}
+    runtime = dict(runtime)
+    if require_runtime_provenance:
+        if verified_runtime is None:
+            errors.append("installed runtime provenance could not be independently verified")
+        if (runtime.get("installation_mode") != "installer"
+                or type(runtime.get("installer_exit_code")) is not int
+                or runtime["installer_exit_code"] != 0):
+            errors.append("runtime provenance requires a successful installer deployment")
+            verified_runtime = None
+        if verified_runtime is not None and any(
+                runtime.get(key) != value for key, value in verified_runtime.items()):
+            errors.append("observed runtime provenance differs from verified installer and installed bytes")
+            verified_runtime = None
+    if verified_runtime is None:
+        runtime.update(source_revision=None, provenance_sha256=None)
     properties = runtime.get("declared_properties", {})
     if not isinstance(properties, dict):
         errors.append("runtime.declared_properties must be an object")
@@ -342,6 +360,8 @@ def summarize(manifest: dict, observations: dict | None, manifest_sha256: str,
             "selected_abi": observed.get("selected_abi"),
             "declared_sdk_int": properties.get("ro.build.version.sdk"),
             "declared_sdk_int_full": properties.get("ro.build.version.sdk_full"),
+            "runtime_source_revision": runtime.get("source_revision"),
+            "runtime_installer_sha256": (verified_runtime or {}).get("installer_sha256"),
             "aosp_tag": runtime.get("aosp_tag"), "modules": runtime.get("modules"),
             "providers": runtime.get("providers"), "hardware_profile": runtime.get("hardware_profile"),
             "android_reference": runtime.get("android_reference"),
@@ -394,6 +414,12 @@ def render(report: dict) -> str:
               f"incomplete selected scenarios: {summary['incomplete_selected_scenarios']}.",
               "Unknown runtime/source, selected ABI, providers and Android-reference fields "
               "remain unknown; declared build properties are not measured hardware capabilities."]
+    runtime = report["runtime"]
+    if runtime.get("provenance_sha256"):
+        lines += ["",
+                  f"Verified runtime source: `{runtime['source_revision']}`.",
+                  f"Verified installer SHA-256: `{runtime['installer_sha256']}`.",
+                  f"Installed component fingerprints matched: **{len(runtime['installed_files'])}**."]
     lines += ["", "### APK identity and profile matrix", "",
               "Packaged native ABIs describe APK contents, not the ABI selected or executed by Gesher. "
               "Certificate hashes identify the verified app signer set; source stamps remain separate. "
@@ -422,7 +448,13 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--expected-invocation-id", default=os.environ.get("GESHER_E2E_INVOCATION_ID"))
     parser.add_argument("--require-apk-identity", action="store_true")
+    parser.add_argument("--installer-dir", type=Path,
+                        help="require provenance from the verified CI installer in this directory")
+    parser.add_argument("--installed-runtime", type=Path,
+                        help="require provenance from this installed CI runtime")
     args = parser.parse_args()
+    if bool(args.installer_dir) != bool(args.installed_runtime):
+        parser.error("--installer-dir and --installed-runtime must be supplied together")
     manifest = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
     observation_error = None
     try:
@@ -430,13 +462,26 @@ def main() -> int:
     except (OSError, ValueError) as error:
         observations = None
         observation_error = f"cannot read observation ledger: {type(error).__name__}"
+    verified_runtime = None
+    provenance_error = None
+    if args.installer_dir is not None:
+        try:
+            installers = list(args.installer_dir.glob("gesher-setup-*.exe"))
+            if len(installers) != 1:
+                raise ValueError("expected one installer in the verified CI artifact")
+            verified_runtime = verify_runtime(args.installed_runtime, installers[0], ci_source())
+        except (OSError, ValueError) as error:
+            provenance_error = str(error)
     report = summarize(manifest, observations, hash_file(args.manifest), {
         "github_run_id": os.environ.get("GITHUB_RUN_ID"),
         "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
         "test_checkout_sha": os.environ.get("GITHUB_SHA"),
-    }, args.expected_invocation_id, args.require_apk_identity)
+    }, args.expected_invocation_id, args.require_apk_identity,
+        args.installer_dir is not None, verified_runtime)
     if observation_error:
         report["validation_errors"].append(observation_error)
+    if provenance_error:
+        report["validation_errors"].append(f"runtime provenance: {provenance_error}")
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "coverage.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     markdown = render(report)
