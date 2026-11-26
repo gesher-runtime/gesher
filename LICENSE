@@ -1,186 +1,40 @@
-GESHER COMMERCIAL END-USER LICENSE AGREEMENT
-Version 1.0
+PROPRIETARY LICENSE — ALL RIGHTS RESERVED
 
 Copyright (c) 2026 The Gesher Authors (gesher-runtime). All Rights Reserved.
 
-1. Parties and scope
+NOTICE: This software, including its source code, object/binary code,
+documentation, and associated files ("the Software"), is proprietary and
+confidential/restricted.
 
-This Agreement is between the person or entity acquiring the license ("you")
-and the copyright holder or authorized licensing entity identified as the
-licensor in your License Entitlement ("Licensor"). If you accept on behalf of
-an entity, you must have authority to bind that entity.
+1. No Grant of Rights.
+   No license or right is granted to copy, reproduce, modify, adapt, translate,
+   publish, publicly display, publicly perform, sublicense, sell, or distribute
+   the Software, in whole or in part, in Source or Object form, with or without
+   modifications, publicly or to any third party, without the prior express
+   written permission of the copyright holder.
 
-"Software" means the Gesher software and accompanying documentation supplied
-with this Agreement, including any source code supplied. "Proprietary Software"
-means only those portions of the Software that Licensor is authorized to
-license under this Agreement, excluding materials governed by separate
-licenses as described in section 7.
+2. Viewing Only (If Hosted Publicly).
+   If the source code is made viewable in a repository, permission is limited
+   strictly to viewing the code for personal evaluation unless a separate
+   written license agreement is executed with the copyright holder. Any
+   redistribution, forking for redistribution, or public/commercial deployment
+   of this version or any derivative thereof is strictly prohibited.
 
-"License Entitlement" means an order, license certificate, redemption
-confirmation, published license offer or other written or electronic
-authorization issued or expressly approved by Licensor. It identifies Licensor,
-the licensee or eligible recipient group, the licensed product or edition, the
-permitted users, devices or other usage limits, the license duration (including
-whether it is perpetual or time-limited), and the fees, if any, and applicable
-payment terms. A published offer may grant the stated license to all eligible
-recipients who accept it, without an individually issued certificate. An
-authorized reseller may supply a License Entitlement on Licensor's behalf.
+3. Third-Party Components and Prior Releases.
+   Third-party components bundled with or fetched by the Software (including,
+   without limitation, AOSP, ANGLE, dynarmic, JUnit, WebView2, fonts, and
+   toolchain libraries) remain subject to their respective licenses and notices
+   (see the `licenses/` and `NOTICES` files). Versions of this repository
+   previously released under the Apache License, Version 2.0, as well as
+   contributions previously submitted under that license, remain governed by
+   the terms of the Apache License, Version 2.0 as to those prior versions
+   and contributions.
 
-2. Acceptance, offers and payment
-
-To exercise rights under this Agreement, you must first receive and accept
-these terms and obtain a valid License Entitlement. Acceptance must be through
-an affirmative acceptance process or a signed agreement incorporating these
-terms. Merely accessing a repository or downloading files does not establish
-acceptance or grant a commercial license under this Agreement.
-
-Licensor may offer licenses for a fee, at a discount, at no charge, through
-coupons or promotional offers, or under a separate agreement. Your License
-Entitlement and any applicable agreement determine the fees, discounts or fee
-waivers, eligibility and scope. You must pay only the fees agreed there, when
-due; no payment is required for a valid no-charge license.
-
-Trials, evaluation licenses, complimentary licenses, coupons and promotional
-offers must be issued or expressly approved by Licensor. Their eligibility,
-redemption conditions, purpose and duration are those stated in the offer or
-License Entitlement. A coupon, discount or fee waiver does not by itself expand
-the permitted use, modification or distribution rights. Those rights change
-only if expressly granted in the License Entitlement or a separate agreement,
-subject to section 7.
-
-Possession of source code, an installer, a coupon or a license key alone does
-not establish a valid License Entitlement; any required acceptance, eligibility
-and redemption conditions must also be met. Receiving the Software at no charge
-does not by itself authorize its modification, forking or redistribution.
-
-3. License grant
-
-Subject to this Agreement and your License Entitlement, Licensor grants you a
-limited, non-exclusive, non-sublicensable and non-transferable license to
-install and run the Proprietary Software in the executable form supplied for
-end-user use, including scripts supplied for normal operation, for your own
-personal use or internal business purposes, within the agreed usage limits and
-license duration. Transfers are permitted where expressly authorized by Licensor
-or required by applicable law.
-
-You may make copies necessary for authorized installation and operation and
-a reasonable number of backup copies, retaining the applicable notices.
-Employees and contractors may use the Software on your behalf within your
-License Entitlement and subject to this Agreement; they receive no independent
-right to distribute it or use it for other customers.
-
-4. Restrictions on Proprietary Software
-
-Except as expressly permitted by this Agreement, your License Entitlement,
-separate written authorization from Licensor, or section 7, you must not:
-
-(a) copy, distribute, publish, sell, sublicense, lend, rent, transfer or make
-    the Proprietary Software available to third parties, in source or object
-    form, with or without modifications;
-(b) modify, adapt, translate or create derivative works of the Proprietary
-    Software, or develop or distribute a fork of it;
-(c) make the Proprietary Software available as a hosted service, service
-    bureau or shared offering for third parties;
-(d) reverse engineer, decompile or disassemble the Proprietary Software;
-(e) remove or alter copyright, license, trademark or other proprietary notices;
-    or
-(f) circumvent license or activation controls, use unauthorized license keys,
-    share credentials to exceed the licensed scope, or otherwise exceed the
-    usage limits in your License Entitlement.
-
-These restrictions do not prevent using ordinary product settings or creating,
-running and sharing your own applications and data without distributing the
-Proprietary Software. Rights to applications, content and services used with
-Gesher must be obtained from their respective rightsholders where required.
-
-5. Source access and contributions
-
-Access to source code or build instructions does not by itself grant rights
-to build, modify or distribute the Proprietary Software. Development work on
-the Proprietary Software requires separate written authorization from
-Licensor, subject to section 7. A contributor agreement governs rights granted
-by a contributor; signing it alone does not grant a development or distribution
-license to the Proprietary Software.
-
-6. Ownership and branding
-
-The Proprietary Software is licensed, not sold. Licensor and the applicable
-rightsholders retain their intellectual property rights. Rights not expressly
-granted under this Agreement are reserved, subject to section 7. No ownership
-of your own applications or data transfers to Licensor under this Agreement.
-No license to Gesher names, logos or other marks is granted for branding or
-endorsing another product or service. Use of marks inherent in authorized
-operation of the Software and uses permitted by applicable law are unaffected.
-
-7. Separate licenses and mandatory rights
-
-Third-party components and other materials subject to a separate valid license
-remain governed by that license, including its permissions, notice requirements
-and source-code obligations. Consult the applicable file headers and license
-and notice files supplied with the source code or distribution. Licensor must
-also comply with the obligations of those licenses when supplying the Software.
-
-Nothing in this Agreement supersedes, revokes or restricts rights independently
-granted under an applicable separate license, or imposes these commercial fees
-or restrictions on the exercise of those rights. Where terms conflict, the
-separate license controls for the corresponding materials. Nothing in this
-Agreement limits rights or exceptions that cannot be excluded or restricted
-under applicable law, including applicable consumer protections and permitted
-interoperability activities.
-
-8. Term and termination
-
-Your license lasts for the duration stated in your License Entitlement. A
-perpetual license does not expire merely because a support or update period
-ends. A time-limited license expires at the end of its agreed term unless
-renewed. Renewal, additional fees and any automatic renewal require the terms
-agreed with you; this Agreement does not itself establish automatic renewal.
-
-Licensor may terminate the rights granted under this Agreement for a material
-breach, including failure to pay fees when due, by written notice identifying
-the breach and allowing a reasonable opportunity to cure it where it can be
-cured. If it is cured within that opportunity, termination on that ground does
-not take effect. Termination remains subject to applicable law.
-
-On expiry or valid termination, you must stop using and remove copies of the
-Proprietary Software licensed solely under this Agreement, except for copies
-you are legally required to retain, which may not be used for other purposes.
-This does not require deletion of your applications or data, or affect rights
-preserved by section 7. Payment obligations already accrued and provisions
-concerning ownership, restrictions, separate licenses and limits of liability
-survive only to the extent relevant after termination.
-
-9. Updates, support and changes to terms
-
-Updates, upgrades, maintenance and support are included only to the extent
-stated in your License Entitlement or a separate agreement. An update does not
-extend the licensed scope or duration unless expressly agreed. Any different
-terms for an update must be provided for your acceptance before they apply.
-Posting a revised license text alone does not amend an accepted Agreement.
-
-10. Warranties and liability
-
-Except for express commitments in your License Entitlement or another agreement
-with Licensor, and to the extent permitted by applicable law, the Software is
-provided "AS IS" and "AS AVAILABLE", without warranties of merchantability,
-fitness for a particular purpose, non-infringement, uninterrupted operation or
-error-free operation. Compatibility with any particular application, device
-or service is not guaranteed unless expressly agreed.
-
-To the extent permitted by applicable law, Licensor and its suppliers are not
-liable under this Agreement for indirect, incidental, special or consequential
-loss, including lost profits or lost data. This exclusion does not override
-express liability commitments agreed with you, or exclude or limit liability
-that cannot lawfully be excluded or limited. Nothing here waives mandatory
-consumer rights, statutory warranties, cancellation rights, refunds or remedies.
-
-11. Relationship with other terms
-
-Your License Entitlement, including any applicable offer or coupon terms,
-specifies the commercial scope of this Agreement. A separate written or
-electronic agreement expressly agreed by Licensor and you may establish
-different commercial or license terms and controls to the extent it expressly
-varies this Agreement. Section 7 controls the treatment of separate licenses
-and mandatory rights. If a provision is unenforceable, it applies only to the
-extent permitted by law; the remaining provisions continue to apply to the
-extent legally possible.
+4. Disclaimer of Warranty and Limitation of Liability.
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+   WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF
+   OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.

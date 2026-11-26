@@ -98,17 +98,9 @@ it is removed or redesigned.
   code generated with AI. Generated explanations and passing tests are not
   substitutes for reviewing its behavior.
 
-Gesher is commercially licensed under the
-[Commercial End-User License Agreement](LICENSE). An end-user license, whether
-paid, discounted, complimentary or granted under a separate agreement,
-permits installation and operation within its License Entitlement; it does not
-by itself grant permission to develop or redistribute proprietary portions.
-Obtain separate written authorization from the licensor before working on those
-portions. Materials governed by separate licenses remain subject to those
-licenses, and mandatory legal rights are preserved. Signing the CLA alone does
-not grant development or distribution rights to proprietary portions.
-
-Every contributor must sign the
+Gesher is now licensed under a proprietary All Rights Reserved license
+([LICENSE](LICENSE)); public redistribution with or without modifications is
+prohibited without prior written permission. Every contributor must sign the
 [Contributor License Agreement](.github/cla/CLA.md) once by posting the
 required signature comment on their pull request (`I have read the CLA Document
 and I hereby sign the CLA`) before the PR can be merged. Identify third-party
