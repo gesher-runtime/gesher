@@ -22,6 +22,19 @@ that reports 0 whatever the source is: the parcel carries no such flag, so
 hwui in the producer's process does not pace its frames by vsync and the
 consumer paces what it shows.)
 
+Gesher's ordinary `QueueSurface` keeps two writable slots available before
+the first frame, with the Android default of one outstanding write after
+publication. A producer can request two outstanding writes with
+`NATIVE_WINDOW_SET_BUFFER_COUNT` of three, including the latest-frame slot.
+A count of zero restores the default. Reducing the count below current
+ownership or exceeding the backend capacity returns `EINVAL`. A foreign or
+double buffer return also returns `EINVAL`. A further dequeue returns
+`WOULD_BLOCK` (`EAGAIN`) when both initial slots are occupied, or
+`INVALID_OPERATION` (`ENOSYS`) at the negotiated limit after publication.
+CPU locks share the limit and keep their own pixel storage. Cancellation preserves the published
+frame and invalidates cancelled pixels for partial CPU redraw. Single-buffer
+SurfaceTexture still admits one producer until its consumer releases the frame.
+
 RGBA images (RGBA readers, PRIVATE readers, and what is drawn into either's
 Surface) live in a per-reader pool of `AHardwareBuffer`s that repeat across
 frames, the one released longest ago being written next. A reader whose usage

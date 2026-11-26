@@ -110,6 +110,9 @@ class QueueSurface : public android::Surface {
   void UpdateFrameGeometry();  // with mutex_ held; drops obsolete reusable pixels
   void EnsureBuffer();  // with mutex_ held
   bool SingleBufferOccupied() const;  // with mutex_ held
+  size_t WritableBuffersInUse() const;  // with mutex_ held
+  int WritableSlotError() const;  // with mutex_ held
+  android::sp<Buffer> TakeDequeued(ANativeWindowBuffer* buffer);  // with mutex_ held
   int UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_scaling_mode = 1);
   // Copies buffer_ as the latest frame with mutex_ held. Notify after unlocking.
   Publication PublishLocked(std::optional<int64_t> timestamp_ns, int video_scaling_mode = 1);
@@ -118,16 +121,20 @@ class QueueSurface : public android::Surface {
   static int HookQueueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fence_fd);
   static int HookCancelBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fence_fd);
 
+  // Keep outstanding producer allocations bounded. The latest consumer
+  // frame has its own immutable copy and does not use a writable slot.
+  static constexpr size_t kMaxWritableBuffers = 2;
   mutable std::mutex mutex_;
-  android::sp<Buffer> buffer_;
+  android::sp<Buffer> buffer_;  // available storage for the next producer
+  android::sp<Buffer> locked_buffer_;
   std::vector<android::sp<Buffer>> dequeued_;
+  size_t max_dequeued_buffers_ = 1;
   int format_ = 1;  // PIXEL_FORMAT_RGBA_8888
   int requested_width_ = 0, requested_height_ = 0;
   int user_width_ = 0, user_height_ = 0;
   int default_width_ = 1, default_height_ = 1;
   int64_t timestamp_ns_ = NATIVE_WINDOW_TIMESTAMP_AUTO;
   int32_t dataspace_ = 0;  // HAL_DATASPACE_UNKNOWN
-  bool locked_ = false;
   bool buffer_contents_valid_ = false;
   bool abandoned_ = false;
   bool queues_to_composer_ = false;

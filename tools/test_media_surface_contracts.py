@@ -106,6 +106,7 @@ def generate(component: str, ref: str | None) -> str:
             "@FRAME_POOL_MEMBERS@": pool_members,
             "@FRAME_POOL_CLASSES@": pool_classes,
             "@PRODUCER_MEMBERS@": "\n".join(members).strip(),
+            "@SEPARATE_CPU_LOCK@": str(int("locked_buffer_" in header)),
             "@TIMESTAMP_DISPATCH@": section(source, "    case NATIVE_WINDOW_SET_BUFFERS_TIMESTAMP: {",
                                             "    case NATIVE_WINDOW_GET_REFRESH_CYCLE_DURATION:"),
             "@PUBLISH@": section(source, "int QueueSurface::unlockAndPost() {",

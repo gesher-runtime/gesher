@@ -151,7 +151,21 @@ void QueueSurface::ReleaseFrame(uint64_t frame_number) {
 }
 
 bool QueueSurface::SingleBufferOccupied() const {
-  return single_buffer_mode_ && (locked_ || !dequeued_.empty() || latest_ != nullptr);
+  return single_buffer_mode_ &&
+         (locked_buffer_ != nullptr || !dequeued_.empty() || latest_ != nullptr);
+}
+
+size_t QueueSurface::WritableBuffersInUse() const {
+  return dequeued_.size() + (locked_buffer_ != nullptr ? 1 : 0);
+}
+
+int QueueSurface::WritableSlotError() const {
+  // Android permits the producer to take the available slots before it queues
+  // the first frame. This in-process queue returns WOULD_BLOCK while those
+  // slots are occupied. The negotiated dequeue limit applies after publication.
+  const size_t used = WritableBuffersInUse();
+  if (frames_ == 0) return used >= kMaxWritableBuffers ? -EAGAIN : 0;
+  return used >= max_dequeued_buffers_ ? -ENOSYS : 0;
 }
 
 uint64_t QueueSurface::frames() const {
@@ -166,9 +180,9 @@ void QueueSurface::Abandon() {
   forwarding_listener_ = nullptr;
   frame_pool_->Close();
   latest_.reset();
-  // Dequeued producers own their buffers through dequeued_. A CPU lock has
-  // only a raw pixels pointer, so keep its buffer until unlockAndPost returns.
-  if (!locked_) buffer_ = nullptr;
+  // The idle buffer can be freed immediately. Outstanding producers retain
+  // their own storage until cancel, queue or CPU unlock.
+  buffer_ = nullptr;
 }
 
 int QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* pixels,
@@ -243,27 +257,28 @@ void QueueSurface::EnsureBuffer() {
 int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   std::lock_guard<std::mutex> lock(mutex_);
   // Surface::lock rejects a second CPU lock before consulting the consumer.
-  if (locked_) return -ENOSYS;  // Android INVALID_OPERATION.
+  if (locked_buffer_ != nullptr) return -ENOSYS;  // Android INVALID_OPERATION.
   if (abandoned_) return -ENODEV;
   if (SingleBufferOccupied()) return -EAGAIN;
+  if (const int error = WritableSlotError(); error != 0) return error;
   EnsureBuffer();
-  locked_ = true;
-  out->width = buffer_->width;
-  out->height = buffer_->height;
-  out->stride = buffer_->stride;
-  out->format = buffer_->format;
-  out->bits = buffer_->pixels.data();
+  locked_buffer_ = std::move(buffer_);
+  out->width = locked_buffer_->width;
+  out->height = locked_buffer_->height;
+  out->stride = locked_buffer_->stride;
+  out->format = locked_buffer_->format;
+  out->bits = locked_buffer_->pixels.data();
   memset(out->reserved, 0, sizeof out->reserved);
   if (dirty != nullptr) {
     // A new size/format has no previous frame to copy back. Otherwise preserve
     // the existing pixels outside the caller's damage, clipped to this buffer.
     if (!buffer_contents_valid_) {
-      *dirty = {0, 0, buffer_->width, buffer_->height};
+      *dirty = {0, 0, locked_buffer_->width, locked_buffer_->height};
     } else {
       dirty->left = std::max(0, dirty->left);
       dirty->top = std::max(0, dirty->top);
-      dirty->right = std::min(buffer_->width, dirty->right);
-      dirty->bottom = std::min(buffer_->height, dirty->bottom);
+      dirty->right = std::min(locked_buffer_->width, dirty->right);
+      dirty->bottom = std::min(locked_buffer_->height, dirty->bottom);
       if (dirty->left >= dirty->right || dirty->top >= dirty->bottom) *dirty = {0, 0, 0, 0};
     }
   }
@@ -283,12 +298,12 @@ int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_s
   Publication publication;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!locked_) return -EINVAL;
-    locked_ = false;
+    if (locked_buffer_ == nullptr) return -EINVAL;
     if (abandoned_) {
-      buffer_ = nullptr;
+      locked_buffer_ = nullptr;
       return -ENODEV;
     }
+    buffer_ = std::move(locked_buffer_);
     publication = PublishLocked(timestamp_ns, video_scaling_mode);
   }
   return publication.Notify();
@@ -337,42 +352,50 @@ QueueSurface::Publication QueueSurface::PublishLocked(std::optional<int64_t> tim
 }
 
 int QueueSurface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
+  if (buffer == nullptr) return -EINVAL;
   std::lock_guard<std::mutex> lock(mutex_);
   if (abandoned_) return -ENODEV;
   if (SingleBufferOccupied()) return -EAGAIN;
+  if (const int error = WritableSlotError(); error != 0) return error;
   EnsureBuffer();
   *buffer = buffer_.get();
-  dequeued_.push_back(buffer_);
+  dequeued_.push_back(std::move(buffer_));
   if (fence_fd != nullptr) *fence_fd = -1;
   return 0;
 }
 
+android::sp<QueueSurface::Buffer> QueueSurface::TakeDequeued(ANativeWindowBuffer* buffer) {
+  const auto it = std::find_if(dequeued_.begin(), dequeued_.end(),
+                               [buffer](const android::sp<Buffer>& slot) {
+    return static_cast<ANativeWindowBuffer*>(slot.get()) == buffer;
+  });
+  if (it == dequeued_.end()) return nullptr;
+  auto owned = std::move(*it);
+  dequeued_.erase(it);
+  return owned;
+}
+
 int QueueSurface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
   std::lock_guard<std::mutex> lock(mutex_);
-  for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
-    if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
-      dequeued_.erase(it);
-      return single_buffer_mode_ && abandoned_ ? -ENODEV : 0;
-    }
+  auto cancelled = TakeDequeued(buffer);
+  if (abandoned_) return !single_buffer_mode_ && cancelled != nullptr ? 0 : -ENODEV;
+  if (cancelled == nullptr) return -EINVAL;
+  // Only published pixels may back an incremental CPU frame.
+  if (buffer_ == nullptr) {
+    buffer_ = std::move(cancelled);
+    buffer_contents_valid_ = false;
   }
-  return single_buffer_mode_ ? (abandoned_ ? -ENODEV : -EINVAL) : 0;
+  return 0;
 }
 
 int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
   Publication publication;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    bool owns_slot = false;
-    for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
-      if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
-        if (!abandoned_) buffer_ = *it;
-        dequeued_.erase(it);
-        owns_slot = true;
-        break;
-      }
-    }
+    auto queued = TakeDequeued(buffer);
     if (abandoned_) return -ENODEV;
-    if (single_buffer_mode_ && !owns_slot) return -EINVAL;
+    if (queued == nullptr) return -EINVAL;
+    buffer_ = std::move(queued);
     publication = PublishLocked(std::nullopt);
   }
   return publication.Notify();
@@ -419,7 +442,7 @@ int QueueSurface::query(int what, int* value) const {
       *value = abandoned_ ? 0 : 1;
       return 0;
     case NATIVE_WINDOW_MAX_BUFFER_COUNT:
-      *value = 1;
+      *value = single_buffer_mode_ ? 1 : kMaxWritableBuffers + 1;
       return 0;
     default:
       *value = 0;
@@ -436,6 +459,21 @@ int QueueSurface::perform(int operation, va_list args) {
     }
     case NATIVE_WINDOW_UNLOCK_AND_POST:
       return unlockAndPost();
+    case NATIVE_WINDOW_SET_BUFFER_COUNT: {
+      const int count = va_arg(args, int);
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (abandoned_) return -ENODEV;
+      if (single_buffer_mode_) return count == 0 || count == 1 ? 0 : -EINVAL;
+      // The consumer reserves one slot. Zero restores Android's one-dequeue
+      // default; ordinary QueueSurface supports two producer slots at most.
+      if (count != 0 && (count < 2 || count > static_cast<int>(kMaxWritableBuffers + 1))) {
+        return -EINVAL;
+      }
+      const size_t limit = count == 0 ? 1 : count - 1;
+      if (WritableBuffersInUse() > limit) return -EINVAL;
+      max_dequeued_buffers_ = limit;
+      return 0;
+    }
     case NATIVE_WINDOW_SET_BUFFERS_FORMAT: {
       int format = va_arg(args, int);
       if (format == 0) format = HAL_PIXEL_FORMAT_RGBA_8888;

@@ -268,6 +268,8 @@ void GeometryAndRetirement() {
   ANativeWindow* window = surface.get();
   ANativeWindowBuffer* producer = nullptr;
   int fence = -1;
+  Check(window->perform(window, NATIVE_WINDOW_SET_BUFFER_COUNT, 3) == 0,
+        "negotiate two writers before overlapping resize");
   Check(window->dequeueBuffer(window, &producer, &fence) == 0, "hold dequeued old producer");
   surface->SetDefaultSize(96, 96);
   Post(surface.get(), 13);

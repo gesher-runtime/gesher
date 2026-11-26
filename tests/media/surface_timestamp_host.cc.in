@@ -23,6 +23,8 @@ struct Site {
 };
 }  // namespace gesher::perf
 
+#define SEPARATE_CPU_LOCK @SEPARATE_CPU_LOCK@
+
 constexpr int64_t NATIVE_WINDOW_TIMESTAMP_AUTO = std::numeric_limits<int64_t>::min();
 constexpr int SYSTEM_TIME_MONOTONIC = 1;
 constexpr int HAL_PIXEL_FORMAT_RGBX_8888 = 2, HAL_PIXEL_FORMAT_BGRA_8888 = 5;
@@ -53,7 +55,11 @@ class QueueSurface {
   std::shared_ptr<Buffer> buffer_ = std::make_shared<Buffer>();
   @PRODUCER_MEMBERS@
   bool abandoned_ = false;
+#if SEPARATE_CPU_LOCK
+  std::shared_ptr<Buffer> locked_buffer_;
+#else
   bool locked_ = false;
+#endif
   bool buffer_contents_valid_ = false;
   uint64_t frames_ = 0;
   std::shared_ptr<const SurfaceFrame> latest_;
@@ -62,7 +68,21 @@ class QueueSurface {
   int UnlockAndPostWithTimestamp(int64_t timestamp_ns, int video_scaling_mode = 1);
   int UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_scaling_mode = 1);
 @PUBLISH_MEMBERS@
-  int Post() { locked_ = true; return unlockAndPost(); }
+  void MarkLocked() {
+#if SEPARATE_CPU_LOCK
+    locked_buffer_ = std::move(buffer_);
+#else
+    locked_ = true;
+#endif
+  }
+  bool Locked() const {
+#if SEPARATE_CPU_LOCK
+    return locked_buffer_ != nullptr;
+#else
+    return locked_;
+#endif
+  }
+  int Post() { MarkLocked(); return unlockAndPost(); }
   int Set(int operation, ...) {
     va_list args;
     va_start(args, operation);
@@ -96,10 +116,10 @@ int main() {
   surface.Post();
   auto previous = surface.latest_;
   Check(previous->timestamp_ns == 12345, "explicit positive timestamp");
-  surface.locked_ = true;
+  surface.MarkLocked();
   Check(surface.UnlockAndPostWithTimestamp(0) == 0 &&
         surface.latest_->timestamp_ns == 0, "explicit zero overrides producer setting for one frame");
-  surface.locked_ = true;
+  surface.MarkLocked();
   Check(surface.UnlockAndPostWithTimestamp(INT64_MIN) == 0 &&
         surface.latest_->timestamp_ns == INT64_MIN,
         "explicit codec timestamp does not become native producer AUTO");
@@ -116,8 +136,8 @@ int main() {
   Check(callbacks == 9 && surface.frames_ == 9, "one frame and notification per publish");
   Check(surface.latest_->pixels == surface.buffer_->pixels, "pixel publication unchanged");
   surface.abandoned_ = true;
-  surface.locked_ = true;
-  Check(surface.UnlockAndPostWithTimestamp(99) == -ENODEV && !surface.locked_ && callbacks == 9,
+  surface.MarkLocked();
+  Check(surface.UnlockAndPostWithTimestamp(99) == -ENODEV && !surface.Locked() && callbacks == 9,
         "abandon unlocks but prevents publication and notification");
   std::printf("surface timestamp host contracts: %d checks, %d failures\n", checks, failures);
   return failures != 0;
