@@ -1,15 +1,11 @@
-// gesher: the Java side of AHardwareBuffer for ImageReader images.
+// gesher: guest JNI access to Java HardwareBuffers.
 //
 // AHardwareBuffer_fromHardwareBuffer, as Flutter's raster thread imports a
 // platform view's frame (Image.getHardwareBuffer(), then the NDK buffer,
 // eglGetNativeClientBufferANDROID / EGL_NATIVE_BUFFER_ANDROID in
-// egl_native_buffer.cc, and a texture). The Java HardwareBuffers of Gesher are
-// the ones an ImageReader's images give (compat/media/surface/reader_surface.cc);
-// each holds a reference to the image's RGBA AHardwareBuffer, so fromHardwareBuffer
-// returns that buffer and, as the NDK says, takes no reference: it lives as long
-// as the Java object. HardwareBuffer allocation is not supported, and
-// AHardwareBuffer_toHardwareBuffer is not provided: the symbol stays undefined
-// for apps that import it.
+// egl_native_buffer.cc, and a texture). A Java HardwareBuffer, created by the
+// app or obtained from ImageReader, owns a reference to its backing buffer.
+// As the NDK specifies, fromHardwareBuffer returns it without acquiring another.
 //
 // android.hardware.SyncFence's natives, over Gesher's native fences
 // (gesher/native_fence.h): Image.getFence() and an app's SyncFence of a fence
@@ -36,7 +32,7 @@ namespace {
 // through the runtime's own.
 void* BIONIC_SYSV FromHardwareBuffer(JNIEnv* env, jobject hardware_buffer) {
   if (env == nullptr || hardware_buffer == nullptr) return nullptr;
-  return media::ReaderHardwareBufferNative(RealJniEnv(env), hardware_buffer);
+  return media::HardwareBufferNative(RealJniEnv(env), hardware_buffer);
 }
 
 [[maybe_unused]] const bool g_registered = [] {

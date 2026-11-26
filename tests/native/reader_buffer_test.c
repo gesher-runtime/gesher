@@ -214,6 +214,49 @@ JNIEXPORT jint JNICALL Java_gesher_ImageReaderPrivateTest_nativeInspect(
   return o[kStatus];
 }
 
+JNIEXPORT jboolean JNICALL Java_gesher_ImageReaderPrivateTest_nativeCheckJavaBuffer(
+    JNIEnv* env, jclass clazz, jobject java_buffer, jint width, jint height, jint format,
+    jlong usage, jlong id) {
+  (void)clazz;
+  AHardwareBuffer_Desc expected = {
+      .width = (uint32_t)width, .height = (uint32_t)height, .layers = 1,
+      .format = (uint32_t)format, .usage = (uint64_t)usage,
+  };
+  AHardwareBuffer* buffer = AHardwareBuffer_fromHardwareBuffer(env, java_buffer);
+  if (buffer == NULL || !AHardwareBuffer_isSupported(&expected)) return JNI_FALSE;
+  AHardwareBuffer_Desc actual;
+  AHardwareBuffer_describe(buffer, &actual);
+  uint64_t native_id = 0;
+  if (actual.width != expected.width || actual.height != expected.height ||
+      actual.layers != expected.layers || actual.format != expected.format ||
+      actual.usage != expected.usage || AHardwareBuffer_getId(buffer, &native_id) != 0 ||
+      native_id != (uint64_t)id) {
+    return JNI_FALSE;
+  }
+
+  jclass type = (*env)->GetObjectClass(env, java_buffer);
+  if (type == NULL) return JNI_FALSE;
+  jmethodID close = (*env)->GetMethodID(env, type, "close", "()V");
+  (*env)->DeleteLocalRef(env, type);
+  if (close == NULL) return JNI_FALSE;
+  AHardwareBuffer_acquire(buffer);
+  (*env)->CallVoidMethod(env, java_buffer, close);
+
+  int ok = 0;
+  void* bytes = NULL;
+  if (!(*env)->ExceptionCheck(env) && AHardwareBuffer_fromHardwareBuffer(env, java_buffer) == NULL &&
+      AHardwareBuffer_lock(buffer, AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, NULL, &bytes) == 0) {
+    ((unsigned char*)bytes)[0] = 0x6d;
+    if (AHardwareBuffer_unlock(buffer, NULL) == 0 &&
+        AHardwareBuffer_lock(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, NULL, &bytes) == 0) {
+      ok = ((const unsigned char*)bytes)[0] == 0x6d;
+      ok = AHardwareBuffer_unlock(buffer, NULL) == 0 && ok;
+    }
+  }
+  AHardwareBuffer_release(buffer);
+  return ok ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jint JNICALL Java_gesher_ImageReaderPrivateTest_nativeFenceFd(JNIEnv* env, jclass clazz) {
   (void)env;
   (void)clazz;
