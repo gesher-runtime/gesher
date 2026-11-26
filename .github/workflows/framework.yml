@@ -738,6 +738,12 @@ jobs:
           "$JAVA_HOME/bin/java" -cp "$RUNNER_TEMP/activity-usage-classes" \
             com.gesher.server.ActivityUsageHistoryTest
 
+      - name: Complete digest identity and shortcut publication contracts
+        run: |
+          python3 tools/test_identity_digests.py --java-home "$JAVA_HOME" \
+            --framework-classes out/framework/classes --core-classes out/coremod \
+            --app-classes out/app/gesher-app-classes.jar --apksig-jar "$RUNNER_TEMP/gesher-apksig.jar"
+
       - name: Notification delegation ownership and durable policy contracts
         run: |
           python3 tools/test_notification_delegation.py --with-storage --java-home "$JAVA_HOME" \

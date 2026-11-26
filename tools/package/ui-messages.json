@@ -33,12 +33,12 @@
       "he": "הוספת חשבון"
     },
     "install_request": {
-      "en": "Install or update Android application ⁨{0}⁩ (version ⁨{1}⁩)?\nThis approval applies to this installation only.",
-      "he": "להתקין או לעדכן את יישום Android ⁨{0}⁩ (גרסה ⁨{1}⁩)?\nהאישור חל על התקנה זו בלבד."
+      "en": "Install or update Android application {0} (version {1})?\r\nThis approval applies to this installation only.",
+      "he": "להתקין או לעדכן את יישום ‪Android {0}‬ (גרסה ‪{1}‬)?\r\nהאישור חל על התקנה זו בלבד."
     },
     "removal_request": {
-      "en": "Remove Android application ⁨{0}⁩ (version ⁨{1}⁩)?\nIts app data will be deleted. This approval applies to this removal only.",
-      "he": "להסיר את יישום Android ⁨{0}⁩ (גרסה ⁨{1}⁩)?\nגם נתוני היישום יימחקו. האישור חל על הסרה זו בלבד."
+      "en": "Remove Android application {0} (version {1})?\r\nIts app data will be deleted. This approval applies to this removal only.",
+      "he": "להסיר את יישום ‪Android {0}‬ (גרסה ‪{1}‬)?\r\nגם נתוני היישום יימחקו. האישור חל על הסרה זו בלבד."
     },
     "starting": {
       "en": "Starting…",
@@ -143,6 +143,18 @@
     "account_title": {
       "en": "Gesher account access",
       "he": "גשר — גישה לחשבון"
+    },
+    "location_off_prompt": {
+      "en": "The application {0} needs Windows Location services (and desktop app location access), which are currently turned off.\r\n\r\nOpen Windows Location settings?",
+      "he": "היישום ‪{0}‬ זקוק לשירותי המיקום של Windows (ולגישת מיקום ליישומי שולחן עבודה), שכרגע כבויים.\r\n\r\nלפתוח את הגדרות המיקום של Windows?"
+    },
+    "location_off_open": {
+      "en": "Open settings",
+      "he": "פתח הגדרות"
+    },
+    "location_off_later": {
+      "en": "Not now",
+      "he": "לא כעת"
     },
     "account_prefix": {
       "en": "Allow this Android application to access an account token?\n\nApplication: ",

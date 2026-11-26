@@ -646,6 +646,14 @@ public final class Services {
             return path.canWrite() ? VolumeInfo.STATE_MOUNTED : VolumeInfo.STATE_MOUNTED_READ_ONLY;
         }
 
+        private static java.io.File canonicalFile(java.io.File path) {
+            try {
+                return path.getCanonicalFile();
+            } catch (java.io.IOException e) {
+                return path.getAbsoluteFile();
+            }
+        }
+
         @Override
         public DiskInfo[] getDisks() {
             // There are no Android-managed physical/adoptable disks. The framework
@@ -669,10 +677,13 @@ public final class Services {
         public VolumeInfo[] getVolumes(int flags) {
             // The two views refer to the same backing storage. Android also includes
             // a private internal volume even though it has no DiskInfo or fsUuid.
+            // StorageManager.getUuidForPath compares File.getCanonicalPath() against
+            // VolumeInfo.path, so canonicalize non-canonical ANDROID_DATA paths
+            // (such as Windows 8.3 short paths for non-ASCII profile directories).
             VolumeInfo internal = new VolumeInfo(VolumeInfo.ID_PRIVATE_INTERNAL,
                     VolumeInfo.TYPE_PRIVATE, null, null);
             internal.state = directoryState(mDataDirectory);
-            internal.path = mDataDirectory.getAbsolutePath();
+            internal.path = canonicalFile(mDataDirectory).getPath();
 
             VolumeInfo shared = new VolumeInfo(VolumeInfo.ID_EMULATED_INTERNAL + ";0",
                     VolumeInfo.TYPE_EMULATED, null, null);
@@ -682,7 +693,7 @@ public final class Services {
             shared.state = directoryState(sharedDirectory());
             // VolumeInfo appends the user ID in getPathForUser(); StorageVolume
             // below contains that final per-user path instead.
-            shared.path = mediaRoot().getAbsolutePath();
+            shared.path = canonicalFile(mediaRoot()).getPath();
             shared.internalPath = shared.path;
             return new VolumeInfo[] {internal, shared};
         }
@@ -781,7 +792,7 @@ public final class Services {
         @Override
         public StorageVolume[] getVolumeList(int userId, String callingPackage, int flags) {
             if (userId != 0) return new StorageVolume[0];
-            java.io.File path = sharedDirectory();
+            java.io.File path = canonicalFile(sharedDirectory());
             return new StorageVolume[] {new StorageVolume("emulated;" + userId, path, path,
                     "Internal shared storage", true /* primary */, false /* removable */,
                     true /* emulated */, false /* externallyManaged */,

@@ -1,0 +1,16 @@
+{
+  "repository": "https://android.googlesource.com/platform/external/llvm-libc",
+  "tag": "android-16.0.0_r4",
+  "scope": "The actual x86_64 memrchr source selected by this tag's Android.bp; host compilation is not an Android runtime claim.",
+  "files": {
+    "src/string/memrchr.cpp": "1231a6c0d05ca8542cdff79e23becb1aa9c38e649cda4b5a31e2d6377f636dd5",
+    "src/string/memrchr.h": "fa73ac9e12ac9e185791820b7978fcd1f1ec6697fcd7e547e3b3b8e84c8d4e11",
+    "src/__support/common.h": "acbc74aa26f2a403e46c05bd1f52537203a302cd4f4cd738e0bb224e5cfbc22b",
+    "src/__support/macros/config.h": "264e20dbe01d0b91e0af0c046724b26b829f2cec221ec9e9100e551b9ee11abc",
+    "src/__support/macros/null_check.h": "fada7446a9e1f171aa55bd371cc9fdf16e07b35a893344cf7c6381ecf2d7827e",
+    "src/__support/macros/attributes.h": "22c3e370ad1fae2c78ffeb2957603cf3c899244f9ede3a61497a5dfc3c7f89b8",
+    "src/__support/macros/properties/architectures.h": "e09525988d5318cc302bc38266c8eecc77b1c93a4ae82ecd4ebb9290abe1c8d9",
+    "src/__support/macros/properties/compiler.h": "f718ffa0bbbb891edb748163d956812e89e708d501d9180c08ad9b9356c73bd1",
+    "src/__support/macros/optimization.h": "feac37982a8901b108a21a541a94b6994cfd0531de32edd046da25827ee3418d"
+  }
+}
