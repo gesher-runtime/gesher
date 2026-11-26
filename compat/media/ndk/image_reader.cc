@@ -12,6 +12,7 @@
 #include <gesher/rgba_buffers.h>
 #include <gesher/yuv_buffers.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <condition_variable>
 #include <cstring>
@@ -59,6 +60,12 @@ struct ImageFrame {
 };
 
 using ImageCallback = void (BIONIC_SYSV*)(void*, AImageReader*);
+using BufferRemovedCallback = void (BIONIC_SYSV*)(void*, AImageReader*, AHardwareBuffer*);
+
+struct ReaderEvent {
+  // A null buffer denotes an image-available notification.
+  std::unique_ptr<AHardwareBuffer, BufferDeleter> removed_buffer;
+};
 
 struct ReaderState {
   std::mutex mutex;
@@ -66,9 +73,12 @@ struct ReaderState {
   std::deque<std::unique_ptr<ImageFrame>> pending;
   std::unordered_set<AImage*> acquired;
   uint64_t next_frame = 1;
-  size_t notifications = 0;
+  std::deque<ReaderEvent> events;
+  size_t image_notifications = 0;
   ImageCallback callback = nullptr;
   void* context = nullptr;
+  BufferRemovedCallback removed_callback = nullptr;
+  void* removed_context = nullptr;
   bool closed = false;
 };
 
@@ -145,11 +155,29 @@ class ReaderWindow final : public QueueSurface {
   }
 };
 
+// Caller holds the reader mutex. Keep the reader's reference through the
+// callback so an app can identify the removed buffer or take a reference to it.
+void NotifyBufferRemoved(ReaderState& state, ImageFrame& frame) {
+  if (state.closed || state.removed_callback == nullptr) return;
+  state.events.push_back({std::move(frame.storage)});
+  state.changed.notify_all();
+}
+
 // Caller holds the reader mutex. The acquired images own separate buffers.
-void Enqueue(ReaderState& state, std::unique_ptr<ImageFrame> frame) {
-  if (state.pending.size() == kPendingFrames) state.pending.pop_front();
+int Enqueue(ReaderState& state, std::unique_ptr<ImageFrame> frame) {
+  // A stalled removal callback retains its buffer. Stop accepting frames while
+  // too many callbacks are queued so a producer cannot grow that memory alone.
+  if (state.events.size() >= 2 * kPendingFrames) return -EAGAIN;
+  if (state.pending.size() == kPendingFrames) {
+    NotifyBufferRemoved(state, *state.pending.front());
+    state.pending.pop_front();
+  }
   state.pending.push_back(std::move(frame));
-  if (state.callback != nullptr && state.notifications < kPendingFrames) ++state.notifications;
+  if (state.callback != nullptr && state.image_notifications < kPendingFrames) {
+    state.events.emplace_back();
+    ++state.image_notifications;
+  }
+  return 0;
 }
 
 int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame) {
@@ -184,8 +212,7 @@ int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame) {
   ++state->next_frame;
   state->changed.notify_all();
   if (!image) return valid_size ? -ENOMEM : -EINVAL;
-  Enqueue(*state, std::move(image));
-  return 0;
+  return Enqueue(*state, std::move(image));
 }
 
 ReaderWindow* YuvWindow(ANativeWindow* window) {
@@ -211,9 +238,9 @@ int PublishYuv(ReaderWindow& reader, std::unique_ptr<ImageFrame> frame) {
   if (state == nullptr) return -ENODEV;
   std::lock_guard<std::mutex> lock(state->mutex);
   if (state->closed) return -ENODEV;
-  Enqueue(*state, std::move(frame));
-  state->changed.notify_all();
-  return 0;
+  const int status = Enqueue(*state, std::move(frame));
+  if (status == 0) state->changed.notify_all();
+  return status;
 }
 std::optional<int> ReaderWindow::PostVideoFrame(const VideoFrame& frame, int64_t timestamp_ns) {
   if (format != AIMAGE_FORMAT_YUV_420_888) return std::nullopt;
@@ -342,6 +369,7 @@ void BIONIC_SYSV DeleteReader(AImageReader* reader) {
     std::lock_guard<std::mutex> lock(state->mutex);
     state->closed = true;
     state->pending.clear();
+    state->events.clear();
     for (AImage* image : state->acquired) image->frame.reset();
     state->acquired.clear();
     state->changed.notify_all();
@@ -383,7 +411,10 @@ media_status_t Acquire(AImageReader* reader, AImage** out, bool latest, int* fen
   auto image = std::unique_ptr<AImage>(new (std::nothrow) AImage{state, {}});
   if (!image) return AMEDIA_ERROR_UNKNOWN;
   if (latest && remaining >= 2) {
-    while (state->pending.size() > 1) state->pending.pop_front();
+    while (state->pending.size() > 1) {
+      NotifyBufferRemoved(*state, *state->pending.front());
+      state->pending.pop_front();
+    }
   }
   image->frame = std::move(state->pending.front());
   state->pending.pop_front();
@@ -416,21 +447,32 @@ void* RunListener(void* context) {
   gesher::bionic::EnterLoadedCode();
   std::unique_lock<std::mutex> lock(state->mutex);
   for (;;) {
-    state->changed.wait(lock, [&] { return state->closed || state->notifications != 0; });
+    state->changed.wait(lock, [&] { return state->closed || !state->events.empty(); });
     if (state->closed) return nullptr;
-    --state->notifications;
-    auto callback = state->callback;
-    void* context = state->context;
-    lock.unlock();
-    callback(context, reader);
+    auto event = std::move(state->events.front());
+    state->events.pop_front();
+    if (event.removed_buffer) {
+      auto callback = state->removed_callback;
+      void* context = state->removed_context;
+      lock.unlock();
+      callback(context, reader, event.removed_buffer.get());
+      event.removed_buffer.reset();
+    } else {
+      --state->image_notifications;
+      auto callback = state->callback;
+      void* context = state->context;
+      lock.unlock();
+      callback(context, reader);
+    }
     lock.lock();
   }
 }
 
-media_status_t BIONIC_SYSV SetImageListener(AImageReader* reader,
-                                           AImageReader_ImageListener* listener) {
+template <class Listener, class Callback>
+media_status_t SetListener(AImageReader* reader, Listener* listener,
+                           Callback Listener::* callback_field, bool buffer_removed) {
   if (reader == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
-  void* address = listener != nullptr ? reinterpret_cast<void*>(listener->onImageAvailable) : nullptr;
+  void* address = listener != nullptr ? reinterpret_cast<void*>(listener->*callback_field) : nullptr;
   if (address != nullptr && gesher::arm64::IsGuestCode(address)) {
     address = gesher::arm64::HostEntry(address);
     if (address == nullptr) return AMEDIA_ERROR_UNKNOWN;
@@ -445,13 +487,43 @@ media_status_t BIONIC_SYSV SetImageListener(AImageReader* reader,
     }
     reader->has_worker = true;
   }
-  state->callback = reinterpret_cast<ImageCallback>(address);
-  state->context = listener != nullptr ? listener->context : nullptr;
-  state->notifications = 0;
+  void* context = listener != nullptr ? listener->context : nullptr;
+  if (buffer_removed) {
+    state->removed_callback = reinterpret_cast<BufferRemovedCallback>(address);
+    state->removed_context = context;
+  } else {
+    state->callback = reinterpret_cast<ImageCallback>(address);
+    state->context = context;
+    state->image_notifications = 0;
+  }
+  std::erase_if(state->events, [buffer_removed](const ReaderEvent& event) {
+    return static_cast<bool>(event.removed_buffer) == buffer_removed;
+  });
   return AMEDIA_OK;
 }
 
-void ReleaseImageFrame(void* frame) { delete static_cast<ImageFrame*>(frame); }
+media_status_t BIONIC_SYSV SetImageListener(AImageReader* reader,
+                                           AImageReader_ImageListener* listener) {
+  return SetListener(reader, listener, &AImageReader_ImageListener::onImageAvailable, false);
+}
+
+media_status_t BIONIC_SYSV SetBufferRemovedListener(
+    AImageReader* reader, AImageReader_BufferRemovedListener* listener) {
+  return SetListener(reader, listener, &AImageReader_BufferRemovedListener::onBufferRemoved, true);
+}
+
+struct DeferredImageRelease {
+  std::weak_ptr<ReaderState> owner;
+  std::unique_ptr<ImageFrame> frame;
+};
+
+void ReleaseImageFrame(void* opaque) {
+  std::unique_ptr<DeferredImageRelease> release(static_cast<DeferredImageRelease*>(opaque));
+  if (auto owner = release->owner.lock()) {
+    std::lock_guard<std::mutex> lock(owner->mutex);
+    NotifyBufferRemoved(*owner, *release->frame);
+  }
+}
 
 void BIONIC_SYSV DeleteImageAsync(AImage* image, int release_fence_fd) {
   if (image == nullptr) return;
@@ -468,10 +540,13 @@ void BIONIC_SYSV DeleteImageAsync(AImage* image, int release_fence_fd) {
     std::lock_guard<std::mutex> lock(image->owner->mutex);
     image->owner->acquired.erase(image);
     frame = std::move(image->frame);
+    if (!fence && frame) NotifyBufferRemoved(*image->owner, *frame);
   }
+  auto owner = std::weak_ptr<ReaderState>(image->owner);
   delete image;
   if (fence && frame) {
-    gesher::ReleaseAfterNativeFence(fence, frame.release(), ReleaseImageFrame);
+    gesher::ReleaseAfterNativeFence(fence, new DeferredImageRelease{std::move(owner), std::move(frame)},
+                                    ReleaseImageFrame);
   }
 }
 
@@ -557,6 +632,7 @@ bool Register() {
   ENTRY(AImageReader_acquireNextImageAsync, AcquireNextAsync);
   ENTRY(AImageReader_acquireLatestImageAsync, AcquireLatestAsync);
   ENTRY(AImageReader_setImageListener, SetImageListener);
+  ENTRY(AImageReader_setBufferRemovedListener, SetBufferRemovedListener);
   ENTRY(AImage_delete, DeleteImage);
   ENTRY(AImage_deleteAsync, DeleteImageAsync);
   ENTRY(AImage_getWidth, GetImageField<int32_t, &ImageFrame::width>);

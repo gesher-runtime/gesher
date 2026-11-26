@@ -5,8 +5,10 @@
 The fixture uses public Android APIs to post distinct RGBA pixels through the
 reader's `ANativeWindow`. It exercises library and symbol lookup, image metadata
 and bytes, maxImages admission, synchronous and asynchronous acquisition, the
-listener's dedicated thread, and a native `AHardwareBuffer` retained past reader
-close. The Windows builds of the fixture load through ART, so the actual
+listener's dedicated thread, buffer removal after a producer resize, and native
+`AHardwareBuffer` references retained past reader close. The Android reference
+can keep buffers in free slots until a producer needs a different allocation.
+The Windows builds of the fixture load through ART, so the actual
 `libmediandk.so` and `libandroid.so` guest exports are required.
 
 Build the PIE and JNI fixtures for both guest ABIs with NDK r28c and SDK D8:
@@ -35,9 +37,12 @@ copied synchronously into the existing CPU-accessible native hardware buffer
 before the reader publishes them. An acquired image keeps its own buffer
 reference. Async acquisition returns the completed CPU pixels with no fence.
 Async deletion takes ownership of a release fence descriptor and keeps the
-image storage until the native event completes. The standalone Android fixture
-passes an EGL native fence when the device supports that extension. The RGBA fixture covers the CPU window producer. The YUV fixture below
-covers decoder output.
+image storage until the native event completes. Buffer removal is dispatched on
+the reader's callback thread with a live buffer reference. The app can acquire
+an independent reference in that callback. The standalone Android fixture
+passes an EGL native fence when the device supports that extension. The RGBA
+fixture covers the CPU window producer. The YUV fixture below covers decoder
+output.
 
 The contract follows the Android 16 public
 [ImageReader and Image API](https://developer.android.com/ndk/reference/group/media).

@@ -44,11 +44,11 @@ static uint32_t read_pixel(const uint8_t* pixels, int row_stride, int x, int y) 
     return result;
 }
 
-static void post(ANativeWindow* window, uint32_t color) {
+static void post_size(ANativeWindow* window, uint32_t color, int width, int height) {
     ANativeWindow_Buffer buffer = {0};
     CHECK(ANativeWindow_lock(window, &buffer, NULL) == 0);
-    CHECK(buffer.width == kWidth && buffer.height == kHeight);
-    CHECK(buffer.stride >= kWidth && buffer.format == AIMAGE_FORMAT_RGBA_8888);
+    CHECK(buffer.width == width && buffer.height == height);
+    CHECK(buffer.stride >= width && buffer.format == AIMAGE_FORMAT_RGBA_8888);
     CHECK(buffer.bits != NULL);
     for (int y = 0; y < buffer.height; ++y) {
         uint32_t* row = (uint32_t*)buffer.bits + y * buffer.stride;
@@ -57,6 +57,10 @@ static void post(ANativeWindow* window, uint32_t color) {
         }
     }
     CHECK(ANativeWindow_unlockAndPost(window) == 0);
+}
+
+static void post(ANativeWindow* window, uint32_t color) {
+    post_size(window, color, kWidth, kHeight);
 }
 
 static void wait_for_pixels(int fence) {
@@ -156,6 +160,91 @@ static void expect_listener(void) {
     CHECK(pthread_mutex_destroy(&callback.mutex) == 0);
 }
 
+struct RemovalTest {
+    pthread_mutex_t mutex;
+    pthread_cond_t changed;
+    pthread_t caller;
+    AHardwareBuffer* expected;
+    AHardwareBuffer* buffer;
+    AImageReader* reader;
+    int same_thread;
+};
+
+static void on_buffer_removed(void* opaque, AImageReader* reader, AHardwareBuffer* buffer) {
+    struct RemovalTest* callback = opaque;
+    pthread_mutex_lock(&callback->mutex);
+    if (buffer == callback->expected && callback->buffer == NULL) {
+        AHardwareBuffer_acquire(buffer);
+        callback->buffer = buffer;
+        callback->reader = reader;
+        callback->same_thread = pthread_equal(callback->caller, pthread_self());
+        pthread_cond_signal(&callback->changed);
+    }
+    pthread_mutex_unlock(&callback->mutex);
+}
+
+static void expect_removed_buffer(void) {
+    AImageReader* reader = NULL;
+    ANativeWindow* window = NULL;
+    struct RemovalTest callback = {
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .changed = PTHREAD_COND_INITIALIZER,
+        .caller = pthread_self(),
+    };
+    AImageReader_BufferRemovedListener listener = {&callback, on_buffer_removed};
+    CHECK(AImageReader_new(kWidth, kHeight, AIMAGE_FORMAT_RGBA_8888, 1, &reader) == AMEDIA_OK);
+    CHECK(AImageReader_getWindow(reader, &window) == AMEDIA_OK && window != NULL);
+    CHECK(AImageReader_setBufferRemovedListener(reader, &listener) == AMEDIA_OK);
+
+    const uint32_t color = 0xff3e0000u;
+    post(window, color);
+    AImage* image = NULL;
+    CHECK(AImageReader_acquireNextImage(reader, &image) == AMEDIA_OK);
+    AHardwareBuffer* borrowed = NULL;
+    CHECK(AImage_getHardwareBuffer(image, &borrowed) == AMEDIA_OK && borrowed != NULL);
+    AHardwareBuffer_acquire(borrowed);
+    CHECK(pthread_mutex_lock(&callback.mutex) == 0);
+    callback.expected = borrowed;
+    CHECK(pthread_mutex_unlock(&callback.mutex) == 0);
+    AImage_delete(image);
+
+    // Android can keep the released buffer in a free slot. Changing producer
+    // geometry forces the slot's old allocation to be removed when reused.
+    for (int width = kWidth + 2; width <= kWidth + 10; width += 2) {
+        CHECK(ANativeWindow_setBuffersGeometry(window, width, kHeight,
+                                               AIMAGE_FORMAT_RGBA_8888) == 0);
+        post_size(window, color, width, kHeight);
+        CHECK(AImageReader_acquireNextImage(reader, &image) == AMEDIA_OK);
+        AImage_delete(image);
+    }
+
+    struct timespec limit;
+    CHECK(clock_gettime(CLOCK_REALTIME, &limit) == 0);
+    limit.tv_sec += 5;
+    CHECK(pthread_mutex_lock(&callback.mutex) == 0);
+    while (callback.buffer == NULL) {
+        CHECK(pthread_cond_timedwait(&callback.changed, &callback.mutex, &limit) == 0);
+    }
+    CHECK(callback.reader == reader && callback.buffer == borrowed && !callback.same_thread);
+    CHECK(pthread_mutex_unlock(&callback.mutex) == 0);
+    CHECK(AImageReader_setBufferRemovedListener(reader, NULL) == AMEDIA_OK);
+    AImageReader_delete(reader);
+    AHardwareBuffer_release(borrowed);
+
+    AHardwareBuffer_Desc desc = {0};
+    AHardwareBuffer_describe(callback.buffer, &desc);
+    CHECK(desc.width == kWidth && desc.height == kHeight);
+    void* pixels = NULL;
+    CHECK(AHardwareBuffer_lock(callback.buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+                               -1, NULL, &pixels) == 0);
+    CHECK(read_pixel(pixels, (int)desc.stride * 4, kWidth - 1, kHeight - 1) ==
+          pixel(color, kWidth - 1, kHeight - 1));
+    CHECK(AHardwareBuffer_unlock(callback.buffer, NULL) == 0);
+    AHardwareBuffer_release(callback.buffer);
+    CHECK(pthread_cond_destroy(&callback.changed) == 0);
+    CHECK(pthread_mutex_destroy(&callback.mutex) == 0);
+}
+
 #if defined(IMAGE_READER_STANDALONE) && !defined(IMAGE_READER_COMPONENT)
 static int make_release_fence(void) {
     EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -215,6 +304,7 @@ static int run_test(void) {
     CHECK(dlsym(library, "AImage_deleteAsync") != NULL);
     CHECK(dlsym(library, "AImageReader_acquireNextImageAsync") != NULL);
     CHECK(dlsym(library, "AImageReader_acquireLatestImageAsync") != NULL);
+    CHECK(dlsym(library, "AImageReader_setBufferRemovedListener") != NULL);
     CHECK(dlclose(library) == 0);
 
     AImageReader* reader = NULL;
@@ -297,6 +387,7 @@ static int run_test(void) {
     AHardwareBuffer_release(retained);
 
     expect_listener();
+    expect_removed_buffer();
     printf("NDK image reader: %d checks passed\n", checks);
     return 0;
 }
