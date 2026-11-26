@@ -50,11 +50,12 @@
 #                                      on an app's toast, given to the device (ADR 0051)
 #   gesher-app apk-icon my.apk         (the .apk icon handler runs it) draw my.apk's app
 #                                      icon for Explorer, without installing it
-#   gesher-app apk-info my.apk OUT     (gesher-launch runs it before it asks to install
+#   gesher-app apk-info my.apk OUT [SNAPSHOT_DIR]  (run before installing
 #                                      an APK opened from Explorer) my.apk's package,
 #                                      version, label and icon, and the installed
 #                                      version, as key=value lines in the file OUT;
-#                                      no device, nothing installed
+#                                      no device, nothing installed; SNAPSHOT_DIR captures
+#                                      the inputs and includes their digest in OUT
 #   gesher-app my.apk --single-process the app alone in this process, with
 #                                      stand-in services (no device)
 #   gesher-app my.apk --system-server  a device of this run only, the app in
@@ -189,12 +190,14 @@ if ($commands -notcontains $command) {
 # apk-info's output file (it need not exist yet): a full Windows path, converted below
 # as the APK's is.
 $apkInfoOut = $null
+$apkSnapshot = $null
 if ($command -eq 'apk-info') {
-  if (-not $apkFull -or $rest.Count -ne 1) {
-    Write-Host ((Get-GesherText 'usage') + 'gesher-app apk-info APK OUT')
+  if (-not $apkFull -or $rest.Count -lt 1 -or $rest.Count -gt 2) {
+    Write-Host ((Get-GesherText 'usage') + 'gesher-app apk-info APK OUT [SNAPSHOT_DIR]')
     exit 2
   }
   $apkInfoOut = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($rest[0])
+  if ($rest.Count -eq 2) { $apkSnapshot = (Resolve-Path -LiteralPath $rest[1]).Path }
   $rest = @()
 }
 Set-Location -LiteralPath $here
@@ -336,6 +339,7 @@ try {
     $launcherArgs = @($command)
     if ($apkFull) { $launcherArgs += UserPath $apkFull }
     if ($apkInfoOut) { $launcherArgs += UserPath $apkInfoOut }
+    if ($apkSnapshot) { $launcherArgs += UserPath $apkSnapshot }
     Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments @launcherArgs @rest
     exit $LASTEXITCODE
   }

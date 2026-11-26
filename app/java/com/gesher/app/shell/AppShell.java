@@ -11,6 +11,7 @@ import android.content.pm.ShortcutInfo;
 
 import com.android.internal.pm.pkg.component.ParsedActivity;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
+import com.gesher.app.HostInstallSnapshot;
 import com.gesher.app.Main;
 import static com.gesher.app.locale.UiText.text;
 import com.gesher.app.locale.UiText;
@@ -992,7 +993,7 @@ public final class AppShell {
     }
 
     /**
-     * {@code gesher-app apk-info APK OUT}, what gesher-launch runs before it asks the user to
+     * {@code gesher-app apk-info APK OUT [SNAPSHOT_DIR]}, what gesher-launch runs before it asks the user to
      * install an APK or split APK bundle opened from Explorer: reads the file as {@link
      * #apkIcon} does (drawing its icon beside the result), without installing it or
      * starting the device, and writes {@code out} (UTF-8), a {@code key=value}
@@ -1000,9 +1001,15 @@ public final class AppShell {
      * {@code icon} (the drawn .ico, when there is one), {@code installed_version_code} and
      * {@code installed_version_name} (when the package is installed: its installed base.apk,
      * from packages.list) and {@code desktop_shortcut=1} (when its recorded desktop shortcut
-     * is there). Throws when the file cannot be read as an app.
+     * is there). If a snapshot directory is given, capture the inputs before reading
+     * them and include {@code inputs_sha256}. Throws when the file cannot be read as an app.
      */
-    public static void apkInfo(File apk, File out) throws Exception {
+    public static void apkInfo(File apk, File out, File snapshot) throws Exception {
+        String snapshotDigest = null;
+        if (snapshot != null) {
+            snapshotDigest = HostInstallSnapshot.capture(apk, snapshot.toPath());
+            apk = new File(snapshot, apk.getName());
+        }
         ApkFacts facts = new ApkFacts();
         File target = out.getAbsoluteFile();
         int code = apkIcon(apk, facts, new File(target.getPath() + ".ico"));
@@ -1015,6 +1022,7 @@ public final class AppShell {
         java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
         values.put("package", facts.packageName);
         values.put("version_code", String.valueOf(facts.versionCode));
+        if (snapshotDigest != null) values.put("inputs_sha256", snapshotDigest);
         values.put("version_name", facts.versionName != null ? facts.versionName : "");
         values.put("label", facts.label != null && !facts.label.isEmpty() ? facts.label
                 : facts.packageName);

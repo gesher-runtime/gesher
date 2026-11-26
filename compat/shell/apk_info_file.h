@@ -12,6 +12,7 @@
 struct GesherApkInfo {
   std::wstring package;
   long long version_code = 0;
+  std::wstring inputs_sha256;
   std::wstring version_name;
   std::wstring label;  // never empty after a successful parse (the package name)
   std::wstring icon;   // a Windows path, or empty
@@ -103,6 +104,12 @@ static inline bool GesherParseApkInfo(const std::string& bytes, GesherApkInfo* i
       info->package = value;
     } else if (key == "version_code") {
       have_code = GesherParseLong(value, &info->version_code);
+    } else if (key == "inputs_sha256") {
+      if (value.size() != 64) return false;
+      for (wchar_t c : value) {
+        if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f'))) return false;
+      }
+      info->inputs_sha256 = value;
     } else if (key == "version_name") {
       info->version_name = GesherDisplayText(value);
     } else if (key == "label") {

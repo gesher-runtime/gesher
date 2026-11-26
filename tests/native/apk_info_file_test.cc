@@ -52,6 +52,12 @@ int main() {
             info.installed_version_code == -9223372036854775807LL - 1);
   Check("version code overflow",
         !GesherParseApkInfo("package=a.b\nversion_code=9223372036854775808\n", &info));
+  const std::string digest(64, 'a');
+  Check("confirmation digest",
+        GesherParseApkInfo("package=a.b\nversion_code=9\ninputs_sha256=" + digest + "\n", &info) &&
+            info.inputs_sha256 == std::wstring(64, L'a'));
+  Check("malformed confirmation digest",
+        !GesherParseApkInfo("package=a.b\nversion_code=9\ninputs_sha256=" + digest + "&\n", &info));
   Check("empty version code", !GesherParseApkInfo("package=a.b\nversion_code=\n", &info));
   Check("spaced version code", !GesherParseApkInfo("package=a.b\nversion_code= 1\n", &info));
   Check("no version code", !GesherParseApkInfo("package=a.b\n", &info));
