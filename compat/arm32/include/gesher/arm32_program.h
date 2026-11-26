@@ -5,6 +5,7 @@
 #include <gesher/arm32_executor.h>
 #include <gesher/arm32_elf.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -83,6 +84,7 @@ class Program {
   uint64_t next_thunk_ = 0xe0000000;
   bool stack_ok_ = false;
   bool initialization_failed_ = false;
+  std::atomic_flag busy_ = ATOMIC_FLAG_INIT;
 
   static constexpr uint32_t kStackBase = 0xeff00000;
   static constexpr uint32_t kStackSize = 0x100000;
