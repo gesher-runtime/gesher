@@ -188,6 +188,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Launch failure text test compilation failed' }
           & .\launch-failure-text-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Launch failure paragraph direction checks failed' }
+      - name: APK information file parsing for the install confirmation
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 /WX tests/native/apk_info_file_test.cc /Fe:apk-info-file-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'APK information file test compilation failed' }
+          & .\apk-info-file-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'APK information file parsing checks failed' }
       - name: Shared media log byte snapshots on PowerShell 7
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -1987,8 +1995,11 @@ jobs:
             throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
           }
           'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
-          # The .apk association: run the open command the installer registered,
-          # with %1 set to the bundled APK, as Explorer would.
+          # The .apk association (docs/installer.md, "Opening an APK from Explorer"): run the
+          # open command the installer registered, with %1 set to the APK, as Explorer would,
+          # and answer gesher-launch's confirmation and installed dialogs as a user would
+          # (tests/windows/shell/InstallConfirmDialog.ps1: the dialogs' control IDs, BM_CLICK).
+          . tests\windows\shell\InstallConfirmDialog.ps1
           $cls = 'HKCU:\Software\Classes'
           $progId = (Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)'
           if ($progId -ne 'Gesher.Apk') { throw ".apk's default ProgID is '$progId', not Gesher.Apk" }
@@ -1996,20 +2007,146 @@ jobs:
           $open = (Get-ItemProperty "$cls\Gesher.Apk\shell\open\command").'(default)'
           Write-Host "Gesher.Apk open command: $open"
           if ($open -notmatch '^"([^"]+)"\s*(.*)$' -or $Matches[1] -ne "$app\gesher-launch.exe") { throw "Gesher.Apk's open command does not start gesher-launch.exe: $open" }
-          $psi = [Diagnostics.ProcessStartInfo]::new($Matches[1], $Matches[2].Replace('%1', "$app\lifecycle.apk"))
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $p = [Diagnostics.Process]::Start($psi)
-          $errors = $p.StandardError.ReadToEndAsync()
-          $out = $p.StandardOutput.ReadToEnd()
-          $p.WaitForExit()
-          $out += $errors.Result
-          Write-Host (($out -split "`n" | Select-Object -Last 5) -join "`n")
-          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device') {
-            throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
+          $openExe = $Matches[1]
+          $openArgs = $Matches[2]
+          # Starts the registered command for $file (its output read as it comes).
+          function Start-ApkOpen([string] $file) {
+            $psi = [Diagnostics.ProcessStartInfo]::new($openExe, $openArgs.Replace('%1', $file))
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $p = [Diagnostics.Process]::Start($psi)
+            return [pscustomobject]@{ Process = $p; Out = $p.StandardOutput.ReadToEndAsync(); Err = $p.StandardError.ReadToEndAsync() }
           }
-          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Waits for it (15 minutes at most) and returns its output.
+          function Complete-ApkOpen($run, [string] $what) {
+            if (-not $run.Process.WaitForExit(900000)) { $run.Process.Kill($true); throw "$what did not end within 15 minutes" }
+            $run.Process.WaitForExit()
+            $text = $run.Out.Result + $run.Err.Result
+            Write-Host "$what (exit $($run.Process.ExitCode)):"
+            Write-Host (($text -split "`n" | Select-Object -Last 8) -join "`n")
+            return $text
+          }
+          function Test-LifecycleListed {
+            $list = & "$app\gesher-app.cmd" list 2>&1 | Out-String
+            return $list -match 'package:com\.gesher\.lifecycle '
+          }
+          $desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Gesher Lifecycle.lnk'
+          $lifecycleRecord = "$env:LOCALAPPDATA\Gesher\data\data\com.gesher.lifecycle\gesher-shell\shortcut.properties"
+          if (Test-Path $desktopLnk) { throw "$desktopLnk exists before any APK was opened" }
+          # The same version is installed (the runs above): no dialog, the installed package
+          # is launched as its Start menu shortcut launches it (and the device started).
+          $run = Start-ApkOpen "$app\lifecycle.apk"
+          $seen = @(Watch-GesherNoInstallDialog $run.Process 900)
+          $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk (the same version installed)'
+          if ($run.Process.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
+              $out -notmatch 'launching the installed package com\.gesher\.lifecycle' -or $out -match 'installed com\.gesher\.lifecycle') {
+            throw "The .apk open command did not launch the installed lifecycle.apk (the same version) on the Gesher device (exit $($run.Process.ExitCode))"
+          }
+          if ($seen.Count) { throw "Opening the installed version of lifecycle.apk showed a dialog: $($seen -join ', ')" }
+          'PASS  installer: opening an APK whose version is installed launches the installed package through the registered command, with no dialog' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Not installed: the confirmation dialog (the desktop shortcut box shown, unchecked).
+          # Cancel installs nothing (exit 1223, ERROR_CANCELLED).
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -or (Test-Path $lnk) -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $code)" }
+          $run = Start-ApkOpen "$app\lifecycle.apk"
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Cancel -ExpectDesktopBox $true
+          $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk, Cancel'
+          Write-Host "confirmation dialog: '$($answer.ConfirmTitle)'"
+          $problems = @($answer.Problems)
+          if ($run.Process.ExitCode -ne 1223) { $problems += "exit $($run.Process.ExitCode), not 1223" }
+          if ($out -match 'installed com\.gesher\.lifecycle' -or $out -match 'gesher-app: done') { $problems += 'it installed or ran the app' }
+          if (Test-LifecycleListed) { $problems += 'gesher-app list shows com.gesher.lifecycle' }
+          if ((Test-Path $lnk) -or (Test-Path $desktopLnk)) { $problems += 'a shortcut was made' }
+          if ($problems) { throw "Cancel in the confirmation dialog: $($problems -join '; ')" }
+          'PASS  installer: an APK opened from Explorer asks first (install_confirm_title; Install/Cancel, an unchecked desktop shortcut box); Cancel installs nothing (exit 1223)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Install with the desktop shortcut box checked, then Done: installed, not launched;
+          # <Desktop>\<label>.lnk made like the Start menu's and recorded as desktop_link.
+          $stageParent = "$env:LOCALAPPDATA\Gesher\data\system"
+          $previousStages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' | ForEach-Object FullName)
+          $expectedApkHash = (Get-FileHash -LiteralPath "$app\lifecycle.apk").Hash
+          $checkSnapshot = {
+            $stages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' |
+              Where-Object FullName -NotIn $previousStages)
+            if ($stages.Count -ne 1) { throw "expected one installation snapshot, saw $($stages.Count)" }
+            $snapshot = Join-Path $stages[0].FullName 'payload\lifecycle.apk'
+            if ((Get-FileHash -LiteralPath $snapshot).Hash -ne $expectedApkHash) {
+              throw 'the confirmation snapshot differs from the selected APK'
+            }
+            try {
+              $stream = [IO.File]::Open($snapshot, 'Open', 'Write', 'ReadWrite')
+              $stream.Dispose()
+              throw 'the confirmation snapshot allowed write access'
+            } catch [IO.IOException] {
+              if (($_.Exception.HResult -band 0xffff) -ne 32) { throw }
+            }
+          }
+          $run = Start-ApkOpen "$app\lifecycle.apk"
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -DesktopShortcut -ExpectDesktopBox $true -Done Done -BeforeAnswer $checkSnapshot
+          $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk, Install with a desktop shortcut, Done'
+          Write-Host "installed dialog: '$($answer.DoneTitle)'"
+          $problems = @($answer.Problems)
+          if ($run.Process.ExitCode -ne 0) { $problems += "exit $($run.Process.ExitCode)" }
+          if ($out -notmatch 'installed com\.gesher\.lifecycle') { $problems += 'no "installed com.gesher.lifecycle" line' }
+          if ($out -match 'gesher-app: done' -or $out -match 'LifecycleActivity' -or $out -match 'launching the installed package') { $problems += 'the app was launched without Open' }
+          if (-not (Test-LifecycleListed)) { $problems += 'gesher-app list does not show com.gesher.lifecycle' }
+          $installed = @(Get-Content -LiteralPath (Join-Path $stageParent 'packages.list') |
+            Where-Object { $_.StartsWith("com.gesher.lifecycle`t") })
+          if ($installed.Count -ne 1) {
+            $problems += 'packages.list lacks a unique installed lifecycle package'
+          } else {
+            $codeDir = (($installed[0] -split "`t")[1] -split '[/\\]')[-1]
+            $installedApk = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir\base.apk"
+            if ((Get-FileHash -LiteralPath $installedApk).Hash -ne $expectedApkHash) {
+              $problems += 'installed APK differs from the one shown for confirmation'
+            }
+          }
+          $remainingStages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' |
+            Where-Object FullName -NotIn $previousStages)
+          if ($remainingStages.Count) { $problems += 'the launcher left an installation snapshot behind' }
+          if (-not (Test-Path $lnk)) { $problems += "no Start menu shortcut $lnk" }
+          if (-not (Test-Path $desktopLnk)) { $problems += "no desktop shortcut $desktopLnk" } else {
+            $desk = $wsh.CreateShortcut($desktopLnk)
+            if ($desk.TargetPath -ne "$app\gesher-launch.exe" -or $desk.Arguments -ne 'launch com.gesher.lifecycle') { $problems += "the desktop shortcut runs $($desk.TargetPath) $($desk.Arguments)" }
+            if ($desk.IconLocation -ne "$lifecycleIco,0") { $problems += "the desktop shortcut's icon is $($desk.IconLocation)" }
+            $deskAumid = Get-LinkAppUserModelId $desktopLnk
+            if ($deskAumid -ne 'Gesher.App.com.gesher.lifecycle') { $problems += "the desktop shortcut's AppUserModelID is $deskAumid" }
+          }
+          $recorded = Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link'
+          if ($recorded -ne $desktopLnk) { $problems += "shortcut.properties records desktop_link '$recorded'" }
+          if ($problems) { throw "Install (desktop shortcut) and Done in the dialogs: $($problems -join '; ')" }
+          'PASS  installer: Install in the confirmation dialog installs the APK and does not launch it; the checked box makes <Desktop>\Gesher Lifecycle.lnk (gesher-launch launch com.gesher.lifecycle, its icon and AppUserModelID), recorded as desktop_link; Done ends' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or (Test-Path $desktopLnk) -or (Test-Path $lnk)) { Write-Host $out; throw "gesher-app uninstall left the desktop shortcut $desktopLnk or the Start menu shortcut (exit $LASTEXITCODE)" }
+          'PASS  installer: gesher-app uninstall removes the recorded desktop shortcut' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # A desktop shortcut the user deleted stays deleted: a later install and
+          # sync-shortcuts keep the record and make no new one.
+          $out = & "$app\gesher-app.cmd" install "$app\lifecycle.apk" --desktop-shortcut 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $desktopLnk)) { Write-Host $out; throw "gesher-app install --desktop-shortcut made no $desktopLnk (exit $LASTEXITCODE)" }
+          Remove-Item -LiteralPath $desktopLnk -Force
+          $out = (& "$app\gesher-app.cmd" install "$app\lifecycle.apk" 2>&1 | Out-String) + (& "$app\gesher-app.cmd" sync-shortcuts 2>&1 | Out-String)
+          $problems = @()
+          if (Test-Path $desktopLnk) { $problems += 'the deleted desktop shortcut was made again' }
+          if ((Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link') -ne $desktopLnk) { $problems += 'shortcut.properties lost desktop_link' }
+          if ($problems) { Write-Host $out; throw "A deleted desktop shortcut: $($problems -join '; ')" }
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $code)" }
+          'PASS  installer: a desktop shortcut the user deleted is not made again by a later install or sync-shortcuts (desktop_link kept)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Install (the box left unchecked), then Open: launched as the Start menu launches it.
+          $run = Start-ApkOpen "$app\lifecycle.apk"
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -ExpectDesktopBox $true -Done Open
+          $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk, Install, Open'
+          $problems = @($answer.Problems)
+          if ($run.Process.ExitCode -ne 0) { $problems += "exit $($run.Process.ExitCode)" }
+          foreach ($want in 'installed com\.gesher\.lifecycle', 'launching the installed package com\.gesher\.lifecycle', 'LifecycleActivity onResume', 'gesher-app: done') {
+            if ($out -notmatch $want) { $problems += "no '$want'" }
+          }
+          if (Test-Path $desktopLnk) { $problems += 'a desktop shortcut was made with the box unchecked' }
+          if ($null -ne (Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link')) { $problems += 'shortcut.properties records a desktop_link' }
+          if ($problems) { throw "Install and Open in the dialogs: $($problems -join '; ')" }
+          'PASS  installer: Install, then Open in the installed dialog, launches the app; no desktop shortcut with the box unchecked' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $bundleExtensions = '.apks', '.xapk', '.apkm', '.apk+'
           foreach ($ext in $bundleExtensions) {
             if ((Get-ItemProperty "$cls\$ext").'(default)' -ne 'Gesher.Xapk') { throw "$ext default ProgID is missing" }
@@ -2019,24 +2156,86 @@ jobs:
           }
           $bundleOpen = (Get-ItemProperty "$cls\Gesher.Xapk\shell\open\command").'(default)'
           if ($bundleOpen -ne $open) { throw "Bundle open command differs from the APK command: $bundleOpen" }
+          # A bundle of a package that is not installed asks first (Install, Open); one of the
+          # installed version launches it directly.
           Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $LASTEXITCODE)" }
           foreach ($ext in '.apkm', '.apk+') {
             $bundle = Join-Path $env:RUNNER_TEMP "shell launch$ext"
             $archive = [IO.Compression.ZipFile]::Open($bundle, 'Create')
             try {
               $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$app\lifecycle.apk", 'base.apk')
             } finally { $archive.Dispose() }
-            $psi.Arguments = '"{0}"' -f $bundle
-            $p = [Diagnostics.Process]::Start($psi)
-            $errors = $p.StandardError.ReadToEndAsync()
-            $out = $p.StandardOutput.ReadToEnd()
-            $p.WaitForExit()
-            $out += $errors.Result
-            if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
-              throw "$ext open command failed (exit $($p.ExitCode)): $out"
+            $run = Start-ApkOpen $bundle
+            if ($ext -eq '.apkm') {
+              $problems = @((Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -ExpectDesktopBox $true -Done Open).Problems)
+            } else {
+              $problems = @(Watch-GesherNoInstallDialog $run.Process 900 | ForEach-Object { "a dialog '$_' for the installed version" })
+            }
+            $out = Complete-ApkOpen $run "gesher-launch on a $ext bundle"
+            if ($run.Process.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'launching the installed package com\.gesher\.lifecycle') {
+              $problems += "exit $($run.Process.ExitCode); the app was not launched"
+            }
+            if ($problems) { throw "$ext open command: $($problems -join '; ')" }
+          }
+          'PASS  installer: split bundle associations; the registered open command asks before installing an APKM bundle and launches an installed APK+ bundle''s package directly' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The actual host install service must fail before installing unconfirmed input.
+          $loose = Join-Path $env:RUNNER_TEMP 'confirmed loose splits'
+          New-Item -ItemType Directory -Path $loose | Out-Null
+          $fixtures = [IO.Compression.ZipFile]::OpenRead("$PWD/dist/split-package-fixtures.zip")
+          $looseInputs = [ordered]@{
+            'base-signed.apk' = 'base.apk'
+            'core-signed.apk' = 'split_feature.core.apk'
+            'entry-signed.apk' = 'split_feature.entry.apk'
+          }
+          try {
+            foreach ($fixture in $looseInputs.Keys) {
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($fixtures.GetEntry($fixture),
+                (Join-Path $loose $looseInputs[$fixture]))
+            }
+          } finally { $fixtures.Dispose() }
+          $dm = [IO.Compression.ZipFile]::Open((Join-Path $loose 'base.dm'), 'Create')
+          try {
+            $profile = $dm.CreateEntry('primary.prof').Open()
+            try { $profile.WriteByte(0) } finally { $profile.Dispose() }
+          } finally { $dm.Dispose() }
+          $baseApk = Join-Path $loose 'base.apk'
+          $splitPackage = 'com.gesher.splitcontract'
+          $wrong = & "$app\gesher-app.cmd" install $baseApk --confirmed $splitPackage 1 ('0' * 64) 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0 -or $wrong -notmatch 'files differ from the confirmed installation') {
+            throw "host service did not reject an incorrect confirmation digest: $wrong"
+          }
+          $registry = Join-Path $stageParent 'packages.list'
+          if (Select-String -LiteralPath $registry -Pattern '^com\.gesher\.splitcontract\t' -Quiet) {
+            throw 'a mismatched digest published an installed package'
+          }
+          $expectedHashes = @{}
+          foreach ($name in @($looseInputs.Values) + 'base.dm') {
+            $expectedHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $loose $name)).Hash
+          }
+          $run = Start-ApkOpen $baseApk
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -Done Done -BeforeAnswer {
+            # These are disposable runner fixtures. The install should use the already
+            # confirmed snapshot even when the original input is no longer at its path.
+            Move-Item -LiteralPath $baseApk -Destination (Join-Path $loose 'original-base.saved') -ErrorAction Stop
+          }
+          $out = Complete-ApkOpen $run 'gesher-launch with loose splits and dex metadata'
+          if ($run.Process.ExitCode -ne 0 -or $answer.Problems.Count) {
+            throw "confirmed loose APK install failed: $out $($answer.Problems -join '; ')"
+          }
+          $row = @(Get-Content -LiteralPath $registry | Where-Object { $_.StartsWith("$splitPackage`t") })
+          if ($row.Count -ne 1) { throw 'confirmed loose APK did not publish an installed package' }
+          $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
+          $installedDir = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir"
+          foreach ($name in @($looseInputs.Values) + 'base.dm') {
+            if ((Get-FileHash -LiteralPath (Join-Path $installedDir $name)).Hash -ne $expectedHashes[$name]) {
+              throw "confirmed loose APK install did not preserve $name"
             }
           }
-          'PASS  installer: split bundle associations and registered APKM/APK+ open commands' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          & "$app\gesher-app.cmd" uninstall $splitPackage
+          if ($LASTEXITCODE -ne 0) { throw 'could not uninstall the loose split fixture' }
+          'PASS  installer: confirmation rejects a mismatched digest and preserves loose APKs, splits and dex metadata' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
           Write-Host "toast activator: $activator"
@@ -2081,7 +2280,7 @@ jobs:
           # The device outlives the console that started it.
           $running = DevicePids
           if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
-          'PASS  installer: the Gesher device started by a double-click keeps running after its console is gone' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: the Gesher device started by opening an APK from Explorer keeps running after its console is gone' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # An app's window on the device (docs/graphics.md, ADR 0029): the
           # installed gesher-app launches uiapp.apk with a hidden window; the
           # app process the system server starts draws its UI into a Win32
@@ -2366,6 +2565,16 @@ jobs:
           Set-Content $sentinel 'not Gesher''s'
           # An app id as the system server registers one for an app's toasts (ADR 0038), which uninstalling must remove.
           $null = New-Item 'HKCU:\Software\Classes\AppUserModelId\Gesher.App.com.gesher.ci' -Force
+          # A recorded desktop shortcut, which uninstalling Gesher must remove ([Code]
+          # RemoveDesktopLinks), next to a user's own shortcut, which it must keep.
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          $uninstallDesktopLnk = Join-Path $desktop 'Gesher Lifecycle.lnk'
+          $out = & "$app\gesher-app.cmd" install "$app\lifecycle.apk" --desktop-shortcut 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $uninstallDesktopLnk)) { Write-Host $out; throw "gesher-app install --desktop-shortcut made no $uninstallDesktopLnk before uninstalling Gesher (exit $LASTEXITCODE)" }
+          $desktopSentinel = Join-Path $desktop 'gesher-ci-user-shortcut.lnk'
+          $userLink = (New-Object -ComObject WScript.Shell).CreateShortcut($desktopSentinel)
+          $userLink.TargetPath = "$env:SystemRoot\notepad.exe"
+          $userLink.Save()
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
@@ -2373,6 +2582,10 @@ jobs:
           if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
           if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
           'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path $uninstallDesktopLnk) { throw "Uninstall left the recorded desktop shortcut $uninstallDesktopLnk" }
+          if (-not (Test-Path $desktopSentinel)) { throw "Uninstall removed the user's desktop shortcut $desktopSentinel" }
+          Remove-Item $desktopSentinel
+          'PASS  installer: uninstall removes the apps'' recorded desktop shortcuts and keeps the user''s own' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
           if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
@@ -2431,6 +2644,7 @@ jobs:
             tools/ci
             tools/surface
             tests/windows/graphics
+            tests/windows/shell
 
       - name: Verify and assemble gesher-setup artifact
         shell: pwsh

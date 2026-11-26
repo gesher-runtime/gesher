@@ -1111,6 +1111,70 @@
     "cp_camera_image_picker_failed": {
       "en": "Could not save the camera setting: {0}",
       "he": "שמירת הגדרת המצלמה נכשלה: {0}"
+    },
+    "install_confirm_title": {
+      "en": "Install Android app",
+      "he": "התקנת יישום Android"
+    },
+    "install_confirm_question": {
+      "en": "Do you want to install this app?",
+      "he": "האם להתקין את היישום הזה?"
+    },
+    "update_confirm_question": {
+      "en": "This app is already installed. Do you want to update it?",
+      "he": "היישום הזה כבר מותקן. האם לעדכן אותו?"
+    },
+    "install_version": {
+      "en": "Version {0}",
+      "he": "גרסה {0}"
+    },
+    "install_button": {
+      "en": "Install",
+      "he": "התקנה"
+    },
+    "update_button": {
+      "en": "Update",
+      "he": "עדכון"
+    },
+    "install_desktop_shortcut": {
+      "en": "Create a desktop shortcut",
+      "he": "יצירת קיצור דרך בשולחן העבודה"
+    },
+    "install_unreadable": {
+      "en": "{0} cannot be installed: it is not an Android app that Gesher can read.",
+      "he": "לא ניתן להתקין את {0}: זה לא יישום Android שגשר יכול לקרוא."
+    },
+    "install_desktop_failed": {
+      "en": "The desktop shortcut was not created.",
+      "he": "קיצור הדרך בשולחן העבודה לא נוצר."
+    },
+    "install_reading": {
+      "en": "Reading…",
+      "he": "קורא…"
+    },
+    "install_installing": {
+      "en": "Installing {0}…",
+      "he": "מתקין את {0}…"
+    },
+    "install_done_title": {
+      "en": "Installation complete",
+      "he": "ההתקנה הושלמה"
+    },
+    "install_done_text": {
+      "en": "{0} was installed.",
+      "he": "{0} הותקן."
+    },
+    "update_done_text": {
+      "en": "{0} was updated.",
+      "he": "{0} עודכן."
+    },
+    "install_open_button": {
+      "en": "Open",
+      "he": "פתיחה"
+    },
+    "install_done_button": {
+      "en": "Done",
+      "he": "סיום"
     }
   }
 }

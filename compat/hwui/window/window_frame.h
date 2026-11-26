@@ -4,6 +4,7 @@
 #pragma once
 #include <windows.h>
 #include <windowsx.h>
+#include "../../windows/nonclient_rtl.h"
 namespace gesher::window_presentation {
 // The Back bar: an Android navigation bar's Back button under a top-level
 // window's client area. It is non-client area, so the client area stays the
@@ -34,27 +35,36 @@ inline RECT BackButtonRect(HWND hwnd) {
 }
 
 // Draw into a caller-owned DC; restore selected GDI objects before returning.
-inline void DrawBackBar(HDC dc, const RECT& bar, int state) {
-  HBRUSH fill = CreateSolidBrush(RGB(0x20, 0x20, 0x20));
+inline void DrawBackBar(HDC dc, const RECT& bar, int state, bool rtl = false,
+                        bool high_contrast = false) {
+  HBRUSH fill = high_contrast ? GetSysColorBrush(COLOR_WINDOW)
+                              : CreateSolidBrush(RGB(0x20, 0x20, 0x20));
   FillRect(dc, &bar, fill);
-  DeleteObject(fill);
+  if (!high_contrast) DeleteObject(fill);
+  const RECT separator = {bar.left, bar.top, bar.right, bar.top + 1};
+  FillRect(dc, &separator, GetSysColorBrush(COLOR_ACTIVEBORDER));
   const int h = bar.bottom - bar.top;
   const int cx = (bar.left + bar.right) / 2, cy = (bar.top + bar.bottom) / 2;
   HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
   HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
   if (state) {
     // Hot or pressed: a circle behind the button, as Android's ripple.
-    HBRUSH ripple = CreateSolidBrush(state == 2 ? RGB(0x55, 0x55, 0x55) : RGB(0x3a, 0x3a, 0x3a));
+    HBRUSH ripple = high_contrast ? GetSysColorBrush(COLOR_HIGHLIGHT)
+        : CreateSolidBrush(state == 2 ? RGB(0x55, 0x55, 0x55) : RGB(0x3a, 0x3a, 0x3a));
     SelectObject(dc, ripple);
     const int r = h * 2 / 5;
     Ellipse(dc, cx - r, cy - r, cx + r + 1, cy + r + 1);
     SelectObject(dc, GetStockObject(NULL_BRUSH));
-    DeleteObject(ripple);
+    if (!high_contrast) DeleteObject(ripple);
   }
-  // Android's Back: an outlined triangle pointing left.
-  const int a = h / 4;
-  POINT triangle[3] = {{cx - a * 4 / 5, cy}, {cx + a * 3 / 5, cy - a}, {cx + a * 3 / 5, cy + a}};
-  HPEN pen = CreatePen(PS_SOLID, h / 20 > 1 ? h / 20 : 1, RGB(0xe8, 0xe8, 0xe8));
+  // Android's Back points toward the leading edge.
+  const int a = h / 4, direction = rtl ? -1 : 1;
+  POINT triangle[3] = {{cx - direction * a * 4 / 5, cy},
+                       {cx + direction * a * 3 / 5, cy - a},
+                       {cx + direction * a * 3 / 5, cy + a}};
+  const COLORREF ink = high_contrast ? GetSysColor(state ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT)
+                                      : RGB(0xe8, 0xe8, 0xe8);
+  HPEN pen = CreatePen(PS_SOLID, h / 20 > 1 ? h / 20 : 1, ink);
   SelectObject(dc, pen);
   Polygon(dc, triangle, 3);
   SelectObject(dc, old_pen);
@@ -62,13 +72,17 @@ inline void DrawBackBar(HDC dc, const RECT& bar, int state) {
   DeleteObject(pen);
 }
 
-inline void PaintBackBar(HWND hwnd, int state) {
+inline void PaintBackBar(HWND hwnd, int state, bool rtl) {
   if (IsIconic(hwnd)) return;
   const RECT bar = BackBarRect(hwnd);
   if (bar.right <= bar.left || bar.bottom <= bar.top) return;
   HDC dc = GetWindowDC(hwnd);
   if (dc == nullptr) return;
-  DrawBackBar(dc, bar, state);
+  HIGHCONTRASTW contrast = {};
+  contrast.cbSize = sizeof(contrast);
+  const bool high_contrast = SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast),
+      &contrast, 0) && (contrast.dwFlags & HCF_HIGHCONTRASTON);
+  DrawBackBar(dc, bar, state, rtl, high_contrast);
   ReleaseDC(hwnd, dc);
 }
 

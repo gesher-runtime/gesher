@@ -33,6 +33,7 @@ int main() {
         nullptr, nullptr, wc.hInstance, nullptr);
     Check(hwnd != nullptr, "create real window");
     if (!hwnd) continue;
+    if (!popup) GesherSetNonclientRtl(hwnd, TRUE);
     for (const SIZE size : {SIZE{360,640}, SIZE{800,600}, SIZE{1,1}}) {
       RECT bounds = view::ClientFrameRect(hwnd, popup, size.cx, size.cy);
       SetWindowPos(hwnd, nullptr, 0, 0, bounds.right-bounds.left, bounds.bottom-bounds.top,
@@ -74,6 +75,14 @@ int main() {
       if(GetPixel(dc,x,y)==RGB(0xe8,0xe8,0xe8)) triangle=true;
     Check(triangle,"Back triangle drawn");
   }
+  for (bool rtl : {false, true}) {
+    view::DrawBackBar(dc, warmup, 0, rtl);
+    const COLORREF ink = RGB(0xe8, 0xe8, 0xe8);
+    Check(GetPixel(dc, rtl ? 128 : 112, 20) == ink, "Back points toward the leading edge");
+    Check(GetPixel(dc, rtl ? 112 : 128, 20) != ink, "Back has no second arrow tip");
+  }
+  view::DrawBackBar(dc, warmup, 0, false, true);
+  Check(GetPixel(dc, 1, 1) == GetSysColor(COLOR_WINDOW), "high contrast uses the system surface");
   Check(GetGuiResources(GetCurrentProcess(),GR_GDIOBJECTS)==before,"paint releases GDI objects");
   SelectObject(dc,old); DeleteObject(bitmap); DeleteDC(dc);
   UnregisterClassW(wc.lpszClassName,wc.hInstance);

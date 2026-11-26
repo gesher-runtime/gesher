@@ -26,6 +26,7 @@ typedef struct {
 static BOOL BackgroundCreateControls(HWND dialog, BackgroundDialogState* state) {
   GesherHostThemeInit(&state->theme, dialog);
   BOOL rtl = GesherUiRtl(state->language);
+  if (rtl || GesherDesktopRtl()) GesherSetNonclientRtl(dialog, TRUE);
   DWORD reading = rtl ? WS_EX_RTLREADING : 0;
   DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
   HWND brand = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "brand"),

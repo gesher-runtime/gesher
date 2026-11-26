@@ -34,6 +34,8 @@ static HWND PermissionControl(HWND dialog, DWORD extra, const WCHAR* klass,
 static BOOL PermissionCreateControls(HWND dialog, PermissionDialogState* state) {
   GesherHostThemeInit(&state->theme, dialog);
   BOOL rtl = GesherUiRtl(state->language);
+  BOOL rtl_layout = rtl || GesherDesktopRtl();
+  if (rtl_layout) GesherSetNonclientRtl(dialog, TRUE);
   DWORD reading = rtl ? WS_EX_RTLREADING : 0;
   DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
   HWND brand = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "brand"),
@@ -52,9 +54,9 @@ static BOOL PermissionCreateControls(HWND dialog, PermissionDialogState* state) 
       ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER | WS_TABSTOP
       | (rtl ? ES_RIGHT : ES_LEFT), PERMISSION_DETAILS, 16, 118, 218, 36);
   HWND deny = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_deny"),
-      BS_OWNERDRAW | WS_TABSTOP, IDNO, 76, 166, 76, 22);
+      BS_OWNERDRAW | WS_TABSTOP, IDNO, rtl_layout ? 98 : 76, 166, 76, 22);
   HWND allow = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "permission_allow"),
-      BS_OWNERDRAW | WS_TABSTOP, IDYES, 160, 166, 74, 22);
+      BS_OWNERDRAW | WS_TABSTOP, IDYES, rtl_layout ? 16 : 160, 166, 74, 22);
   if (!brand || !heading || !app || !package || !requested || !details || !deny || !allow) {
     return FALSE;
   }

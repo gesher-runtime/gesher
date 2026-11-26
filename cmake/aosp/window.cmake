@@ -10,7 +10,7 @@ add_library(gesher_window STATIC ${_win}/gesher_window.cc ${_win}/gesher_popup.c
   ${_win}/input_pane.cc)
 target_include_directories(gesher_window PUBLIC ${_win} ${CMAKE_SOURCE_DIR}/compat/windows)
 target_compile_options(gesher_window PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(gesher_window PUBLIC user32 gdi32 ole32 shell32)
+target_link_libraries(gesher_window PUBLIC user32 gdi32 ole32 shell32 advapi32)
 gesher_graphics_lib(gesher_window)
 
 add_library(gesher_window_surface STATIC ${_win}/win32_surface.cc ${_win}/native_window.cc)

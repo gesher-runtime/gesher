@@ -7,8 +7,8 @@
 **Run Android apps on Windows as native Windows processes — no emulator, no virtual machine.**
 
 Gesher (Hebrew: *bridge*) is to Android what Wine is to Windows: a compatibility
-layer. Double-click an `.apk`, and the app runs in an ordinary window, at native
-speed, with no hidden VM and no Android image to boot.
+layer. Double-click an `.apk`, confirm the install, open it, and the app runs in an ordinary
+window, at native speed, with no hidden VM and no Android image to boot.
 
 > **Release: v0.1.0** — Native execution of Android applications on Windows with ART JIT, HWUI/Direct3D acceleration, WASAPI audio, Camera/Location subsystems, microG GMS stubs, ARM64-to-x64 binary translation, and seamless desktop integration.
 > See the [architecture overview](docs/architecture.md).
@@ -173,8 +173,8 @@ subject to those licenses, and mandatory legal rights are preserved.
 ## בעברית
 
 ‏**גשר** מריץ אפליקציות אנדרואיד על Windows כתוכנות רגילות, בלי אמולטור ובלי
-מכונה וירטואלית. המטרה היא כלי קל שפותח קובצי ‎`.apk` בלחיצה כפולה ומכבד את
-הסינון שמותקן במחשב.
+מכונה וירטואלית. המטרה היא כלי קל שמתקין קובצי ‎`.apk` בלחיצה כפולה (אחרי אישור
+ההתקנה) ומכבד את הסינון שמותקן במחשב.
 
 גרסה **v0.1.0** כוללת מנוע ART עם JIT, האצת חומרה HWUI/Direct3D, סאונד WASAPI, תמיכת מצלמה ומיקום, שירותי microG GMS, תרגום ספריות ARM64, ושילוב מלא בשולחן העבודה של Windows.
 

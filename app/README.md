@@ -325,7 +325,18 @@ existing bounded delivery holds; these deliveries do not restart the idle clock.
   that the system server also gives the package's processes
   (`GESHER_APP_USER_MODEL_ID`; `GesherAppProcess` sets it); `uninstall` removes it
   (`com.gesher.app.shell`, [docs/installer.md](../docs/installer.md),
-  [0028](../docs/decisions/0028-shell-start-menu-apps.md)).
+  [0028](../docs/decisions/0028-shell-start-menu-apps.md)). `install APK
+  --desktop-shortcut` also puts that shortcut on the user's desktop, recorded as
+  `desktop_link` (never in portable Gesher or with `GESHER_SHORTCUTS=0`); `uninstall`
+  removes the recorded link.
+- `apk-info APK OUT` reads an APK or bundle without installing it or starting the
+  device and writes `OUT` (UTF-8 `key=value` lines: `package`, `version_code`,
+  `version_name`, `label`, `icon`, and `installed_version_code`,
+  `installed_version_name`, `desktop_shortcut=1` when they apply). gesher-launch runs it
+  for an APK opened from Explorer, then asks the user before it runs `install` (the
+  same version installed: `launch PACKAGE` directly), and launches the app only when
+  the user clicks Open ([docs/installer.md](../docs/installer.md#opening-an-apk-from-explorer)).
+  `gesher-app my.apk` itself still installs and runs without asking.
 - The custom schemes of a package's BROWSABLE VIEW filters (an OAuth redirect's) become
   per-user URL protocols at `install`, running `gesher-launch view PACKAGE "%1"`;
   `uninstall` removes them. `view PACKAGE URL` starts ACTION_VIEW of the URL in the

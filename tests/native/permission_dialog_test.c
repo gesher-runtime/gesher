@@ -87,9 +87,15 @@ static void CALLBACK Inspect(HWND dialog, UINT message, UINT_PTR timer, DWORD ti
   Check(wcscmp(value, GesherUiText(language, "permission_allow")) == 0, "localized Allow label");
   SendMessageW(details, EM_LINESCROLL, 0, 60);
   Check(SendMessageW(details, EM_GETFIRSTVISIBLELINE, 0, 0) > 0, "long request scrolls vertically");
-  RECT client, bounds;
+  RECT client, bounds, deny_bounds;
   GetClientRect(dialog, &client);
   GetWindowRect(allow, &bounds);
+  GetWindowRect(deny, &deny_bounds);
+  Check((GesherUiRtl(language) || GesherDesktopRtl())
+      ? bounds.left < deny_bounds.left : deny_bounds.left < bounds.left,
+      "button positions follow the locale while Deny remains the default");
+  Check((GetWindowLongW(dialog, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) == 0,
+      "caption direction does not mirror the dialog's client coordinates");
   MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
   Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "Allow fits inside dialog");
   if (action == DENY || action == ALLOW) {
@@ -352,6 +358,7 @@ int main(void) {
   BOOL fixture_icon = FALSE;
   for (int locale = 0; locale < 2; ++locale) {
     language = locale ? GESHER_UI_HE : GESHER_UI_EN;
+    SetEnvironmentVariableW(L"GESHER_LOCALES", locale ? L"he-IL" : L"en-US");
     // English runs without gesher.ico (the dialog still works), Hebrew with it.
     if (locale == 0) {
       expect_icon = have_path && GetFileAttributesW(icon_path) != INVALID_FILE_ATTRIBUTES;
@@ -393,6 +400,15 @@ int main(void) {
       printf("exact alarm settings: locale=%s action=%d result=%d\n", locale ? "he" : "en", exact_action, result);
     }
   }
+  /* An untranslated RTL locale mirrors the host layout even with English text. */
+  SetEnvironmentVariableW(L"GESHER_LOCALES", L"ar-SA,en-US");
+  language = GESHER_UI_EN;
+  Check(GesherDesktopRtl(), "Arabic primary language requests RTL desktop chrome");
+  phase = 0;
+  action = ENTER;
+  Check(PermissionDialog(language, L"com.ideomobile.mercantile", permissions) == PERMISSION_DENIED,
+      "default remains Deny for Arabic desktop layout");
+  SetEnvironmentVariableW(L"GESHER_LOCALES", NULL);
   // The host prompts below share the icon helper; they run with gesher.ico.
   // Account token consent is always default-No; Enter, Escape and close deny.
   for (int locale = 0; locale < 2; ++locale) {

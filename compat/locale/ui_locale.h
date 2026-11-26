@@ -36,3 +36,37 @@ static inline enum GesherUiLanguage GesherUiCurrentLanguage(void) {
   HeapFree(GetProcessHeap(), 0, tags);
   return language;
 }
+
+/* The host chrome can follow the user's layout even when Gesher has no
+ * translation in the first preferred language. Windows identifies the
+ * reading layout from the full locale, including its script. */
+static inline BOOL GesherDesktopRtl(void) {
+  wchar_t* tags = NULL;
+  DWORD size = GetEnvironmentVariableW(L"GESHER_LOCALES", NULL, 0);
+  if (size > 1) {
+    tags = GesherLanguageBufferAllocate(size);
+    if (tags != NULL) {
+      DWORD copied = GetEnvironmentVariableW(L"GESHER_LOCALES", tags, size);
+      if (copied == 0 || copied >= size) {
+        HeapFree(GetProcessHeap(), 0, tags);
+        tags = NULL;
+      }
+    }
+  }
+  if (tags == NULL) tags = GesherPreferredLanguages();
+  wchar_t* primary = tags;
+  if (primary != NULL) {
+    while (GesherLanguageSpace(*primary)) ++primary;
+    wchar_t* end = primary;
+    while (*end && *end != L',' && *end != L';' && !GesherLanguageSpace(*end)) {
+      if (*end == L'_') *end = L'-';
+      ++end;
+    }
+    *end = L'\0';
+  }
+  DWORD layout = 0;
+  int found = GetLocaleInfoEx(primary, LOCALE_IREADINGLAYOUT | LOCALE_RETURN_NUMBER,
+      (LPWSTR)&layout, sizeof(layout) / sizeof(wchar_t));
+  if (tags != NULL) HeapFree(GetProcessHeap(), 0, tags);
+  return found != 0 ? layout == 1 : GesherUiRtl(GesherUiCurrentLanguage());
+}
