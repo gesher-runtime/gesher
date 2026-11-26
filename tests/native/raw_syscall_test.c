@@ -112,7 +112,12 @@ static void check_patched_code(void) {
     check("code written at run time runs again", patched_getpid() == getpid());
 }
 
+static long descriptor_raw2(long nr, long a, long b) { return raw3(nr, a, b, 0); }
+
+#include "raw_descriptor_syscall_contract.inc"
+
 int gesher_selftest(void) {
+    test_raw_descriptor_syscalls(descriptor_raw2);
     errno = EDOM;
     check("raw success preserves libc errno", raw0(SYS_getpid) == getpid() && errno == EDOM);
     errno = EDOM;

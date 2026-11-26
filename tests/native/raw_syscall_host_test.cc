@@ -7,6 +7,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <sys/epoll.h>
+#include <sys/inotify.h>
+#include <unistd.h>
 
 namespace {
 int failures;
@@ -49,6 +52,12 @@ int64_t BIONIC_SYSV Sigaltstack(int64_t ss, int64_t old_ss, int64_t, int64_t, in
   if (alt_stack_fail) return errno = EINVAL, -1;
   return 0;
 }
+int64_t BIONIC_SYSV LegacyEpollCreate(int64_t size, int64_t, int64_t, int64_t, int64_t, int64_t) {
+  return epoll_create(static_cast<int>(size));
+}
+int64_t BIONIC_SYSV LegacyInotifyInit(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t) {
+  return inotify_init();
+}
 struct Regex { int32_t magic; size_t count; const char* end; void* guts; };
 struct Match { int64_t begin, end; };
 }
@@ -68,6 +77,8 @@ void* LookupBionicSymbol(const char* name) {
   if (!std::strcmp(name, "sysconf")) return reinterpret_cast<void*>(&Sysconf);
   if (!std::strcmp(name, "sigprocmask")) return reinterpret_cast<void*>(&Sigprocmask);
   if (!std::strcmp(name, "sigaltstack")) return reinterpret_cast<void*>(&Sigaltstack);
+  if (!std::strcmp(name, "epoll_create")) return reinterpret_cast<void*>(&LegacyEpollCreate);
+  if (!std::strcmp(name, "inotify_init")) return reinterpret_cast<void*>(&LegacyInotifyInit);
   return nullptr;
 }
 }
@@ -101,6 +112,20 @@ int main() {
   Check("affinity errors stay negative errno", RawSyscallX64(204, args) == -EINVAL);
   Check("unknown syscall remains ENOSYS", RawSyscallX64(500, args) == -ENOSYS);
   Check("int error result remains EBADF", RawSyscallX64(3, args) == -EBADF);
+  const int64_t legacy[6] = {0, -1, -1, -1, -1, -1};
+  errno = EDOM;
+  Check("raw epoll_create keeps legacy size validation",
+        RawSyscallX64(213, legacy) == -EINVAL && errno == EDOM);
+  const int64_t valid_epoll[6] = {1, -1, -1, -1, -1, -1};
+  int ep = static_cast<int>(RawSyscallX64(213, valid_epoll));
+  epoll_event event{};
+  Check("raw legacy epoll_create produces a usable descriptor",
+        ep >= 0 && errno == EDOM && epoll_wait(ep, &event, 1, 0) == 0);
+  if (ep >= 0) close(ep);
+  errno = EDOM;
+  int in = static_cast<int>(RawSyscallX64(253, legacy));
+  Check("raw legacy inotify_init ignores unused registers", in >= 0 && errno == EDOM);
+  if (in >= 0) close(in);
   errno = EDOM;
   args[0] = 0x1111;
   args[1] = 0x2222;
