@@ -198,6 +198,11 @@ void Run(const char* path) {
           &vm_result, &error) &&
         static_cast<int32_t>(vm_result.bits) == 77,
         "JavaVM attach returns the real owning JNI thread, detachment fails closed");
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_env_get_vm",
+          {Value::GuestPointer(bridge.GuestEnvironment())}, ValueKind::I32,
+          &vm_result, &error) &&
+        static_cast<int32_t>(vm_result.bits) == 88,
+        "guest JNIEnv GetJavaVM and JavaVM GetEnv round-trip");
 
   auto call = [&](const char* name, Value* value) {
     return program.CallExport("gesher_arm32_jni_fixture.so", name,
