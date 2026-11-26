@@ -75,6 +75,9 @@ struct LoadOptions {
   void* reserved_addr = nullptr;
   size_t reserved_size = 0;
   bool reserved_hint = false;
+  // FORCE_LOAD can map a new file, but requesting another copy of the same
+  // already loaded file is unsupported.
+  bool reject_loaded_file = false;
 };
 
 // Loads the ELF object at `path`. On success returns a handle and runs its
@@ -103,7 +106,7 @@ void* ResolveBionic(const char* name);
 // Is `library` an arm64-v8a object (run by the arm64 translator, ADR 0047)?
 bool IsAarch64(Library* library);
 
-// Opens an already-linked object by soname or file base name, running its
+// Opens an already-linked object by soname, running its
 // constructors if they have not started. Returns nullptr on a miss.
 Library* OpenLoaded(const char* name);
 

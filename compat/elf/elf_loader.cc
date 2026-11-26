@@ -21,6 +21,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -130,11 +131,19 @@ uint32_t SysvHash(const char* name) {
 
 }  // namespace
 
-// A loaded object. One per .so.
+struct ImageIdentity {
+  uint64_t volume;
+  uint64_t index[2];
+  bool wide;
+  bool operator==(const ImageIdentity&) const = default;
+};
+
+// A loaded object. File-backed objects keep the identity of the opened file.
 struct Library {
   std::string name;       // file base name or given name
   std::string soname;     // DT_SONAME, else name
   std::string path;       // the file's absolute path (realpath), else name
+  std::optional<ImageIdentity> file_id;
   uint8_t* base = nullptr;   // where the first PT_LOAD landed
   uint8_t* load_bias = nullptr;  // base - first PT_LOAD p_vaddr
   size_t map_size = 0;       // total reserved span
@@ -522,6 +531,20 @@ Library* FindLocked(const std::string& name) {
   return nullptr;
 }
 
+Library* FindSoname(const std::vector<Library*>& libraries, const std::string& name) {
+  for (Library* lib : libraries) {
+    if (lib->soname == name) return lib;
+  }
+  return nullptr;
+}
+
+Library* FindFile(const std::vector<Library*>& libraries, const ImageIdentity& id) {
+  for (Library* lib : libraries) {
+    if (lib->file_id == id) return lib;
+  }
+  return nullptr;
+}
+
 // Looks up `name` as exported by any loaded object. Fills *out_lib/*out_sym.
 // `arch` limits the search to x86-64 (0) or arm64 (1) objects, so a guest
 // object never binds to host code and vice versa (ADR 0047); -1 is any.
@@ -621,6 +644,7 @@ std::string AbsolutePath(const char* path) {
 // and it is unmapped once the object is loaded.
 struct FileImage {
   int fd = -1;
+  std::optional<ImageIdentity> id;
   const uint8_t* data = nullptr;
   size_t size = 0;
   void* view = nullptr;
@@ -647,6 +671,25 @@ bool OpenImage(const char* path, FileImage* image, std::string* error) {
     return false;
   }
   image->size = static_cast<size_t>(st.st_size);
+#ifdef _WIN32
+  FILE_ID_INFO file_id{};
+  HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(image->fd));
+  if (file != INVALID_HANDLE_VALUE &&
+      GetFileInformationByHandleEx(file, FileIdInfo, &file_id, sizeof(file_id))) {
+    ImageIdentity id{file_id.VolumeSerialNumber, {}, true};
+    std::memcpy(id.index, file_id.FileId.Identifier, sizeof(id.index));
+    if (id.index[0] != 0 || id.index[1] != 0) image->id = id;
+    return true;
+  }
+#endif
+  if (st.st_ino != 0) {
+    image->id = ImageIdentity{static_cast<uint64_t>(st.st_dev),
+                              {static_cast<uint64_t>(st.st_ino), 0}, false};
+  }
+  return true;
+}
+
+bool MapImage(const char* path, FileImage* image, std::string* error) {
   HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(image->fd));
   if (file != INVALID_HANDLE_VALUE) {
     if (HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr)) {
@@ -1807,8 +1850,12 @@ using PendingLibrary = std::unique_ptr<Library, decltype(&DiscardLibrary)>;
 // reaches an unread ElfReader precondition. See docs/native-load-transactions.md.
 thread_local std::vector<const std::vector<Library*>*> g_pending_scopes;
 
-bool IsPending(const std::string& name) {
+bool IsPending(const std::string& name, const std::optional<ImageIdentity>& id) {
   for (const auto* scope : g_pending_scopes) {
+    if (id) {
+      if (FindFile(*scope, *id)) return true;
+      continue;
+    }
     for (Library* lib : *scope) {
       if (lib->name == name || lib->soname == name) return true;
     }
@@ -1827,9 +1874,10 @@ class LoadTransaction {
   }
 
   // `path`: the root's file (null for an object loaded from memory).
-  Library* Load(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
+  Library* Load(const char* name, const char* path, const FileImage* file,
+                const uint8_t* data, size_t size,
                 const LoadOptions& options, std::string* error) {
-    Library* root = Stage(name, path, data, size, fd, options, error, nullptr);
+    Library* root = Stage(name, path, file, data, size, options, error, nullptr);
     if (root == nullptr) return nullptr;
     for (const auto& node : nodes_) {
       if (!Prepare(*node, error)) return nullptr;
@@ -1884,17 +1932,12 @@ class LoadTransaction {
   std::vector<std::unique_ptr<Node>> nodes_;
   std::vector<Library*> scope_;
 
-  Library* FindStaged(const std::string& name) {
-    for (Library* lib : scope_) {
-      if (lib->name == name || lib->soname == name) return lib;
-    }
-    return nullptr;
-  }
-
-  Library* Stage(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
+  Library* Stage(const char* name, const char* path, const FileImage* file,
+                 const uint8_t* data, size_t size,
                  const LoadOptions& options, std::string* error,
                  std::unique_ptr<FileImage> image) {
-    if (IsPending(name)) {
+    const auto id = file ? file->id : std::nullopt;
+    if (IsPending(name, id)) {
       Fail(error, std::string(name) + ": recursive load while relocation is unfinished");
       return nullptr;
     }
@@ -1920,6 +1963,7 @@ class LoadTransaction {
     Library* lib = node->library.get();
     lib->name = name;
     lib->path = path != nullptr ? AbsolutePath(path) : std::string(name);
+    lib->file_id = id;
     lib->is_aarch64 = aarch64;
     lib->stub_unresolved = options.stub_unresolved_functions;
     lib->load_scope = &scope_;
@@ -1927,7 +1971,7 @@ class LoadTransaction {
     node->size = size;
     node->options = options;
     node->image = std::move(image);
-    if (!MapSegments(lib, data, size, fd, options, error)) return nullptr;
+    if (!MapSegments(lib, data, size, file ? file->fd : -1, options, error)) return nullptr;
     ParseDynamic(lib, data);
     TraceMapping(*lib);
     nodes_.push_back(std::move(node));
@@ -1935,14 +1979,19 @@ class LoadTransaction {
     // Discover every dependency before allocating TLS, rewriting code or
     // running any resolver. A cycle finds its already-mapped private node.
     for (const std::string& soname : lib->needed) {
-      Library* dep = FindStaged(soname);
-      if (dep == nullptr) dep = FindLocked(soname);
+      const bool by_name = soname.find_first_of("/\\") == std::string::npos;
+      Library* dep = by_name ? FindSoname(scope_, soname) : nullptr;
+      if (dep == nullptr && by_name) dep = FindSoname(Loaded(), soname);
       if (dep == nullptr) {
         std::string found;
-        for (const std::string& dir : options.search_paths) {
-          std::string candidate = dir + "/" + soname;
-          struct stat st {};
-          if (stat(candidate.c_str(), &st) == 0) { found = candidate; break; }
+        if (by_name) {
+          for (const std::string& dir : options.search_paths) {
+            std::string candidate = dir + "/" + soname;
+            struct stat st {};
+            if (stat(candidate.c_str(), &st) == 0) { found = candidate; break; }
+          }
+        } else {
+          found = soname;
         }
         if (found.empty()) {
           if (options.allow_shimmed_needed) continue;
@@ -1951,6 +2000,15 @@ class LoadTransaction {
         }
         auto child_image = std::make_unique<FileImage>();
         if (!OpenImage(found.c_str(), child_image.get(), error)) return nullptr;
+        if (child_image->id) {
+          dep = FindFile(scope_, *child_image->id);
+          if (dep == nullptr) dep = FindFile(Loaded(), *child_image->id);
+        }
+        if (dep != nullptr) {
+          lib->dependencies.push_back(dep);
+          continue;
+        }
+        if (!MapImage(found.c_str(), child_image.get(), error)) return nullptr;
         FileImage* source = child_image.get();
         LoadOptions child_options = options;
         child_options.main_executable = false;
@@ -1960,7 +2018,7 @@ class LoadTransaction {
         child_options.reserved_addr = nullptr;
         child_options.reserved_size = 0;
         child_options.reserved_hint = false;
-        dep = Stage(soname.c_str(), found.c_str(), source->data, source->size, source->fd,
+        dep = Stage(soname.c_str(), found.c_str(), source, source->data, source->size,
                     child_options, error, std::move(child_image));
         if (dep == nullptr) return nullptr;
       }
@@ -2044,10 +2102,11 @@ class LoadTransaction {
 
 };
 
-Library* LoadCommon(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
+Library* LoadCommon(const char* name, const char* path, const FileImage* file,
+                    const uint8_t* data, size_t size,
                     std::string* error, const LoadOptions& options) {
   LoadTransaction transaction;
-  Library* lib = transaction.Load(name, path, data, size, fd, options, error);
+  Library* lib = transaction.Load(name, path, file, data, size, options, error);
   if (lib != nullptr && lib->mapped_by_caller) {
     std::lock_guard<std::mutex> lock(g_reserved_mutex);
     g_reserved_objects.push_back(lib);
@@ -2213,25 +2272,35 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
   // Name the object by its file base name.
   const char* slash = std::strrchr(path, '/');
   const char* bslash = std::strrchr(path, '\\');
-  const char* base = slash > bslash ? slash : bslash;
+  const char* base = slash && (!bslash || slash > bslash) ? slash : bslash;
   std::string name = base ? base + 1 : path;
-  if (Library* existing = FindAndInitLocked(name)) return existing;
   FileImage image;
   if (!OpenImage(path, &image, error)) return nullptr;
+  if (image.id) {
+    if (Library* existing = FindFile(Loaded(), *image.id)) {
+      if (options.reject_loaded_file) {
+        Fail(error, "ANDROID_DLEXT_FORCE_LOAD of an already loaded file is not supported");
+        return nullptr;
+      }
+      RunInit(existing);
+      return existing;
+    }
+  }
+  if (!MapImage(path, &image, error)) return nullptr;
   if (IsGesherLinkerImage(image.data, image.size)) {
     Fail(error, std::string(path) +
                     " is Gesher's ELF loader (/system/bin/linker64): the process's own dynamic "
                     "linker, not a library to load");
     return nullptr;
   }
-  return LoadCommon(name.c_str(), path, image.data, image.size, image.fd, error, options);
+  return LoadCommon(name.c_str(), path, &image, image.data, image.size, error, options);
 }
 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
                         const LoadOptions& options) {
   std::lock_guard<LoaderMutex> operation(g_mutex);
   if (Library* existing = FindAndInitLocked(name)) return existing;
-  return LoadCommon(name, nullptr, static_cast<const uint8_t*>(data), size, -1, error, options);
+  return LoadCommon(name, nullptr, nullptr, static_cast<const uint8_t*>(data), size, error, options);
 }
 
 void* Lookup(Library* library, const char* name) {
@@ -2291,7 +2360,9 @@ void* ResolveBionic(const char* name) {
 
 Library* OpenLoaded(const char* name) {
   std::lock_guard<LoaderMutex> lock(g_mutex);
-  return FindAndInitLocked(name);
+  Library* lib = FindSoname(Loaded(), name);
+  if (lib != nullptr) RunInit(lib);
+  return lib;
 }
 
 Library* Find(const char* name) {

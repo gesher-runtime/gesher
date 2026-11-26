@@ -1,7 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 // Execute real, original ELF dependency graphs through the public loader API.
-// Usage: elf_load_transaction_test <fixture-root> [--arm64] [--reentry-only]
+// Usage: elf_load_transaction_test <fixture-root> [--arm64] [--reentry-only | --identity-only]
 // The Linux host runner substitutes Win32 primitives explicitly. Windows CI
 // uses the production mapping/rewrite/TLS implementations and optional ARM64
 // translator. No application-specific behavior or production failure switch.
@@ -12,6 +12,7 @@
 #endif
 #include <elf.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
@@ -357,6 +358,32 @@ void IfuncFileAndMemory() {
         "both IFUNC objects publish and construct exactly once");
 }
 
+void FileIdentity(const std::string& root) {
+  const size_t initial_count = Count();
+  const std::string first = root + "/identity-a/tx_identity.so";
+  const std::string second = root + "/identity-b/tx_identity.so";
+  const std::string alias = root + "/identity-a/tx_identity_alias-" +
+                            std::to_string(getpid()) + ".so";
+  const std::string missing = root + "/incomplete/tx_identity.so";
+  std::string error;
+  auto* a = elf::Load(first.c_str(), &error);
+  auto* b = elf::Load(second.c_str(), &error);
+  Check(a != nullptr && b != nullptr && a != b, "same basename and SONAME can load from distinct files");
+  Check(Call(a, "tx_identity") == 29 && Call(b, "tx_identity") == 30,
+        "each explicit handle calls its own file's export");
+  Check(elf::OpenLoaded("tx_identity.so") == a, "bare SONAME retains first loaded match");
+  Check(elf::Load(missing.c_str(), &error) == nullptr, "missing explicit path never resolves by basename");
+  Check(elf::Load(first.c_str(), &error) == a, "repeated path reuses its loaded object");
+  const bool linked = link(first.c_str(), alias.c_str()) == 0;
+  Check(linked, "hard-link alias fixture is a link to the first file");
+  if (linked) {
+    Check(elf::Load(alias.c_str(), &error) == a, "hard-link alias reuses its original file identity");
+    Check(unlink(alias.c_str()) == 0, "remove hard-link alias fixture");
+  }
+  Check(initialized[29] == 1 && initialized[30] == 1 && Count() == initial_count + 2,
+        "constructors and program-header entries are unique per file");
+}
+
 void IfuncDependencyTls() {
   std::string error;
   auto* root = Load(complete_dir, "tx_ifunc_tls_root.so", Options(complete_dir), &error);
@@ -463,16 +490,18 @@ int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   bool arm64 = false;
   bool reentry_only = false;
+  bool identity_only = false;
   for (int i = 2; i < argc; ++i) {
     if (std::strcmp(argv[i], "--arm64") == 0) arm64 = true;
     else if (std::strcmp(argv[i], "--reentry-only") == 0) reentry_only = true;
+    else if (std::strcmp(argv[i], "--identity-only") == 0) identity_only = true;
     else {
       std::fprintf(stderr, "unknown option: %s\n", argv[i]);
       return 2;
     }
   }
-  if (argc < 2) {
-    std::fprintf(stderr, "usage: %s <fixture-root> [--arm64] [--reentry-only]\n", argv[0]);
+  if (argc < 2 || (reentry_only && identity_only)) {
+    std::fprintf(stderr, "usage: %s <fixture-root> [--arm64] [--reentry-only | --identity-only]\n", argv[0]);
     return 2;
   }
   Watchdog watchdog;
@@ -488,9 +517,12 @@ int main(int argc, char** argv) {
 #endif
   }
   elf::SetBionicResolver(Resolve);
-  if (reentry_only) {
+  if (identity_only) {
+    FileIdentity(argv[1]);
+  } else if (reentry_only) {
     ConstructorReentry();
     ConstructorReentryIntoLinkedSiblings();
+    FileIdentity(argv[1]);
   } else {
     MissingDependencyAndRetry();
     RelocationFailureAndRetry();

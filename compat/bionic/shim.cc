@@ -1187,29 +1187,22 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
     }
   }
   if (filename == nullptr) return reinterpret_cast<void*>(-2);  // the "main program"
-  const char* slash = std::strrchr(filename, '/');
-  const char* base = slash ? slash + 1 : filename;
+  const bool by_path = std::strpbrk(filename, "/\\") != nullptr;
   // FORCE_LOAD only skips bionic's match of an already-loaded library by its
   // file (inode); a bare name is still found by soname first
-  // (find_loaded_library_by_soname ignores names with a '/'). So with a path,
-  // a library already loaded would be loaded a second time, which this loader
-  // cannot do (one object per name): that fails rather than returning the
-  // first copy. With a bare name the loaded library is returned, as bionic does.
-  const bool force_second_copy =
-      ext != nullptr && (ext->flags & kDlextForceLoad) != 0 && slash != nullptr;
+  // (find_loaded_library_by_soname ignores paths). The loader checks the
+  // identity of the opened file before rejecting an unsupported second copy.
+  const bool force_load = ext != nullptr && (ext->flags & kDlextForceLoad) != 0;
   if (void* platform = PlatformLibraryHandle(filename)) {
-    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
+    if (force_load && by_path) return DlOpenUnsupported(kDlextForceLoad);
     return platform;
   }
-  // Already loaded: the same handle, where it is, whatever reservation
-  // extinfo offers (bionic finds a loaded library before it maps anything).
-  if (auto* existing = force_second_copy ? gesher::elf::Find(base) : gesher::elf::OpenLoaded(base)) {
-    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
-    return existing;
+  if (!by_path) {
+    if (auto* existing = gesher::elf::OpenLoaded(filename)) return existing;
   }
   std::string path = filename;
   std::vector<std::string> dirs = LibraryDirectories();
-  if (slash == nullptr) {
+  if (!by_path) {
     path.clear();
     for (const std::string& d : dirs) {
       if (Exists(d + "/" + filename)) {
@@ -1224,6 +1217,7 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
     }
   }
   gesher::elf::LoadOptions options;
+  options.reject_loaded_file = force_load;
   if (ext != nullptr && (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint)) != 0) {
     options.use_reserved = true;
     options.reserved_addr = ext->reserved_addr;

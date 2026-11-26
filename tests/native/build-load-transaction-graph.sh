@@ -47,6 +47,13 @@ build reentry_trigger 25
 build reentry_file 26
 build reentry_memory 27
 build reentry_graph 28 -l:tx_reentry_trigger.so -l:tx_reentry_file.so -l:tx_reentry_memory.so
+mkdir -p "$output/identity-a" "$output/identity-b"
+for role in 29 30; do
+  directory=identity-a
+  if [[ $role == 30 ]]; then directory=identity-b; fi
+  "$compiler" "${common[@]}" -DTX_ROLE="$role" -Wl,-soname,tx_identity.so \
+    -o "$output/$directory/tx_identity.so" "$here/elf_load_transaction_graph.c"
+done
 for name in newchild middle root; do
   cp "$complete/tx_${name}.so" "$output/incomplete/tx_${name}.so"
 done
