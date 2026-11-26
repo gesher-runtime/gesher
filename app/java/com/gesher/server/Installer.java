@@ -273,6 +273,14 @@ final class Installer {
             try {
                 ApkPackage installedPackage = open(e);
                 ContactsProviderSupport.checkPackageAdmission(installedPackage);
+                // Older releases left their installed code writable. Migrate only a
+                // parsed generation belonging to this profile and registry entry.
+                for (String path : apksOf(e.codePath)) {
+                    File file = new File(path);
+                    if (file.canWrite() && !file.setReadOnly()) {
+                        throw new IOException("Cannot make installed APK read-only: " + file);
+                    }
+                }
                 result.add(installedPackage);
             } catch (Exception ex) {
                 SystemServer.log("installed package " + e.packageName + " at " + e.codePath
@@ -612,8 +620,8 @@ final class Installer {
             pendingPackage = pkg;
             File base = new File(code, "base.apk");
             boolean syncCode = sessionMetadata != null;
-            copy(source, base, syncCode);
-            if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode);
+            copy(source, base, syncCode, true);
+            if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode, false);
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
                     String targetName = splitFileName(split);
@@ -621,10 +629,10 @@ final class Installer {
                     if (!target.createNewFile()) {
                         throw new IOException("Conflicting split filenames: " + targetName);
                     }
-                    copy(split, target, syncCode);
+                    copy(split, target, syncCode, true);
                     File splitMetadata = dexMetadata(split);
                     if (splitMetadata.isFile()) copy(splitMetadata,
-                            new File(code, InstallSessionMetadata.dexName(targetName)), syncCode);
+                            new File(code, InstallSessionMetadata.dexName(targetName)), syncCode, false);
                 }
             }
             if (sessionMetadata != null) sessionMetadata.copyTo(code);
@@ -1087,10 +1095,19 @@ final class Installer {
         return total;
     }
 
-    private static void copy(File from, File to, boolean sync) throws IOException {
+    private static void copy(File from, File to, boolean sync, boolean readOnly) throws IOException {
         byte[] buffer = new byte[64 * 1024];
         try (InputStream in = new FileInputStream(from);
                 FileOutputStream out = new FileOutputStream(to)) {
+            if (readOnly) {
+                // Publish the same generation that signature verification reads.
+                // Keep the original writable handle only while filling the new file.
+                try {
+                    android.system.Os.fchmod(out.getFD(), 0444);
+                } catch (android.system.ErrnoException e) {
+                    throw new IOException("Cannot make staged APK read-only: " + to, e);
+                }
+            }
             for (int n; (n = in.read(buffer)) > 0; ) {
                 out.write(buffer, 0, n);
             }
