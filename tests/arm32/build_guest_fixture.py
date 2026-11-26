@@ -104,7 +104,7 @@ def main() -> None:
                          if symbol.name.startswith("jni32_")}
             expected = {"jni32_version", "jni32_contract", "jni32_stale",
                         "jni32_wrong_env", "jni32_unsupported",
-                        "jni32_vm_bad_version", "jni32_vm_attach",
+                        "jni32_vm_bad_version", "jni32_vm_unknown_version", "jni32_vm_attach",
                         "jni32_env_get_vm", "jni32_onload_state",
                         "jni32_get_created_vm"}
             named = {symbol.name: symbol for symbol in symbols
