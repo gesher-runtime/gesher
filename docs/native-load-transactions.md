@@ -145,8 +145,9 @@ The expected rejection is the old failed graph remaining visible through
 `native-libs.yml` and `arm64.yml` build the graph with API 29 or later NDK
 compilers for native TLS. Windows tracks 40 and 47 run both
 `elf_load_transaction_test` and `elf_load_transaction_failure_test`; track 47
-uses the production ARM translator. The driver accepts the graph directory and
-optional `--arm64`. CMake builds the failure variant from the real loader and
+uses the production ARM translator. The driver accepts the graph directory,
+`--arm64` for AArch64 graphs, and `--reentry-only` to run the constructor
+reentry checks independently. CMake builds the failure variant from the real loader and
 keeps the ordinary production target separate.
 
 The reentrant sibling graph also runs independently through Android libdl.

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 // Execute real, original ELF dependency graphs through the public loader API.
-// Usage: elf_load_transaction_test <fixture-root> [--arm64]
+// Usage: elf_load_transaction_test <fixture-root> [--arm64] [--reentry-only]
 // The Linux host runner substitutes Win32 primitives explicitly. Windows CI
 // uses the production mapping/rewrite/TLS implementations and optional ARM64
 // translator. No application-specific behavior or production failure switch.
@@ -461,14 +461,24 @@ extern "C" int gesher_elf_test_mprotect(void* address, size_t length, int protec
 
 int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
-  if (argc < 2 || argc > 3 || (argc == 3 && std::strcmp(argv[2], "--arm64") != 0)) {
-    std::fprintf(stderr, "usage: %s <fixture-root> [--arm64]\n", argv[0]);
+  bool arm64 = false;
+  bool reentry_only = false;
+  for (int i = 2; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--arm64") == 0) arm64 = true;
+    else if (std::strcmp(argv[i], "--reentry-only") == 0) reentry_only = true;
+    else {
+      std::fprintf(stderr, "unknown option: %s\n", argv[i]);
+      return 2;
+    }
+  }
+  if (argc < 2) {
+    std::fprintf(stderr, "usage: %s <fixture-root> [--arm64] [--reentry-only]\n", argv[0]);
     return 2;
   }
   Watchdog watchdog;
   complete_dir = std::string(argv[1]) + "/complete";
   incomplete_dir = std::string(argv[1]) + "/incomplete";
-  if (argc == 3) {
+  if (arm64) {
 #ifdef _WIN32
     Check(gesher::arm64::EnsureLoaded(), "production ARM64 translator is available");
     if (failures) return 1;
@@ -478,18 +488,23 @@ int main(int argc, char** argv) {
 #endif
   }
   elf::SetBionicResolver(Resolve);
-  MissingDependencyAndRetry();
-  RelocationFailureAndRetry();
-  DiamondAndCycle();
-  ConstructorReentry();
-  ConstructorReentryIntoLinkedSiblings();
-  IfuncFileAndMemory();
-  IfuncDependencyTls();
-  Concurrent(false);
-  Concurrent(true);
+  if (reentry_only) {
+    ConstructorReentry();
+    ConstructorReentryIntoLinkedSiblings();
+  } else {
+    MissingDependencyAndRetry();
+    RelocationFailureAndRetry();
+    DiamondAndCycle();
+    ConstructorReentry();
+    ConstructorReentryIntoLinkedSiblings();
+    IfuncFileAndMemory();
+    IfuncDependencyTls();
+    Concurrent(false);
+    Concurrent(true);
 #ifdef GESHER_ELF_TRANSACTION_FAILURE
-  ProtectionFailureAndRetry();
+    ProtectionFailureAndRetry();
 #endif
+  }
   std::printf("ELF transaction: %d checks, %d failures\n", checks, failures);
   if (failures == 0) std::puts("elf_load_transaction_test all passed");
   return failures == 0 ? 0 : 1;
