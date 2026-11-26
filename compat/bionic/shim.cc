@@ -1203,7 +1203,7 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
   }
   // Already loaded: the same handle, where it is, whatever reservation
   // extinfo offers (bionic finds a loaded library before it maps anything).
-  if (gesher::elf::Library* existing = gesher::elf::Find(base)) {
+  if (auto* existing = force_second_copy ? gesher::elf::Find(base) : gesher::elf::OpenLoaded(base)) {
     if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
     return existing;
   }

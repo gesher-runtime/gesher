@@ -1755,6 +1755,14 @@ void RunInit(Library* lib) {
   for (size_t i = 0; i < lib->init_array_count; ++i) CallInit(lib->init_array[i]);
 }
 
+// A constructor can open a sibling that was linked and published with the
+// outer graph but has not reached its turn in RunInit yet.
+Library* FindAndInitLocked(const std::string& name) {
+  Library* lib = FindLocked(name);
+  if (lib != nullptr) RunInit(lib);
+  return lib;
+}
+
 // A pending image has never been returned to application code. Withdraw every
 // consumer of its storage before unmapping it; committed libraries retain their
 // existing process lifetime (successful dlclose/unload is a separate concern).
@@ -2207,10 +2215,7 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
   const char* bslash = std::strrchr(path, '\\');
   const char* base = slash > bslash ? slash : bslash;
   std::string name = base ? base + 1 : path;
-  {
-    std::lock_guard<LoaderMutex> lock(g_mutex);
-    if (Library* existing = FindLocked(name)) return existing;
-  }
+  if (Library* existing = FindAndInitLocked(name)) return existing;
   FileImage image;
   if (!OpenImage(path, &image, error)) return nullptr;
   if (IsGesherLinkerImage(image.data, image.size)) {
@@ -2225,10 +2230,7 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
                         const LoadOptions& options) {
   std::lock_guard<LoaderMutex> operation(g_mutex);
-  {
-    std::lock_guard<LoaderMutex> lock(g_mutex);
-    if (Library* existing = FindLocked(name)) return existing;
-  }
+  if (Library* existing = FindAndInitLocked(name)) return existing;
   return LoadCommon(name, nullptr, static_cast<const uint8_t*>(data), size, -1, error, options);
 }
 
@@ -2285,6 +2287,11 @@ bool IsAarch64(Library* library) { return library != nullptr && library->is_aarc
 void* ResolveBionic(const char* name) {
   std::lock_guard<LoaderMutex> lock(g_mutex);
   return g_resolver ? g_resolver(name) : nullptr;
+}
+
+Library* OpenLoaded(const char* name) {
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  return FindAndInitLocked(name);
 }
 
 Library* Find(const char* name) {

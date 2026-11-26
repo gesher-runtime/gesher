@@ -48,6 +48,8 @@ std::vector<int> events;
 std::atomic<bool> supply_missing{false}, inject_protection{false}, fail_protection_once{false};
 std::atomic<int> protection_failures{0};
 bool reentry_parent_visible, reentry_child_worked;
+bool sibling_find_is_passive;
+int reentrant_file_count, reentrant_memory_count;
 std::mutex barrier_lock;
 std::condition_variable barrier_cv;
 bool barrier_enabled, barrier_entered, barrier_release;
@@ -152,6 +154,25 @@ void TX_SYSV Reenter() {
   reentry_child_worked = child != nullptr && Call(child, "tx_reentrant_child") == 13;
 }
 
+void TX_SYSV ReenterSiblings() {
+  constexpr char file_name[] = "tx_reentry_file.so";
+  constexpr char memory_name[] = "tx_reentry_memory.so";
+  auto* sibling = elf::Find(file_name);
+  sibling_find_is_passive = sibling != nullptr && Call(sibling, "tx_sibling_init_count") == 0;
+
+  std::string error;
+  auto* file = Load(complete_dir, file_name, Options(complete_dir), &error);
+  reentrant_file_count = Call(file, "tx_sibling_init_count");
+
+  std::ifstream input(complete_dir + "/" + memory_name, std::ios::binary);
+  std::vector<char> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  if (!bytes.empty()) {
+    auto* memory = elf::LoadFromMemory(memory_name, bytes.data(), bytes.size(), &error,
+                                      Options(complete_dir));
+    reentrant_memory_count = Call(memory, "tx_sibling_init_count");
+  }
+}
+
 void Barrier() {
   std::unique_lock<std::mutex> guard(barrier_lock);
   if (!barrier_enabled) return;
@@ -166,6 +187,7 @@ void* Resolve(const char* name) {
   if (std::strcmp(name, "tx_missing") == 0)
     return supply_missing ? reinterpret_cast<void*>(&Missing) : nullptr;
   if (std::strcmp(name, "tx_reenter") == 0) return reinterpret_cast<void*>(&Reenter);
+  if (std::strcmp(name, "tx_reenter_siblings") == 0) return reinterpret_cast<void*>(&ReenterSiblings);
   if (std::strcmp(name, "tx_barrier") == 0) {
     Barrier(); return reinterpret_cast<void*>(&BarrierValue);
   }
@@ -300,6 +322,20 @@ void ConstructorReentry() {
   Check(reentry_parent_visible && reentry_child_worked,
         "constructor reentry sees its committed parent and a usable newly loaded child");
   Check(initialized[13] == 1 && initialized[14] == 1, "nested constructor load initializes both libraries once");
+}
+
+void ConstructorReentryIntoLinkedSiblings() {
+  const size_t initial_count = Count();
+  std::string error;
+  auto* root = Load(complete_dir, "tx_reentry_graph.so", Options(complete_dir), &error);
+  Check(root != nullptr && Call(root, "tx_reentry_graph") == 28,
+        "linked sibling graph loads and its export executes");
+  Check(sibling_find_is_passive, "passive Find does not start a sibling constructor");
+  Check(reentrant_file_count == 1, "reentrant file open initializes its linked sibling");
+  Check(reentrant_memory_count == 1, "reentrant memory open initializes its linked sibling");
+  Check(initialized[25] == 1 && initialized[26] == 1 && initialized[27] == 1 &&
+            initialized[28] == 1 && Count() == initial_count + 4,
+        "outer load neither maps nor initializes any sibling twice");
 }
 
 void IfuncFileAndMemory() {
@@ -446,6 +482,7 @@ int main(int argc, char** argv) {
   RelocationFailureAndRetry();
   DiamondAndCycle();
   ConstructorReentry();
+  ConstructorReentryIntoLinkedSiblings();
   IfuncFileAndMemory();
   IfuncDependencyTls();
   Concurrent(false);

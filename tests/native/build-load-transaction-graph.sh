@@ -43,6 +43,10 @@ build ifunc_memory 22
 # Resolver TLS accesses must not depend on a still-unresolved external PLT.
 build ifunc_tls_child 23 -fno-plt -ftls-model=global-dynamic
 build ifunc_tls_root 24 -fno-plt -ftls-model=global-dynamic -l:tx_ifunc_tls_child.so
+build reentry_trigger 25
+build reentry_file 26
+build reentry_memory 27
+build reentry_graph 28 -l:tx_reentry_trigger.so -l:tx_reentry_file.so -l:tx_reentry_memory.so
 for name in newchild middle root; do
   cp "$complete/tx_${name}.so" "$output/incomplete/tx_${name}.so"
 done

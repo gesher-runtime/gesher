@@ -13,11 +13,19 @@ __thread int tx_tls_anchor = TX_ROLE;
 
 #if TX_ROLE == 14
 extern void tx_reenter(void);
+#elif TX_ROLE == 25
+extern void tx_reenter_siblings(void);
+#elif TX_ROLE >= 26 && TX_ROLE <= 27
+static int sibling_initializations;
 #endif
 __attribute__((constructor)) static void initialized(void) {
   tx_event(TX_ROLE);
 #if TX_ROLE == 14
   tx_reenter();
+#elif TX_ROLE == 25
+  tx_reenter_siblings();
+#elif TX_ROLE >= 26 && TX_ROLE <= 27
+  ++sibling_initializations;
 #endif
 }
 
@@ -102,6 +110,13 @@ static __attribute__((used)) int (*select_tls_ifunc(void))(void) {
 int tx_selected_tls(void) __attribute__((ifunc("select_tls_ifunc")));
 static int (*tls_dispatch)(void) = tx_selected_tls;
 int tx_ifunc_tls_observed(void) { return tls_dispatch(); }
+#elif TX_ROLE == 25
+int tx_reentry_trigger(void) { return 25; }
+#elif TX_ROLE >= 26 && TX_ROLE <= 27
+int tx_sibling_init_count(void) { return sibling_initializations; }
+#elif TX_ROLE == 28
+extern int tx_reentry_trigger(void);
+int tx_reentry_graph(void) { return tx_reentry_trigger() + 3; }
 #else
 #error Unknown TX_ROLE
 #endif
