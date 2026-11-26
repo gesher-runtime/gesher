@@ -153,7 +153,7 @@ separates reviewed families from raw registration-name candidates. Alternate
 registrations, app-local service injection and later native overrides require
 individual review.
 
-Schema 2 resolves each method by its complete compiled JVM descriptor, including
+The report resolves each method by its complete compiled JVM descriptor, including
 parameter types, array dimensions and return type. It follows inherited concrete
 implementations and retains compiler bridges for covariant/generic overrides.
 Indirect and anonymous Default/Stub subclasses in the app input are included.
@@ -172,6 +172,15 @@ missing methods. The report records archive and parser hashes, framework-first
 compile-input provider selection, and duplicate app classes shadowed by that
 selection. Compile inputs can differ from shipped DEX/loaders, and their hashes
 do not replace a build receipt tying them to source.
+
+Schema 3 links direct `services.put` keys to the interface class explicitly
+passed to `StandIn.of`. It records the class literal and distinguishes compiled
+framework interfaces from absent, unresolved or non-interface definitions and
+other adapter shapes. Literal keys and simple `Context` constants are resolved
+from source and the supplied framework JAR, respectively. A failed Context
+constant read leaves the candidate count unmeasured. These rows record source
+declarations. Conditional registration, concrete delegate selection, manager
+lookup, callback delivery and live Binder dispatch require separate evidence.
 
 ```powershell
 python tools/audit_services_jni.py `

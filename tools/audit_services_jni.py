@@ -27,9 +27,69 @@ REGISTRATION_ALIASES = {
 }
 
 
-def mask(text):
-    return re.sub(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
-                  lambda m: ''.join('\n' if c == '\n' else ' ' for c in m[0]), text)
+SOURCE_TRIVIA = re.compile(r'(?P<comment>//[^\n]*|/\*[\s\S]*?\*/)'
+                           r'|"""(?:\\[\s\S]|(?!""")[^\\])*"""'
+                           r'|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+STANDIN_ADAPTER = re.compile(r'\s*StandIn\s*\.\s*of\s*\(\s*([\w.]+)\s*\.\s*class\s*,')
+
+
+def mask(text, *, keep_literals=False):
+    def replace(match):
+        if keep_literals and match['comment'] is None:
+            return match[0]
+        return ''.join('\n' if c == '\n' else ' ' for c in match[0])
+
+    return SOURCE_TRIVIA.sub(replace, text)
+
+
+def read_context_constants(framework_jar):
+    context = subprocess.run(['javap', '-constants', '-classpath', str(framework_jar),
+                              'android.content.Context'], capture_output=True, text=True,
+                             encoding='utf8', errors='replace')
+    if context.returncode:
+        return {}, 'context_constants_unmeasured'
+    constants = dict(re.findall(r'public static final java\.lang\.String (\w+) = "([^"\\]*)";',
+                                context.stdout))
+    return constants, 'context_constants_inspected'
+
+
+def registry_rows(path, text, context_constants, framework, ref):
+    """Attribute direct StandIn registrations without inferring the live delegate."""
+    code = mask(text)
+    imports = {name.rsplit('.', 1)[-1]: name for name in
+               re.findall(r'\bimport\s+([\w.]+)\s*;', code)}
+    rows = []
+    for put in re.finditer(r'(?<![\w$.])services\s*\.\s*put\s*\(([^,;(){}\[\]]*),', code):
+        key_expression = text[put.start(1):put.end(1)].strip()
+        key_code = mask(key_expression, keep_literals=True).strip()
+        literal = re.fullmatch(r'"([^"\\\n]*)"', key_code)
+        constant = re.fullmatch(r'Context\s*\.\s*(\w+)', key_code)
+        key = None
+        if literal:
+            key = literal[1]
+        elif constant:
+            key = context_constants.get(constant[1])
+        row = {'key_expression': key_expression, 'resolved_key': key,
+               'status': 'registered_source_unverified', 'source': ref(path, text, put.start()),
+               'expression_excerpt': re.sub(r'\s+', ' ', text[put.end():put.end()+180]).split(';')[0],
+               'binder_interface': None, 'binder_interface_class_literal': None,
+               'binder_interface_status': 'adapter_not_attributed'}
+        adapter = STANDIN_ADAPTER.match(code, put.end())
+        if adapter:
+            class_literal = adapter[1]
+            interface = class_literal if '.' in class_literal else imports.get(class_literal)
+            definition = framework.get(interface)
+            row.update(binder_interface=interface, binder_interface_class_literal=class_literal,
+                       binder_interface_status='class_literal_unresolved')
+            if interface is not None:
+                if definition is None:
+                    row['binder_interface_status'] = 'framework_interface_unavailable'
+                elif definition.flags & members.INTERFACE:
+                    row['binder_interface_status'] = 'framework_interface_attributed'
+                else:
+                    row['binder_interface_status'] = 'framework_definition_not_interface'
+        rows.append(row)
+    return rows
 
 
 def end_brace(code, start):
@@ -309,23 +369,17 @@ def main():
     classes, gaps = compare_services(classes, framework, app, declarations)
     defaults = {c['interface'] for c in classes if c['jar_interface_available']}
 
-    context = subprocess.run(['javap', '-constants', '-classpath', str(args.framework_jar), 'android.content.Context'],
-                             capture_output=True, text=True, encoding='utf8', errors='replace')
-    service_constants = {m[1]: m[2] for m in re.finditer(r'public static final java.lang.String (\w+_SERVICE) = "([^"]+)";', context.stdout)}
+    context_constants, context_status = read_context_constants(args.framework_jar)
     registrations = []
     for filename in ('Services.java', 'SystemServer.java'):
         path = root / 'app/java/com/gesher/server' / filename
         text = path.read_text(encoding='utf8')
-        for m in re.finditer(r'\bservices\.put\(\s*([^,\n]+?)\s*,', text):
-            expr=m[1].strip()
-            key = service_constants.get(expr.split('.',1)[1]) if expr.startswith('Context.') else expr.strip('"') if expr.startswith('"') else None
-            registrations.append({'key_expression': m[1], 'resolved_key': key, 'status': 'registered_source_unverified',
-                                  'source': ref(path, text, m.start()),
-                                  'expression_excerpt': re.sub(r'\s+', ' ', text[m.end():m.end()+180]).split(';')[0]})
+        registrations.extend(registry_rows(path, text, context_constants, framework, ref))
     registered = {r['resolved_key'] for r in registrations if r['resolved_key']}
     unregistered_constants = [{'constant': name, 'key': key, 'status': 'context_key_without_direct_source_registration',
                                'caveat': 'Some Context services are local managers or use different Binder keys; candidate only.'}
-                              for name, key in service_constants.items() if key not in registered]
+                              for name, key in context_constants.items()
+                              if name.endswith('_SERVICE') and key not in registered]
 
     upstream = args.aosp_dir / 'frameworks/base/core/jni/AndroidRuntime.cpp'
     upstream_text = upstream.read_text(encoding='utf8')
@@ -464,7 +518,7 @@ def main():
                 if selected and all(c['inherited_default_count'] is not None for c in selected) else None)
 
     unmeasured = sum(c['inherited_default_count'] is None for c in classes)
-    result = {'schema_version': 2, 'date': datetime.datetime.now(datetime.timezone.utc).date().isoformat(), 'aosp_tag': 'android-16.0.0_r4',
+    result = {'schema_version': 3, 'date': datetime.datetime.now(datetime.timezone.utc).date().isoformat(), 'aosp_tag': 'android-16.0.0_r4',
               'scope': 'JNI registration/stand-ins; app/java Binder Default services; direct Services/SystemServer registry keys. No user apps started.',
               'framework_jar': {**framework_input, 'path': str(args.framework_jar.resolve())},
               'app_classes': app_input,
@@ -475,13 +529,15 @@ def main():
               'methodology_limits': ['Source WIP and supplied framework JAR can differ from installed runtime.',
                   'Explicit implementations are unverified; source presence is not semantic coverage.',
                   'AIDL methods use compiled JVM names and full descriptors, including compiler bridges and inherited implementations.',
+                  'Direct StandIn registry rows attribute the declared interface only. Conditional publication, delegate identity and live Binder dispatch are unmeasured.',
                   'Compiled app/source correspondence requires a build receipt; input hashes alone do not establish a fresh build.',
                   'Missing app classes or hierarchy leave counts null; observed rows are a lower bound, not a completed inventory.',
                   'Descriptor types outside the supplied compile inputs are listed separately; this does not prove runtime absence.',
                   'Textual JNI symbol comparison is a candidate list, not proof every omitted registration is required.',
                   'Fallback JNI rows can be overwritten later and must not be counted as active noops without registration-order review.'],
               'service_classes': classes, 'inherited_default_methods': gaps, 'direct_service_registrations': registrations,
-              'context_key_candidates': unregistered_constants, 'jni_upstream_registrations': registration_rows,
+              'context_constants_status': context_status, 'context_key_candidates': unregistered_constants,
+              'jni_upstream_registrations': registration_rows,
               'jni_standin_methods': standins, 'jni_standin_inputs': standin_inputs,
               'generator_sha256': hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
               'parser_source_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
@@ -498,7 +554,10 @@ def main():
                           'unmeasured_service_classes': unmeasured,
                           'service_comparison_statuses': dict(collections.Counter(c['comparison_status'] for c in classes)),
                           'direct_service_registrations': len(registrations),
-                          'context_key_candidates': len(unregistered_constants),
+                          'context_key_candidates': len(unregistered_constants)
+                              if context_status == 'context_constants_inspected' else None,
+                          'direct_registry_interface_statuses': dict(collections.Counter(
+                              r['binder_interface_status'] for r in registrations)),
                           'upstream_jni_registration_rows': len(registration_rows),
                           'jni_registration_statuses': dict(collections.Counter(r['status'] for r in registration_rows)),
                           'jni_standin_methods': len(standins),
