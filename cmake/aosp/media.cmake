@@ -391,3 +391,24 @@ target_compile_definitions(media_rgba_i420_test PRIVATE GESHER_MEDIA_STANDALONE 
 target_compile_options(media_rgba_i420_test PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_rgba_i420_test PRIVATE avc pthread)
 set_target_properties(media_rgba_i420_test PROPERTIES CXX_STANDARD 23)
+
+# Complete capture stream methods and the explicitly selected test-owned WAV
+# source. Only engine attachment and source-clock input are fixture boundaries.
+set(_capture_unity_fixture "${CMAKE_CURRENT_BINARY_DIR}/capture-unity-fixture")
+set(_capture_unity_cpp "${_capture_unity_fixture}/capture_unity_production.cc")
+set(_capture_unity_header "${_capture_unity_fixture}/capture_unity_common.h")
+add_custom_command(OUTPUT "${_capture_unity_cpp}" "${_capture_unity_header}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/test_audio_capture_unity.py"
+    --generate-only --output-dir "${_capture_unity_fixture}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tools/test_audio_capture_unity.py"
+    "${CMAKE_SOURCE_DIR}/tests/media/capture_unity_common.h.in"
+    "${_media}/audio/capture.cc" "${_media}/audio/capture.h"
+    "${_media}/audio/engine.cc" "${_media}/audio/engine.h"
+  VERBATIM)
+add_executable(media_capture_unity_test "${_capture_unity_cpp}" "${_capture_unity_header}"
+  "${CMAKE_SOURCE_DIR}/tests/media/capture_unity_test.cc")
+target_include_directories(media_capture_unity_test PRIVATE "${_capture_unity_fixture}")
+target_compile_definitions(media_capture_unity_test PRIVATE GESHER_COUNT_CAPTURE=1)
+target_compile_options(media_capture_unity_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(media_capture_unity_test PRIVATE pthread)
+set_target_properties(media_capture_unity_test PROPERTIES CXX_STANDARD 23)

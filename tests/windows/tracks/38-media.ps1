@@ -16,6 +16,12 @@ Check 'media: real MP3, Vorbis and Opus reuse scratch while retaining independen
   & "$Dir/media_audio_decoder_scratch_test.exe" gate "$Dir/media-audio-scratch-fixtures"
 } @('Real audio decoder scratch, retained PCM, seek, trim and error contracts passed:')
 
+$captureUnityTmp = Join-Path $mediaTmp 'capture-unity'
+New-Item -ItemType Directory -Force $captureUnityTmp | Out-Null
+Check 'media: actual capture preserves exact float edges, input history, PCM, lifecycle and complete paced WAV output' {
+  & "$Dir/media_capture_unity_test.exe" gate $captureUnityTmp
+} @('CAPTURE_UNITY_PASS checks=', 'CAPTURE_WORK channels=2 frames=480 channel_frames=1')
+
 # The sounds of a capture, as media_probe analyze measures them.
 function MediaSounds([string] $wav) {
   $out = & "$Dir/media_probe.exe" analyze $wav 2>&1 | Out-String
