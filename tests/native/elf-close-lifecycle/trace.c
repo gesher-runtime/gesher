@@ -1,7 +1,8 @@
 /* Copyright (C) 2026 The Gesher Authors
  * SPDX-License-Identifier: Apache-2.0 */
 
-static int events[16];
+// The combined observer, mixed-owner and NODELETE probe records 18 events.
+static int events[32];
 static int count;
 
 void gesher_n06_event_record(int event) {
