@@ -9,6 +9,7 @@ import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Parcel;
 import android.os.RemoteException;
+import com.android.internal.inputmethod.IBooleanListener;
 import com.android.internal.inputmethod.IConnectionlessHandwritingCallback;
 import com.android.internal.view.IInputMethodManager;
 import com.gesher.server.InputMethodManagerService;
@@ -83,6 +84,45 @@ public final class HandwritingUnavailableContractTest {
             request(service, delegated, next);
             next.unsupportedOnce();
             failed.unsupportedOnce(); // No retry or retained callback when another request arrives.
+
+            // A missing callback has nobody to notify: no NullPointerException in the service.
+            request(service, delegated, null);
+        }
+    }
+
+    private static final class BooleanResults extends IBooleanListener.Default {
+        int results;
+        boolean last = true;
+        RemoteException failure;
+
+        @Override public void onResult(boolean value) throws RemoteException {
+            results++;
+            last = value;
+            if (failure != null) throw failure;
+        }
+    }
+
+    private static void asyncDelegationContracts(InputMethodManagerService service) throws Exception {
+        for (int flags : new int[] {0, 1}) {
+            check(!service.acceptStylusHandwritingDelegation(null, 0, "fixture.handwriting.delegate",
+                    "fixture.handwriting.delegator", flags),
+                    "No handwriting delegation may be accepted");
+            BooleanResults accepted = new BooleanResults();
+            service.acceptStylusHandwritingDelegationAsync(null, 0, "fixture.handwriting.delegate",
+                    "fixture.handwriting.delegator", flags, accepted);
+            check(accepted.results == 1 && !accepted.last,
+                    "Async delegation must complete once with false");
+
+            // A dead client must not fail the service call (the listener is one-way).
+            BooleanResults gone = new BooleanResults();
+            gone.failure = new DeadObjectException("fixture listener is gone");
+            service.acceptStylusHandwritingDelegationAsync(null, 0, "fixture.handwriting.delegate",
+                    "fixture.handwriting.delegator", flags, gone);
+            check(gone.results == 1 && !gone.last, "Dead listener must still have been told false once");
+
+            // A missing listener has nobody to notify: no NullPointerException in the service.
+            service.acceptStylusHandwritingDelegationAsync(null, 0, "fixture.handwriting.delegate",
+                    "fixture.handwriting.delegator", flags, null);
         }
     }
 
@@ -143,6 +183,7 @@ public final class HandwritingUnavailableContractTest {
         if (binder) System.loadLibrary("android_runtime");
         InputMethodManagerService service = new InputMethodManagerService();
         directContracts(service);
+        asyncDelegationContracts(service);
         if (binder) parcelContracts(service);
         System.out.println("HandwritingUnavailableContractTest all passed: " + checks
                 + "; binder=" + binder);

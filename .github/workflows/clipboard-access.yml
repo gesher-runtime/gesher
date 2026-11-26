@@ -49,7 +49,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows clipboard access gate failed' }
       - name: Build actual standalone restart implementation
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:standalone-restart.exe user32.lib
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:standalone-restart.exe user32.lib advapi32.lib ole32.lib
       - name: Check UID re-entry, inherited I/O, exact exit and parent-death cleanup
         shell: pwsh
         run: |

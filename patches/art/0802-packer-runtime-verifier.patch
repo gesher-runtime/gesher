@@ -1,0 +1,32 @@
+diff --git a/runtime/runtime.cc b/runtime/runtime.cc
+--- a/runtime/runtime.cc
++++ b/runtime/runtime.cc
+@@ -3251,6 +3251,28 @@
+   return verify_ == verifier::VerifyMode::kSoftFail;
+ }
+ 
++#if defined(GESHER)
++// gesher: the verifier controls above for compat/bionic/jni_bridge.cc, which
++// gives them to a stand-in libart.so's functions (ADR 0086). A packer that
++// finds libart.so in /proc/self/maps calls them by symbol on the Runtime; only
++// this process's Runtime is accepted.
++extern "C" bool gesher_art_runtime_disable_verifier(Runtime* runtime) {
++  if (runtime == nullptr || runtime != Runtime::Current()) return false;
++  runtime->DisableVerifier();
++  return true;
++}
++
++extern "C" int gesher_art_runtime_verification(const Runtime* runtime) {
++  if (runtime == nullptr || runtime != Runtime::Current()) return -1;
++  return (runtime->IsVerificationEnabled() ? 1 : 0) | (runtime->IsVerificationSoftFail() ? 2 : 0);
++}
++
++extern "C" Runtime* gesher_art_runtime_current() { return Runtime::Current(); }
++
++// OatHeader::kOatVersion, which the stand-in exports as libart.so does.
++extern "C" const uint8_t* gesher_art_oat_version() { return OatHeader::kOatVersion.data(); }
++#endif
++
+ bool Runtime::IsAsyncDeoptimizeable(ArtMethod* method, uintptr_t code) const {
+   if (OatQuickMethodHeader::NterpMethodHeader != nullptr) {
+     if (OatQuickMethodHeader::NterpMethodHeader->Contains(code)) {

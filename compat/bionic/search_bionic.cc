@@ -5,6 +5,7 @@
 #include "search_bionic.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 
@@ -142,18 +143,43 @@ void* BIONIC_SYSV Tfind(const void* key, void* const* root, Compare compare) {
 
 void* BIONIC_SYSV Tdelete(const void* key, void** root, Compare compare) {
   if (root == nullptr) return nullptr;
-  auto* node = static_cast<Node*>(*root);
+  auto* tree_root = static_cast<Node*>(*root);
+  Node** link = &tree_root;
+  Node* node = tree_root;
   Node* parent = nullptr;
+  // Preserve the search route to avoid comparing every key a second time.
+  // Deeper trees retain the original recursive removal without an overrun.
+  std::array<Node**, 128> ancestors;
+  size_t depth = 0;
+  bool overflow = false;
   while (node != nullptr) {
     int order = compare(key, node->key);
     if (order == 0) break;
     parent = node;
-    node = order < 0 ? node->left : node->right;
+    if (depth < ancestors.size()) ancestors[depth++] = link;
+    else overflow = true;
+    link = order < 0 ? &node->left : &node->right;
+    node = *link;
   }
   if (node == nullptr) return nullptr;
   // For removal of the root, POSIX leaves the non-null return value unspecified.
   void* result = parent ? parent : node;
-  *root = Remove(static_cast<Node*>(*root), key, compare);
+  if (overflow) {
+    *root = Remove(tree_root, key, compare);
+    return result;
+  }
+  if (node->left != nullptr && node->right != nullptr) {
+    node->right = RemoveMinimum(node->right, &node->key);
+    *link = Balance(node);
+  } else {
+    *link = node->left ? node->left : node->right;
+    std::free(node);
+  }
+  while (depth != 0) {
+    Node** ancestor = ancestors[--depth];
+    *ancestor = Balance(*ancestor);
+  }
+  *root = tree_root;
   return result;
 }
 

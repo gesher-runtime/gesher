@@ -21,7 +21,7 @@ struct SharedAudioState {
   uint32_t version;
   volatile LONG generation;
   volatile LONG next_session;
-  volatile LONG lock;  // a spin lock for the multi-field updates
+  volatile LONG lock;  // the updates' spin lock, taken inside the named mutex
   int32_t index[kNumStreamTypes];
   int32_t min_index[kNumStreamTypes];
   int32_t max_index[kNumStreamTypes];
@@ -98,17 +98,41 @@ SharedAudioState* Open() {
   return s;
 }
 
+// The device's lock for the multi-field updates: a named mutex beside the
+// mapping, then the mapping's spin lock inside it. A process stopped by a
+// tracer (ptrace, ADR 0093) is stopped only outside Gesher's cross-process
+// mutexes ("gesher..." names), so it never holds the spin lock while
+// stopped: the mutex is taken first and the spin lock is only held inside
+// it. The spin lock still excludes a process that could not take the mutex
+// (it could not create it, or an older binary that only spins): every user
+// takes it.
+HANDLE LockMutex() {
+  static HANDLE mutex = CreateMutexW(nullptr, FALSE, (MappingName() + L"-lock").c_str());
+  return mutex;
+}
+
 class SpinLock {
  public:
-  explicit SpinLock(SharedAudioState* s) : s_(s) {
+  explicit SpinLock(SharedAudioState* s) : s_(s), mutex_(LockMutex()) {
+    if (mutex_ != nullptr) {
+      const DWORD wait = WaitForSingleObject(mutex_, INFINITE);
+      // A holder that died inside the mutex may have left the spin lock
+      // taken; with the mutex, no one else holds it.
+      if (wait == WAIT_ABANDONED) InterlockedExchange(&s_->lock, 0);
+      if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) mutex_ = nullptr;
+    }
     for (int spins = 0; InterlockedCompareExchange(&s_->lock, 1, 0) != 0; spins++) {
       if (spins > 64) Sleep(0);
     }
   }
-  ~SpinLock() { InterlockedExchange(&s_->lock, 0); }
+  ~SpinLock() {
+    InterlockedExchange(&s_->lock, 0);
+    if (mutex_ != nullptr) ReleaseMutex(mutex_);
+  }
 
  private:
   SharedAudioState* s_;
+  HANDLE mutex_;
 };
 
 bool Valid(int stream) { return stream >= 0 && stream < kNumStreamTypes; }

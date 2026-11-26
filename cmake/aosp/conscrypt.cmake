@@ -29,11 +29,27 @@ target_link_libraries(conscrypt_jni PUBLIC nativehelper log boringssl_ssl crypt3
 
 target_link_libraries(dalvikvm PRIVATE conscrypt_jni)
 
+# The system CA directory holds only certificates; its manifest is next to it.
+add_executable(trust_store_layout_test ${CMAKE_SOURCE_DIR}/tests/native/trust_store_layout_test.cc
+  ${_net}/trust_store.cc)
+target_include_directories(trust_store_layout_test PRIVATE ${_net}/include ${_net})
+target_compile_options(trust_store_layout_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(trust_store_layout_test PRIVATE boringssl_crypto crypt32)
+
+# The user-added CAs: which of Windows' roots were installed on this PC, and
+# cacerts-added laid out as Android's TrustedCertificateStore keeps it.
+add_executable(trust_store_user_test ${CMAKE_SOURCE_DIR}/tests/native/trust_store_user_test.cc
+  ${_net}/trust_store.cc)
+target_include_directories(trust_store_user_test PRIVATE ${_net}/include ${_net})
+target_compile_options(trust_store_user_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(trust_store_user_test PRIVATE boringssl_crypto crypt32)
+
 # com.gesher.net.WindowsNetworks's natives (the built-in library libgesher_net.so):
 # Windows' networks for the connectivity service, and the INTERNET permission's
-# switch (<gesher/inet.h>), plus the libgesher_nsd.so multicast query transport.
+# switch (<gesher/inet.h>), plus the libgesher_nsd.so multicast query transport, the
+# libgesher_wifi.so WLAN reader and the libgesher_cellular.so Mobile Broadband reader.
 add_library(gesher_net_natives OBJECT ${_net}/windows_networks.cc ${_net}/windows_nsd.cc
-  ${_net}/windows_wifi.cc)
+  ${_net}/windows_wifi.cc ${_net}/windows_cellular.cc ${_net}/cost_events_win.cc)
 target_include_directories(gesher_net_natives PRIVATE ${_net}/include)
 target_compile_options(gesher_net_natives PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_link_libraries(gesher_net_natives PUBLIC nativehelper iphlpapi ole32 oleaut32 ws2_32)

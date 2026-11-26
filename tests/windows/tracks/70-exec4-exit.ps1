@@ -13,7 +13,8 @@ CheckTimed 'exec4 exit: only the latest bound PID/start can publish launcher suc
 $exitLauncher = @("-Xbootclasspath:$exitBcp", "-Ximage:$(NoDrive "$root/system/framework/boot.art")",
   'com.gesher.app.Launcher')
 $exitPackage = 'com.gesher.exitstatus'
-$exitEnvironment = @{ GESHER_APP_WINDOW = 'hidden' }
+$exitLogs = Join-Path $root "logs-exitstatus-$(Get-Random)"
+$exitEnvironment = @{ GESHER_APP_WINDOW = 'hidden'; GESHER_LOGS = (NoDrive $exitLogs) }
 try {
   $null = Aot2Run "$Dir/dalvikvm.exe" ($exitLauncher + 'shutdown') @{} 120
   $exitInstall = Aot2Run "$Dir/dalvikvm.exe" ($exitLauncher + 'install', (NoDrive "$Dir/exitstatusapp.apk")) $exitEnvironment 180
@@ -36,6 +37,28 @@ try {
       Write-Host $exitRun.Out
       $script:failed++
     }
+  }
+  $restartRun = Aot2Run "$Dir/dalvikvm.exe" ($exitLauncher + 'launch', $exitPackage,
+    '--activity', '.RestartActivity', '--hidden-window', '--keep-task') $exitEnvironment 120
+  $exitAppLog = Join-Path $exitLogs "$exitPackage.log"
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  do {
+    $restartTrace = if (Test-Path -LiteralPath $exitAppLog) {
+      (Get-Content -LiteralPath $exitAppLog -Raw -Encoding UTF8) + ''
+    } else { '' }
+    $replacement = [regex]::Match($restartTrace, 'replacement resumed pid=(\d+)')
+    if ($replacement.Success) { break }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::UtcNow -lt $deadline)
+  $request = [regex]::Match($restartTrace, 'restart requested before exit pid=(\d+)')
+  if ($request.Success -and $replacement.Success -and $replacement.Index -gt $request.Index -and
+      $request.Groups[1].Value -ne $replacement.Groups[1].Value) {
+    Write-Host 'PASS  exec4 exit: admitted CLEAR_TASK activity starts in a fresh process after the old process exits'
+  } else {
+    Write-Host 'FAIL  exec4 exit: waiting CLEAR_TASK activity did not resume in a fresh process'
+    Write-Host $restartRun.Out
+    ($restartTrace -split "`n" | Select-Object -Last 40) | Out-Host
+    $script:failed++
   }
 } catch {
   Write-Host "FAIL  exec4 exit: real launcher sequence: $_"

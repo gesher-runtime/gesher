@@ -3,8 +3,9 @@
 These are live protocol reads, not the separate post-failure diagnostic reader.
 Windows readers permit replacement, but not in-place writes. A reader retains
 one complete old or new file object while its peer publishes the next message.
-Only native Windows access/sharing errors receive bounded transport retries;
-all parsing and invocation/phase/ownership checks remain outside that recovery.
+Native Windows access/sharing errors and a temporarily missing read snapshot
+receive bounded transport retries. Parsing and invocation/phase/ownership checks
+remain outside that recovery; publications never retry missing files.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ def _deadline(deadline: float) -> None:
         raise TimeoutError("Workload protocol exceeded its existing deadline")
 
 
-def _retry(operation, deadline):
+def _retry(operation, deadline, *, missing_snapshot=False):
     for attempt in range(MAX_ATTEMPTS):
         _deadline(deadline)
         try:
@@ -37,7 +38,9 @@ def _retry(operation, deadline):
             # ERROR_ACCESS_DENIED can also mean a genuine denial. It is never
             # accepted as success: persistent denial preserves the final error.
             # Do not classify generic errno.EACCES or other platform errors.
-            if not WINDOWS or getattr(error, "winerror", None) not in (5, 32) or attempt == MAX_ATTEMPTS - 1:
+            code = getattr(error, "winerror", None)
+            retryable = code in (5, 32) or missing_snapshot and code == 2
+            if not WINDOWS or not retryable or attempt == MAX_ATTEMPTS - 1:
                 raise
             _deadline(deadline)
             backoff = RETRY_SECONDS * (2 ** attempt)
@@ -97,7 +100,11 @@ def _read_snapshot(path):
 
 
 def read_json(path: Path, *, deadline: float):
-    data = _retry(lambda: _read_snapshot(path), deadline)
+    # Existence checked by a polling consumer does not pin the next path lookup.
+    # Windows can report ERROR_FILE_NOT_FOUND while its peer replaces a mailbox.
+    # Retry only this read, under the same fixed attempt/deadline bounds. A missing
+    # parent, persistent absence, invalid JSON or wrong identity still fails.
+    data = _retry(lambda: _read_snapshot(path), deadline, missing_snapshot=True)
     # Invalid JSON, duplicate keys, nonfinite values and invalid UTF-8 are not
     # transport errors and cannot be skipped in favor of a later message.
     value = parse_json(data.decode("utf-8-sig"))

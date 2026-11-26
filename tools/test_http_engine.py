@@ -187,6 +187,7 @@ def main():
             subprocess.run([str(args.java_home / 'bin/javac'), '--release', '17', '-encoding', 'UTF-8',
                             '-cp', str(work), '-d', str(work), str(wrapper), str(policy), str(annotation), str(logger),
                             *map(str, framing), str(ROOT / 'tests/net/Http2DeviceSmoke.java'),
+                            str(ROOT / 'tests/net/HttpBrotliFixtures.java'),
                             str(ROOT / 'tests/net/Http2TransferHost.java'),
                             str(ROOT / 'tests/net/Http2SessionContracts.java'),
                             str(ROOT / 'tests/net/Http2SessionHost.java'),
@@ -241,7 +242,7 @@ def main():
                 return
             subprocess.run([sys.executable, str(ROOT / 'tools/test_http_engine_policy.py'),
                             '--java-home', str(args.java_home), '--okhttp-source', str(provider)],
-                           check=True, timeout=180)
+                           check=True, timeout=300)
 
 
 if __name__ == '__main__':
