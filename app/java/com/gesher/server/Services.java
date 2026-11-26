@@ -301,10 +301,12 @@ public final class Services {
                         user(userId); return Configuration.GRAMMATICAL_GENDER_NOT_SPECIFIED;
                     }
                 }).asBinder());
-        // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
-        // their authenticators.
+        // Accounts: those an installed authenticator added (apps' own, microG's Google
+        // accounts), through their authenticators. Sync settings left for the Google
+        // account Gesher once reported without an authenticator are retired (#335).
         AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
         accounts.setSyncRetirement(sync::accountsRemoved);
+        accounts.retireSyntheticAccountResidue();
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
                 accounts).asBinder());
         sync.start(accounts::syncableAccounts, accounts::canAccessAccount);
