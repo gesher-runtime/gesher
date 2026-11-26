@@ -35,6 +35,7 @@
 #include "core_jni_helpers.h"
 #include "services_zygote.h"
 #include "services_dexopt_watch.h"
+#include "store_entitlement.h"
 
 // Its layout checks use offsetof on a class with atomics, which Soong's flags
 // let pass (-Wno-invalid-offsetof).
@@ -402,8 +403,23 @@ static const JNINativeMethod gProfileWatchMethods[] = {
     {"close", "(J)V", GESHER_JNI(ProfileWatch_close)},
 };
 
+static jboolean StoreEntitlement_releaseEnabled(JNIEnv*, jclass) {
+    return gesher::store::EditionReleaseEnabled() ? JNI_TRUE : JNI_FALSE;
+}
+
+static jint StoreEntitlement_read(JNIEnv*, jclass) {
+    return static_cast<jint>(gesher::store::ReadEntitlement());
+}
+
+static const JNINativeMethod gStoreEntitlementMethods[] = {
+    {"nativeReleaseEnabled", "()Z", GESHER_JNI(StoreEntitlement_releaseEnabled)},
+    {"nativeRead", "()I", GESHER_JNI(StoreEntitlement_read)},
+};
+
 int register_gesher_Zygote(JNIEnv* env) {
     RegisterGesherNatives(env, "com/gesher/server/Zygote", gZygoteMethods, NELEM(gZygoteMethods));
+    RegisterGesherNatives(env, "com/gesher/server/StoreEntitlement", gStoreEntitlementMethods,
+                          NELEM(gStoreEntitlementMethods));
     return RegisterGesherNatives(env, "com/gesher/server/DexoptProfileNotifications",
                                 gProfileWatchMethods, NELEM(gProfileWatchMethods));
 }

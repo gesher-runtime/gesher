@@ -496,6 +496,7 @@ final class Installer {
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             ContactsProviderSupport.checkPackageAdmission(parsed);
+            mPm.enforceEditionAdmission(parsed);
             return unchanged(apk, recorded.packageName, parsed, recorded, null, restrictedAllowlist,
                     authorize);
         }
@@ -582,8 +583,10 @@ final class Installer {
                             sessionMetadata == null && tempDir == null)
                     && (sessionMetadata == null || sessionMetadata.matches(new File(old.codePath)))
                     && mPm.get(pkg) != null) {
+                ApkPackage installed = ApkPackage.parseCodeDirectory(old.codePath);
+                mPm.enforceEditionAdmission(installed);
                 recordSource(original, pkg, old.codePath);
-                return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
+                return unchanged(apk, pkg, installed, old,
                         installSource, restrictedAllowlist, authorize, explicitInstall);
             }
             int n = 1;
@@ -652,6 +655,10 @@ final class Installer {
             try (PackageUids.Admission checked = PackageUids.prepare(List.of(staged), mPm.packages())) {
                 // Recheck the copied cluster before stopping the working generation.
             }
+            boolean addonUpdate = previous != null && previous.isSystemAddon();
+            if (addonUpdate && !GmsSignatureSpoofing.verifyAddonApk(pkg, staged.apkPath)) {
+                throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+            }
             // The package's ABI over base.apk and its splits: an ABI split's libraries
             // (an .xapk's config.arm64_v8a.apk) go to lib/arm64 and the package runs as
             // arm64-v8a, not as an x86_64 package without its libraries.
@@ -660,6 +667,7 @@ final class Installer {
             String libDir = new File(code, "lib/" + NativeLibs.instructionSetDir(abi)).getPath();
             int libs = 0;
             for (String file : apks) libs += NativeLibs.extract(file, libDir, abi);
+            mPm.enforceEditionAdmission(staged);
             // dexopt, as the package manager runs it at install (Dexopt; ADR 0054).
             Dexopt.onInstall(pkg, code.getPath(), staged.sharedLibraries);
             long now = System.currentTimeMillis();
@@ -667,12 +675,7 @@ final class Installer {
                     now, installSource == null ? PackageInstallSource.UNKNOWN : installSource);
             ApkPackage installed = open(entry);
             installed.setRestrictedPermissionAllowlist(restrictedAllowlist);
-            if (previous != null && previous.isSystemAddon()) {
-                if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
-                    throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
-                }
-                installed.setSystemAddon(true);
-            }
+            if (addonUpdate) installed.setSystemAddon(true);
             commitAuthorized(authorize, () -> {
                 // The incoming manifest cannot authorize moving an older app's data.
                 // Boot preparation used the committed manifest before any update.

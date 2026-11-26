@@ -46,6 +46,7 @@ public final class GesherService extends Binder {
     static final int SETTINGS_SHOWN = IBinder.FIRST_CALL_TRANSACTION + 13;
     static final int SETTINGS_VISIT_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 14;
     static final int SET_SPECIAL_ACCESS_VISIT = IBinder.FIRST_CALL_TRANSACTION + 15;
+    static final int START_VIEW = IBinder.FIRST_CALL_TRANSACTION + 16;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -104,6 +105,9 @@ public final class GesherService extends Binder {
         default LaunchResult startShortcutAndWait(String pkg, String key) throws Exception {
             throw new UnsupportedOperationException("Publisher-bound shortcut launch unavailable");
         }
+        default WaitResult startViewAndWait(Intent intent, int taskId) throws Exception {
+            throw new UnsupportedOperationException("Host URL launch unavailable");
+        }
         /** The app's special access switches: rows of "op-name TAB allowed|denied". */
         default String[] specialAccess(String packageName) {
             throw new UnsupportedOperationException("Special access unavailable");
@@ -147,7 +151,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > SET_SPECIAL_ACCESS_VISIT) {
+        if (code < INSTALL || code > START_VIEW) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -237,6 +241,20 @@ public final class GesherService extends Binder {
                     LaunchResult result = mDevice.startShortcutAndWait(pkg, key);
                     reply.writeNoException(); reply.writeTypedObject(result.result, 0);
                     reply.writeInt(result.taskId); reply.writeStrongBinder(result.exitReceipt);
+                    return true;
+                }
+                case START_VIEW: {
+                    Intent intent = data.readTypedObject(Intent.CREATOR);
+                    int taskId = data.readInt();
+                    data.enforceNoDataAvail();
+                    if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction())
+                            || !intent.hasCategory(Intent.CATEGORY_BROWSABLE)
+                            || intent.getPackage() == null || taskId < -1) {
+                        throw new IllegalArgumentException("Invalid host URL launch");
+                    }
+                    WaitResult result = mDevice.startViewAndWait(intent, taskId);
+                    reply.writeNoException();
+                    reply.writeTypedObject(result, 0);
                     return true;
                 }
                 case SPECIAL_ACCESS: {
@@ -584,6 +602,26 @@ public final class GesherService extends Binder {
                 int taskId = reply.readInt(); IBinder receipt = reply.readStrongBinder();
                 reply.enforceNoDataAvail(); return new LaunchResult(result, taskId, receipt);
             } finally { data.recycle(); reply.recycle(); }
+        }
+
+        /** A null result means the running device predates the host URL transaction. */
+        public WaitResult startViewAndWait(Intent intent, int taskId) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeTypedObject(intent, 0);
+                data.writeInt(taskId);
+                if (!mBinder.transact(START_VIEW, data, reply, 0)) return null;
+                reply.readException();
+                WaitResult result = java.util.Objects.requireNonNull(
+                        reply.readTypedObject(WaitResult.CREATOR));
+                reply.enforceNoDataAvail();
+                return result;
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
         }
 
         /** Reads only the status of the process generation captured by a host launch. */

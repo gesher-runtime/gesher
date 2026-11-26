@@ -212,8 +212,6 @@ public final class SystemServer {
             throw new IllegalStateException("$GESHER_BINDER is not set: the system server"
                     + " registers its services with servicemanager over binderd");
         }
-        EditionPolicy edition = EditionPolicy.forSystemServer(System.getenv(EditionPolicy.TRIAL_ENV),
-                AppSandbox.enabled(), System.getenv(AppSandbox.NETWORK_ENV));
         StandIn.setTag(TAG);
         // Binder calls from this process carry the system uid, as system_server's do
         // (gesher-base's /dev/binder reads it when the process opens the driver, below):
@@ -225,6 +223,13 @@ public final class SystemServer {
         if (frameworkRes == null) frameworkRes = androidRoot + "/framework/framework-res.apk";
 
         Main.bootstrap(TAG, buildProp, frameworkRes);
+
+        String trial = System.getenv(EditionPolicy.TRIAL_ENV);
+        boolean contained = AppSandbox.enabled();
+        String networkProfile = System.getenv(AppSandbox.NETWORK_ENV);
+        EditionPolicy edition = trial == null && StoreEntitlement.releaseEnabled()
+                ? EditionPolicy.forStoreLaunch(StoreEntitlement.read(), contained, networkProfile)
+                : EditionPolicy.forSystemServer(trial, contained, networkProfile);
 
         if (persistent) {
             // The device goes as a whole: binderd, servicemanager and the app processes
@@ -608,6 +613,11 @@ public final class SystemServer {
         }
         @Override public GesherService.LaunchResult startShortcutAndWait(String pkg, String key) {
             return mServices.atm.startShortcutForHost(pkg, key);
+        }
+
+        @Override
+        public android.app.WaitResult startViewAndWait(android.content.Intent intent, int taskId) {
+            return mServices.atm.startActivityForHost(intent, taskId).result;
         }
 
         @Override

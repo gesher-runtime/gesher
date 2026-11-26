@@ -18,6 +18,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.ServiceManager;
+import android.os.ServiceSpecificException;
 import android.os.SystemClock;
 
 import com.gesher.app.shell.AppShell;
@@ -25,6 +26,7 @@ import static com.gesher.app.locale.UiText.text;
 import com.gesher.app.window.WindowMode;
 import com.gesher.net.ProxySetting;
 import com.gesher.server.Device;
+import com.gesher.server.EditionAdmission;
 import com.gesher.server.GesherService;
 import com.gesher.server.MobileDataCommands;
 import com.gesher.server.SpellCheckerCommands;
@@ -182,6 +184,23 @@ public final class Launcher {
         return null;
     }
 
+    static String describeEditionFailure(String messageKey, String detail) {
+        if (detail == null || detail.length() > 320) return null;
+        int separator = detail.indexOf('\t');
+        if (separator < 1 || separator > 255) return null;
+        String packageName = detail.substring(0, separator);
+        if (!packageName.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*")) return null;
+        String feature = detail.substring(separator + 1);
+        switch (feature) {
+            case "android.hardware.location":
+            case "android.hardware.location.gps":
+            case "android.hardware.location.network":
+                return text(messageKey, packageName, text("edition_feature_location"));
+            default:
+                return null;
+        }
+    }
+
     /** Writes the failure for gesher-launch or the Control Center to show; best effort. */
     private static void reportFailure(String message) {
         if (sErrorFile == null || sErrorFile.isEmpty() || message == null) return;
@@ -194,6 +213,31 @@ public final class Launcher {
 
     private static void log(String message) {
         Main.log(message);
+    }
+
+    private static final class EditionNotice extends RuntimeException {
+        EditionNotice(String message) {
+            super(message);
+        }
+    }
+
+    private static RuntimeException hostEditionFailure(ServiceSpecificException error) {
+        String messageKey;
+        switch (error.errorCode) {
+            case EditionAdmission.UPGRADE_REQUIRED:
+                messageKey = "edition_upgrade_required";
+                break;
+            case EditionAdmission.LICENSE_UNAVAILABLE:
+                messageKey = "edition_license_unavailable";
+                break;
+            case EditionAdmission.TRIAL_LIMIT:
+                messageKey = "edition_trial_limit";
+                break;
+            default:
+                return error;
+        }
+        String message = describeEditionFailure(messageKey, error.getMessage());
+        return message == null ? error : new EditionNotice(message);
     }
 
     public static void main(String[] args) {
@@ -209,9 +253,10 @@ public final class Launcher {
             code = run(args);
         } catch (Throwable t) {
             System.out.flush();
-            String message = describeFailure(t);
+            boolean editionNotice = t instanceof EditionNotice;
+            String message = editionNotice ? t.getMessage() : describeFailure(t);
             System.err.println(TAG + ": " + (message != null ? message : text("failed", t)));
-            t.printStackTrace();
+            if (!editionNotice) t.printStackTrace();
             reportFailure(message != null ? message
                     : t.getMessage() != null ? t.getMessage() : String.valueOf(t));
             code = 1;
@@ -643,7 +688,12 @@ public final class Launcher {
             throws Exception {
         File f = new File(apk);
         if (!f.isFile()) throw new IllegalArgumentException(text("no_file", apk));
-        String[] r = gesher.install(f.getAbsolutePath(), explicitInstall);
+        String[] r;
+        try {
+            r = gesher.install(f.getAbsolutePath(), explicitInstall);
+        } catch (ServiceSpecificException e) {
+            throw hostEditionFailure(e);
+        }
         switch (r[1]) {
             case "unchanged":
                 log(text("unchanged", r[0], r[2]));
@@ -729,18 +779,27 @@ public final class Launcher {
                 .setPackage(pkg);
         IActivityTaskManager atm = ActivityTaskManager.getService();
         ActivityManager.RunningTaskInfo task = GesherAppProcess.taskOf(atm, pkg);
-        android.os.Bundle options = null;
-        if (task != null) {
-            ActivityOptions o = ActivityOptions.makeBasic();
-            o.setLaunchTaskId(task.taskId);
-            options = o.toBundle();
-        } else if (!running(ActivityManager.getService(), pkg)) {
+        if (task == null && !running(ActivityManager.getService(), pkg)) {
             gesher.setWindowMode(pkg, WindowMode.fromEnvironment(WindowMode.WINDOW));
         }
         log(text("start_intent", intent.toShortString(false, true, true, false)
                 + (task != null ? text("in_task", task.taskId) : "")));
-        WaitResult result = atm.startActivityAndWait(null /* caller: the launcher */,
-                "com.gesher.launcher", null, intent, null, null, null, 0, 0, null, options, 0);
+        WaitResult result;
+        try {
+            result = gesher.startViewAndWait(intent, task == null ? -1 : task.taskId);
+        } catch (ServiceSpecificException e) {
+            throw hostEditionFailure(e);
+        }
+        if (result == null) {
+            android.os.Bundle options = null;
+            if (task != null) {
+                ActivityOptions o = ActivityOptions.makeBasic();
+                o.setLaunchTaskId(task.taskId);
+                options = o.toBundle();
+            }
+            result = atm.startActivityAndWait(null /* caller: the launcher */,
+                    "com.gesher.launcher", null, intent, null, null, null, 0, 0, null, options, 0);
+        }
         String outcome = text("start_result", result.result,
                 result.who != null ? result.who.flattenToShortString() : text("no_new_activity"),
                 result.timeout ? text("timed_out") : "");
@@ -860,8 +919,13 @@ public final class Launcher {
         try {
             if (shortcutId == null) log(text("start_intent", intent.toShortString(false, true, true, false)));
             IActivityTaskManager atm = ActivityTaskManager.getService();
-            GesherService.LaunchResult launch = shortcutId == null ? gesher.startActivityAndWait(intent)
-                    : gesher.startShortcutAndWait(pkg, shortcutId);
+            GesherService.LaunchResult launch;
+            try {
+                launch = shortcutId == null ? gesher.startActivityAndWait(intent)
+                        : gesher.startShortcutAndWait(pkg, shortcutId);
+            } catch (ServiceSpecificException e) {
+                throw hostEditionFailure(e);
+            }
             WaitResult result = launch.result;
             log(text("start_result", result.result,
                     result.who != null ? result.who.flattenToShortString() : text("no_activity"),

@@ -337,6 +337,12 @@ Check 'services: authenticated notification delegation, revocation and retained 
 # the production services on the boot path. Each VM creates its own data child.
 $imageBoot = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
 $imageArgs = @("-Xbootclasspath:$imageBoot", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+$storeEntitlementOut = FixesRun ($imageArgs + 'com.gesher.server.StoreEntitlementPolicyTest') 90
+$storeEntitlementCode = $LASTEXITCODE
+Check 'services: verified Store status selects the edition policy under containment' {
+  $global:LASTEXITCODE = $storeEntitlementCode
+  $storeEntitlementOut
+} @('Store entitlement policy passed')
 $imagePublicationOut = FixesRun ($imageArgs + 'com.gesher.server.NotificationImagePublicationTest') 90
 $imagePublicationCode = $LASTEXITCODE
 Check 'services: notification image preparation progress, cancellation and replacement fencing' {

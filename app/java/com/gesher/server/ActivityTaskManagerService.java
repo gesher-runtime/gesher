@@ -1811,6 +1811,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
     private final ThreadLocal<StackLaunch> mStackLaunch = new ThreadLocal<>();
+    private final ThreadLocal<Intent> mHostEditionLaunch = new ThreadLocal<>();
     private final Object mLaunchLock = new Object();
     private int mStackPublications; // Guarded by this; callbacks cannot realize a half-published stack.
     private final java.util.LinkedHashSet<Integer> mHistoryToRealize = new java.util.LinkedHashSet<>();
@@ -1853,12 +1854,29 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     /** The host launcher receives authority for this actual launch, never a claimed process name. */
     GesherService.LaunchResult startActivityForHost(Intent intent) {
+        return startActivityForHost(intent, intent != null ? intent.getType() : null, -1);
+    }
+
+    GesherService.LaunchResult startActivityForHost(Intent intent, int launchTaskId) {
+        return startActivityForHost(intent, null, launchTaskId);
+    }
+
+    private GesherService.LaunchResult startActivityForHost(Intent intent, String resolvedType, int launchTaskId) {
         if (mAm == null || !mAm.callers().isSystem()) throw new SecurityException("Host launch required");
         if (intent == null) throw new IllegalArgumentException("Missing launch intent");
+        if (launchTaskId < -1) throw new IllegalArgumentException("Invalid launch task");
         ActivityRecord[] started = new ActivityRecord[1];
         String creator = mVerifiedCreator.get();
-        int code = start(null, new Intent(intent), intent.getType(), creator == null ? "com.gesher.launcher" : creator,
-                null, null, 0, -1, started);
+        Intent launch = new Intent(intent);
+        Intent previous = mHostEditionLaunch.get();
+        int code;
+        mHostEditionLaunch.set(launch);
+        try {
+            code = start(null, launch, resolvedType, creator == null ? "com.gesher.launcher" : creator,
+                    null, null, 0, launchTaskId, started);
+        } finally {
+            if (previous == null) mHostEditionLaunch.remove(); else mHostEditionLaunch.set(previous);
+        }
         ActivityRecord record = started[0];
         WaitResult result = waitForStarted(code, record);
         ProcessExitStatus.Generation generation;
@@ -3426,6 +3444,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || starting(info.packageName, componentProcess(info.packageName, info.processName)))) {
                 return ActivityManager.START_CANCELED;
             }
+            EditionAdmission.Denied denied = mPm.editionDenial(targetCode);
+            if (denied != null) {
+                if (mHostEditionLaunch.get() == intent) throw denied;
+                return ActivityManager.START_CLASS_NOT_FOUND;
+            }
             // startActivityIntentSender authenticated this result activity before
             // clearing Binder identity. Creator authority still controls the target;
             // window visibility follows the live recipient that requested its UI.
@@ -4051,6 +4074,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (mPm) {
             owner = mPm.get(packageName);
             if (owner == null || !owner.matchesEnabledApplication(0) || mPm.isRemovalPending(packageName)) return;
+            if (mPm.editionDenial(owner) != null) return;
             ai = owner.applicationInfo(0);
             enabledLifetime = owner.enabledProcessLifetime();
         }
@@ -4927,7 +4951,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         ProcessRecord app = null;
         boolean dispatchNow = false, accepted;
         synchronized (this) {
-            accepted = pending.current(mPm);
+            accepted = pending.current(mPm) && mPm.editionDenial(owner) == null;
             if (accepted) {
                 app = processFor(packageName, processName);
                 dispatchNow = app != null && app.ready;

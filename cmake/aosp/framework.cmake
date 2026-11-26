@@ -113,6 +113,7 @@ add_library(framework_runtime OBJECT
   ${_fwjni}/com_android_internal_util_VirtualRefBasePtr.cpp
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/store_entitlement.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives_pic.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc
@@ -148,4 +149,4 @@ target_compile_options(framework_runtime PRIVATE -Wall -Wextra -Werror
 # allows it next to <atomic> only from C++23 on (bionic's allows it always).
 set_target_properties(framework_runtime PROPERTIES CXX_STANDARD 23)
 
-target_link_libraries(dalvikvm PRIVATE framework_runtime)
+target_link_libraries(dalvikvm PRIVATE framework_runtime runtimeobject)

@@ -88,7 +88,7 @@ public final class Services {
     }
 
     static Map<String, IBinder> create(Collection<ApkPackage> packages, EditionPolicy edition) {
-        return create(new PackageManagerService(packages, true), true, edition).services;
+        return create(new PackageManagerService(packages, true, edition), true, edition).services;
     }
 
     /** Stand-in services share no persistent account or enabled-state policy with the real device. */

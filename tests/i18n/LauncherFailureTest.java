@@ -79,6 +79,24 @@ public final class LauncherFailureTest {
                     new IllegalArgumentException("INSTALL_FAILED_OTHER: detail")));
             equal(null, Launcher.describeFailure(new RuntimeException("unrelated failure")));
             equal(null, Launcher.describeFailure(new RuntimeException((String) null)));
+            String packageName = "com.example";
+            for (String feature : new String[] {"android.hardware.location",
+                    "android.hardware.location.gps", "android.hardware.location.network"}) {
+                for (String key : new String[] {"edition_upgrade_required",
+                        "edition_license_unavailable", "edition_trial_limit"}) {
+                    equal(text(key, packageName, text("edition_feature_location")),
+                            Launcher.describeEditionFailure(key, packageName + "\t" + feature));
+                }
+            }
+            equal(null, Launcher.describeEditionFailure("edition_upgrade_required", null));
+            equal(null, Launcher.describeEditionFailure("edition_upgrade_required",
+                    "com.example\tandroid.hardware.unknown"));
+            equal(null, Launcher.describeEditionFailure("edition_upgrade_required",
+                    "com.example\tandroid.hardware.location\textra"));
+            equal(null, Launcher.describeEditionFailure("edition_upgrade_required",
+                    "com.\nexample\tandroid.hardware.location"));
+            equal(null, Launcher.describeFailure(
+                    new RuntimeException("6401: com.example\tandroid.hardware.location")));
         }
         System.out.println("PASS: Launcher failure mapping " + checks
                 + " checks (real mapper and catalog; host language selection)");

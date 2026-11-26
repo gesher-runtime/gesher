@@ -53,6 +53,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     private IntentPackageIndex mIntentPackageIndex;
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
+    private final EditionPolicy mEdition;
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
     /** Windows' mailto/tel/sms/geo handlers (WindowsUriHandlers), present only when registered. */
     private final WindowsUriHandlers mUriHandlers = new WindowsUriHandlers(WindowsHost::hasUrlHandler);
@@ -234,7 +235,12 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     PackageManagerService(Collection<ApkPackage> packages, boolean persistentEnabled) {
+        this(packages, persistentEnabled, EditionPolicy.LEGACY);
+    }
+
+    PackageManagerService(Collection<ApkPackage> packages, boolean persistentEnabled, EditionPolicy edition) {
         mTransientEnabled = !persistentEnabled;
+        mEdition = java.util.Objects.requireNonNull(edition);
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
             if (ContactsProviderSupport.hasBuiltInConflict(p)) {
@@ -1676,15 +1682,36 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public boolean hasSystemFeature(String name, int version) {
+        return showsSystemFeature(name) && hasBaseSystemFeature(name, version);
+    }
+
+    static boolean hasBaseSystemFeature(String name, int version) {
         android.content.pm.FeatureInfo f = FEATURES.get(name);
         return f != null && version <= f.version;
+    }
+
+    private boolean showsSystemFeature(String name) {
+        return !EditionAdmission.isHostLocationFeature(name)
+                || mEdition.permits(EditionPolicy.Capability.HOST_LOCATION);
+    }
+
+    EditionAdmission.Denied editionDenial(ApkPackage pkg) {
+        String feature = EditionAdmission.unavailableRequiredFeature(mEdition, pkg);
+        return feature == null ? null : new EditionAdmission.Denied(mEdition, pkg.packageName, feature);
+    }
+
+    void enforceEditionAdmission(ApkPackage pkg) {
+        EditionAdmission.Denied denied = editionDenial(pkg);
+        if (denied != null) throw denied;
     }
 
     @Override
     public ParceledListSlice<android.content.pm.FeatureInfo> getSystemAvailableFeatures() {
         // As AOSP: the named features, then one unnamed entry with the OpenGL ES version.
         ArrayList<android.content.pm.FeatureInfo> list = new ArrayList<>(FEATURES.size() + 1);
-        list.addAll(FEATURES.values());
+        for (android.content.pm.FeatureInfo feature : FEATURES.values()) {
+            if (showsSystemFeature(feature.name)) list.add(feature);
+        }
         android.content.pm.FeatureInfo gles = new android.content.pm.FeatureInfo();
         gles.reqGlEsVersion = glEsVersion();
         list.add(gles);

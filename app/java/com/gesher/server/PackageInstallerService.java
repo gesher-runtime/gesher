@@ -1098,6 +1098,9 @@ public final class PackageInstallerService extends IPackageInstaller.Default {
                         !"unchanged".equals(installed[1])));
                 status = PackageInstaller.STATUS_SUCCESS;
                 message = "Installed";
+            } catch (EditionAdmission.Denied e) {
+                status = PackageInstaller.STATUS_FAILURE_INCOMPATIBLE;
+                message = e.androidMessage();
             } catch (SecurityException e) {
                 status = PackageInstaller.STATUS_FAILURE_BLOCKED;
                 message = "Package identity or consent changed";

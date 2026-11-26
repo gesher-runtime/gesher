@@ -112,11 +112,25 @@ Coverage should include separate APKs for Free-only workflows, a known paid mand
   behavior, and skips host and IP-based position acquisition. The
   independent WebView2 geolocation permission path needs its own enforcement
   and validation before claiming complete host-location restriction.
-- Production activation still requires verified Store entitlement,
-  authenticated tier delivery to the running server, and production
-  containment. Scope a downgrade to new launches, already active brokers and
-  persisted Windows notification activations. Complete the remaining app
-  capability checks and upgrade presentation before publishing either offer.
+- At startup, the server can query the Windows Store license for its own
+  package family and exact add-on SKU and offer token. A cached active
+  entitlement can select Paid. A missing, unavailable or inactive entitlement
+  selects a Free policy when Store edition activation is enabled. That release
+  switch is off and the Store catalog is empty. The installed release still
+  uses its existing policy.
+- The location admission check covers individually required Android location
+  features that the build otherwise exposes. Optional features, permissions
+  alone and grouped declarations do not trigger this check. The server checks
+  verified installs and updates, and checks the resolved package before
+  handling an activity launch. Previously installed app data is preserved.
+  Android callers receive standard failure results. Windows install, app
+  launch, shortcut and URL activation can present a localized reason from the
+  server. Only a configured, inactive entitlement produces an upgrade message.
+- Production activation still requires a configured Store catalog and
+  production containment. Live license changes, remaining activation paths,
+  runtime upgrade prompts and checkout UI remain release work. Scope a
+  downgrade to new launches, already active brokers and persisted Windows
+  notification activations.
 
 ### Representative app workflows
 

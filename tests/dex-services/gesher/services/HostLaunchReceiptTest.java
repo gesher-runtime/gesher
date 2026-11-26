@@ -5,6 +5,7 @@ import android.app.*;
 import android.content.*;
 import android.content.pm.ActivityInfo;
 import android.content.res.AssetManager;
+import android.net.Uri;
 import android.os.*;
 import com.gesher.server.*;
 import java.lang.reflect.*;
@@ -384,6 +385,14 @@ public final class HostLaunchReceiptTest {
                 new Intent(intent).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),null,null,null,0,0,null,options.toBundle(),0);
         require(reused.result==ActivityManager.START_DELIVERED_TO_TOP && reused.who.equals(intent.getComponent())
                 && get(record,"launchGeneration")==captured.get() && starts.get()==3,"Reused activity lost its actual record/generation");
+        Intent view = new Intent(Intent.ACTION_VIEW, Uri.parse("gesher-fixture-view://callback"))
+                .addCategory(Intent.CATEGORY_BROWSABLE).setPackage(pkg)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+        GesherService.LaunchResult viewLaunch = (GesherService.LaunchResult)
+                method(atm, "startActivityForHost", Intent.class, int.class).invoke(tasks, view, 37);
+        require(viewLaunch.taskId == 37 && viewLaunch.result.result == ActivityManager.START_DELIVERED_TO_TOP
+                && intent.getComponent().equals(viewLaunch.result.who) && starts.get() == 3,
+                "BROWSABLE host URL did not reuse the requested task");
         launchReadiness(tasks,atm,recordType,info);
         firstFrameCompletesLaunch(tasks,atm,recordType,processType,info);
         processDeathBeforeReadiness(tasks,atm,recordType,processType,info);

@@ -155,6 +155,22 @@
       "en": "The Android application could not be opened.\n\n{0}",
       "he": "לא ניתן לפתוח את יישום ה־Android.\n\n{0}"
     },
+    "edition_upgrade_required": {
+      "en": "The application ⁨{0}⁩ requires the paid edition of Gesher for ⁨{1}⁩.",
+      "he": "היישום ⁨{0}⁩ דורש את השכבה בתשלום של גשר כדי להשתמש ב־⁨{1}⁩."
+    },
+    "edition_license_unavailable": {
+      "en": "Gesher could not verify the license required by ⁨{0}⁩ for ⁨{1}⁩. Try again when Microsoft Store is available.",
+      "he": "גשר לא הצליחה לאמת את הרישיון שהיישום ⁨{0}⁩ דורש עבור ⁨{1}⁩. כדאי לנסות שוב כשחנות Microsoft Store זמינה."
+    },
+    "edition_trial_limit": {
+      "en": "The application ⁨{0}⁩ requires ⁨{1}⁩, which is unavailable in this Gesher edition.",
+      "he": "היישום ⁨{0}⁩ דורש ⁨{1}⁩. יכולת זו אינה זמינה במהדורה זו של גשר."
+    },
+    "edition_feature_location": {
+      "en": "location",
+      "he": "מיקום"
+    },
     "install_update_incompatible": {
       "en": "The application ⁨{0}⁩ is already installed, but signed with a different signing key than this file.\n\nTo install this file, first remove the installed application (in the Gesher Control Center, or: gesher-app uninstall {0}). Its app data will be deleted.",
       "he": "היישום ⁨{0}⁩ כבר מותקן, אבל חתום במפתח חתימה שונה מזה של הקובץ הזה.\n\nכדי להתקין את הקובץ, יש להסיר קודם את היישום המותקן (בלוח הבקרה של גשר, או: gesher-app uninstall {0}). נתוני היישום יימחקו."
