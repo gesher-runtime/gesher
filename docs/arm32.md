@@ -25,7 +25,7 @@ DLL, or advertised by `NativeLibs.SUPPORTED` or `build.prop`.
 | `arm32_executor` | ARM/Thumb execution through the pinned Dynarmic A32 frontend, finite instruction budgets, checked instruction/data access, explicit faults and typed host-function thunks. |
 | `arm32_program` | Isolated dependency-DAG loader, guest-address allocation, typed host import bindings, transactional load rollback, guest constructors and reverse-order finalizers, exported function calls and explicit shutdown. Not integrated with ART or APK packaging. |
 | `arm32_bionic` | A narrow ILP32 guest-memory libc adapter for malloc/calloc/realloc/free, memcpy/memmove/memset/memcmp and strlen/strnlen/strcmp/strncmp; a guest `__errno` cell with ENOMEM on allocation failure, bounds checks and typed imports. Not a complete Bionic implementation. |
-| `arm32_jni` | Guest `JNIEnv*` and `JavaVM*` with read-only 32-bit tables, typed JNI callbacks, generation-checked Java references, local/global reference ownership, UTF copies, `JNI_OnLoad`, and descriptor-aware named native / `@CriticalNative` calls. The owning thread alone supports `GetEnv` and attach; guest thread creation and detach are unsupported. This is an isolated component with an injected host JNIEnv, not ART native registration or complete JNI32. |
+| `arm32_jni` | Guest `JNIEnv*` and `JavaVM*` with read-only 32-bit tables, typed JNI callbacks, generation-checked Java references, local/global reference ownership, UTF copies, `JNI_OnLoad`/`JNI_OnUnload`, and descriptor-aware named native / `@CriticalNative` calls. The owning thread alone supports `GetEnv` and attach; guest thread creation and detach are unsupported. This is an isolated component with an injected host JNIEnv, not ART native registration or complete JNI32. |
 
 The linked-program test loads and calls the compiled ARM and Thumb fixtures through `Program`, including their constructors and typed host imports. Additional actual compiler-generated ARM/Thumb fixtures test libc imports and a two-DSO `DT_NEEDED` graph with guest-side constructor/finalizer ordering assertions. The dependency's destructor traps if the consumer has not run its own destructor first. The `arm32_bionic` adapter confines pointers to `GuestMemory`; it does not expose host pointers to 32-bit guest code. Its `__errno` cell is per standalone Program, not thread-local: real guest threads require a distinct errno/TLS design before application use. These are component test paths, not Windows/ART APK runs. The executor runs the compiler-generated fixtures in `tests/arm32`: constructors,
 relocated data pointers, integer and floating-point calls, 64-bit register/stack
@@ -57,11 +57,11 @@ reference arguments according to the JVM method descriptor, runs guest
 references are never truncated into a 32-bit guest pointer. CriticalNative
 calls omit JNIEnv and receiver. Unknown table slots are null and fault
 closed; they are not silently simulated. The test harness supplies an
-in-process fake host JNIEnv, not a running ART instance. The guest JavaVM invoke table supports `GetEnv`, `JNI_OnLoad` and
+in-process fake host JNIEnv, not a running ART instance. The guest JavaVM invoke table supports `GetEnv`, `JNI_OnLoad`/`JNI_OnUnload` and
 same-thread `AttachCurrentThread` / `AttachCurrentThreadAsDaemon` when
 the real ART thread is already attached. `DestroyJavaVM` and
 `DetachCurrentThread` explicitly return JNI_ERR, and new guest threads
-are unsupported. The actual ART native registration/dlsym path, most JNI
+are unsupported. Guest `JNI_OnUnload` must be called explicitly before the module is unmapped; this component does not hook ART's unload flow. An installed guest JNIEnv/JavaVM table is retired when the bridge is destroyed; partial installation failures preserve pre-existing foreign guest pages. The actual ART native registration/dlsym path, most JNI
 functions, arrays and buffer pinning, real guest-thread attachment, and
 nested cross-ABI callbacks remain unsupported. A native
 frame must release its guest local references before returning to ART.
