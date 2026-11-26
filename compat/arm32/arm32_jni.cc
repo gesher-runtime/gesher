@@ -563,6 +563,32 @@ bool Jni32::Install(std::string* error) { return state_->Install(error); }
 uint32_t Jni32::GuestEnvironment() const {
   return state_ && state_->active ? kGuestEnv : 0;
 }
+uint32_t Jni32::GuestJavaVM() const {
+  return state_ && state_->active ? kGuestVm : 0;
+}
+bool Jni32::CallOnLoad(std::string_view library, jint* version,
+                       std::string* error, uint64_t instruction_budget) {
+  if (!state_ || !state_->CheckThread(error) || !version)
+    return Fail(error, "JNI32 JNI_OnLoad requires an owning Java thread and output");
+  Value returned;
+  std::string failure;
+  const bool called = state_->program.CallExport(
+      library, "JNI_OnLoad",
+      {Value::GuestPointer(GuestJavaVM()), Value::GuestPointer(0)},
+      ValueKind::I32, &returned, &failure, instruction_budget);
+  std::string cleanup;
+  const bool cleaned = ReleaseLocals(&cleanup);
+  if (!called || !cleaned) {
+    if (error) *error = !failure.empty() ? failure : cleanup;
+    return false;
+  }
+  const jint requested = static_cast<jint>(returned.bits);
+  if (requested < JNI_VERSION_1_1 || requested > state_->real->GetVersion())
+    return Fail(error, "JNI32 guest JNI_OnLoad returned unsupported JNI version");
+  *version = requested;
+  if (error) error->clear();
+  return true;
+}
 bool Jni32::ReleaseLocals(std::string* error) {
   if (!state_ || !state_->CheckThread(error)) return false;
   const bool leaked = !state_->utf_copies.empty();
