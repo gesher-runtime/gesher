@@ -165,6 +165,7 @@ struct Entry {
   uint64_t id;  // tells a re-added fd from the entry a wait started with
   bool armed;   // false once an EPOLLONESHOT entry fired, until EPOLL_CTL_MOD
   std::weak_ptr<Epoll> child;
+  bool is_socket;
   std::shared_ptr<OwnerWatch> owner_watch = nullptr;
   bool ordinary_eventfd = false;
   uint32_t readable_events = EPOLLIN;
@@ -455,9 +456,11 @@ constexpr uint32_t kPollable = EPOLLIN | EPOLLPRI | EPOLLOUT | EPOLLRDNORM | EPO
 
 // What epoll reports for poll's `revents`: the requested events, and errors
 // and hangups always.
-uint32_t ToEpoll(short revents, uint32_t events) {
-  uint32_t r = static_cast<uint16_t>(revents) & ((events & kPollable) | EPOLLERR | EPOLLHUP);
-  if ((revents & POLLHUP) != 0 && (events & EPOLLRDHUP) != 0) r |= EPOLLRDHUP;
+uint32_t ToEpoll(short revents, const Entry& entry) {
+  uint32_t r = static_cast<uint16_t>(revents) & ((entry.events & kPollable) | EPOLLERR | EPOLLHUP);
+  // Preserve the socket backend's half-close translation. A pipe's last
+  // writer closing reports HUP, even when the reader still has bytes queued.
+  if (entry.is_socket && (revents & POLLHUP) != 0 && (entry.events & EPOLLRDHUP) != 0) r |= EPOLLRDHUP;
   return r;
 }
 
@@ -525,13 +528,6 @@ bool CanNest(const std::shared_ptr<Epoll>& parent, const std::shared_ptr<Epoll>&
   return true;
 }
 
-// Regular files and directories cannot be polled on Linux, so epoll refuses
-// them with EPERM. Pipes, sockets, eventfds and character devices can.
-bool Pollable(int fd) {
-  SocketFd socket;
-  return LookupSocket(fd, &socket) || GetFileType(HandleFromFd(fd)) != FILE_TYPE_DISK;
-}
-
 }  // namespace
 
 int SampleVirtualEntries(EpollPollScratch& scratch, bool prepare_wait);
@@ -568,7 +564,7 @@ bool PollEpollOwned(const std::shared_ptr<Epoll>& ep, short events, short* ready
     if (found != ep->entries.end() && found->second.id == ids[i] && found->second.armed &&
         (fds[i].revents & POLLNVAL) == 0 &&
         (found->second.edge_source ? EventFdEdgeReady(found->second, false)
-                                  : ToEpoll(fds[i].revents, found->second.events)) != 0) {
+                                  : ToEpoll(fds[i].revents, found->second)) != 0) {
       *ready = events & (POLLIN | POLLRDNORM);
       break;
     }
@@ -821,7 +817,11 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
   if (ep == nullptr || fd == epfd || child == ep) return errno = EINVAL, -1;
   if (op != EPOLL_CTL_ADD && op != EPOLL_CTL_MOD && op != EPOLL_CTL_DEL) return errno = EINVAL, -1;
   if (op != EPOLL_CTL_DEL && event == nullptr) return errno = EFAULT, -1;
-  if (!gesher::Pollable(fd)) return errno = EPERM, -1;
+  gesher::SocketFd socket;
+  const bool is_socket = gesher::LookupSocket(fd, &socket);
+  // Linux accepts pipes, sockets and pollable devices. Disk files and
+  // directories do not support epoll registration.
+  if (!is_socket && GetFileType(gesher::HandleFromFd(fd)) == FILE_TYPE_DISK) return errno = EPERM, -1;
   uint32_t events = event != nullptr ? event->events : 0;
   if (op == EPOLL_CTL_MOD && (events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
   if (child && (events & EPOLLEXCLUSIVE) != 0 && op != EPOLL_CTL_DEL) return errno = EINVAL, -1;
@@ -841,7 +841,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
     switch (op) {
       case EPOLL_CTL_ADD:
         if (it != ep->entries.end()) return errno = EEXIST, -1;
-        ep->entries[key] = {events, event->data, ep->next_id++, true, child};
+        ep->entries[key] = {events, event->data, ep->next_id++, true, child, is_socket};
         gesher::ConfigureOwnerEntry(ep->entries[key], key, owner, ep);
         gesher::ConfigureEventFdEntry(ep->entries[key], owner ? owner->object.eventfd : nullptr,
                                       ep->wake, owner && owner->object.inotify != nullptr);
@@ -849,7 +849,7 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
       case EPOLL_CTL_MOD:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
         if ((it->second.events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
-        it->second = {events, event->data, ep->next_id++, true, child};
+        it->second = {events, event->data, ep->next_id++, true, child, is_socket};
         gesher::ConfigureOwnerEntry(it->second, key, owner, ep);
         gesher::ConfigureEventFdEntry(it->second, owner ? owner->object.eventfd : nullptr,
                                       ep->wake, owner && owner->object.inotify != nullptr);
@@ -922,7 +922,7 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
           continue;
         }
         uint32_t r = it->second.edge_source ? gesher::EventFdEdgeReady(it->second, true)
-                                          : gesher::ToEpoll(fds[i].revents, it->second.events);
+                                          : gesher::ToEpoll(fds[i].revents, it->second);
         if (r == 0) continue;
         events[count].events = r;
         events[count].data = it->second.data;

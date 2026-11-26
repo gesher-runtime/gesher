@@ -7,6 +7,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <sys/epoll.h>
+#include <sys/inotify.h>
+#include <unistd.h>
 
 namespace {
 int failures;
@@ -18,6 +21,25 @@ int event_flags = -1, chmod_flags = -1, mask_calls;
 int alt_stack_calls;
 int64_t alt_stack_in, alt_stack_out;
 bool alt_stack_fail;
+constexpr int64_t kWideOffset = 0x123456789L;
+int64_t BIONIC_SYSV Fadvise(int64_t fd, int64_t offset, int64_t length, int64_t advice,
+                           int64_t, int64_t) {
+  if (fd < 0) return EBADF;
+  return fd == 23 && offset == kWideOffset && length == 91 && advice == 5 ? 0 : EINVAL;
+}
+int64_t BIONIC_SYSV Fallocate(int64_t fd, int64_t mode, int64_t offset,
+                             int64_t length, int64_t, int64_t) {
+  if (mode != 0) return errno = EOPNOTSUPP, -1;
+  return fd == 23 && offset == kWideOffset && length == 91 ? 0 : (errno = EINVAL, -1);
+}
+int64_t BIONIC_SYSV Preadv(int64_t fd, int64_t iov, int64_t count,
+                          int64_t offset, int64_t, int64_t) {
+  return fd == 23 && iov == 91 && count == 5 && offset == kWideOffset ? 7 : (errno = EINVAL, -1);
+}
+int64_t BIONIC_SYSV Pwritev(int64_t fd, int64_t iov, int64_t count,
+                           int64_t offset, int64_t, int64_t) {
+  return fd == 23 && iov == 91 && count == 5 && offset == kWideOffset ? 13 : (errno = EINVAL, -1);
+}
 int64_t BIONIC_SYSV Eventfd(int64_t initial, int64_t flags, int64_t, int64_t, int64_t, int64_t) {
   event_flags = static_cast<int>(flags);
   return flags < 0 ? (errno = EINVAL, -1) : initial + 100;
@@ -49,6 +71,12 @@ int64_t BIONIC_SYSV Sigaltstack(int64_t ss, int64_t old_ss, int64_t, int64_t, in
   if (alt_stack_fail) return errno = EINVAL, -1;
   return 0;
 }
+int64_t BIONIC_SYSV LegacyEpollCreate(int64_t size, int64_t, int64_t, int64_t, int64_t, int64_t) {
+  return epoll_create(static_cast<int>(size));
+}
+int64_t BIONIC_SYSV LegacyInotifyInit(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t) {
+  return inotify_init();
+}
 struct Regex { int32_t magic; size_t count; const char* end; void* guts; };
 struct Match { int64_t begin, end; };
 }
@@ -60,6 +88,10 @@ int ProtectLoadedMemory(void*, size_t, int, bool) { errno = ENOSYS; return -1; }
 
 namespace gesher::bionic {
 void* LookupBionicSymbol(const char* name) {
+  if (!std::strcmp(name, "posix_fadvise64")) return reinterpret_cast<void*>(&Fadvise);
+  if (!std::strcmp(name, "fallocate")) return reinterpret_cast<void*>(&Fallocate);
+  if (!std::strcmp(name, "preadv64")) return reinterpret_cast<void*>(&Preadv);
+  if (!std::strcmp(name, "pwritev64")) return reinterpret_cast<void*>(&Pwritev);
   if (!std::strcmp(name, "eventfd")) return reinterpret_cast<void*>(&Eventfd);
   if (!std::strcmp(name, "fchmodat")) return reinterpret_cast<void*>(&Fchmodat);
   if (!std::strcmp(name, "close")) return reinterpret_cast<void*>(&Close);
@@ -68,6 +100,8 @@ void* LookupBionicSymbol(const char* name) {
   if (!std::strcmp(name, "sysconf")) return reinterpret_cast<void*>(&Sysconf);
   if (!std::strcmp(name, "sigprocmask")) return reinterpret_cast<void*>(&Sigprocmask);
   if (!std::strcmp(name, "sigaltstack")) return reinterpret_cast<void*>(&Sigaltstack);
+  if (!std::strcmp(name, "epoll_create")) return reinterpret_cast<void*>(&LegacyEpollCreate);
+  if (!std::strcmp(name, "inotify_init")) return reinterpret_cast<void*>(&LegacyInotifyInit);
   return nullptr;
 }
 }
@@ -101,6 +135,20 @@ int main() {
   Check("affinity errors stay negative errno", RawSyscallX64(204, args) == -EINVAL);
   Check("unknown syscall remains ENOSYS", RawSyscallX64(500, args) == -ENOSYS);
   Check("int error result remains EBADF", RawSyscallX64(3, args) == -EBADF);
+  const int64_t legacy[6] = {0, -1, -1, -1, -1, -1};
+  errno = EDOM;
+  Check("raw epoll_create keeps legacy size validation",
+        RawSyscallX64(213, legacy) == -EINVAL && errno == EDOM);
+  const int64_t valid_epoll[6] = {1, -1, -1, -1, -1, -1};
+  int ep = static_cast<int>(RawSyscallX64(213, valid_epoll));
+  epoll_event event{};
+  Check("raw legacy epoll_create produces a usable descriptor",
+        ep >= 0 && errno == EDOM && epoll_wait(ep, &event, 1, 0) == 0);
+  if (ep >= 0) close(ep);
+  errno = EDOM;
+  int in = static_cast<int>(RawSyscallX64(253, legacy));
+  Check("raw legacy inotify_init ignores unused registers", in >= 0 && errno == EDOM);
+  if (in >= 0) close(in);
   errno = EDOM;
   args[0] = 0x1111;
   args[1] = 0x2222;
@@ -111,6 +159,22 @@ int main() {
   errno = EDOM;
   Check("sigaltstack errors stay negative errno",
         RawSyscallX64(131, args) == -EINVAL && alt_stack_calls == 2 && errno == EDOM);
+
+  int64_t advice[6] = {23, kWideOffset, 91, 5, 0, 0};
+  Check("fadvise64 forwards the LP64 byte range and advice",
+        RawSyscallX64(221, advice) == 0 && errno == EDOM);
+  advice[0] = -1;
+  Check("fadvise64 converts the POSIX error number without touching errno",
+        RawSyscallX64(221, advice) == -EBADF && errno == EDOM);
+  int64_t allocate[6] = {23, 0, kWideOffset, 91, 0, 0};
+  Check("fallocate forwards the full byte range", RawSyscallX64(285, allocate) == 0);
+  allocate[1] = 1;
+  Check("fallocate returns the backend error", RawSyscallX64(285, allocate) == -EOPNOTSUPP);
+  int64_t vectors[6] = {23, 91, 5, kWideOffset, 0xdeadbeef, 0};
+  Check("preadv uses the full LP64 offset in the fourth argument",
+        RawSyscallX64(295, vectors) == 7);
+  Check("pwritev uses the full LP64 offset in the fourth argument",
+        RawSyscallX64(296, vectors) == 13);
 
   SymbolTable symbols;
   RegisterSyscall(symbols);

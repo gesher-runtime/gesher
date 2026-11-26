@@ -18,6 +18,8 @@
 #endif
 #if !defined(_WIN32)
 #include <spawn.h>
+#include <sys/syscall.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 extern char** environ;
 #endif
@@ -46,6 +48,71 @@ static void drain(int sig) {
   siginfo_t info;
   for (int i = 0; i < 128 && take(sig, &info, 0) == sig; ++i) {}
 }
+
+#if !defined(_WIN32)
+static atomic_int alarm_calls;
+
+static void count_alarm(int sig) {
+  if (sig == SIGALRM) atomic_fetch_add_explicit(&alarm_calls, 1, memory_order_relaxed);
+}
+
+static void interval_timer(void) {
+  const sigset_t set = one(SIGALRM);
+  sigset_t old;
+  if (pthread_sigmask(SIG_BLOCK, &set, &old) != 0) {
+    check(0, "block SIGALRM for synchronous delivery");
+    return;
+  }
+  struct itimerval timer = {0}, current = {0};
+  check(getitimer(ITIMER_REAL, &current) == 0 && !timerisset(&current.it_value),
+        "process starts without a real interval timer");
+  check(alarm(3) == 0 && getitimer(ITIMER_REAL, &current) == 0 && current.it_value.tv_sec >= 1,
+        "alarm arms the same timer reported by getitimer");
+  check(alarm(0) >= 1 && getitimer(ITIMER_REAL, &current) == 0 && !timerisset(&current.it_value),
+        "alarm(0) cancels and returns the previous time");
+
+  timer.it_value.tv_usec = 1000000;
+  errno = 0;
+  check(setitimer(ITIMER_REAL, &timer, NULL) == -1 && errno == EINVAL,
+        "reject out-of-range microseconds");
+  timer.it_value.tv_usec = 30000;
+  timer.it_interval.tv_usec = 30000;
+  check(syscall(SYS_setitimer, ITIMER_REAL, &timer, NULL) == 0,
+        "setitimer syscall arms the process timer");
+  siginfo_t info = {0};
+  check(take(SIGALRM, &info, 2) == SIGALRM && info.si_code == SI_KERNEL &&
+            info.si_pid == 0 && info.si_uid == 0,
+        "blocked default SIGALRM is waitable with kernel signal metadata");
+  check(take(SIGALRM, NULL, 2) == SIGALRM,
+        "consuming the first alarm rearms the periodic timer");
+  memset(&timer, 0, sizeof(timer));
+  check(setitimer(ITIMER_REAL, &timer, NULL) == 0, "setitimer disarms a periodic timer");
+  drain(SIGALRM);
+  check(syscall(SYS_getitimer, ITIMER_REAL, &current) == 0 &&
+            !timerisset(&current.it_value) && !timerisset(&current.it_interval),
+        "getitimer syscall observes disarm");
+  check(take(SIGALRM, NULL, 0) == -1 && errno == EAGAIN, "no extra expiration remains queued");
+
+  struct sigaction action = {0}, old_action = {0};
+  action.sa_handler = count_alarm;
+  sigemptyset(&action.sa_mask);
+  if (sigaction(SIGALRM, &action, &old_action) != 0) {
+    check(0, "install ordinary alarm handler");
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
+    return;
+  }
+  pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+  timer.it_value.tv_usec = 30000;
+  check(setitimer(ITIMER_REAL, &timer, NULL) == 0, "arm a one-shot handler");
+  for (int i = 0; i < 200 && atomic_load_explicit(&alarm_calls, memory_order_relaxed) == 0; ++i)
+    step();
+  check(atomic_load_explicit(&alarm_calls, memory_order_relaxed) == 1,
+        "one-shot timer invokes the unblocked handler exactly once");
+  alarm(0);
+  sigaction(SIGALRM, &old_action, NULL);
+  pthread_sigmask(SIG_SETMASK, &old, NULL);
+}
+#endif
 
 static void fifo(void) {
   int sig = SIGRTMIN;
@@ -700,6 +767,7 @@ int main(int argc, char** argv) {
   else if (strcmp(argv[1], "retirement") == 0) retirement();
   else if (strcmp(argv[1], "remote-capabilities") == 0) remote_capabilities(argc >= 3 ? argv[2] : argv[0]);
 #if !defined(_WIN32)
+  else if (strcmp(argv[1], "interval-timer") == 0) interval_timer();
   else if (argc == 3 && strcmp(argv[1], "cross") == 0) cross_process(argv[2]);
   else if (argc == 3 && strcmp(argv[1], "stop") == 0) stop_continue(argv[2]);
   else if (argc == 3 && strcmp(argv[1], "status") == 0) exit_status(argv[2]);
