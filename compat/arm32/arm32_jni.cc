@@ -499,6 +499,8 @@ bool Jni32::CallNative(std::string_view library, std::string_view export_name,
 
   bool called = false;
   Value returned;
+  jvalue host_result{};
+  bool has_result_local = false;
   std::string failure;
   try {
     std::vector<Value> guest_arguments;
@@ -557,7 +559,6 @@ bool Jni32::CallNative(std::string_view library, std::string_view export_name,
     }
 
     if (called && failure.empty()) {
-      jvalue host_result{};
       const uint32_t word = static_cast<uint32_t>(returned.bits);
       switch (ReturnTypeCode(descriptor)) {
         case 'V': break;
@@ -577,6 +578,7 @@ bool Jni32::CallNative(std::string_view library, std::string_view export_name,
           jobject object = nullptr;
           if (!state_->Lookup(word, &object, &failure)) { called = false; break; }
           host_result.l = state_->real->NewLocalRef(object);
+          has_result_local = host_result.l != nullptr;
           if (object != nullptr && host_result.l == nullptr &&
               !state_->real->ExceptionCheck()) {
             called = false;
@@ -586,7 +588,6 @@ bool Jni32::CallNative(std::string_view library, std::string_view export_name,
         }
         default: called = false; failure = "invalid JNI32 return descriptor"; break;
       }
-      if (called) *result = host_result;
     }
   } catch (const std::exception& ex) {
     failure = std::string("JNI32 native argument marshal exception: ") + ex.what();
@@ -600,9 +601,14 @@ bool Jni32::CallNative(std::string_view library, std::string_view export_name,
   const bool cleaned = ReleaseLocals(&cleanup_error);
   if (!cleaned && failure.empty()) failure = cleanup_error;
   if (!called || !cleaned) {
+    if (has_result_local && state_->real)
+      state_->real->DeleteLocalRef(host_result.l);
     if (error) *error = failure.empty() ? "JNI32 guest native call failed" : failure;
     return false;
   }
+  // Do not publish any partial JNI return value until native execution,
+  // reference duplication and frame cleanup all succeed.
+  *result = host_result;
   if (error) error->clear();
   return true;
 }
