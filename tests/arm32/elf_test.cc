@@ -316,6 +316,28 @@ void ValidImages() {
     CHECK(R32(image.bytes, 0x600) == 0x10640);  // ordinary REL table coexists.
   }
 
+  // Android's SLEB128 r_offset delta can be negative; the signed delta is
+  // applied before validating the destination word. GROUPED_BY_ADDEND alone
+  // does not imply a REL addend and is tolerated by Bionic.
+  Fixture signed_deltas;
+  PackedAps2(signed_deltas, false);
+  const uint8_t signed_stream[] = {
+      'A','P','S','2', 3, 0xb0, 0x0c, 3, 0, 0x78, 23, 4, 23, 4, 23};
+  std::copy(std::begin(signed_stream), std::end(signed_stream),
+            signed_deltas.file.begin() + 0x4a0);
+  signed_deltas.Tag(0x60000010, sizeof(signed_stream));
+  CHECK(LoadElf32(signed_deltas.file.data(), signed_deltas.file.size(),
+                  Options(), &image, &error));
+  CHECK(R32(image.bytes, 0x628) == 0x10640);
+  CHECK(R32(image.bytes, 0x62c) == 0x10644);
+  CHECK(R32(image.bytes, 0x630) == 0x10648);
+
+  Fixture ignored_rel_addend_grouping;
+  PackedAps2(ignored_rel_addend_grouping, true);
+  ignored_rel_addend_grouping.file[0x4a8] = 7;
+  CHECK(LoadElf32(ignored_rel_addend_grouping.file.data(),
+                  ignored_rel_addend_grouping.file.size(), Options(), &image, &error));
+
   Fixture linux;
   linux.file[7] = 3;
   CHECK(LoadElf32(linux.file.data(), linux.file.size(), Options(), &image, &error));
