@@ -1,0 +1,74 @@
+name: arm32-review
+# A branch-local validation trigger: the complete production workflow is
+# pull_request-only. This does not enable ARM32 APK admission or waive the
+# Windows and real ART application gates documented in docs/arm32.md.
+on:
+  push:
+    branches:
+      - work/arm32-runtime-foundation-20261126
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm32-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arm32-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            compat/arm32
+            tests/arm32
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned tools
+        run: python -m pip install cmake==4.4.5 ninja==1.13.2 ziglang==0.17.1 pyelftools==0.33 unicorn==2.1.4
+      - name: Compile and inspect ARM and genuine Thumb fixtures
+        run: python tests/arm32/build_guest_fixture.py --out-dir out-fixtures
+      - name: Verify independent ELF, ABI and memory core
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S compat/arm32 -B out-arm32-core -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build out-arm32-core --parallel 4
+          ctest --test-dir out-arm32-core --output-on-failure
+      - name: Fetch checked Dynarmic and Boost source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p deps
+          git init -q deps/dynarmic
+          git -C deps/dynarmic config core.autocrlf false
+          git -C deps/dynarmic fetch --depth 1 https://github.com/yuzu-mirror/dynarmic 9d4582339990d4eae53f1dc7160686920fc2075c
+          git -C deps/dynarmic checkout -q FETCH_HEAD
+          test "$(git -C deps/dynarmic rev-parse HEAD)" = 9d4582339990d4eae53f1dc7160686920fc2075c
+          curl --fail --location --retry 3 -o deps/boost.tar.bz2 https://archives.boost.io/release/1.83.0/source/boost_1_83_0.tar.bz2
+          tar -xjf deps/boost.tar.bz2 -C deps boost_1_83_0/boost
+          python compat/arm32/patch_dynarmic.py deps/dynarmic
+      - name: Build multi-DSO, Bionic32, JNI32 and ARM/Thumb executor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S compat/arm32 -B out-arm32 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DGESHER_ARM32_WITH_DYNARMIC=ON \
+            -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
+            -DBoost_INCLUDE_DIR="$PWD/deps/boost_1_83_0" \
+            -DARM32_GUEST_FIXTURES="$PWD/out-fixtures/fixture-arm.so;$PWD/out-fixtures/fixture-thumb.so" \
+            -DARM32_GUEST_BIONIC_FIXTURES="$PWD/out-fixtures/bionic-arm.so;$PWD/out-fixtures/bionic-thumb.so" \
+            -DARM32_GUEST_JNI_FIXTURES="$PWD/out-fixtures/jni-arm.so;$PWD/out-fixtures/jni-thumb.so" \
+            -DARM32_GUEST_DEPENDENCY_DIR="$PWD/out-fixtures"
+          cmake --build out-arm32 --parallel 4
+          ctest --test-dir out-arm32 --output-on-failure
+      - name: Cross-check AAPCS32 with independent Unicorn
+        run: python tests/arm32/abi_oracle.py --cxx g++
