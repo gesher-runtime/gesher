@@ -84,6 +84,17 @@ const hub::Sensor* BIONIC_SYSV GetDefaultSensorEx(Manager* manager, int type, bo
   return wake_up ? nullptr : GetDefaultSensor(manager, type);
 }
 
+bool IsRateLimitedMotion(const hub::Sensor& sensor) {
+  return sensor.type == hub::kAccelerometer || sensor.type == hub::kMagneticField ||
+      sensor.type == hub::kGyroscope;
+}
+
+int SamplingPeriod(const hub::Sensor& sensor, int requested_us) {
+  // This bridge lacks a permission-verified elevated-rate path.
+  constexpr int kUnprivilegedMinimumUs = 5000;
+  return IsRateLimitedMotion(sensor) ? std::max(requested_us, kUnprivilegedMinimumUs) : requested_us;
+}
+
 using GuestCallback = int (BIONIC_SYSV*)(int, int, void*);
 
 class Callback : public android::LooperCallback {
@@ -141,8 +152,7 @@ class Queue : public hub::Sink {
     event.type = sensor->type;
     event.timestamp = timestamp_ns;
     std::memcpy(event.data, reading.values, sizeof(event.data));
-    if (sensor->type == hub::kAccelerometer || sensor->type == hub::kMagneticField ||
-        sensor->type == hub::kGyroscope) {
+    if (IsRateLimitedMotion(*sensor)) {
       event.vector.status = static_cast<int8_t>(reading.accuracy);
     }
     std::lock_guard<std::mutex> lock(mutex_);
@@ -202,7 +212,7 @@ int BIONIC_SYSV RegisterSensor(Queue* queue, const hub::Sensor* sensor, int32_t 
                              int64_t latency_us) {
   if (queue == nullptr || sensor == nullptr || period_us < 0 || latency_us < 0) return -EINVAL;
   // No batching FIFO. Samples arrive immediately, which meets the maximum latency.
-  return hub::Enable(queue, sensor->handle, period_us);
+  return hub::Enable(queue, sensor->handle, SamplingPeriod(*sensor, period_us));
 }
 
 int BIONIC_SYSV EnableSensor(Queue* queue, const hub::Sensor* sensor) {
@@ -215,7 +225,7 @@ int BIONIC_SYSV DisableSensor(Queue* queue, const hub::Sensor* sensor) {
 
 int BIONIC_SYSV SetEventRate(Queue* queue, const hub::Sensor* sensor, int32_t period_us) {
   if (queue == nullptr || sensor == nullptr || period_us < sensor->minDelayUs) return -EINVAL;
-  return hub::SetRate(queue, sensor->handle, period_us);
+  return hub::SetRate(queue, sensor->handle, SamplingPeriod(*sensor, period_us));
 }
 
 int BIONIC_SYSV HasEvents(Queue* queue) { return queue ? queue->HasEvents() : -EINVAL; }

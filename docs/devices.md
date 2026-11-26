@@ -160,6 +160,11 @@ Tests: `tools/test_captioning_contracts.py`, `tests/captioning/caption_windows_t
   is a BitTube's fd; events are dispatched on the Looper's thread
   (`dispatchSensorEvent`, `dispatchFlushCompleteEvent`). No direct channels,
   no data injection, no dynamic sensors.
+- NDK sensor inventory and ordinary Looper event queues use the same sources,
+  handles and boot-time event timestamps as the Java path. Native accelerometer,
+  gyroscope and magnetic-field sampling requests use at least a 5 ms interval.
+  Elevated-rate access with `HIGH_SAMPLING_RATE_SENSORS` needs a permission-verified
+  native path. Native direct channels and additional-info events are unavailable.
 
 ## Cameras
 
