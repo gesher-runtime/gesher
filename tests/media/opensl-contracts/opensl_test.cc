@@ -99,6 +99,32 @@ void CheckVolumeEffect(Report& r, SLObjectItf player, SLAndroidEffectItf effect)
   request.value_size = UINT32_MAX;
   r.Check(api.SendCommand(effect, &volume, kSetParam, kParamHeader + 2, &request, &size, &reply) ==
               SL_RESULT_PARAMETER_INVALID, "reject malformed Android effect command");
+  struct BooleanParam {
+    int32_t status;
+    uint32_t parameter_size;
+    uint32_t value_size;
+    uint32_t parameter;
+    uint32_t value;
+    uint32_t guard;
+  };
+  static_assert(offsetof(BooleanParam, value) == kParamHeader);
+  constexpr uint32_t kGuard = 0x12345678;
+  for (uint32_t parameter : {2u, 3u}) {
+    BooleanParam boolean_request{0, 4, 4, parameter, 1, 0};
+    status = -1;
+    size = sizeof(status);
+    r.Check(api.SendCommand(effect, &volume, kSetParam, kParamHeader + 4, &boolean_request, &size, &status) ==
+                SL_RESULT_SUCCESS && size == sizeof(status) && status == 0,
+            "set Android volume effect boolean parameter");
+    BooleanParam boolean_reply{0, 0, 0, 0, 0, kGuard};
+    boolean_request.value_size = 8;
+    size = sizeof(boolean_reply);
+    r.Check(api.SendCommand(effect, &volume, kGetParam, kParamHeader, &boolean_request, &size,
+                            &boolean_reply) == SL_RESULT_SUCCESS &&
+                size == kParamHeader + 4 && boolean_reply.status == 0 && boolean_reply.value_size == 4 &&
+                boolean_reply.value == 1 && boolean_reply.guard == kGuard,
+            "get Android volume effect boolean with larger reply capacity");
+  }
   SLVolumeItf ordinary = nullptr;
   SLmillibel level = 1;
   r.Check((*player)->GetInterface(player, SL_IID_VOLUME, &ordinary) == SL_RESULT_SUCCESS &&

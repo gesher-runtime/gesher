@@ -41,14 +41,14 @@ bool NavigationTracing() {
 }
 
 // Opt-in event-order diagnostics. IDs and outcomes only, no URLs or document data.
-void TraceNavigation(const void* host, const char* format, ...) {
+void TraceNavigation(unsigned long long host, const char* format, ...) {
   if (!NavigationTracing()) return;
   char message[512] = {};
   va_list args;
   va_start(args, format);
   vsnprintf(message, sizeof(message), format, args);
   va_end(args);
-  fprintf(stderr, "gesher-webview: navigation-trace native host=%p tick=%llu %s\n", host,
+  fprintf(stderr, "gesher-webview: navigation-trace native host=%llu tick=%llu %s\n", host,
           static_cast<unsigned long long>(GetTickCount64()), message);
   fflush(stderr);
 }
@@ -466,6 +466,10 @@ void WithEnvironment(std::function<void(ICoreWebView2Environment*, HRESULT)> fn)
 // --- A WebView ---------------------------------------------------------------
 
 struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
+  const unsigned long long trace_id = [] {
+    static std::atomic<unsigned long long> next{1};
+    return NavigationTracing() ? next.fetch_add(1, std::memory_order_relaxed) : 0ULL;
+  }();
   std::shared_ptr<PublicHostLease> admission;
   Listener* listener = nullptr;
   HostOptions options;
@@ -1318,7 +1322,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         if (NavigationTracing()) {
                           UINT64 nav = 0;
                           args->get_NavigationId(&nav);
-                          TraceNavigation(impl.get(),
+                          TraceNavigation(impl->trace_id,
                               "event=start nav=%llu handed=%lld api=%d redirect=%d user=%d",
                               static_cast<unsigned long long>(nav),
                               static_cast<long long>(started_number), api,
@@ -1386,7 +1390,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         std::wstring url = source.str();
                         if (url.empty() || url == L"about:blank") url = impl->main_document;
                         int64_t started = impl->NavigationEnded(nav);
-                        TraceNavigation(impl.get(),
+                        TraceNavigation(impl->trace_id,
                             "event=finished nav=%llu handed=%lld latest=%lld ok=%d status=%d http=%d",
                             static_cast<unsigned long long>(nav),
                             static_cast<long long>(started),
@@ -1596,7 +1600,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         int64_t id = impl->next_request++;
                         impl->requests.emplace(id, std::move(r));
                         bool main = document && SameDocumentUrl(url, impl->main_document);
-                        if (document) TraceNavigation(impl.get(),
+                        if (document) TraceNavigation(impl->trace_id,
                             "event=request request=%lld handed=%lld context=%d main=%d file=%d",
                             static_cast<long long>(id), static_cast<long long>(impl->api_number),
                             static_cast<int>(context), main, file);
@@ -2320,13 +2324,13 @@ void Host::Navigate(const std::wstring& url, const std::wstring& headers,
       }
       if (SUCCEEDED(hr)) {
         if (number > impl->api_number) impl->api_number = number;
-        TraceNavigation(impl, "event=navigate api=%lld handed=%lld request-api=1",
+        TraceNavigation(impl->trace_id, "event=navigate api=%lld handed=%lld request-api=1",
                         static_cast<long long>(number), static_cast<long long>(impl->api_number));
         hr = wv2->NavigateWithWebResourceRequest(request.get());
       }
     } else {
       if (number > impl->api_number) impl->api_number = number;
-      TraceNavigation(impl, "event=navigate api=%lld handed=%lld request-api=0",
+      TraceNavigation(impl->trace_id, "event=navigate api=%lld handed=%lld request-api=0",
                       static_cast<long long>(number), static_cast<long long>(impl->api_number));
       hr = impl->webview->Navigate(url.c_str());
     }
@@ -2519,7 +2523,7 @@ void Host::RespondToRequest(int64_t id, int32_t status, const std::wstring& reas
   PostToWebViewThread([shared, id, status, reason, headers, body = std::move(bytes)] {
     Impl* impl = shared.get();
     auto it = impl->requests.find(id);
-    TraceNavigation(impl, "event=response request=%lld status=%d found=%d bytes=%llu",
+    TraceNavigation(impl->trace_id, "event=response request=%lld status=%d found=%d bytes=%llu",
                     static_cast<long long>(id), status, it != impl->requests.end(),
                     static_cast<unsigned long long>(body ? body->size() : 0));
     if (it == impl->requests.end()) return;
@@ -2541,7 +2545,7 @@ void Host::RespondToRequest(int64_t id, int32_t status, const std::wstring& reas
           SUCCEEDED(impl->env->CreateWebResourceResponse(
                         stream.get(), status, reason.c_str(), response_headers, response.Put()))) {
         HRESULT response_hr = r.args->put_Response(response.get());
-        TraceNavigation(impl, "event=response-applied request=%lld status=%d hr=%ld",
+        TraceNavigation(impl->trace_id, "event=response-applied request=%lld status=%d hr=%ld",
                         static_cast<long long>(id), status, static_cast<long>(response_hr));
       }
     }

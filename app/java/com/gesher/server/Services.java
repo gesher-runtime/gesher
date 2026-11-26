@@ -262,7 +262,7 @@ public final class Services {
         services.put(Context.COUNTRY_DETECTOR, StandIn.of(android.location.ICountryDetector.class,
                 new CountryDetectorService(WindowsCountry.create())).asBinder());
         services.put(com.gesher.net.IWindowsWifi.NAME,
-                new WifiService(am, atm, pm, () -> location.isLocationEnabledForUser(0)));
+                new WifiService(am, atm, pm, location::isLocationEnabled));
         // Bluetooth (docs/bluetooth.md): Windows' radio, its broadcasts and discovery. The
         // android.bluetooth classes run scans, GATT and sockets in the app's process.
         services.put(BluetoothManagerService.NAME, new BluetoothManagerService(am, pm));
@@ -331,7 +331,7 @@ public final class Services {
         // Telephony over the host's cellular modem, if Windows reported one at boot
         // (docs/telephony.md); without one, AOSP's no-phone answers.
         TelephonyService.Endpoints telephony = TelephonyService.create(pm, am,
-                () -> location.isLocationEnabledForUser(0));
+                location::isLocationEnabled);
         services.put(Context.TELEPHONY_SERVICE, StandIn.of(
                 com.android.internal.telephony.ITelephony.class, telephony.phone).asBinder());
         services.put("iphonesubinfo", StandIn.of(

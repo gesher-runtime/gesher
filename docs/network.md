@@ -75,7 +75,12 @@ loopback corpus covers 16 concurrent warm streams and measured connection/TLS
 handshake reduction, not general high-concurrency throughput. See the
 [session ownership and measurement report](research/http2-sessions-2026-11-22.md).
 
-The transport does not implement QUIC, Brotli or engine-private disk caches.
+With `HttpEngine.Builder.setEnableBrotli(true)`, the engine uses the pinned
+AOSP Brotli decoder for encoded response bodies. It advertises Brotli for
+HTTPS and loopback requests by default, keeps an explicit `Accept-Encoding`
+header, and requests identity encoding by default for range requests.
+
+The transport does not implement QUIC or engine-private disk caches.
 Protocol/DNS/cache tuning is advisory and does not install process-global settings;
 additional public-key pins fail explicitly rather than pretending to provide those
 guarantees. Received-byte counts currently measure response body bytes, excluding

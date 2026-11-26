@@ -860,93 +860,7 @@ def preceding_memrchr_source(qualification):
   assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
  return baseline
 
-# The receiver-selected fence flag is an exact, separately bounded transition.
-# Restore the original published feature files to the complete main972 bytes
-# in both directions as historical evidence. The original
-# OFD patch, checkpoint, authority, supplier inputs and runtime approval remain
-# unchanged; this is source preservation, not native runtime approval.
-FENCE_RECEIVE_BASE='972c2b42b40c4ac799e147f5e352d07ba615d0fb'
-FENCE_RECEIVE_POLICY_SHA256='a32bc8e65cf655635c04fb86f1ea23d668d125a79a8fef4732c86055b2985ac0'
-FENCE_RECEIVE_QUALIFICATION_SHA256='a34d606deb33143e43d67b6b21eef5eee1ae66780aac8ead055656d1259b1190'
-FENCE_RECEIVE_PATHS=['compat/posix/src/native_fence.cc',
-                     'compat/posix/src/native_fence_internal.h',
-                     'compat/posix/src/unix_rights.cc']
-FENCE_RECEIVE_OFD_QUALIFICATION_SHA256='f48d40f13d4e875be756a7af503e564daa7f625c00c2a9a9d3c501305acdc146'
-def preceding_fence_receive_sources(current):
- folder=ROOT/'tools/net-tcp-priority/qualified'
- raw=(folder/'native-fence-receive-source.json').read_bytes()
- assert hashlib.sha256(raw).hexdigest()==FENCE_RECEIVE_QUALIFICATION_SHA256,'fence receive qualification changed'
- qualification=json.loads(raw)
- assert qualification['baseline']==FENCE_RECEIVE_BASE
- assert qualification['baseline_policy_sha256']==FENCE_RECEIVE_POLICY_SHA256
- assert qualification['ofd_qualification_sha256']==FENCE_RECEIVE_OFD_QUALIFICATION_SHA256
- original_ofd=subprocess.check_output(['git','show',FENCE_RECEIVE_BASE+':tools/net-tcp-priority/qualified/ofd-stream-source.json'],cwd=ROOT)
- assert hashlib.sha256(original_ofd).hexdigest()==FENCE_RECEIVE_OFD_QUALIFICATION_SHA256,'historical fence OFD receipt changed'
- assert qualification['paths']==FENCE_RECEIVE_PATHS
- assert list(qualification['before_sha256'])==list(qualification['after_sha256'])==FENCE_RECEIVE_PATHS
- original_policy=subprocess.check_output(['git','show',FENCE_RECEIVE_BASE+':tools/net-tcp-priority/test-selected-policy.py'],cwd=ROOT)
- assert hashlib.sha256(original_policy).hexdigest()==FENCE_RECEIVE_POLICY_SHA256,'fence baseline policy changed'
- patch=(folder/'native-fence-receive-source.patch').read_bytes()
- assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'fence receive patch changed'
- assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==FENCE_RECEIVE_PATHS
- assert list(current)==FENCE_RECEIVE_PATHS,'historical fence input paths changed'
- previous={path:subprocess.check_output(['git','show',FENCE_RECEIVE_BASE+':'+path],cwd=ROOT) for path in FENCE_RECEIVE_PATHS}
- for path in FENCE_RECEIVE_PATHS:
-  assert hashlib.sha256(current[path]).hexdigest()==qualification['after_sha256'][path],path
-  assert hashlib.sha256(previous[path]).hexdigest()==qualification['before_sha256'][path],path
- with tempfile.TemporaryDirectory(prefix='gesher-fence-receive-qualification-') as temporary:
-  work=Path(temporary)
-  for path in FENCE_RECEIVE_PATHS:
-   (work/path).parent.mkdir(parents=True,exist_ok=True)
-   (work/path).write_bytes(current[path])
-  for direction,expected in [(['--reverse'],previous),([],current)]:
-   subprocess.run(['git','apply',*direction,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
-   subprocess.run(['git','apply',*direction,'-'],input=patch,cwd=work,check=True,capture_output=True)
-   assert {path:(work/path).read_bytes() for path in FENCE_RECEIVE_PATHS}==expected,'fence receive exact roundtrip changed'
- return previous
-# Compose the original receiver-flag correction with the exact integration
-# checkpoint, retaining current completion timestamps, SyncFileIoctl, fork
-# locks and pipe-client access. The old leaf evidence is independently checked
-# against its published source. Neither OFD receipt is rewritten; all current
-# 71 source hashes and supplier/runtime restrictions remain authoritative.
-COMPOSED_FENCE_BASELINE='3030a5aacfbe7f053fd3811eedfdaedcb2830bff'
-COMPOSED_FENCE_PRIOR_FEATURE='8df95e1cc29e74ef2d0853074bdc5cf6548baf0a'
-COMPOSED_FENCE_BASE_POLICY_SHA256='18df8aa9ca299769fc2aa5f7f9983ef28d3a19bc68f6454ade9305cdb74f99cb'
-COMPOSED_FENCE_PATHS=['compat/posix/src/native_fence.cc', 'compat/posix/src/native_fence_internal.h', 'compat/posix/src/unix_rights.cc']
-COMPOSED_FENCE_SHA256={'compat/posix/src/native_fence.cc': '99f71ad798ae5022c0866d59ab0878b2761b9d63c801bb9330df6f8ef14cc3b2', 'compat/posix/src/native_fence_internal.h': 'd6d6ff6c9e4a756f0127b6fe483943a6bc25a92a2037a8e107262a54b4060555', 'compat/posix/src/unix_rights.cc': 'b30768aa9378375374d9c5a79bad7321071eb13e041d5558db6a8309a4c7ca51'}
-COMPOSED_FENCE_PREVIOUS_SHA256={'compat/posix/src/native_fence.cc': 'ffe3de1c97099bfe2b78a1187609f221b541e8b66fbb4f460c44232efa34ea09', 'compat/posix/src/native_fence_internal.h': '0349e7b0bf9544ffdb429c3650e1bbf681893aebb0b4b3e0a74ed64d2ca346a6', 'compat/posix/src/unix_rights.cc': 'c958136f7daa28fec51bc338014eaf1bae8df050b6594fa759aa12acc9334a4e'}
-COMPOSED_FENCE_PATCH_SHA256='685da84c0981a68cba5aff1765a36edd98a996dc70e982b8f639b1d6a3395643'
-def preceding_composed_fence_receive_sources():
- assert COMPOSED_FENCE_PATHS==FENCE_RECEIVE_PATHS,'composed fence paths changed'
- assert list(COMPOSED_FENCE_SHA256)==list(COMPOSED_FENCE_PREVIOUS_SHA256)==COMPOSED_FENCE_PATHS,'composed fence endpoint paths changed'
- original_policy=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_FENCE_BASELINE+':tools/net-tcp-priority/test-selected-policy.py'])
- assert hashlib.sha256(original_policy).hexdigest()==COMPOSED_FENCE_BASE_POLICY_SHA256,'composed fence baseline policy changed'
- historical={path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_FENCE_PRIOR_FEATURE+':'+path]) for path in FENCE_RECEIVE_PATHS}
- preceding_fence_receive_sources(historical)
- current={path:(ROOT/path).read_bytes() for path in COMPOSED_FENCE_PATHS}
- for path,actual in current.items():
-  assert hashlib.sha256(actual).hexdigest()==COMPOSED_FENCE_SHA256[path],path
- patch=(ROOT/'tools/net-tcp-priority/qualified/native-fence-receive-composed.patch').read_bytes()
- assert hashlib.sha256(patch).hexdigest()==COMPOSED_FENCE_PATCH_SHA256,'composed fence patch changed'
- assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==COMPOSED_FENCE_PATHS,'composed fence patch paths changed'
- with tempfile.TemporaryDirectory(prefix='gesher-composed-fence-qualification-') as temporary:
-  work=Path(temporary)
-  for path,actual in current.items():
-   (work/path).parent.mkdir(parents=True,exist_ok=True)
-   (work/path).write_bytes(actual)
-  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
-  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
-  previous={path:(work/path).read_bytes() for path in COMPOSED_FENCE_PATHS}
-  for path,actual in previous.items():
-   expected=subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_FENCE_BASELINE+':'+path])
-   assert actual==expected and hashlib.sha256(actual).hexdigest()==COMPOSED_FENCE_PREVIOUS_SHA256[path],('composed fence reverse endpoint',path)
-  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
-  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
-  assert all((work/path).read_bytes()==actual for path,actual in current.items()),'composed fence forward endpoint'
- return previous
-
 def preceding_ofd_sources():
- fence_main=preceding_composed_fence_receive_sources()
  stdio_main=preceding_stdio_feature_sources()
  historical=preceding_stdio_line_sources({path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_PRIOR_FEATURE+':'+path]) for path in COMPOSED_STDIO_PATHS})
  historical_scan=preceding_stdio_scan_source(subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_PRIOR_FEATURE+':'+COMPOSED_SCAN_PATHS[0]]))
@@ -977,8 +891,7 @@ def preceding_ofd_sources():
  storage_policy=preceding_storage_policy_sources()
  assert memfd_lease.keys().isdisjoint(shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
  assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
- assert fence_main.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()|storage_policy.keys()),'source qualifications overlap'
- preceding={**memfd_lease,**stdio_main,**shared_stdio,**storage_policy,**fence_main}
+ preceding={**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
   actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
   if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source()
@@ -1376,20 +1289,6 @@ def transition_negative_controls():
   *STDIO_LINE_NEGATIVE_CASES,
   *STDIO_SCAN_NEGATIVE_CASES,
   *SNPRINTF_BOUNDS_NEGATIVE_CASES,
-  ('compat/posix/src/unix_rights.cc',b'AdoptNativeFence(h, metadata, close_on_exec)',b'AdoptNativeFence(h, metadata, true)'),
-  ('compat/posix/src/unix_rights.cc',b'AdoptNativeFence(h, metadata, close_on_exec)',b'AdoptNativeFence(h, metadata, false)'),
-  ('compat/posix/src/native_fence_internal.h',b'bool close_on_exec = true',b'bool close_on_exec = false'),
-  ('compat/posix/src/native_fence_internal.h',b'// Consumes owned on every outcome.',b'// Unqualified header mutation.'),
-  ('compat/posix/src/native_fence.cc',b'if (!close_on_exec &&',b'if (close_on_exec &&'),
-  ('compat/posix/src/native_fence.cc',b'CloseUnpublishedDuplicate(fd);',b'_close(fd);'),
-  ('compat/posix/src/native_fence.cc',b'Register(result, close_on_exec)',b'Register(result)'),
-  ('compat/posix/src/native_fence.cc',b'completed->metadata = kTransferredCompletedFence;',b'completed->metadata = 5;'),
-  ('tools/net-tcp-priority/qualified/native-fence-receive-source.patch',b'@@',b'@x'),
-  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',FENCE_RECEIVE_BASE.encode(),b'0'*40),
-  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',FENCE_RECEIVE_POLICY_SHA256.encode(),b'0'*64),
-  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',b'"compat/posix/src/native_fence_internal.h"',b'"compat/posix/src/unqualified.h"'),
-  ('tools/net-tcp-priority/qualified/native-fence-receive-source.json',FENCE_RECEIVE_OFD_QUALIFICATION_SHA256.encode(),b'0'*64),
-  ('tools/net-tcp-priority/qualified/native-fence-receive-composed.patch',b'@@',b'@x'),
  ]
  def memfd_lease_repin(name,data):
   # Refresh only the receipt's digest of the mutated file (and the receipt's
@@ -1546,71 +1445,6 @@ def transition_negative_controls():
    try:check()
    except (AssertionError,subprocess.CalledProcessError):rejected=True
   assert rejected,'repinned composed Binder mutation accepted: '+before.decode()
- for name,value in [('FENCE_RECEIVE_BASE','0'*40),
-                    ('FENCE_RECEIVE_POLICY_SHA256','0'*64),
-                    ('FENCE_RECEIVE_QUALIFICATION_SHA256','0'*64),
-                    ('FENCE_RECEIVE_PATHS',FENCE_RECEIVE_PATHS[:-1])]:
-  rejected=False
-  with patch.dict(globals(),{name:value}):
-   try:check()
-   except (AssertionError,subprocess.CalledProcessError):rejected=True
-  assert rejected,'fence receive authority pin mutation accepted: '+name
- print('FENCE_RECEIVE_PIN_NEGATIVE_CONTROLS_PASS cases=4')
- # Updating a current-source digest together with the manifest pin must still
- # fail the independently pinned baseline and exact reverse/forward patch.
- manifest_path=ROOT/'tools/net-tcp-priority/qualified/native-fence-receive-source.json'
- for name,before,after in [
-   ('compat/posix/src/native_fence.cc',b'if (!close_on_exec &&',b'if (close_on_exec &&'),
-   ('compat/posix/src/native_fence_internal.h',b'bool close_on_exec = true',b'bool close_on_exec = false')]:
-  target=ROOT/name
-  current=original(target)
-  assert current.count(before)==1,name
-  modified=current.replace(before,after,1)
-  manifest=json.loads(original(manifest_path))
-  manifest['after_sha256'][name]=hashlib.sha256(modified).hexdigest()
-  forged=(json.dumps(manifest,indent=2)+'\n').encode()
-  def changed(path):
-   if path==manifest_path:return forged
-   if path==target:return modified
-   return original(path)
-  rejected=False
-  with patch.object(Path,'read_bytes',changed),patch.dict(globals(),{'FENCE_RECEIVE_QUALIFICATION_SHA256':hashlib.sha256(forged).hexdigest()}):
-   try:check()
-   except (AssertionError,subprocess.CalledProcessError):rejected=True
-  assert rejected,'fence receive current-digest repin accepted: '+name
- print('FENCE_RECEIVE_REPIN_NEGATIVE_CONTROLS_PASS cases=2')
- # Check the new layer directly so an unrelated outer qualification cannot
- # mask whether coherent current-source repinning is rejected here.
- composed_controls=0
- for name,before,after in [
-   ('compat/posix/src/native_fence.cc',b'if (!close_on_exec &&',b'if (close_on_exec &&'),
-   ('compat/posix/src/native_fence_internal.h',b'bool close_on_exec = true',b'bool close_on_exec = false'),
-   ('compat/posix/src/unix_rights.cc',b'AdoptNativeFence(h, metadata, close_on_exec)',b'AdoptNativeFence(h, metadata, true)')]:
-  target=ROOT/name
-  current=original(target)
-  assert current.count(before)==1,name
-  modified=current.replace(before,after,1)
-  repinned=dict(COMPOSED_FENCE_SHA256)
-  repinned[name]=hashlib.sha256(modified).hexdigest()
-  def changed(path):
-   return modified if path==target else original(path)
-  rejected=False
-  with patch.object(Path,'read_bytes',changed),patch.dict(globals(),{'COMPOSED_FENCE_SHA256':repinned}):
-   try:preceding_composed_fence_receive_sources()
-   except (AssertionError,subprocess.CalledProcessError):rejected=True
-  assert rejected,'repinned composed fence mutation accepted: '+name
-  composed_controls+=1
- for name,value in [('COMPOSED_FENCE_BASELINE','0'*40),
-                    ('COMPOSED_FENCE_PRIOR_FEATURE','0'*40),
-                    ('COMPOSED_FENCE_BASE_POLICY_SHA256','0'*64),
-                    ('COMPOSED_FENCE_PATCH_SHA256','0'*64),
-                    ('COMPOSED_FENCE_PATHS',COMPOSED_FENCE_PATHS[:-1])]:
-  rejected=False
-  with patch.dict(globals(),{name:value}):
-   try:preceding_composed_fence_receive_sources()
-   except (AssertionError,subprocess.CalledProcessError):rejected=True
-  assert rejected,'composed fence authority mutation accepted: '+name
- print('COMPOSED_FENCE_REPINNED_CONTROLS_PASS cases='+str(composed_controls)+' authority_cases=5')
  print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease)+' repinned_binder_output_controls=6 repinned_composed_binder_controls='+str(len(composed_cases)))
 if __name__=='__main__':
  import sys

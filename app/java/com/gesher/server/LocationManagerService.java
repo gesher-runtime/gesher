@@ -216,7 +216,7 @@ public final class LocationManagerService extends ILocationManager.Default {
     }
 
     /** Location is on when Windows gives it to this program, or a test provider is on. */
-    private boolean isLocationEnabled() {
+    boolean isLocationEnabled() {
         synchronized (mLock) {
             for (TestProvider t : mTestProviders.values()) {
                 if (t.enabled) return true;

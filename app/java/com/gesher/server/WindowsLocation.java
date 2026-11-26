@@ -216,6 +216,12 @@ public final class WindowsLocation {
      */
     static void maybePromptEnable(String packageName, String appLabel) {
         if (packageName == null || packageName.isEmpty()) return;
+        access();
+        synchronized (WindowsLocation.class) {
+            // A missing provider or an unknown access result cannot be fixed by
+            // assuming that the user disabled location in Windows Settings.
+            if (sAccess != DENIED && sStatus != STATUS_DISABLED) return;
+        }
         synchronized (PROMPT_LOCK) {
             if (sPrompting || sPromptedPackages.contains(packageName)
                     || sPromptedPackages.size() >= MAX_PROMPTED_PACKAGES) {

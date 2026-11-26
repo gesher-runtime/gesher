@@ -746,10 +746,12 @@ struct VolumeEffectParam {
 };
 
 template <typename T>
-int32_t VolumeEffectValue(bool write, uint32_t size, void* data, T& value, T min, T max) {
-  if (size != sizeof(T)) return -EINVAL;
+int32_t VolumeEffectValue(bool write, uint32_t& size, void* data, T& value, T min, T max,
+                          bool allow_larger_reply = false) {
+  if (size != sizeof(T) && (write || !allow_larger_reply || size < sizeof(T))) return -EINVAL;
   if (!write) {
     memcpy(data, &value, sizeof(T));
+    size = sizeof(T);
     return 0;
   }
   T next;
@@ -789,8 +791,8 @@ SLresult SYSV EffectSendCommand(const void* self, SLInterfaceID id, SLuint32 com
       break;
     case 1: param.status = write ? -EINVAL : VolumeEffectValue(false, param.value_size, data,
                                              max_level, kMinLevel, kMaxLevel); break;
-    case 2: param.status = VolumeEffectValue(write, param.value_size, data, effect.mute, 0u, 1u); break;
-    case 3: param.status = VolumeEffectValue(write, param.value_size, data, effect.stereo_enabled, 0u, 1u); break;
+    case 2: param.status = VolumeEffectValue(write, param.value_size, data, effect.mute, 0u, 1u, true); break;
+    case 3: param.status = VolumeEffectValue(write, param.value_size, data, effect.stereo_enabled, 0u, 1u, true); break;
     case 4: param.status = VolumeEffectValue<SLpermille>(write, param.value_size, data,
                                              effect.stereo_position, -1000, 1000); break;
     default: param.status = -EINVAL; break;

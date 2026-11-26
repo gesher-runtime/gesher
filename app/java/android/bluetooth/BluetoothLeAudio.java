@@ -9,9 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * BluetoothLeAudio with the Bluetooth module's public API. Windows does not expose LE Audio
- * profile controls to applications, so this proxy enforces permissions and reports no
- * connected devices while allowing apps targeting Android 13+ to bind {@link #LE_AUDIO}.
+ * Public LE Audio type for application linkage. The adapter exposes no proxy until
+ * a host LE Audio service is available.
  */
 public final class BluetoothLeAudio implements BluetoothProfile {
     public static final String ACTION_LE_AUDIO_CONNECTION_STATE_CHANGED =
@@ -23,7 +22,7 @@ public final class BluetoothLeAudio implements BluetoothProfile {
 
     private final Context mContext;
 
-    BluetoothLeAudio(Context context) {
+    private BluetoothLeAudio(Context context) {
         mContext = context;
     }
 

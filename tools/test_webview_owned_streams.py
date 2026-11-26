@@ -87,7 +87,9 @@ def main() -> int:
         "@NAVIGATE@": navigate,
         "@NAVIGATION_TRACE@": trace,
         "@NUMBERED_NAVIGATION@": "1" if numbered else "0",
-        "@NAVIGATION_STATE@": state,
+        "@NAVIGATION_STATE@": (
+            "  unsigned long long trace_id = 1;\n" + state if "impl->trace_id" in source else state
+        ),
         "@NAV_START_CALLBACK@": callback,
         "@NUMBER_DECLARATION@": "void NumberNextNavigate(int64_t number);" if legacy_number else "",
         "@NUMBER_FUNCTION@": function(source, "void Host::NumberNextNavigate(") if legacy_number else "",
