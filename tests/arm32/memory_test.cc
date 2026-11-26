@@ -209,6 +209,8 @@ void AllocationRollback() {
   CHECK(memory.Map(P * 8, P, R | W));
   CHECK(memory.Write32(P * 8, 0xdecafbad));
   for (long fail_after : {0, 1, 2, 3}) {
+    std::fprintf(stderr, "arm32_memory: injection at %ld\n", fail_after);
+    std::fflush(stderr);
     allocations_before_failure.store(fail_after);
     const bool mapped = memory.Map(P, P * 2, R | W);
     allocations_before_failure.store(-1);
@@ -288,11 +290,25 @@ void CompareExchangeAndConcurrency() {
 }  // namespace
 
 int main() {
+  // Diagnose platform-specific hard termination without changing checked
+  // memory semantics. CTest prints stderr when a test crashes.
+  auto stage = [](const char* label) {
+    std::fprintf(stderr, "arm32_memory: %s (checks=%u)\n",
+                 label, checks.load());
+    std::fflush(stderr);
+  };
+  stage("InvalidRangesAndTopPage");
   InvalidRangesAndTopPage();
+  stage("ScalarsAndPermissions");
   ScalarsAndPermissions();
+  stage("TransactionalTransfers");
   TransactionalTransfers();
+  stage("MappingTransactionsAndBudget");
   MappingTransactionsAndBudget();
+  stage("AllocationRollback");
   AllocationRollback();
+  stage("CompareExchangeAndConcurrency");
   CompareExchangeAndConcurrency();
+  stage("complete");
   std::printf("ARM32 guest memory passed: %u checks\n", checks.load());
 }
