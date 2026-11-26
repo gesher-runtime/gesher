@@ -112,10 +112,10 @@ def main() -> None:
             onload = {symbol.name: symbol for symbol in symbols
                       if symbol.name == "JNI_OnLoad"}
             all_functions = list(functions.values()) + list(named.values()) + list(onload.values())
-            if set(functions) != expected or set(named) != expected_named or
+            if (set(functions) != expected or set(named) != expected_named or
                     set(onload) != {"JNI_OnLoad"} or any(
-                    bool(symbol["st_value"] & 1) != (mode == "thumb")
-                    for symbol in all_functions):
+                        bool(symbol["st_value"] & 1) != (mode == "thumb")
+                        for symbol in all_functions)):
                 raise RuntimeError(f"{jni_output}: JNI functions lost ARM/Thumb entry state")
             imported = {symbol.name for symbol in symbols
                         if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
