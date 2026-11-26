@@ -142,6 +142,7 @@ bool NativeLibrarySession::Close(std::string* error) {
   state_ = State::Closed;
   std::string unload_error;
   const bool unloaded = !onload_invoked_ ||
+                        !program_.HasExport(root_, "JNI_OnUnload") ||
                         jni_.CallOnUnload(root_, &unload_error);
   onload_invoked_ = false;
   std::string shutdown_error;
