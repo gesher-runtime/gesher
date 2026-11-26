@@ -138,7 +138,8 @@ def main() -> None:
                         "jni32_vm_bad_version", "jni32_vm_unknown_version", "jni32_vm_attach",
                         "jni32_env_get_vm", "jni32_onload_state",
                         "jni32_get_created_vm", "jni32_register_natives",
-                        "jni32_invalid_registration"}
+                        "jni32_invalid_registration", "jni32_byte_array",
+                        "jni32_byte_bad_pointer"}
             named = {symbol.name: symbol for symbol in symbols
                      if symbol.name.startswith("Java_gesher_Test_")}
             expected_named = {"Java_gesher_Test_add", "Java_gesher_Test_length",
