@@ -5,6 +5,7 @@
 package com.gesher.app;
 
 import android.content.pm.dex.DexMetadataHelper;
+import com.gesher.server.ApkPackage;
 
 import java.io.File;
 import java.io.IOException;
@@ -46,13 +47,21 @@ public final class HostInstallSnapshot {
     public static String capture(File source, Path destination) throws IOException {
         Map<String, byte[]> files = new TreeMap<>();
         copy(source, destination, files);
-        if (!PackageBundles.isBundle(destination.resolve(source.getName()).toFile())) {
+        File base = destination.resolve(source.getName()).toFile();
+        if (!PackageBundles.isBundle(base)) {
+            String packageName = ApkPackage.packageName(base);
             copyMetadata(source, destination, files);
             File[] splits = companionSplits(source);
             if (splits == null) throw new IOException("Cannot list APK companions for " + source);
             for (File split : splits) {
                 copy(split, destination, files);
-                copyMetadata(split, destination, files);
+                Path captured = destination.resolve(split.getName());
+                if (packageName.equals(ApkPackage.packageName(captured.toFile()))) {
+                    copyMetadata(split, destination, files);
+                } else {
+                    Files.delete(captured);
+                    files.remove(split.getName());
+                }
             }
         }
         MessageDigest manifest = sha256();

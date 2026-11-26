@@ -17,6 +17,7 @@
 #include <string>
 
 #include "shell_win32.h"
+#include "desktop_shortcut_file.h"
 
 namespace gesher {
 namespace shell {
@@ -160,6 +161,35 @@ long CreateShortcut(const std::u16string& link_path, const std::u16string& targe
     }
   }
   return hr;
+}
+
+std::u16string CreateDesktopShortcut(const std::u16string& link, const std::u16string& target,
+                    const std::u16string& arguments, const std::u16string& work_dir,
+                    const std::u16string& icon, const std::u16string& description,
+                    const std::u16string& app_id) {
+  const size_t separator = link.find_last_of(u"\\/");
+  if (separator == std::u16string::npos) return {};
+  wchar_t temporary[MAX_PATH];
+  if (!GetTempFileNameW(W(link.substr(0, separator)), L"gsh", 0, temporary)) return {};
+  std::wstring receipt;
+  if (SUCCEEDED(CreateShortcut(U(temporary), target, arguments, work_dir, icon, description, app_id))) {
+    HANDLE file = CreateFileW(temporary, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+      receipt = DesktopShortcutReceipt(file);
+      // Same-volume rename with no replacement, even if another app created this name
+      // while Gesher was building the shortcut.
+      if (!receipt.empty() && !MoveFileW(temporary, W(link))) receipt.clear();
+      CloseHandle(file);
+    }
+  }
+  if (receipt.empty()) DeleteFileW(temporary);
+  else NotifyChanged(link);
+  return {receipt.begin(), receipt.end()};
+}
+
+bool CheckDesktopShortcut(const std::u16string& link, const std::u16string& digest, bool remove) {
+  return CheckDesktopShortcut(W(link), std::wstring(digest.begin(), digest.end()), remove);
 }
 
 long SetProcessAppId(const std::u16string& app_id) {

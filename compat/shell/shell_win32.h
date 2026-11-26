@@ -31,6 +31,14 @@ long CreateShortcut(const std::u16string& link, const std::u16string& target,
                     const std::u16string& icon, const std::u16string& description,
                     const std::u16string& app_id);
 
+// Publishes a new desktop shortcut without replacing any existing item.
+// Returns the file identity and SHA-256 receipt, or an empty string.
+std::u16string CreateDesktopShortcut(const std::u16string& link, const std::u16string& target,
+                    const std::u16string& arguments, const std::u16string& work_dir,
+                    const std::u16string& icon, const std::u16string& description,
+                    const std::u16string& app_id);
+bool CheckDesktopShortcut(const std::u16string& link, const std::u16string& digest, bool remove);
+
 // SetCurrentProcessExplicitAppUserModelID: the windows of this process group
 // under the shortcut with the same ID on the taskbar. Returns its HRESULT.
 long SetProcessAppId(const std::u16string& app_id);

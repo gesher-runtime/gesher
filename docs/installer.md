@@ -308,10 +308,12 @@ menu shortcut, as a launcher lists it
   --desktop-shortcut`): the same link (target, arguments, icon, description,
   AppUserModelID) as `<Desktop>\<label>.lnk` (FOLDERID_Desktop; `<label>
   (<package>).lnk` when another file has that name), recorded as `desktop_link`
-  in `shortcut.properties`. Later launches, `sync-shortcuts` and updates keep the
+  with the identity and digest of the created shortcut in `shortcut.properties`.
+  Later launches, `sync-shortcuts` and updates keep the
   record but never make the link again: a desktop shortcut the user deleted stays
   deleted. Uninstalling the package (`gesher-app uninstall`, a `PackageInstaller`
-  removal, the Control Center) removes the recorded link, and only that path.
+  removal, the Control Center) removes the recorded link if its identity and
+  digest still match. A user replacement or edited shortcut stays in place.
   Never in portable Gesher or with `GESHER_SHORTCUTS=0` (the output says why); a
   failure to make it does not fail the install and is printed.
 - **Window icon without a shortcut**: the app's windows take the shortcut's

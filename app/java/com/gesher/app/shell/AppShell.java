@@ -271,6 +271,8 @@ public final class AppShell {
         // never made again here: the user may have deleted it.
         String desktopLink = old != null ? old.getProperty("desktop_link") : null;
         if (desktopLink != null) record.setProperty("desktop_link", desktopLink);
+        String desktopReceipt = old != null ? old.getProperty("desktop_link_receipt") : null;
+        if (desktopReceipt != null) record.setProperty("desktop_link_receipt", desktopReceipt);
         dir.mkdirs();
         Device.write(new File(dir, RECORD), record);
         log("Start menu shortcut " + link + ": " + icon.label + ", AppUserModelID " + id
@@ -398,7 +400,9 @@ public final class AppShell {
         }
         String label = record.getProperty("label", packageName);
         String old = record.getProperty("desktop_link");
-        String mine = isDesktopLink(old) ? old : null;
+        String oldReceipt = record.getProperty("desktop_link_receipt");
+        String mine = isDesktopLink(old) && Shell.checkDesktopShortcut(old, oldReceipt, false)
+                ? old : null;
         String link = linkPath(desktop, label, packageName, mine);
         if (!isDesktopLink(link)) {
             // Never make a link that uninstall would not remove.
@@ -406,11 +410,7 @@ public final class AppShell {
                     + " is not a shortcut in the Desktop folder");
             return false;
         }
-        if (Shell.exists(link) && !link.equalsIgnoreCase(mine)) {
-            log("desktop shortcut for " + packageName + " failed: " + link
-                    + " exists and is not this app's");
-            return false;
-        }
+        if (link.equalsIgnoreCase(mine)) return Shell.checkDesktopShortcut(link, oldReceipt, false);
         String gesher = installDir();
         String systemRoot = System.getenv("SystemRoot");
         if (systemRoot == null || systemRoot.isEmpty()) systemRoot = "C:\\Windows";
@@ -424,19 +424,22 @@ public final class AppShell {
                 : "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + psScript
                         + "\" launch " + packageName;
         String id = record.getProperty("app_user_model_id", appUserModelId(packageName));
-        int hr = Shell.createShortcut(link, target, arguments, gesher,
+        String receipt = Shell.createDesktopShortcut(link, target, arguments, gesher,
                 record.getProperty("icon", ""), text("run_app", label + " (" + packageName + ")"),
                 id);
-        if (hr != 0) {
-            log(String.format("desktop shortcut %s for %s failed: HRESULT 0x%08x", link,
-                    packageName, hr));
+        if (receipt == null) {
+            log("could not create desktop shortcut " + link + " for " + packageName);
             return false;
         }
-        if (mine != null && !mine.equalsIgnoreCase(link) && Shell.exists(mine)) {
-            Shell.removeFile(mine);  // its earlier name (another label)
-        }
         record.setProperty("desktop_link", link);
-        Device.write(new File(shellDir(packageName), RECORD), record);
+        record.setProperty("desktop_link_receipt", receipt);
+        try {
+            Device.write(new File(shellDir(packageName), RECORD), record);
+        } catch (Exception failure) {
+            Shell.checkDesktopShortcut(link, receipt, true);
+            throw failure;
+        }
+        if (mine != null) Shell.checkDesktopShortcut(mine, oldReceipt, true);
         log("desktop shortcut " + link + ": " + label + ", AppUserModelID " + id);
         return true;
     }
@@ -462,7 +465,8 @@ public final class AppShell {
         try {
             Properties record = shortcutOf(packageName);
             String link = record != null ? record.getProperty("desktop_link") : null;
-            return link != null && !portableMode() && isDesktopLink(link) && Shell.exists(link);
+            return link != null && !portableMode() && isDesktopLink(link)
+                    && Shell.checkDesktopShortcut(link, record.getProperty("desktop_link_receipt"), false);
         } catch (Throwable t) {
             return false;
         }
@@ -477,9 +481,8 @@ public final class AppShell {
             log("the recorded desktop shortcut " + link + " is not in the Desktop folder: left");
             return;
         }
-        if (Shell.exists(link)) {
-            log(Shell.removeFile(link) ? "removed the desktop shortcut " + link
-                    : "cannot remove the desktop shortcut " + link);
+        if (Shell.checkDesktopShortcut(link, shortcut.getProperty("desktop_link_receipt"), true)) {
+            log("removed the desktop shortcut " + link);
         }
     }
 

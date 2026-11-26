@@ -822,14 +822,15 @@ end;
 // The desktop shortcuts the user asked for when installing apps (gesher-app install
 // --desktop-shortcut, com.gesher.app.shell.AppShell) go with Gesher: a .lnk directly
 // in the user's Desktop folder that a package's gesher-shell\shortcut.properties
-// records as its desktop_link, and no other file. Run before [UninstallDelete]
+// records with a matching desktop_link_receipt. Run before [UninstallDelete]
 // removes {localappdata}\Gesher.
 procedure RemoveDesktopLinks();
 var
-  Data, Desktop: String;
-  Lines, Links: TArrayOfString;
+  Data, Desktop, Link, Receipt, Launcher: String;
+  Lines, Links, Receipts: TArrayOfString;
   Find: TFindRec;
-  I, Count: Integer;
+  I, J, Count, Code: Integer;
+  Valid: Boolean;
 begin
   Data := ExpandConstant('{localappdata}\Gesher\data\data');
   Count := 0;
@@ -840,13 +841,28 @@ begin
         if ((Find.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and
            (Find.Name <> '.') and (Find.Name <> '..') and
            LoadStringsFromFile(Data + '\' + Find.Name + '\gesher-shell\shortcut.properties', Lines) then
+        begin
+          Link := '';
+          Receipt := '';
           for I := 0 to GetArrayLength(Lines) - 1 do
+          begin
             if Copy(Lines[I], 1, 13) = 'desktop_link=' then
-            begin
-              SetArrayLength(Links, Count + 1);
-              Links[Count] := Copy(Lines[I], 14, Length(Lines[I]));
-              Count := Count + 1;
-            end;
+              Link := Copy(Lines[I], 14, Length(Lines[I]));
+            if Copy(Lines[I], 1, 21) = 'desktop_link_receipt=' then
+              Receipt := Copy(Lines[I], 22, Length(Lines[I]));
+          end;
+          Valid := Length(Receipt) = 112;
+          for J := 1 to Length(Receipt) do
+            if Pos(Receipt[J], '0123456789abcdef') = 0 then Valid := False;
+          if (Link <> '') and Valid then
+          begin
+            SetArrayLength(Links, Count + 1);
+            SetArrayLength(Receipts, Count + 1);
+            Links[Count] := Link;
+            Receipts[Count] := Receipt;
+            Count := Count + 1;
+          end;
+        end;
       until not FindNext(Find);
     finally
       FindClose(Find);
@@ -854,6 +870,8 @@ begin
   end;
   if Count = 0 then Exit;
   Desktop := ExpandConstant('{userdesktop}');
+  Launcher := ExpandConstant('{app}\gesher-launch.exe');
+  if not FileExists(Launcher) then Exit;
   if (Desktop = '') or not FindFirst(AddBackslash(Desktop) + '*.lnk', Find) then Exit;
   try
     repeat
@@ -862,9 +880,10 @@ begin
         for I := 0 to Count - 1 do
           if PropertyNames(Links[I], AddBackslash(Desktop) + Find.Name) then
           begin
-            if not DeleteFile(AddBackslash(Desktop) + Find.Name) then
-              Log('Could not remove the desktop shortcut ' + Find.Name);
-            Break;
+            // Gesher verifies and marks the same opened file for deletion.
+            if Exec(Launcher, '--remove-desktop-shortcut "' + AddBackslash(Desktop) +
+                Find.Name + '" ' + Receipts[I], '', SW_HIDE, ewWaitUntilTerminated, Code) and
+               (Code = 0) then Break;
           end;
     until not FindNext(Find);
   finally

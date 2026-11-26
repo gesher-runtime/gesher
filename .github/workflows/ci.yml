@@ -2143,9 +2143,18 @@ jobs:
           if (Test-Path $desktopLnk) { $problems += 'the deleted desktop shortcut was made again' }
           if ((Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link') -ne $desktopLnk) { $problems += 'shortcut.properties lost desktop_link' }
           if ($problems) { Write-Host $out; throw "A deleted desktop shortcut: $($problems -join '; ')" }
+          # A user can reuse the deleted shortcut's name for their own link.
+          $replacement = $wsh.CreateShortcut($desktopLnk)
+          $replacement.TargetPath = "$env:WINDIR\notepad.exe"
+          $replacement.Save()
+          $replacementSha = (Get-FileHash -LiteralPath $desktopLnk).Hash
           $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
           $code = $LASTEXITCODE
           if ($code -ne 0 -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $code)" }
+          if ((Get-FileHash -LiteralPath $desktopLnk).Hash -ne $replacementSha) {
+            throw "App uninstall changed the user's replacement at $desktopLnk"
+          }
+          Remove-Item -LiteralPath $desktopLnk -Force
           'PASS  installer: a desktop shortcut the user deleted is not made again by a later install or sync-shortcuts (desktop_link kept)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Install (the box left unchecked), then Open: launched as the Start menu launches it.
           $run = Start-ApkOpen "$app\lifecycle.apk"
@@ -2213,6 +2222,10 @@ jobs:
             $profile = $dm.CreateEntry('primary.prof').Open()
             try { $profile.WriteByte(0) } finally { $profile.Dispose() }
           } finally { $dm.Dispose() }
+          # A second APK in Downloads has a conventional split name. Its sidecar
+          # is unrelated even when it is not a readable dex-metadata file.
+          Copy-Item -LiteralPath "$app\lifecycle.apk" -Destination (Join-Path $loose 'split_foreign.apk')
+          New-Item -ItemType Directory -Path (Join-Path $loose 'split_foreign.dm') | Out-Null
           $baseApk = Join-Path $loose 'base.apk'
           $splitPackage = 'com.gesher.splitcontract'
           $wrong = & "$app\gesher-app.cmd" install $baseApk --confirmed $splitPackage 1 ('0' * 64) 2>&1 | Out-String
@@ -2241,6 +2254,9 @@ jobs:
           if ($row.Count -ne 1) { throw 'confirmed loose APK did not publish an installed package' }
           $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
           $installedDir = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir"
+          if (Test-Path -LiteralPath (Join-Path $installedDir 'split_foreign.apk')) {
+            throw 'confirmed loose APK unexpectedly installed another package''s split'
+          }
           foreach ($name in @($looseInputs.Values) + 'base.dm') {
             if ((Get-FileHash -LiteralPath (Join-Path $installedDir $name)).Hash -ne $expectedHashes[$name]) {
               throw "confirmed loose APK install did not preserve $name"

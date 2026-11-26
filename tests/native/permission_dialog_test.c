@@ -278,8 +278,8 @@ static void CALLBACK InspectReview(HWND dialog, UINT message, UINT_PTR timer, DW
   HWND cancel = GetDlgItem(dialog, IDCANCEL);
   Check(package && box0 && box_last && confirm && cancel, "all review controls exist");
   if (review_phase == 0) {
-    Check(GetFocus() == confirm, "review initial focus is Confirm");
-    Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == IDOK, "review default action is Confirm");
+    Check(GetFocus() == cancel, "review initial focus is Cancel");
+    Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == IDCANCEL, "review default action is Cancel");
     Check((GetWindowLongW(package, GWL_EXSTYLE) & (WS_EX_RTLREADING | WS_EX_LAYOUTRTL)) == 0,
         "review package identifier stays LTR in both locales");
     Check((GetWindowLongW(package, GWL_STYLE) & ES_READONLY) != 0, "review package is read-only");
@@ -304,19 +304,23 @@ static void CALLBACK InspectReview(HWND dialog, UINT message, UINT_PTR timer, DW
             "managed row visibly explains its enforced state in the current locale");
       }
     }
-    Check(((GetWindowLongW(box0, GWL_STYLE) & BS_RIGHTBUTTON) != 0) == GesherUiRtl(language),
+    const BOOL rtl = GesherUiRtl(language) || GesherDesktopRtl();
+    Check(((GetWindowLongW(box0, GWL_STYLE) & BS_RIGHTBUTTON) != 0) == rtl,
         "review checkbox alignment follows locale direction");
     WCHAR value[256] = {0};
     GetWindowTextW(confirm, value, 256);
     Check(wcscmp(value, GesherUiText(language, "review_permission_confirm")) == 0, "localized review Confirm");
     GetWindowTextW(cancel, value, 256);
     Check(wcscmp(value, GesherUiText(language, "review_permission_cancel")) == 0, "localized review Cancel");
-    RECT client, bounds, work_area, dlg_rect;
+    RECT client, bounds, confirm_bounds, work_area, dlg_rect;
     GetClientRect(dialog, &client);
-    GetWindowRect(confirm, &bounds);
+    GetWindowRect(confirm, &confirm_bounds);
+    bounds = confirm_bounds;
     MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
     Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "review Confirm fits inside dialog");
     GetWindowRect(cancel, &bounds);
+    Check(rtl ? confirm_bounds.left < bounds.left : bounds.left < confirm_bounds.left,
+        "review actions follow the desktop direction");
     MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
     Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "review Cancel fits inside dialog");
     if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0)) {
@@ -327,6 +331,11 @@ static void CALLBACK InspectReview(HWND dialog, UINT message, UINT_PTR timer, DW
     if (review_action == RV_MANAGED_CONFIRM || review_action == RV_MANAGED_CANCEL) {
       HWND scroll = GetDlgItem(dialog, REVIEW_SCROLL);
       if (scroll) {
+        RECT scroll_bounds, row_bounds;
+        GetWindowRect(scroll, &scroll_bounds);
+        GetWindowRect(box0, &row_bounds);
+        Check(rtl ? scroll_bounds.right < row_bounds.left : row_bounds.right < scroll_bounds.left,
+            "review scrollbar leaves room at the appropriate edge");
         for (int i = 0; i < review_expected_count; ++i)
           SendMessageW(dialog, WM_VSCROLL, SB_PAGEDOWN, (LPARAM)scroll);
         Check(IsWindowVisible(box_last), "scrolling exposes the final managed permission row");
@@ -461,6 +470,7 @@ static BOOL WriteFixtureIcon(const WCHAR* path) {
 }
 
 int main(void) {
+  setvbuf(stdout, NULL, _IONBF, 0);
   HANDLE completed = CreateEventW(NULL, TRUE, FALSE, NULL);
   if (!completed) return 2;
   HANDLE watchdog = CreateThread(NULL, 0, Watchdog, completed, 0, NULL);
@@ -522,7 +532,7 @@ int main(void) {
       unsigned char enabled[2] = {1, 1};
       int decision = ShowReview(L"com.example.legacy", review_groups, enabled, review_mutable, 2);
       int expected = (review_action == RV_CONFIRM_ALL || review_action == RV_TOGGLE_ONE
-          || review_action == RV_TAB_SPACE_CONFIRM || review_action == RV_ENTER)
+          || review_action == RV_TAB_SPACE_CONFIRM)
           ? REVIEW_ALLOWED : REVIEW_DISMISSED;
       Check(decision == expected, "review dialog returns allowed only on explicit confirm");
       if (review_action == RV_TOGGLE_ONE || review_action == RV_TAB_SPACE_CONFIRM) {

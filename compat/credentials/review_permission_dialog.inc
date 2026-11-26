@@ -22,6 +22,7 @@ typedef struct {
   int row_height;
   int scroll_pos;
   int max_scroll;
+  BOOL rtl_layout;
   HWND scroll_bar;
   HFONT heading_font;
   HFONT brand_font;
@@ -36,12 +37,14 @@ static void ReviewLayoutRows(HWND dialog, ReviewDialogState* state, int next_pos
   state->scroll_pos = next_pos;
   if (state->scroll_bar) SetScrollPos(state->scroll_bar, SB_CTL, state->scroll_pos, TRUE);
   int width = state->max_scroll > 0 ? 204 : 218;
+  int left = state->max_scroll > 0 && state->rtl_layout ? 30 : 16;
   for (int i = 0; i < state->count; ++i) {
     HWND box = GetDlgItem(dialog, REVIEW_GROUP_BASE + i);
     if (!box) continue;
     int row = i - state->scroll_pos;
     if (row >= 0 && row < state->visible_rows) {
-      RECT r = {16, 128 + row * state->row_height, 16 + width, 128 + (row + 1) * state->row_height};
+      RECT r = {left, 128 + row * state->row_height,
+                left + width, 128 + (row + 1) * state->row_height};
       MapDialogRect(dialog, &r);
       SetWindowPos(box, NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
           SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -54,6 +57,8 @@ static void ReviewLayoutRows(HWND dialog, ReviewDialogState* state, int next_pos
 static BOOL ReviewCreateControls(HWND dialog, ReviewDialogState* state) {
   GesherHostThemeInit(&state->theme, dialog);
   BOOL rtl = GesherUiRtl(state->language);
+  state->rtl_layout = rtl || GesherDesktopRtl();
+  if (state->rtl_layout) GesherSetNonclientRtl(dialog, TRUE);
   DWORD reading = rtl ? WS_EX_RTLREADING : 0;
   DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
   HWND brand = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "brand"),
@@ -74,7 +79,8 @@ static BOOL ReviewCreateControls(HWND dialog, ReviewDialogState* state) {
   state->scroll_pos = 0;
   state->max_scroll = state->count - state->visible_rows;
   int box_width = state->max_scroll > 0 ? 204 : 218;
-  DWORD checkbox_style = BS_AUTOCHECKBOX | BS_MULTILINE | (rtl ? BS_RIGHTBUTTON : 0);
+  int box_left = state->max_scroll > 0 && state->rtl_layout ? 30 : 16;
+  DWORD checkbox_style = BS_AUTOCHECKBOX | BS_MULTILINE | (state->rtl_layout ? BS_RIGHTBUTTON : 0);
   for (int i = 0; i < state->count; ++i) {
     int y = 128 + (i < state->visible_rows ? i : 0) * state->row_height;
     const WCHAR* label = state->groups[i];
@@ -94,7 +100,7 @@ static BOOL ReviewCreateControls(HWND dialog, ReviewDialogState* state) {
     }
     DWORD style = checkbox_style | (state->changeable[i] ? WS_TABSTOP : WS_DISABLED);
     HWND box = PermissionControl(dialog, reading, L"BUTTON", label, style,
-        REVIEW_GROUP_BASE + i, 16, y, box_width, state->row_height);
+        REVIEW_GROUP_BASE + i, box_left, y, box_width, state->row_height);
     if (managed_label != NULL) HeapFree(GetProcessHeap(), 0, managed_label);
     if (!box) return FALSE;
     SendMessageW(box, BM_SETCHECK, state->enabled[i] ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -102,7 +108,7 @@ static BOOL ReviewCreateControls(HWND dialog, ReviewDialogState* state) {
   }
   if (state->max_scroll > 0) {
     state->scroll_bar = PermissionControl(dialog, 0, L"SCROLLBAR", L"",
-        SBS_VERT | WS_TABSTOP, REVIEW_SCROLL, 224, 128, 10, list_height);
+        SBS_VERT | WS_TABSTOP, REVIEW_SCROLL, state->rtl_layout ? 16 : 224, 128, 10, list_height);
     if (!state->scroll_bar) return FALSE;
     SCROLLINFO info = {sizeof(info), SIF_RANGE | SIF_PAGE | SIF_POS, 0, state->count - 1,
         (UINT)state->visible_rows, 0, 0};
@@ -112,10 +118,10 @@ static BOOL ReviewCreateControls(HWND dialog, ReviewDialogState* state) {
   int button_y = 128 + list_height + 10;
   HWND cancel = PermissionControl(dialog, 0, L"BUTTON",
       GesherUiText(state->language, "review_permission_cancel"),
-      BS_OWNERDRAW | WS_TABSTOP, IDCANCEL, 76, button_y, 76, 22);
+      BS_OWNERDRAW | WS_TABSTOP, IDCANCEL, state->rtl_layout ? 98 : 76, button_y, 76, 22);
   HWND confirm = PermissionControl(dialog, 0, L"BUTTON",
       GesherUiText(state->language, "review_permission_confirm"),
-      BS_OWNERDRAW | WS_TABSTOP, IDOK, 160, button_y, 74, 22);
+      BS_OWNERDRAW | WS_TABSTOP, IDOK, state->rtl_layout ? 16 : 160, button_y, 74, 22);
   if (!cancel || !confirm) return FALSE;
 
   GesherHostSetFont(heading, &state->heading_font, 145, FW_SEMIBOLD);
@@ -139,15 +145,15 @@ static INT_PTR CALLBACK ReviewDialogProc(HWND dialog, UINT message, WPARAM wpara
       EndDialog(dialog, IDCANCEL);
       return FALSE;
     }
-    HWND confirm = GetDlgItem(dialog, IDOK);
-    SendMessageW(dialog, DM_SETDEFID, IDOK, 0);
+    HWND cancel = GetDlgItem(dialog, IDCANCEL);
+    SendMessageW(dialog, DM_SETDEFID, IDCANCEL, 0);
     GesherHostSetIcons(dialog, &state->icons);
     // Request foreground once; never keep the consent window permanently topmost.
     if (!SetForegroundWindow(dialog)) {
       FLASHWINFO flash = {sizeof(flash), dialog, FLASHW_TRAY, 3, 0};
       FlashWindowEx(&flash);
     }
-    SetFocus(confirm);
+    SetFocus(cancel);
     return FALSE;
   }
   if (state == NULL) return FALSE;
