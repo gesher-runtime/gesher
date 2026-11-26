@@ -617,6 +617,9 @@ public final class ServiceRebindContractTest {
     public static int contracts(boolean realBinder, String scenario) throws Exception {
         binder = realBinder; checks = 0;
         if (scenario.equals("all") || scenario.equals("retained")) retained();
+        if (scenario.equals("all") || scenario.equals("retained") || scenario.equals("publication")) {
+            repeatedPublication();
+        }
         if (scenario.equals("all") || scenario.equals("declined")) declined();
         if (scenario.equals("all") || scenario.equals("delayed")) delayed(false);
         if (scenario.equals("all") || scenario.equals("null")) delayed(true);
@@ -632,7 +635,6 @@ public final class ServiceRebindContractTest {
         if (scenario.equals("all") || scenario.equals("retired")) retiredQueued();
         if (scenario.equals("all") || scenario.equals("destroyed")) destroyed();
         if (scenario.equals("all") || scenario.equals("restarted")) restarted();
-        if (scenario.equals("all") || scenario.equals("publication")) repeatedPublication();
         check(checks > 0, "No service rebind scenario selected");
         System.out.println("Service rebinding contracts passed: " + checks
                 + " checks; cached/null Binders, true/false/delayed acknowledgements, reentry, ordering, cleanup and restart");
