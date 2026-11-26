@@ -4,6 +4,8 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
+import android.media.MediaCodecInfo.CodecProfileLevel;
+import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.Bundle;
 import android.os.PersistableBundle;
@@ -26,6 +28,7 @@ final class CodecControlsTest {
     private CodecControlsTest() {}
 
     static void run() throws Exception {
+        testAvcProfiles();
         testBuffersAndMetrics();
         testLowVideoMetrics();
         testSurfaceAndReuse();
@@ -43,6 +46,51 @@ final class CodecControlsTest {
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 10);
         format.setInteger(MediaFormat.KEY_ROTATION, rotation);
         return format;
+    }
+
+    private static void testAvcProfiles() throws Exception {
+        MediaCodec codec = MediaCodec.createEncoderByType("video/avc");
+        try {
+            CodecProfileLevel[] profiles = codec.getCodecInfo().getCapabilitiesForType("video/avc").profileLevels;
+            require(profiles.length == 1 && profiles[0].profile == CodecProfileLevel.AVCProfileBaseline
+                            && profiles[0].level == CodecProfileLevel.AVCLevel41,
+                    "forced software AVC must only advertise Baseline through Level 4.1");
+            MediaFormat format = videoFormat(
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar, LOW, 0);
+            format.setInteger(MediaFormat.KEY_LEVEL, CodecProfileLevel.AVCLevel31);
+            MediaCodecList list = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+            for (int unsupported : new int[] {CodecProfileLevel.AVCProfileMain,
+                    CodecProfileLevel.AVCProfileHigh, CodecProfileLevel.AVCProfileHigh10}) {
+                format.setInteger(MediaFormat.KEY_PROFILE, unsupported);
+                require(list.findEncoderForFormat(format) == null,
+                        "MediaCodecList selected an encoder for unsupported profile " + unsupported);
+                try {
+                    codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                    throw new AssertionError("configure accepted unsupported AVC profile " + unsupported);
+                } catch (IllegalArgumentException expected) {
+                    // The call leaves this codec idle and ready for a valid retry.
+                }
+            }
+            format.setInteger(MediaFormat.KEY_PROFILE, CodecProfileLevel.AVCProfileBaseline);
+            require(codec.getName().equals(list.findEncoderForFormat(format)), "Baseline encoder not selected");
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            require(codec.getOutputFormat().getInteger(MediaFormat.KEY_PROFILE) == CodecProfileLevel.AVCProfileBaseline,
+                    "accepted AVC profile missing from output format");
+            codec.start();
+            int input = codec.dequeueInputBuffer(1_000_000);
+            require(input >= 0, "no input for Baseline encoder");
+            byte[] frame = new byte[WIDTH * HEIGHT * 3 / 2];
+            codec.getInputBuffer(input).put(frame);
+            codec.queueInputBuffer(input, 0, frame.length, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+            awaitEos(codec);
+            ByteBuffer sps = codec.getOutputFormat().getByteBuffer("csd-0");
+            require(sps != null && sps.remaining() >= 6 && (sps.get(4) & 0x1f) == 7
+                            && (sps.get(5) & 0xff) == 66,
+                    "actual AVC SPS did not identify the Baseline profile");
+        } finally {
+            codec.release();
+        }
+        RecordActivity.say("codec profiles: Baseline selected and encoded, unsupported AVC profiles rejected");
     }
 
     private static void testBuffersAndMetrics() throws Exception {

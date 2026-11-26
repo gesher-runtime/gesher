@@ -3,6 +3,7 @@
 
 #include "encoder.h"
 
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 
@@ -26,9 +27,10 @@ const std::vector<EncoderInfo>& AvailableEncoders() {
   static const std::vector<EncoderInfo> encoders = [] {
     std::vector<EncoderInfo> all;
     if (!SoftVideoOnly() && MfH264EncoderAvailable()) {
-      all.push_back({"video/avc", "mf", true});
+      all.push_back({"video/avc", "mf", true,
+                     kAvcProfileBaseline | kAvcProfileMain | kAvcProfileHigh});
     } else if (kSoftAvcEncoder) {
-      all.push_back({"video/avc", "soft", true});
+      all.push_back({"video/avc", "soft", true, kAvcProfileBaseline});
     }
     if (MfAacEncoderAvailable()) all.push_back({"audio/mp4a-latm", "mf", false});
     all.push_back({"audio/opus", "soft", false});
@@ -52,10 +54,20 @@ std::unique_ptr<VideoEncoder> VideoEncoder::Create(const std::string& mime, cons
   }
   for (const EncoderInfo& e : AvailableEncoders()) {
     if (e.mime != mime) continue;
+    if (p.profile != 0 && (!std::has_single_bit(static_cast<unsigned>(p.profile)) ||
+                           (e.avc_profiles & p.profile) == 0)) {
+      *error = "unsupported AVC encoder profile " + std::to_string(p.profile);
+      return nullptr;
+    }
     if (e.backend == "mf") {
       std::string mf_error;
       auto enc = CreateMfH264Encoder(p, &mf_error);
       if (enc != nullptr) return enc;
+      if (p.profile != 0 && p.profile != kAvcProfileBaseline) {
+        // The software fallback cannot produce Main or High.
+        *error = mf_error;
+        return nullptr;
+      }
       MEDIA_LOGW("H.264 encoder: Media Foundation's: %s; libavc's instead", mf_error.c_str());
     }
     return CreateSoftAvcEncoder(p, error);

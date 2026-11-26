@@ -256,7 +256,8 @@ if (Test-Path "$Dir/recordapp.apk") {
     Check 'media3: a live AVC encoder changes output rate and requests sync frames while preserving metrics and stream continuity' {
       $global:LASTEXITCODE = $codecCode
       $codecOut
-    } @('RecordTest codec controls: live AVC rate and sync controls, ordered output, surface retirement, isolated metrics, and lifecycle passed')
+    } @('RecordTest codec profiles: Baseline selected and encoded, unsupported AVC profiles rejected',
+        'RecordTest codec controls: live AVC rate and sync controls, ordered output, surface retirement, isolated metrics, and lifecycle passed')
   } finally {
     [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedVideoEncoders)
     Remove-Item Env:GESHER_TEST_CODEC_CONTROLS -ErrorAction SilentlyContinue

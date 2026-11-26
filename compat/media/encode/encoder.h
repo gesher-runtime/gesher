@@ -31,10 +31,17 @@ struct EncodedPacket {
   bool config = false;  // BUFFER_FLAG_CODEC_CONFIG
 };
 
+// MediaCodecInfo.CodecProfileLevel values shared by admission and enumeration.
+inline constexpr int kAvcProfileBaseline = 0x01;
+inline constexpr int kAvcProfileMain = 0x02;
+inline constexpr int kAvcProfileHigh = 0x08;
+inline constexpr int kAvcLevel41 = 0x1000;
+
 struct EncoderInfo {
   std::string mime;
   std::string backend;  // "mf", "soft"
   bool video = false;
+  int avc_profiles = 0;
 };
 
 // The encoders this machine has, one per MIME type.

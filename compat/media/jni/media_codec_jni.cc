@@ -94,6 +94,7 @@ struct CodecEntry {
   bool hardware;
   int max_width, max_height;
   bool encoder = false;
+  int avc_encoder_profiles = 0;
 };
 
 std::string ShortName(const std::string& mime) {
@@ -126,7 +127,7 @@ const std::vector<CodecEntry>& Codecs() {
     // The encoders (compat/media/encode).
     for (const EncoderInfo& e : AvailableEncoders()) {
       all.push_back({"c2.gesher." + ShortName(e.mime) + ".encoder", e.mime, e.video, false,
-                     e.video ? 1920 : 0, e.video ? 1088 : 0, true});
+                     e.video ? 1920 : 0, e.video ? 1088 : 0, true, e.avc_profiles});
     }
     return all;
   }();
@@ -1602,6 +1603,8 @@ class Codec {
       AMediaFormat_setInt32(f.get(), "width", enc_params_.width);
       AMediaFormat_setInt32(f.get(), "height", enc_params_.height);
       AMediaFormat_setInt32(f.get(), "frame-rate", enc_params_.frame_rate);
+      AMediaFormat_setInt32(f.get(), "profile", enc_params_.profile == 0
+          ? kAvcProfileBaseline : enc_params_.profile);
       AMediaFormat_setInt32(f.get(), "bitrate", target_bitrate_.value_or(enc_params_.bitrate));
     } else {
       AMediaFormat_setInt32(f.get(), "sample-rate", static_cast<int32_t>(audio_params_.sample_rate));
@@ -2252,8 +2255,18 @@ jint JNICALL MCL_findCodecByName(JNIEnv* env, jclass, jstring name) {
 }
 
 // Profiles and levels by codec role, as on a device's codec list.
-std::vector<std::pair<int, int>> ProfileLevels(const std::string& mime, bool encoder = false) {
-  if (mime == "video/avc") return {{0x01, 0x8000}, {0x02, 0x8000}, {0x08, 0x8000}, {0x10000, 0x8000}, {0x80000, 0x8000}};
+std::vector<std::pair<int, int>> ProfileLevels(const std::string& mime, bool encoder,
+                                               int avc_encoder_profiles) {
+  if (mime == "video/avc") {
+    if (!encoder) {
+      return {{0x01, 0x8000}, {0x02, 0x8000}, {0x08, 0x8000}, {0x10000, 0x8000}, {0x80000, 0x8000}};
+    }
+    std::vector<std::pair<int, int>> profiles;
+    for (int profile : {kAvcProfileBaseline, kAvcProfileMain, kAvcProfileHigh}) {
+      if ((avc_encoder_profiles & profile) != 0) profiles.emplace_back(profile, kAvcLevel41);
+    }
+    return profiles;
+  }
   if (mime == "video/hevc") return {{0x01, 0x10000}};
   if (mime == "video/x-vnd.on2.vp8") return {{0x01, 0x01}};
   if (mime == "video/x-vnd.on2.vp9") return {{0x01, 0x200}};
@@ -2275,7 +2288,7 @@ jobject JNICALL MCL_getCodecCapabilities(JNIEnv* env, jclass, jint index, jstrin
     return nullptr;
   }
   jclass pl_class = env->FindClass("android/media/MediaCodecInfo$CodecProfileLevel");
-  auto pls = ProfileLevels(e->mime, e->encoder);
+  auto pls = ProfileLevels(e->mime, e->encoder, e->avc_encoder_profiles);
   jobjectArray pl_array = env->NewObjectArray(static_cast<jsize>(pls.size()), pl_class, nullptr);
   jfieldID profile = env->GetFieldID(pl_class, "profile", "I");
   jfieldID level = env->GetFieldID(pl_class, "level", "I");

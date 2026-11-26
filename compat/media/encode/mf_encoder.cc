@@ -416,7 +416,9 @@ class MfH264Encoder : public VideoEncoder {
     out->SetUINT64(kMtFrameRate, rate);
     out->SetUINT64(kMtPixelAspect, (static_cast<UINT64>(1) << 32) | 1);
     out->SetUINT32(kMtInterlaceMode, 2 /* progressive */);
-    out->SetUINT32(kMtMpeg2Profile, p.profile == 8 ? 100 : p.profile == 2 ? 77 : 66);
+    const UINT32 profile = p.profile == kAvcProfileHigh ? 100 :
+                           p.profile == kAvcProfileMain ? 77 : 66;
+    out->SetUINT32(kMtMpeg2Profile, profile);
     hr = t_->SetOutputType(0, out, 0);
     out->Release();
     if (FAILED(hr)) {
