@@ -36,9 +36,17 @@ void Run(const char* fixture) {
     return true;
   });
   std::string error;
+  bool reentry_rejected = false;
   Check(program.BindHostSymbol("host_adjust", {ValueKind::I32}, ValueKind::I32,
-        [](const std::vector<Value>& arguments, Value* result, std::string*) {
+        [&](const std::vector<Value>& arguments, Value* result, std::string*) {
           if (arguments.size() != 1) return false;
+          // A guest-to-host callback may not change the program's module
+          // vector while the outer call holds its export entrypoint.
+          std::string nested_error;
+          const bool reentered = program.LoadLibrary("missing.so", &nested_error);
+          reentry_rejected = !reentered &&
+                             nested_error == "ARM32 program is already active";
+          if (!reentry_rejected) return false;
           *result = Value::Signed32(static_cast<int32_t>(arguments[0].bits) * 3);
           return true;
         }, &error), "typed import binding");
@@ -63,6 +71,7 @@ void Run(const char* fixture) {
         {Value::Signed32(9)}, ValueKind::I32, &result, &error) &&
         static_cast<int32_t>(result.bits) == 32,
         "guest PLT calls a typed host thunk");
+  Check(reentry_rejected, "reentrant provider load was rejected during guest execution");
   Check(program.CallExport(soname, "fixture_wide",
         {Value::Signed32(5), Value::Signed64(0x100000002LL),
          Value::Signed64(0x200000003LL), Value::Signed32(7)},
