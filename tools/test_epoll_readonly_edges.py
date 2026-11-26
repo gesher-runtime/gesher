@@ -51,6 +51,8 @@ def main() -> int:
     host = (ROOT / "tests/native/epoll_eventfd_edges_host.cc.in").read_text()
     if host.count("@EPOLL_SOURCE@") != 1:
         raise ValueError("ambiguous complete epoll source marker")
+    if "void RefreshTimerFd(" in sources["timerfd"]:
+        host = host.replace("bool RefreshTimerFd(TimerFd&);", "void RefreshTimerFd(TimerFd&);")
     host = "#define GESHER_READONLY_EDGES 1\n" + host.replace("@EPOLL_SOURCE@", epoll)
     extension = (ROOT / "tests/native/epoll_readonly_edges_host.cc.in").read_text()
     pieces = {

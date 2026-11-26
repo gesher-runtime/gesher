@@ -65,11 +65,12 @@ def main() -> int:
                                 if owned_registry else "bool IsNonBlocking(EventFd&")
     object_operations += section(epoll, "bool IsNonBlocking(EventFd&",
                                  "// Virtual registrations retire" if owned_registry else "// Linux drops an entry")
+    event_start = next(name for name in ("EpollWakeChannel", "EpollWakeChannels", "EventFd")
+                       if f"struct {name} {{" in epoll)
     replacements = {
         "RESUME_CORE": re.sub(r"^#include[^\n]*\n", "", resume_source, flags=re.M),
         "HAS_ANDROID_CLOCKS": str(int("#include <gesher/clocks.h>" in core)),
-        "EVENT_FD": section(epoll, "struct EpollWakeChannels {" if "struct EpollWakeChannels {" in epoll
-                            else "struct EventFd {", "namespace {\n\nstruct Epoll;"),
+        "EVENT_FD": section(epoll, f"struct {event_start} {{", "namespace {\n\nstruct Epoll;"),
         "OBJECT_STATE": object_state,
         "OBJECT_REGISTRY": section(epoll, "struct Object {", lookup_start if owned_registry else "// Every live epoll"),
         "OBJECT_LOOKUP": section(epoll, lookup_start, "std::shared_ptr<Epoll> LookupEpoll("),
@@ -84,6 +85,8 @@ def main() -> int:
         "BASELINE_CLEANUP": "  gesher::bionic::g_timers.clear();" if old else "",
     }
     template = (ROOT / "tests/native/timerfd_host.cc.in").read_text()
+    if "void RefreshTimerFd(" in core:
+        template = template.replace("bool RefreshTimerFd(TimerFd&);", "void RefreshTimerFd(TimerFd&);")
     for key, value in replacements.items():
         marker = "@" + key + "@"
         if template.count(marker) != 1:
