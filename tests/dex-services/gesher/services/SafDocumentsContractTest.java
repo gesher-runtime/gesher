@@ -394,12 +394,33 @@ public final class SafDocumentsContractTest {
     static Uri document(File f)throws IOException{return DocumentsContract.buildDocumentUri(AUTH,f.getCanonicalPath());}
     static Uri tree(File f)throws IOException{return DocumentsContract.buildTreeDocumentUri(AUTH,f.getCanonicalPath());}
     static Intent open(){return new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE);}
+    static void providerBootFlags(Harness h)throws Exception{
+        ProviderInfo info=h.pm.resolveContentProvider(AUTH,0,0);
+        check(info != null, "Hosted DocumentsProvider is visible in the unlocked profile");
+        check(!info.directBootAware, "Hosted DocumentsProvider reports its real boot awareness");
+        int aware = PackageManager.MATCH_DIRECT_BOOT_AWARE;
+        int unaware = PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        check(h.pm.resolveContentProvider(AUTH, aware, 0) == null,
+                "Aware-only authority lookup hides the unaware hosted provider");
+        Intent discover = new Intent(DocumentsContract.PROVIDER_INTERFACE).setPackage(info.packageName);
+        check(h.pm.queryIntentContentProviders(discover, null, aware, 0).getList().isEmpty(),
+                "Aware-only discovery hides the unaware hosted provider");
+        for (int flags : new int[]{0, unaware, aware | unaware, PackageManager.MATCH_DIRECT_BOOT_AUTO}) {
+            ProviderInfo resolved = h.pm.resolveContentProvider(AUTH, flags, 0);
+            check(resolved != null && AUTH.equals(resolved.authority),
+                    "Authority lookup retains hosted provider with matching flags " + flags);
+            List<ResolveInfo> matches = h.pm.queryIntentContentProviders(discover, null, flags, 0).getList();
+            check(matches.size() == 1 && AUTH.equals(matches.get(0).providerInfo.authority),
+                    "Intent discovery retains hosted provider with matching flags " + flags);
+        }
+    }
     static void provider(File dir)throws Exception{
         Harness h=new Harness(new File(dir,"provider.xml"));File data=Files.createDirectory(new File(dir,"documents").toPath()).toFile();
         File f=new File(data,"one.txt");Files.writeString(f.toPath(),"original");Uri doc=document(f),root=tree(data),parent=DocumentsContract.buildDocumentUriUsingTree(root,data.getCanonicalPath());
         check(DocumentsProvider.class.isAssignableFrom(h.provider.getClass()),"AOSP DocumentsProvider superclass");check(h.provider.getContext()!=null,"Attached before holder publication");
         ProviderInfo info=h.pm.resolveContentProvider(AUTH,0,0);
         check(info!=null&&info.exported&&info.grantUriPermissions&&info.applicationInfo.uid==1000,"Registered real provider identity");
+        providerBootFlags(h);
         check(android.Manifest.permission.MANAGE_DOCUMENTS.equals(info.readPermission)&&info.readPermission.equals(info.writePermission),"MANAGE_DOCUMENTS protects both operations");
         try (Cursor roots = h.provider.queryRoots(new String[]{DocumentsContract.Root.COLUMN_FLAGS})) {
             check(roots.moveToFirst() && (roots.getInt(0) & DocumentsContract.Root.FLAG_LOCAL_ONLY) == 0,
