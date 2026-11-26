@@ -78,3 +78,23 @@ int jni32_unsupported(JNIEnv32* env) {
   typedef int (*BadCall)(JNIEnv32*);
   return API(env, 5, BadCall)(env);
 }
+
+// Named native entry points reached from a 64-bit ART caller after exact
+// descriptor-based marshaling into AAPCS32.
+int Java_gesher_Test_add(JNIEnv32* env, jobject32 receiver, int a, int b) {
+  if (!receiver || API(env, 4, GetVersion)(env) != 0x10006) return -1;
+  return a + b + 1;
+}
+int Java_gesher_Test_length(JNIEnv32* env, jobject32 receiver, jstring32 string) {
+  if (!receiver || !string) return -1;
+  return API(env, 168, GetStringUTFLength)(env, string);
+}
+jobject32 Java_gesher_Test_echo(JNIEnv32* env, jobject32 receiver, jobject32 string) {
+  if (!receiver || !string) return 0;
+  return API(env, 25, NewLocalRef)(env, string);
+}
+// @CriticalNative has no JNIEnv or managed receiver; AAPCS32 passes its
+// 64-bit first argument in r0:r1, followed by the signed int in r2.
+long long Java_gesher_Test_critical(long long value, int adjustment) {
+  return value + adjustment;
+}
