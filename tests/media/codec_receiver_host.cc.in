@@ -70,6 +70,12 @@ struct CodecEntry {};
 const CodecEntry* FindByType(const std::string&, bool) { static CodecEntry entry; return &entry; }
 const CodecEntry* FindByName(const std::string&) { static CodecEntry entry; return &entry; }
 
+#if SHARED_CODEC_ENGINE
+struct CodecEngine {
+  static const CodecEntry* FindByType(const std::string& n, bool e) { return ::FindByType(n, e); }
+  static const CodecEntry* FindByName(const std::string& n) { return ::FindByName(n); }
+};
+#endif
 class Codec {
  public:
   static inline std::atomic<int> live{0}, retired{0}, destroyed{0};

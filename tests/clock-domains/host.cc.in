@@ -11,6 +11,7 @@
 #include <limits>
 #include <vector>
 #include <map>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <condition_variable>
@@ -150,6 +151,9 @@ class Probe final : public PacedSource {
 }
 
 namespace media {
+#if SHARED_CODEC_ENGINE
+namespace android { constexpr int OK = 0; }
+#endif
 using jobject = void*;
 static std::map<std::string, int64_t> posted;
 static int events;
@@ -187,6 +191,14 @@ class CodecProbe {
   bool released_ = false, fatal_ = false, flushed_ = false, flush_requested_ = false;
   uint64_t execution_generation_ = 0, wait_generation_ = 0;
   std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
+#if SHARED_CODEC_ENGINE
+  bool frame_rendered_ = true;
+  std::function<void(int64_t, int64_t)> frame_rendered_cb_ = [](int64_t media, int64_t system) {
+    ++events;
+    posted["0-media-time-us"] = media;
+    posted["0-system-nano"] = system;
+  };
+#endif
 @CODEC_RENDER@
 @CODEC_INPUT@
 };

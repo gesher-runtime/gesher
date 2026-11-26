@@ -590,6 +590,7 @@ jobs:
           python3 tools/test_persistent_input_jni.py
           python3 tools/test_recorder_persistent_input.py --sanitize
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
+          python3 tools/test_ndk_codec_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
           python3 tools/test_uia_query_retirement.py --sanitize
           python3 tools/test_dns_admission.py --sanitize

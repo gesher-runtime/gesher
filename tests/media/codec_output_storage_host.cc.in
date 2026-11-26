@@ -4,6 +4,8 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cerrno>
+#include <functional>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -118,6 +120,7 @@ void SetRange(JNIEnv*, jobject buffer, int start, int size) {
 }
 struct ANativeWindow { int refs = 0; };
 struct Surface { ANativeWindow* window = nullptr; bool reader = false; };
+void ANativeWindow_acquire(ANativeWindow* window) { ++window->refs; }
 void ANativeWindow_release(ANativeWindow* window) { --window->refs; }
 ANativeWindow* ANativeWindow_fromSurface(JNIEnv*, jobject surface) {
   auto* w = static_cast<Surface*>(surface)->window;
@@ -128,10 +131,30 @@ bool IsReaderSurface(JNIEnv*, jobject surface) { return static_cast<Surface*>(su
 struct GlobalRef { GlobalRef(JNIEnv*, jobject) {} };
 constexpr int kSlots = 8, kCbOutputAvailable = 2, kFlagEndOfStream = 4;
 
+#if SHARED_CODEC_ENGINE
+namespace android { constexpr int OK = 0, INVALID_OPERATION = -38, BAD_VALUE = -22; }
+struct Format {};  // output format contents are a separate format-contract boundary
+constexpr int kCodecSlots = kSlots;
+constexpr uint32_t kCodecFlagEndOfStream = kFlagEndOfStream;
+using SurfaceDeliverHook = std::function<int(const VideoFrame&, int64_t)>;
+struct CodecBufferInfo { int offset = 0, size = 0; int64_t time_us = 0; uint32_t flags = 0; };
+#endif
 #define memcpy CountedCopy
 @SLOT_AND_COPY@
 class Codec {
  public:
+#if SHARED_CODEC_ENGINE
+  Codec* engine_ = this;
+  std::shared_ptr<Format> output_format_;
+  SurfaceDeliverHook reader_hook_;
+  void* input_source_ = nullptr;
+  uint64_t wait_generation_ = 0;
+  struct Callbacks { std::function<void(CODEC_CALLBACK_EPOCH_ARGS int, const CodecBufferInfo&)> on_output_available; }
+      callbacks_{[this](CODEC_CALLBACK_EPOCH_ARGS int index, const CodecBufferInfo& info) {
+        ++callbacks; callback_index = index;
+        callback_info = {info.offset, info.size, static_cast<int>(info.flags), info.time_us};
+      }};
+#endif
   std::mutex mu_;
   std::condition_variable cv_;
   Slot outputs_[kSlots], inputs_[kSlots];
@@ -148,7 +171,13 @@ class Codec {
   struct Metrics { int width = 0, height = 0; };
   std::optional<Metrics> metrics_{Metrics{}};
   ~Codec() { if (window_) ANativeWindow_release(window_); }
+#if SHARED_CODEC_ENGINE
+  void OutputFormatIs(std::unique_lock<std::mutex>&, int w, int h) {
+    out_width_ = w; out_height_ = h; output_known_ = true;
+  }
+#else
   void OutputFormatIs(int w, int h) { out_width_ = w; out_height_ = h; output_known_ = true; }
+#endif
   void PostLocked(int event, int index, jobject info) {
     Check(event == kCbOutputAvailable, "production Publish emits output callback");
     ++callbacks; callback_index = index; callback_info = *static_cast<BufferInfo*>(info);
@@ -222,7 +251,14 @@ std::vector<uint8_t> Expected(int w, int h, int crop, int seed) {
 }
 void ConfigureSurface(Codec& codec, JNIEnv& env, Surface* surface) {
   std::lock_guard lock(codec.mu_);
+#if SHARED_CODEC_ENGINE
+  (void)env;
+  SurfaceDeliverHook reader;
+  if (surface && surface->reader) reader = [](const VideoFrame&, int64_t) { return 0; };
+  codec.SetSurfaceLocked(surface ? surface->window : nullptr, std::move(reader));
+#else
   codec.SetSurfaceLocked(&env, surface);
+#endif
 }
 bool Emit(Codec& codec, std::shared_ptr<VideoFrame> frame) {
   std::unique_lock lock(codec.mu_);
@@ -256,7 +292,7 @@ void PixelsAndModes() {
         Check(codec.metrics_->width == w && codec.metrics_->height == h,
               "metrics retain visible dimensions");
         if (mode != 0) {
-          Check(codec.OutputBuffer(&env, i) == nullptr && codec.OutputImage(&env, i) == nullptr,
+          Check(codec.OutputBuffer(&env, i) == nullptr && codec.OutputImage(&env, i, false) == nullptr,
                 "Surface output has no CPU buffer or Image");
           auto buffers = codec.Buffers(&env, false);
           Check(std::all_of(buffers->begin(), buffers->end(), [](jobject p) { return p == nullptr; }),
@@ -267,7 +303,7 @@ void PixelsAndModes() {
           auto* buffer = static_cast<ByteBuffer*>(codec.OutputBuffer(&env, i));
           CheckBytes(buffer, expected);
           Check(buffer->position == 0 && buffer->limit == slot.size, "ByteBuffer valid range preserved");
-          Check(codec.OutputImage(&env, i) != nullptr, "CPU output produces an Image");
+          Check(codec.OutputImage(&env, i, false) != nullptr, "CPU output produces an Image");
           CheckBytes(env.image.buffer, expected);
           Check(env.image.timestamp == f->time_us * 1000, "Image timestamp unchanged");
           int32_t info[26];
@@ -279,7 +315,7 @@ void PixelsAndModes() {
                 "Image plane geometry preserves odd sizes and tight strides");
           Check(copied_bytes == expected.size(), "repeated CPU getters do not copy the frame again");
         }
-        Check(codec.OutputBuffer(&env, -1) == nullptr && codec.OutputImage(&env, kSlots) == nullptr,
+        Check(codec.OutputBuffer(&env, -1) == nullptr && codec.OutputImage(&env, kSlots, false) == nullptr,
               "invalid output indexes remain inaccessible");
         std::weak_ptr<VideoFrame> weak = f;
         f.reset();
@@ -310,7 +346,7 @@ void Transitions() {
   Check(two.refs == 0 && codec.OutputBuffer(&env, i) == nullptr, "reader switch remains Surface output");
   ConfigureSurface(codec, env, nullptr);
   CheckBytes(static_cast<ByteBuffer*>(codec.OutputBuffer(&env, i)), Expected(5, 3, 1, 42));
-  Check(codec.OutputImage(&env, i) != nullptr, "detached output has its retained frame Image");
+  Check(codec.OutputImage(&env, i, false) != nullptr, "detached output has its retained frame Image");
   CheckBytes(env.image.buffer, Expected(5, 3, 1, 42));
   Check(copied_bytes == Expected(5, 3, 1, 42).size(), "detached output materializes exactly once, without stale CPU pixels");
   codec.Release(i);
@@ -318,7 +354,7 @@ void Transitions() {
   Check(Emit(codec, Frame(17, 11, 3, 77)), "larger Surface frame after CPU transition");
   i = codec.Take();
   ConfigureSurface(codec, env, nullptr);
-  Check(codec.OutputImage(&env, i) != nullptr, "Image can be first accessor after detach");
+  Check(codec.OutputImage(&env, i, false) != nullptr, "Image can be first accessor after detach");
   CheckBytes(env.image.buffer, Expected(17, 11, 3, 77));
   codec.Release(i);
   for (bool async : {false, true}) {
@@ -399,7 +435,7 @@ void AllocationFailures() {
     copied_bytes = 0;
     fail_deferred_allocation = true;
     jobject result = accessor == 0 ? codec.OutputBuffer(&env, i)
-        : accessor == 1 ? codec.OutputImage(&env, i) : codec.Buffers(&env, false);
+        : accessor == 1 ? codec.OutputImage(&env, i, false) : codec.Buffers(&env, false);
     Check(!fail_deferred_allocation, "lazy allocation fault reached production");
     Check(result == nullptr && env.exception && env.exception_type != nullptr
           && std::string(env.exception_type) == "java/lang/OutOfMemoryError",
@@ -413,7 +449,7 @@ void AllocationFailures() {
     env.exception = false;
     env.exception_type = nullptr;
     CheckBytes(static_cast<ByteBuffer*>(codec.OutputBuffer(&env, i)), expected);
-    Check(codec.OutputImage(&env, i) != nullptr, "image accessor succeeds after memory recovers");
+    Check(codec.OutputImage(&env, i, false) != nullptr, "image accessor succeeds after memory recovers");
     CheckBytes(env.image.buffer, expected);
     Check(copied_bytes == expected.size(), "recovery materializes once");
     codec.Release(i);
