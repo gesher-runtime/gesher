@@ -585,9 +585,10 @@ final class ActiveServices {
             r = token instanceof ServiceRecord ? (ServiceRecord) token : null;
             if (r != null) requireServiceOwner(r);
             if (r != null && type == 1 && res != Service.START_REDELIVER_INTENT) {
+                // Returning from onStartCommand ends redelivery bookkeeping, but
+                // the service may still be using the start's URIs asynchronously.
+                // The start ID or the service lifetime retires the grant owner.
                 r.deliveredStarts.remove(startId);
-                IBinder owner = r.startGrantOwners.remove(startId);
-                if (owner != null && mAtm.uriGrants() != null) mAtm.uriGrants().revokeByOwner(owner);
             }
             if (r != null && type == 1 && startId == r.lastStartId) {
                 r.startResult = res;
