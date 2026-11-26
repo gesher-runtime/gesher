@@ -91,7 +91,16 @@ public final class SettingsIntentsTest {
         settingsIntents(pm, pmClass);
         componentStates((IPackageManager) pm);
         contentProviders((IPackageManager) pm);
-        storageStats(pm, pmClass, data);
+        // Measured as the system: this fixture's own UID is an ordinary app without an
+        // attached process, and usage-access authorization has its own contracts.
+        long identity = android.os.Binder.clearCallingIdentity();
+        try {
+            android.os.Binder.restoreCallingIdentity(
+                    ((long) android.os.Process.SYSTEM_UID << 32) | android.os.Process.myPid());
+            storageStats(pm, pmClass, data);
+        } finally {
+            android.os.Binder.restoreCallingIdentity(identity);
+        }
         standInDefaults();
         System.out.println("SettingsIntentsTest all passed: " + checks + " checks");
     }
@@ -475,13 +484,11 @@ public final class SettingsIntentsTest {
         long[] missing = (long[]) read.invoke(null, new File(meminfo.getPath() + ".missing"));
         require(missing[0] == 0 && missing[1] == 0, "missing meminfo invented sizes");
 
-        Class<?> telephony = Class.forName("com.gesher.server.DeviceServices$TelephonyService");
-        Constructor<?> tc = telephony.getDeclaredConstructor();
-        tc.setAccessible(true);
-        com.android.internal.telephony.ITelephony phone =
-                (com.android.internal.telephony.ITelephony) tc.newInstance();
+        com.android.internal.telephony.ITelephony phone = noModemPhone();
+        // Without a modem, AOSP's answer without telephony: UNKNOWN (ADR 0094, superseding
+        // ADR 0087's ABSENT).
         require(phone.getSimStateForSlotIndex(0)
-                == android.telephony.TelephonyManager.SIM_STATE_ABSENT, "SIM state not ABSENT");
+                == android.telephony.TelephonyManager.SIM_STATE_UNKNOWN, "SIM state not UNKNOWN");
         require("".equals(phone.getNetworkCountryIsoForPhone(0)),
                 "network country ISO not empty string");
         require("".equals(phone.getNetworkCountryIsoForPhone(
@@ -493,5 +500,47 @@ public final class SettingsIntentsTest {
                 "profile type not as UserManagerService answers");
         require(!users.isDemoUser(0), "demo user");
         System.out.println("SettingsIntentsTest: memory, SIM state and profile type answer as Android");
+    }
+
+    /**
+     * TelephonyService's ITelephony over a Mobile Broadband service that reports no modem
+     * (its "none" snapshot), as on a PC without one. Its interfaces are package-private.
+     */
+    private static com.android.internal.telephony.ITelephony noModemPhone() throws Exception {
+        ClassLoader loader = SettingsIntentsTest.class.getClassLoader();
+        Class<?> source = Class.forName("com.gesher.server.WindowsCellular$Source", true, loader);
+        Class<?> snapshot = Class.forName("com.gesher.server.WindowsCellular$Snapshot", true, loader);
+        Class<?> sink = Class.forName("com.gesher.server.TelephonyService$PropertySink", true, loader);
+        Class<?> callers = Class.forName("com.gesher.server.TelephonyService$Callers", true, loader);
+        Class<?> cellular = Class.forName("com.gesher.server.TelephonyService$Cellular", true, loader);
+        Class<?> rules = Class.forName("com.gesher.server.TelephonyService$Rules", true, loader);
+        Class<?> phone = Class.forName("com.gesher.server.TelephonyService$Phone", true, loader);
+        Object none = java.lang.reflect.Proxy.newProxyInstance(source.getClassLoader(),
+                new Class<?>[] {source}, (p, m, a) -> "status\tnone\t80040154\n");
+        Object noProperties = java.lang.reflect.Proxy.newProxyInstance(sink.getClassLoader(),
+                new Class<?>[] {sink}, (p, m, a) -> {
+                    throw new AssertionError("telephony property written without a modem");
+                });
+        Object noCallers = java.lang.reflect.Proxy.newProxyInstance(callers.getClassLoader(),
+                new Class<?>[] {callers}, (p, m, a) -> {
+                    throw new AssertionError("caller checked for a no-permission answer: " + m);
+                });
+        Constructor<?> cc = cellular.getDeclaredConstructor(source, snapshot, sink);
+        cc.setAccessible(true);
+        Object modemless = cc.newInstance(none, null, noProperties);
+        Constructor<?> rc = rules.getDeclaredConstructor(callers);
+        rc.setAccessible(true);
+        // The data switches over a settings store of their own (no modem: never written).
+        Class<?> settings = Class.forName("com.gesher.server.TelephonyService$GlobalSettings", true, loader);
+        Class<?> data = Class.forName("com.gesher.server.TelephonyService$DataSettings", true, loader);
+        java.lang.reflect.Method memory = Class.forName("com.gesher.server.TelephonyService", true, loader)
+                .getDeclaredMethod("memorySettings");
+        memory.setAccessible(true);
+        Constructor<?> dc = data.getDeclaredConstructor(settings, cellular);
+        dc.setAccessible(true);
+        Constructor<?> pc = phone.getDeclaredConstructor(cellular, rules, data);
+        pc.setAccessible(true);
+        return (com.android.internal.telephony.ITelephony) pc.newInstance(modemless,
+                rc.newInstance(noCallers), dc.newInstance(memory.invoke(null), modemless));
     }
 }

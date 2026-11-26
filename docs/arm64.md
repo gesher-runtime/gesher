@@ -40,6 +40,21 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   is not executable) and the vectored handler resumes it at that stub.
 - **Faults** in guest code end the process with an Android-style
   `Fatal signal` report and exit status 128 + signal, never a hang.
+- **Signals** are the shim's (`signal_bionic.cc`, docs/native-libs.md). A
+  signal another thread queues for a guest thread (`pthread_kill`, `tgkill`,
+  `tkill`) makes the translator stop that thread's guest code at its next
+  block boundary (`gesher_arm64_interrupt_thread`, dynarmic `HaltExecution`)
+  and run the shim's delivery there, below the live guest frames. A guest
+  `SA_SIGINFO` handler's `ucontext_t` is Bionic's arm64 one, its
+  `uc_mcontext` the kernel's `struct sigcontext` with an FPSIMD record, filled
+  with the guest registers where the thread took the signal
+  (`gesher_arm64_guest_context`): at a block boundary, or at the guest call of
+  the host function it is in. Changes a handler makes to it are not applied;
+  the FPCR/FPSR the handler leaves are (`gesher_arm64_guest_fp`), as
+  sigreturn restores them. dynarmic checks for the stop when blocks link
+  directly; its return-stack-buffer and fast-dispatch terminals do not, so a
+  loop made only of indirect branches or returns, with no direct branch or
+  host call in it, is not stopped until it leaves that loop.
 
 - **The ELF loader** (`compat/elf`) maps `EM_AARCH64` objects with executable
   segments non-executable, applies the AArch64 relocations and TLS, and
@@ -82,6 +97,36 @@ the design are [ADR 0047](decisions/0047-arm64-translation.md).
   `MRS CNTPCT_EL0` reads QPC with CNTFRQ_EL0 at its frequency (it read 0).
   If that frequency exceeds CNTFRQ_EL0's 32 bits, both use a 1 GHz scale;
   conversion uses a 128-bit intermediate so long-running hosts do not overflow.
+
+- **Instruction cache**: a guest's `IC IVAU` lines (CTR_EL0's IminLine,
+  64 bytes) collect into a per-thread range that goes to every live Jit at
+  the next `ISB` (`hook_isb`; `__builtin___clear_cache` ends with one), or
+  before a line that does not extend it, a WFE/YIELD hint or the thread's
+  next host call or syscall. A Jit running guest code on another thread halts
+  at its next block boundary and drops the range, as `IC IVAU` is broadcast
+  on ARM: a thread spinning in guest code sees the rewrite. Only a Jit that
+  translated code from the range's pages gets it (each Jit records the pages
+  it read code from), so a JIT's flushes of new code neither stop other
+  threads' Jits nor build up in a paused one (an outer Jit under a blocking
+  host call, a pooled Env's), which keeps its cache; past 256 ranges waiting
+  for its next dispatch they go to it rounded to whole pages. dynarmic has no
+  hook for `DSB`: a thread whose `IC IVAU` lines are followed by `DSB ISH`
+  but no `ISB`, hint, host call or syscall (it spins in guest code waiting
+  for another thread to run the new code) does not broadcast them until one
+  of those; other threads keep running the old code until then.
+  `__builtin___clear_cache` and ARM's documented sequence end with `ISB`.
+  `IC IALLU`/`IC IALLUIS` are EL1-only and UNDEFINED at
+  EL0: SIGILL. As a conservative choice (Linux does not guarantee it for a
+  page that already ran), an `mprotect` that makes pages executable drops the
+  translations of those that were writable or not executable before (an
+  inline hook written RWX, then mapped R-X); a range that stays R-X keeps
+  them. An executable `mmap` drops its whole range (a reused address).
+  The guest's `mprotect`/`mmap`/`munmap`/`mremap` change the host mapping
+  and this record as one step (one lock), so racing calls on the same pages
+  cannot leave a writable page recorded as clean R-X.
+  `arm64_abi_test`'s `test_rewritten_code` and
+  `test_rewritten_code_other_thread`; `GESHER_ARM64_ABI_CRASH=ic-iallu` runs
+  the SIGILL case.
 
 - **Thread reuse**: the Env of an exited guest thread (its Jits with their
   translated code, guest stack and TLS block) is pooled, at most 8
@@ -241,8 +286,7 @@ getrusage, sched params), bound only when the shim has no such name.
 - A real arm64-only app now reaches its first frame in e2e (TIC-80,
   ci 40307919084 attempt 2); the remaining shim gaps above belong to the
   shim (compat/bionic) so x86_64 apps get them too.
-- Guest JIT code (RWX pages the guest writes), guest signal handlers with an
-  arm64 `ucontext`, LSE atomics (dynarmic does not decode them; HWCAP hides
+- Guest JIT code (RWX pages the guest writes), LSE atomics (dynarmic does not decode them; HWCAP hides
   them), HFAs by value.
 
 ### Dead ends ruled out

@@ -77,6 +77,13 @@ public final class CrashDiagnosisTest {
         com.gesher.app.CrashReport.append(report, "test.pkg", 3, new Exception(longMessage));
         evidence = java.nio.file.Files.readString(report.toPath());
         check(evidence.length() < 140_000 && evidence.contains("[stack trace truncated]"));
+        // Exception messages reach the persisted report without their credentials.
+        com.gesher.app.CrashReport.append(report, "test.pkg", 4, new IllegalStateException(
+                "HTTP 401 for Authorization: Bearer ya29.a0CrashSecret\nCAUSE-TOKEN auth_token=987654"));
+        evidence = java.nio.file.Files.readString(report.toPath());
+        check(!evidence.contains("CrashSecret") && !evidence.contains("987654")
+                && evidence.contains("Authorization: <redacted>")
+                && evidence.contains("CAUSE-TOKEN auth_token=<redacted>"));
         System.out.println("PASS: " + checks + " crash diagnosis/reporting host checks");
     }
 }

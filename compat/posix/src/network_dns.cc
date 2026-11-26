@@ -26,6 +26,10 @@
 
 #include "linux_socket.h"
 #include "socket_internal.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace {
 namespace ws = gesher::ws;
@@ -481,3 +485,8 @@ extern "C" void gesher_res_cancel(int fd) {
   }
   close(fd);
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, g_queries_mutex);
+#endif

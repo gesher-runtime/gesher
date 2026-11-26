@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--apksig-jar", required=True, type=Path)
     parser.add_argument("--java-home", required=True, type=Path)
     parser.add_argument("--source-ref", help="Use old production service source as a negative control")
-    parser.add_argument("--case", default="all", choices=["all", "listeners", "pending", "failures", "deaths", "current", "terminal", "concurrent", "expiry", "current-deaths", "disabled", "initial-disabled", "late", "duration"])
+    parser.add_argument("--case", default="all", choices=["all", "listeners", "pending", "failures", "deaths", "current", "terminal", "concurrent", "expiry", "current-deaths", "disabled", "initial-disabled", "mode", "late", "duration"])
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:

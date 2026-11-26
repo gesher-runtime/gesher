@@ -25,6 +25,54 @@ def native_error(code):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_missing_snapshot_retries_only_windows_reads_with_the_same_bounds(self):
+        message = b'{"invocation_id":"' + b'a' * 32 + b'","phase":"stop"}'
+        with patch.object(protocol, "WINDOWS", True), \
+                patch.object(protocol, "_read_snapshot", side_effect=[native_error(2), message]) as read, \
+                patch.object(protocol.time, "sleep") as sleep:
+            self.assertEqual(protocol.read_json(Path("ack.json"), deadline=time.monotonic() + 10)["phase"], "stop")
+            self.assertEqual(read.call_count, 2)
+            sleep.assert_called_once_with(protocol.RETRY_SECONDS)
+        error = native_error(2)
+        with patch.object(protocol, "WINDOWS", True), \
+                patch.object(protocol, "_read_snapshot", side_effect=error) as read, \
+                patch.object(protocol.time, "sleep") as sleep, self.assertRaises(OSError) as failed:
+            protocol.read_json(Path("ack.json"), deadline=time.monotonic() + 10)
+        self.assertIs(failed.exception, error)
+        self.assertEqual(read.call_count, protocol.MAX_ATTEMPTS)
+        self.assertEqual(sleep.call_count, protocol.MAX_ATTEMPTS - 1)
+        for windows, missing in ((False, True), (True, False)):
+            operation = Mock(side_effect=error)
+            with self.subTest(windows=windows, missing=missing), patch.object(protocol, "WINDOWS", windows), \
+                    patch.object(protocol.time, "sleep") as sleep, self.assertRaises(OSError):
+                protocol._retry(operation, time.monotonic() + 10, missing_snapshot=missing)
+            operation.assert_called_once()
+            sleep.assert_not_called()
+        for error in (native_error(3), FileNotFoundError(errno.ENOENT, "unclassified absence")):
+            with self.subTest(error=error), patch.object(protocol, "WINDOWS", True), \
+                    patch.object(protocol, "_read_snapshot", side_effect=error) as read, \
+                    patch.object(protocol.time, "sleep") as sleep, self.assertRaises(OSError):
+                protocol.read_json(Path("ack.json"), deadline=time.monotonic() + 10)
+            read.assert_called_once()
+            sleep.assert_not_called()
+
+    def test_missing_snapshot_recovery_does_not_retry_corrupt_contents_or_extend_deadline(self):
+        with patch.object(protocol, "WINDOWS", True), \
+                patch.object(protocol, "_read_snapshot", side_effect=[native_error(2), b'{invalid']) as read, \
+                patch.object(protocol.time, "sleep") as sleep, self.assertRaises(ValueError):
+            protocol.read_json(Path("ack.json"), deadline=time.monotonic() + 10)
+        self.assertEqual(read.call_count, 2)
+        sleep.assert_called_once()
+        clock = [0.0]
+        with patch.object(protocol, "WINDOWS", True), \
+                patch.object(protocol, "_read_snapshot", side_effect=native_error(2)) as read, \
+                patch.object(protocol.time, "monotonic", side_effect=lambda: clock[0]), \
+                patch.object(protocol.time, "sleep", side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay)), \
+                self.assertRaises(TimeoutError):
+            protocol.read_json(Path("ack.json"), deadline=.015)
+        self.assertEqual(read.call_count, 2)
+        self.assertAlmostEqual(clock[0], .015)
+
     def test_only_classified_windows_errors_retry_and_success_is_retried_operation(self):
         for code in (5, 32):
             operation = Mock(side_effect=[native_error(code), {"fresh": True}])
@@ -114,6 +162,27 @@ class WindowsProtocolTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_actual_missing_snapshot_recovers_only_after_complete_publication(self):
+        # Exercise the real native ERROR_FILE_NOT_FOUND, followed by a complete
+        # publication. This reproduces the observed read error without assuming
+        # which internal ReplaceFileW step caused that historical occurrence.
+        self.path.unlink()
+        def publish(_):
+            protocol.write_json(self.path, {"phase": "stop"}, deadline=time.monotonic() + 10)
+        with patch.object(protocol.time, "sleep", side_effect=publish) as sleep:
+            self.assertEqual(protocol.read_json(self.path, deadline=time.monotonic() + 10)["phase"], "stop")
+        sleep.assert_called_once()
+        self.path.unlink()
+        with patch.object(protocol.time, "sleep") as sleep, self.assertRaises(FileNotFoundError) as failed:
+            protocol.read_json(self.path, deadline=time.monotonic() + 10)
+        self.assertEqual(failed.exception.winerror, 2)
+        self.assertEqual(sleep.call_count, protocol.MAX_ATTEMPTS - 1)
+        missing_parent = self.path.parent / "absent" / "ack.json"
+        with patch.object(protocol.time, "sleep") as sleep, self.assertRaises(FileNotFoundError) as failed:
+            protocol.read_json(missing_parent, deadline=time.monotonic() + 10)
+        self.assertEqual(failed.exception.winerror, 3)
+        sleep.assert_not_called()
 
     def test_read_coexists_with_live_delete_handle_that_rejects_ordinary_python_read(self):
         c, kernel = protocol._kernel()

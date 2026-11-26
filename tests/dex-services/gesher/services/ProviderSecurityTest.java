@@ -223,6 +223,11 @@ public final class ProviderSecurityTest {
 
         ContentProviderHolder local = (ContentProviderHolder) get.invoke(providers, ownerProcess, ownerName, authority);
         require(local.mLocal && local.provider == null, "same-package unpublished provider deadlocks instead of installing locally");
+        // ActivityThread installs a local holder without publishing it. Use the
+        // bindApplication admission for the publication and forgery checks below.
+        ApplicationInfo bindInfo = new ApplicationInfo(provider.applicationInfo);
+        bindInfo.processName = provider.processName;
+        method(cpType, "providersFor", processType, ApplicationInfo.class).invoke(providers, ownerProcess, bindInfo);
         denied(() -> get.invoke(providers, senderProcess, senderName, authority));
         ProviderInfo guarded = new ProviderInfo(provider);
         guarded.exported = true;
@@ -353,7 +358,10 @@ public final class ProviderSecurityTest {
         // Restore the fixture for the URI revocation checks below.
         exiting.setBoolean(ownerProcess, false);
         reaped.setBoolean(ownerProcess, false);
+        method(cpType, "providersFor", processType, ApplicationInfo.class).invoke(providers, ownerProcess, bindInfo);
         publish.invoke(providers, ownerProcess, List.of(holder(provider)));
+        require(((java.util.Map<?, ?>) field(cpType, "mPublished").get(providers)).containsKey(authority),
+                "The readmitted fixture owner did not restore its actual provider");
         System.out.println("ProviderSecurityTest: provider counts, connection ownership, lock order and atomic retirement passed");
         as(31701, ownerUid, () -> revoke.invoke(grants, senderName, uri, read, 0));
         require((Integer) check.invoke(grants, uri, 31702, senderUid, read, 0) == PackageManager.PERMISSION_DENIED,
