@@ -188,6 +188,58 @@ void Run(const char* path) {
   Check(bridge.ReleaseLocals(&error) && fake.locals == 0,
         "local references retired at explicit JNI frame boundary");
 
+  // ART -> ARM32: primitive, reference and 64-bit CriticalNative method calls
+  // must pass through descriptor-aware AAPCS32 marshalling, never through a
+  // narrowed 64-bit Java object pointer.
+  const jobject receiver = Ref(fake.class_object);
+  jvalue inputs[2]{};
+  jvalue host_result{};
+  inputs[0].i = 9;
+  inputs[1].i = 21;
+  if (!bridge.CallNative("gesher_arm32_jni_fixture.so",
+                         "Java_gesher_Test_add", "(II)I",
+                         JniCallMode::Instance, receiver, inputs, 2,
+                         &host_result, &error))
+    std::cerr << "JNI32 host-to-guest add: " << error << '\n';
+  Check(host_result.i == 31 && error.empty() && fake.locals == 0,
+        "ART-to-ARM32 named native integer call and local ref cleanup");
+
+  jobject host_string = Ref(fake.Add("abcdef", false));
+  inputs[0].l = host_string;
+  Check(bridge.CallNative("gesher_arm32_jni_fixture.so",
+                          "Java_gesher_Test_length", "(Ljava/lang/String;)I",
+                          JniCallMode::Instance, receiver, inputs, 1,
+                          &host_result, &error) &&
+        host_result.i == 6 && fake.locals == 0,
+        "ART jobject argument is a managed 32-bit guest token");
+
+  Check(bridge.CallNative("gesher_arm32_jni_fixture.so",
+                          "Java_gesher_Test_echo",
+                          "(Ljava/lang/String;)Ljava/lang/String;",
+                          JniCallMode::Instance, receiver, inputs, 1,
+                          &host_result, &error) &&
+        host_result.l == host_string && fake.locals == 1,
+        "guest jobject return becomes a new host JNI local reference");
+  DeleteLocalRef(&env, host_result.l);
+  Check(fake.locals == 0, "caller retains ownership of returned host reference");
+
+  inputs[0].j = 0x100000002LL;
+  inputs[1].i = 7;
+  Check(bridge.CallNative("gesher_arm32_jni_fixture.so",
+                          "Java_gesher_Test_critical", "(JI)J",
+                          JniCallMode::CriticalNative, nullptr, inputs, 2,
+                          &host_result, &error) &&
+        host_result.j == 0x100000009LL && fake.locals == 0,
+        "CriticalNative has no JNIEnv, with aligned 64-bit AAPCS32 arguments");
+
+  host_result.i = 123;
+  Check(!bridge.CallNative("gesher_arm32_jni_fixture.so",
+                           "Java_gesher_Test_add", "(II)I",
+                           JniCallMode::Instance, receiver, inputs, 1,
+                           &host_result, &error) &&
+        host_result.i == 123 && fake.locals == 0,
+        "wrong JNI descriptor argument count fails without changing result");
+
   Check(!call("jni32_stale", &result) && !error.empty(),
         "stale JNI guest reference must not resolve");
   Check(!call("jni32_wrong_env", &result) && !error.empty(),
