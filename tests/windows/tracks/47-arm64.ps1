@@ -17,9 +17,25 @@ $a64 = (Resolve-Path $Dir).Path
 # guest fork's children outlive a parent that is killed, as orphans do on
 # Linux; the test job must not keep them).
 function A64StopDescendants([int] $ProcessId) {
-  foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" -ErrorAction SilentlyContinue)) {
-    A64StopDescendants $child.ProcessId
-    Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+  # Most probes have no descendants. Only snapshot the full process tree
+  # when the targeted query finds children, with one RPC for the whole tree.
+  $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" `
+    -Property ParentProcessId, ProcessId -OperationTimeoutSec 5)
+  if (-not $children.Count) { return }
+  $byParent = Get-CimInstance Win32_Process -Property ParentProcessId, ProcessId -OperationTimeoutSec 5 |
+    Group-Object -Property ParentProcessId -AsHashTable -AsString
+  $byParent[[string]$ProcessId] = $children + @($byParent[[string]$ProcessId] | Where-Object { $null -ne $_ })
+  $parents = [Collections.Generic.Queue[int]]::new()
+  $seen = [Collections.Generic.HashSet[int]]::new()
+  $parents.Enqueue($ProcessId)
+  [void]$seen.Add($ProcessId)
+  while ($parents.Count) {
+    foreach ($child in $byParent[[string]$parents.Dequeue()]) {
+      if ($seen.Add($child.ProcessId)) {
+        Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+        $parents.Enqueue($child.ProcessId)
+      }
+    }
   }
 }
 
@@ -29,19 +45,21 @@ function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
   $quoted = $Arguments | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
   $p = Start-Process -FilePath $Exe -ArgumentList $quoted -NoNewWindow -PassThru `
     -RedirectStandardOutput $out -RedirectStandardError $err
-  if (-not $p.WaitForExit($Seconds * 1000)) {
+  try {
+    $timedOut = -not $p.WaitForExit($Seconds * 1000)
+    if ($timedOut) {
+      Write-Output "TIMEOUT after $Seconds s: $Exe $($Arguments -join ' ')"
+      try { $p.Kill() } catch { if (-not $p.HasExited) { throw } }
+      if (-not $p.WaitForExit(5000)) { throw "ARM64 test process did not exit within five seconds after kill: $Exe" }
+    }
     A64StopDescendants $p.Id
-    $p.Kill()
-    $p.WaitForExit()
-    Write-Output "TIMEOUT after $Seconds s: $Exe $($Arguments -join ' ')"
-    $global:LASTEXITCODE = 124
-  } else {
-    $global:LASTEXITCODE = $p.ExitCode
+    $global:LASTEXITCODE = if ($timedOut) { 124 } else { $p.ExitCode }
+  } finally {
+    $p.Dispose()
+    Get-Content $out -ErrorAction SilentlyContinue
+    Get-Content $err -ErrorAction SilentlyContinue
+    Remove-Item $out, $err -ErrorAction SilentlyContinue
   }
-  A64StopDescendants $p.Id
-  Get-Content $out -ErrorAction SilentlyContinue
-  Get-Content $err -ErrorAction SilentlyContinue
-  Remove-Item $out, $err -ErrorAction SilentlyContinue
 }
 
 # A run that must crash the way Android reports a native crash: the expected
