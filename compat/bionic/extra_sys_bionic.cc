@@ -25,12 +25,14 @@
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <io.h>
+#include <linux/futex.h>
 #include <mntent.h>
 #include <sys/file.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/statvfs.h>
+#include <sys/syscall.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
@@ -76,48 +78,107 @@ int64_t MsUntil(const LinuxTimespec* abs, int clock) {
   return static_cast<int64_t>(ms > 0x7ffffffe ? 0x7ffffffe : ms);
 }
 
-// --- POSIX semaphores on bionic's sem_t (16 bytes; word 0 is the count) ---------
+// --- POSIX semaphores on bionic's sem_t ------------------------------------
 
-int BIONIC_SYSV SemInit(void* s, int, unsigned v) {
+// The low bits of word 0 carry the count. Private semaphores keep their
+// original layout. A shared waiter sets kSemWaiting while the count is zero
+// so an uncontended shared post needs no futex operation.
+constexpr uint32_t kSemShared = 1u << 31;
+constexpr uint32_t kSemWaiting = 1u << 30;
+constexpr uint32_t kSemCountMask = kSemWaiting - 1;
+static_assert(kSemValueMax <= kSemCountMask);
+
+int BIONIC_SYSV SemInit(void* s, int pshared, unsigned v) {
   if (v > kSemValueMax) return errno = kEINVAL, -1;
-  Word(s)->store(v);
+  Word(s)->store(v | (pshared != 0 ? kSemShared : 0));
   return 0;
 }
 int BIONIC_SYSV SemDestroy(void*) { return 0; }
 int BIONIC_SYSV SemPost(void* s) {
-  uint32_t value = Word(s)->load();
+  uint32_t state = Word(s)->load();
+  uint32_t count;
   do {
-    if (value == kSemValueMax) return errno = EOVERFLOW, -1;
-  } while (!Word(s)->compare_exchange_weak(value, value + 1));
-  WakeByAddressSingle(Word(s));
+    count = state & kSemCountMask;
+    if (count == kSemValueMax) return errno = EOVERFLOW, -1;
+  } while (!Word(s)->compare_exchange_weak(state, (count + 1) | (state & kSemShared)));
+  if ((state & kSemShared) == 0) {
+    WakeByAddressSingle(Word(s));
+  } else if (state & kSemWaiting) {
+    // Posting clears the contention bit. Wake every contender so that
+    // those that find the count back at zero can mark contention again.
+    const int saved_errno = errno;
+    ::syscall(SYS_futex, reinterpret_cast<volatile int*>(s), FUTEX_WAKE, INT_MAX,
+              nullptr, nullptr, 0);
+    errno = saved_errno;
+  }
   return 0;
 }
-bool SemTake(void* s) {
-  uint32_t v = Word(s)->load();
-  while (v > 0) {
-    if (Word(s)->compare_exchange_weak(v, v - 1)) return true;
+bool SemTake(void* s, uint32_t& state) {
+  state = Word(s)->load();
+  while (state & kSemCountMask) {
+    if (Word(s)->compare_exchange_weak(state, state - 1)) return true;
   }
   return false;
 }
 int BIONIC_SYSV SemTrywait(void* s) {
-  if (SemTake(s)) return 0;
+  uint32_t state;
+  if (SemTake(s, state)) return 0;
   errno = kEAGAIN;
   return -1;
 }
+
+int WaitSharedSemaphore(void* s, const LinuxTimespec* abs, int clock) {
+  timespec deadline{};
+  if (abs != nullptr) {
+    if (abs->tv_sec < 0) return kETIMEDOUT;
+    deadline.tv_sec = abs->tv_sec;
+    deadline.tv_nsec = static_cast<long>(abs->tv_nsec);
+  }
+  const int operation = FUTEX_WAIT_BITSET | (clock == 0 ? FUTEX_CLOCK_REALTIME : 0);
+  auto* interrupt = AttachSignalInterrupt();
+  const int saved_errno = errno;
+  const long result = ::syscall(SYS_futex, reinterpret_cast<volatile int*>(s), operation,
+                                static_cast<int>(kSemShared | kSemWaiting),
+                                abs == nullptr ? nullptr : &deadline, nullptr,
+                                static_cast<int>(FUTEX_BITSET_MATCH_ANY));
+  const int error = result < 0 ? errno : 0;
+  errno = saved_errno;
+  if (interrupt != nullptr) {
+    DetachSignalInterrupt();
+    const int handlers = DeliverAfterInterrupt();
+    if (error == kEINTR) {
+      if (handlers == kNoHandler) return 0;
+      if (abs == nullptr) {
+        const auto target_sdk = Shim<int (BIONIC_SYSV*)()>("android_get_application_target_sdk_version");
+        if (handlers == kHandlersRestart || (target_sdk != nullptr && target_sdk() < 24)) return 0;
+      }
+    }
+  }
+  return error == kEAGAIN ? 0 : error;
+}
+
 // Waits until the count is positive or `abs` passes on `clock` (no `abs`: forever).
 int SemWaitUntil(void* s, const LinuxTimespec* abs, int clock) {
   for (;;) {
-    if (SemTake(s)) return 0;
-    DeliverPendingSignals();
-    DWORD ms = INFINITE;
-    if (abs != nullptr) {
-      if (abs->tv_nsec < 0 || abs->tv_nsec >= 1000000000) return errno = kEINVAL, -1;
-      int64_t left = MsUntil(abs, clock);
-      if (left < 0) return errno = kETIMEDOUT, -1;
-      ms = static_cast<DWORD>(left > 0x7ffffffe ? 0x7ffffffe : left);
+    uint32_t state;
+    if (SemTake(s, state)) return 0;
+    if (abs != nullptr && (abs->tv_nsec < 0 || abs->tv_nsec >= 1000000000))
+      return errno = kEINVAL, -1;
+    if (state & kSemShared) {
+      const uint32_t waiting = kSemShared | kSemWaiting;
+      if (state != waiting && !Word(s)->compare_exchange_strong(state, waiting)) continue;
+      if (const int error = WaitSharedSemaphore(s, abs, clock)) return errno = error, -1;
+    } else {
+      DeliverPendingSignals();
+      DWORD ms = INFINITE;
+      if (abs != nullptr) {
+        int64_t left = MsUntil(abs, clock);
+        if (left < 0) return errno = kETIMEDOUT, -1;
+        ms = static_cast<DWORD>(left);
+      }
+      uint32_t zero = 0;
+      WaitOnAddress(Word(s), &zero, 4, ms);
     }
-    uint32_t zero = 0;
-    WaitOnAddress(Word(s), &zero, 4, ms);
   }
 }
 int BIONIC_SYSV SemWait(void* s) { return SemWaitUntil(s, nullptr, 0); }
@@ -130,7 +191,7 @@ int BIONIC_SYSV SemClockwait(void* s, int clock, const LinuxTimespec* abs) {
   return SemWaitUntil(s, abs, clock);
 }
 int BIONIC_SYSV SemGetvalue(void* s, int* v) {
-  *v = static_cast<int>(Word(s)->load());
+  *v = static_cast<int>(Word(s)->load() & kSemCountMask);
   return 0;
 }
 // Named semaphores: bionic has none either.
