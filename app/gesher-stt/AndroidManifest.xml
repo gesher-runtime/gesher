@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gesher Speech Recognition (docs/speech-recognition.md): the device's RecognitionService,
+     whose recognizers are the PC's SAPI 5 recognizers (through
+     com.gesher.server.WindowsSpeechRecognition). It captures with AudioRecord, for the
+     calling app and with its RECORD_AUDIO checked by RecognitionService, and Windows
+     recognizes that audio. The device installs it at its start when Windows has at least
+     one recognizer, and removes it when there are none, as a device without a recognizer
+     has no recognition service. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.gesher.stt"
+    android:versionCode="1"
+    android:versionName="1.0">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <application
+        android:supportsRtl="true"
+        android:label="@string/app_name">
+        <service
+            android:name=".WindowsRecognitionService"
+            android:label="@string/app_name"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

@@ -63,6 +63,10 @@ HRESULT EnsureApartment();
 HRESULT ActivateInstance(const wchar_t* className, IInspectable** instance);
 HRESULT GetActivationFactory(const wchar_t* className, const IID& iid, void** factory);
 
+// WindowsCreateString: an HSTRING of `length` UTF-16 units, released with
+// DeleteString; E_NOTIMPL when combase lacks it.
+HRESULT CreateString(const wchar_t* s, UINT32 length, HSTRING* out);
+
 // The characters of an HSTRING (empty for null), and releasing one.
 std::wstring StringOf(HSTRING s);
 void DeleteString(HSTRING s);

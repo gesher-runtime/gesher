@@ -16,6 +16,10 @@
 #include "record_lock_descriptors.h"
 #include "../../bionic/stdio_windows_lock.h"
 #include <gesher/file_description.h>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 #include <windows.h>
 #include <fcntl.h>
@@ -296,17 +300,16 @@ char* LineLocal(char* bytes, int count, FILE* stream, bool unlocked) {
   if (count <= 0) std::abort();  // Bionic fgets rejects a nonpositive bound fatally.
   AccessStream state(stream, unlocked);
   if (!state) return nullptr;
-  state->buffer.Orient(-1);
   state->line_output.store(false, std::memory_order_release);
-  int used = 0;
-  while (used < count - 1) {
-    int value = state->buffer.Get(Reader(state.Get()), Writer(state->fd));
-    if (value == EOF) { if (!used) return nullptr; break; }
-    bytes[used++] = static_cast<char>(value);
-    if (value == '\n') break;
-  }
-  bytes[used] = '\0';
-  return bytes;
+  return state->buffer.ReadLine(bytes, count, Reader(state.Get()), Writer(state->fd));
+}
+int64_t DelimitedLocal(char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
+  AccessStream state(stream, unlocked);
+  if (!state) return -1;
+  state->line_output.store(false, std::memory_order_release);
+  auto reallocate = [](void* prior, size_t size) { return std::realloc(prior, size); };
+  return state->buffer.ReadDelimited(bytes, capacity, delimiter, Reader(state.Get()),
+                                     Writer(state->fd), reallocate);
 }
 int UngetLocal(int character, FILE* stream) {
   AccessStream state(stream, false);
@@ -540,6 +543,12 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
       PrintLocal, PrintWideLocal, ScanLocal, ScanWideLocal, BionicMetadataLocal};
   return &api;
 }
+// A separate versioned entry avoids extending the existing v1 owner table.
+// All modules still use the same registry and descriptor-backed input state.
+extern "C" __declspec(dllexport) int64_t gesher_stdio_delimited_v1(
+    char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
+  return DelimitedLocal(bytes, capacity, delimiter, stream, unlocked);
+}
 namespace {
 // Register before ordinary application constructors register their destructors
 // or atexit callbacks. A lazy registration during the first fopen would flush
@@ -575,6 +584,13 @@ size_t Write(const void* bytes, size_t size, size_t count, FILE* stream, bool un
   return Owner()->write(bytes, size, count, stream, unlocked);
 }
 char* ReadLine(char* bytes, int count, FILE* stream, bool unlocked) { return Owner()->line(bytes, count, stream, unlocked); }
+int64_t ReadDelimited(char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
+  using Read = int64_t (*)(char**, size_t*, int, FILE*, bool);
+  static auto read = reinterpret_cast<Read>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(nullptr), "gesher_stdio_delimited_v1")));
+  if (!read) std::abort();
+  return read(bytes, capacity, delimiter, stream, unlocked);
+}
 int Get(FILE* stream, bool unlocked) {
   unsigned char value;
   return Read(&value, 1, 1, stream, unlocked) == 1 ? value : EOF;
@@ -779,3 +795,44 @@ extern "C" {
 int (*__imp_fseeko64)(FILE*, long long, int) = gesher_fseeko64;
 long long (*__imp_ftello64)(FILE*) = gesher_ftello64;
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): the stream registry. A stream's own lock is not
+// waited for (another thread may hold it across a blocking read, and Linux's
+// fork waits for no stream): in the child every stream's lock is made anew,
+// free, unless the forking thread itself held it (flockfile around fork),
+// which keeps it at that depth. A stream another thread was writing at that
+// moment may hold part of that write in the child's copy of its buffer.
+namespace {
+DWORD g_stdio_fork_thread = 0;
+bool StdioTryLock(void*) {
+  using namespace gesher::stdio;
+  if (registry == nullptr) return true;
+  if (!registry->mutex.try_lock()) return false;
+  g_stdio_fork_thread = GetCurrentThreadId();
+  return true;
+}
+void StdioUnlock(void*) {
+  using namespace gesher::stdio;
+  if (registry != nullptr) registry->mutex.unlock();
+}
+void StdioChild(void*) {
+  using namespace gesher::stdio;
+  if (registry == nullptr) return;
+  for (auto& entry : registry->streams) {
+    auto* section = reinterpret_cast<CRITICAL_SECTION*>(&entry.second->mutex);
+    const bool ours = reinterpret_cast<uintptr_t>(section->OwningThread) == g_stdio_fork_thread;
+    const LONG depth = ours ? section->RecursionCount : 0;
+    InitializeCriticalSection(section);
+    for (LONG i = 0; i < depth; ++i) EnterCriticalSection(section);
+  }
+  new (&registry->mutex) std::mutex();
+}
+const gesher::ForkLockOps kStdioForkOps = {&StdioTryLock, &StdioUnlock, &StdioChild};
+// Registered with a non-null object: the registry may be made later.
+int g_stdio_fork_anchor = 0;
+const gesher::ForkLockRegistration g_fork_stdio(gesher::kForkOrderSubsystem, "stdio streams",
+                                                []() -> void* { return &g_stdio_fork_anchor; },
+                                                &kStdioForkOps);
+}  // namespace
+#endif

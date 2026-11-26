@@ -25,6 +25,7 @@ system/unwinding libunwindstack/include/
 libcore libcore.aconfig NativeCode.bp JavaLibrary.bp openjdk_java_files.bp non_openjdk_java_files.bp ojluni/src/main/ ojluni/src/lambda/ luni/src/main/ luni/src/module/ dalvik/src/main/ libart/src/main/ json/src/main/ xml/src/main/
 external/icu icu.aconfig android_icu4j/src/main/java/ android_icu4j/libcore_bridge/src/java/ android_icu4j/libcore_bridge/src/native/ android_icu4j/resources/ android_icu4c/include/ libicu/ndk_headers/ libicu/src/ libandroidicuinit/ icu4c/source/common/ icu4c/source/i18n/ icu4c/source/stubdata/ icu4c/source/data/misc/windowsZones.txt
 external/okhttp Android.bp repackaged/ /LICENSE
+external/brotli c/common/ c/dec/ c/enc/ c/include/ /LICENSE
 # Networking (docs/network.md): BoringSSL for Windows (cmake/aosp/boringssl.cmake),
 # Conscrypt's natives and Java (cmake/aosp/conscrypt.cmake, tools/net), BouncyCastle
 # (external/bouncycastle, below, widened to its sources).
@@ -38,7 +39,7 @@ external/sqlite android/ dist/sqlite-autoconf-3500400/
 frameworks/libs/modules-utils java/android/annotation/
 tools/platform-compat=tools/platform-compat java/android/compat/annotation/
 build/release release_configs/ aconfig/
-frameworks/base location/lib/ core/res/ core/jni/ libs/androidfw/ tools/streaming_proto/ libs/hwui/ libs/hostgraphics/ data/fonts/ core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl core/java/android/speech/SpeechRecognizerImpl.java core/java/android/view/SurfaceView.java media/java/android/media/session/MediaSessionManager.java core/java/android/util/jar/StrictJarFile.java core/java/android/webkit/WebViewFactory.java core/java/com/android/internal/pm/split/DefaultSplitAssetLoader.java core/java/com/android/internal/pm/split/SplitAssetDependencyLoader.java
+frameworks/base location/lib/ core/res/ core/jni/ rs/jni/ libs/androidfw/ tools/streaming_proto/ libs/hwui/ libs/hostgraphics/ data/fonts/ core/java/android/net/Proxy.java core/java/android/os/Looper.java core/java/android/os/Handler.java core/java/android/os/Message.java core/java/android/os/HandlerThread.java core/java/android/os/MessageHeap.java core/java/android/os/MessageStack.java core/java/android/os/CombinedMessageQueue/ core/java/android/os/IStatsBootstrapAtomService.aidl core/java/android/os/StatsBootstrapAtom.aidl core/java/android/os/StatsBootstrapAtomValue.aidl core/java/android/speech/SpeechRecognizerImpl.java core/java/android/view/SurfaceView.java media/java/android/media/session/MediaSessionManager.java core/java/android/util/jar/StrictJarFile.java core/java/android/webkit/WebViewFactory.java core/java/com/android/internal/pm/split/DefaultSplitAssetLoader.java core/java/com/android/internal/pm/split/SplitAssetDependencyLoader.java
 
 # Graphics (docs/graphics.md): Skia, the libraries it, minikin and hwui build
 # on, and the fonts.
@@ -52,6 +53,12 @@ external/vulkan-headers /include/
 frameworks/minikin /Android.bp /include/ /libs/minikin/
 external/roboto-fonts /Android.bp /font/ /NOTICE
 external/noto-fonts /notosanshebrew/ /notoserif/ /notonaskharabic/ /notonaskharabicui/ /notosansthai/ /notosansthaiui/ /notosansdevanagari/ /notosansdevanagariui/
+
+# Legacy RenderScript (docs/renderscript.md): libRS, its CPU driver and
+# reference intrinsics (cmake/aosp/renderscript.cmake), and the platform JNI
+# (frameworks/base rs/jni/, above). The compiled script runtime (driver/runtime,
+# prebuilt bitcode) and the support library are left out.
+frameworks/rs /*.cpp /*.h /*.spec /*_rsg /driver/*.cpp /driver/*.h /cpu_ref/*.cpp /cpu_ref/*.h /cpu_ref/*.inc
 
 # The framework build (tools/framework/build.py) and its host tools
 # (tools/host). Projects with only *.bp give the planner their Soong module

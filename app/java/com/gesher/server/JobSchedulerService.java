@@ -74,7 +74,7 @@ import java.util.concurrent.TimeUnit;
 final class JobSchedulerService extends IJobScheduler.Default
         implements DeviceWork.Source, WindowsHost.Listener {
     private static final long EXECUTION_LIMIT_MS = 10 * 60_000;
-    private static final long IDLE_AFTER_MS = 31 * 60_000; // AOSP config_jobSchedulerInactivityIdleThreshold
+    private static final long IDLE_AFTER_MS = DeviceConstraints.IDLE_AFTER_MS;
     private static final long BIND_TIMEOUT_MS = 18_000;
     private static final long CALLBACK_TIMEOUT_MS = 8_000;
     private static final int SYSTEM_STOP_TO_FAILURE_RATIO = 3;
@@ -1180,7 +1180,7 @@ final class JobSchedulerService extends IJobScheduler.Default
     private static long hostPollAt(long now, int inputs, ConstraintState state) {
         if (inputs == 0) return Long.MAX_VALUE;
         long delay = CONSTRAINT_POLL_MS;
-        if (state.idleMillis > 0 && state.idleMillis < IDLE_AFTER_MS) {
+        if (state.idleMillis >= 0 && state.idleMillis < IDLE_AFTER_MS) {
             delay = Math.min(delay, IDLE_AFTER_MS - state.idleMillis);
         }
         return now + delay;
@@ -1303,26 +1303,24 @@ final class JobSchedulerService extends IJobScheduler.Default
     }
 
     private static boolean batteryNotLow(int[] power) {
-        return power != null && power.length >= 3 && power[1] >= 0 && power[1] != 255
-                && (power[1] & (2 | 4)) == 0;
+        return DeviceConstraints.batteryNotLow(power);
     }
 
     private static boolean charging(Job job, ConstraintState state) {
         int[] power = state.power;
-        if (power == null || power.length < 3 || power[0] != 1) return false;
+        if (!DeviceConstraints.powerConnected(power)) return false;
         // BatteryController retains the top-app power exemption for that run.
         Run run = job.run;
         if ((job.packageName.equals(state.topPackage) || run != null && run.topStarted)
                 && job.effectivePriority() >= JobInfo.PRIORITY_DEFAULT) return true;
-        return batteryNotLow(power)
-                && ((power[1] & (128 | 8)) != 0 || power[2] == 100);
+        return DeviceConstraints.stablePower(power);
     }
 
     private static final class ConstraintState {
         com.gesher.net.WindowsNetworks.Snapshot networks;
         Map<android.net.NetworkRequest, android.net.Network> networkMatches;
         int[] power;
-        long idleMillis;
+        long idleMillis = DeviceConstraints.NOT_OFF;
         boolean storageNotLow;
         String topPackage;
     }
@@ -1355,7 +1353,7 @@ final class JobSchedulerService extends IJobScheduler.Default
         }
         if ((inputs & OBSERVE_IDLE) != 0) {
             Long idle = mIdleMillisOverride;
-            state.idleMillis = idle != null ? idle : WindowsHost.jobIdleMillis();
+            state.idleMillis = idle != null ? idle : WindowsHost.jobIdleReading();
         }
         if ((inputs & OBSERVE_TOP) != 0) state.topPackage = mAtm.topResumedPackage();
         if ((inputs & OBSERVE_STORAGE) != 0) {

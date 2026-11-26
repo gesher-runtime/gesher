@@ -75,7 +75,7 @@ def main():
                 env['PATH'] = str(Path(compiler[0]).parent) + os.pathsep + env.get('PATH', '')
             if args.compile_only:
                 continue
-            for case in (('fixture-env', 'fixture-bad-file') if fixture else ('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'fixture-env',
+            for case in (('fixture-env', 'fixture-bad-file') if fixture else ('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'event-signal', 'event-command', 'event-wake', 'fixture-env',
                          'last-owner', 'stale-peer', 'opensl-descriptors', 'opensl-missing', 'opensl-permission', 'opensl-start', 'opensl-disconnect', 'recorder-start', 'recorder-disconnect', 'jni-read')):
                 subprocess.run([str(binary), case], env=env, cwd=work, check=True, timeout=15)
         wasapi_source = (ROOT / 'compat/media/audio/capture_wasapi.cc').read_text().replace(' private:', ' public:')

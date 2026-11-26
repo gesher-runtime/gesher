@@ -1,7 +1,7 @@
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 # Compile with the panel's existing taskbar helper, not in a second compiler call.
 if (-not ('Gesher.PanelChangeMonitor' -as [type])) {
-    Add-Type -TypeDefinition @'
+    $nativeSource = @'
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -205,4 +205,62 @@ namespace Gesher {
   }
 }
 '@
+    $loaded = $false
+    try {
+        $cacheDir = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+            Join-Path $env:LOCALAPPDATA 'Gesher\cache'
+        } else {
+            Join-Path ([IO.Path]::GetTempPath()) 'gesher-cache'
+        }
+        $keyInput = "{0}|{1}|{2}" -f $nativeSource, [Environment]::Version.ToString(), [IntPtr]::Size
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            $hashBytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($keyInput))
+            $hash = ([BitConverter]::ToString($hashBytes) -replace '-', '').Substring(0, 16).ToLowerInvariant()
+        } finally {
+            $sha.Dispose()
+        }
+        $dllPath = Join-Path $cacheDir ("Gesher.PanelNative.{0}.dll" -f $hash)
+        if ([IO.File]::Exists($dllPath)) {
+            try {
+                # Inspect the file without binding it. Windows PowerShell's CLR caches
+                # failed LoadFrom calls, even after a corrupt file has been replaced.
+                [void][Reflection.AssemblyName]::GetAssemblyName($dllPath)
+                [void][Reflection.Assembly]::LoadFrom($dllPath)
+                $loaded = $null -ne ('Gesher.PanelChangeMonitor' -as [type])
+            } catch {
+                $loaded = $false
+            }
+        }
+        if (-not $loaded) {
+            [void][IO.Directory]::CreateDirectory($cacheDir)
+            $tempDll = Join-Path $cacheDir ("Gesher.PanelNative.{0}.{1}.tmp.dll" -f $hash, [Guid]::NewGuid().ToString('N'))
+            try {
+                Add-Type -TypeDefinition $nativeSource -OutputAssembly $tempDll -ErrorAction Stop
+                try {
+                    if ([IO.File]::Exists($dllPath)) {
+                        [IO.File]::Delete($dllPath)
+                    }
+                    [IO.File]::Move($tempDll, $dllPath)
+                    [void][Reflection.Assembly]::LoadFrom($dllPath)
+                } catch {
+                    if ([IO.File]::Exists($dllPath)) {
+                        [void][Reflection.Assembly]::LoadFrom($dllPath)
+                    } else {
+                        throw
+                    }
+                }
+                $loaded = $null -ne ('Gesher.PanelChangeMonitor' -as [type])
+            } finally {
+                if ([IO.File]::Exists($tempDll)) {
+                    try { [IO.File]::Delete($tempDll) } catch { }
+                }
+            }
+        }
+    } catch {
+        $loaded = $false
+    }
+    if (-not $loaded -and -not ('Gesher.PanelChangeMonitor' -as [type])) {
+        Add-Type -TypeDefinition $nativeSource
+    }
 }

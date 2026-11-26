@@ -2,6 +2,8 @@
 // child handles and CRT descriptors are controlled boundaries. The sink models
 // each OS write as one operation and schedules a real competing app thread
 // after its first operation, reproducing the observed stdio-prefix interleave.
+// The production argument summary of the start/failure records is inserted
+// too and checked directly.
 #include <algorithm>
 #include <climits>
 #include <condition_variable>
@@ -12,6 +14,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -152,6 +155,35 @@ namespace ex {
 @EXIT_STATUS@
 }
 
+@EXEC_LOG_ARGUMENTS@
+
+void ArgumentCases() {
+  Check(ExecLogArguments({"/system/bin/sh"}).empty(), "no arguments add nothing to the record");
+  Check(ExecLogArguments({"/system/bin/cat", "/proc/self/status"}) == ", args: /proc/self/status",
+        "plain arguments are logged as they are");
+  Check(ExecLogArguments({"sh", "-c", "echo $HOME it's"}) == ", args: -c 'echo $HOME it'\\''s'",
+        "other arguments are single-quoted shell words");
+  Check(ExecLogArguments({"x", ""}) == ", args: ''", "an empty argument stays visible");
+  Check(ExecLogArguments({"sh", "-c", "a\nb\r\t\x01"}) == ", args: -c 'a\\nb\\r\\t\\x01'",
+        "control bytes are escaped so the record is one line");
+  std::string long_argument(500, 'a');
+  std::string summary = ExecLogArguments({"sh", "-c", long_argument, "never"});
+  Check(summary == ", args: -c " + std::string(197, 'a') + "... [truncated]",
+        "long argument text is cut at the bound and marked");
+  std::vector<std::string> many{"tool"};
+  for (int i = 0; i < 100000; ++i) many.push_back("argument");
+  Check(ExecLogArguments(many).size() == std::string(", args: ").size() + 200 + std::string("... [truncated]").size(),
+        "many arguments stay bounded");
+  // Two-byte UTF-8 characters: the cut never splits one.
+  std::string hebrew;
+  for (int i = 0; i < 150; ++i) hebrew += "\xd7\xa9";
+  std::string cut = ExecLogArguments({"echo", hebrew});
+  std::string text = cut.substr(std::string(", args: ").size());
+  text.resize(text.size() - std::string("... [truncated]").size());
+  Check(text.size() == 199 && text[0] == '\'' && (text.size() - 1) % 2 == 0,
+        "the cut keeps whole UTF-8 characters");
+}
+
 #define fprintf FragmentedFprintf
 #define fflush FixtureFlush
 @WAIT_FOR_PROCESS_EXIT@
@@ -203,6 +235,7 @@ void Case(jint pid, DWORD code, int expected) {
 }
 
 int main() {
+  ArgumentCases();
   Case(9180, 0, 0);
   Case(9181, 37, 37);
   Case(9182, 143, 143);

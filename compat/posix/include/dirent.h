@@ -37,6 +37,10 @@ void rewinddir(DIR* dir);
 long telldir(DIR* dir);
 void seekdir(DIR* dir, long position);
 int dirfd(DIR* dir);
+// getdents64(2): the directory open as fd, from the fd's file position (the
+// index of its next entry), as struct linux_dirent64 records (d_ino, d_off,
+// d_reclen, d_type, d_name; 8-byte aligned). 0 at the end.
+ssize_t getdents64(int fd, void* buffer, size_t size);
 #define readdir64 readdir
 #define readdir64_r readdir_r
 
