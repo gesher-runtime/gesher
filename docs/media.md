@@ -41,7 +41,11 @@ rewrites the buffer released longest ago, so it has normally signalled long
 ago, and the device is not drained of the app's next frame). Draws the app
 made before it let go have sampled the old frame when the new one is written;
 draws after the write see the new one (the upload completes before
-`getHardwareBuffer` returns). Not ordered: draws the app issues with a kept
+`getHardwareBuffer` returns). An unresolved or failed release fence, failed
+fence creation, or unconfirmed upload leaves the CPU pixels dirty and returns
+no HardwareBuffer from that call; the app can retry after synchronization
+recovers. The shared texture is never rewritten while its release fence is
+unresolved. Not ordered: draws the app issues with a kept
 EGLImage after it let go and before the rewrite, and another thread's racing
 with the call. `ImageReaderPrivateTest` runs the sequence with an
 EGLImage kept across the rewrite.

@@ -158,7 +158,7 @@ bool RgbaBufferReusable(void* buffer) {
 }
 uint8_t* RgbaBufferPixels(void* buffer) { return static_cast<HostRgbaBuffer*>(buffer)->pixels.get(); }
 void MarkRgbaWritten(void* buffer) { static_cast<HostRgbaBuffer*>(buffer)->memory_newer = true; }
-void FlushRgbaToGpu(void* buffer) { static_cast<HostRgbaBuffer*>(buffer)->memory_newer = false; }
+bool FlushRgbaToGpu(void* buffer) { static_cast<HostRgbaBuffer*>(buffer)->memory_newer = false; return true; }
 void NoteRgbaAppReleased(void*) {}
 }  // namespace gesher::bionic::ahb
 
@@ -349,6 +349,15 @@ void Lifetimes() {
   {
     Target jpeg(16,8,0x21);
     Check(jpeg.Deliver(frame,9) == BAD_VALUE && jpeg.reader->pending.empty(), "JPEG without encoded bytes remains unsupported");
+  }
+  for (int max : {INT32_MAX / 2, INT32_MAX}) {
+    Target large_limit(1,1,1,max);
+    auto tiny = Frame(2,2,0,0,0,1);
+    Check(large_limit.Deliver(tiny,9) == OK, "large valid maxImages delivers a tiny RGBA frame");
+    auto* image = large_limit.Acquire();
+    Check(image && image->rgba && large_limit.reader->pool.size() == 1,
+          "large maxImages does not overflow the pool's retention bound");
+    if (image) ReleaseImage(large_limit.reader,image);
   }
   {
     Target reentrant(16,8);

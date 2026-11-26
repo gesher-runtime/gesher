@@ -413,11 +413,12 @@ void FromTexture(Buffer* b, const ARect& r, const uint8_t* px) {
 }
 
 // Uploads rect `r` of the buffer's memory into its texture.
-void UploadRect(Buffer* b, const ARect& r) {
-  if (b->gpu.texture == nullptr || Empty(r)) return;
+bool UploadRect(Buffer* b, const ARect& r) {
+  if (b->gpu.texture == nullptr) return false;
+  if (Empty(r)) return true;
   size_t row_bytes = 0;
   std::vector<uint8_t> px = ToTexture(b, r, &row_bytes);
-  gpu::UpdateTexture(b->gpu.texture, r.left, r.top, r.right - r.left, r.bottom - r.top, px.data(), row_bytes);
+  return gpu::UpdateTexture(b->gpu.texture, r.left, r.top, r.right - r.left, r.bottom - r.top, px.data(), row_bytes);
 }
 
 // Creates the texture (with the memory's contents) if the buffer has none.
@@ -1078,6 +1079,8 @@ void NoteRgbaAppReleased(void* buffer) {
   }
   // Outside the buffer's lock: this takes ANGLE's.
   std::shared_ptr<NativeFence> fence = gpu::CreateAngleFence();
+  // A failed submission leaves fence_requested ahead of fence_stored. The old
+  // fence cannot prove completion of this release, so a later flush must fail.
   if (fence == nullptr) return;
   std::lock_guard<std::mutex> lock(b->mutex);
   if (request > b->fence_stored) {  // a later release's fence covers an earlier one's
@@ -1086,17 +1089,19 @@ void NoteRgbaAppReleased(void* buffer) {
   }
 }
 
-void FlushRgbaToGpu(void* buffer) {
+bool FlushRgbaToGpu(void* buffer) {
   Buffer* b = FromApp(buffer);
-  bool upload;
+  if (b == nullptr) return false;
   std::shared_ptr<NativeFence> fence;
+  uint64_t release;
   {
     std::lock_guard<std::mutex> lock(b->mutex);
-    upload = b->has_texture && b->memory_newer;
-    if (upload) {
-      b->memory_newer = false;
-      fence = b->release_fence;
-    }
+    if (!b->has_texture || !b->memory_newer) return true;
+    // The last release may still be creating a fence, or creation may have
+    // failed. Neither permits reusing an older, already-signaled fence.
+    release = b->fence_requested;
+    if (release != b->fence_stored) return false;
+    fence = b->release_fence;
   }
   // A texture made before (an app's EGLImage of this buffer) gets the new pixels
   // here, on the GPU thread in order with the compositor. Without a texture the
@@ -1112,20 +1117,36 @@ void FlushRgbaToGpu(void* buffer) {
   // app's next frame). Normally the fence signalled long ago: the pool rewrites the
   // buffer released longest ago. Draws made after this call see the new pixels (the
   // upload finishes before it returns).
-  if (upload && fence != nullptr) {
+  if (fence != nullptr) {
     g_fence_waits++;
-    if (NativeFenceStatus(fence) != FenceStatus::kSignaled) {
+    const FenceStatus status = NativeFenceStatus(fence);
+    if (status != FenceStatus::kSignaled) {
       g_fence_waits_pending++;
-      if (WaitNativeFence(fence, kReleaseFenceTimeoutNs) != FenceStatus::kSignaled) {
+      if (status != FenceStatus::kPending ||
+          WaitNativeFence(fence, kReleaseFenceTimeoutNs) != FenceStatus::kSignaled) {
         static std::atomic<bool> said{false};
-        LogOnce(&said, "a reader buffer's release fence did not signal in time: it is rewritten unordered");
+        LogOnce(&said, "a reader buffer's release fence is unresolved: hardware buffer unavailable");
+        return false;
       }
     }
   }
-  if (upload)
-    gpu::Thread::Get()->Run([&] {
-      UploadRect(b, ARect{0, 0, static_cast<int32_t>(b->desc.width), static_cast<int32_t>(b->desc.height)});
-    });
+  gpu::Thread* thread = gpu::Thread::Get();
+  if (thread == nullptr) return false;
+  bool complete = false;
+  thread->Run([&] {
+    // Recheck after waiting and crossing the GPU queue. A newer release cannot
+    // use the older proof. Holding the buffer lock here also prevents a new
+    // release or dirty mark from being lost during the upload. No ANGLE lock is
+    // taken by UploadRect (it uses the GPU thread's separate D3D device).
+    std::lock_guard<std::mutex> lock(b->mutex);
+    if (release != b->fence_requested || release != b->fence_stored) return;
+    if (b->memory_newer &&
+        !UploadRect(b, ARect{0, 0, static_cast<int32_t>(b->desc.width), static_cast<int32_t>(b->desc.height)}))
+      return;
+    b->memory_newer = false;
+    complete = true;
+  });
+  return complete;
 }
 
 }  // namespace gesher::bionic::ahb

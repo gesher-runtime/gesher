@@ -39,7 +39,9 @@ uint8_t* RgbaBufferPixels(void* buffer);
 void MarkRgbaWritten(void* buffer);
 // Brings an existing GPU form up to date with the memory (before an app samples it).
 // If an app sampled the buffer, waits for the buffer's release fence first.
-void FlushRgbaToGpu(void* buffer);
+// False when synchronization or upload fails: leaves the memory dirty and the
+// caller must not hand the buffer to an app. A later call may retry.
+bool FlushRgbaToGpu(void* buffer);
 // An app-facing holder of the buffer (an Image, a Java HardwareBuffer) is about to
 // let go of it: if the app made an EGLImage of it, queues a fence on ANGLE's device
 // (what the app drew so far) and keeps it on the buffer as its release fence, as

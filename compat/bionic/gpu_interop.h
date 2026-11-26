@@ -56,8 +56,9 @@ enum class TextureFormat { kRgba8, kRgba16f, kRgb10a2, kR8 };
 // A width x height texture holding `data` (rows `row_bytes` apart, in the
 // texture's own layout); null on failure.
 Texture* CreateTexture(TextureFormat format, int width, int height, const void* data, size_t row_bytes);
-// Uploads a width x height block at (x, y); ANGLE's device sees it on return.
-void UpdateTexture(Texture* texture, int x, int y, int width, int height, const void* data, size_t row_bytes);
+// Uploads a width x height block at (x, y). True only once the GPU completed
+// the upload, so ANGLE's device can read it; false if completion cannot be proved.
+bool UpdateTexture(Texture* texture, int x, int y, int width, int height, const void* data, size_t row_bytes);
 // Reads a width x height block at (x, y) into `out`; false on failure.
 bool ReadTexture(Texture* texture, int x, int y, int width, int height, void* out, size_t row_bytes);
 // The texture opened on ANGLE's device (an ID3D11Texture2D*), for

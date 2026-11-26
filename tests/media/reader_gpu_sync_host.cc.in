@@ -1,0 +1,310 @@
+// Exact production methods; only GPU device/fence/dispatch/JNI boundaries are adapters.
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <utility>
+#include <vector>
+
+using HRESULT = int32_t;
+using BOOL = int32_t;
+using UINT = uint32_t;
+constexpr HRESULT S_OK = 0, S_FALSE = 1, E_FAIL = -1;
+constexpr BOOL FALSE = 0;
+constexpr int D3D11_QUERY_EVENT = 0;
+bool FAILED(HRESULT hr) { return hr < 0; }
+void SwitchToThread() {}
+struct D3D11_QUERY_DESC { int type; UINT flags; };
+struct D3D11_BOX { UINT left, top, front, right, bottom, back; };
+struct ID3D11Texture2D {};
+struct QueryResult { HRESULT result = S_OK; BOOL done = 1; };
+struct Boundary {
+  bool thread_available = true, query_creation_fails = false;
+  int uploads = 0, flushes = 0, queries = 0, releases = 0, waits = 0, wrappers = 0;
+  std::deque<QueryResult> results;
+  std::vector<uint8_t> uploaded_pixels;
+  std::function<void()> before_run, during_fence_creation;
+} boundary;
+int live_queries = 0;
+struct ID3D11Query {
+  ID3D11Query() { ++live_queries; }
+  void Release() { ++boundary.releases; --live_queries; delete this; }
+};
+struct ID3D11Device {
+  HRESULT CreateQuery(const D3D11_QUERY_DESC*, ID3D11Query** out) {
+    ++boundary.queries;
+    if (boundary.query_creation_fails) { *out = nullptr; return E_FAIL; }
+    *out = new ID3D11Query;
+    return S_OK;
+  }
+} device;
+struct ID3D11DeviceContext {
+  void UpdateSubresource(ID3D11Texture2D*, UINT, const D3D11_BOX* box,
+                         const void* data, UINT row_bytes, UINT) {
+    ++boundary.uploads;
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    boundary.uploaded_pixels.assign(bytes, bytes + row_bytes * (box->bottom - box->top));
+  }
+  void End(ID3D11Query*) {}
+  void Flush() { ++boundary.flushes; }
+  HRESULT GetData(ID3D11Query*, BOOL* done, size_t, UINT) {
+    QueryResult result;
+    if (!boundary.results.empty()) { result = boundary.results.front(); boundary.results.pop_front(); }
+    *done = result.done;
+    return result.result;
+  }
+} context;
+
+namespace gesher {
+enum class FenceStatus { kPending, kSignaled, kFailed };
+struct NativeFence { FenceStatus status = FenceStatus::kSignaled, after_wait = FenceStatus::kSignaled; };
+std::shared_ptr<NativeFence> next_fence;
+FenceStatus NativeFenceStatus(const std::shared_ptr<NativeFence>& fence) { return fence->status; }
+FenceStatus WaitNativeFence(const std::shared_ptr<NativeFence>& fence, uint64_t) {
+  ++boundary.waits;
+  return fence->after_wait;
+}
+namespace bionic {
+namespace gpu {
+struct Texture { ID3D11Texture2D* texture = nullptr; };
+struct Thread {
+  ID3D11Device* device_ = &::device;
+  ID3D11DeviceContext* context_ = &::context;
+  static Thread* Get() { static Thread instance; return boundary.thread_available ? &instance : nullptr; }
+  ID3D11Device* device() { return device_; }
+  ID3D11DeviceContext* context() { return context_; }
+  void Run(const std::function<void()>& fn) {
+    auto hook = std::move(boundary.before_run);
+    boundary.before_run = nullptr;
+    if (hook) hook();
+    fn();
+  }
+  void Finish();
+};
+void LogHr(const char*, HRESULT) {}
+std::shared_ptr<NativeFence> CreateAngleFence() {
+  auto fence = next_fence;
+  auto hook = std::move(boundary.during_fence_creation);
+  boundary.during_fence_creation = nullptr;
+  if (hook) hook();
+  return fence;
+}
+@FINISH@
+@UPDATE@
+}  // namespace gpu
+namespace ahb {
+struct ARect { int32_t left, top, right, bottom; };
+struct Buffer {
+  std::mutex mutex;
+  bool memory_newer = true, has_texture = true, gpu_written = true;
+  uint64_t fence_requested = 1, fence_stored = 1;
+  std::shared_ptr<NativeFence> release_fence;
+  struct { gpu::Texture* texture = nullptr; } gpu;
+  struct { uint32_t width = 2, height = 1; } desc;
+  std::vector<uint8_t> pixels{9, 28, 47, 255, 63, 82, 101, 255};
+};
+Buffer* FromApp(void* p) { return static_cast<Buffer*>(p); }
+std::atomic<uint64_t> g_fence_waits{0}, g_fence_waits_pending{0};
+constexpr uint64_t kReleaseFenceTimeoutNs = 2000ull * 1000 * 1000;
+void LogOnce(std::atomic<bool>*, const char*) {}
+// The pixel conversion is covered by codec_reader_delivery; this adapter passes
+// a known RGBA payload to the actual UploadRect/UpdateTexture production methods.
+std::vector<uint8_t> ToTexture(const Buffer* b, const ARect& r, size_t* row_bytes) {
+  *row_bytes = static_cast<size_t>(r.right - r.left) * 4;
+  return b->pixels;
+}
+@EMPTY@
+@UPLOAD@
+@MARK@
+@RELEASE@
+@FLUSH@
+bool TryFlush(void* buffer) {
+#if CHECKED_FLUSH
+  return FlushRgbaToGpu(buffer);
+#else
+  FlushRgbaToGpu(buffer);
+  return true;  // the old void API could not report a failed handoff
+#endif
+}
+}  // namespace ahb
+}  // namespace bionic
+}  // namespace gesher
+
+using jobject = void*;
+struct JNIEnv {};
+struct Image { void* rgba; int width = 2, height = 1; };
+Image* ImageOf(JNIEnv*, jobject image) { return static_cast<Image*>(image); }
+namespace gesher::media {
+jobject ReaderHardwareBuffer(JNIEnv*, void* buffer, int, int) {
+  ++boundary.wrappers;
+  return buffer;
+}
+}  // namespace gesher::media
+@GET_BUFFER@
+
+using namespace gesher;
+using namespace gesher::bionic;
+using namespace gesher::bionic::ahb;
+int checks = 0, failures = 0;
+void Check(bool ok, const char* message) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL reader GPU handoff: %s\n", message); }
+}
+std::shared_ptr<NativeFence> Fence(FenceStatus status, FenceStatus after = FenceStatus::kSignaled) {
+  return std::make_shared<NativeFence>(NativeFence{status, after});
+}
+struct Case {
+  ID3D11Texture2D native;
+  gpu::Texture texture{&native};
+  Buffer buffer;
+  Case() {
+    boundary = Boundary{};
+    buffer.gpu.texture = &texture;
+    buffer.release_fence = Fence(FenceStatus::kSignaled);
+    next_fence = Fence(FenceStatus::kSignaled);
+  }
+  ~Case() { Check(live_queries == 0, "all completion queries released"); }
+  jobject Acquire() { JNIEnv env; Image image{&buffer}; return Image_getHardwareBuffer(&env, &image); }
+  void FailedBeforeUpload(const char* reason) {
+    Check(!TryFlush(&buffer), reason);
+    Check(buffer.memory_newer && boundary.uploads == 0, "unresolved release retains pixels without overwriting texture");
+  }
+};
+
+void Releases() {
+  {
+    Case c;
+    Check(c.Acquire() == &c.buffer, "signaled release publishes hardware buffer");
+    Check(!c.buffer.memory_newer && boundary.uploads == 1 && boundary.wrappers == 1,
+          "successful upload alone clears dirty state");
+    Check(boundary.uploaded_pixels == c.buffer.pixels && boundary.waits == 0,
+          "signaled fence uploads the new pixels without waiting");
+    Check(c.Acquire() == &c.buffer && boundary.uploads == 1, "clean acquisition does not upload again");
+  }
+  for (auto status : {FenceStatus::kPending, FenceStatus::kFailed}) {
+    Case c;
+    c.buffer.release_fence = Fence(FenceStatus::kPending, status);
+    Check(c.Acquire() == nullptr && boundary.wrappers == 0, "failed or timed-out wait cannot publish hardware buffer");
+    Check(c.buffer.memory_newer && boundary.uploads == 0 && boundary.waits == 1,
+          "failed or timed-out wait does not consume dirty pixels");
+    c.buffer.release_fence->status = FenceStatus::kSignaled;
+    Check(c.Acquire() == &c.buffer && boundary.uploads == 1 && !c.buffer.memory_newer,
+          "retry succeeds after the actual release signals");
+  }
+  {
+    Case c;
+    c.buffer.release_fence = Fence(FenceStatus::kFailed);
+    c.FailedBeforeUpload("errored fence rejects handoff");
+    Check(boundary.waits == 0, "errored fence is not treated as a pending fence");
+  }
+  {
+    Case c;
+    c.buffer.release_fence = Fence(FenceStatus::kPending, FenceStatus::kSignaled);
+    Check(TryFlush(&c.buffer) && boundary.waits == 1 && boundary.uploads == 1 && !c.buffer.memory_newer,
+          "pending fence that signals during the wait permits upload");
+  }
+  {
+    Case c;
+    next_fence.reset();
+    NoteRgbaAppReleased(&c.buffer);
+    Check(c.buffer.fence_requested > c.buffer.fence_stored, "failed fence creation leaves a proof gap");
+    c.FailedBeforeUpload("an older signaled fence cannot cover failed release-fence creation");
+    next_fence = Fence(FenceStatus::kSignaled);
+    NoteRgbaAppReleased(&c.buffer);
+    Check(TryFlush(&c.buffer) && !c.buffer.memory_newer, "a later successful release fence permits retry");
+  }
+  {
+    Case c;
+    boundary.during_fence_creation = [&] { c.FailedBeforeUpload("release being submitted has no completion proof yet"); };
+    NoteRgbaAppReleased(&c.buffer);
+    Check(TryFlush(&c.buffer), "completed fence creation closes the proof gap");
+  }
+  {
+    Case c;
+    auto older = Fence(FenceStatus::kPending, FenceStatus::kPending);
+    auto newer = Fence(FenceStatus::kSignaled);
+    next_fence = older;
+    boundary.during_fence_creation = [&] { next_fence = newer; NoteRgbaAppReleased(&c.buffer); };
+    NoteRgbaAppReleased(&c.buffer);
+    Check(c.buffer.release_fence == newer && c.buffer.fence_requested == c.buffer.fence_stored,
+          "out-of-order fence creation cannot replace the newer release proof");
+    Check(TryFlush(&c.buffer), "newer signaled proof covers both ordered releases");
+  }
+  {
+    Case c;
+    boundary.before_run = [&] { NoteRgbaAppReleased(&c.buffer); };
+    c.FailedBeforeUpload("a release arriving across GPU dispatch invalidates the older proof");
+    Check(TryFlush(&c.buffer) && !c.buffer.memory_newer, "retry captures the newest release proof");
+  }
+}
+
+void UploadFailures() {
+  {
+    Case c;
+    boundary.query_creation_fails = true;
+    Check(c.Acquire() == nullptr && boundary.wrappers == 0 && c.buffer.memory_newer,
+          "untracked upload cannot publish or clear dirty state");
+    Check(boundary.uploads == 1 && boundary.flushes == 1 && boundary.releases == 0,
+          "query failure retains the legacy submission and flush behavior");
+    boundary.query_creation_fails = false;
+    Check(c.Acquire() == &c.buffer && !c.buffer.memory_newer && boundary.uploads == 2,
+          "retry after query creation recovers uploads the pending pixels");
+  }
+  for (auto result : {QueryResult{E_FAIL, 0}, QueryResult{S_OK, 0}}) {
+    Case c;
+    boundary.results.push_back(result);
+    Check(c.Acquire() == nullptr && boundary.wrappers == 0 && c.buffer.memory_newer,
+          "unconfirmed GPU completion rejects handoff and retains dirty data");
+    Check(boundary.uploads == 1 && boundary.releases == 1, "failed GPU completion releases its query");
+    Check(c.Acquire() == &c.buffer && !c.buffer.memory_newer && boundary.uploads == 2,
+          "failed upload remains available for a successful retry");
+  }
+  {
+    Case c;
+    boundary.results = {{S_FALSE, 0}, {S_FALSE, 0}, {S_OK, 1}};
+    Check(TryFlush(&c.buffer) && !c.buffer.memory_newer && boundary.results.empty(),
+          "handoff waits for proven upload completion");
+  }
+  {
+    Case c;
+    c.buffer.gpu.texture = nullptr;
+    c.FailedBeforeUpload("missing texture cannot be a successful upload");
+  }
+#if CHECKED_FLUSH
+  {
+    Case c;
+    boundary.thread_available = false;
+    c.FailedBeforeUpload("unavailable GPU thread fails without losing pixels");
+    Check(!TryFlush(nullptr), "invalid buffer cannot be a successful handoff");
+  }
+#endif
+  {
+    Case c;
+    c.buffer.has_texture = false;
+    boundary.thread_available = false;
+    Check(c.Acquire() == &c.buffer && c.buffer.memory_newer && boundary.uploads == 0,
+          "CPU-only or lazily-created buffer keeps its pixels without starting GPU work");
+    c.buffer.gpu_written = false;
+    const auto sequence = c.buffer.fence_requested;
+    NoteRgbaAppReleased(&c.buffer);
+    Check(c.buffer.fence_requested == sequence, "CPU-only release needs no ANGLE fence");
+  }
+  {
+    Case c;
+    Check(TryFlush(&c.buffer), "first upload completes");
+    c.buffer.pixels[0] = 173;
+    MarkRgbaWritten(&c.buffer);
+    Check(TryFlush(&c.buffer) && boundary.uploads == 2 && boundary.uploaded_pixels[0] == 173,
+          "a later dirty mark uploads its own pixels");
+  }
+}
+
+int main() {
+  Releases();
+  UploadFailures();
+  std::printf("reader GPU handoff: %d checks, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

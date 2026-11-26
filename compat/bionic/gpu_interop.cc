@@ -389,12 +389,37 @@ Texture* CreateTexture(TextureFormat format, int width, int height, const void* 
   return t;
 }
 
-void UpdateTexture(Texture* t, int x, int y, int width, int height, const void* data, size_t row_bytes) {
+bool UpdateTexture(Texture* t, int x, int y, int width, int height, const void* data, size_t row_bytes) {
   Thread* thread = Thread::Get();
+  if (thread == nullptr || t == nullptr || t->texture == nullptr) return false;
   D3D11_BOX box = {static_cast<UINT>(x), static_cast<UINT>(y), 0, static_cast<UINT>(x + width),
                    static_cast<UINT>(y + height), 1};
-  thread->context()->UpdateSubresource(t->texture, 0, &box, data, static_cast<UINT>(row_bytes), 0);
-  thread->Finish();
+  ID3D11DeviceContext* context = thread->context();
+  context->UpdateSubresource(t->texture, 0, &box, data, static_cast<UINT>(row_bytes), 0);
+  // Keep submitting and flushing uploads for existing callers. A flush without
+  // a query does not prove completion on the shared texture, though, so callers
+  // that publish a reader buffer must treat failed tracking as an upload failure.
+  D3D11_QUERY_DESC desc = {D3D11_QUERY_EVENT, 0};
+  ID3D11Query* query = nullptr;
+  HRESULT hr = thread->device()->CreateQuery(&desc, &query);
+  if (FAILED(hr)) {
+    context->Flush();
+    LogHr("tracking a shared texture upload", hr);
+    return false;
+  }
+  context->End(query);
+  context->Flush();
+  BOOL done = FALSE;
+  do {
+    hr = context->GetData(query, &done, sizeof done, 0);
+    if (hr == S_FALSE) SwitchToThread();
+  } while (hr == S_FALSE);
+  query->Release();
+  if (hr != S_OK || !done) {
+    LogHr("completing a shared texture upload", FAILED(hr) ? hr : E_FAIL);
+    return false;
+  }
+  return true;
 }
 
 bool ReadTexture(Texture* t, int x, int y, int width, int height, void* out, size_t row_bytes) {

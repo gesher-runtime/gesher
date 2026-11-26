@@ -153,7 +153,7 @@ void* AcquireRgbaBuffer(const std::shared_ptr<Reader>& r) {
     return nullptr;
   }
   r->pool.push_back(fresh);
-  while (static_cast<int>(r->pool.size()) > 2 * r->maxImages + 2) {
+  while (r->pool.size() > 2 * static_cast<uint64_t>(r->maxImages) + 2) {
     ReleaseRgbaBuffer(r->pool.front());  // its holders keep it alive
     r->pool.erase(r->pool.begin());
   }
@@ -449,7 +449,7 @@ jobject Image_getHardwareBuffer(JNIEnv* env, jobject thiz) {
   if (image == nullptr || image->rgba == nullptr) return nullptr;
   // An existing GPU form (an EGLImage the app kept from an earlier frame in this
   // buffer) takes this frame's pixels now, when the app asks for the image.
-  gesher::bionic::ahb::FlushRgbaToGpu(image->rgba);
+  if (!gesher::bionic::ahb::FlushRgbaToGpu(image->rgba)) return nullptr;
   return gesher::media::ReaderHardwareBuffer(env, image->rgba, image->width, image->height);
 }
 
