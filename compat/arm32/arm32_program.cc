@@ -165,9 +165,9 @@ bool Program::LoadRecursive(const std::string& name, std::string* error) {
     if (error && !child_error.empty()) *error += " (" + child_error + ")";
     return false;
   }
-  if (image.guest_base != expected_base || image.bytes.size() > span ||
-      !MapElfImage(image, &memory_, error))
-    return Fail(error, "ARM32 mapped DSO does not match reserved address span");
+  if (image.guest_base != expected_base || image.bytes.size() > span)
+    return Fail(error, "ARM32 DSO does not match reserved address span");
+  if (!MapElfImage(image, &memory_, error)) return false;
 
   // Persist modules only after complete ELF validation and mapping. Any
   // failure after a child was mapped is rolled back by the root transaction.
