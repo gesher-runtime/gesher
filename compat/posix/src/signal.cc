@@ -35,8 +35,10 @@ typedef void* pthread_t;
 #include <chrono>
 #include <condition_variable>
 #include <memory>
+#include <cstddef>
 #include <mutex>
 #include <new>
+#include <gesher/fork.h>
 
 // The underlying winpthreads functions; callers use the POSIX adapters.
 #undef pthread_create
@@ -67,55 +69,145 @@ thread_local stack_t alt_stack = {nullptr, SS_DISABLE, 0};
 
 // The registry owns no thread references. Each registered queue is linked
 // until that thread exits, even if the thread is detached or cancelled.
+//
+// A thread's queue is unlinked as the thread leaves, in a thread_local
+// destructor (under ntdll's loader lock). A fork's clone waits for that lock
+// while the fork holds state().lock (gesher/fork.h): then the queue is only
+// marked dead, kept allocated, and unlinked and freed by the next thread that
+// registers one.
 struct LocalPending {
   gesher::signals::Pending<siginfo_t> pending;
   sigset_t mask = 0;
   pthread_t thread{};
   LocalPending* next = nullptr;
   bool registered = false;
+  bool dead = false;            // its thread left while a fork held the lock
+  void (*release)(LocalPending*) = nullptr;  // frees its owner once unlinked
 
-  void RegisterLocked(State& state, pthread_t id) {
-    thread = id;
-    next = state.local_pending;
-    state.local_pending = this;
-    registered = true;
-  }
-  ~LocalPending() {
-    if (!registered) return;
-    std::lock_guard<std::mutex> guard(state().lock);
-    auto** entry = &state().local_pending;
-    while (*entry != this) entry = &(*entry)->next;
-    *entry = next;
-  }
+  void RegisterLocked(State& state, pthread_t id);
 };
+
+// Under state().lock: unlinks and frees the queues of threads that left.
+void SweepDeadLocked(State& state) {
+  for (LocalPending** entry = &state.local_pending; *entry != nullptr;) {
+    LocalPending* p = *entry;
+    if (!p->dead) {
+      entry = &p->next;
+      continue;
+    }
+    *entry = p->next;
+    if (p->release != nullptr) p->release(p);
+  }
+}
+
+void LocalPending::RegisterLocked(State& state, pthread_t id) {
+  SweepDeadLocked(state);
+  thread = id;
+  next = state.local_pending;
+  state.local_pending = this;
+  registered = true;
+}
+
+// As its thread leaves: true when `p` is unlinked (its owner may be freed);
+// false when it was marked dead instead (its owner must stay allocated).
+bool UnlinkOrRetire(LocalPending* p) {
+  if (!p->registered) return true;
+  State& s = state();
+  if (!gesher::LockUnlessForkHolds(s.lock)) {
+    p->dead = true;  // the fork holds the lock: no reader runs until it is done
+    return false;
+  }
+  auto** entry = &s.local_pending;
+  while (*entry != p) entry = &(*entry)->next;
+  *entry = p->next;
+  s.lock.unlock();
+  return true;
+}
 
 struct ThreadStart {
   void* (*start)(void*);
   void* argument;
   LocalPending signals;
 };
-thread_local std::unique_ptr<ThreadStart> thread_start;
-thread_local LocalPending local_pending;
+void FreeThreadStart(LocalPending* p) {
+  delete reinterpret_cast<ThreadStart*>(reinterpret_cast<char*>(p) - offsetof(ThreadStart, signals));
+}
+struct ThreadStartRelease {
+  void operator()(ThreadStart* start) const {
+    start->signals.release = &FreeThreadStart;
+    if (UnlinkOrRetire(&start->signals)) delete start;
+  }
+};
+thread_local std::unique_ptr<ThreadStart, ThreadStartRelease> thread_start;
+
+// A thread not started here: its queue is allocated, as it may outlive the
+// thread's own storage (see above).
+void FreeLocalPending(LocalPending* p) { delete p; }
+struct LocalPendingHolder {
+  LocalPending* queue = nullptr;
+  ~LocalPendingHolder() {
+    if (queue != nullptr && UnlinkOrRetire(queue)) delete queue;
+  }
+};
+thread_local LocalPendingHolder local_pending_holder;
 
 LocalPending& CurrentPending() {
   if (thread_start) return thread_start->signals;
-  if (!local_pending.registered) {
+  LocalPending*& queue = local_pending_holder.queue;
+  if (queue == nullptr) {
+    queue = new LocalPending();
+    queue->release = &FreeLocalPending;
+  }
+  if (!queue->registered) {
     const pthread_t self = pthread_self();
     State& current = state();
     std::lock_guard<std::mutex> guard(current.lock);
-    local_pending.RegisterLocked(current, self);
+    queue->RegisterLocked(current, self);
   }
-  return local_pending;
+  return *queue;
+}
+
+// A thread that ends by pthread_exit (winpthreads' own, which longjmps out of
+// the start routine) passes the fork's exit gate too: winpthreads runs the
+// thread's key destructors on both ways out, before the thread's exit
+// callbacks.
+void LeavingKeyDestructor(void*) { gesher::ThreadLeaving(); }
+// The key, or nullptr if none could be made (out of keys): such threads then
+// pass the gate only when their start routine returns.
+const pthread_key_t* LeavingKey() {
+  static pthread_key_t key{};
+  static const bool made = pthread_key_create(&key, LeavingKeyDestructor) == 0;
+  return made ? &key : nullptr;
+}
+void PassGateOnExit() {
+  if (const pthread_key_t* key = LeavingKey()) pthread_setspecific(*key, reinterpret_cast<void*>(1));
 }
 
 void* StartThread(void* argument) {
+  PassGateOnExit();
   {
     // The creator still owns the allocation until it publishes the returned
     // pthread identity and its inherited mask. User code may start after that.
     std::lock_guard<std::mutex> guard(state().lock);
     thread_start.reset(static_cast<ThreadStart*>(argument));
   }
-  return thread_start->start(thread_start->argument);
+  void* result = thread_start->start(thread_start->argument);
+  gesher::ThreadLeaving();  // before its exit callbacks (gesher/fork.h)
+  return result;
+}
+
+// A thread with no inherited mask: only the fork's exit gate.
+struct PlainStart {
+  void* (*start)(void*);
+  void* argument;
+};
+void* StartPlainThread(void* raw) {
+  PlainStart plain = *static_cast<PlainStart*>(raw);
+  delete static_cast<PlainStart*>(raw);
+  PassGateOnExit();
+  void* result = plain.start(plain.argument);
+  gesher::ThreadLeaving();  // before its exit callbacks (gesher/fork.h)
+  return result;
 }
 
 bool Valid(int signum) { return signum >= 1 && signum <= kMaxSignal; }
@@ -333,8 +425,16 @@ int gesher_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
                          void* (*start)(void*), void* argument) {
   // Thread masks are written only by their own thread. An empty inherited
   // mask needs no private state until the new thread actually uses signals.
-  const sigset_t inherited = thread_start ? thread_start->signals.mask : local_pending.mask;
-  if (inherited == 0) return gesher_errno_from_crt(pthread_create(thread, attr, start, argument));
+  const sigset_t inherited = thread_start ? thread_start->signals.mask
+                                          : local_pending_holder.queue != nullptr ? local_pending_holder.queue->mask
+                                                                                  : 0;
+  if (inherited == 0) {
+    auto* plain = new (std::nothrow) PlainStart{start, argument};
+    if (plain == nullptr) return EAGAIN;
+    const int error = pthread_create(thread, attr, StartPlainThread, plain);
+    if (error != 0) delete plain;
+    return gesher_errno_from_crt(error);
+  }
   std::unique_ptr<ThreadStart> context(new (std::nothrow) ThreadStart{start, argument, {}});
   if (!context) return EAGAIN;
   context->signals.mask = inherited;
@@ -358,7 +458,7 @@ int gesher_pthread_kill(pthread_t thread, int sig) {
   {
     std::unique_lock<std::mutex> guard(s.lock);
     auto* target = s.local_pending;
-    while (target && !pthread_equal(target->thread, thread)) target = target->next;
+    while (target && (target->dead || !pthread_equal(target->thread, thread))) target = target->next;
     if (!target) {
       guard.unlock();
       const int status = gesher_errno_from_crt(pthread_kill(thread, 0));
@@ -442,6 +542,8 @@ int sigsuspend(const sigset_t* mask) {
         PopSignalLocked(queue, candidate, &delivered_info);
         local.mask = old_mask;
         guard.unlock();
+        // A forked child ends as a signal kills it (gesher/fork.h).
+        if (gesher::InForkedChild()) TerminateProcess(GetCurrentProcess(), gesher::SignalExitCode(candidate));
         ExitProcess(128 + static_cast<UINT>(candidate));
       }
 
@@ -482,3 +584,7 @@ int sigsuspend(const sigset_t* mask) {
 }
 
 }  // extern "C"
+
+// fork (gesher/fork.h): gesher-base's signal state in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderProcess, std::mutex, state().lock);
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, std::condition_variable, state().sent);

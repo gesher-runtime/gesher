@@ -47,6 +47,70 @@ app). `GESHER_BINDER_TRACE=1` makes binderd trace every transaction on stderr;
 device starts stream an ART method trace to `<dir>/<package>-<pid>.trace`,
 which survives an abort (it found the HealthConnectManager placeholder's need).
 
+## Downloads
+
+`DownloadProvider` serves `content://downloads`, the provider behind
+`android.app.DownloadManager`, from the system server; see [downloads.md](downloads.md).
+
+## MediaStore
+
+`MediaStoreProvider` serves `content://media` (MediaStore's Images, Video, Audio,
+Downloads and Files collections over the shared volume) from the system server, with
+Android's scoped-storage ownership, pending items and scanner; see
+[media-provider.md](media-provider.md).
+
+## Restricted permissions at installation
+
+An installer's restricted-permission allowlist makes declared permissions eligible
+for a later runtime request. It does not grant them. Gesher captures
+`PackageInstaller.SessionParams` at session creation: the Android default allows
+all declared restricted permissions, while an explicit empty or null selection
+adds none. An explicit subset is copied and filtered to platform restricted
+permissions; undeclared names cannot affect the installed package. Returning
+`SessionInfo` does not expose the server's mutable state.
+
+After installation consent and the existing signing, caller-generation and
+target-generation checks succeed, publication adds the selected installer
+exemptions atomically with package metadata. Updates union the new selection
+with existing installer exemptions. Runtime grants and user/fixed denial choices
+remain separate. Existing upgrade and system exemptions are preserved. A fixed
+grant remains fixed when its final exemption is still valid. Allowlist reads and
+mutations authenticate the attached current installer (including an admitted
+shared-UID peer), or the established trusted-host/privileged permission boundary.
+Independent add/remove operations update one locked snapshot; a replacement
+installer cannot inherit an already authenticated call's authority.
+
+The runtime's one-time boot migration restores installer eligibility for older
+permission ledgers while preserving runtime decisions and fixed denials. After
+that migration, run `gesher-app install "path\app.apk"` with the updated runtime
+to explicitly refresh default installer eligibility. This is
+an explicit reinstall, including when the APK bytes are identical; it preserves
+the app's data and its runtime permission choices. The supplied APK still passes
+the normal parsing and signing checks. Ordinary launch of an unchanged APK
+preserves the prior installer selection. A successful `PackageInstaller` session
+reinstall likewise applies that session's captured selection. A normal launch
+never restores an exemption that was removed, and a fixed denial still requires
+the appropriate user/settings action. The extended host-install RPC requires an
+explicit acknowledgment; an older running device must be restarted after an
+update rather than silently treating the request as an ordinary launch.
+
+The contract follows Android 16's
+[SessionParams default and setter](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/content/pm/PackageInstaller.java),
+[installer sanitation](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/core/java/com/android/server/pm/PackageInstallerService.java),
+and [permission installation callback and queries](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/permission/java/com/android/server/permission/access/permission/PermissionService.kt).
+The production policy/controller fixture checks eligibility separately from
+Allow, denial/fixed choices, persistence and removal. The production installer
+host fixture checks captured session parameters and unchanged publication. Its
+APK metadata and native identity are test boundaries. Windows/ART fixtures
+separately exercise real session metadata and the host-install Binder protocol;
+their execution results must be reported separately from host JVM results.
+
+This repairs a runtime eligibility gap relevant to the call-log permission
+screen in [issue #472](https://github.com/gesher-runtime/gesher/issues/472).
+The report does not identify the Truecaller APK version or Gesher build, so
+these checks do not establish that app's complete setup flow. The special-access
+controls from #332 cover a separate set of Android permissions.
+
 ## Storage Access Framework documents
 
 `DocumentsStorageProvider` publishes `com.gesher.documents` through the platform's
@@ -428,14 +492,74 @@ intents nothing resolves (`SettingsIntents`):
 - **One installed app's screen** (App info, all-files access, unknown sources, battery
   optimization, overlay, write settings, exact alarms, app locale, open by default...;
   the app as `package:` data or the APP_PACKAGE extra): Gesher's Control Center on that
-  app's details (`ControlCenter`: `data/system/control-panel-request`, opened through
+  app's details (`ControlCenter`: immutable records in `data/system/control-panel-requests`, opened through
   `data/system/gesher-control-panel.lnk`). A Control Center already open shows it.
 - **List screens** (apps, sync, accounts, Settings itself): the Control Center.
 - **Device screens**: a fixed Windows Settings page (Wi-Fi `ms-settings:network-wifi`,
   Bluetooth, location, date, language, display, sound, storage, battery...); the app and
   channel notification screens open `ms-settings:notifications` as before.
 - Anything else, an app that is not installed, and explicit components stay unresolved
-  (`ActivityNotFoundException`). A `startActivityForResult` gets RESULT_CANCELED at once.
+  (`ActivityNotFoundException`). A `startActivityForResult` gets RESULT_CANCELED at once,
+  except on an app's details (below).
+
+**Special app access.** The app's details in the Control Center show the implemented
+Android Settings special accesses that the app's manifest requests (`SpecialAccess`): Display over other apps
+(`OP_SYSTEM_ALERT_WINDOW`), Install unknown apps (`OP_REQUEST_INSTALL_PACKAGES`), Modify
+system settings (`OP_WRITE_SETTINGS`) and Usage access (`OP_GET_USAGE_STATS`). A switch
+writes the package app-op as AOSP Settings does (on: MODE_ALLOWED; off: MODE_ERRORED,
+or MODE_IGNORED for usage access) through `AppOpsService`: persisted with the
+package's signing identity, app-op watchers notified, and read by the app's own check
+(`Settings.canDrawOverlays`, `Settings.System.canWrite`,
+`PackageManager.canRequestPackageInstalls` and usage stats). Every switch starts off (each op's default; the appop
+permissions themselves are never granted). The Control Center reads and writes them with
+`gesher-app special-access PACKAGE [OP allow|deny]`, a `gesher` service transaction that
+only the host shell may call (an attached app is refused). The device checks the package,
+the op and eligibility, and the dialog reads and changes switches in the background.
+
+A per-app Settings visit pauses the originating activity while the Control Center covers it.
+A `startActivityForResult` answers on close. Install unknown apps returns `RESULT_OK` when the
+last change in that visit turned the switch on. Other outcomes return `RESULT_CANCELED`.
+A request that has not been displayed expires after 15 minutes. Each queued record carries
+its package and result token together, and an atomic rename assigns it to one consumer.
+Newer requests never replace another package's queued visit. The queue and work per UI
+tick are each bounded to 32. A visible visit waits for the same Control Center process
+to report its close and cancels if that process exits unexpectedly. The updated panel
+can import older single-file requests; a new server requires the updated panel from the
+same installation.
+
+`canRequestPackageInstalls` authenticates the current attached installation, including
+ordinary standalone app callers; an admitted shared-identity peer can query its UID's
+package, while an unrelated or retired caller cannot reuse a numeric UID. A `PackageInstaller`
+session from an eligible app source returns `STATUS_PENDING_USER_ACTION` once the APK is
+validated. The installer app launches the returned confirmation intent. If its source
+requires a decision, the intent opens Install unknown apps and the server checks the
+source on close. The user confirms the specific APK on Windows, then the server checks
+authorization again before publishing package code. Trusted install sources keep their
+existing Windows confirmation. Exact alarms and full-screen intents have no switch.
+StorageStatsService honours the Usage access op as usage stats do, including when an
+ordinary standalone application hosts the service in its own process. Usage access and
+SettingsProvider writes are decided for the caller's current installation: a process
+retained from an earlier installation of the same package and UID is refused, including
+when the replacement happens during a storage scan.
+All files access (`OP_MANAGE_EXTERNAL_STORAGE`) is offered by the special-access command
+and Control Center. The effective grant is published to the package's shared-storage
+policy before capability queries and permission callbacks report it as available.
+Gesher's POSIX and SQLite paths enforce that policy, including later revocation;
+another package's private `Android/data` and `Android/obb` directories remain excluded.
+FIFO creation, opens and file-metadata operations use the same checks, including the
+actual FIFO reached through a symbolic link. An application retains access to its own
+external directories. These checks govern Gesher's filesystem interfaces; they do not
+isolate arbitrary native Windows code or revoke already granted Windows handles
+(see [App isolation](sandbox.md)). Media management (`OP_MANAGE_MEDIA`) remains unavailable
+through the special-access command because its separate media-consent contract is not
+implemented. The production [MediaStore provider](media-provider.md) retains its own
+ownership and permission checks.
+Alert window admission uses the caller's installed process identity and Android's
+target-SDK and AppOps rules. A window admitted in a hidden mode stays hidden, including
+its attached children. Changing the alert-window mode updates the existing surfaces
+and their input routes. Offscreen Windows tests run this path with real HWNDs. Windows
+desktop stacking still uses Gesher's existing popup ownership. Windows documents use
+the system document picker when the application requests document selection.
 
 `storagestats` (StorageStatsService) measures apps' code, data and cache directories and
 the shared view's media on the host files. Component enabled states, memory info, the SIM
@@ -512,6 +636,18 @@ telemetry.
   `/system` path under `$ANDROID_ROOT` and adds it for apps targeting API 27
   or lower. Gmail's account setup died on NoClassDefFoundError for
   `BasicHttpParams` (`HttpLegacyTest`, track 94).
+- **android.test.base, android.test.mock, android.test.runner**
+  ([framework-build.md](framework-build.md#shared-libraries)): built from
+  frameworks/base/test-*, declared as platform.xml declares them, with
+  PackageBackwardCompatibility's implicit additions. GloryFit and system APKs
+  naming `android.test.runner` failed with INSTALL_FAILED_MISSING_SHARED_LIBRARY
+  (issue #426; `AndroidTestLibrariesTest`, track 94).
+- **Shared-library declarations read once** (`SharedLibraryRegistry`): kept as a
+  snapshot, with the graphs resolved from it, while the XML files and declared
+  jars keep their size and modification time, as SystemConfig reads them once at
+  boot. A bindService resolving a service's ApplicationInfo parsed every XML file
+  and hashed every jar, and the app's StrictMode reported the unbuffered reads
+  (`SharedLibrarySnapshotTest`, track 94).
 - **Real apps** ([e2e.md](e2e.md), ADR 0034; ci run 40077182991): stand-ins
   for `power`, `thermalservice`, `alarm`, `clipboard`, `appops`, `appwidget`
   and `search` (`DeviceServices.java`), a primary shared storage volume in

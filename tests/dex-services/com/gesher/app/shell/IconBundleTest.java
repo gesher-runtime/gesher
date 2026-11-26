@@ -148,6 +148,46 @@ public final class IconBundleTest {
             leaf = leaf.substring(leaf.lastIndexOf('/') + 1);
             check(color(new File(Device.dataDir(), "system/apk-icons/" + leaf)) == red, "published cached pixels");
         }
+        // framework-res.apk, Gesher's own file beside the runtime: the platform package,
+        // recorded with Gesher's icon and no app package (it was "not read" before).
+        File frameworkRes = new File(root + "/framework/framework-res.apk");
+        check(AppShell.apkIcon(frameworkRes) == 0, "framework-res.apk is recorded");
+        String frameworkKey = frameworkRes.length() + "\t" + frameworkRes.lastModified() + "\t";
+        String[] frameworkRow = Files.readAllLines(new File(Device.dataDir(), "system/apk-icons.list")
+                .toPath()).stream().filter(x -> x.startsWith(frameworkKey)).findFirst().orElseThrow()
+                .split("\t", -1);
+        check(frameworkRow.length == 4 && frameworkRow[2].endsWith("\\gesher.ico")
+                && "-".equals(frameworkRow[3]), "framework-res.apk is no app: Gesher's icon");
+        String log = new String(Files.readAllBytes(new File(Device.logsDir(), "apk-icons.log").toPath()),
+                java.nio.charset.StandardCharsets.UTF_8);
+        check(log.contains("the Android platform's resources (package android), not an app"),
+                "framework-res.apk is logged as the platform's resources");
+        // Its whole manifest parses: android:featureFlag elements are read through
+        // android.os.flagging.AconfigPackage, which framework.jar does not contain (a
+        // NoClassDefFoundError before); only then is the reserved name refused.
+        try {
+            ApkPackage.parse(frameworkRes.getAbsolutePath());
+            throw new AssertionError("the platform package was admitted as an app");
+        } catch (SecurityException expected) {
+            check(String.valueOf(expected.getMessage()).contains("platform package name is reserved"),
+                    "framework-res.apk's manifest parses through its feature flags");
+        }
+        // The flag values answered are the ones Gesher's framework runs with.
+        check(android.os.flagging.AconfigPackage.load("android.content.res")
+                        .getBooleanFlagValue("manifest_flagging", !android.content.res.Flags.manifestFlagging())
+                        == android.content.res.Flags.manifestFlagging(),
+                "aconfig flag value is the framework's own");
+        check(android.os.flagging.AconfigPackage.load("android.content.res")
+                        .getBooleanFlagValue("no_such_flag_in_gesher", true),
+                "undeclared aconfig flag answers the caller's default");
+        try {
+            android.os.flagging.AconfigPackage.load("com.gesher.no.such.flag.package");
+            throw new AssertionError("an aconfig package Gesher lacks was loaded");
+        } catch (android.os.flagging.AconfigStorageReadException expected) {
+            check(expected.getErrorCode()
+                    == android.os.flagging.AconfigStorageReadException.ERROR_PACKAGE_NOT_FOUND,
+                    "missing aconfig package is ERROR_PACKAGE_NOT_FOUND");
+        }
         // A first launch must remember its installed identity even without a drawn icon.
         String installedPackage = ApkPackage.parse(full.getAbsolutePath()).packageName;
         check(!new File(Device.dataDir(), "data/" + installedPackage + "/gesher-shell/icon.ico").exists(),
@@ -168,7 +208,23 @@ public final class IconBundleTest {
         tooMany[0] = "base.apk";
         for (int i = 1; i < tooMany.length; i++) tooMany[i] = "config." + i + ".apk";
         zip(bad, tooMany); rejects(bad);
-        Files.write(bad.toPath(), new byte[] {1, 2, 3}); rejects(bad);
+        // Content, not the suffix, makes a bundle: these are single APK inputs.
+        Files.write(bad.toPath(), new byte[] {1, 2, 3});
+        try (Inputs single = Inputs.open(bad)) {
+            check(single.paths.length == 1 && single.base.equals(bad.getAbsolutePath()),
+                    "a file that is not a ZIP is read as an APK, not a bundle");
+        }
+        File plainXapk = new File(output, "plain.xapk");
+        Files.copy(full.toPath(), plainXapk.toPath());
+        try (Inputs single = Inputs.open(plainXapk)) {
+            check(single.paths.length == 1 && single.base.equals(plainXapk.getAbsolutePath()),
+                    "an APK saved as .xapk is read as the APK it is");
+        }
+        check(color(ico(plainXapk, new File(output, "plain.xapk.ico"))) == red, "APK named .xapk draws its icon");
+        File bundleApk = new File(output, "icon-bundle-saved-as.apk");
+        Files.copy(new File(fixtures, "icon-bundle.xapk").toPath(), bundleApk.toPath());
+        check(color(bundleIco(bundleApk, new File(output, "bundle-as-apk.ico"))) == red,
+                "a bundle saved as .apk is read as the bundle it is");
         File temporary;
         try (Inputs inputs = Inputs.open(nested)) {
             temporary = new File(inputs.base).getParentFile();

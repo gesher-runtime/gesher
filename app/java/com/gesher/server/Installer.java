@@ -24,7 +24,6 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -111,6 +110,23 @@ final class Installer {
         return root;
     }
 
+    static String resolveCodePath(String codePath) throws IOException {
+        if (codePath == null || codePath.isEmpty()) return codePath;
+        String name = new File(codePath).getName();
+        if (name.isEmpty() || name.equals(".") || name.equals("..")) return codePath;
+        // The registry belongs to this profile, including when it was copied and
+        // the old profile still exists. Never prefer another profile's APKs just
+        // because its old absolute path remains accessible.
+        File relocated = new File(codeRoot(), name);
+        if (Files.isDirectory(relocated.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                && relocated.equals(relocated.getCanonicalFile())) {
+            return relocated.getPath();
+        }
+        // Keep invalid/missing paths for the existing parser to reject. Do not
+        // weaken its canonical direct-child and no-symlink code boundary.
+        return codePath;
+    }
+
     private static Map<String, Entry> readRegistry() throws IOException {
         Map<String, Entry> entries = new LinkedHashMap<>();
         File f = registry();
@@ -119,7 +135,8 @@ final class Installer {
             String[] fields = line.split("\t", -1);
             if (fields.length < 4 || line.startsWith("#")) continue;
             try {
-                entries.put(fields[0], new Entry(fields[0], fields[1],
+                String codePath = resolveCodePath(fields[1]);
+                entries.put(fields[0], new Entry(fields[0], codePath,
                         Long.parseLong(fields[2]), Long.parseLong(fields[3]),
                         readInstallSource(fields)));
             } catch (NumberFormatException e) {
@@ -322,10 +339,52 @@ final class Installer {
 
     /** Conventional companion filenames for a loose APK. */
     private static File[] companionSplits(File apk) {
+        if (apk == null) return null;
         File dir = apk.getParentFile();
+        if (dir == null) dir = apk.getAbsoluteFile().getParentFile();
         if (dir == null) return null;
+        // Keep discovery independent of parsing: even an unreadable candidate must
+        // invalidate the base-only source cache and reach companionsOf's validation.
         return dir.listFiles((d, name) -> (name.startsWith("split_") || name.startsWith("config."))
                 && name.endsWith(".apk") && !name.equals(apk.getName()));
+    }
+
+    /**
+     * The companions of {@code pkg} among a loose APK's {@code companions}: a folder such as
+     * Downloads also holds other apps' split_*.apk and config.*.apk files, which are not part
+     * of this install and are left out rather than failing it. An unreadable manifest cannot
+     * establish a different owner, so its parse error still rejects the installation.
+     */
+    private static File[] companionsOf(String pkg, File[] companions) throws IOException {
+        if (companions == null) return null;
+        List<File> own = new ArrayList<>();
+        for (File companion : companions) {
+            String owner = ApkPackage.packageName(companion);
+            if (pkg.equals(owner)) {
+                own.add(companion);
+            } else {
+                SystemServer.log("install " + pkg + ": ignoring " + companion.getName()
+                        + " beside it, an APK of " + owner);
+            }
+        }
+        return own.toArray(new File[0]);
+    }
+
+    /**
+     * Logs the expansion (OBB) files a bundle carries. Android keeps them in shared storage,
+     * {@code Android/obb/<package>/}, where Google Play or an XAPK installer copies them; a
+     * package install does not, and this one leaves them in the archive.
+     */
+    private static void reportExpansions(File archive, String pkg) throws IOException {
+        List<String> obbs;
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
+            obbs = PackageBundles.expansions(zip);
+        }
+        if (!obbs.isEmpty()) {
+            SystemServer.log("install " + pkg + ": " + archive.getName() + " also holds expansion files,"
+                    + " which were not installed (Android/obb/" + pkg + "/ is left as it is): "
+                    + String.join(", ", obbs));
+        }
     }
 
     /**
@@ -344,11 +403,19 @@ final class Installer {
         if (count == 0 && keepUnspecified) return true;
         if ((installed != null ? installed.length : 0) != count) return false;
         for (int i = 0; i < count; i++) {
-            String name = splits[i].getName();
-            File target = new File(codePath, name.startsWith("split_") ? name : "split_" + name);
-            if (!sameContent(splits[i], target)) return false;
+            if (!sameContent(splits[i], new File(codePath, splitFileName(splits[i])))) return false;
         }
         return true;
+    }
+
+    /**
+     * The installed name of split APK {@code split}, from its manifest rather than its file
+     * name: {@code split_<split name>.apk}, as PackageInstallerSession names it.
+     */
+    private static String splitFileName(File split) throws IOException {
+        String name = ApkPackage.splitName(split);
+        if (name == null) throw new IOException("Not a split APK: " + split.getName());
+        return InstalledSplitSet.apkName(name);
     }
 
     /** base.apk and the split APKs installed beside it (split_*.apk). */
@@ -387,23 +454,50 @@ final class Installer {
      * version code.
      */
     synchronized String[] install(String apk) throws Exception {
-        return install(apk, null, null);
+        return install(apk, false);
     }
 
-    /** Server-owned immutable session metadata, copied before package publication. */
+    /** An explicit host install verifies the APK and may refresh installer eligibility. */
+    synchronized String[] install(String apk, boolean explicitInstall) throws Exception {
+        return install(apk, null, null, null, null, explicitInstall);
+    }
+
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
             PackageInstallSource installSource) throws Exception {
+        return install(apk, sessionMetadata, installSource, null, null);
+    }
+
+    /**
+     * Server-owned immutable session metadata, copied before package publication.
+     * {@code restrictedAllowlist} is the request's restricted-permission allowlist; null is
+     * AOSP's default INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS (as {@code pm install}).
+     * {@code authorize}, when present, rechecks the app installer's source access before
+     * the commit (see {@link #commitAuthorized}).
+     */
+    synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize) throws Exception {
+        return install(apk, sessionMetadata, installSource, restrictedAllowlist, authorize, true);
+    }
+
+    private String[] install(String apk, InstallSessionMetadata sessionMetadata,
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize, boolean explicitInstall) throws Exception {
+        if (authorize != null) authorize.run();
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
         recoverRemovals();
         File source = new File(apk);
         if (!source.isFile()) throw new IllegalArgumentException("no such file: " + apk);
         final File original = source;
-        Entry recorded = sessionMetadata == null ? recordedSource(original) : null;
+        // Explicit installs verify supplied bytes, including a same-size/time replacement.
+        // An ordinary launch may reuse the recorded source without restoring a removed exemption.
+        Entry recorded = sessionMetadata == null && !explicitInstall ? recordedSource(original) : null;
         if (recorded != null) {
             ApkPackage parsed = ApkPackage.parseCodeDirectory(recorded.codePath);
             ContactsProviderSupport.checkPackageAdmission(parsed);
-            return unchanged(apk, recorded.packageName, parsed, recorded, null);
+            return unchanged(apk, recorded.packageName, parsed, recorded, null, restrictedAllowlist,
+                    authorize);
         }
         File tempDir = null;
         File pendingCode = null;
@@ -416,11 +510,23 @@ final class Installer {
                 source = extractBundle(source, tempDir, splits);
                 incomingSplits = splits.toArray(new File[0]);
             } else {
+                if (source.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".apkm")
+                        && !PackageBundles.isZip(source)) {
+                    // APKMirror's encrypted format: Gesher has no key for it and does not guess.
+                    throw new IllegalArgumentException("INSTALL_FAILED_INVALID_APK: " + source.getName()
+                            + " is not a ZIP of APKs but an encrypted APKMirror bundle, which Gesher"
+                            + " cannot open; use an unencrypted .apkm, .apks or .xapk of the app");
+                }
                 incomingSplits = companionSplits(source);
             }
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
             ContactsProviderSupport.checkPackageAdmission(parsed);
             String pkg = parsed.packageName;
+            if (tempDir == null) {
+                incomingSplits = companionsOf(pkg, incomingSplits);
+            } else {
+                reportExpansions(original, pkg);
+            }
             File metadata = dexMetadata(source);
             if (metadata.isFile()) {
                 ParseResult<?> result = DexMetadataHelper.validateDexMetadataFile(
@@ -478,7 +584,7 @@ final class Installer {
                     && mPm.get(pkg) != null) {
                 recordSource(original, pkg, old.codePath);
                 return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
-                        installSource);
+                        installSource, restrictedAllowlist, authorize, explicitInstall);
             }
             int n = 1;
             if (old != null) {
@@ -510,8 +616,7 @@ final class Installer {
             if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode);
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
-                    String targetName = split.getName().startsWith("split_")
-                            ? split.getName() : "split_" + split.getName();
+                    String targetName = splitFileName(split);
                     File target = new File(code, targetName);
                     if (!target.createNewFile()) {
                         throw new IOException("Conflicting split filenames: " + targetName);
@@ -561,24 +666,27 @@ final class Installer {
             Entry entry = new Entry(pkg, code.getPath(), old != null ? old.firstInstallTime : now,
                     now, installSource == null ? PackageInstallSource.UNKNOWN : installSource);
             ApkPackage installed = open(entry);
+            installed.setRestrictedPermissionAllowlist(restrictedAllowlist);
             if (previous != null && previous.isSystemAddon()) {
                 if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
                     throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
                 }
                 installed.setSystemAddon(true);
             }
-            // The incoming manifest cannot authorize moving an older app's data.
-            // Boot preparation used the committed manifest before any update;
-            // changing defaultToDeviceProtectedStorage later does not migrate CE.
-            installed.prepareInstallDataDirectories(old != null || previous != null);
-            // Keep the running generation until parsing and native extraction succeed.
-            if (old != null || previous != null) mAtm.forceStopPackage(pkg);
-            if (previous != null && !previous.hasVerifiedSigningIdentity()) {
-                mPm.permissions().forgetPackage(pkg);
-                NotificationManagerService notifications = NotificationManagerService.sLast;
-                if (notifications != null) notifications.packageRemoved(pkg);
-            }
-            publishInstalled(entry, installed);
+            commitAuthorized(authorize, () -> {
+                // The incoming manifest cannot authorize moving an older app's data.
+                // Boot preparation used the committed manifest before any update.
+                installed.prepareInstallDataDirectories(old != null || previous != null);
+                // Keep the running generation until parsing and native extraction succeed.
+                if (old != null || previous != null) mAtm.forceStopPackage(pkg);
+                if (previous != null && !previous.hasVerifiedSigningIdentity()) {
+                    mPm.permissions().forgetPackage(pkg);
+                    NotificationManagerService notifications = NotificationManagerService.sLast;
+                    if (notifications != null) notifications.packageRemoved(pkg);
+                }
+                publishInstalled(entry, installed);
+                return null;
+            });
             if (old != null && !old.codePath.equals(entry.codePath)) {
                 delete(new File(old.codePath));
             }
@@ -588,6 +696,7 @@ final class Installer {
                             + ")" : ""));
             recordSource(original, pkg, code.getPath());
             mPm.packageInstalled(installed, old != null || previous != null, this);
+            persistPermissionAdmission();
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
         } finally {
             if (pendingCode != null) {
@@ -598,6 +707,20 @@ final class Installer {
             }
             if (tempDir != null) deleteTree(tempDir);
         }
+    }
+
+    /**
+     * App installers enter the commit only after checking source access. Mode changes wait
+     * until that commit finishes so an access denial cannot stop the existing target.
+     * Host installs use the original publication path.
+     */
+    private <T> T commitAuthorized(Runnable authorize,
+            java.util.concurrent.Callable<T> publication) throws Exception {
+        if (authorize == null) return publication.call();
+        return mPm.appOps().withInstallSourceMode(() -> {
+            synchronized (mPm) { authorize.run(); }
+            return publication.call();
+        });
     }
 
     /** Owner creation can fail; finish it before committing the installed registry. */
@@ -628,45 +751,79 @@ final class Installer {
         }
     }
 
+    /**
+     * The registry already records the package; write the permission ledger with the
+     * admission's restriction exemptions (or the session's opt-out) now rather than after
+     * the usual delay. A boot finding no recorded state for a restricted permission keeps
+     * it restricted, so a lost write can only withhold an exemption, never grant one.
+     */
+    private void persistPermissionAdmission() {
+        if (!mPm.permissions().flushDecisions()) {
+            SystemServer.log("install: permission state not yet persisted; it is retried with the next change");
+        }
+    }
+
     /** The "unchanged" answer for {@code pkg}, installed in {@code old}. */
     private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
-            PackageInstallSource installSource) throws Exception {
-        Entry entry = old.withInstallSource(installSource);
-        SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
-                + old.codePath + ")");
-        // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
-        boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
-        boolean recompile = libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile();
-        if (recompile) {
-            if (libraryChange) {
-                mAtm.forceStopPackage(pkg);
-                SystemServer.log("install " + pkg + ": shared-library context/content changed");
-            }
-            Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
-        }
-        // A cache-only rebuild leaves attached processes and session handles valid.
-        // Replacing the PM object would retire their identity without changing code.
-        if (recompile && (libraryChange || mPm.get(pkg) == null)) {
-            ApkPackage installed = open(entry);
-            ApkPackage previous = mPm.get(pkg);
-            if (previous != null && previous.isSystemAddon()) {
-                if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
-                    throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize) throws Exception {
+        return unchanged(apk, pkg, parsed, old, installSource, restrictedAllowlist, authorize,
+                installSource != null);
+    }
+
+    private String[] unchanged(String apk, String pkg, ApkPackage parsed, Entry old,
+            PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
+            Runnable authorize, boolean explicitInstall) throws Exception {
+        String[] result = commitAuthorized(authorize, () -> {
+            Entry entry = old.withInstallSource(installSource);
+            SystemServer.log("install " + apk + ": " + pkg + " is installed, unchanged ("
+                    + old.codePath + ")");
+            // A byte-identical APK can depend on changed XML, jar bytes or loader policy.
+            boolean libraryChange = !parsed.sharedLibraries.matchesArtifacts(Dexopt.oatDir(old.codePath));
+            boolean recompile = libraryChange || !new File(Dexopt.oatDir(old.codePath), "base.odex").isFile();
+            if (recompile) {
+                if (libraryChange) {
+                    mAtm.forceStopPackage(pkg);
+                    SystemServer.log("install " + pkg + ": shared-library context/content changed");
                 }
-                installed.setSystemAddon(true);
+                Dexopt.onInstall(pkg, old.codePath, parsed.sharedLibraries);
             }
-            installed.prepareInstalledDataDirectories();
-            if (entry != old) publishInstalled(entry, installed);
-            else mPm.add(installed, this);
-        } else if (entry != old) {
-            // An explicit session reinstall can change attribution even when code bytes
-            // are unchanged. A direct host launch of the same file keeps the old record.
-            synchronized (mPm) {
-                persistInstallSource(mPm.get(pkg), entry.installSource);
+            // A cache-only rebuild leaves attached processes and session handles valid.
+            // Replacing the PM object would retire their identity without changing code.
+            if (recompile && (libraryChange || mPm.get(pkg) == null)) {
+                ApkPackage installed = open(entry);
+                // A verified host reinstall is also an install request; attribution may be absent.
+                if (explicitInstall) installed.setRestrictedPermissionAllowlist(restrictedAllowlist);
+                ApkPackage previous = mPm.get(pkg);
+                if (previous != null && previous.isSystemAddon()) {
+                    if (!GmsSignatureSpoofing.verifyAddonApk(pkg, installed.apkPath)) {
+                        throw new SecurityException("INSTALL_FAILED_UNTRUSTED_ADDON_UPDATE: " + pkg);
+                    }
+                    installed.setSystemAddon(true);
+                }
+                installed.prepareInstalledDataDirectories();
+                if (entry != old) publishInstalled(entry, installed);
+                else mPm.add(installed, this);
+            } else {
+                if (entry != old) {
+                    // An explicit session reinstall can change attribution even when code bytes
+                    // are unchanged. A direct host launch of the same file keeps the old record.
+                    synchronized (mPm) {
+                        persistInstallSource(mPm.get(pkg), entry.installSource);
+                    }
+                }
+                // A verified explicit host or session reinstall adds installer eligibility.
+                // Attribution alone cannot distinguish it from an ordinary launch.
+                ApkPackage current = explicitInstall ? mPm.get(pkg) : null;
+                if (current != null) mPm.permissions().addInstallerAllowlist(current, restrictedAllowlist);
             }
-        }
-        return new String[] {pkg, "unchanged", old.codePath,
-                String.valueOf(parsed.versionCode())};
+            return new String[] {pkg, "unchanged", old.codePath,
+                    String.valueOf(parsed.versionCode())};
+        });
+        // After the authorized commit releases the AppOps mode lock (a policy write is
+        // never flushed under an operation monitor), still before the result is reported.
+        persistPermissionAdmission();
+        return result;
     }
 
     /** {@code file}'s line in install-sources.list: path, size, time, .dm size and time. */
@@ -731,44 +888,68 @@ final class Installer {
         }
     }
 
+    /**
+     * Stages {@code archive}'s APKs in {@code directory} under the names the package manager
+     * gives a package's files, taken from their manifests rather than from the archive:
+     * {@code base.apk} and {@code split_<split name>.apk}, each with the {@code .dm} beside
+     * it in the archive. Archive paths never reach the filesystem, so entries of different
+     * folders with the same file name neither collide nor leave the directory.
+     */
     private static File extractBundle(File archive, File directory, List<File> splits) throws IOException {
         File base = null;
-        Path staging = directory.toPath().toAbsolutePath().normalize();
         byte[] buffer = new byte[64 * 1024];
         try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(archive)) {
+            // An APK set holds alternatives (variants, standalones, other devices' splits):
+            // only the APKs this device gets are installed.
+            List<java.util.zip.ZipEntry> apks = new ArrayList<>();
+            for (String path : PackageBundles.select(zip,
+                    PackageBundles.Device.gesher(android.os.Build.VERSION.SDK_INT))) {
+                apks.add(zip.getEntry(path));
+            }
+            Map<String, java.util.zip.ZipEntry> dexMetadata = new LinkedHashMap<>();
             java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {
                 java.util.zip.ZipEntry entry = entries.nextElement();
-                if (entry.isDirectory()) continue;
                 String name = entry.getName();
-                boolean apk = name.endsWith(".apk");
-                if (!apk && !name.endsWith(".dm")) continue;
-                // ZIP uses forward slashes. Only the leaf enters the staging directory.
-                String leaf = name.substring(name.lastIndexOf('/') + 1);
-                if (leaf.indexOf('\\') >= 0 || leaf.indexOf(':') >= 0) {
-                    throw new IOException("Invalid APK bundle filename: " + leaf);
+                if (!entry.isDirectory() && name.endsWith(".dm")) {
+                    dexMetadata.put(name.substring(0, name.length() - 3), entry);
                 }
-                Path out = staging.resolve(leaf).normalize();
-                if (!out.startsWith(staging) || !staging.equals(out.getParent())) {
-                    throw new IOException("Invalid APK bundle filename: " + leaf);
+            }
+            for (int i = 0; i < apks.size(); i++) {
+                java.util.zip.ZipEntry entry = apks.get(i);
+                // A generated name until the manifest names it.
+                File staged = new File(directory, i + ".apk");
+                unzip(zip, entry, staged, buffer);
+                String split = ApkPackage.splitName(staged);
+                String name = InstalledSplitSet.apkName(split);
+                File target = new File(directory, name);
+                if (target.exists()) {
+                    throw new IOException(split == null ? "Multiple base APKs in " + archive
+                            : "Split " + split + " defined more than once in " + archive);
                 }
-                try (InputStream in = zip.getInputStream(entry);
-                        OutputStream os = Files.newOutputStream(out,
-                                StandardOpenOption.CREATE_NEW)) {
-                    for (int n; (n = in.read(buffer)) > 0; ) os.write(buffer, 0, n);
+                Files.move(staged.toPath(), target.toPath());
+                String path = entry.getName();
+                java.util.zip.ZipEntry dm = dexMetadata.get(path.substring(0, path.length() - 4));
+                if (dm != null) {
+                    unzip(zip, dm, new File(directory, InstallSessionMetadata.dexName(name)), buffer);
                 }
-                if (!apk) continue;
-                File extracted = out.toFile();
-                if (!ApkPackage.isBaseApk(extracted)) {
-                    splits.add(extracted);
+                if (split == null) {
+                    base = target;
                 } else {
-                    if (base != null) throw new IOException("Multiple base APKs in " + archive);
-                    base = extracted;
+                    splits.add(target);
                 }
             }
         }
         if (base == null) throw new IOException("No base APK in " + archive);
         return base;
+    }
+
+    private static void unzip(java.util.zip.ZipFile zip, java.util.zip.ZipEntry entry, File out,
+            byte[] buffer) throws IOException {
+        try (InputStream in = zip.getInputStream(entry);
+                OutputStream os = Files.newOutputStream(out.toPath(), StandardOpenOption.CREATE_NEW)) {
+            for (int n; (n = in.read(buffer)) > 0; ) os.write(buffer, 0, n);
+        }
     }
 
     synchronized boolean ordinaryInstalled(ApkPackage target) {
