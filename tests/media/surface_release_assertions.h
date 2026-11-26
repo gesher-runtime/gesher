@@ -13,7 +13,7 @@
 namespace surface_release_contract {
 constexpr size_t kPixelsBytes = 3840u * 2160u * sizeof(uint32_t);
 std::atomic<size_t> live_pixels{0};
-struct alignas(std::max_align_t) Allocation { size_t bytes; };
+struct alignas(__STDCPP_DEFAULT_NEW_ALIGNMENT__) Allocation { size_t bytes; };
 }
 
 void* operator new(size_t bytes) {
