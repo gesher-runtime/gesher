@@ -3,6 +3,7 @@
 #include <gesher/bionic_shim.h>
 #include <media/NdkMediaFormat.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
