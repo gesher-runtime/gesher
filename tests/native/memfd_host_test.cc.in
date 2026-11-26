@@ -1,6 +1,7 @@
 // Exact production functions are inserted below. Win32 storage calls are
 // modeled with real Linux temporary files; this is not a Windows runtime.
 #include <cerrno>
+#include <chrono>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -173,6 +174,17 @@ static int64_t RawSyscallX64(int64_t, const int64_t*) { return -ENOSYS; }
 static BOOL WaitOnAddress(void*, void*, size_t, DWORD) { last_error = ERROR_TIMEOUT; return 0; }
 static void WakeByAddressSingle(void*) {}
 static void WakeByAddressAll(void*) {}
+static int64_t MonotonicNanos() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+// Directed-signal interruption is a boundary here: no fixture thread has
+// signal state (signal_bionic.cc), so futex waits are never attached to it.
+struct gesher_futex_interrupt;
+static gesher_futex_interrupt* AttachSignalInterrupt() { return nullptr; }
+static void DetachSignalInterrupt() {}
+static constexpr int kNoHandler = 0, kHandlersWithoutRestart = 2, kEINTR = EINTR;
+static int DeliverAfterInterrupt() { return kNoHandler; }
 #define BIONIC_SYSV __attribute__((sysv_abi))
 @BIONIC_DISPATCH@
 #undef memfd_create

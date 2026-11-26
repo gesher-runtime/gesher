@@ -10,7 +10,10 @@ import java.io.File;
  * Gesher Camera ({@code gesher-camera.apk} next to dalvikvm.exe, app/gesher-camera; hwsvc2
  * track, ADR 0051), the camera app MediaStore.ACTION_IMAGE_CAPTURE resolves to: the
  * persistent device installs (or updates) it at its start when Camera2 has cameras, and
- * uninstalls it when there are none, as a device without a camera has no camera app.
+ * uninstalls it when there are none, as a device without a camera has no camera app. The
+ * Control Center's image-picker setting counts as a camera (CameraImageSource's selected-image
+ * camera): with it on at the start, a PC without a camera has the app too, and a photo it
+ * takes is the image the user selects, written with the requesting app's own URI grant.
  */
 final class CameraApp {
     static final String PACKAGE = "com.gesher.camera";
@@ -24,12 +27,17 @@ final class CameraApp {
             String dir = exe.substring(0, exe.lastIndexOf('\\') + 1);
             // Drive-less, with '/', as the launcher hands APK paths over.
             String apk = (dir + "gesher-camera.apk").replace('\\', '/').replaceFirst("^[A-Za-z]:", "");
-            int cameras = WindowsCamera.devices().size();
+            int cameras = CameraImageSource.withPicker(WindowsCamera.devices(),
+                    CameraImageFallback.enabled()).size();
             boolean installed = pm.get(PACKAGE) != null;
             if (cameras > 0 && new File(apk).isFile()) {
                 String[] r = installer.install(apk);
                 SystemServer.log("camera app: " + PACKAGE + " " + r[1] + " (" + cameras
                         + " camera(s))");
+                // As every install: no Start menu shortcut (it has no launcher activity), its
+                // windows' icon, and the record that the Control Center offers no "Launch".
+                PackageInstallerService.WINDOWS_SHELL.installed(r[0], r[2],
+                        !"unchanged".equals(r[1]));
             } else if (cameras == 0 && installed) {
                 installer.uninstall(PACKAGE);
                 SystemServer.log("camera app: no camera, " + PACKAGE + " uninstalled");

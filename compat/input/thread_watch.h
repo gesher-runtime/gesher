@@ -30,6 +30,11 @@ bool ThreadWatchMessage(ThreadWatch* watch, uint32_t msg);
 void ThreadWatchEnter(ThreadWatch* watch, uint32_t msg, uint32_t* saved);
 void ThreadWatchLeave(ThreadWatch* watch, uint32_t saved);
 
+// The clock the watch measures waits with, in milliseconds: awake time
+// (unbiased interrupt time, Android's uptimeMillis clock), which stops while
+// Windows sleeps or hibernates, so a suspend is never reported as a wait.
+uint64_t ThreadWatchClockMs();
+
 // Explicit diagnostic observer: at most 40 threads, each with its native stack
 // and wait chain. Call from a separate process, never the process being read.
 // Synchronous Windows WCT may block: the caller must bound this observer's life.

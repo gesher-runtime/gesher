@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""Writes the System V copy of librs_jni's natives (docs/renderscript.md).
+
+  gen_jni_source.py <out-dir> <frameworks/base> rs/jni/android_renderscript_RenderScript.cpp
+
+ART enters natives with the System V ABI (docs/decisions/0006-managed-abi.md).
+Each `(void*) fn` of the source's JNI table becomes `GESHER_JNI(fn)`, as
+tools/jni-sysv-patch.py does for libandroid_runtime's sources (its rewrite,
+reused here, as compat/input/gen_jni_sources.py does). The copy is written into
+the build tree rather than kept as a frameworks/base patch, and only when its
+text changes, so ninja does not rebuild it needlessly.
+
+EDITS are Gesher's changes to the source, each a block that must be found
+exactly once (the script fails otherwise, as a patch would):
+
+- core_jni_helpers.h, for GESHER_JNI.
+- The graphics natives (RenderScriptGL, programs, meshes, fonts, A3D files)
+  and the Surface natives of an Allocation are registered from
+  compat/renderscript/rs_jni_unavailable.h instead: libRS is built CPU only
+  (cmake/aosp/renderscript.cmake), and these fail as that header describes.
+- nScriptGroup2Create returns jlong rather than long, which is 32 bits on
+  Windows and truncated the ScriptGroup2's address.
+- JNI_OnLoad is named gesher_rs_jni_OnLoad: compat/renderscript/renderscript_jni.cc
+  registers it as librs_jni.so's JNI_OnLoad (a builtin library).
+- nScriptIntrinsicCreate throws RSRuntimeException when the CPU driver has no
+  such intrinsic (ScriptIntrinsicBLAS: frameworks/rs patch 0001), so no
+  intrinsic object stands on a script that was not created.
+"""
+import importlib.util
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+spec = importlib.util.spec_from_file_location(
+    'jni_sysv_patch', os.path.join(HERE, '..', '..', 'tools', 'jni-sysv-patch.py'))
+jsp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(jsp)
+
+UNAVAILABLE = [
+    'nContextCreateGL', 'nContextSetSurface', 'nContextPause', 'nContextResume',
+    'nFileA3DCreateFromFile', 'nFileA3DCreateFromAssetStream', 'nFileA3DCreateFromAsset',
+    'nFileA3DGetNumIndexEntries', 'nFileA3DGetIndexEntries', 'nFileA3DGetEntryByIndex',
+    'nFontCreateFromFile', 'nFontCreateFromAssetStream', 'nFontCreateFromAsset',
+    'nProgramStoreCreate', 'nProgramBindConstants', 'nProgramBindTexture', 'nProgramBindSampler',
+    'nProgramFragmentCreate', 'nProgramRasterCreate', 'nProgramVertexCreate',
+    'nContextBindRootScript', 'nContextBindProgramStore', 'nContextBindProgramFragment',
+    'nContextBindProgramVertex', 'nContextBindProgramRaster',
+    'nMeshCreate', 'nMeshGetVertexBufferCount', 'nMeshGetIndexCount', 'nMeshGetVertices',
+    'nMeshGetIndices',
+    'nAllocationGetSurface', 'nAllocationSetSurface',
+]
+
+SOURCE = 'rs/jni/android_renderscript_RenderScript.cpp'
+
+EDITS = [
+    ('#include "android_runtime/AndroidRuntime.h"\n',
+     '#include "android_runtime/AndroidRuntime.h"\n'
+     '#include "core_jni_helpers.h"  // GESHER_JNI\n'),
+    ('static const char *classPathName = "android/renderscript/RenderScript";\n',
+     '#include "rs_jni_unavailable.h"  // Gesher: compat/renderscript\n\n'
+     'static const char *classPathName = "android/renderscript/RenderScript";\n'),
+    # `long` is 32 bits on Windows (LLP64): the ScriptGroup2's address would be
+    # truncated. The Java method returns a long (jlong).
+    ('static long\nnScriptGroup2Create(',
+     'static jlong\nnScriptGroup2Create('),
+    ('jint JNI_OnLoad(JavaVM* vm, void* reserved)\n',
+     'jint gesher_rs_jni_OnLoad(JavaVM* vm, void* reserved)\n'),
+    ('    return (jlong)(uintptr_t)rsScriptIntrinsicCreate((RsContext)con, id, (RsElement)eid);\n',
+     '    jlong script = (jlong)(uintptr_t)rsScriptIntrinsicCreate((RsContext)con, id, (RsElement)eid);\n'
+     '#ifdef GESHER\n'
+     '    if (script == 0) {\n'
+     '        jniThrowExceptionFmt(_env, "android/renderscript/RSRuntimeException",\n'
+     '                             "ScriptIntrinsic %d is not supported by this device\'s RenderScript driver", id);\n'
+     '    }\n'
+     '#endif\n'
+     '    return script;\n'),
+]
+
+
+def main():
+    if len(sys.argv) != 4 or sys.argv[3] != SOURCE:
+        sys.exit(__doc__)
+    out_dir, base, rel = sys.argv[1], sys.argv[2], sys.argv[3]
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(base, rel), encoding='utf-8', newline=None) as f:
+        text = f.read()
+    for old_block, new_block in EDITS:
+        if text.count(old_block) != 1:
+            sys.exit(f'{rel}: a Gesher edit does not apply (found {text.count(old_block)} times):\n'
+                     f'{old_block}')
+        text = text.replace(old_block, new_block)
+    for name in UNAVAILABLE:
+        entry = f'(void*){name} }}'
+        if text.count(entry) != 1:
+            sys.exit(f'{rel}: the table entry of {name} is not found once')
+        text = text.replace(entry, f'(void*)gesher_rs_unavailable::{name} }}')
+    new = jsp.rewrite(rel, text)
+    if new == text:
+        sys.exit(f'{rel}: no table entry to rewrite')
+    new = f'// Generated by compat/renderscript/gen_jni_source.py from {rel}; do not edit.\n' + new
+    out = os.path.join(out_dir, os.path.basename(rel))
+    old = None
+    if os.path.exists(out):
+        with open(out, encoding='utf-8', newline=None) as f:
+            old = f.read()
+    if old != new:
+        with open(out, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(new)
+
+
+if __name__ == '__main__':
+    main()

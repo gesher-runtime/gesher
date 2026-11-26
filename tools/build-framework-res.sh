@@ -77,13 +77,19 @@ cp "$res/remote_color_resources_res/symbols.xml" "$colors/raw/res/values/"
 compile "$colors/raw" "$flat" "$(native res/raw/remote_views_color_resources.arsc)"
 compile "$colors/raw" "$flat" "$(native res/values/symbols.xml)"
 
-# Optional CI resource overlay. The normal resource table remains the default;
-# a caller using this must independently compare every generated R/Manifest byte.
-overlay=()
+# Gesher's device overlay (config/framework-res-overlay): configuration values that
+# describe this device, as a device tree's framework-res overlay does. It only
+# overrides existing values, so the generated R/Manifest classes are unchanged.
+compile "$root/config/framework-res-overlay" "$flat/device-overlay.zip" --dir . --feature-flags "$flags"
+overlay=(-R "$(native "$flat/device-overlay.zip")")
+
+# Optional CI resource overlay, applied after the device overlay. The normal resource
+# table remains the default; a caller using this must independently compare every
+# generated R/Manifest byte.
 if [[ -n ${FRAMEWORK_RES_OVERLAY_DIR:-} ]]; then
   [[ -d $FRAMEWORK_RES_OVERLAY_DIR ]] || { echo 'Missing framework resource overlay directory' >&2; exit 2; }
   compile "$FRAMEWORK_RES_OVERLAY_DIR" "$flat/fixture-overlay.zip" --dir . --feature-flags "$flags"
-  overlay=(-R "$(native "$flat/fixture-overlay.zip")")
+  overlay+=(-R "$(native "$flat/fixture-overlay.zip")")
 fi
 
 java=$out/framework-res-java

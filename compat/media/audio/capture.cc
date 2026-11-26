@@ -21,7 +21,11 @@ namespace gesher::media {
 
 namespace {
 
+// A source without a data signal of its own is pulled every period; one with a
+// signal waits for it, and this bounds that wait. In shared event mode WASAPI
+// chooses the endpoint buffer duration; packets normally wake us each period.
 constexpr int kPeriodMs = 10;
+constexpr int kSignalSafetyMs = 50;
 
 int64_t MonotonicNs() {
   timespec ts;
@@ -234,6 +238,13 @@ class CaptureEngine {
     // Destruction of the final weak-lock snapshot can occur while mu_ is held.
     // Never reacquire that mutex here; the worker owns the idle decision.
     restart_.store(true);
+    {
+      // The worker may be waiting for the source's data signal or for its
+      // period; either ends now, not at its timeout.
+      std::lock_guard<std::mutex> wake(wake_mu_);
+      if (waiting_ != nullptr) waiting_->Interrupt();
+    }
+    wake_cv_.notify_all();
     cv_.notify_all();
   }
 
@@ -362,7 +373,10 @@ class CaptureEngine {
       Process(command);
     } else {
       commands_.push_back(&command);
-      cv_.notify_all();
+      // The worker may be in the source's data wait, not cv_. Control requests
+      // must interrupt that wait too: preparing or starting another recorder
+      // cannot depend on the current endpoint producing a packet.
+      Wake();
       cv_.wait(lock, [&] { return command.done; });
     }
     if (error != nullptr) *error = command.error;
@@ -389,7 +403,7 @@ class CaptureEngine {
         continue;
       }
       lock.unlock();
-      std::this_thread::sleep_for(std::chrono::milliseconds(kPeriodMs));
+      WaitForData(*source_);
       buf.clear();
       const bool ok = source_->Pull(&buf);
       const int64_t now = MonotonicNs();
@@ -427,6 +441,23 @@ class CaptureEngine {
     }
   }
 
+  // The worker's wait between pulls (no engine lock held): the source's own data
+  // signal if it has one, else its period. A stream stopped or released (Wake)
+  // ends it at once; a wake that came earlier is not lost (restart_).
+  void WaitForData(CaptureSource& source) {
+    {
+      std::lock_guard<std::mutex> wake(wake_mu_);
+      if (restart_.load()) return;
+      waiting_ = &source;
+    }
+    const bool signalled = source.WaitForData(kSignalSafetyMs);
+    std::unique_lock<std::mutex> wake(wake_mu_);
+    waiting_ = nullptr;  // the source outlives this call: only the worker retires it
+    if (!signalled) {
+      wake_cv_.wait_for(wake, std::chrono::milliseconds(kPeriodMs), [this] { return restart_.load(); });
+    }
+  }
+
   static void CoInitializeMta();
 
   std::mutex mu_;
@@ -436,6 +467,12 @@ class CaptureEngine {
   std::unique_ptr<CaptureSource> source_;
   InputInfo info_;
   std::atomic<bool> restart_{false};
+  // Guards waiting_ (the source the worker is waiting on, for Wake to interrupt) and
+  // the period wait. Wake may hold mu_ first; the worker releases wake_mu_ before
+  // reacquiring mu_. No source call runs under wake_mu_ except Interrupt.
+  std::mutex wake_mu_;
+  std::condition_variable wake_cv_;
+  CaptureSource* waiting_ = nullptr;
   bool running_ = false;
   std::vector<Command*> commands_;
 };

@@ -71,9 +71,10 @@ const char kNewline[] = {10, 0};
 struct SlowWatch {
   const char* what;
   int detail;
-  ULONGLONG start = GetTickCount64();
+  // Awake time, as the thread watch: a sleep during the message is no delay.
+  uint64_t start = ThreadWatchClockMs();
   ~SlowWatch() {
-    ULONGLONG ms = GetTickCount64() - start;
+    uint64_t ms = ThreadWatchClockMs() - start;
     if (ms >= 500) {
       fprintf(stderr, "gesher-ime: %s (%d) took %llu ms on the window's thread%s", what, detail,
               static_cast<unsigned long long>(ms), kNewline);
