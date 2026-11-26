@@ -30,8 +30,11 @@ enumeration as `getifaddrs()`. The receive queue is bounded, and a dump returns
 destinations return `EOPNOTSUPP`. Link queries, explicit unicast binds, and route netlink ioctls return
 `EACCES` under the ordinary Android app contract. See
 [Android's route socket policy](https://android.googlesource.com/platform/system/sepolicy/+/android16-release/private/app_neverallows.te#132).
-Sending a request or connecting to the kernel allocates a local port. Descriptor aliases preserve that port.
-Transferring a route netlink descriptor or addressing another process is unsupported.
+Sending a request or connecting to the kernel allocates a local port. Descriptor
+aliases and inherited descriptors after guest fork share that port, pending
+replies and file status. Closing a process's last local descriptor leaves any
+inherited descriptors in other processes usable. Passing a route netlink
+descriptor through descriptor transfer or addressing another process is unsupported.
 
 ### Android HttpEngine
 

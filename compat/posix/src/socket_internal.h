@@ -75,7 +75,7 @@ enum class Provider { kOther, kNativeIpv4Tcp, kNativeIpv4Udp };
 struct ConnectOperation;
 struct SocketDescription {
   std::shared_ptr<gesher::NetlinkState> netlink;
-  bool (*netlink_readable)(gesher::NetlinkState&) = nullptr;  // non-null only for AF_NETLINK descriptors
+  int (*netlink_poll)(gesher::NetlinkState&, int) = nullptr;  // non-null only for AF_NETLINK descriptors
   std::atomic<ConnectState> state{ConnectState::kInitial};
   Provider provider = Provider::kOther;  // exact base-provider identity before publication
   bool native_nonblocking_datagram = false;  // immutable after ownership registration

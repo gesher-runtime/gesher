@@ -531,7 +531,7 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
     }
     const ssize_t n = gesher::NetlinkRecv(
         state.description, buffers, count, flags, addr,
-        addr != nullptr ? &actual : nullptr, state.description->nonblocking.load(), result_flags);
+        addr != nullptr ? &actual : nullptr, false, result_flags);
     if (n >= 0 && addr != nullptr && addrlen != nullptr) {
       const socklen_t out_len = static_cast<socklen_t>(actual);
       if (!ws::CopyToUser(addrlen, &out_len, sizeof(out_len))) return errno = EFAULT, -1;

@@ -469,7 +469,7 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # Reverse its exact delta before running those checks on their original inputs.
 NETLINK_PATCH='tools/net-tcp-priority/qualified/netlink-source.patch'
 NETLINK_RECEIPT='tools/net-tcp-priority/qualified/netlink-source.json'
-NETLINK_RECEIPT_SHA256='fe94d93aaf525ce611ead339f06d03dd5cd78f94950537c2f87e599e554ea935'
+NETLINK_RECEIPT_SHA256='38fcaa794e6d0130b51f72ae72a7e4803c03d7d288188acd33160f3fba666230'
 
 def preceding_netlink_sources():
  raw=(ROOT/NETLINK_RECEIPT).read_bytes()

@@ -45,6 +45,7 @@
 #include "linux_socket.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_duplicate.h"
+#include "netlink_internal.h"
 #include "socket_internal.h"
 
 namespace {
@@ -438,6 +439,11 @@ int fcntl(int fd, int cmd, ...) {
     if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
     gesher::SocketFd state;
     if (gesher::LookupSocket(fd, &state)) {
+      if (state.description->netlink) {
+        if (cmd == F_GETFL) return gesher::NetlinkGetStatus(*state.description->netlink);
+        if (cmd == F_SETFL)
+          return gesher::NetlinkSetStatus(*state.description->netlink, (arg & O_NONBLOCK) != 0);
+      }
       switch (cmd) {
         case F_GETFL:
           return O_RDWR | (state.description->nonblocking.load() ? O_NONBLOCK : 0);
@@ -449,8 +455,7 @@ int fcntl(int fd, int cmd, ...) {
             std::lock_guard<std::mutex> lock(state.description->status_mutex);
             const bool on = (arg & O_NONBLOCK) != 0;
             if (on != state.description->nonblocking.load()) {
-              if (!state.description->netlink &&
-                  !state.description->native_nonblocking_datagram &&
+              if (!state.description->native_nonblocking_datagram &&
                   gesher::ws::SetNonBlocking(state.socket, on) < 0) return -1;
               state.description->nonblocking.store(on);
             }

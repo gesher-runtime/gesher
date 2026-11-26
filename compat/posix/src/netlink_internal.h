@@ -13,9 +13,11 @@ namespace gesher {
 
 struct NetlinkState;
 
-std::shared_ptr<NetlinkState> CreateNetlinkState(int sock_type);
+std::shared_ptr<NetlinkState> CreateNetlinkState(int sock_type, bool nonblocking);
 void NetlinkClose(NetlinkState& state);
-bool NetlinkReadable(NetlinkState& state);
+int NetlinkPoll(NetlinkState& state, int events);
+int NetlinkGetStatus(NetlinkState& state);
+int NetlinkSetStatus(NetlinkState& state, bool nonblocking);
 
 int NetlinkBind(NetlinkState& state, const void* addr, uint32_t len);
 int NetlinkConnect(NetlinkState& state, const void* addr, uint32_t len);

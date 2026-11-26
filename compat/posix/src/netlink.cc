@@ -6,6 +6,7 @@
 // queries into standard Linux rtnetlink replies built from ws::ListInterfaces().
 
 #include <errno.h>
+#include <fcntl.h>
 #include <linux/if_addr.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
@@ -17,76 +18,184 @@
 #include <sys/time.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <mutex>
-#include <unordered_set>
 #include <vector>
 
 #include "event_internal.h"
+#include "internal.h"
+#include <gesher/fork.h>
 #include "linux_socket.h"
 #include "netlink_internal.h"
 #include "socket_internal.h"
 
 namespace gesher {
 
-struct NetlinkState {
-  explicit NetlinkState(int type) : sock_type(type) {}
-
-  std::mutex mu;
-  std::condition_variable cv;
-  int sock_type = SOCK_RAW;
-  uint32_t bound_pid = 0;
-  bool closed = false;
-  int rcv_timeout_ms = 0;
-  int rcvbuf = 65536;
-  int sndbuf = 65536;
-  size_t queued_bytes = 0;
-  std::deque<std::vector<uint8_t>> queue;
-};
-
 namespace {
 
 constexpr int kMaxNetlinkRequestBytes = 65536;
 constexpr int kMaxNetlinkReceiveBytes = 256 * 1024;
+// Pack dump replies into <= 4096-byte datagrams for callers' fixed buffers.
+constexpr size_t kMaxNetlinkPacketBytes = 4096;
+constexpr DWORD kCancellationSliceMs = 10;
 
-// This backend supports kernel requests only. Keep distinct local port
-// identities for sockets in the same guest process, including descriptor aliases.
-struct PortRegistry {
-  std::mutex mutex;
-  std::unordered_set<uint32_t> bound;
-  uint32_t next = UINT32_MAX;
+// No process-local pointers or C++ synchronization in the shared section.
+struct NetlinkShared {
+  alignas(8) volatile LONG64 queue{};  // head (low word), occupied bytes (high word)
+  volatile LONG nonblocking{};
+  uint32_t bound_pid{};
+  volatile LONG rcv_timeout_ms{};
+  int rcvbuf{};
+  int sndbuf{};
+  uint8_t data[kMaxNetlinkReceiveBytes];
 };
 
-PortRegistry& Ports() {
-  // Socket descriptors can be closed by application shutdown handlers.
-  static auto* const registry = new PortRegistry;
-  return *registry;
-}
-// Pack dump replies into <= 4096-byte datagrams so callers using fixed 4 KiB
-// buffers (including WebRTC's ifaddrs_android.cc) never truncate an nlmsghdr.
-constexpr size_t kMaxNetlinkPacketBytes = 4096;
+struct SharedPortCounter {
+  volatile LONG next{};
+};
 
-uint32_t SelfNetlinkPid() {
-  const int32_t pid = ws::LocalCredentials().pid;
-  return pid > 0 ? static_cast<uint32_t>(pid) : 1u;
+}  // namespace
+
+struct NetlinkState {
+  int sock_type = SOCK_RAW;
+  bool closed = false;  // last descriptor closed in this process
+  unsigned active = 0;
+  NetlinkState* next = nullptr;
+  HANDLE section = nullptr;
+  HANDLE lock = nullptr;
+  HANDLE ready = nullptr;
+  NetlinkShared* shared = nullptr;
+};
+
+namespace {
+
+std::mutex g_resources_mutex;
+NetlinkState* g_resources = nullptr;
+// All descendants of a process that owns route sockets share its synthetic
+// port counter. The handle keeps the view alive across guest fork.
+HANDLE g_port_section = nullptr;
+SharedPortCounter* g_ports = nullptr;
+std::atomic<uint32_t> g_pid_port_issued{0};
+
+void RetireResources(NetlinkState& state) {
+  if (!state.shared) return;
+  UnmapViewOfFile(state.shared);
+  state.shared = nullptr;
+  for (HANDLE handle : {state.section, state.lock, state.ready}) CloseHandle(handle);
 }
 
-void AutoBindPort(NetlinkState& state) {
-  if (state.bound_pid != 0) return;
-  PortRegistry& registry = Ports();
-  std::lock_guard<std::mutex> lock(registry.mutex);
-  uint32_t port = SelfNetlinkPid();
-  if (!registry.bound.insert(port).second) {
-    do {
-      port = registry.next--;
-      if (registry.next == INT32_MAX) registry.next = UINT32_MAX;
-    } while (!registry.bound.insert(port).second);
+using ResourceForkTraits = ForkLockTraits<std::mutex>;
+const ForkLockOps kResourcesForkOps{ResourceForkTraits::TryLock, ResourceForkTraits::Unlock,
+  [](void* lock) {
+    // The shared_ptr control blocks copied by fork can still count parent
+    // callers. The child has their descriptor aliases, but no in-flight I/O.
+    for (auto* state = g_resources; state; state = state->next) {
+      state->active = 0;
+      if (state->closed) RetireResources(*state);
+    }
+    ResourceForkTraits::Child(lock);
+  }};
+const ForkLockRegistration kResourcesForkLock(kForkOrderLeaf, "route netlink resources",
+    []() -> void* { return &g_resources_mutex; }, &kResourcesForkOps);
+
+int WinError() { return ErrnoFromWin32(GetLastError()); }
+
+class Operation {
+ public:
+  explicit Operation(NetlinkState& state) : state_(state) {
+    std::lock_guard<std::mutex> guard(g_resources_mutex);
+    if (!state_.closed) {
+      ++state_.active;
+      held_ = true;
+    }
   }
-  state.bound_pid = port;
+  ~Operation() {
+    if (!held_) return;
+    std::lock_guard<std::mutex> guard(g_resources_mutex);
+    if (--state_.active == 0 && state_.closed) RetireResources(state_);
+  }
+  explicit operator bool() const { return held_; }
+  Operation(const Operation&) = delete;
+  Operation& operator=(const Operation&) = delete;
+ private:
+  NetlinkState& state_;
+  bool held_ = false;
+};
+
+class QueueLock {
+ public:
+  explicit QueueLock(NetlinkState& state, DWORD wait = 1000) : lock_(state.lock) {
+    const DWORD result = WaitForSingleObject(lock_, wait);
+    held_ = result == WAIT_OBJECT_0 || result == WAIT_ABANDONED;
+    if (!held_) error_ = result == WAIT_TIMEOUT ? EAGAIN : WinError();
+  }
+  ~QueueLock() { if (held_) ReleaseMutex(lock_); }
+  int error() const { return error_; }
+  QueueLock(const QueueLock&) = delete;
+  QueueLock& operator=(const QueueLock&) = delete;
+ private:
+  HANDLE lock_;
+  bool held_ = false;
+  int error_ = 0;
+};
+
+struct Cursor {
+  uint32_t head;
+  uint32_t used;
+};
+
+Cursor GetCursor(NetlinkShared& shared) {
+  const auto bits = static_cast<uint64_t>(InterlockedCompareExchange64(&shared.queue, 0, 0));
+  return {static_cast<uint32_t>(bits), static_cast<uint32_t>(bits >> 32)};
+}
+
+void SetCursor(NetlinkShared& shared, Cursor cursor) {
+  const uint64_t bits = (static_cast<uint64_t>(cursor.used) << 32) | cursor.head;
+  InterlockedExchange64(&shared.queue, static_cast<LONG64>(bits));
+}
+
+uint32_t RingAdvance(uint32_t offset, size_t count) {
+  return static_cast<uint32_t>((offset + count) % kMaxNetlinkReceiveBytes);
+}
+
+void RingWrite(NetlinkShared& shared, uint32_t* offset, const void* data, size_t count) {
+  const size_t first = std::min(count, static_cast<size_t>(kMaxNetlinkReceiveBytes - *offset));
+  memcpy(shared.data + *offset, data, first);
+  if (first < count) memcpy(shared.data, static_cast<const uint8_t*>(data) + first, count - first);
+  *offset = RingAdvance(*offset, count);
+}
+
+void RingRead(const NetlinkShared& shared, uint32_t* offset, void* data, size_t count) {
+  const size_t first = std::min(count, static_cast<size_t>(kMaxNetlinkReceiveBytes - *offset));
+  memcpy(data, shared.data + *offset, first);
+  if (first < count) memcpy(static_cast<uint8_t*>(data) + first, shared.data, count - first);
+  *offset = RingAdvance(*offset, count);
+}
+
+bool AutoBindPort(NetlinkShared& shared) {
+  if (shared.bound_pid != 0) return true;
+  const DWORD pid = GetCurrentProcessId();
+  uint32_t expected = g_pid_port_issued.load(std::memory_order_relaxed);
+  if (expected != pid &&
+      g_pid_port_issued.compare_exchange_strong(expected, pid, std::memory_order_relaxed)) {
+    shared.bound_pid = pid;
+    return true;
+  }
+  LONG current = InterlockedCompareExchange(&g_ports->next, 0, 0);
+  for (;;) {
+    // Keep the synthetic range disjoint from the native process identity.
+    if (current >= 0) return errno = ENOSPC, false;
+    const LONG next = current + 1;
+    const LONG previous = InterlockedCompareExchange(&g_ports->next, next, current);
+    if (previous == current) {
+      shared.bound_pid = static_cast<uint32_t>(current);
+      return true;
+    }
+    current = previous;
+  }
 }
 
 void AppendAttr(std::vector<uint8_t>* msg, unsigned short type, const void* data, size_t len) {
@@ -271,30 +380,89 @@ bool WriteIntOpt(int v, void* value, uint32_t* len) {
 
 }  // namespace
 
-std::shared_ptr<NetlinkState> CreateNetlinkState(int sock_type) {
-  return std::make_shared<NetlinkState>(sock_type);
+std::shared_ptr<NetlinkState> CreateNetlinkState(int sock_type, bool nonblocking) {
+  std::lock_guard<std::mutex> guard(g_resources_mutex);
+  if (!g_port_section) {
+    HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                        sizeof(SharedPortCounter), nullptr);
+    if (!section) return errno = WinError(), nullptr;
+    auto* shared = static_cast<SharedPortCounter*>(MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, 0));
+    if (!shared) {
+      const int error = WinError();
+      CloseHandle(section);
+      return errno = error, nullptr;
+    }
+    g_port_section = section;
+    shared->next = INT32_MIN;
+    g_ports = shared;
+  }
+
+  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+                                      sizeof(NetlinkShared), nullptr);
+  if (!section) return errno = WinError(), nullptr;
+  auto* shared = static_cast<NetlinkShared*>(MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, 0));
+  HANDLE lock = shared ? CreateMutexW(nullptr, FALSE, nullptr) : nullptr;
+  HANDLE ready = lock ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
+  if (!ready) {
+    const int error = WinError();
+    if (lock) CloseHandle(lock);
+    if (shared) UnmapViewOfFile(shared);
+    CloseHandle(section);
+    return errno = error, nullptr;
+  }
+  shared->nonblocking = nonblocking ? 1 : 0;
+  shared->rcvbuf = 65536;
+  shared->sndbuf = 65536;
+  auto state = std::shared_ptr<NetlinkState>(new NetlinkState, [](NetlinkState* released) {
+    {
+      std::lock_guard<std::mutex> lock(g_resources_mutex);
+      auto** link = &g_resources;
+      while (*link != released) link = &(*link)->next;
+      *link = released->next;
+      RetireResources(*released);
+    }
+    delete released;
+  });
+  state->sock_type = sock_type;
+  state->section = section;
+  state->lock = lock;
+  state->ready = ready;
+  state->shared = shared;
+  state->next = g_resources;
+  g_resources = state.get();
+  return state;
 }
 
 void NetlinkClose(NetlinkState& state) {
   {
-    std::lock_guard<std::mutex> lock(state.mu);
+    std::lock_guard<std::mutex> guard(g_resources_mutex);
     state.closed = true;
-    if (state.bound_pid) {
-      PortRegistry& registry = Ports();
-      std::lock_guard<std::mutex> ports_lock(registry.mutex);
-      registry.bound.erase(state.bound_pid);
-      state.bound_pid = 0;
-    }
-    state.queue.clear();
-    state.queued_bytes = 0;
+    // Another process can still own an inherited descriptor. Retire only
+    // this process's mapped view and handles, leaving the shared queue intact.
+    if (state.active == 0) RetireResources(state);
   }
-  state.cv.notify_all();
   if (HasPollWaiters()) WakePollers();
 }
 
-bool NetlinkReadable(NetlinkState& state) {
-  std::lock_guard<std::mutex> lock(state.mu);
-  return !state.queue.empty() || state.closed;
+int NetlinkPoll(NetlinkState& state, int events) {
+  const Operation operation(state);
+  if (!operation) return ws::kPollNval;
+  int ready = events & ws::kPollOut;
+  if ((events & ws::kPollIn) && GetCursor(*state.shared).used != 0) ready |= ws::kPollIn;
+  return ready;
+}
+
+int NetlinkGetStatus(NetlinkState& state) {
+  const Operation operation(state);
+  if (!operation) return errno = EBADF, -1;
+  return O_RDWR | (InterlockedCompareExchange(&state.shared->nonblocking, 0, 0) ? O_NONBLOCK : 0);
+}
+
+int NetlinkSetStatus(NetlinkState& state, bool nonblocking) {
+  const Operation operation(state);
+  if (!operation) return errno = EBADF, -1;
+  InterlockedExchange(&state.shared->nonblocking, nonblocking ? 1 : 0);
+  return 0;
 }
 
 int NetlinkBind(NetlinkState& state, const void* addr, uint32_t len) {
@@ -304,8 +472,8 @@ int NetlinkBind(NetlinkState& state, const void* addr, uint32_t len) {
   if (!ws::CopyFromUser(&local, addr, sizeof(local))) return errno = EFAULT, -1;
   if (local.nl_family != AF_NETLINK) return errno = EINVAL, -1;
   if (local.nl_groups) return errno = EOPNOTSUPP, -1;
-  std::lock_guard<std::mutex> lock(state.mu);
-  if (state.closed) return errno = EBADF, -1;
+  const Operation operation(state);
+  if (!operation) return errno = EBADF, -1;
   // The ordinary Android app domains lack route socket bind permission.
   return errno = EACCES, -1;
 }
@@ -318,10 +486,11 @@ int NetlinkConnect(NetlinkState& state, const void* addr, uint32_t len) {
   // The kernel is the only destination, including after disconnecting.
   if (family == AF_UNSPEC) return 0;
   if (!ValidateNetlinkPeerAddr(addr, len)) return -1;
-  std::lock_guard<std::mutex> lock(state.mu);
-  if (state.closed) return errno = EBADF, -1;
-  AutoBindPort(state);
-  return 0;
+  const Operation operation(state);
+  if (!operation) return errno = EBADF, -1;
+  const QueueLock lock(state);
+  if (lock.error()) return errno = lock.error(), -1;
+  return AutoBindPort(*state.shared) ? 0 : -1;
 }
 
 int NetlinkGetName(NetlinkState& state, void* addr, uint32_t* len, bool peer) {
@@ -329,8 +498,11 @@ int NetlinkGetName(NetlinkState& state, void* addr, uint32_t* len, bool peer) {
   sockaddr_nl local = {};
   local.nl_family = AF_NETLINK;
   if (!peer) {
-    std::lock_guard<std::mutex> lock(state.mu);
-    local.nl_pid = state.bound_pid;
+    const Operation operation(state);
+    if (!operation) return errno = EBADF, -1;
+    const QueueLock lock(state);
+    if (lock.error()) return errno = lock.error(), -1;
+    local.nl_pid = state.shared->bound_pid;
   }
   uint32_t capacity = 0;
   if (!ws::CopyFromUser(&capacity, len, sizeof(capacity))) return errno = EFAULT, -1;
@@ -376,10 +548,14 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
   if (hdr.nlmsg_type == RTM_GETLINK) return errno = EACCES, -1;
 
   {
-    std::lock_guard<std::mutex> lock(state.mu);
-    if (state.closed) return errno = EPIPE, -1;
-    if (req.size() > static_cast<size_t>(state.sndbuf)) return errno = EMSGSIZE, -1;
-    AutoBindPort(state);
+    const Operation operation(state);
+    if (!operation) return errno = EBADF, -1;
+    const QueueLock lock(state);
+    if (lock.error()) return errno = lock.error(), -1;
+    auto& shared = *state.shared;
+    if (req.size() > static_cast<size_t>(shared.sndbuf)) return errno = EMSGSIZE, -1;
+    if (!AutoBindPort(shared)) return -1;
+    auto cursor = GetCursor(shared);
 
     PacketBatcher batch;
     if (hdr.nlmsg_type == RTM_GETADDR &&
@@ -387,24 +563,34 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
         hdr.nlmsg_len > NLMSG_HDRLEN) {
       const uint8_t family = req[NLMSG_HDRLEN];
       if (family != AF_UNSPEC && family != AF_INET && family != AF_INET6) {
-        AppendErrorPacket(-EAFNOSUPPORT, hdr, state.bound_pid, &batch);
+        AppendErrorPacket(-EAFNOSUPPORT, hdr, shared.bound_pid, &batch);
       } else {
-        if (!state.queue.empty()) return errno = EBUSY, -1;
-        if (!AppendAddrDump(family, hdr.nlmsg_seq, state.bound_pid, &batch)) return -1;
+        if (cursor.used != 0) return errno = EBUSY, -1;
+        if (!AppendAddrDump(family, hdr.nlmsg_seq, shared.bound_pid, &batch)) return -1;
       }
     } else if (hdr.nlmsg_type == NLMSG_NOOP) {
       if ((hdr.nlmsg_flags & NLM_F_ACK) != 0) {
-        AppendErrorPacket(0, hdr, state.bound_pid, &batch);
+        AppendErrorPacket(0, hdr, shared.bound_pid, &batch);
       }
     } else {
-      AppendErrorPacket(-EOPNOTSUPP, hdr, state.bound_pid, &batch);
+      AppendErrorPacket(-EOPNOTSUPP, hdr, shared.bound_pid, &batch);
     }
-    if (batch.bytes + state.queued_bytes > static_cast<size_t>(state.rcvbuf) &&
-        !batch.packets.empty()) return errno = ENOBUFS, -1;
-    for (auto& pkt : batch.packets) state.queue.push_back(std::move(pkt));
-    state.queued_bytes += batch.bytes;
+    size_t bytes = batch.bytes + batch.packets.size() * sizeof(uint32_t);
+    if (bytes) {
+      if (bytes + cursor.used > static_cast<size_t>(shared.rcvbuf)) return errno = ENOBUFS, -1;
+      uint32_t tail = RingAdvance(cursor.head, cursor.used);
+      for (const auto& packet : batch.packets) {
+        const auto size = static_cast<uint32_t>(packet.size());
+        RingWrite(shared, &tail, &size, sizeof(size));
+        RingWrite(shared, &tail, packet.data(), size);
+      }
+      // Publish all records together. A process that dies under the mutex
+      // either published the full batch or left the old cursor intact.
+      cursor.used += static_cast<uint32_t>(bytes);
+      SetCursor(shared, cursor);
+      SetEvent(state.ready);
+    }
   }
-  state.cv.notify_all();
   if (HasPollWaiters()) WakePollers();
   return static_cast<ssize_t>(req.size());
 }
@@ -429,11 +615,13 @@ ssize_t NetlinkRecv(std::shared_ptr<ws::SocketDescription>& description,
   auto& state = *description->netlink;
   using Clock = std::chrono::steady_clock;
   auto deadline = Clock::time_point::max();
+  bool immediate = nonblocking || (flags & MSG_DONTWAIT);
   {
-    std::lock_guard<std::mutex> lock(state.mu);
-    if (state.rcv_timeout_ms > 0) {
-      deadline = Clock::now() + std::chrono::milliseconds(state.rcv_timeout_ms);
-    }
+    const Operation operation(state);
+    if (!operation) return errno = EBADF, -1;
+    const int timeout = InterlockedCompareExchange(&state.shared->rcv_timeout_ms, 0, 0);
+    if (timeout > 0) deadline = Clock::now() + std::chrono::milliseconds(timeout);
+    immediate |= InterlockedCompareExchange(&state.shared->nonblocking, 0, 0) != 0;
   }
 
   std::vector<uint8_t> pkt;
@@ -443,27 +631,54 @@ ssize_t NetlinkRecv(std::shared_ptr<ws::SocketDescription>& description,
     // Like the Winsock datagram wait, check cancellation without a held lock
     // or a retained temporary buffer. Data and close notify the wait directly.
     pthread_testcancel();
-    std::unique_lock<std::mutex> lock(state.mu);
-    if (state.closed) {
+    const Operation operation(state);
+    if (!operation) {
       error = EBADF;
       break;
     }
-    if (!state.queue.empty()) {
-      if (flags & MSG_PEEK) {
-        pkt = state.queue.front();
-      } else {
-        pkt = std::move(state.queue.front());
-        state.queue.pop_front();
-        state.queued_bytes -= pkt.size();
+    auto& shared = *state.shared;
+    {
+      const QueueLock lock(state, immediate ? 0 : kCancellationSliceMs);
+      if (!lock.error()) {
+        auto cursor = GetCursor(shared);
+        if (cursor.used != 0) {
+          uint32_t length = 0;
+          uint32_t head = cursor.head;
+          RingRead(shared, &head, &length, sizeof(length));
+          if (length == 0 || length > kMaxNetlinkPacketBytes ||
+              length + sizeof(length) > cursor.used) {
+            error = EIO;
+            break;
+          }
+          pkt.resize(length);
+          RingRead(shared, &head, pkt.data(), length);
+          if (!(flags & MSG_PEEK)) {
+            cursor.head = head;
+            cursor.used -= length + sizeof(length);
+            SetCursor(shared, cursor);
+            if (cursor.used == 0) ResetEvent(state.ready);
+          }
+          break;
+        }
+        // An abandoned writer may have published a cursor without setting
+        // the event (or an abandoned reader may not have cleared it).
+        ResetEvent(state.ready);
+      } else if (lock.error() != EAGAIN) {
+        error = lock.error();
+        break;
       }
-      break;
     }
     const auto now = Clock::now();
-    if (nonblocking || (flags & MSG_DONTWAIT) != 0 || now >= deadline) {
+    if (immediate || now >= deadline) {
       error = EAGAIN;
       break;
     }
-    state.cv.wait_until(lock, std::min(deadline, now + std::chrono::milliseconds(10)));
+    const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - now).count();
+    const DWORD wait = static_cast<DWORD>(std::min<int64_t>(kCancellationSliceMs, remaining));
+    if (WaitForSingleObject(state.ready, wait) == WAIT_FAILED) {
+      error = WinError();
+      break;
+    }
   }
   pthread_cleanup_pop(0);
   if (error) return errno = error, -1;
@@ -500,21 +715,24 @@ ssize_t NetlinkRecv(std::shared_ptr<ws::SocketDescription>& description,
 }
 
 int NetlinkSetSockOpt(NetlinkState& state, int level, int name, const void* value, uint32_t len) {
+  const Operation operation(state);
+  if (!operation) return errno = EBADF, -1;
+  const QueueLock lock(state);
+  if (lock.error()) return errno = lock.error(), -1;
+  auto& shared = *state.shared;
   int v = 0;
   if (level == SOL_SOCKET) {
     switch (name) {
       case SO_RCVBUF:
         if (!ReadIntOpt(value, len, &v)) return -1;
         {
-          std::lock_guard<std::mutex> lock(state.mu);
-          state.rcvbuf = std::clamp(v, 128, kMaxNetlinkReceiveBytes / 2) * 2;
+          shared.rcvbuf = std::clamp(v, 128, kMaxNetlinkReceiveBytes / 2) * 2;
         }
         return 0;
       case SO_SNDBUF:
         if (!ReadIntOpt(value, len, &v)) return -1;
         {
-          std::lock_guard<std::mutex> lock(state.mu);
-          state.sndbuf = std::clamp(v, 128, kMaxNetlinkRequestBytes / 2) * 2;
+          shared.sndbuf = std::clamp(v, 128, kMaxNetlinkRequestBytes / 2) * 2;
         }
         return 0;
       case SO_RCVTIMEO: {
@@ -524,8 +742,7 @@ int NetlinkSetSockOpt(NetlinkState& state, int level, int name, const void* valu
         if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= 1000000) return errno = EDOM, -1;
         const long long ms = std::min(2147483647LL,
             std::min(2147484LL, static_cast<long long>(tv.tv_sec)) * 1000 + (tv.tv_usec + 999) / 1000);
-        std::lock_guard<std::mutex> lock(state.mu);
-        state.rcv_timeout_ms = static_cast<int>(ms);
+        InterlockedExchange(&shared.rcv_timeout_ms, static_cast<LONG>(ms));
         return 0;
       }
       default:
@@ -540,12 +757,16 @@ int NetlinkSetSockOpt(NetlinkState& state, int level, int name, const void* valu
 }
 
 int NetlinkGetSockOpt(NetlinkState& state, int level, int name, void* value, uint32_t* len) {
+  const Operation operation(state);
+  if (!operation) return errno = EBADF, -1;
+  const QueueLock lock(state);
+  if (lock.error()) return errno = lock.error(), -1;
+  auto& shared = *state.shared;
   if (level == SOL_SOCKET) {
     switch (name) {
       case SO_TYPE: {
         int sock_type = SOCK_RAW;
         {
-          std::lock_guard<std::mutex> lock(state.mu);
           sock_type = state.sock_type;
         }
         return WriteIntOpt(sock_type, value, len) ? 0 : -1;
@@ -559,16 +780,14 @@ int NetlinkGetSockOpt(NetlinkState& state, int level, int name, void* value, uin
       case SO_RCVBUF: {
         int buf = 65536;
         {
-          std::lock_guard<std::mutex> lock(state.mu);
-          buf = state.rcvbuf;
+          buf = shared.rcvbuf;
         }
         return WriteIntOpt(buf, value, len) ? 0 : -1;
       }
       case SO_SNDBUF: {
         int buf = 65536;
         {
-          std::lock_guard<std::mutex> lock(state.mu);
-          buf = state.sndbuf;
+          buf = shared.sndbuf;
         }
         return WriteIntOpt(buf, value, len) ? 0 : -1;
       }
@@ -579,8 +798,7 @@ int NetlinkGetSockOpt(NetlinkState& state, int level, int name, void* value, uin
         if (capacity < sizeof(timeval)) return errno = EINVAL, -1;
         int ms = 0;
         {
-          std::lock_guard<std::mutex> lock(state.mu);
-          ms = state.rcv_timeout_ms;
+          ms = InterlockedCompareExchange(&shared.rcv_timeout_ms, 0, 0);
         }
         timeval tv = {};
         tv.tv_sec = ms / 1000;

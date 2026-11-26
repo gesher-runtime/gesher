@@ -171,9 +171,9 @@ int RegisterSocket(const SocketFd& state) {
 }
 
 int RegisterNetlinkSocket(bool nonblocking, int sock_type) {
-  auto netlink = CreateNetlinkState(sock_type);
-  if (!netlink) return errno = ENOMEM, -1;
   record_locks::DescriptorGuard descriptor_guard;
+  auto netlink = CreateNetlinkState(sock_type, nonblocking);
+  if (!netlink) return -1;
   int fd = ReserveFd();
   if (fd < 0) return -1;
   SocketFd registered;
@@ -182,7 +182,7 @@ int RegisterNetlinkSocket(bool nonblocking, int sock_type) {
   registered.description = std::make_shared<ws::SocketDescription>();
   registered.description->nonblocking.store(nonblocking);
   registered.description->netlink = std::move(netlink);
-  registered.description->netlink_readable = &gesher::NetlinkReadable;
+  registered.description->netlink_poll = &gesher::NetlinkPoll;
   Insert(fd, registered);
   return fd;
 }

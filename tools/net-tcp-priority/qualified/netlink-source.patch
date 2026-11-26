@@ -5,16 +5,16 @@ index 869d3d90b..0f910493e 100644
 @@ -28,0 +29 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/netlink.cc
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
-index a8fb022e2..760f24294 100644
+index a8fb022e2..050eb5646 100644
 --- a/compat/posix/src/fd.cc
 +++ b/compat/posix/src/fd.cc
 @@ -35,0 +36 @@
 +#include "netlink_internal.h"
 @@ -171,0 +173,17 @@ int RegisterSocket(const SocketFd& state) {
 +int RegisterNetlinkSocket(bool nonblocking, int sock_type) {
-+  auto netlink = CreateNetlinkState(sock_type);
-+  if (!netlink) return errno = ENOMEM, -1;
 +  record_locks::DescriptorGuard descriptor_guard;
++  auto netlink = CreateNetlinkState(sock_type, nonblocking);
++  if (!netlink) return -1;
 +  int fd = ReserveFd();
 +  if (fd < 0) return -1;
 +  SocketFd registered;
@@ -23,13 +23,13 @@ index a8fb022e2..760f24294 100644
 +  registered.description = std::make_shared<ws::SocketDescription>();
 +  registered.description->nonblocking.store(nonblocking);
 +  registered.description->netlink = std::move(netlink);
-+  registered.description->netlink_readable = &gesher::NetlinkReadable;
++  registered.description->netlink_poll = &gesher::NetlinkPoll;
 +  Insert(fd, registered);
 +  return fd;
 +}
 +
 diff --git a/compat/posix/src/socket.cc b/compat/posix/src/socket.cc
-index c28d77eda..3a0ebb337 100644
+index c28d77eda..21249efe7 100644
 --- a/compat/posix/src/socket.cc
 +++ b/compat/posix/src/socket.cc
 @@ -3,0 +4 @@
@@ -109,7 +109,7 @@ index c28d77eda..3a0ebb337 100644
 +    }
 +    const ssize_t n = gesher::NetlinkRecv(
 +        state.description, buffers, count, flags, addr,
-+        addr != nullptr ? &actual : nullptr, state.description->nonblocking.load(), result_flags);
++        addr != nullptr ? &actual : nullptr, false, result_flags);
 +    if (n >= 0 && addr != nullptr && addrlen != nullptr) {
 +      const socklen_t out_len = static_cast<socklen_t>(actual);
 +      if (!ws::CopyToUser(addrlen, &out_len, sizeof(out_len))) return errno = EFAULT, -1;
@@ -136,7 +136,7 @@ index c28d77eda..3a0ebb337 100644
 @@ -1169,0 +1248 @@ bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {
 +  if (d.netlink) return false;
 diff --git a/compat/posix/src/socket_internal.h b/compat/posix/src/socket_internal.h
-index 122339127..c3402e661 100644
+index 122339127..b8b760f2e 100644
 --- a/compat/posix/src/socket_internal.h
 +++ b/compat/posix/src/socket_internal.h
 @@ -20,0 +21,4 @@
@@ -146,102 +146,78 @@ index 122339127..c3402e661 100644
 +
 @@ -72,0 +77,2 @@ struct SocketDescription {
 +  std::shared_ptr<gesher::NetlinkState> netlink;
-+  bool (*netlink_readable)(gesher::NetlinkState&) = nullptr;  // non-null only for AF_NETLINK descriptors
++  int (*netlink_poll)(gesher::NetlinkState&, int) = nullptr;  // non-null only for AF_NETLINK descriptors
 @@ -383,0 +390,2 @@ int RegisterSocket(const SocketFd& state);
 +// Registers an in-process AF_NETLINK descriptor backed by `netlink`.
 +int RegisterNetlinkSocket(bool nonblocking, int sock_type);
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index 00aaf9f45..260137af9 100644
+index 00aaf9f45..98cee968a 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
-@@ -350,0 +351,2 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -47,0 +48 @@
++#include "netlink_internal.h"
+@@ -350,0 +352,2 @@ int ioctl(int fd, unsigned long request, ...) {
 +    // Android's untrusted app domains cannot issue route netlink ioctls.
 +    if (state.description->netlink) return errno = EACCES, -1;
-@@ -450 +452,2 @@ int fcntl(int fd, int cmd, ...) {
--              if (!state.description->native_nonblocking_datagram &&
-+              if (!state.description->netlink &&
-+                  !state.description->native_nonblocking_datagram &&
+@@ -438,0 +442,5 @@ int fcntl(int fd, int cmd, ...) {
++      if (state.description->netlink) {
++        if (cmd == F_GETFL) return gesher::NetlinkGetStatus(*state.description->netlink);
++        if (cmd == F_SETFL)
++          return gesher::NetlinkSetStatus(*state.description->netlink, (arg & O_NONBLOCK) != 0);
++      }
 diff --git a/compat/posix/src/winsock.cc b/compat/posix/src/winsock.cc
-index 86c44eb8c..7b6f150b0 100644
+index 86c44eb8c..68f27ff23 100644
 --- a/compat/posix/src/winsock.cc
 +++ b/compat/posix/src/winsock.cc
 @@ -25,0 +26 @@
 +#include "netlink_internal.h"
-@@ -451,0 +453,13 @@ int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool
+@@ -451,0 +453,4 @@ int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool
 +  if (description && description->netlink) {
-+    {
-+      std::lock_guard<std::mutex> lock(description->error_mutex);
-+      description->native_closing = true;
-+    }
 +    gesher::NetlinkClose(*description->netlink);
-+    {
-+      std::lock_guard<std::mutex> lock(description->error_mutex);
-+      description->native_closed = true;
-+      description->native_closing = false;
-+    }
 +    return 0;
 +  }
-@@ -1410,0 +1425,4 @@ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, co
+@@ -1410,0 +1416,4 @@ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, co
 +  if (description && description->netlink) {
 +    if (rights != nullptr && rights->count != 0) return errno = EOPNOTSUPP, -1;
 +    return gesher::NetlinkSend(*description->netlink, buffers, count, 0, nullptr, 0);
 +  }
-@@ -1429,0 +1448,6 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
+@@ -1429,0 +1439,6 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
 +  if (description && description->netlink) {
 +    if (rights != nullptr) *rights = {};
 +    if (credentials != nullptr) *credentials = {};
 +    return gesher::NetlinkRecv(description, buffers, count, 0, nullptr, nullptr,
-+                               description->nonblocking.load() || dont_wait, result_flags);
++                               dont_wait, result_flags);
 +  }
-@@ -1683,0 +1708,2 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+@@ -1683,0 +1699,2 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
 +  bool has_netlink = false;
 +  bool has_netlink_ready = false;
-@@ -1691,0 +1718,17 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+@@ -1684,0 +1702,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
 +    if (entries[i].description && entries[i].description->netlink) {
 +      has_netlink = true;
 +      fds[i].fd = INVALID_SOCKET;
-+      SHORT nl_rev = 0;
-+      if (closed[i]) {
-+        nl_rev = POLLNVAL;
-+      } else {
-+        if ((entries[i].events & kPollIn) != 0 && entries[i].description->netlink_readable != nullptr &&
-+            entries[i].description->netlink_readable(*entries[i].description->netlink)) {
-+          nl_rev |= POLLRDNORM;
-+        }
-+        if ((entries[i].events & kPollOut) != 0) nl_rev |= POLLWRNORM;
-+      }
-+      fds[i].revents = nl_rev;
-+      if (nl_rev != 0) has_netlink_ready = true;
++      const auto& description = *entries[i].description;
++      has_netlink_ready |= description.netlink_poll(*description.netlink, entries[i].events) != 0;
 +      continue;
 +    }
-@@ -1738 +1781,6 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+@@ -1738 +1762,6 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
 -  const int wait = has_lifecycle_hup ? 0 : has_owned_pending && (timeout_ms < 0 || timeout_ms > 10) ? 10 : timeout_ms;
 +  const int wait = (has_lifecycle_hup || has_netlink_ready)
 +                       ? 0
-+                       : (has_owned_pending || (has_netlink && wake == kInvalidSocket)) &&
++                       : (has_owned_pending || has_netlink) &&
 +                                 (timeout_ms < 0 || timeout_ms > 10)
 +                             ? 10
 +                             : timeout_ms;
-@@ -1749 +1797,5 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+@@ -1749 +1778,5 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
 -    if (!owned_pending[i] && !closed[i]) { active.push_back(fds[i]); active_index.push_back(i); }
 +    if (!owned_pending[i] && !closed[i] &&
 +        !(entries[i].description && entries[i].description->netlink)) {
 +      active.push_back(fds[i]);
 +      active_index.push_back(i);
 +    }
-@@ -1805 +1857,14 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
--    if (entries[i].description) {
+@@ -1804,0 +1838,6 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
 +    if (entries[i].description && entries[i].description->netlink) {
-+      auto& description = *entries[i].description;
-+      std::lock_guard<std::mutex> lock(description.error_mutex);
-+      if (description.native_closed || description.native_closing) {
-+        r = POLLNVAL;
-+      } else {
-+        r = 0;
-+        if ((entries[i].events & kPollIn) != 0 && description.netlink_readable != nullptr &&
-+            description.netlink_readable(*description.netlink)) {
-+          r |= POLLRDNORM;
-+        }
-+        if ((entries[i].events & kPollOut) != 0) r |= POLLWRNORM;
-+      }
-+    } else if (entries[i].description) {
++      const auto& description = *entries[i].description;
++      entries[i].revents = description.netlink_poll(*description.netlink, entries[i].events);
++      if (entries[i].revents != 0) ++ready;
++      continue;
++    }

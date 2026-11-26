@@ -20,6 +20,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <gesher/fork.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -386,7 +388,7 @@ void TestReceiveBufferLimit() {
   request.nlmsg_len = NLMSG_LENGTH(0);
   request.nlmsg_type = NLMSG_NOOP;
   request.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
-  const int expected = bufsize / NLMSG_LENGTH(sizeof(nlmsgerr));
+  const int expected = bufsize / (NLMSG_LENGTH(sizeof(nlmsgerr)) + sizeof(uint32_t));
   int admitted = 0;
   while (admitted <= expected && write(fd, &request, sizeof(request)) == sizeof(request)) {
     ++admitted;
@@ -455,6 +457,87 @@ void TestReceiveRetirement() {
   }
 }
 
+bool QueueAck(int fd, uint32_t seq) {
+  nlmsghdr request = {};
+  request.nlmsg_len = NLMSG_LENGTH(0);
+  request.nlmsg_type = NLMSG_NOOP;
+  request.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+  request.nlmsg_seq = seq;
+  return write(fd, &request, sizeof(request)) == sizeof(request);
+}
+
+bool ReadAck(int fd, uint32_t seq) {
+  alignas(nlmsghdr) uint8_t buffer[NLMSG_LENGTH(sizeof(nlmsgerr))];
+  const ssize_t length = recv(fd, buffer, sizeof(buffer), MSG_DONTWAIT);
+  if (length != sizeof(buffer)) return false;
+  nlmsghdr hdr;
+  memcpy(&hdr, buffer, sizeof(hdr));
+  return hdr.nlmsg_type == NLMSG_ERROR && hdr.nlmsg_seq == seq;
+}
+
+void TestQueueWrap() {
+  const int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_NONBLOCK, NETLINK_ROUTE);
+  Check(fd >= 0, "open route socket to exercise receive ring wrap");
+  if (fd < 0) return;
+  // More than a full ring of 40-byte encoded acknowledgements. With a
+  // 256 KiB ring at least one response spans the boundary.
+  bool matched = true;
+  for (unsigned seq = 1; seq <= 7000; ++seq) {
+    if (!QueueAck(fd, seq) || !ReadAck(fd, seq)) {
+      matched = false;
+      break;
+    }
+  }
+  Check(matched, "datagram headers and payload read correctly across ring wrap");
+  close(fd);
+}
+
+void TestForkedSocket() {
+  const int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+  Check(fd >= 0, "open a route socket before cloning");
+  if (fd < 0) return;
+  Check(QueueAck(fd, 31), "queue the first response in the parent");
+  gesher::StartSpawnBroker();
+  gesher::PrepareFork();
+  if (gesher::AcquireForkLocks(nullptr, nullptr, 3000) != 0) {
+    Check(false, "acquire the production fork lock set");
+    close(fd);
+    return;
+  }
+  HANDLE process = nullptr;
+  DWORD pid = 0;
+  const int cloned = gesher::CloneProcess(&process, &pid);
+  gesher::ReleaseForkLocks(cloned == 0);
+  if (cloned == 0) {
+    // The child consumes the parent's record, updates shared open status,
+    // queues a new response and lets its local last close retire.
+    const bool passed = ReadAck(fd, 31) &&
+                        fcntl(fd, F_SETFL, O_NONBLOCK) == 0 &&
+                        QueueAck(fd, 32) && close(fd) == 0;
+    TerminateProcess(GetCurrentProcess(), passed ? 0 : 1);
+    return;
+  }
+  Check(cloned > 0, "clone a Windows process through the production fork set");
+  if (cloned > 0) {
+    pollfd pfd = {fd, POLLIN, 0};
+    const DWORD completed = WaitForSingleObject(process, 3000);
+    if (completed == WAIT_TIMEOUT) TerminateProcess(process, 1);
+    DWORD result = 1;
+    Check(completed == WAIT_OBJECT_0 && GetExitCodeProcess(process, &result) && result == 0,
+          "child consumes the shared reply, sets flags, sends and closes");
+    CloseHandle(process);
+    gesher::ForgetChildMailbox(pid);
+    gesher::ForgetForkedChild(pid);
+    Check(poll(&pfd, 1, 1000) == 1 && (pfd.revents & POLLIN),
+          "child reply is readable after the child's last local close");
+    Check(ReadAck(fd, 32), "parent sees the child's reply without duplicate data");
+    Check(fcntl(fd, F_GETFL) == (O_RDWR | O_NONBLOCK),
+          "parent sees the child's open status flags");
+    Check(poll(&pfd, 1, 0) == 0, "parent and child consumed each reply exactly once");
+  }
+  Check(close(fd) == 0, "parent's descriptor closes independently");
+}
+
 }  // namespace
 
 int main() {
@@ -463,6 +546,8 @@ int main() {
   TestFlagsPollTimeoutAndDup();
   TestReceiveBufferLimit();
   TestReceiveRetirement();
+  TestQueueWrap();
+  TestForkedSocket();
 
   if (g_failures == 0) {
     std::printf("netlink_route_test all passed\n");
