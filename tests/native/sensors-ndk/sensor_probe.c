@@ -33,10 +33,11 @@ static int on_sample(int fd, int events, void* context) {
   (void)fd;
   struct callback_probe* probe = context;
   ASensorEvent sample;
+  if (!(events & ALOOPER_EVENT_INPUT)) return 0;
+  if (ASensorEventQueue_hasEvents(probe->queue) <= 0 ||
+      ASensorEventQueue_getEvents(probe->queue, &sample, 1) != 1) return 1;
   ++probe->calls;
-  probe->passed = (events & ALOOPER_EVENT_INPUT) && ASensorEventQueue_hasEvents(probe->queue) > 0 &&
-      ASensorEventQueue_getEvents(probe->queue, &sample, 1) == 1 &&
-      valid_sample(&sample, probe->sensor, probe->fixture);
+  probe->passed = valid_sample(&sample, probe->sensor, probe->fixture);
   return 0;
 }
 
@@ -49,16 +50,21 @@ static const char* sample_sensor(ASensorManager* manager, const ASensor* sensor,
   int rate = ASensor_getMinDelay(sensor);
   if (rate < 20000) rate = 20000;
   const char* failure = "identifier queue delivery";
-  if (ASensorEventQueue_hasEvents(queue) != 0 ||
-      ASensorEventQueue_registerSensor(queue, sensor, rate, 0) != 0 ||
-      ASensorEventQueue_setEventRate(queue, sensor, rate) != 0) {
+  int initial = ASensorEventQueue_hasEvents(queue);
+  int enabled = ASensorEventQueue_registerSensor(queue, sensor, rate, 0);
+  int updated = ASensorEventQueue_setEventRate(queue, sensor, rate);
+  if (initial > 0 || enabled != 0 || updated != 0) {
+    fprintf(stderr, "Sensor queue states before sampling: initial=%d enable=%d rate=%d\n",
+            initial, enabled, updated);
     failure = "enable or set sampling rate";
   } else {
     for (int i = 0; i < 8; ++i) {
       if (ALooper_pollOnce(500, NULL, NULL, NULL) != ident) continue;
-      if (ASensorEventQueue_hasEvents(queue) <= 0) break;
+      if (ASensorEventQueue_hasEvents(queue) <= 0) continue;
       ssize_t count = ASensorEventQueue_getEvents(queue, events, 8);
-      if (count > 0 && valid_sample(&events[0], sensor, fixture)) failure = NULL;
+      // Android can wake for additional-info records filtered by getEvents.
+      if (count <= 0) continue;
+      if (valid_sample(&events[0], sensor, fixture)) failure = NULL;
       break;
     }
     if (ASensorEventQueue_disableSensor(queue, sensor) != 0) failure = "disable sensor";
@@ -81,9 +87,11 @@ JNIEXPORT jobjectArray JNICALL Java_gesher_SensorContract_probe(JNIEnv* env, jcl
   const char* mode = (*env)->GetStringUTFChars(env, arg, NULL);
   if (!mode) return NULL;
   bool fixture = strcmp(mode, "fixture") == 0;
-  bool require_sensor = fixture || strcmp(mode, "android") == 0;
+  bool android = strcmp(mode, "android") == 0;
+  bool require_sensor = fixture || android;
   (*env)->ReleaseStringUTFChars(env, arg, mode);
-  ASensorManager* manager = ASensorManager_getInstanceForPackage("gesher.sensors.fixture");
+  ASensorManager* manager = ASensorManager_getInstanceForPackage(
+      android ? "com.android.shell" : "gesher.sensors.fixture");
   ASensorList list = NULL;
   int count = ASensorManager_getSensorList(manager, &list);
   const ASensor* sensor = ASensorManager_getDefaultSensor(manager, ASENSOR_TYPE_ACCELEROMETER);
