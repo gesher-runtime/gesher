@@ -161,6 +161,15 @@ def main() -> None:
         inspections = {'@BODY@': 'return mData;', '@MIME@': 'return mDataMime;', '@URL@': 'return mDataUrl;'}
         atomic = False
     exact = '\n'.join(pieces)
+    if 'private void traceNavigation(String message)' in production:
+        trace_flag = re.findall(r'private static final boolean TRACE_NAVIGATION\s*=\s*'
+                               r'"1"\.equals\(System.getenv\("GESHER_TRACE_WEBVIEW_NAVIGATION"\)\);',
+                               production)
+        if len(trace_flag) != 1:
+            raise ValueError('navigation diagnostic flag changed')
+        pieces += [method(production, 'private void traceNavigation(String message)'),
+                   trace_flag[0]]
+        exact = '\n'.join(pieces)
     print('WebView response production SHA256 ' + hashlib.sha256(exact.encode()).hexdigest(), flush=True)
     if atomic:
         boundary = 'PendingData data = mPendingData.get();'

@@ -81,7 +81,7 @@ jobs:
           foreach ($name in 'core-oj','core-libart','core-icu4j','framework','gesher-app') {
             Write-Host "ACTUAL_MUXER_JAR name=$name sha256=$((Get-FileHash "dist/$name.jar" -Algorithm SHA256).Hash) source=$source"
           }
-          foreach ($path in 'dalvikvm.exe','gesher-exec.exe','gesher_arm64.dll','media_muxer_verify.exe','framework/x86_64/boot.art','media/ndk-muxer/fixtures/h264-aac.json') {
+          foreach ($path in 'dalvikvm.exe','gesher-exec.exe','gesher_arm64.dll','media_muxer_verify.exe','media_annexb_contracts.exe','framework/x86_64/boot.art','media/ndk-muxer/fixtures/h264-aac.json') {
             if (-not (Test-Path "dist/$path")) { throw "Missing matching artifact member $path" }
             $producerSource = if ($path -in 'gesher_arm64.dll','framework/x86_64/boot.art') { $source } else { '${{ github.sha }}' }
             Write-Host "ACTUAL_MUXER_MEMBER name=$path sha256=$((Get-FileHash "dist/$path" -Algorithm SHA256).Hash) source=$producerSource"

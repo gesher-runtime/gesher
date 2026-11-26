@@ -17,6 +17,8 @@
 #include <gesher/bionic_shim.h>
 #include <windows.h>
 
+#include <array>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -226,6 +228,176 @@ void ThreadNames() {
   for (int kind = 0; kind != 4; ++kind) CheckNamingPeer(kind);
 }
 
+using KeyCreate = int (SYSV*)(int32_t*, void (SYSV*)(void*));
+using KeyDelete = int (SYSV*)(int32_t);
+using KeyGet = void* (SYSV*)(int32_t);
+using KeySet = int (SYSV*)(int32_t, const void*);
+KeyCreate key_create;
+KeyDelete key_delete;
+KeyGet key_get;
+KeySet key_set;
+struct KeyReadState;
+struct KeyReadValue { KeyReadState* owner; bool replacement; };
+struct KeyReadState {
+  int32_t key = -1;
+  HANDLE ready = nullptr, start = nullptr, read = nullptr, replaced = nullptr;
+  KeyReadValue old_value{this, false}, new_value{this, true};
+  int old_calls = 0, new_calls = 0, wrong_calls = 0;
+  bool valid = true;
+};
+void SYSV OldReadExit(void* value) { ++static_cast<KeyReadValue*>(value)->owner->old_calls; }
+void SYSV NewReadExit(void* value) {
+  auto* data = static_cast<KeyReadValue*>(value);
+  if (data->replacement) ++data->owner->new_calls;
+  else ++data->owner->wrong_calls;
+}
+void KeyRequire(bool value, const char* label) {
+  if (!value) { std::fprintf(stderr, "FAIL bionic key reads: %s\n", label); ExitProcess(1); }
+}
+void KeyWait(HANDLE event) {
+  KeyRequire(event && WaitForSingleObject(event, 30000) == WAIT_OBJECT_0, "owned barrier/completion");
+}
+DWORD WINAPI WindowsKeyReader(void* argument) {
+  auto* state = static_cast<KeyReadState*>(argument);
+  state->valid = key_set(state->key, &state->old_value) == 0;
+  KeyRequire(SetEvent(state->ready) != 0, "signal ready");
+  KeyWait(state->start);
+  for (int n = 0; n < 20000; ++n)
+    state->valid &= key_get(state->key) == &state->old_value;
+  KeyRequire(SetEvent(state->read) != 0, "signal completed reads");
+  KeyWait(state->replaced);
+  state->valid &= key_get(state->key) == nullptr;
+  state->valid &= key_set(state->key, &state->new_value) == 0;
+  state->valid &= key_get(state->key) == &state->new_value;
+  return 0;
+}
+void ConcurrentKeyReads() {
+  key_create = reinterpret_cast<KeyCreate>(gesher::bionic::LookupBionicSymbol("pthread_key_create"));
+  key_delete = reinterpret_cast<KeyDelete>(gesher::bionic::LookupBionicSymbol("pthread_key_delete"));
+  key_get = reinterpret_cast<KeyGet>(gesher::bionic::LookupBionicSymbol("pthread_getspecific"));
+  key_set = reinterpret_cast<KeySet>(gesher::bionic::LookupBionicSymbol("pthread_setspecific"));
+  KeyRequire(key_create && key_delete && key_get && key_set, "actual exported key adapters");
+  for (int count : {1, 8, 32}) for (bool distinct : {false, true}) {
+    const int key_count = distinct ? count : 1;
+    std::array<int32_t, 32> keys{};
+    std::array<KeyReadState, 32> states;
+    std::array<HANDLE, 32> threads{}, ready{}, read{};
+    HANDLE start = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE replaced = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    KeyRequire(start && replaced, "create shared barriers");
+    for (int k = 0; k < key_count; ++k)
+      KeyRequire(key_create(&keys[k], OldReadExit) == 0, "create live reader keys");
+    for (int i = 0; i < count; ++i) {
+      auto& state = states[i];
+      state.key = keys[distinct ? i : 0]; state.start = start; state.replaced = replaced;
+      state.ready = ready[i] = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      state.read = read[i] = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      KeyRequire(state.ready && state.read, "create owned reader barriers");
+      threads[i] = CreateThread(nullptr, 0, WindowsKeyReader, &state, 0, nullptr);
+      KeyRequire(threads[i] != nullptr, "start actual native reader");
+    }
+    KeyRequire(WaitForMultipleObjects(count, ready.data(), TRUE, 30000) == WAIT_OBJECT_0, "all readers initialized");
+    KeyRequire(SetEvent(start) != 0, "publish read phase");
+    KeyRequire(WaitForMultipleObjects(count, read.data(), TRUE, 30000) == WAIT_OBJECT_0, "all real reads finished");
+    for (int k = 0; k < key_count; ++k) {
+      int32_t next = -1;
+      KeyRequire(key_delete(keys[k]) == 0 && key_create(&next, NewReadExit) == 0 && next == keys[k],
+                 "delete and publish exact replacement slot");
+    }
+    KeyRequire(SetEvent(replaced) != 0, "publish replacement phase");
+    for (int i = 0; i < count; ++i) {
+      KeyWait(threads[i]);
+      const auto& state = states[i];
+      KeyRequire(state.valid && state.old_calls == 0 && state.new_calls == 1 && state.wrong_calls == 0,
+                 "own values, empty replacement and exact native-exit destructor");
+      CloseHandle(threads[i]); CloseHandle(ready[i]); CloseHandle(read[i]);
+    }
+    for (int k = 0; k < key_count; ++k) KeyRequire(key_delete(keys[k]) == 0, "retire completed keys");
+    CloseHandle(start); CloseHandle(replaced);
+  }
+  std::puts("Bionic concurrent key read contracts: all passed");
+}
+
+struct KeyWriteState {
+  KeyReadState value;
+  bool retain = false;
+};
+void WriteKeys(KeyWriteState* state) {
+  auto& value = state->value;
+  KeyWait(value.start);
+  errno = EDOM;
+  value.valid = key_set(-1, &value.old_value) == EINVAL &&
+      key_set(INT32_MAX, &value.old_value) == EINVAL;
+  for (int n = 0; n < 4000; ++n) {
+    value.valid &= key_set(value.key, &value.old_value) == 0 &&
+        key_get(value.key) == &value.old_value;
+    value.valid &= key_set(value.key, &value.new_value) == 0 &&
+        key_get(value.key) == &value.new_value;
+    value.valid &= key_set(value.key, nullptr) == 0 && key_get(value.key) == nullptr;
+  }
+  value.valid &= errno == EDOM;
+  if (state->retain)
+    value.valid &= key_set(value.key, &value.new_value) == 0 &&
+        key_get(value.key) == &value.new_value;
+}
+void* SYSV BionicKeyWriter(void* argument) {
+  WriteKeys(static_cast<KeyWriteState*>(argument));
+  return nullptr;
+}
+void* HostKeyWriter(void* argument) {
+  WriteKeys(static_cast<KeyWriteState*>(argument));
+  return nullptr;
+}
+DWORD WINAPI WindowsKeyWriter(void* argument) {
+  WriteKeys(static_cast<KeyWriteState*>(argument));
+  return 0;
+}
+void ConcurrentKeyWrites() {
+  KeyRequire(key_create && key_delete && key_get && key_set, "actual exported setter adapters");
+  for (int kind = 0; kind < 3; ++kind) {
+    for (int count : {1, 2, 8, 32}) for (bool distinct : {false, true}) {
+      const int key_count = distinct ? count : 1;
+      std::array<int32_t, 32> keys{};
+      std::array<KeyWriteState, 32> states;
+      std::array<uint64_t, 32> bionic{};
+      std::array<pthread_t, 32> host{};
+      std::array<HANDLE, 32> windows{};
+      HANDLE start = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      KeyRequire(start != nullptr, "create owned setter barrier");
+      for (int k = 0; k < key_count; ++k)
+        KeyRequire(key_create(&keys[k], NewReadExit) == 0, "create writer key");
+      for (int i = 0; i < count; ++i) {
+        states[i].value.key = keys[distinct ? i : 0];
+        states[i].value.start = start;
+        states[i].retain = (i % 2) == 0;
+        if (kind == 0)
+          KeyRequire(gesher_bionic_pthread_create(&bionic[i], nullptr, BionicKeyWriter, &states[i]) == 0,
+                     "start actual bionic writer");
+        else if (kind == 1)
+          KeyRequire(pthread_create(&host[i], nullptr, HostKeyWriter, &states[i]) == 0,
+                     "start actual winpthreads writer");
+        else {
+          windows[i] = CreateThread(nullptr, 0, WindowsKeyWriter, &states[i], 0, nullptr);
+          KeyRequire(windows[i] != nullptr, "start actual Windows writer");
+        }
+      }
+      KeyRequire(SetEvent(start) != 0, "release real concurrent writers");
+      for (int i = 0; i < count; ++i) {
+        if (kind == 0) KeyRequire(gesher_bionic_pthread_join(bionic[i], nullptr) == 0, "join bionic writer");
+        else if (kind == 1) KeyRequire(pthread_join(host[i], nullptr) == 0, "join host writer");
+        else { KeyWait(windows[i]); CloseHandle(windows[i]); }
+        const auto& value = states[i].value;
+        KeyRequire(value.valid && value.new_calls == int(states[i].retain) &&
+                   value.old_calls == 0 && value.wrong_calls == 0,
+                   "actual concurrent setters retain local values and exact exit ownership");
+      }
+      for (int k = 0; k < key_count; ++k) KeyRequire(key_delete(keys[k]) == 0, "retire completed writer key");
+      CloseHandle(start);
+    }
+  }
+  std::puts("Bionic concurrent key write contracts: all passed");
+}
+
 }  // namespace
 
 int main() {
@@ -262,6 +434,10 @@ int main() {
   }
   CloseHandle(wt);
   Report("a Windows", windows);
+
+  // Keep the existing ART-before-adapter registration/order probe first.
+  ConcurrentKeyReads();
+  ConcurrentKeyWrites();
 
   if (failures != 0) {
     std::printf("bionic_key_exit_test: %d failed\n", failures);

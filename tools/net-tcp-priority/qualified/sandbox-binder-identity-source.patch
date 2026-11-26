@@ -1,0 +1,134 @@
+diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
+index 889533e8972a595951128934e38467b15d41bf30..64c77907234eba0c83a7ff04e68871cc87bb0586 100644
+--- a/compat/binder/binderd.cc
++++ b/compat/binder/binderd.cc
+@@ -1584,7 +1584,11 @@ uint64_t RandomKey() {
+-// Whether the client of `pipe` is restricted (GESHER_SANDBOX=appcontainer, ADR 0090):
+-// in an AppContainer, or below Medium integrity. The pipe's Low label admits both,
+-// and neither may speak for the system. Its token, not its hello, says so: the
+-// pipe impersonates the sender of the last message read. A token that cannot be
+-// read counts as restricted.
+-bool ClientIsRestricted(HANDLE pipe) {
+-  if (!ImpersonateNamedPipeClient(pipe)) return true;
++using ContainerSid = std::vector<BYTE>;
++std::mutex g_container_lock;
++std::map<ContainerSid, uint32_t> g_container_uids;
++constexpr uint32_t kFirstAppUid = 10000;
++
++enum class PipePeer { kUnverified, kHost, kContainer };
++
++// Inspect the token of the sender of the message just read. The pipe admits
++// Low integrity clients, so a successful pipe open alone grants no authority.
++PipePeer ReadPipePeer(HANDLE pipe, ContainerSid* container_sid = nullptr) {
++  if (!ImpersonateNamedPipeClient(pipe)) return PipePeer::kUnverified;
+@@ -1593,7 +1597,20 @@ bool ClientIsRestricted(HANDLE pipe) {
+-  RevertToSelf();
+-  if (!opened) return true;
+-  DWORD contained = 1, size = 0;
+-  bool restricted =
+-      !GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &size) ||
+-      contained != 0;
+-  if (!restricted) {
++  if (!RevertToSelf()) abort();
++  if (!opened) return PipePeer::kUnverified;
++  DWORD contained = 0, size = 0;
++  if (!GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &size)) {
++    CloseHandle(token);
++    return PipePeer::kUnverified;
++  }
++  PipePeer peer = PipePeer::kUnverified;
++  if (contained != 0) {
++    alignas(TOKEN_APPCONTAINER_INFORMATION)
++        BYTE info[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE];
++    if (container_sid && GetTokenInformation(token, TokenAppContainerSid, info, sizeof(info), &size)) {
++      PSID sid = reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(info)->TokenAppContainer;
++      if (sid && IsValidSid(sid)) {
++        const auto* bytes = static_cast<const BYTE*>(sid);
++        container_sid->assign(bytes, bytes + GetLengthSid(sid));
++        peer = PipePeer::kContainer;
++      }
++    }
++  } else {
+@@ -1601,3 +1618 @@ bool ClientIsRestricted(HANDLE pipe) {
+-    if (!GetTokenInformation(token, TokenIntegrityLevel, label, sizeof(label), &size)) {
+-      restricted = true;
+-    } else {
++    if (GetTokenInformation(token, TokenIntegrityLevel, label, sizeof(label), &size)) {
+@@ -1605,2 +1620,5 @@ bool ClientIsRestricted(HANDLE pipe) {
+-      UCHAR count = *GetSidSubAuthorityCount(sid);
+-      restricted = count == 0 || *GetSidSubAuthority(sid, count - 1) < SECURITY_MANDATORY_MEDIUM_RID;
++      if (sid && IsValidSid(sid)) {
++        UCHAR count = *GetSidSubAuthorityCount(sid);
++        if (count && *GetSidSubAuthority(sid, count - 1) >= SECURITY_MANDATORY_MEDIUM_RID)
++          peer = PipePeer::kHost;
++      }
+@@ -1610 +1628,24 @@ bool ClientIsRestricted(HANDLE pipe) {
+-  return restricted;
++  return peer;
++}
++
++void RegisterContainer(HANDLE pipe, In in) {
++  uint32_t version, uid, size;
++  alignas(SID) BYTE sid[SECURITY_MAX_SID_SIZE]{};
++  int32_t status = -EPERM;
++  if (g_sandbox && ReadPipePeer(pipe) == PipePeer::kHost &&
++      in.Get(&version) && version == wire::kVersion && in.Get(&uid) && uid >= kFirstAppUid &&
++      in.Get(&size) && size <= sizeof(sid) && in.Read(sid, size) && in.p == in.end &&
++      IsValidSid(sid) && GetLengthSid(sid) == size && *GetSidSubAuthorityCount(sid) > 0) {
++    const SID_IDENTIFIER_AUTHORITY authority = SECURITY_APP_PACKAGE_AUTHORITY;
++    if (memcmp(GetSidIdentifierAuthority(sid), &authority, sizeof(authority)) == 0 &&
++        *GetSidSubAuthority(sid, 0) == SECURITY_APP_PACKAGE_BASE_RID) {
++      std::lock_guard<std::mutex> lock(g_container_lock);
++      auto registration = g_container_uids.emplace(ContainerSid(sid, sid + size), uid);
++      // PackageUids reserves the app ID across uninstall/reinstall. Refuse
++      // conflicting registrations for this device rather than changing it live.
++      if (registration.first->second == uid) status = 0;
++    }
++  }
++  WireReply reply;
++  reply.Put<int32_t>(status);
++  if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
+@@ -1616,4 +1657,3 @@ void ServeProc(HANDLE pipe, In in) {
+-  if (g_sandbox && ClientIsRestricted(pipe)) {
+-    // A first step of kernel-verified identity (ADR 0090, milestone M2 completes it):
+-    // a restricted process is an app, at its own pid. It cannot claim a system UID
+-    // (SYSTEM_UID 1000 and every other below FIRST_APPLICATION_UID) or another pid.
++  if (g_sandbox) {
++    ContainerSid sid;
++    PipePeer peer = ReadPipePeer(pipe, &sid);
+@@ -1621,2 +1661,10 @@ void ServeProc(HANDLE pipe, In in) {
+-    bool known = GetNamedPipeClientProcessId(pipe, &actual) != FALSE;
+-    if (uid < 10000 || !known || actual != pid) {
++    bool authorized = GetNamedPipeClientProcessId(pipe, &actual) && actual == pid;
++    if (authorized && peer == PipePeer::kContainer) {
++      std::lock_guard<std::mutex> lock(g_container_lock);
++      auto found = g_container_uids.find(sid);
++      authorized = found != g_container_uids.end();
++      if (authorized) uid = found->second;
++    } else {
++      authorized = authorized && peer == PipePeer::kHost;
++    }
++    if (!authorized) {
+@@ -1627,2 +1675 @@ void ServeProc(HANDLE pipe, In in) {
+-      Log("rejected a restricted client: claimed pid %u uid %u, actual pid %lu", pid, uid,
+-          actual);
++      Log("rejected an unverified Binder process (pipe PID %lu)", actual);
+@@ -1946,0 +1994,2 @@ void ServeThread(HANDLE pipe, In in) {
++  ULONG actual = 0;
++  bool known = !g_sandbox || GetNamedPipeClientProcessId(pipe, &actual);
+@@ -1950 +1999,2 @@ void ServeThread(HANDLE pipe, In in) {
+-    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
++    if (known && it != g_procs.end() && it->second->key == key && !it->second->is_dead &&
++        (!g_sandbox || actual == static_cast<ULONG>(it->second->pid))) {
+@@ -2044,0 +2095,2 @@ void Serve(HANDLE pipe) {
++      } else if (op == wire::kRegisterContainer) {
++        RegisterContainer(pipe, in);
+diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
+index 50a85fb801ec706ad7a4819e1186d7fe29505c53..63b6e886511eb84f15a3f7f92d837a3c7ce90728 100644
+--- a/compat/posix/src/binder_wire.h
++++ b/compat/posix/src/binder_wire.h
+@@ -111,0 +112,4 @@ enum Op : uint32_t {
++
++  // Host registration before starting a package in its AppContainer.
++  // -> {magic, kVersion, uid, sid size, binary SID}; <- {status}
++  kRegisterContainer = 12,

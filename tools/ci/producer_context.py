@@ -131,6 +131,15 @@ def authenticate(path, consumer, role, *, expected_supplier=None):
     require(os.environ.get('GITHUB_ACTIONS') == 'true', 'Reused producer proof executes only in CI')
     current = receipt_context(consumer, os.environ['GITHUB_WORKFLOW'])
     earlier = receipt_context(original, current['workflow'])
+    authenticate_archive(path, raw, current, earlier, role, expected_supplier=expected_supplier)
+    return original
+
+
+def authenticate_archive(path, raw, current, earlier, role, *, expected_supplier=None):
+    require(os.environ.get('GITHUB_ACTIONS') == 'true', 'Reused producer proof executes only in CI')
+    member, artifact_name, producer_name, _ = ROLES[role]
+    if isinstance(producer_name, dict):
+        producer_name = producer_name[current['workflow']]
     receipts.check_checkout(current)
     receipts.check_run(current)
     before = snapshot(current, earlier, artifact_name, producer_name)
@@ -158,8 +167,7 @@ def authenticate(path, consumer, role, *, expected_supplier=None):
     receipts.check_checkout(current)
     require(path.read_bytes() == raw, 'Producer role changed during archive verification')
     print('CI_AUTHENTICATED_PRODUCER_CONTEXT ' + json.dumps(dict(
-        role=role, source=original['source'], supplier_head=original['supplier_head'],
-        run=original['run'], producer_attempt=original['attempt'], consumer_attempt=consumer['attempt'],
+        role=role, source=earlier['checkout'], supplier_head=earlier['head'],
+        run=earlier['run_id'], producer_attempt=earlier['attempt'], consumer_attempt=current['attempt'],
         original_producer_id=after[0]['id'], current_producer_id=after[1]['id'],
         artifact=after[2]['id'], digest=after[2]['digest']), sort_keys=True), flush=True)
-    return original

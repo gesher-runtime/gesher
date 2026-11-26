@@ -14,6 +14,7 @@ function New-GeocoderProbeAssembly {
   if ($env:GITHUB_ACTIONS -cne 'true') { throw 'WinRT compilation is CI only' }
   . (Join-Path $PSScriptRoot '../tracks/geocoder-operation.ps1')
   if (-not ('TsfJobSupervisor' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot '../../../tools/windows4/TsfJobSupervisor.cs') }
+  & (Join-Path $PSScriptRoot 'pid-census-exit-probe.ps1')
   $framework = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319'
   Write-Host "WINRT_ORCHESTRATOR version=$($PSVersionTable.PSVersion) home=$PSHOME"
   $package = New-GeocoderCompilerHost
