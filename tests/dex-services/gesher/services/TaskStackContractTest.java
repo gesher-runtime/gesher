@@ -118,6 +118,10 @@ public final class TaskStackContractTest {
         return new Intent(pkg + "." + name).setComponent(new ComponentName(pkg, pkg + "." + name));
     }
     private static ApkPackage code(String pkg, int uid) throws Exception {
+        return code(pkg, uid, pkg);
+    }
+
+    private static ApkPackage code(String pkg, int uid, String affinity) throws Exception {
         String path = "/fixture/" + pkg + "/base.apk";
         PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(pkg, path);
         parsed.setEnabled(true);
@@ -127,7 +131,7 @@ public final class TaskStackContractTest {
             ParsedActivityImpl activity = new ParsedActivityImpl();
             activity.setPackageName(pkg);
             activity.setName(pkg + "." + name);
-            activity.setTaskAffinity(pkg);
+            activity.setTaskAffinity(affinity);
             activity.setEnabled(true);
             activity.setExported(!name.equals("Private"));
             if (name.equals("Guarded")) activity.setPermission("fixture.permission.NOT_GRANTED");
@@ -747,6 +751,25 @@ public final class TaskStackContractTest {
         check(h.records().size() == 3 && h.api.getTasks(10, false, true, Display.DEFAULT_DISPLAY).size() == 2
                 && h.thread.launches(null) == 3 && live(h, root) && live(h, top),
                 "Task reuse consumed MULTIPLE_TASK or retired the original task");
+    }
+
+    private static void ordinaryAffinityOwner() throws Exception {
+        String peerPackage = PKG + ".second";
+        for (boolean sharedUid : new boolean[]{true, false}) {
+            Harness h = new Harness();
+            ApkPackage peer = code(peerPackage, sharedUid ? UID : UID + 1, PKG);
+            publishFixtureCode(h, peerPackage, peer);
+            check(h.startOne(launch(peerPackage, "Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null)
+                    == ActivityManager.START_SUCCESS, "Could not start the peer's task");
+            Object existing = h.record(peerPackage, "Root");
+            check(h.startOne(launch("Other").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null)
+                    == ActivityManager.START_SUCCESS, "Could not launch the matching affinity");
+            Object destination = h.record("Other");
+            check(get(existing, "taskId").equals(get(destination, "taskId")) == sharedUid,
+                    sharedUid ? "Same-UID activities with matching affinity did not reuse the task"
+                            : "An unrelated UID's matching affinity changed task ownership");
+            check(live(h, existing) && live(h, destination), "Affinity lookup retired a live history record");
+        }
     }
 
     private static void launcherResetTask() throws Exception {
@@ -2453,7 +2476,7 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("validation")) invalidBatch();
         if (selected.equals("all") || selected.equals("tasks")) { taskFlags(); reorderedUriOwner(); abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris(); }
         if (selected.equals("all") || selected.equals("ordinary")) {
-            ordinaryTaskReuse(); ordinaryWaitReuse(); ordinaryClearTop(); ordinaryRootAndMultipleTasks(); launcherResetTask();
+            ordinaryTaskReuse(); ordinaryWaitReuse(); ordinaryClearTop(); ordinaryRootAndMultipleTasks(); ordinaryAffinityOwner(); launcherResetTask();
             launcherClearTaskOnLaunch(); launcherResetDocumentSuffix(); ordinaryNewTaskResult(); ordinaryDocumentResult();
             ordinaryReuseAdmission(); ordinaryAuthenticatorCompletion();
         }

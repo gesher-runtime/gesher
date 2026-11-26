@@ -3724,8 +3724,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                             && component && java.util.Objects.equals(root.intent.getData(), intent.getData())) return task;
                 } else if ((root.intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_DOCUMENT) == 0) {
                     if (component) return task;
-                    if (affinityTask < 0 && info.taskAffinity != null
-                            && info.taskAffinity.equals(root.info.taskAffinity)) affinityTask = task;
+                    // Android scopes the affinity name to the admitted app UID.
+                    // Use the task's retained identity, as Up navigation does.
+                    AppTaskRecord identity = mAppTasks.get(task);
+                    if (affinityTask < 0 && info.taskAffinity != null && identity != null
+                            && identity.available(mPm)
+                            && identity.matchesAffinity(info.applicationInfo.uid, info.taskAffinity)) {
+                        affinityTask = task;
+                    }
                 }
             }
             if (affinityTask >= 0) return affinityTask;
