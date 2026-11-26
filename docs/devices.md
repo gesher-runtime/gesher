@@ -115,7 +115,8 @@ Windows without them (no location service, no Media Foundation) gets clean
   after `onConfigured`. An open that fails there is retried by the first
   request, which reports the failure. Then one frame per request, for each
   target: an ImageReader gets YUV_420_888 (I420 planes),
-  RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
+  PRIVATE (the same I420, no visible planes; the reader also has a native
+  producer Surface, so apps can draw into it), RGBA_8888 or JPEG (encoded with YuvImage, else a Bitmap), scaled to the
   reader's size; another surface with a native window gets RGBA through
   `ANativeWindow_lock`. Then `onCaptureStarted` and the result
   (`CameraMetadataInfo.metadata`, SENSOR_TIMESTAMP and the 3A states).

@@ -577,6 +577,9 @@ std::shared_ptr<ViewSurface> ViewSurfaceFor(jlong blast, bool create) {
   if (!create) return nullptr;
   auto vs = std::make_shared<ViewSurface>();
   vs->surface = android::sp<QueueSurface>::make(1, 1);
+  // A SurfaceView's layer is composited into its window (Android's SurfaceFlinger
+  // does that for its BLAST surface), so hwui paces its frames like a window's.
+  vs->surface->SetQueuesToWindowComposer(true);
   std::weak_ptr<ViewSurface> weak = vs;
   vs->surface->SetListener([weak] {
     std::shared_ptr<ViewSurface> v = weak.lock();
@@ -914,6 +917,11 @@ extern "C" jlong gesher_surface_create_forwarding(int width, int height,
                                                   GesherSurfaceFrameFn on_frame,
                                                   GesherSurfaceReleaseFn release, void* context) {
   android::sp<QueueSurface> surface = android::sp<QueueSurface>::make(width, height);
+  // Its NATIVE_WINDOW_QUEUES_TO_WINDOW_COMPOSER stays 0, even when the consumer's
+  // surface is a SurfaceView's (1 there): the parcel carries no such flag, and the
+  // producer's process only ever sees frames it forwards. The effect: hwui in the
+  // producer does not pace frames posted to it by vsync (patch 0787), and the
+  // consumer paces what it shows.
   QueueSurface* raw = surface.get();
   const jlong self = reinterpret_cast<jlong>(static_cast<android::Surface*>(raw));
   // The listener owns the context: Publish calls a copy of it, so the context
