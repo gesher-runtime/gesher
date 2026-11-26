@@ -614,6 +614,35 @@ public final class ServiceRebindContractTest {
         h.unbind(freshClient); h.acknowledge(0, false); h.stop();
     }
 
+    private static void retainedAcrossServiceDeath() throws Exception {
+        for (boolean published : List.of(true, false)) {
+            Harness h = new Harness();
+            int clientPid = PID + 100;
+            AppThread client = new AppThread();
+            h.clientProcess(clientPid, client);
+            Connection existing = new Connection(Runnable::run);
+            h.bindFrom(clientPid, client, existing, "provider-death");
+            if (published) h.publish(0, new Binder());
+
+            h.restartProcess();
+            check(existing.nulls == 0 && existing.died == 0,
+                    "Recovering service reported a null publication or terminal binding death");
+            check(h.connections() == 1, "Service-process death lost the surviving client");
+            Connection trigger = new Connection(Runnable::run);
+            h.bind(trigger, "provider-death", Context.BIND_AUTO_CREATE);
+            check(h.thread.binds.size() == 1 && !h.thread.binds.get(0).rebind,
+                    "Replacement service did not receive a fresh onBind");
+            IBinder replacement = new Binder();
+            h.publish(0, replacement);
+            check(existing.value == replacement && existing.connected == (published ? 2 : 1)
+                            && existing.nulls == 0 && existing.died == 0,
+                    "Replacement publication did not reach the existing client");
+            h.asCaller(clientPid, () -> check(h.am.unbindService(existing.callback),
+                    "Surviving external connection could not unbind"));
+            h.unbind(trigger);
+        }
+    }
+
     public static int contracts(boolean realBinder, String scenario) throws Exception {
         binder = realBinder; checks = 0;
         if (scenario.equals("all") || scenario.equals("retained")) retained();
@@ -635,6 +664,7 @@ public final class ServiceRebindContractTest {
         if (scenario.equals("all") || scenario.equals("retired")) retiredQueued();
         if (scenario.equals("all") || scenario.equals("destroyed")) destroyed();
         if (scenario.equals("all") || scenario.equals("restarted")) restarted();
+        if (scenario.equals("all") || scenario.equals("provider-death")) retainedAcrossServiceDeath();
         check(checks > 0, "No service rebind scenario selected");
         System.out.println("Service rebinding contracts passed: " + checks
                 + " checks; cached/null Binders, true/false/delayed acknowledgements, reentry, ordering, cleanup and restart");

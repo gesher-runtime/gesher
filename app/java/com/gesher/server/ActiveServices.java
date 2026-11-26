@@ -1275,9 +1275,6 @@ final class ActiveServices {
                 }
                 r.app = null;
                 r.created = false;
-                for (IntentBindRecord b : r.bindings.values()) {
-                    disconnected.addAll(b.connections);
-                }
                 resetBindingsLocked(r);
                 boolean started = r.startRequested && (r.startResult != Service.START_NOT_STICKY
                         || !r.pendingStarts.isEmpty());
@@ -1289,8 +1286,17 @@ final class ActiveServices {
                 // eventual death into an intentional stop of its existing services.
                 boolean recover = (!app.exiting || app.reaped || app.recoverAfterPidSupersession)
                         && (started || r.hasAutoCreateConnections())
-                        && r.owner != null && r.owner.serviceInfo(r.info.name, 0) != null;
-                if (serviceCurrent(r) && recover) {
+                        && r.owner != null && r.owner.serviceInfo(r.info.name, 0) != null
+                        && serviceCurrent(r);
+                for (IntentBindRecord b : r.bindings.values()) {
+                    for (ConnectionRecord c : b.connections) {
+                        // LoadedApk observes a published Binder's death itself.
+                        // A null publication means onBind returned null, so don't
+                        // send one while a surviving app binding awaits restart.
+                        if (!recover || c.systemClient) disconnected.add(c);
+                    }
+                }
+                if (recover) {
                     if (r.startRequested && r.pendingStarts.isEmpty() && started) {
                         Intent redelivery = r.startResult == Service.START_REDELIVER_INTENT
                                 && r.lastStartIntent != null ? new Intent(r.lastStartIntent) : null;
