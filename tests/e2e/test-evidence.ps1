@@ -60,6 +60,19 @@ try {
     $read.runtime.installed_files.'dalvikvm.exe' -eq (Get-FileHash -LiteralPath (Join-Path $directory 'dalvikvm.exe')).Hash.ToLowerInvariant() -and
     $read.runtime.declared_properties.'ro.build.version.sdk_full' -eq '36.0' -and
     $null -eq $read.runtime.source_revision -and $null -eq $read.runtime.android_reference)
+  if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    $hardware = $read.runtime.hardware_profile
+    $system = Get-CimInstance Win32_ComputerSystem -OperationTimeoutSec 5
+    EvidenceCheck 'CIM snapshot preserves the Windows-visible model without identifying a Gesher provider' (
+      $hardware.source -eq 'windows_cim' -and
+      $hardware.system.Model -eq $system.Model -and
+      $hardware.system.Manufacturer -eq $system.Manufacturer -and
+      $hardware.processors.Count -gt 0 -and
+      @($hardware.system.PSObject.Properties).Count -eq 2 -and
+      $null -eq $read.runtime.providers)
+  } else {
+    EvidenceCheck 'non-Windows ledger has no Windows hardware snapshot' ($null -eq $read.runtime.hardware_profile)
+  }
   Add-E2eApk 'fixture.a' ('a' * 64)
   $read = ReadEvidence
   EvidenceCheck 'APK record preserves unmeasured signer and selected ABI as null' (

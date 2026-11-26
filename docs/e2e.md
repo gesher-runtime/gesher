@@ -106,8 +106,13 @@ Identity fields distinguish measured bytes from declared or unknown values:
   `target_sdk` is taken from the actual successful package-parser log when
   available. Neither metadata source is inferred from an app's display name.
 - The test checkout SHA is separate from the runtime source revision. The
-  latter, AOSP tag, selected app ABI, modules, providers, hardware profile and
-  Android reference stay null until a future collector can verify them.
+  latter, AOSP tag, selected app ABI, modules, providers and Android reference
+  stay null until a collector can verify them.
+- The hardware profile records the system manufacturer/model, processor names,
+  and display adapter names/driver versions reported by Windows CIM. On a VM
+  these describe the Windows guest's view. The profile stays null when the
+  query is unavailable. It does not establish which adapter or provider an
+  individual app used.
 
 ### Measured APK identity and profile rows
 
@@ -175,8 +180,8 @@ collector against valid bytes, mismatched manifest identity and modifications
 after signing, a four-ABI `multiArch` APK, source stamps with a distinct key,
 omitted version/SDK attributes, and real v3.1 key rotation. These tests establish
 metadata handling, not app compatibility.
-Signer rotation history, split-APK sets and measured runtime/provider/hardware
-selection remain follow-up work in issue #56 A01/T01/T13/T14.
+Signer rotation history, split-APK sets and per-app runtime/provider selection
+remain follow-up work in issue #56 A01/T01/T13/T14.
 
 To regenerate a report locally after a Windows run:
 

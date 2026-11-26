@@ -147,6 +147,26 @@ function Set-E2eRuntime([string] $InstallationDirectory) {
       }
     }
   }
+  if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    try {
+      $system = Get-CimInstance Win32_ComputerSystem -Property Manufacturer,Model -OperationTimeoutSec 5 -ErrorAction Stop
+      $processors = @(Get-CimInstance Win32_Processor -Property Name -OperationTimeoutSec 5 -ErrorAction Stop |
+        Sort-Object Name | Select-Object Name)
+      $video = @(Get-CimInstance Win32_VideoController -Property Name,DriverVersion -OperationTimeoutSec 5 -ErrorAction Stop |
+        Sort-Object Name,DriverVersion | Select-Object Name,DriverVersion)
+      if ($null -ne $system) {
+        $script:E2eEvidence.runtime.hardware_profile = [ordered]@{
+          source = 'windows_cim'
+          system = $system | Select-Object Manufacturer,Model
+          processors = $processors
+          video_controllers = $video
+        }
+      }
+    } catch {
+      # Hardware inventory is optional. An unavailable provider leaves it unknown.
+      $script:E2eEvidence.runtime.hardware_profile = $null
+    }
+  }
   Write-E2eEvidence
 }
 
