@@ -544,7 +544,26 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
           return true;
         }, error);
 
-    if (!vm_ok ||
+    // Android native libraries may query the already running VM without
+    // using JNIEnv::GetJavaVM. Never return a host JavaVM address here.
+    const bool created_vms_ok = vm_ok &&
+        program.BindHostSymbol("JNI_GetCreatedJavaVMs",
+            {P, I, P}, I, [this](const auto& a, Value* out, std::string* e) {
+          if (!CheckThread(e) || a.size() != 3) return false;
+          const int32_t capacity = static_cast<int32_t>(a[1].bits);
+          if (capacity < 0)
+            return Fail(e, "JNI32 VM enumeration has negative capacity");
+          if (a[2].bits == 0 || !program.Memory().Write32(
+                  static_cast<uint32_t>(a[2].bits), 1, e))
+            return Fail(e, "JNI32 VM count output is not writable guest memory");
+          if (capacity > 0 && (a[0].bits == 0 || !program.Memory().Write32(
+                  static_cast<uint32_t>(a[0].bits), kGuestVm, e)))
+            return Fail(e, "JNI32 guest JavaVM array is not writable");
+          *out = Value::Signed32(JNI_OK);
+          return true;
+        }, error);
+
+    if (!created_vms_ok ||
         !memory.Protect(kGuestVm, kPage, MemoryPermission::kRead, error) ||
         !memory.Protect(kGuestVmTable, kPage, MemoryPermission::kRead, error) ||
         !memory.Protect(kGuestEnv, kPage, MemoryPermission::kRead, error) ||
