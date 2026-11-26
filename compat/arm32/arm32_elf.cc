@@ -204,8 +204,13 @@ class Loader {
     std::sort(loads_.begin(), loads_.end(), [](const auto& a, const auto& b) {
       return a.vaddr < b.vaddr;
     });
-    minimum_ = loads_.front().vaddr;
-    uint64_t end = minimum_;
+    // A shared object's first PT_LOAD can start at a non-page-aligned
+    // virtual address when p_align permits it. The mapped image must still
+    // begin on a guest page boundary. Preserve the leading zero-filled bytes
+    // before the first actual segment; metadata accesses remain restricted
+    // to PT_LOAD file-backed ranges by Covering()/MetadataAt().
+    minimum_ = loads_.front().vaddr & ~uint32_t{4095};
+    uint64_t end = loads_.front().vaddr;
     for (const auto& ph : loads_) {
       if (ph.vaddr < end) return Fail("overlapping PT_LOAD byte ranges");
       end = uint64_t{ph.vaddr} + ph.memsz;
