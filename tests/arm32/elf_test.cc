@@ -152,13 +152,13 @@ struct Fixture {
 void PackedAps2(Fixture& f, bool grouped) {
   std::vector<uint8_t> encoded{'A', 'P', 'S', '2'};
   // total count = 3; previous offset = 0x624 (signed LEB128).
-  encoded.insert(encoded.end(), {3, 0xa4, 0x0c, 3});
+  encoded.insert(encoded.end(), {3, 0xa4, 0x0c});
   if (grouped) {
     // grouped by offset delta and r_info; relative relocation at each step.
-    encoded.insert(encoded.end(), {3, 4, 23});
+    encoded.insert(encoded.end(), {3, 3, 4, 23});
   } else {
     // Three individual (delta, r_info) pairs.
-    encoded.insert(encoded.end(), {0, 4, 23, 4, 23, 4, 23});
+    encoded.insert(encoded.end(), {3, 0, 4, 23, 4, 23, 4, 23});
   }
   CHECK(0x4a0 + encoded.size() < 0x500);
   std::copy(encoded.begin(), encoded.end(), f.file.begin() + 0x4a0);
@@ -423,13 +423,13 @@ void HostileImages() {
     PackedAps2(f, true); f.file[0x4a8] = 8;
   }, "invalid flags or addends");
   bad([](auto& f) {
-    PackedAps2(f, true); f.file[0x4a5] = 0xa0; // first offset 0x620, first relocation 0x624 duplicates REL.
+    PackedAps2(f, true); f.file[0x4a5] = 0xfc; f.file[0x4a6] = 0x0b; // 0x5fc + 4 = 0x600 duplicates DT_REL.
   }, "duplicate relocation");
   bad([](auto& f) {
     PackedAps2(f, true); f.Tag(0x60000010, 12);
   }, "trailing Android APS2 relocation data");
   bad([](auto& f) {
-    PackedAps2(f, true); f.file[0x4aa] = 0x7f;
+    PackedAps2(f, true); f.Tag(0x60000010, 10);
   }, "truncated Android APS2 group info");
   bad([](auto& f) { f.Tag(0x60000011, 0x400); }, "ELF32 Android packed RELA");
 
