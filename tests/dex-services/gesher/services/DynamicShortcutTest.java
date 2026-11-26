@@ -90,7 +90,14 @@ public final class DynamicShortcutTest {
         long original=Binder.clearCallingIdentity();
         try {
             Binder.restoreCallingIdentity(((long)owner.uid()<<32)|910001);
-            checks += ShortcutUpdateContractTest.contracts(api, pkg);
+            // This existing merge/validation corpus intentionally exceeds the
+            // publisher budget. Its system caller has the platform exemption;
+            // ordinary publisher identity and quota are exercised separately.
+            long publisherIdentity=Binder.clearCallingIdentity();
+            try {
+                Binder.restoreCallingIdentity(((long)android.os.Process.SYSTEM_UID<<32)|android.os.Process.myPid());
+                checks += ShortcutUpdateContractTest.contracts(api, pkg);
+            } finally {Binder.restoreCallingIdentity(publisherIdentity);}
             denied(()->api.setDynamicShortcuts(other.packageName,new ParceledListSlice<>(Collections.singletonList(info(other.packageName,"foreign","foreign"))),0));
             require(api.setDynamicShortcuts(pkg,new ParceledListSlice<>(Collections.singletonList(first)),0),"valid snapshot failed");
             require(list(api,pkg).size()==1 && list(api,pkg).get(0).isDynamic(),"dynamic state missing");
@@ -189,6 +196,7 @@ public final class DynamicShortcutTest {
             try {AppShell.dynamicShortcutIntent(pkg,AppShell.dynamicKey(pkg,"retirement"),owner.codeIdentity());throw new AssertionError("retired shortcut launched");}
             catch(SecurityException|IllegalArgumentException expected){checks++;}
         } finally {Binder.restoreCallingIdentity(original);}
+        ShortcutQuotaContractTest.contracts(true);
         System.out.println("DynamicShortcutTest all passed: "+checks+" checks");
     }
 }

@@ -19,7 +19,9 @@ def notices(package, log_path):
     callback = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
     u.EnumWindows.argtypes = [callback, w.LPARAM]
     u.EnumChildWindows.argtypes = [w.HWND, callback, w.LPARAM]
-    u.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+    u.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM,
+                                    w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
+    u.SendMessageTimeoutW.restype = w.LPARAM
     u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
     u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
     found = []
@@ -33,8 +35,12 @@ def notices(package, log_path):
         @callback
         def child(ch, unused):
             text = ctypes.create_unicode_buffer(16384)
-            u.GetWindowTextW(ch, text, len(text))
-            labels.append(text.value)
+            result = ctypes.c_size_t()
+            # The host prompt may use an EDIT for long text. GetWindowTextW
+            # cannot retrieve that control's contents across process boundaries.
+            if u.SendMessageTimeoutW(ch, 0x000D, len(text), ctypes.addressof(text),
+                    0x3, 1000, ctypes.byref(result)):  # SMTO_BLOCK | SMTO_ABORTIFHUNG
+                labels.append(text.value)
             return True
         u.EnumChildWindows(hwnd, child, 0)
         text = '\n'.join(labels)

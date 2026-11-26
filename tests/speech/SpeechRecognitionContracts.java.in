@@ -1,0 +1,1313 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+// Host contracts for Gesher's speech recognition service (app/gesher-stt,
+// docs/speech-recognition.md). The production sources (WindowsRecognitionService,
+// RecognizerBackend, WindowsRecognizerBackend, AudioInput, MicrophoneInput, StreamInput,
+// Languages) and com.gesher.server.WindowsSpeechRecognition are inserted unchanged apart
+// from their package, imports and public class visibility.
+//
+// Everything else is a boundary stand-in with android-16.0.0_r4's constant values.
+// RecognitionService follows frameworks/base core/java/android/speech/
+// RecognitionService.java: dispatchStartListening checks the session capacity
+// (ERROR_RECOGNIZER_BUSY), runs the RECORD_AUDIO preflight, calls onStartListening, and
+// then checkPermissionAndStartDataDelivery, which is skipped when the service already
+// created an attribution context for the caller; on refusal it reports
+// ERROR_INSUFFICIENT_PERMISSIONS and calls onCancel. Callback.error and results reset the
+// session. AudioRecord hands over PCM from a scripted microphone. FakeBackend is an
+// isolated test double: production recognizes with Windows' recognizers only.
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public final class SpeechRecognitionContracts {
+    private static int failures, checks;
+
+    static void check(boolean condition, String description) {
+        checks++;
+        System.out.println((condition ? "PASS " : "FAIL ") + description);
+        if (!condition) failures++;
+    }
+
+    // --- the isolated backend --------------------------------------------------------
+
+    static final class FakeRecognition implements RecognizerBackend.Recognition {
+        final BlockingQueue<RecognizerBackend.Event> events = new LinkedBlockingQueue<>();
+        final AtomicInteger samples = new AtomicInteger();
+        volatile boolean ended, canceled, released;
+        /** Called with the total samples after each write. */
+        volatile java.util.function.IntConsumer onWrite = n -> { };
+        volatile Runnable onEndAudio = () -> { };
+
+        void emit(int kind, String... texts) {
+            float[] c = new float[texts.length];
+            Arrays.fill(c, -1f);
+            events.add(new RecognizerBackend.Event(kind, texts, c, 0));
+        }
+
+        void emit(RecognizerBackend.Event e) {
+            events.add(e);
+        }
+
+        public boolean write(short[] pcm, int count) {
+            if (ended || canceled) return false;
+            onWrite.accept(samples.addAndGet(count));
+            return true;
+        }
+        public void endAudio() {
+            if (ended) return;
+            ended = true;
+            onEndAudio.run();
+        }
+        public void cancel() { canceled = true; }
+        public RecognizerBackend.Event next(int timeoutMs) {
+            if (canceled) return new RecognizerBackend.Event(RecognizerBackend.NONE, null, null, 0);
+            try {
+                RecognizerBackend.Event e = timeoutMs <= 0 ? events.poll()
+                        : events.poll(timeoutMs, TimeUnit.MILLISECONDS);
+                return e != null ? e : new RecognizerBackend.Event(RecognizerBackend.NONE, null, null, 0);
+            } catch (InterruptedException e) {
+                return new RecognizerBackend.Event(RecognizerBackend.NONE, null, null, 0);
+            }
+        }
+        public void release() { released = true; }
+    }
+
+    static final class FakeBackend implements RecognizerBackend {
+        List<Language> languages = new ArrayList<>();
+        StartFailure failure;
+        final List<String> starts = new ArrayList<>();
+        volatile FakeRecognition last;
+        volatile java.util.function.Consumer<FakeRecognition> script = r -> { };
+
+        public List<Language> languages() { return languages; }
+
+        public Recognition start(String tag, int sampleRate, boolean partials, int maxResults)
+                throws StartFailure {
+            synchronized (starts) { starts.add(tag + "/" + sampleRate + "/" + partials + "/" + maxResults); }
+            if (failure != null) throw failure;
+            FakeRecognition r = new FakeRecognition();
+            script.accept(r);
+            last = r;
+            return r;
+        }
+    }
+
+    static List<RecognizerBackend.Language> windowsLanguages() {
+        return new ArrayList<>(List.of(
+                new RecognizerBackend.Language("en-US", true),
+                new RecognizerBackend.Language("en-GB", false),
+                new RecognizerBackend.Language("fr-FR", false)));
+    }
+
+    // --- the client's listener ----------------------------------------------------------
+
+    static final class Listener implements IRecognitionListener {
+        final List<String> events = Collections.synchronizedList(new ArrayList<>());
+        final CountDownLatch done = new CountDownLatch(1);
+        volatile Bundle results;
+        volatile boolean dieOnRms;
+        final AtomicInteger finals = new AtomicInteger();
+
+        public void onReadyForSpeech(Bundle params) { events.add("ready"); }
+        public void onBeginningOfSpeech() { events.add("begin"); }
+        public void onRmsChanged(float rmsdB) throws RemoteException {
+            if (dieOnRms) throw new RemoteException("client died");
+            events.add("rms");
+        }
+        public void onEndOfSpeech() { events.add("end"); }
+        public void onPartialResults(Bundle partial) {
+            events.add("partial:" + partial.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION));
+        }
+        public void onResults(Bundle b) {
+            results = b;
+            events.add("results:" + b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION));
+            finals.incrementAndGet();
+            done.countDown();
+        }
+        public void onError(int error) {
+            events.add("error:" + error);
+            finals.incrementAndGet();
+            done.countDown();
+        }
+
+        boolean await() throws InterruptedException { return done.await(10, TimeUnit.SECONDS); }
+
+        /** The callbacks without the rms ones, which depend on timing. */
+        List<String> flow() {
+            List<String> out = new ArrayList<>();
+            synchronized (events) { for (String e : events) if (!e.equals("rms")) out.add(e); }
+            return out;
+        }
+
+        boolean has(String e) { synchronized (events) { return events.contains(e); } }
+    }
+
+    static final AttributionSource CALLER = new AttributionSource(10123, "com.example.notes");
+
+    static WindowsRecognitionService service(FakeBackend backend) {
+        RecognitionService.resetPermissions();
+        return new WindowsRecognitionService(backend);
+    }
+
+    static Intent intent() {
+        return new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+    }
+
+    /** Silence, then the next microphone chunks come from the test. */
+    static short[] chunk(int samples, int amplitude) {
+        short[] s = new short[samples];
+        for (int i = 0; i < samples; i++) s[i] = (short) ((i & 1) == 0 ? amplitude : -amplitude);
+        return s;
+    }
+
+    static void settle() throws Exception {
+        Thread.sleep(300);
+        Looper.main().flush();
+    }
+
+    // --- the contracts --------------------------------------------------------------------
+
+    public static void main(String[] args) throws Exception {
+        Locale.setDefault(Locale.US);
+        languages();
+        nativesAbsent();
+        recognitionFlow();
+        partialsOnlyWhenRequested();
+        resultRequestLimits();
+        permissionRefusals();
+        languageRefusals();
+        startFailures();
+        audioFailure();
+        speechTimeout();
+        noMatch();
+        stopListening();
+        cancelAndDestroy();
+        busy();
+        windowsFailureMidSession();
+        clientDeath();
+        appAudioSource();
+        appAudioShortReads();
+        recognitionSupport();
+        modelDownload();
+        levels();
+        System.out.println(checks + " checks, " + failures + " failure(s)");
+        Looper.main().quit();
+        if (failures != 0) System.exit(1);
+    }
+
+    static void languages() {
+        List<RecognizerBackend.Language> l = windowsLanguages();
+        check("en-US".equals(Languages.match(l, "en-US")), "an installed tag selects itself");
+        check("en-GB".equals(Languages.match(l, "EN-gb")), "tags compare without case");
+        check("en-US".equals(Languages.match(l, "en")), "a bare language prefers the default recognizer's");
+        check(Languages.match(l, "en-AU") == null, "another region is not substituted (en-AU is not en-US)");
+        check(Languages.match(l, "he-IL") == null, "Hebrew is not offered when Windows has no Hebrew recognizer");
+        check(Languages.match(l, "") == null && Languages.match(l, null) == null, "no language matches nothing");
+        List<RecognizerBackend.Language> he = new ArrayList<>(List.of(new RecognizerBackend.Language("he-IL", true)));
+        check("he-IL".equals(Languages.match(he, "iw-IL")), "the legacy code iw-IL is Hebrew, when Windows has it");
+        check(Languages.tags(l).equals(List.of("en-US", "en-GB", "fr-FR")), "the tags are Windows' own, in order");
+    }
+
+    static void nativesAbsent() {
+        check(WindowsSpeechRecognition.recognizers().isEmpty(),
+                "without the natives Windows has no recognizer (no engine is installed)");
+        boolean threw = false;
+        try {
+            WindowsSpeechRecognition.start("en-US", 16000, false, 1);
+        } catch (WindowsSpeechRecognition.StartException e) {
+            threw = e.reason == WindowsSpeechRecognition.REASON_WINDOWS;
+        }
+        check(threw, "without the natives a session fails as a Windows failure");
+        WindowsRecognizerBackend backend = new WindowsRecognizerBackend();
+        check(backend.languages().isEmpty(), "the Windows backend reports no language without natives");
+        int reason = -1;
+        try {
+            backend.start("en-US", 16000, false, 1);
+        } catch (RecognizerBackend.StartFailure e) {
+            reason = e.reason;
+        }
+        check(reason == RecognizerBackend.WINDOWS_FAILED, "and its start fails as WINDOWS_FAILED");
+        List<WindowsSpeechRecognition.Recognizer> parsed = WindowsSpeechRecognition.recognizersOf(new String[] {
+                "HKLM\\...\\MS-1033-80-DESK", "Microsoft Speech Recognizer 8.0 for Windows (English - US)", "en-US,en", "1",
+                "", "nameless", "fr-FR", "0",
+                "HKLM\\...\\MS-2057-80-DESK", "English - UK", "en-GB", "0",
+                "HKLM\\...\\none", "no languages", "", "0"});
+        check(parsed.size() == 2 && parsed.get(0).isDefault && parsed.get(0).languages.equals(List.of("en-US", "en"))
+                && !parsed.get(1).isDefault, "the natives' records are read; incomplete ones are dropped");
+        check(WindowsSpeechRecognition.recognizersOf(new String[] {"a", "b"}).isEmpty(),
+                "a malformed native array is no recognizer");
+        WindowsSpeechRecognition.Event e = new WindowsSpeechRecognition.Event(4, new String[] {"x"}, null, 0);
+        check(e.confidences.length == 1 && e.confidences[0] == -1f, "missing confidences are Android's -1");
+    }
+
+    static void recognitionFlow() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        backend.script = r -> r.onWrite = n -> {
+            if (n == 3200) {  // after 200 ms of audio
+                r.emit(RecognizerBackend.SOUND_START);
+                r.emit(RecognizerBackend.HYPOTHESIS, "hello");
+            } else if (n == 6400) {
+                r.emit(RecognizerBackend.SOUND_END);
+                r.emit(new RecognizerBackend.Event(RecognizerBackend.RECOGNITION,
+                        new String[] {"hello world", "hello word"}, new float[] {0.91f, -1f}, 0));
+            }
+        };
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(20, chunk(1600, 1000));
+        Listener l = new Listener();
+        Intent i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+        s.startListening(i, l, CALLER);
+        check(l.await(), "a session ends with one final callback");
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "partial:[hello]", "end",
+                "results:[hello world, hello word]")),
+                "callbacks in AOSP's order: ready, beginning, partial, end, results " + l.flow());
+        check(l.has("rms"), "onRmsChanged comes from the captured audio");
+        float[] c = l.results.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES);
+        check(c != null && c.length == 2 && c[0] == 0.91f && c[1] == -1f,
+                "CONFIDENCE_SCORES are Windows' confidences, -1 where it reported none");
+        check(backend.starts.equals(List.of("en-US/16000/true/5")),
+                "Windows recognizes the default locale at 16 kHz, partials as requested " + backend.starts);
+        AudioRecord rec = AudioRecord.created.get(0);
+        check(rec.source == MediaRecorder.AudioSource.VOICE_RECOGNITION && rec.rate == 16000
+                && rec.channelMask == AudioFormat.CHANNEL_IN_MONO && rec.encoding == AudioFormat.ENCODING_PCM_16BIT,
+                "the microphone is AudioRecord: VOICE_RECOGNITION, 16 kHz mono PCM 16");
+        check(rec.context != null && rec.context.next == CALLER,
+                "AudioRecord is opened with an attribution context for the calling app");
+        check(rec.released && backend.last.released && backend.last.samples.get() >= 6400,
+                "after the result the microphone and Windows' recognizer are released");
+        check(l.finals.get() == 1 && s.sessions() == 0, "exactly one final callback, and the session is reset");
+    }
+
+    static void partialsOnlyWhenRequested() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        backend.script = r -> r.onWrite = n -> {
+            if (n == 1600) {
+                r.emit(RecognizerBackend.SOUND_START);
+                r.emit(RecognizerBackend.HYPOTHESIS, "partial");
+                r.emit(RecognizerBackend.RECOGNITION, "final");
+            }
+        };
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(20, chunk(1600, 500));
+        Listener l = new Listener();
+        Intent i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        s.startListening(i, l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "end", "results:[final]")),
+                "no onPartialResults unless EXTRA_PARTIAL_RESULTS " + l.flow());
+        check(backend.starts.equals(List.of("en-US/16000/false/1")), "EXTRA_MAX_RESULTS reaches Windows");
+    }
+
+    static void resultRequestLimits() throws Exception {
+        int[] requests = {Integer.MIN_VALUE, 0, 1, 64, 65, Integer.MAX_VALUE};
+        int[] expected = {1, 1, 1, 64, 64, 64};
+        for (int index = 0; index < requests.length; index++) {
+            FakeBackend backend = new FakeBackend();
+            backend.languages = windowsLanguages();
+            backend.script = r -> r.onWrite = n -> r.emit(RecognizerBackend.RECOGNITION, "result");
+            WindowsRecognitionService s = service(backend);
+            AudioRecord.reset();
+            AudioRecord.feed(20, chunk(1600, 500));
+            Listener l = new Listener();
+            Intent request = intent();
+            request.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, requests[index]);
+            s.startListening(request, l, CALLER);
+            l.await();
+            settle();
+            check(backend.starts.equals(List.of("en-US/16000/false/" + expected[index])),
+                    "EXTRA_MAX_RESULTS " + requests[index] + " has bounded backend storage: "
+                            + backend.starts);
+            check(l.flow().contains("results:[result]"),
+                    "a large result limit still returns the recognizer's actual result");
+        }
+    }
+
+    static void permissionRefusals() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        WindowsRecognitionService s = service(backend);
+        RecognitionService.preflight = RecognitionService.PERMISSION_HARD_DENIED;
+        AudioRecord.reset();
+        Listener l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)),
+                "a caller without RECORD_AUDIO gets ERROR_INSUFFICIENT_PERMISSIONS only " + l.flow());
+        check(AudioRecord.created.isEmpty() && backend.starts.isEmpty(),
+                "and no microphone is opened and Windows is not started");
+
+        s = service(backend);
+        RecognitionService.dataDelivery = false;  // the preflight passes, the data delivery does not
+        AudioRecord.reset();
+        AudioRecord.feed(5, chunk(1600, 0));
+        l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)),
+                "a refused data delivery is ERROR_INSUFFICIENT_PERMISSIONS only " + l.flow());
+        check(AudioRecord.created.isEmpty() && backend.starts.isEmpty() && s.canceled.get() == 1,
+                "the session onCancel ended opens nothing: the permission check precedes the microphone");
+        check(!RecognitionService.attributionContextBeforeCheck,
+                "no attribution context exists before RecognitionService checks the caller");
+    }
+
+    static void languageRefusals() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        for (String tag : new String[] {"he-IL", "en-AU"}) {
+            WindowsRecognitionService s = service(backend);
+            AudioRecord.reset();
+            Listener l = new Listener();
+            Intent i = intent();
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag);
+            s.startListening(i, l, CALLER);
+            l.await();
+            settle();
+            check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED))
+                    && AudioRecord.created.isEmpty(),
+                    tag + " without a Windows recognizer: ERROR_LANGUAGE_NOT_SUPPORTED, no microphone");
+        }
+        Locale.setDefault(Locale.forLanguageTag("he-IL"));
+        WindowsRecognitionService s = service(backend);
+        Listener l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        Locale.setDefault(Locale.US);
+        check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED)),
+                "without EXTRA_LANGUAGE the device locale is used, and not replaced by another language");
+        backend.languages = new ArrayList<>();
+        s = service(backend);
+        l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED)),
+                "recognizers removed from Windows: ERROR_LANGUAGE_NOT_SUPPORTED");
+    }
+
+    static void startFailures() throws Exception {
+        int[][] cases = {
+                {RecognizerBackend.RECOGNIZER_FAILED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE},
+                {RecognizerBackend.NO_RECOGNIZER, SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED},
+                {RecognizerBackend.WINDOWS_FAILED, SpeechRecognizer.ERROR_SERVER}};
+        String[] names = {"a recognizer Windows cannot load: ERROR_LANGUAGE_UNAVAILABLE",
+                "a recognizer gone since the check: ERROR_LANGUAGE_NOT_SUPPORTED",
+                "SAPI failing: ERROR_SERVER"};
+        for (int k = 0; k < cases.length; k++) {
+            FakeBackend backend = new FakeBackend();
+            backend.languages = windowsLanguages();
+            backend.failure = new RecognizerBackend.StartFailure(cases[k][0], 0x80004005, "scripted");
+            WindowsRecognitionService s = service(backend);
+            AudioRecord.reset();
+            Listener l = new Listener();
+            s.startListening(intent(), l, CALLER);
+            l.await();
+            settle();
+            check(l.flow().equals(List.of("error:" + cases[k][1])) && AudioRecord.created.isEmpty(), names[k]);
+        }
+    }
+
+    static void audioFailure() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.failInit = true;
+        Listener l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_AUDIO)),
+                "an AudioRecord Gesher refuses (no microphone, no permission): ERROR_AUDIO " + l.flow());
+        check(backend.last != null && backend.last.released, "Windows' recognizer is released");
+
+        s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(2, chunk(1600, 100));
+        AudioRecord.readError = true;
+        l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "error:" + SpeechRecognizer.ERROR_AUDIO)),
+                "a capture failure mid-session: ERROR_AUDIO " + l.flow());
+    }
+
+    static void speechTimeout() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        backend.script = r -> {
+            r.onWrite = n -> { if (n == 3200) SystemClock.advance(WindowsRecognitionService.NO_SPEECH_TIMEOUT_MS); };
+            r.onEndAudio = () -> r.emit(RecognizerBackend.STREAM_END);
+        };
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(50, chunk(1600, 0));
+        Listener l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "error:" + SpeechRecognizer.ERROR_SPEECH_TIMEOUT)),
+                "no speech within the timeout: ERROR_SPEECH_TIMEOUT " + l.flow());
+        check(backend.last.ended && AudioRecord.created.get(0).released, "the audio ended and the microphone closed");
+    }
+
+    static void noMatch() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        backend.script = r -> r.onWrite = n -> {
+            if (n == 1600) {
+                r.emit(RecognizerBackend.SOUND_START);
+                r.emit(RecognizerBackend.SOUND_END);
+                r.emit(RecognizerBackend.NO_MATCH);
+            }
+        };
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(20, chunk(1600, 3000));
+        Listener l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "end", "error:" + SpeechRecognizer.ERROR_NO_MATCH)),
+                "sound Windows matched to nothing: ERROR_NO_MATCH " + l.flow());
+
+        backend.script = r -> {
+            r.onWrite = n -> { if (n == 1600) r.emit(RecognizerBackend.SOUND_START); };
+            r.onEndAudio = () -> r.emit(RecognizerBackend.STREAM_END);
+        };
+        s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(3, chunk(1600, 3000));
+        AudioRecord.endAfterFeed = true;
+        l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "end", "error:" + SpeechRecognizer.ERROR_NO_MATCH)),
+                "speech that ended without a recognition: ERROR_NO_MATCH, after onEndOfSpeech " + l.flow());
+    }
+
+    static void stopListening() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        CountDownLatch spoke = new CountDownLatch(1);
+        backend.script = r -> {
+            r.onWrite = n -> { if (n == 1600) { r.emit(RecognizerBackend.SOUND_START); spoke.countDown(); } };
+            r.onEndAudio = () -> r.emit(RecognizerBackend.RECOGNITION, "stopped here");
+        };
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(3, chunk(1600, 2000));  // then the microphone's read waits
+        Listener l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        spoke.await(5, TimeUnit.SECONDS);
+        settle();
+        s.stopListening(l);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "end", "results:[stopped here]")),
+                "stopListening: Windows recognizes the speech captured so far " + l.flow());
+        check(backend.last.ended && backend.last.samples.get() == 3 * 1600 && AudioRecord.created.get(0).released,
+                "stopListening ends a waiting capture at once and closes the microphone");
+
+        s = service(backend);
+        l = new Listener();
+        s.stopListening(l);
+        settle();
+        check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_CLIENT)),
+                "stopListening without a session: RecognitionService's ERROR_CLIENT");
+    }
+
+    static void cancelAndDestroy() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(500, chunk(1600, 100));
+        Listener l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        settle();
+        s.cancel(l);
+        settle();
+        int count = l.events.size();
+        Thread.sleep(400);
+        settle();
+        check(l.events.size() == count && l.finals.get() == 0, "after cancel no callback is delivered");
+        check(backend.last.canceled && backend.last.released && AudioRecord.created.get(0).released,
+                "cancel stops Windows' recognizer and closes the microphone");
+
+        s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(500, chunk(1600, 100));
+        l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        settle();
+        s.destroy();
+        settle();
+        check(l.finals.get() == 0 && backend.last.canceled && AudioRecord.created.get(0).released,
+                "onDestroy stops the session and releases Windows' recognizer and the microphone");
+    }
+
+    static void busy() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(500, chunk(1600, 100));
+        Listener first = new Listener(), second = new Listener();
+        s.startListening(intent(), first, CALLER);
+        settle();
+        s.startListening(intent(), second, new AttributionSource(10124, "com.example.other"));
+        second.await();
+        settle();
+        check(second.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_RECOGNIZER_BUSY))
+                        && backend.starts.size() == 1,
+                "one microphone, one session: a second caller gets ERROR_RECOGNIZER_BUSY");
+        s.cancel(first);
+        settle();
+    }
+
+    static void windowsFailureMidSession() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        backend.script = r -> r.onWrite = n -> {
+            if (n == 1600) {
+                r.emit(RecognizerBackend.SOUND_START);
+                r.emit(new RecognizerBackend.Event(RecognizerBackend.FAILED, null, null, 0x80045003));
+            }
+        };
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(20, chunk(1600, 100));
+        Listener l = new Listener();
+        s.startListening(intent(), l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "end", "error:" + SpeechRecognizer.ERROR_SERVER)),
+                "Windows' recognizer failing mid-session: ERROR_SERVER " + l.flow());
+    }
+
+    static void clientDeath() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        AudioRecord.feed(500, chunk(1600, 100));
+        Listener l = new Listener();
+        l.dieOnRms = true;
+        s.startListening(intent(), l, CALLER);
+        settle();
+        Thread.sleep(300);
+        settle();
+        check(backend.last != null && backend.last.canceled && backend.last.released
+                        && AudioRecord.created.get(0).released && l.finals.get() == 0,
+                "a dead client stops the session: Windows' recognizer and the microphone are released");
+    }
+
+    static void appAudioSource() throws Exception {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        backend.script = r -> r.onEndAudio = () -> {
+            r.emit(RecognizerBackend.SOUND_START);
+            r.emit(RecognizerBackend.SOUND_END);
+            r.emit(RecognizerBackend.RECOGNITION, "from the file");
+        };
+        byte[] pcm = new byte[8000 * 2 + 1];  // one second at 8 kHz, and an odd trailing byte
+        for (int i = 0; i + 1 < pcm.length; i += 2) { pcm[i] = (byte) 0x10; pcm[i + 1] = (byte) 0x02; }
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        ParcelFileDescriptor source = new ParcelFileDescriptor(new ByteArrayInputStream(pcm));
+        Intent i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source);
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 8000);
+        Listener l = new Listener();
+        s.startListening(i, l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "end", "results:[from the file]")),
+                "EXTRA_AUDIO_SOURCE: the app's PCM is recognized until it is closed " + l.flow());
+        check(backend.starts.equals(List.of("en-US/8000/false/5")) && backend.last.samples.get() == 8000
+                        && AudioRecord.created.isEmpty() && source.closed,
+                "at its sampling rate, every sample, no microphone, and the descriptor closed");
+
+        s = service(backend);
+        source = new ParcelFileDescriptor(new ByteArrayInputStream(pcm));
+        i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source);
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_FLOAT);
+        l = new Listener();
+        s.startListening(i, l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_AUDIO)) && source.closed,
+                "audio Windows cannot take as handed over (float PCM): ERROR_AUDIO, descriptor closed");
+
+        s = service(backend);
+        RecognitionService.preflight = RecognitionService.PERMISSION_HARD_DENIED;
+        RecognitionService.dataDelivery = false;
+        source = new ParcelFileDescriptor(new ByteArrayInputStream(pcm));
+        i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source);
+        l = new Listener();
+        s.startListening(i, l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("error:" + SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS)),
+                "EXTRA_AUDIO_SOURCE still needs the caller's RECORD_AUDIO data delivery, as RecognitionService checks");
+    }
+
+    /** Little-endian 16-bit PCM of {@code count} distinct samples, then {@code extra} bytes. */
+    static byte[] pcmBytes(int count, int extra) {
+        byte[] b = new byte[count * 2 + extra];
+        for (int i = 0; i < count; i++) {
+            short v = sampleAt(i);
+            b[2 * i] = (byte) v;
+            b[2 * i + 1] = (byte) (v >> 8);
+        }
+        Arrays.fill(b, count * 2, b.length, (byte) 0x5a);
+        return b;
+    }
+
+    static short sampleAt(int i) {
+        return (short) (i * 7919 - 32000);
+    }
+
+    /**
+     * Reads the app's audio as the listening loop does, until StreamInput reports the end.
+     * Returns the samples handed over, or -1 - index for the first wrong sample.
+     */
+    static int drain(byte[] bytes, int bufferSamples, int... sizes) throws IOException {
+        ParcelFileDescriptor source = new ParcelFileDescriptor(new ShortReadInputStream(bytes, sizes));
+        StreamInput input = new StreamInput(source, 16000);
+        input.start();
+        short[] pcm = new short[bufferSamples];
+        int total = 0;
+        try {
+            while (true) {
+                int n = input.read(pcm);
+                if (n == 0) return total;
+                for (int k = 0; k < n; k++) {
+                    if (pcm[k] != sampleAt(total + k)) return -1 - (total + k);
+                }
+                total += n;
+            }
+        } finally {
+            input.stop();
+        }
+    }
+
+    static void appAudioShortReads() throws Exception {
+        // A pipe hands over what has arrived: as little as one byte, half a sample.
+        byte[] pcm = pcmBytes(1000, 0);
+        int n = drain(pcm, 320, 1, Integer.MAX_VALUE);
+        check(n == 1000, "a first read of one byte (half a sample) is not the end of the app's audio: " + n);
+        n = drain(pcm, 320, 1);
+        check(n == 1000, "reads of one byte throughout the stream deliver every sample: " + n);
+        n = drain(pcm, 320, 3);
+        check(n == 1000, "reads of three bytes throughout the stream deliver every sample: " + n);
+        n = drain(pcm, 320, 1, 3, 5, 7, 641, 1, 639);
+        check(n == 1000, "odd reads of mixed sizes deliver every sample, in order: " + n);
+        n = drain(pcm, 3, 1, 3, 5, 7);
+        check(n == 1000, "odd reads into a buffer of three samples deliver every sample: " + n);
+        n = drain(pcmBytes(1000, 1), 320, 1);
+        check(n == 1000, "a stream ending on an odd byte: every complete sample, the half sample dropped, then the end: " + n);
+        n = drain(pcmBytes(1000, 1), 320, 3, 5);
+        check(n == 1000, "an odd trailing byte after odd reads: every complete sample, then the end: " + n);
+        n = drain(pcmBytes(0, 1), 320, 1);
+        check(n == 0, "a stream of a single byte ends with no sample: " + n);
+        n = drain(new byte[0], 320, 1);
+        check(n == 0, "an empty stream ends at once: " + n);
+
+        // stop() while half a sample waits for its pair ends the read.
+        ShortReadInputStream live = new ShortReadInputStream(pcmBytes(0, 1), 1);
+        ParcelFileDescriptor source = new ParcelFileDescriptor(live);
+        StreamInput input = new StreamInput(source, 16000);
+        input.start();
+        live.onEnd = input::stop;
+        check(input.read(new short[320]) == 0 && source.closed,
+                "stop ends a read waiting for the second byte of a sample, and closes the descriptor");
+
+        // The service: the app's first write is one byte, odd writes follow.
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        backend.script = r -> r.onEndAudio = () -> {
+            r.emit(RecognizerBackend.SOUND_START);
+            r.emit(RecognizerBackend.SOUND_END);
+            r.emit(RecognizerBackend.RECOGNITION, "from the pipe");
+        };
+        WindowsRecognitionService s = service(backend);
+        AudioRecord.reset();
+        source = new ParcelFileDescriptor(new ShortReadInputStream(pcmBytes(8000, 1), 1, 3, 4001, 5));
+        Intent i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, source);
+        i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 8000);
+        Listener l = new Listener();
+        s.startListening(i, l, CALLER);
+        l.await();
+        settle();
+        check(l.flow().equals(List.of("ready", "begin", "end", "results:[from the pipe]"))
+                        && backend.last.samples.get() == 8000 && AudioRecord.created.isEmpty() && source.closed,
+                "EXTRA_AUDIO_SOURCE over a pipe that hands over one byte first and odd reads after: every sample reaches Windows ("
+                        + backend.last.samples.get() + ")");
+    }
+
+    static void recognitionSupport() {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        WindowsRecognitionService s = service(backend);
+        RecognitionSupport[] got = new RecognitionSupport[1];
+        s.onCheckRecognitionSupport(intent(), CALLER, s.new SupportCallback() {
+            @Override public void onSupportResult(RecognitionSupport support) { got[0] = support; }
+        });
+        check(got[0] != null && got[0].getInstalledOnDeviceLanguages().equals(List.of("en-US", "en-GB", "fr-FR"))
+                        && got[0].getPendingOnDeviceLanguages().isEmpty()
+                        && got[0].getSupportedOnDeviceLanguages().isEmpty() && got[0].getOnlineLanguages().isEmpty(),
+                "checkRecognitionSupport: Windows' installed languages, nothing pending, downloadable or online");
+        backend.languages = new ArrayList<>();
+        s.onCheckRecognitionSupport(intent(), CALLER, s.new SupportCallback() {
+            @Override public void onSupportResult(RecognitionSupport support) { got[0] = support; }
+        });
+        check(got[0].getInstalledOnDeviceLanguages().isEmpty(), "no recognizer: no language");
+    }
+
+    static void modelDownload() {
+        FakeBackend backend = new FakeBackend();
+        backend.languages = windowsLanguages();
+        WindowsRecognitionService s = service(backend);
+        List<String> seen = new ArrayList<>();
+        ModelDownloadListener listener = new ModelDownloadListener() {
+            public void onProgress(int p) { seen.add("progress"); }
+            public void onSuccess() { seen.add("success"); }
+            public void onScheduled() { seen.add("scheduled"); }
+            public void onError(int e) { seen.add("error:" + e); }
+        };
+        Intent i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-GB");
+        s.onTriggerModelDownload(i, CALLER, listener);
+        i = intent();
+        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "he-IL");
+        s.onTriggerModelDownload(i, CALLER, listener);
+        check(seen.equals(List.of("success", "error:" + SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED)),
+                "triggerModelDownload: an installed language is available, nothing is downloaded " + seen);
+    }
+
+    static void levels() {
+        check(WindowsRecognitionService.levelDb(new short[160], 160) == -100f, "silence is -100 dB");
+        float full = WindowsRecognitionService.levelDb(chunk(160, 32767), 160);
+        float half = WindowsRecognitionService.levelDb(chunk(160, 16384), 160);
+        check(Math.abs(full) < 0.01f && Math.abs(half + 6.02f) < 0.05f,
+                "levels are the PCM's dBFS (full scale 0 dB, half scale -6 dB): " + full + ", " + half);
+        check(WindowsRecognitionService.levelDb(new short[0], 0) == -100f, "no samples, no level");
+    }
+}
+
+// --- android-16.0.0_r4 boundary stand-ins ------------------------------------------------
+
+final class RemoteException extends Exception {
+    RemoteException(String message) { super(message); }
+}
+
+final class Log {
+    static int w(String tag, String message) { System.out.println("  [" + tag + "] " + message); return 0; }
+}
+
+final class SystemClock {
+    private static volatile long sOffset;
+    static long elapsedRealtime() { return System.nanoTime() / 1_000_000 + sOffset; }
+    static void advance(long ms) { sOffset += ms; }
+}
+
+/** The main looper: one thread, as an app's main thread. */
+final class Looper {
+    private static final Looper MAIN = new Looper();
+    final ExecutorService thread = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "main");
+        t.setDaemon(true);
+        return t;
+    });
+    static Looper getMainLooper() { return MAIN; }
+    static Looper main() { return MAIN; }
+    /** Whether the calling thread is this looper's (Looper.myLooper() == this). */
+    boolean isCurrentThread() { return Thread.currentThread().getName().equals("main"); }
+    void flush() throws Exception { thread.submit(() -> { }).get(10, TimeUnit.SECONDS); }
+    void quit() { thread.shutdownNow(); }
+}
+
+class Handler {
+    private final Looper mLooper;
+    Handler(Looper looper) { mLooper = looper; }
+    boolean post(Runnable r) {
+        mLooper.thread.execute(r);
+        return true;
+    }
+}
+
+final class Bundle {
+    private final Map<String, Object> mValues = new HashMap<>();
+    void putStringArrayList(String key, ArrayList<String> value) { mValues.put(key, value); }
+    @SuppressWarnings("unchecked")
+    ArrayList<String> getStringArrayList(String key) { return (ArrayList<String>) mValues.get(key); }
+    void putFloatArray(String key, float[] value) { mValues.put(key, value); }
+    float[] getFloatArray(String key) { return (float[]) mValues.get(key); }
+}
+
+final class Intent {
+    private final String mAction;
+    private final Map<String, Object> mExtras = new HashMap<>();
+    Intent(String action) { mAction = action; }
+    String getAction() { return mAction; }
+    Intent putExtra(String name, String value) { mExtras.put(name, value); return this; }
+    Intent putExtra(String name, int value) { mExtras.put(name, value); return this; }
+    Intent putExtra(String name, boolean value) { mExtras.put(name, value); return this; }
+    Intent putExtra(String name, ParcelFileDescriptor value) { mExtras.put(name, value); return this; }
+    boolean hasExtra(String name) { return mExtras.containsKey(name); }
+    String getStringExtra(String name) {
+        Object v = mExtras.get(name);
+        return v instanceof String ? (String) v : null;
+    }
+    int getIntExtra(String name, int fallback) {
+        Object v = mExtras.get(name);
+        return v instanceof Integer ? (Integer) v : fallback;
+    }
+    boolean getBooleanExtra(String name, boolean fallback) {
+        Object v = mExtras.get(name);
+        return v instanceof Boolean ? (Boolean) v : fallback;
+    }
+    <T> T getParcelableExtra(String name, Class<T> type) {
+        Object v = mExtras.get(name);
+        return type.isInstance(v) ? type.cast(v) : null;
+    }
+}
+
+final class AttributionSource {
+    final int uid;
+    final String packageName;
+    AttributionSource(int uid, String packageName) { this.uid = uid; this.packageName = packageName; }
+}
+
+final class ContextParams {
+    final AttributionSource next;
+    private ContextParams(AttributionSource next) { this.next = next; }
+    AttributionSource getNextAttributionSource() { return next; }
+    static final class Builder {
+        private AttributionSource mNext;
+        Builder setNextAttributionSource(AttributionSource next) { mNext = next; return this; }
+        ContextParams build() { return new ContextParams(mNext); }
+    }
+}
+
+class Context {
+    /** An attribution context's next source (the caller), null for the service itself. */
+    AttributionSource next;
+    Context createContext(ContextParams params) {
+        Context c = new Context();
+        c.next = params.getNextAttributionSource();
+        return c;
+    }
+}
+
+final class AudioFormat {
+    static final int ENCODING_PCM_16BIT = 2;
+    static final int ENCODING_PCM_8BIT = 3;
+    static final int ENCODING_PCM_FLOAT = 4;
+    static final int CHANNEL_IN_MONO = 0x10;  // CHANNEL_IN_FRONT
+    final int rate, mask, encoding;
+    private AudioFormat(int rate, int mask, int encoding) { this.rate = rate; this.mask = mask; this.encoding = encoding; }
+    static final class Builder {
+        private int mRate, mMask, mEncoding;
+        Builder setSampleRate(int rate) { mRate = rate; return this; }
+        Builder setChannelMask(int mask) { mMask = mask; return this; }
+        Builder setEncoding(int encoding) { mEncoding = encoding; return this; }
+        AudioFormat build() { return new AudioFormat(mRate, mMask, mEncoding); }
+    }
+}
+
+final class MediaRecorder {
+    static final class AudioSource {
+        static final int VOICE_RECOGNITION = 6;
+    }
+}
+
+/** AudioRecord over a scripted microphone: feed() queues the PCM its reads return. */
+final class AudioRecord {
+    static final int STATE_UNINITIALIZED = 0;
+    static final int STATE_INITIALIZED = 1;
+    static final int RECORDSTATE_STOPPED = 1;
+    static final int RECORDSTATE_RECORDING = 3;
+    static final int ERROR_INVALID_OPERATION = -3;
+
+    static final List<AudioRecord> created = new CopyOnWriteArrayList<>();
+    static final BlockingQueue<short[]> mic = new LinkedBlockingQueue<>();
+    static volatile boolean failInit, readError, endAfterFeed;
+
+    static void reset() {
+        created.clear();
+        mic.clear();
+        failInit = readError = endAfterFeed = false;
+    }
+
+    static void feed(int chunks, short[] chunk) {
+        for (int i = 0; i < chunks; i++) mic.add(chunk.clone());
+    }
+
+    Context context;
+    int source, rate, channelMask, encoding;
+    volatile boolean recording, released;
+    private int mReads;
+
+    static int getMinBufferSize(int rate, int channels, int encoding) { return 1280; }
+
+    int getState() { return failInit ? STATE_UNINITIALIZED : STATE_INITIALIZED; }
+    void startRecording() { recording = true; }
+    int getRecordingState() { return recording ? RECORDSTATE_RECORDING : RECORDSTATE_STOPPED; }
+
+    int read(short[] pcm, int offset, int size) {
+        if (released) return ERROR_INVALID_OPERATION;
+        if (readError && ++mReads > 1) return ERROR_INVALID_OPERATION;
+        while (recording) {
+            short[] next;
+            try {
+                next = mic.poll(50, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                return ERROR_INVALID_OPERATION;
+            }
+            if (next == null) {
+                if (endAfterFeed) return 0;
+                continue;
+            }
+            int n = Math.min(size, next.length);
+            System.arraycopy(next, 0, pcm, offset, n);
+            return n;
+        }
+        return 0;
+    }
+
+    void stop() { recording = false; }
+    void release() { recording = false; released = true; }
+
+    static final class Builder {
+        private final AudioRecord mRecord = new AudioRecord();
+        Builder setContext(Context context) { mRecord.context = context; return this; }
+        Builder setAudioSource(int source) { mRecord.source = source; return this; }
+        Builder setAudioFormat(AudioFormat format) {
+            mRecord.rate = format.rate;
+            mRecord.channelMask = format.mask;
+            mRecord.encoding = format.encoding;
+            return this;
+        }
+        Builder setBufferSizeInBytes(int size) { return this; }
+        AudioRecord build() {
+            created.add(mRecord);
+            return mRecord;
+        }
+    }
+}
+
+/** A descriptor over an InputStream; AutoCloseInputStream closes it with the stream. */
+final class ParcelFileDescriptor {
+    final InputStream in;
+    volatile boolean closed;
+    ParcelFileDescriptor(InputStream in) { this.in = in; }
+    void close() throws IOException { closed = true; in.close(); }
+
+    static final class AutoCloseInputStream extends InputStream {
+        private final ParcelFileDescriptor mFd;
+        AutoCloseInputStream(ParcelFileDescriptor fd) { mFd = fd; }
+        @Override public int read() throws IOException { return mFd.in.read(); }
+        @Override public int read(byte[] b, int off, int len) throws IOException { return mFd.in.read(b, off, len); }
+        @Override public void close() throws IOException { mFd.close(); }
+    }
+}
+
+/**
+ * The read side of an app's pipe, as its writes arrive: read k returns at most
+ * sizes[k % sizes.length] bytes, at least one, and -1 at the end. With onEnd set, the
+ * pipe stays open after the data instead: a read there runs onEnd (which stops the
+ * input) and then fails as the closed descriptor does. Test-only.
+ */
+final class ShortReadInputStream extends InputStream {
+    private final byte[] mData;
+    private final int[] mSizes;
+    private int mPos, mReads;
+    volatile Runnable onEnd;
+
+    ShortReadInputStream(byte[] data, int... sizes) { mData = data; mSizes = sizes; }
+
+    @Override public int read() throws IOException {
+        byte[] one = new byte[1];
+        return read(one, 0, 1) < 0 ? -1 : one[0] & 0xff;
+    }
+
+    @Override public int read(byte[] b, int off, int len) throws IOException {
+        if (len == 0) return 0;
+        if (mPos >= mData.length) {
+            Runnable end = onEnd;
+            if (end == null) return -1;
+            end.run();
+            throw new IOException("read on a closed descriptor");
+        }
+        int n = Math.min(Math.min(len, mSizes[mReads++ % mSizes.length]), mData.length - mPos);
+        System.arraycopy(mData, mPos, b, off, n);
+        mPos += n;
+        return n;
+    }
+}
+
+final class SpeechRecognizer {
+    static final String RESULTS_RECOGNITION = "results_recognition";
+    static final String CONFIDENCE_SCORES = "confidence_scores";
+    static final int ERROR_NETWORK_TIMEOUT = 1;
+    static final int ERROR_NETWORK = 2;
+    static final int ERROR_AUDIO = 3;
+    static final int ERROR_SERVER = 4;
+    static final int ERROR_CLIENT = 5;
+    static final int ERROR_SPEECH_TIMEOUT = 6;
+    static final int ERROR_NO_MATCH = 7;
+    static final int ERROR_RECOGNIZER_BUSY = 8;
+    static final int ERROR_INSUFFICIENT_PERMISSIONS = 9;
+    static final int ERROR_TOO_MANY_REQUESTS = 10;
+    static final int ERROR_SERVER_DISCONNECTED = 11;
+    static final int ERROR_LANGUAGE_NOT_SUPPORTED = 12;
+    static final int ERROR_LANGUAGE_UNAVAILABLE = 13;
+    static final int ERROR_CANNOT_CHECK_SUPPORT = 14;
+    static final int ERROR_CANNOT_LISTEN_TO_DOWNLOAD_EVENTS = 15;
+}
+
+final class RecognizerIntent {
+    static final String ACTION_RECOGNIZE_SPEECH = "android.speech.action.RECOGNIZE_SPEECH";
+    static final String EXTRA_AUDIO_SOURCE = "android.speech.extra.AUDIO_SOURCE";
+    static final String EXTRA_AUDIO_SOURCE_CHANNEL_COUNT = "android.speech.extra.AUDIO_SOURCE_CHANNEL_COUNT";
+    static final String EXTRA_AUDIO_SOURCE_ENCODING = "android.speech.extra.AUDIO_SOURCE_ENCODING";
+    static final String EXTRA_AUDIO_SOURCE_SAMPLING_RATE = "android.speech.extra.AUDIO_SOURCE_SAMPLING_RATE";
+    static final String EXTRA_LANGUAGE = "android.speech.extra.LANGUAGE";
+    static final String EXTRA_MAX_RESULTS = "android.speech.extra.MAX_RESULTS";
+    static final String EXTRA_PARTIAL_RESULTS = "android.speech.extra.PARTIAL_RESULTS";
+}
+
+final class RecognitionSupport {
+    private final List<String> mInstalled, mPending, mSupported, mOnline;
+    private RecognitionSupport(List<String> installed, List<String> pending, List<String> supported,
+            List<String> online) {
+        mInstalled = installed; mPending = pending; mSupported = supported; mOnline = online;
+    }
+    List<String> getInstalledOnDeviceLanguages() { return mInstalled; }
+    List<String> getPendingOnDeviceLanguages() { return mPending; }
+    List<String> getSupportedOnDeviceLanguages() { return mSupported; }
+    List<String> getOnlineLanguages() { return mOnline; }
+    static final class Builder {
+        private List<String> mInstalled = List.of(), mPending = List.of(), mSupported = List.of(), mOnline = List.of();
+        Builder setInstalledOnDeviceLanguages(List<String> value) { mInstalled = value; return this; }
+        RecognitionSupport build() { return new RecognitionSupport(mInstalled, mPending, mSupported, mOnline); }
+    }
+}
+
+interface ModelDownloadListener {
+    void onProgress(int completedPercent);
+    void onSuccess();
+    void onScheduled();
+    void onError(int error);
+}
+
+interface IRecognitionListener {
+    void onReadyForSpeech(Bundle params) throws RemoteException;
+    void onBeginningOfSpeech() throws RemoteException;
+    void onRmsChanged(float rmsdB) throws RemoteException;
+    void onEndOfSpeech() throws RemoteException;
+    void onPartialResults(Bundle results) throws RemoteException;
+    void onResults(Bundle results) throws RemoteException;
+    void onError(int error) throws RemoteException;
+}
+
+/**
+ * RecognitionService's dispatch (android-16.0.0_r4): startListening, stopListening and cancel
+ * run on the main handler as dispatchStartListening, dispatchStopListening and dispatchCancel.
+ */
+abstract class RecognitionService extends Context {
+    static final String SERVICE_INTERFACE = "android.speech.RecognitionService";
+    static final int PERMISSION_GRANTED = 0, PERMISSION_SOFT_DENIED = 1, PERMISSION_HARD_DENIED = 2;
+    private static final int DEFAULT_MAX_CONCURRENT_SESSIONS_COUNT = 1;
+
+    /** The caller's RECORD_AUDIO, as PermissionChecker answers it. */
+    static volatile int preflight;
+    static volatile boolean dataDelivery;
+    static volatile boolean attributionContextBeforeCheck;
+
+    static void resetPermissions() {
+        preflight = PERMISSION_GRANTED;
+        dataDelivery = true;
+        attributionContextBeforeCheck = false;
+    }
+
+    private final Handler mHandler = new Handler(Looper.getMainLooper());
+    private final Map<IRecognitionListener, Callback> mSessions = new HashMap<>();
+    final AtomicInteger canceled = new AtomicInteger();
+
+    int sessions() throws Exception {
+        int[] n = new int[1];
+        Looper.main().thread.submit(() -> { n[0] = mSessions.size(); }).get(5, TimeUnit.SECONDS);
+        return n[0];
+    }
+
+    // The Binder calls.
+    void startListening(Intent intent, IRecognitionListener listener, AttributionSource source) {
+        mHandler.post(() -> dispatchStartListening(intent, listener, source));
+    }
+    void stopListening(IRecognitionListener listener) {
+        mHandler.post(() -> dispatchStopListening(listener));
+    }
+    void cancel(IRecognitionListener listener) {
+        mHandler.post(() -> dispatchCancel(listener));
+    }
+    void destroy() {
+        mHandler.post(this::onDestroy);
+    }
+
+    private void dispatchStartListening(Intent intent, IRecognitionListener listener,
+            AttributionSource attributionSource) {
+        Callback currentCallback = null;
+        Callback sessionState = mSessions.get(listener);
+        try {
+            if (sessionState == null) {
+                if (mSessions.size() >= getMaxConcurrentSessionsCount()) {
+                    listener.onError(SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+                    return;
+                }
+                boolean preflightPermissionCheckPassed =
+                        intent.hasExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE)
+                                || preflight == PERMISSION_GRANTED || preflight == PERMISSION_SOFT_DENIED;
+                if (preflightPermissionCheckPassed) {
+                    currentCallback = new Callback(listener, attributionSource);
+                    sessionState = currentCallback;
+                    mSessions.put(listener, sessionState);
+                    onStartListening(intent, currentCallback);
+                }
+                if (!preflightPermissionCheckPassed || !checkPermissionAndStartDataDelivery(sessionState)) {
+                    listener.onError(SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS);
+                    if (preflightPermissionCheckPassed) {
+                        canceled.incrementAndGet();
+                        onCancel(currentCallback);
+                        mSessions.remove(listener);
+                    }
+                }
+            } else {
+                listener.onError(SpeechRecognizer.ERROR_CLIENT);
+            }
+        } catch (RemoteException e) {
+            // The client is gone.
+        }
+    }
+
+    private boolean checkPermissionAndStartDataDelivery(Callback sessionState) {
+        if (sessionState.mAttributionContextCreated) {
+            attributionContextBeforeCheck = true;
+            return true;
+        }
+        return dataDelivery;
+    }
+
+    private void dispatchStopListening(IRecognitionListener listener) {
+        Callback sessionState = mSessions.get(listener);
+        if (sessionState == null) {
+            try {
+                listener.onError(SpeechRecognizer.ERROR_CLIENT);
+            } catch (RemoteException e) {
+                // The client is gone.
+            }
+        } else {
+            onStopListening(sessionState);
+        }
+    }
+
+    private void dispatchCancel(IRecognitionListener listener) {
+        Callback sessionState = mSessions.get(listener);
+        if (sessionState != null) {
+            onCancel(sessionState);
+            mSessions.remove(listener);
+        }
+    }
+
+    @Override
+    Context createContext(ContextParams params) {
+        AttributionSource next = params.getNextAttributionSource();
+        if (next != null) {
+            // handleAttributionContextCreation: at once on the handler's thread, else posted.
+            Runnable created = () -> {
+                for (Callback c : mSessions.values()) {
+                    if (c.mCallingAttributionSource == next) c.mAttributionContextCreated = true;
+                }
+            };
+            if (Looper.main().isCurrentThread()) created.run();
+            else mHandler.post(created);
+        }
+        return super.createContext(params);
+    }
+
+    protected abstract void onStartListening(Intent recognizerIntent, Callback listener);
+    protected abstract void onCancel(Callback listener);
+    protected abstract void onStopListening(Callback listener);
+
+    public void onCheckRecognitionSupport(Intent recognizerIntent, AttributionSource attributionSource,
+            SupportCallback supportCallback) {
+        supportCallback.onError(SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT);
+    }
+
+    public void onTriggerModelDownload(Intent recognizerIntent, AttributionSource attributionSource,
+            ModelDownloadListener listener) {
+        listener.onError(SpeechRecognizer.ERROR_CANNOT_LISTEN_TO_DOWNLOAD_EVENTS);
+    }
+
+    public void onDestroy() {
+        mSessions.clear();
+    }
+
+    public int getMaxConcurrentSessionsCount() {
+        return DEFAULT_MAX_CONCURRENT_SESSIONS_COUNT;
+    }
+
+    class Callback {
+        private final IRecognitionListener mListener;
+        final AttributionSource mCallingAttributionSource;
+        boolean mAttributionContextCreated;
+
+        Callback(IRecognitionListener listener, AttributionSource attributionSource) {
+            mListener = listener;
+            mCallingAttributionSource = attributionSource;
+        }
+
+        void beginningOfSpeech() throws RemoteException { mListener.onBeginningOfSpeech(); }
+        void endOfSpeech() throws RemoteException { mListener.onEndOfSpeech(); }
+        void error(int error) throws RemoteException {
+            mHandler.post(() -> mSessions.remove(mListener));  // MSG_RESET
+            mListener.onError(error);
+        }
+        void partialResults(Bundle partialResults) throws RemoteException { mListener.onPartialResults(partialResults); }
+        void readyForSpeech(Bundle params) throws RemoteException { mListener.onReadyForSpeech(params); }
+        void results(Bundle results) throws RemoteException {
+            mHandler.post(() -> mSessions.remove(mListener));  // MSG_RESET
+            mListener.onResults(results);
+        }
+        void rmsChanged(float rmsdB) throws RemoteException { mListener.onRmsChanged(rmsdB); }
+        AttributionSource getCallingAttributionSource() { return mCallingAttributionSource; }
+    }
+
+    class SupportCallback {
+        void onSupportResult(RecognitionSupport recognitionSupport) { }
+        void onError(int errorCode) { }
+    }
+}
+
+// PRODUCTION_SOURCES

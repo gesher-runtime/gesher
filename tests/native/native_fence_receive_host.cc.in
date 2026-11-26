@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -80,6 +81,12 @@ DWORD GetLastError() { return last_error; }
 struct ID3D11Device {};
 template<class T> struct ComPtr { T* p=nullptr; };
 namespace gesher {
+// Declared clock adapter for the exact current NoteSignaled body. It uses the
+// host's real monotonic clock; it does not validate Windows event timestamps.
+int64_t MonotonicNanos() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 namespace record_locks {
 static std::recursive_mutex descriptors;
 struct DescriptorGuard { std::lock_guard<std::recursive_mutex> lock{descriptors}; };
@@ -213,4 +220,3 @@ int main() {
   std::printf("NATIVE_FENCE_RECEIVE checks=%d failures=%d (declared Linux Win32/CRT adapter)\n",checks,failures);
   return failures?1:0;
 }
-

@@ -8,17 +8,21 @@ import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.FirebaseApp;
 
-import java.util.UUID;
+import java.io.IOException;
 
 /**
- * Entry point for Firebase Cloud Messaging operations.
+ * Firebase Cloud Messaging for the gmsapp test fixture (app/build.sh keeps these
+ * client-library classes out of gesher-app.jar). It has no registration transport, so
+ * every token or topic request fails as Firebase's GmsRpc reports a registration with no
+ * answer: IOException("SERVICE_NOT_AVAILABLE"). It never invents a token (issue #335).
  */
 public class FirebaseMessaging {
     public static final String INSTANCE_ID_SCOPE = "FCM";
 
     private static final Object sLock = new Object();
     private static FirebaseMessaging sInstance;
-    private static String sToken = "fcm_token_gesher_" + UUID.randomUUID().toString().replace("-", "");
+    /** Firebase GmsRpc.ERROR_SERVICE_NOT_AVAILABLE. */
+    static final String ERROR_SERVICE_NOT_AVAILABLE = "SERVICE_NOT_AVAILABLE";
 
     private final FirebaseApp mApp;
     private boolean mAutoInitEnabled = true;
@@ -40,23 +44,24 @@ public class FirebaseMessaging {
         }
     }
 
+    private static <T> Task<T> unavailable() {
+        return Tasks.forException(new IOException(ERROR_SERVICE_NOT_AVAILABLE));
+    }
+
     public Task<String> getToken() {
-        return Tasks.forResult(sToken);
+        return unavailable();
     }
 
     public Task<Void> deleteToken() {
-        synchronized (sLock) {
-            sToken = "fcm_token_gesher_" + UUID.randomUUID().toString().replace("-", "");
-        }
-        return Tasks.forResult(null);
+        return unavailable();
     }
 
     public Task<Void> subscribeToTopic(String topic) {
-        return Tasks.forResult(null);
+        return unavailable();
     }
 
     public Task<Void> unsubscribeFromTopic(String topic) {
-        return Tasks.forResult(null);
+        return unavailable();
     }
 
     public boolean isAutoInitEnabled() {
@@ -68,11 +73,5 @@ public class FirebaseMessaging {
     }
 
     public void send(RemoteMessage message) {
-    }
-
-    public static void setTokenForTest(String token) {
-        synchronized (sLock) {
-            sToken = token;
-        }
     }
 }

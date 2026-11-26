@@ -34,6 +34,7 @@ import com.android.internal.pm.pkg.component.ParsedActivity;
 import com.android.internal.pm.pkg.component.ParsedComponent;
 import com.android.internal.pm.pkg.component.ParsedIntentInfo;
 import com.android.internal.pm.pkg.component.ParsedMainComponent;
+import com.android.internal.pm.pkg.component.ParsedProvider;
 
 import java.io.File;
 import java.io.IOException;
@@ -46,6 +47,7 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -77,6 +79,9 @@ public final class ApkPackage {
     private static final long DIRECT_BOOT = PackageManager.MATCH_DIRECT_BOOT_AWARE
             | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
 
+    // Tiny families cost less to generate directly than to index and copy.
+    private static final int BATCH_METADATA_COMPONENTS = 8;
+
     public final String apkPath;
     public final ParsedPackage parsed;
     public final String packageName;
@@ -85,12 +90,25 @@ public final class ApkPackage {
     private long mInstallTime = System.currentTimeMillis();
     private long mUpdateTime = mInstallTime;
     private volatile PackageInstallSource mInstallSource = PackageInstallSource.UNKNOWN;
+    // The install request's restricted-permission allowlist (AOSP SessionParams), applied
+    // once when this generation is published. Null: no install request was recorded.
+    private volatile java.util.Set<String> mRestrictedPermissionAllowlist;
     private String mDataDir;
     private AppDataStorage mDataStorage;
     private String mNativeLibraryDir;  // null: <data dir>/lib
     private String mPrimaryCpuAbi;     // null: no native code (NativeLibs.abiFor)
     private final boolean mHasCode;
     private Boolean mVerifiedMicrogSigner;
+    // The authorities registration gives each provider class, computed once per parsed
+    // package (see providerAuthorities()).
+    private volatile Map<String, ProviderClaim> mProviderAuthorities;
+
+    /**
+     * What registration left a provider class: its first authority if it kept it, the
+     * other authorities it kept (';'-joined, or null), and whether any went to an
+     * earlier declaration.
+     */
+    private record ProviderClaim(String first, String others, boolean skipped) {}
     private int mUid;
     // Parsing an archive is not package admission. Only the server's identity
     // transaction may attach a stable UID after validating the complete candidate.
@@ -199,7 +217,7 @@ public final class ApkPackage {
         this.apkPath = apkPath;
         this.parsed = parsed;
         this.packageName = parsed.getPackageName();
-        if ("android".equals(packageName)) {
+        if (PLATFORM_PACKAGE.equals(packageName)) {
             throw new SecurityException("The platform package name is reserved");
         }
         mUid = -1;
@@ -299,8 +317,37 @@ public final class ApkPackage {
         return parse(base.getPath(), directory);
     }
 
+    /** The platform's own package (framework-res.apk), which no app may be. */
+    public static final String PLATFORM_PACKAGE = "android";
+
+    /** The package an APK's manifest declares (ApkLite: the manifest's head only). */
+    public static String declaredPackageName(File apk) throws IOException {
+        ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(
+                ParseTypeImpl.forParsingWithoutPlatformCompat(), apk, 0);
+        if (result.isError()) {
+            throw new IOException("Cannot parse APK " + apk + ": " + result.getErrorMessage(),
+                    result.getException());
+        }
+        return result.getResult().getPackageName();
+    }
+
+    /** Identify the base APK from the manifest before assembling a package cluster. */
+    public static boolean isBaseApk(File file) throws IOException {
+        return splitName(file) == null;
+    }
+
+    /** The manifest's package name of {@code file}, a base or a split APK. */
+    public static String packageName(File file) throws IOException {
+        return codeApkLite(file).getPackageName();
+    }
+
+    /** The manifest's {@code split} name of {@code file}; null for a base APK. */
+    public static String splitName(File file) throws IOException {
+        return codeApkLite(file).getSplitName();
+    }
+
     private static ApkLite codeApkLite(File file) throws IOException {
-        if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        if (file == null || !Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Not a regular installed APK: " + file);
         }
         ParseResult<ApkLite> result = ApkLiteParseUtils.parseApkLite(
@@ -463,6 +510,17 @@ public final class ApkPackage {
     void setInstallSource(PackageInstallSource source) {
         mInstallSource = source;
     }
+
+    /**
+     * AOSP InstallPackageHelper: INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS ({@code null})
+     * allowlists every requested permission; otherwise exactly {@code permissions}.
+     */
+    void setRestrictedPermissionAllowlist(java.util.Collection<String> permissions) {
+        mRestrictedPermissionAllowlist = java.util.Set.copyOf(permissions == null
+                ? parsed.getRequestedPermissions() : permissions);
+    }
+
+    java.util.Set<String> restrictedPermissionAllowlist() { return mRestrictedPermissionAllowlist; }
 
     PackageInstallSource installSource() {
         PackageInstallSource source = mInstallSource;
@@ -726,24 +784,34 @@ public final class ApkPackage {
 
     /** The PackageInfo PackageManager.getPackageInfo answers for these flags. */
     public PackageInfo packageInfo(long flags) {
-        return packageInfo(flags, false);
+        return packageInfo(flags, false, null, enabledState());
     }
 
-    private PackageInfo packageInfo(long flags, boolean providerQuery) {
+    private PackageInfo packageInfo(long flags, boolean providerQuery, String authority,
+            PackageEnabledStore.State state) {
         if ((flags & DIRECT_BOOT) == 0) {
             flags |= DIRECT_BOOT;
         }
-        PackageEnabledStore.State state = enabledState();
         // Include manifest-disabled declarations before applying installed overrides.
         // A provider query also needs both boot states: choose its registered first
         // component before either boot-state or enabled-state filtering.
-        PackageInfo pi = PackageInfoCommonUtils.generate(parsed,
-                flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0),
-                0 /* userId */);
+        long generated = flags | PackageManager.MATCH_DISABLED_COMPONENTS | (providerQuery ? DIRECT_BOOT : 0);
+        PackageInfo pi = PackageInfoCommonUtils.generate(parsed, generated, 0 /* userId */);
         installed(pi.applicationInfo, state, flags);
         pi.activities = installedComponents(pi.activities, pi.applicationInfo, flags, state);
         pi.receivers = installedComponents(pi.receivers, pi.applicationInfo, flags, state);
         pi.services = installedComponents(pi.services, pi.applicationInfo, flags, state);
+        if ((flags & PackageManager.GET_PROVIDERS) != 0 && (generated & DIRECT_BOOT) != DIRECT_BOOT) {
+            // Other component lists still use the caller's original boot flags.
+            ProviderInfo[] allProviders = PackageInfoCommonUtils.generate(parsed,
+                    (generated | DIRECT_BOOT) & ~(PackageManager.GET_ACTIVITIES | PackageManager.GET_RECEIVERS
+                            | PackageManager.GET_SERVICES | PackageManager.GET_PERMISSIONS
+                            | PackageManager.GET_CONFIGURATIONS), 0 /* userId */).providers;
+            registerAuthorities(allProviders, authority);
+            pi.providers = filterProviderBootState(allProviders, generated);
+        } else {
+            registerAuthorities(pi.providers, authority);
+        }
         if (providerQuery) pi.providers = registeredProviders(pi.providers, flags);
         pi.providers = installedComponents(pi.providers, pi.applicationInfo, flags, state);
         pi.firstInstallTime = mInstallTime;
@@ -771,10 +839,14 @@ public final class ApkPackage {
     }
 
     public ApplicationInfo applicationInfo(long flags) {
+        return applicationInfo(flags, enabledState());
+    }
+
+    private ApplicationInfo applicationInfo(long flags, PackageEnabledStore.State state) {
         return packageInfo(flags & ~(PackageManager.GET_ACTIVITIES
                 | PackageManager.GET_RECEIVERS | PackageManager.GET_SERVICES
                 | PackageManager.GET_PROVIDERS | PackageManager.GET_PERMISSIONS
-                | PackageManager.GET_CONFIGURATIONS)).applicationInfo;
+                | PackageManager.GET_CONFIGURATIONS), false, null, state).applicationInfo;
     }
 
     /** The activity named {@code className}, or null. */
@@ -846,9 +918,15 @@ public final class ApkPackage {
             }
             return result;
         }
-        for (Match m : match(parsed.getActivities(), intent, resolvedType, flags)) {
-            ActivityInfo a = activityInfo(m.name, flags);
-            if (a != null) result.add(m.resolveInfo(flags, a, null));
+        List<ParsedActivity> declarations = parsed.getActivities();
+        List<Match> matches = match(declarations, intent, resolvedType, flags);
+        if (matches.size() > 1 && declarations.size() >= BATCH_METADATA_COMPONENTS) {
+            addActivityMatches(result, matches, flags, false);
+        } else {
+            for (Match m : matches) {
+                ActivityInfo a = activityInfo(m.name, flags);
+                if (a != null) result.add(m.resolveInfo(flags, a, null));
+            }
         }
         return result;
     }
@@ -874,9 +952,15 @@ public final class ApkPackage {
             }
             return result;
         }
-        for (Match m : match(parsed.getServices(), intent, resolvedType, flags)) {
-            ServiceInfo s = serviceInfo(m.name, flags);
-            if (s != null) result.add(m.resolveInfo(flags, null, s));
+        var declarations = parsed.getServices();
+        List<Match> matches = match(declarations, intent, resolvedType, flags);
+        if (matches.size() > 1 && declarations.size() >= BATCH_METADATA_COMPONENTS) {
+            addServiceMatches(result, matches, flags);
+        } else {
+            for (Match m : matches) {
+                ServiceInfo s = serviceInfo(m.name, flags);
+                if (s != null) result.add(m.resolveInfo(flags, null, s));
+            }
         }
         return result;
     }
@@ -902,9 +986,57 @@ public final class ApkPackage {
             }
             return result;
         }
-        for (Match m : match(parsed.getReceivers(), intent, resolvedType, flags)) {
-            ActivityInfo a = receiverInfo(m.name, flags);
-            if (a != null) result.add(m.resolveInfo(flags, a, null));
+        List<ParsedActivity> declarations = parsed.getReceivers();
+        List<Match> matches = match(declarations, intent, resolvedType, flags);
+        if (matches.size() > 1 && declarations.size() >= BATCH_METADATA_COMPONENTS) {
+            addActivityMatches(result, matches, flags, true);
+        } else {
+            for (Match m : matches) {
+                ActivityInfo a = receiverInfo(m.name, flags);
+                if (a != null) result.add(m.resolveInfo(flags, a, null));
+            }
+        }
+        return result;
+    }
+
+    /** Generate one family and enabled-state snapshot per batched query, never retain it. */
+    private void addActivityMatches(List<ResolveInfo> result, List<Match> matches,
+            long flags, boolean receivers) {
+        PackageEnabledStore.State state = enabledState();
+        Map<String, ActivityInfo> snapshot = firstComponents(receivers
+                ? packageInfo(flags | PackageManager.GET_RECEIVERS, false, null, state).receivers
+                : packageInfo(flags | PackageManager.GET_ACTIVITIES, false, null, state).activities);
+        for (Match m : matches) {
+            ActivityInfo template = snapshot.get(m.name);
+            if (template == null) continue;
+            ActivityInfo a = new ActivityInfo(template);
+            // The framework copy constructor shares this generated mutable set.
+            a.setKnownActivityEmbeddingCerts(template.getKnownActivityEmbeddingCerts());
+            if (!result.isEmpty()) a.applicationInfo = applicationInfo(flags, state);
+            result.add(m.resolveInfo(flags, a, null));
+        }
+    }
+
+    private void addServiceMatches(List<ResolveInfo> result, List<Match> matches, long flags) {
+        PackageEnabledStore.State state = enabledState();
+        Map<String, ServiceInfo> snapshot = firstComponents(
+                packageInfo(flags | PackageManager.GET_SERVICES, false, null, state).services);
+        for (Match m : matches) {
+            ServiceInfo template = snapshot.get(m.name);
+            if (template == null) continue;
+            ServiceInfo s = new ServiceInfo(template);
+            // Keep independently generated application/library metadata per result.
+            if (!result.isEmpty()) s.applicationInfo = applicationInfo(flags, state);
+            result.add(m.resolveInfo(flags, null, s));
+        }
+    }
+
+    private static <T extends ComponentInfo> Map<String, T> firstComponents(T[] components) {
+        Map<String, T> result = new HashMap<>();
+        if (components != null) {
+            // Match the single-component getters: the first declaration remaining
+            // after boot/enabled filtering wins, including duplicate names.
+            for (T component : components) result.putIfAbsent(component.name, component);
         }
         return result;
     }
@@ -973,12 +1105,122 @@ public final class ApkPackage {
      * common to bind, publication and PackageManager's authority/component queries.
      */
     public List<ProviderInfo> providers(long flags) {
-        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true);
+        return providerList(flags, null);
+    }
+
+    ProviderInfo providerForAuthority(String authority, long flags) {
+        for (ProviderInfo info : providerList(flags, authority)) {
+            if (ContentProviders.hasAuthority(info, authority)) return info;
+        }
+        return null;
+    }
+
+    private List<ProviderInfo> providerList(long flags, String authority) {
+        PackageInfo pi = packageInfo(flags | PackageManager.GET_PROVIDERS, true, authority, enabledState());
         List<ProviderInfo> result = new ArrayList<>();
         if (pi.providers != null) Collections.addAll(result, pi.providers);
         return result;
     }
 
+    /**
+     * ComponentResolver.addProvidersLocked registers a package's providers in manifest
+     * order: each authority belongs to the first declaration that names it, a later one
+     * keeps only the authorities still free and logs "Skipping provider name ...", and
+     * one left with none stays a registered component with a null authority (the
+     * ParsedProvider keeps its declared authorities; registerAuthorities rewrites the
+     * generated ProviderInfo, so PackageInfo shows the same), so
+     * queryContentProviders never binds it. Done on the parsed declarations, before
+     * enabled and direct-boot filtering, as registration happens at scan time; computed
+     * once, so the warning is logged once per parsed package. Authorities shared with
+     * another package are not resolved here: ContentProviders rejects that ambiguity
+     * instead of picking an owner by install order. Use the same
+     * first-declaration-per-class rule as the provider queries and index.
+     */
+    private Map<String, ProviderClaim> providerAuthorities() {
+        Map<String, ProviderClaim> result = mProviderAuthorities;
+        if (result != null) return result;
+        synchronized (this) {
+            if (mProviderAuthorities == null) {
+                Map<String, ProviderClaim> claims = new HashMap<>();
+                Set<String> registered = new HashSet<>();
+                Set<String> components = new HashSet<>();
+                for (ParsedProvider provider : parsed.getProviders()) {
+                    String authorities = provider.getAuthority();
+                    if (!components.add(provider.getName()) || authorities == null) continue;
+                    String first = null;
+                    StringBuilder others = null;
+                    boolean skipped = false;
+                    String[] names = authorities.split(";");
+                    for (int i = 0; i < names.length; i++) {
+                        String name = names[i];
+                        if (!registered.add(name)) {
+                            skipped = true;
+                            android.util.Log.w("PackageManager", "Skipping provider name " + name
+                                    + " (in package " + packageName + "): name already used by "
+                                    + packageName);
+                            continue;
+                        }
+                        if (i == 0) {
+                            first = name;
+                        } else {
+                            if (others == null) others = new StringBuilder(name);
+                            else others.append(';').append(name);
+                        }
+                    }
+                    claims.put(provider.getName(), new ProviderClaim(first,
+                            others == null ? null : others.toString(), skipped));
+                }
+                mProviderAuthorities = claims;
+            }
+            return mProviderAuthorities;
+        }
+    }
+
+    /**
+     * Gives generated provider infos the authorities registration left them
+     * (providerAuthorities()).
+     *
+     * <p>For a syncable provider Android maps the first authority to the class record
+     * and maps the aliases to a non-syncable copy that retains the first authority
+     * if registered. Binding uses the class view; authority lookups select
+     * the record registered under the requested authority.
+     */
+    private void registerAuthorities(ProviderInfo[] providers, String authority) {
+        if (providers == null) return;
+        Map<String, ProviderClaim> claims = providerAuthorities();
+        Set<String> components = new HashSet<>();
+        for (ProviderInfo info : providers) {
+            if (!components.add(info.name) || info.authority == null) continue;
+            ProviderClaim claim = claims.get(info.name);
+            String first = claim.first();
+            String registeredAuthorities = claim.others() == null ? first
+                    : first == null ? claim.others() : first + ";" + claim.others();
+            if (info.isSyncable) {
+                boolean classRecord = authority == null || authority.equals(first);
+                info.authority = classRecord ? first : registeredAuthorities;
+                info.isSyncable = classRecord;
+            } else if (claim.skipped()) {
+                info.authority = registeredAuthorities;
+            }
+        }
+    }
+
+    private static ProviderInfo[] filterProviderBootState(ProviderInfo[] providers, long flags) {
+        if (providers == null) return null;
+        int count = 0;
+        for (ProviderInfo info : providers) {
+            long state = info.directBootAware ? PackageManager.MATCH_DIRECT_BOOT_AWARE
+                    : PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+            if ((flags & state) != 0) providers[count++] = info;
+        }
+        return count == 0 ? null : count == providers.length ? providers : Arrays.copyOf(providers, count);
+    }
+
+    /**
+     * The registered providers: the first declaration of each component, including one
+     * left without an authority (ComponentResolver registers the component before its
+     * authorities), filtered by boot state.
+     */
     private static ProviderInfo[] registeredProviders(ProviderInfo[] providers, long flags) {
         if (providers == null) return null;
         Set<String> components = new HashSet<>();
@@ -1096,7 +1338,9 @@ public final class ApkPackage {
         ai.nativeLibraryDir = nativeLibraryDir();
         ai.primaryCpuAbi = mPrimaryCpuAbi;
 
-        // A long-lived PM record must not publish a cached graph after XML/jar updates.
+        // A long-lived PM record must not publish a stale graph after XML/jar updates:
+        // the registry's snapshot is checked against the files' metadata and the graph
+        // comes from it, without reading or hashing again while they are unchanged.
         // Ordinary packages keep the cheap immutable empty graph path.
         try {
             SharedLibraryGraph graph = SharedLibraryRegistry.usesNone(parsed) ? sharedLibraries

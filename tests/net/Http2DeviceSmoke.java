@@ -144,9 +144,9 @@ public class Http2DeviceSmoke {
 
     /** Cancel while the reader has no response DATA and the writer has no
      * WINDOW_UPDATE credit. Closing the transport must retire both directions. */
-    static void checkCancellation() throws Exception {
+    static void checkCancellation(boolean brotli) throws Exception {
         ExecutorService executor=Executors.newSingleThreadExecutor();
-        HttpEngine engine=new HttpEngine.Builder(new android.content.ContextWrapper(null)).build();
+        HttpEngine engine=new HttpEngine.Builder(new android.content.ContextWrapper(null)).setEnableBrotli(brotli).build();
         CountDownLatch headersReceived=new CountDownLatch(1),windowConsumed=new CountDownLatch(1),peerClosed=new CountDownLatch(1);
         CompletableFuture<Void> canceled=new CompletableFuture<>();
         AtomicReference<Throwable> unexpected=new AtomicReference<>();
@@ -162,6 +162,7 @@ public class Http2DeviceSmoke {
                     if (!new String(preface,java.nio.charset.StandardCharsets.US_ASCII)
                             .equals("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")) throw new IOException("Bad preface");
                     frame(out,4,0,0,new byte[0]);
+                    int blockedId=0;
                     for (;;) {
                         int n=(in.readUnsignedByte()<<16)|(in.readUnsignedByte()<<8)|in.readUnsignedByte();
                         int type=in.readUnsignedByte(),flags=in.readUnsignedByte(),id=in.readInt()&0x7fffffff;
@@ -176,7 +177,13 @@ public class Http2DeviceSmoke {
                         }
                         byte[] data=new byte[n]; in.readFully(data);
                         if (type==4 && (flags&1)==0) frame(out,4,1,0,new byte[0]);
-                        if (type==1) frame(out,1,4,id,new byte[]{(byte)0x88});
+                        if (type==1) {
+                            ByteArrayOutputStream response=new ByteArrayOutputStream(); response.write(0x88);
+                            if(brotli && blockedId==0) response.write(literal("content-encoding","br"));
+                            frame(out,1,4,id,response.toByteArray());
+                            if (blockedId==0) blockedId=id;
+                            else frame(out,0,1,id,Http2SessionContracts.BODY);
+                        }
                         if (type==0) {
                             if ((flags&1)!=0) throw new AssertionError("Upload ended without enough flow-control credit");
                             if (dataBytes.addAndGet(n)==65535) windowConsumed.countDown();
@@ -184,7 +191,8 @@ public class Http2DeviceSmoke {
                         // Deliberately give no DATA response and no write credit.
                     }
                 } catch (EOFException expected) {
-                    // Peer EOF confirms that cancellation closed the real socket.
+                // The private baseline closes on cancellation; a shared session
+                // closes when its engine is shut down after worker retirement.
                     if (!cancelRequested.get()) cancellationFailure(unexpected,canceled,expected);
                 } catch (SocketException reset) {
                     // An abortive TCP close is also a terminal peer-close result.
@@ -236,9 +244,22 @@ public class Http2DeviceSmoke {
                     throw new AssertionError("writer did not exhaust initial credit; DATA bytes="+dataBytes.get());
                 }
                 Thread[] workers=awaitBlockedDuplex(unexpected);
+                try {
+                    // The single accepted physical connection must still serve
+                    // a different stream while both directions above are parked.
+                    engine.getClass().getDeclaredField("http2Sessions");
+                    Http2SessionContracts.Call parallel=new Http2SessionContracts.Call(engine,
+                            "http://127.0.0.1:"+server.getLocalPort()+"/parallel",executor);
+                    parallel.start();
+                    if (!parallel.await().equals("success") || parallel.terminals.get()!=1) {
+                        throw new AssertionError("blocked duplex prevented an independent stream");
+                    }
+                    checkCancellationFailure(unexpected);
+                } catch (NoSuchFieldException historical) { /* Private baseline cannot share its connection. */ }
                 cancelRequested.set(true); stream.cancel(); canceled.get(10,TimeUnit.SECONDS);
-                if (!peerClosed.await(5,TimeUnit.SECONDS)) throw new AssertionError("canceled socket remained open");
                 awaitStreamIoRetirement(workers,unexpected);
+                engine.shutdown();
+                if (!peerClosed.await(5,TimeUnit.SECONDS)) throw new AssertionError("shutdown retained the canceled socket");
                 // Drain the production serial callback queue, not only its target
                 // executor: queued callbacks can otherwise be submitted after a
                 // barrier placed directly in the target executor's queue.
@@ -263,21 +284,28 @@ public class Http2DeviceSmoke {
     }
 
     public static void main(String[] args) throws Exception {
+        if (args.length==1 && (args[0].equals("sessions") || args[0].equals("sessions-baseline"))) {
+            Http2SessionContracts.run(!args[0].equals("sessions-baseline"));
+            return;
+        }
         if (args.length == 1 && args[0].equals("disabled")) {
             checkHttp2Disabled();
             return;
         }
-        if (args.length==1 && args[0].equals("cancel")) {
-            checkCancellation();
+        if (args.length==1 && (args[0].equals("cancel") || args[0].equals("brotli-cancel"))) {
+            checkCancellation(args[0].equals("brotli-cancel"));
             return;
         }
         boolean gzipHeaders=args.length>0 && args[0].equals("gzip-headers");
+        boolean brotli=args.length>0 && args[0].startsWith("brotli");
+        boolean brotliHeaders=brotli && args[0].equals("brotli-headers");
+        boolean delayedBody=gzipHeaders || brotliHeaders;
         boolean earlyRead=args.length>0 && args[0].equals("early-read");
         boolean readOnly=args.length>0 && args[0].equals("readonly-write");
         boolean large=args.length>0 && args[0].equals("large");
         boolean gzip=gzipHeaders || (args.length>0 && args[0].equals("gzip"));
-        boolean unary=gzip || earlyRead || readOnly || large || (args.length>0 && args[0].equals("unary"));
-        boolean tls=args.length>0 && !unary;
+        boolean unary=gzip || brotliHeaders || earlyRead || readOnly || large || (args.length>0 && args[0].equals("unary"));
+        boolean tls=args.length>0 && !unary && !brotli;
         byte[] upload=new byte[large ? 1024*1024+37 : 4];
         if (large) for (int i=0;i<upload.length;i++) upload[i]=(byte)('a'+i%26);
         else System.arraycopy(new byte[]{'p','i','n','g'},0,upload,0,4);
@@ -290,6 +318,7 @@ public class Http2DeviceSmoke {
                     byte[] preface=new byte[24]; in.readFully(preface);
                     if (!new String(preface,"US-ASCII").equals("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")) throw new IOException("Bad preface");
                     frame(out,4,0,0,new byte[0]);
+                    int brotliParts=0;
                     for (;;) {
                         int n=(in.readUnsignedByte()<<16)|(in.readUnsignedByte()<<8)|in.readUnsignedByte();
                         int type=in.readUnsignedByte(),flags=in.readUnsignedByte(),stream=in.readInt()&0x7fffffff;
@@ -298,6 +327,7 @@ public class Http2DeviceSmoke {
                         if (type==1) {
                             ByteArrayOutputStream headers=new ByteArrayOutputStream(); headers.write(0x88); // indexed :status 200
                             if (gzip) headers.write(literal("content-encoding","gzip"));
+                            if (brotli) headers.write(literal("content-encoding","br"));
                             frame(out,1,4,stream,headers.toByteArray());
                         }
                         if (type==0) {
@@ -313,6 +343,12 @@ public class Http2DeviceSmoke {
                                     try (java.util.zip.GZIPOutputStream zipped=new java.util.zip.GZIPOutputStream(compressed)) { zipped.write(data); }
                                     data=compressed.toByteArray();
                                 }
+                                if (brotli) {
+                                    if(!new String(data,java.nio.charset.StandardCharsets.US_ASCII).equals(brotliParts==0?"ping":"pong"))
+                                        throw new IOException("Unexpected Brotli duplex input");
+                                    data=brotliHeaders ? HttpBrotliFixtures.PING : brotliParts++==0
+                                            ? HttpBrotliFixtures.FLUSH_PING : HttpBrotliFixtures.FINISH_PONG;
+                                }
                                 frame(out,0,0,stream,data);
                             }
                             if ((flags&1)!=0) { frame(out,1,5,stream,literal("grpc-status","0")); break; }
@@ -323,7 +359,7 @@ public class Http2DeviceSmoke {
                 } catch(Exception e) { failure[0]=e; }
             }); peer.setDaemon(true); peer.start();
         }
-        HttpEngine engine=new HttpEngine.Builder(new android.content.ContextWrapper(null)).build();
+        HttpEngine engine=new HttpEngine.Builder(new android.content.ContextWrapper(null)).setEnableBrotli(brotli).build();
         ExecutorService executor=Executors.newSingleThreadExecutor();
         CountDownLatch done=new CountDownLatch(1);
         StringBuilder body=new StringBuilder();
@@ -337,7 +373,7 @@ public class Http2DeviceSmoke {
         BidirectionalStream stream=engine.newBidirectionalStreamBuilder(url,executor,new BidirectionalStream.Callback() {
             public void onStreamReady(BidirectionalStream s) {
                 if (earlyRead) s.read(ByteBuffer.allocateDirect(32));
-                if (!tls && !gzipHeaders) {
+                if (!tls && !delayedBody) {
                     ByteBuffer b=ByteBuffer.allocateDirect(upload.length); b.put(upload).flip();
                     s.write(readOnly || large ? b.asReadOnlyBuffer() : b,unary);
                 }
@@ -348,7 +384,7 @@ public class Http2DeviceSmoke {
                     throw new IllegalStateException("HTTP/2 :status metadata is missing");
                 // The peer sends response headers before it receives any DATA.
                 // Decoding gzip must not delay this callback until body bytes.
-                if (gzipHeaders) {
+                if (delayedBody) {
                     ByteBuffer b=ByteBuffer.allocateDirect(4); b.put(new byte[]{'p','i','n','g'}).flip();
                     s.write(b,true); s.flush();
                 }
@@ -365,6 +401,9 @@ public class Http2DeviceSmoke {
             public void onWriteCompleted(BidirectionalStream s,UrlResponseInfo i,ByteBuffer b,boolean end) { completedWrites[0]++; }
             public void onSucceeded(BidirectionalStream s,UrlResponseInfo i) {
                 if (!tls && completedWrites[0]!=(unary?1:2)) failure[0]=new AssertionError("Completed before write callbacks");
+                if(brotli && i.getReceivedByteCount()!=(brotliHeaders ? HttpBrotliFixtures.PING.length
+                        : HttpBrotliFixtures.FLUSH_PING.length+HttpBrotliFixtures.FINISH_PONG.length))
+                    failure[0]=new AssertionError("Decoded HTTP/2 bytes counted as wire bytes");
                 done.countDown();
             }
             public void onFailed(BidirectionalStream s,UrlResponseInfo i,HttpException e) { failure[0]=e; done.countDown(); }

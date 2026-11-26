@@ -32,11 +32,16 @@
 #   gesher-app windows com.example separate  each task of the app in a window of its own
 #                                      (`shared`: one window for the app, the default;
 #                                      from its next start; ADR 0088)
+#   gesher-app special-access com.example  (the Control Center runs it) the app's special
+#                                      access switches; `special-access com.example OP
+#                                      allow|deny`: the user's choice for one
+#   gesher-app settings-closed TOKEN...  (the Control Center runs it) the app details it
+#                                      showed for these Settings requests closed
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
 #   gesher-app cameras                 list Windows cameras and their frame sizes
 #   gesher-app cameras rear CAMERA_ID  record a physically rear-mounted Windows camera
-#   gesher-app cameras reset           clear the mounting choice (external cameras)
+#   gesher-app cameras reset           clear the mounting choice (front cameras)
 #   gesher-app shutdown                stop the device
 #   gesher-app toast-activated         (COM runs it: Gesher's toast activator) a click
 #                                      on an app's toast, given to the device (ADR 0051)
@@ -61,8 +66,11 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
+# AppContainer M1 is a developer probe. Installed app launches use the ordinary runtime.
+Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
+. (Join-Path $scriptRoot 'gesher-runtime-files.ps1')
 $here = $scriptRoot
 
 # When started interactively from Explorer (.apk double-click or Start menu shortcut),
@@ -89,16 +97,17 @@ try {
   }
 } catch { }
 
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
+$root = Set-GesherProfileEnvironment $here
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'windows', 'sync-shortcuts', 'cameras', 'spell-checker'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'proxy', 'windows', 'special-access', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--detach | --wait | --single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared'
   Write-Host '       gesher-app spell-checker list|use COMPONENT|automatic|enable|disable|language ID'
   Write-Host '       gesher-app cameras [rear CAMERA_ID | reset]'
+  Write-Host '       gesher-app mobile-data [on|off] | mobile-data roaming [on|off]'
   exit 2
 }
 $command = $Arguments[0]
@@ -168,7 +177,6 @@ if ($commands -notcontains $command) {
   $apkFull = (Resolve-Path -LiteralPath $rest[0]).Path
   $rest = @($rest | Select-Object -Skip 1)
 }
-. (Join-Path $here 'gesher-runtime-files.ps1')
 Set-Location -LiteralPath $here
 # A Windows path as gesher-base's path model reads it (docs/posix.md): no drive
 # on the current drive, /mnt/<drive>/... on another, so ':'-separated lists
@@ -206,6 +214,13 @@ if (Test-Path (Join-Path $here 'com.android.location.provider.jar')) {
   New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
   Install (Join-Path $here 'com.android.location.provider.jar') (Join-Path $root 'system/framework/com.android.location.provider.jar')
   Install (Join-Path $here 'etc/permissions/com.android.location.provider.xml') (Join-Path $root 'system/etc/permissions/com.android.location.provider.xml')
+}
+foreach ($library in 'android.test.base', 'android.test.mock', 'android.test.runner') {
+  if (Test-Path (Join-Path $here "$library.jar")) {
+    New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
+    Install (Join-Path $here "$library.jar") (Join-Path $root "system/framework/$library.jar")
+    Install (Join-Path $here "etc/permissions/$library.xml") (Join-Path $root "system/etc/permissions/$library.xml")
+  }
 }
 if (Test-Path (Join-Path $here 'etc/permissions/privapp-permissions-microg.xml')) {
   New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
@@ -250,6 +265,22 @@ $bcp = ($jars | ForEach-Object { NoDrive "$here/$_.jar" }) -join ':'
 # the boot image's AOT code without the JIT; app processes add the JIT (ADR 0081, 0054).
 $dvm = @("-Xbootclasspath:$bcp", "-Ximage:$(NoDrive "$here/framework/boot.art")", '-Xusejit:false')
 $dalvikvm = Join-Path $here 'dalvikvm.exe'
+# Runs the VM; its exit code ($LASTEXITCODE) is the result. ART writes ordinary
+# diagnostics to stderr (always "setting boot class path" at INFO). When that
+# stream is redirected - the control panel, a caller's 2>, a host without a
+# visible console - Windows PowerShell turns each line into an ErrorRecord,
+# which this script's ErrorActionPreference=Stop would make terminating: a
+# successful start or install would be reported with ART's first log line.
+# A VM that could not be started at all (missing or damaged dalvikvm.exe) sets
+# no exit code under Continue, so that case still fails here.
+# Pass '-X...:value' options inside an array (@dvm): a literal colon argument
+# written directly to this function is split in two by PowerShell's binder.
+function Invoke-Dalvikvm {
+  $ErrorActionPreference = 'Continue'
+  $global:LASTEXITCODE = $null
+  & $dalvikvm @args
+  if ($null -eq $global:LASTEXITCODE) { throw "gesher-app: could not start $dalvikvm" }
+}
 
 # Keep the profile choice local to child processes, so disabling the marker in
 # this PowerShell session cannot inherit a previous launcher's automatic opt-in.
@@ -270,7 +301,7 @@ try {
     catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { }
   }
   if ($command -eq 'cameras') {
-    & $dalvikvm @dvm com.gesher.server.CameraSelection (NoDrive $rearCameraFile) @rest
+    Invoke-Dalvikvm @dvm com.gesher.server.CameraSelection (NoDrive $rearCameraFile) @rest
     $code = $LASTEXITCODE
     if ($code -eq 0 -and $rest.Count -gt 0) {
       $state = DeviceState
@@ -284,18 +315,18 @@ try {
   if ($commands -contains $command) {
     $launcherArgs = @($command)
     if ($apkFull) { $launcherArgs += UserPath $apkFull }
-    & $dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments @launcherArgs @rest
+    Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments @launcherArgs @rest
     exit $LASTEXITCODE
   }
   if ($rest -notcontains '--single-process' -and $rest -notcontains '--system-server') {
-    & $dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch (UserPath $apkFull) @rest
+    Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch (UserPath $apkFull) @rest
     exit $LASTEXITCODE
   }
 
   # Single process: the app alone, with stand-in services in its own process.
   $DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
   if ($DriverArgs -notcontains '--system-server') {
-    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
+    Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
     exit $LASTEXITCODE
   }
 
@@ -303,13 +334,15 @@ try {
   # the APK, then the app in this console's process; the three are stopped when it exits.
   $logs = Join-Path $root 'logs'
   New-Item -ItemType Directory -Force $logs | Out-Null
-  $env:GESHER_BINDER = "gesher-app-$PID"
+  # Unique per run, not only per PID: a reused PID must not name an earlier run's device
+  # (its binder pipe, property session and /proc/sys/kernel/random/boot_id).
+  $env:GESHER_BINDER = "gesher-app-$PID-" + [Convert]::ToString([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(), 16)
   $started = @()
   try {
     $started += Start-Process (Join-Path $here 'binderd.exe') -ArgumentList $env:GESHER_BINDER -PassThru -NoNewWindow `
       -RedirectStandardOutput "$logs/run-binderd.out" -RedirectStandardError "$logs/run-binderd.log"
     # A successful protocol connection to this broker must precede ProcessState.
-    & $dalvikvm @dvm com.gesher.server.RuntimeCommands wait-binder $env:GESHER_BINDER $started[0].Id 15000
+    Invoke-Dalvikvm @dvm com.gesher.server.RuntimeCommands wait-binder $env:GESHER_BINDER $started[0].Id 15000
     if ($LASTEXITCODE -ne 0) { throw ('gesher-app: ' + (Get-GesherText 'binder_failed')) }
     $started += Start-Process (Join-Path $here 'servicemanager.exe') -PassThru -NoNewWindow `
       -RedirectStandardOutput "$logs/run-servicemanager.out" -RedirectStandardError "$logs/run-servicemanager.log"
@@ -324,7 +357,7 @@ try {
       if ($text.Contains('with servicemanager')) { break }
       Start-Sleep -Milliseconds 100
     }
-    & $dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
+    Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
     $code = $LASTEXITCODE
     if ($code -ne 0) { Write-Host ('gesher-app: ' + (Get-GesherText 'server_logs' @($logs))) }
   } finally {

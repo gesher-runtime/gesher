@@ -247,6 +247,10 @@ AOSP already builds Skia, hwui, minikin and libandroid_runtime for the host
   a `Surface` over `NativeWindow`: lockCanvas/unlockCanvasAndPost, the
   window's back buffer and PrintWindow show the frame, a dirty-rectangle
   redraw keeps the rest.
+  CPU damage now limits retained-buffer conversion and Win32 invalidation;
+  layered popups also retain their DIB and coalesce pending damage. See the
+  [PR 399 validation and contract notes](audits/pr399-review.md)
+  for fallback cases, pinned AOSP evidence and host-only measurements.
 - **hwui's renderer into the window** (step 3, `HardwareRendererTest`,
   `PASS  dalvikvm: HardwareRenderer: a RenderNode tree into the Win32 window
   (CPU pipeline)`, ci run 39997138911 and later): a RenderNode tree (with a
@@ -532,7 +536,11 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
 - **EGL/GLES into it** (SDL, games, Firefox's compositor in its GPU process): an
   ANativeWindow without an HWND gets a hidden helper window for ANGLE's window surface;
   at each eglSwapBuffers the frame is read back and posted to the ANativeWindow, paced
-  at 60 Hz on a high-resolution waitable timer (`compat/bionic/egl_child_surface.cc`).
+  at the queried host monitor frequency on a high-resolution waitable timer,
+  with a 60 Hz fallback (`compat/bionic/egl_child_surface.cc`). Child queue
+  surfaces do not identify their consumer's display: the query uses this
+  process's foreground window when available, otherwise the helper/default
+  monitor. It refreshes on monitor changes and at most once per second.
   The helper is never shown, so its swap chain is not presented: ANGLE's swap is made
   only when the window's size changed (where ANGLE resizes the surface), with swap
   interval 0 (eglSwapInterval with such a surface current keeps 0). Presenting it with
@@ -576,6 +584,21 @@ How child surfaces work (built on the media track's no-compositor path, ADR 0052
   now goes through a Surface over the SurfaceTexture (LegacyCamera).
 - **Bitmap parcels** (`compat/hwui/surfaces/bitmap_parcel.cc`) and **YuvImage**
   (`compat/hwui/surfaces/yuv_image.cc`), registered after hwui's tables.
+  `Bitmap.asShared()` uses real sealed memfd-backed storage through the pinned
+  hwui allocator. Shared Parcel recipients retain independent mapped native
+  Bitmaps; forwarding an immutable mapped Bitmap duplicates its descriptor
+  without copying its pixels. Mutable sources still produce independent
+  snapshots, and a Parcel which forbids descriptors uses inline bytes. The
+  recipient outlives both the sender and the Parcel. Actual storage/JNI host
+  tests and source-based work measurements are documented in
+  [the shared Bitmap report](research/shared-bitmap-2026-11-22.md). Track 52
+  requires a public SDK app to preserve all pixels through a separate Binder
+  process after both sending Bitmaps are recycled; that Windows/ART/Skia
+  acceptance is not inferred from the host tests.
+  Seals live in an extended attribute of the `%TEMP%` file, so where `%TEMP%`
+  is on a volume without extended attributes (ReFS, including Dev Drive)
+  `memfd_create(MFD_ALLOW_SEALING)` fails with `EOPNOTSUPP` and `asShared()`
+  fails instead of returning unsealed storage.
 - **Surfaces in Parcels** (`compat/framework/surface_parcel.cc`, the QueueSurface side in
   `compat/media/surface/surface_parcel_bridge.h`): on a device a parceled Surface is its
   IGraphicBufferProducer. Here a QueueSurface's parcel is a producer endpoint, a binder in
@@ -652,6 +675,10 @@ pieces are listed in [native-libs.md](native-libs.md) ("Graphics").
   `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` makes an EGLImage of it
   (`EGL_ANGLE_image_d3d11_texture`). CPU locks read the texture back when the
   GPU may have drawn; unlocks after writing upload.
+  `AHardwareBuffer_fromHardwareBuffer` imports the HardwareBuffer of an
+  ImageReader image (RGBA or PRIVATE reader) as such a buffer, so a platform
+  view's frame (Flutter) is sampled through the same EGL path
+  ([media.md](media.md)).
 - `ASurfaceControl_*`: each window an ASurfaceControl tree hangs from (a
   SurfaceView's surface, the forwarding Surface Chromium's GPU process holds,
   a Gesher window) is composed on the GPU thread after every applied

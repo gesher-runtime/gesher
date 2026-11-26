@@ -8,6 +8,7 @@
 # process (gesher-app --hidden-window) and on the Gesher device (its own app process),
 # both with GESHER_CAMERA_TEST's camera for the preview phases.
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
 if (-not ('GesherSurfWin32' -as [type])) {
   Add-Type @'
 using System;
@@ -69,18 +70,61 @@ function InOrder([string] $text, [string[]] $lines) {
 }
 
 # Runs surfaceapp with $Arguments; returns @{ Text; Shots = @{ phase -> pixels } }.
-function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [string] $Prefix = 'surfaces', [int] $Phases = 7) {
+function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [string] $Prefix = 'surfaces', [int] $Phases = 7, [hashtable] $Environment = @{}) {
   $log = Join-Path $env:RUNNER_TEMP "surfaces-$Tag-$(Get-Random).log"
+  # The scaling Activity reuses surfaceapp after SurfaceActivity. Keep earlier
+  # evidence on disk, but never capture a prior launch's HWND or phase markers.
+  $starts = @{}
+  foreach ($f in $AppLogs) {
+    $prior = Get-Content -Raw $f -ErrorAction SilentlyContinue
+    $starts[$f] = if ($prior) { $prior.Length } else { 0 }
+  }
   $quoted = (@($dvmSurfaces) + $Arguments | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ } }) -join ' '
   $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$log`" 2>&1`"")
   $psi.Environment['GESHER_TRACE_FAULTS'] = '1'
   $psi.Environment['GESHER_CAMERA_TEST'] = '1'
+  foreach ($entry in $Environment.GetEnumerator()) { $psi.Environment[$entry.Key] = [string]$entry.Value }
   $psi.UseShellExecute = $false
   $p = [Diagnostics.Process]::Start($psi)
   try {
+  # Diagnostic observations never select a window, retry a capture, or change a verdict.
+  # Retain at most 128 events and 128 Ki characters of the already-read combined log.
+  $trace = [ordered]@{ Schema = 1; Tag = $Tag; Prefix = $Prefix; Phases = $Phases;
+    WrapperPid = $p.Id; CommandLog = $log; AppLogStartCharacters = $starts;
+    Events = [Collections.Generic.List[object]]::new(); DroppedEvents = 0 }
+  $traceClock = [Diagnostics.Stopwatch]::StartNew()
+  $tracePhases = @{}
+  $breakReason = 'phase-limit-or-deadline'
+  $text = ''
+  $observe = {
+    param([string] $Kind, [int] $Phase, [IntPtr] $Window, [int] $Characters, $Pixels = $null)
+    if ($trace.Events.Count -ge 128) { $trace.DroppedEvents++; return }
+    $event = [ordered]@{ Kind = $Kind; Milliseconds = $traceClock.ElapsedMilliseconds;
+      Phase = $Phase; Hwnd = ('0x{0:x}' -f $Window.ToInt64()); LogCharacters = $Characters }
+    if ($Window -ne [IntPtr]::Zero) {
+      try {
+        $event.WindowAlive = [GesherWin32]::IsWindow($Window)
+        $event.WindowOwnerPid = [GesherWin32]::ProcessId($Window)
+        $size = [GesherWin32]::ClientSize($Window)
+        $event.ClientWidth = $size[0]; $event.ClientHeight = $size[1]
+      } catch { $event.WindowObservationError = $_.Exception.GetType().FullName }
+    }
+    if ($Kind -eq 'capture-result') {
+      $event.CaptureReturnedNull = $null -eq $Pixels
+      if ($null -ne $Pixels) {
+        $event.CaptureValues = $Pixels.Length
+        if ($Pixels.Length -ge 2) { $event.CaptureWidth = $Pixels[0]; $event.CaptureHeight = $Pixels[1] }
+      }
+    }
+    $trace.Events.Add($event)
+  }.GetNewClosure()
   $read = {
     $t = Get-Content -Raw $log -ErrorAction SilentlyContinue
-    foreach ($f in $AppLogs) { $t += "`n" + (Get-Content -Raw $f -ErrorAction SilentlyContinue) }
+    foreach ($f in $AppLogs) {
+      $current = Get-Content -Raw $f -ErrorAction SilentlyContinue
+      if ($current -and $current.Length -ge $starts[$f]) { $current = $current.Substring($starts[$f]) }
+      $t += "`n" + $current
+    }
     "$t"
   }.GetNewClosure()
   $shots = @{}
@@ -102,17 +146,34 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
     }
     if ($hwnd -eq [IntPtr]::Zero) {
       $m = [regex]::Match($text, 'first frame drawn \((\d+) presented\), \w+, hwnd 0x([0-9a-f]+)')
-      if ($m.Success) { $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[2].Value, 16) }
+      if ($m.Success) {
+        $hwnd = [IntPtr][Convert]::ToInt64($m.Groups[2].Value, 16)
+        & $observe 'hwnd-marker' $phase $hwnd $text.Length
+      }
     }
-    if ($text.Contains("${Prefix}: done") -or $p.HasExited) { break }
+    if (-not $tracePhases.ContainsKey($phase) -and $text.Contains("${Prefix}: phase $phase ready")) {
+      $tracePhases[$phase] = $true
+      & $observe 'phase-marker' $phase $hwnd $text.Length
+    }
+    if ($text.Contains("${Prefix}: done") -or $p.HasExited) {
+      $breakReason = if ($text.Contains("${Prefix}: done")) { 'done-marker' } else { 'wrapper-exited' }
+      break
+    }
     if ($hwnd -ne [IntPtr]::Zero -and $text.Contains("${Prefix}: phase $phase ready")) {
       Start-Sleep -Milliseconds 1500  # the frames after the step land
+      & $observe 'capture-attempt' $phase $hwnd $text.Length
       $shots[$phase] = [GesherWin32]::Capture($hwnd)
+      & $observe 'capture-result' $phase $hwnd $text.Length $shots[$phase]
       $phase++
       continue
     }
     Start-Sleep -Milliseconds 250
   }
+  if ($breakReason -eq 'phase-limit-or-deadline') {
+    $breakReason = if ($phase -gt $Phases) { 'phase-limit' } else { 'phase-deadline' }
+  }
+  $trace.PollBreakReason = $breakReason
+  & $observe 'poll-ended' $phase $hwnd $text.Length
   $timedOut = -not $p.WaitForExit(120000)
   if ($timedOut) {
     # Its threads' stacks into its log before it goes (ART's SIGQUIT dump).
@@ -129,6 +190,8 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
   if ($timedOut) { $text += "
 (killed: still running 120 s after its last phase)" }
   $exitCode = if ($timedOut) { -1 } else { $p.ExitCode }
+  $trace.ExitWaitTimedOut = $timedOut; $trace.ExitCode = $exitCode
+  $trace.CapturedPhaseKeys = @($shots.Keys | Sort-Object)
   return @{ Text = $text; Shots = $shots; Hwnd = $hwnd; Exit = $exitCode }
   } finally {
     try {
@@ -136,7 +199,27 @@ function SurfaceRun([string[]] $Arguments, [string] $Tag, [string[]] $AppLogs, [
         try { $p.Kill($true) } catch { Write-Host "INFO  surfaces: final process kill failed: $_" }
         if (-not $p.WaitForExit(5000)) { Write-Host 'INFO  surfaces: final process cleanup exceeded five seconds' }
       }
-    } finally { $p.Dispose() }
+    } finally {
+      $p.Dispose()
+      try {
+        $trace.CompletedMilliseconds = $traceClock.ElapsedMilliseconds
+        $trace.LogCharacters = if ($null -eq $text) { 0 } else { $text.Length }
+        $folder = Join-Path $env:RUNNER_TEMP 'gesher-surface-evidence'
+        [void][IO.Directory]::CreateDirectory($folder)
+        $name = ($Tag -replace '[^a-zA-Z0-9_-]', '_')
+        if ($name.Length -gt 64) { $name = $name.Substring(0, 64) }
+        $stem = Join-Path $folder ("$name-$([Guid]::NewGuid().ToString('N'))")
+        [IO.File]::WriteAllText("$stem.json", ($trace | ConvertTo-Json -Depth 8))
+        $observed = [string]$text
+        if ($observed.Length -gt 131072) {
+          $omitted = "`n[combined log middle omitted]`n"
+          $tail = 65536 - $omitted.Length
+          $observed = $observed.Substring(0, 65536) + $omitted + $observed.Substring($observed.Length - $tail)
+        }
+        [IO.File]::WriteAllText("$stem.log", $observed)
+        Write-Host "INFO  surfaces: diagnostic evidence $stem.json; poll ended $breakReason"
+      } catch { Write-Host "INFO  surfaces: diagnostic evidence could not be saved: $_" }
+    }
   }
 }
 
@@ -244,6 +327,54 @@ function SurfaceGlChecks([string] $Mode, $r) {
   }
 }
 
+# Real MediaCodec -> SurfaceView/TextureView display, including a separate decoder
+# process in the device run. Pixel checks are mandatory; log markers alone fail.
+function CodecScalingChecks([string] $Mode, $r, [bool] $RemoteProducer) {
+  $t = $r.Text
+  SurfaceCheck "video scaling ($Mode): process completion and JNI errors" @(
+    if ($r.Exit -ne 0) { "actual process exit $($r.Exit)" }
+    if ($t -match 'scaling: FAILED') { ([regex]::Match($t, 'scaling: FAILED[^\r\n]*').Value) }
+    InOrder $t @('scaling: invalid modes and released state verified',
+      'scaling: phase 1 bitmap verified: default fit after no-Surface call',
+      'scaling: phase 2 bitmap verified: live centered crop',
+      'scaling: phase 3 bitmap verified: resize same frame, no new decoded input',
+      'scaling: phase 4 bitmap verified: setOutputSurface keeps mode for next frame',
+      'scaling: phase 5 bitmap verified: live fit clears prior crop',
+      'scaling: phase 6 bitmap verified: reset and reconfigure restore default fit', 'scaling: done'))
+  SurfaceCheck "video scaling ($Mode): producer process identity" @(
+    if ($RemoteProducer) {
+      $identity = [regex]::Match($t, 'scaling: separate producer pid (\d+) consumer pid (\d+)')
+      if (-not $identity.Success -or $identity.Groups[1].Value -eq $identity.Groups[2].Value) {
+        'no independently verified separate decoder process'
+      }
+    } elseif ($t -notmatch 'scaling: local producer pid \d+') { 'no local decoder process' })
+  foreach ($phase in 1..6) {
+    $regions = @()
+    $wide = $phase -eq 3
+    $cropped = $phase -eq 2 -or $phase -eq 4
+    foreach ($offset in $(if ($wide) { @(0, 208) } else { @(0, 120) })) {
+      $name = if ($offset -eq 0) { 'SurfaceView' } else { 'TextureView' }
+      if ($cropped) {
+        $regions += ,@("$name centered green", ($offset + 6), 6, ($offset + 90), 90, 0x00ff00)
+      } elseif ($wide) {
+        $regions += ,@("$name red restored", ($offset + 8), 8, ($offset + 52), 56, 0xff0000)
+        $regions += ,@("$name green", ($offset + 72), 8, ($offset + 116), 56, 0x00ff00)
+        $regions += ,@("$name blue restored", ($offset + 136), 8, ($offset + 180), 56, 0x0000ff)
+      } else {
+        $regions += ,@("$name red", ($offset + 6), 6, ($offset + 26), 90, 0xff0000)
+        $regions += ,@("$name green", ($offset + 38), 6, ($offset + 58), 90, 0x00ff00)
+        $regions += ,@("$name blue", ($offset + 70), 6, ($offset + 90), 90, 0x0000ff)
+      }
+    }
+    SurfaceCheck "video scaling ($Mode): phase $phase actual window pixels" @(
+      if ($null -eq $r.Shots[$phase]) { "no window read-back at phase $phase" }
+      else { Regions $r.Shots[$phase] $regions })
+  }
+  if ($script:failed -gt $script:surfacesFailedBefore) {
+    ("$t" -split "`n" | Where-Object { $_ -match 'scaling|Surface|Texture|Exception|FATAL| at |killed' } | Select-Object -Last 200) | Out-Host
+  }
+}
+
 if (-not (Test-Path "$Dir/surfacegl.apk")) {
   Write-Host 'FAIL  surfaces: surfacegl.apk is missing'
   $failed++
@@ -259,10 +390,18 @@ if (-not (Test-Path "$Dir/surfaceapp.apk")) {
 } else {
   Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force -ErrorAction SilentlyContinue
   Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force -ErrorAction SilentlyContinue
+  # Camera previews require the isolated operator's explicit grant, including
+  # the ordinary application identity used by the single-process runner.
+  $surfaceUid = Grant-FixturePermissions "$Dir/dalvikvm.exe" $dvmSurfaces (NoDrive "$Dir/services-tests.dex") `
+    (NoDrive "$Dir/surfaceapp.apk") 'com.gesher.surfaceapp' @('android.permission.CAMERA')
   # 1. A single process.
   $script:surfacesFailedBefore = $failed
-  $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/surfaceapp.apk")) 'single' @()
+  $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/surfaceapp.apk")) 'single' @() `
+    -Environment @{ GESHER_UID = [string]$surfaceUid; GESHER_BINDER_UID = [string]$surfaceUid }
   SurfaceChecks 'single process' $r
+  $script:surfacesFailedBefore = $failed
+  $r = SurfaceRun @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', '--activity', 'com.gesher.surfaceapp.CodecScalingActivity', (NoDrive "$Dir/surfaceapp.apk")) 'scaling-single' @() 'scaling' 6
+  CodecScalingChecks 'single process' $r $false
 
   # 2. The Gesher device: surfaceapp's own app process, started by the system server.
   $savedData = $env:ANDROID_DATA
@@ -273,9 +412,51 @@ if (-not (Test-Path "$Dir/surfaceapp.apk")) {
   $env:GESHER_SHORTCUTS = '0'
   $env:GESHER_CAMERA_TEST = '1'  # the device's processes inherit it
   try {
+    # This profile has its own UID registry. Install through the real launcher,
+    # then grant/read back through its running package and permission services.
+    $surfaceDeviceUid = Grant-FixturePermissions "$Dir/dalvikvm.exe" $dvmSurfaces (NoDrive "$Dir/services-tests.dex") `
+      (NoDrive "$Dir/surfaceapp.apk") 'com.gesher.surfaceapp' @('android.permission.CAMERA')
+    $surfaceInstall = RunTimed "$Dir/dalvikvm.exe" ($dvmSurfaces + @('com.gesher.app.Launcher', 'install', (NoDrive "$Dir/surfaceapp.apk"))) 180
+    if ($LASTEXITCODE -ne 0) { throw "Surface fixture installation prerequisite failed: $surfaceInstall" }
+    $null = Grant-FixturePermissions "$Dir/dalvikvm.exe" $dvmSurfaces (NoDrive "$Dir/services-tests.dex") `
+      (NoDrive "$Dir/surfaceapp.apk") 'com.gesher.surfaceapp' @('android.permission.CAMERA') `
+      -Installed -ExpectedUid $surfaceDeviceUid
     $script:surfacesFailedBefore = $failed
     $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfaceapp.apk"), '--hidden-window') 'device' @("$root/logs-surfaces/com.gesher.surfaceapp.log")
     SurfaceChecks 'Gesher device' $r
+    # Use the real system server/Binder app processes. Read only this launch's
+    # appended log bytes, and require the exact pixels after both native senders
+    # have retired. The app itself rejects equal parent/relay PIDs.
+    $sharedBitmapLog = "$root/logs-surfaces/com.gesher.surfaceapp.log"
+    $sharedBitmapOffset = if (Test-Path -LiteralPath $sharedBitmapLog) { (Get-Item -LiteralPath $sharedBitmapLog).Length } else { 0 }
+    $sharedBitmapOut = RunTimed "$Dir/dalvikvm.exe" @($dvmSurfaces + @('com.gesher.app.Launcher', 'launch',
+      (NoDrive "$Dir/surfaceapp.apk"), '--activity', 'com.gesher.surfaceapp.BitmapSharedActivity', '--headless', '--keep-task')) 180
+    $sharedBitmapCode = $LASTEXITCODE
+    if (Test-Path -LiteralPath $sharedBitmapLog) {
+      $sharedBitmapBytes = [IO.File]::ReadAllBytes($sharedBitmapLog)
+      if ($sharedBitmapBytes.Length -ge $sharedBitmapOffset) {
+        $sharedBitmapOut += "`n" + [Text.Encoding]::UTF8.GetString($sharedBitmapBytes, [int]$sharedBitmapOffset,
+          [int]($sharedBitmapBytes.Length - $sharedBitmapOffset))
+      } else { $sharedBitmapOut += "`nshared bitmap: FAILED log truncated during launch" }
+    }
+    $sharedBitmapProblems = @()
+    if ($sharedBitmapCode -ne 0) { $sharedBitmapProblems += "process exit $sharedBitmapCode" }
+    if ($sharedBitmapOut -match 'shared bitmap: FAILED') { $sharedBitmapProblems += 'application failure' }
+    foreach ($cycle in 0..1) {
+      foreach ($size in @('9x7', '641x359')) {
+        if ($sharedBitmapOut -notmatch "shared bitmap: $size cycle $cycle exact pixels after both senders recycled; parent pid \d+ relay pid \d+") {
+          $sharedBitmapProblems += "missing independent transfer $size cycle $cycle"
+        }
+      }
+    }
+    if ($sharedBitmapOut -notmatch 'shared bitmap: PASS 8 Bitmap hops through separate Binder process; immutable identity, pixels, metadata and independent retirement verified') {
+      $sharedBitmapProblems += 'missing complete Binder/Skia acceptance'
+    }
+    SurfaceCheck 'immutable shared Bitmap across Binder keeps real pixels after both senders recycle' $sharedBitmapProblems
+    if ($sharedBitmapProblems.Count -ne 0) { $sharedBitmapOut | Out-Host }
+    $script:surfacesFailedBefore = $failed
+    $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfaceapp.apk"), '--activity', 'com.gesher.surfaceapp.CodecScalingActivity', '--ez', 'scaling.remote', 'true', '--hidden-window') 'scaling-device' @("$root/logs-surfaces/com.gesher.surfaceapp.log") 'scaling' 6
+    CodecScalingChecks 'Gesher device with Binder producer' $r $true
     if (Test-Path "$Dir/surfacegl.apk") {
       $script:surfacesFailedBefore = $failed
       $r = SurfaceRun @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/surfacegl.apk"), '--hidden-window') 'gl-device' @("$root/logs-surfaces/com.gesher.surfacegl.log") 'surfacegl' 2

@@ -79,6 +79,9 @@ target_include_directories(libcore_javacore PRIVATE ${_lc}/luni/src/main/native)
 target_link_libraries(libcore_javacore PUBLIC nativehelper base log expat z ziparchive
   icu_ndk_headers boringssl_crypto)
 target_compile_options(libcore_javacore PRIVATE ${_libcore_flags})
+# Os.ftruncate (and FileChannel.truncate below) must obey memfd seals like the
+# guest's ftruncate; mingw's ftruncate64 is the UCRT's, which ignores them.
+target_compile_definitions(libcore_javacore PRIVATE ftruncate64=gesher_ftruncate)
 set_source_files_properties("${_lc}/luni/src/main/native/Register.cpp" PROPERTIES
   COMPILE_DEFINITIONS "JNI_OnLoad=JNI_OnLoad_javacore;JNI_OnUnload=JNI_OnUnload_javacore")
 
@@ -105,6 +108,7 @@ target_link_libraries(libcore_openjdk PUBLIC nativehelper base log fdlibm z icu_
 # Windows ones with WIN32), and gesher-base provides Linux's interfaces. Only
 # for C: libc++'s headers test __linux__ too, and must not see it.
 target_compile_definitions(libcore_openjdk PRIVATE _LARGEFILE64_SOURCE _GNU_SOURCE LINUX
+  ftruncate64=gesher_ftruncate
   $<$<COMPILE_LANGUAGE:C>:__linux__>)
 target_compile_options(libcore_openjdk PRIVATE $<$<COMPILE_LANGUAGE:C>:-UWIN32>)
 # libjavacore and libopenjdk each have a class JniConstants, apart in their

@@ -113,20 +113,29 @@ public final class CameraRequestRaceTest {
             require(number == expected++, "selected frame number was lost or repeated");
             require(cancelledFrame[0] == number, "cancel/flush missed the selected in-flight frame");
             require(repeating.get(camera) == null, "cancel/flush retained a repeating request");
+            Object callbacks = field(frame.getClass(), "callbacks").get(frame);
+            ((AutoCloseable) callbacks).close();
         }
 
         // A queued single capture still precedes a repeating request and keeps its assigned number.
         Class<?> frameClass = Class.forName("com.gesher.server.CameraDeviceUser$Frame");
+        Class<?> callbacksClass = Class.forName("com.gesher.server.CameraCallbacks$FrameCallbacks");
         Constructor<?> frameConstructor = frameClass.getDeclaredConstructor(requestClass,
-                int.class, long.class);
+                int.class, long.class, callbacksClass);
         frameConstructor.setAccessible(true);
-        Object queued = frameConstructor.newInstance(request, 0, 12345L);
+        Object callbackQueue = field(cameraClass, "mCallbackQueue").get(camera);
+        Method reserve = callbackQueue.getClass().getDeclaredMethod("reserve", long[].class);
+        reserve.setAccessible(true);
+        Object[] reserved = (Object[]) reserve.invoke(callbackQueue, (Object) new long[] {0});
+        Object queued = frameConstructor.newInstance(request, 0, 12345L, reserved[0]);
         synchronized (lock) {
             repeating.set(camera, requests);
             queue.add(queued);
         }
         require(next.invoke(camera) == queued, "queued capture did not precede repeating capture");
         require(nextNumber.getLong(camera) == expected, "queued capture renumbered repeating frames");
+        ((AutoCloseable) reserved[0]).close();
+        ((AutoCloseable) callbackQueue).close();
         field(cameraClass, "mDisconnected").setBoolean(camera, true);
         require(next.invoke(camera) == null, "disconnected camera selected a request");
         System.out.println("CameraRequestRaceTest: 1000 contended cancel/flush selections, "

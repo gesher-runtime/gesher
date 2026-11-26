@@ -64,6 +64,7 @@ namespace {
 
 constexpr int32_t kParcelMagic = 0x46525347;  // "GSRF"
 constexpr uint32_t kFrame = IBinder::FIRST_CALL_TRANSACTION;
+constexpr int32_t kFrameScalingVersion = 1;
 // The largest frame side either end takes (a 16384x16384 frame is 1 GiB).
 constexpr int32_t kMaxSide = 16384;
 
@@ -74,6 +75,20 @@ const char kJavaReference = 0;
 const String16& Descriptor() {
   static const String16 descriptor("com.gesher.view.ISurfaceSink");
   return descriptor;
+}
+
+// Old producers end after the FD and therefore mean scale-to-fit. A non-default
+// display mode is an optional, versioned tail; reject malformed extensions before
+// mapping the producer's storage. No image bytes or descriptor ownership change.
+status_t ReadFrameVideoScalingMode(const Parcel& data, int* mode) {
+  *mode = 1;
+  if (data.dataAvail() == 0) return OK;
+  int32_t version = 0, value = 0;
+  if (data.dataAvail() != 2 * sizeof(int32_t) || data.readInt32(&version) != OK ||
+      data.readInt32(&value) != OK || version != kFrameScalingVersion ||
+      (value != 1 && value != 2)) return BAD_VALUE;
+  *mode = value;
+  return OK;
 }
 
 // The consumer's endpoint, a binder in its process. It holds the consumer's
@@ -100,7 +115,8 @@ class SurfaceSink : public BBinder {
 
   // kFrame: int32 width, int32 height, int64 time stamp, uint64 the memfd's id
   // (its producer's: a new memfd has a new one), the memfd with the pixels
-  // (RGBA_8888, width pixels a row). Answered with int32 status (OK; NO_INIT:
+  // (RGBA_8888, width pixels a row), optionally int32 scaling-version and mode.
+  // Answered with int32 status (OK; NO_INIT:
   // the consumer is gone; BAD_VALUE: not a frame) and the consumer's current
   // size.
   status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags) override {
@@ -185,6 +201,8 @@ class SurfaceSink : public BBinder {
     }
     // The Parcel's descriptor (it closes it).
     const int fd = data.readFileDescriptor();
+    int video_scaling_mode = 1;
+    if (ReadFrameVideoScalingMode(data, &video_scaling_mode) != OK) return BAD_VALUE;
     const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
     static gesher::perf::Site site("surface sink: post a forwarded frame");
     const int64_t start = gesher::perf::Now();
@@ -192,7 +210,8 @@ class SurfaceSink : public BBinder {
     std::shared_ptr<Mapping> m = MappingFor(id, fd, bytes, &status);
     if (m == nullptr) return status;
     const bool queued = gesher_surface_post(surface, width, height, width, timestamp,
-                                            static_cast<const uint32_t*>(m->pixels));
+                                            static_cast<const uint32_t*>(m->pixels),
+                                            video_scaling_mode);
     site.Add(gesher::perf::Now() - start);
     return queued ? OK : NO_INIT;
   }
@@ -314,7 +333,7 @@ bool Reserve(Forwarder* f, size_t bytes) {
 
 // A frame queued to a forwarding Surface, on its producer's thread.
 void Forward(void* context, jlong surface, int width, int height, int64_t timestamp,
-             const uint32_t* pixels) {
+             const uint32_t* pixels, int video_scaling_mode) {
   Forwarder* f = static_cast<std::shared_ptr<Forwarder>*>(context)->get();
   status_t status = NO_INIT;
   int32_t consumer_width = 0, consumer_height = 0;
@@ -339,6 +358,10 @@ void Forward(void* context, jlong surface, int width, int height, int64_t timest
     data.writeInt64(timestamp);
     data.writeUint64(f->id);
     data.writeFileDescriptor(f->fd);
+    if (video_scaling_mode != 1) {
+      data.writeInt32(kFrameScalingVersion);
+      data.writeInt32(video_scaling_mode);
+    }
     const status_t transport = f->sink->transact(kFrame, data, &reply);
     transact_site.Add(gesher::perf::Now() - copied);
     if (transport == OK) {

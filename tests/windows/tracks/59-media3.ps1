@@ -7,6 +7,8 @@
 # and measured (media_probe analyze, or the test app's own zero crossings). The real
 # WASAPI capture path must either open real hardware or report unavailable.
 # Synthetic recordings below use separately named, default-OFF fixture builds.
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
+. "$PSScriptRoot/../helpers/SharedLogBytes.ps1"
 
 $m3Tmp = Join-Path $env:RUNNER_TEMP 'gesher-media3'
 New-Item -ItemType Directory -Force $m3Tmp | Out-Null
@@ -14,7 +16,7 @@ $captureProbe = Join-Path $Dir 'media_probe-media-capture-test.exe'
 $captureRuntime = Join-Path $Dir 'dalvikvm-media-capture-test.exe'
 Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
 CheckTimed 'media3: actual WASAPI packet and disconnect status contracts' "$Dir/capture_wasapi_contract_test.exe" @() @('WASAPI capture contracts:') 20
-foreach ($case in @('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'last-owner', 'stale-peer', 'fixture-env',
+foreach ($case in @('missing', 'start-fails', 'disconnect', 'stop-race', 'release-race', 'reentrant', 'event-signal', 'event-command', 'event-wake', 'last-owner', 'stale-peer', 'fixture-env',
                     'opensl-missing', 'opensl-permission', 'opensl-descriptors', 'opensl-start', 'opensl-disconnect', 'recorder-start', 'recorder-disconnect', 'jni-read')) {
   CheckTimed "media3: unavailable/disconnected capture contract ($case)" "$Dir/capture_failure_contract_test.exe" @($case) @("capture failure ${case}:") 20
 }
@@ -69,7 +71,7 @@ function LineCheck([string] $Name, [string] $Out, [string[]] $Patterns, [int] $C
   $script:failed++
   if ($Tag -and -not $script:m3Printed[$Tag]) {
     $script:m3Printed[$Tag] = $true
-    ($Out -split "`n" | Where-Object { $_ -match 'RecordTest|GesherMedia|gesher-app|Exception|FATAL| F dalvikvm|JNI DETECTED|\s+at ' } |
+    ($Out -split "`n" | Where-Object { $_ -match 'RecordTest|persistent input:|GesherMedia|gesher-app|Exception|FATAL| F dalvikvm|JNI DETECTED|\s+at ' } |
       Select-Object -First 200) | Out-Host
   }
 }
@@ -167,13 +169,16 @@ $recordChecks = @(
   @{ Name = 'MediaRecorder, video from its Surface (Canvas) with the microphone: H.264 and AAC in MPEG-4, every color in order, the frame at 1.25 s, the tones'
      P = @("${t}recorder surface: getSurface the same true, 2 track\(s\) \[video/avc 320x240, audio/mp4a-latm 44100 Hz 1 ch\], [12]\.\d s; video 45\+ frames, colors \[red, lime, blue, white\], frame at 1\.25 s 320x240 blue; audio 750 Hz then 1250 Hz") },
   @{ Name = 'MediaRecorder, video from the camera (Camera2: GESHER_CAMERA_TEST''s camera, a repeating request into getSurface()): H.264 in MPEG-4 with the test picture'
-     P = @("${t}recorder camera \d+: 1 track\(s\) \[video/avc 320x240\], [12]\.\d s; video 30\+ frames, ordered true, the test picture true") },
+     P = @("${t}recorder camera \d+: 1 track\(s\) \[video/avc 320x240\], [12]\.\d s; video 30\+ frames, ordered true, the test picture true",
+           "${t}recorder camera ready: completed recording sequence true") },
   @{ Name = 'Camera2 close delivers onClosed exactly once before its callback thread quits'
      P = @("${t}recorder camera close: onClosed exactly once before callback thread quit true, callback thread stopped true") },
   @{ Name = 'MediaCodec output into an ImageReader''s Surface: YUV pixels and default or explicit timestamps'
      P = @("${t}imagereader: decoder rendered 60 frames into the reader's surface; images 40\+ \(35 320x240 3 planes\), colors \[red, lime, blue, white\]",
            "${t}imagereader timestamps: pass",
-           "${t}imagereader retained image: pass") }
+           "${t}imagereader retained image: pass") },
+  @{ Name = 'Gesher MediaCodec to ImageReader floor-resize path: exact decoded planes at four sizes, timestamps and owned teardown'
+     P = @("${t}imagereader plane scaling: pass 4 sizes, exact decoded planes and timestamps, owned teardown") }
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
@@ -221,9 +226,17 @@ function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
 if (Test-Path "$Dir/recordapp.apk") {
   $bcpRec = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
   $dvmRec = @("-Xbootclasspath:$bcpRec", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false')
+  # Grant the camera and microphone permissions used by this fixture only as
+  # explicit isolated operator decisions. The APK retains its ordinary UID.
+  $recordUid = Grant-FixturePermissions $captureRuntime $dvmRec (NoDrive "$Dir/services-tests.dex") `
+    (NoDrive "$Dir/recordapp.apk") 'com.gesher.recordapp' @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO')
+  $recordIdentity = @{ GESHER_UID = [string]$recordUid; GESHER_BINDER_UID = [string]$recordUid }
   CheckTimed 'media3: Camera2 request selection is atomic against 1000 contended cancel/flush calls, with ordered frame numbers and queued-capture priority' "$Dir/dalvikvm.exe" `
     @($dvmRec + @('-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.CameraRequestRaceTest')) `
     @('CameraRequestRaceTest: 1000 contended cancel/flush selections, ordered frame numbers, queued priority and disconnected stop passed') 120
+  CheckTimed 'media3: camera callback admission includes actual native metadata and blocked consumers' "$Dir/dalvikvm.exe" `
+    @($dvmRec + @('-cp', (NoDrive "$Dir/services-tests.dex"), 'gesher.services.CameraCallbackAdmissionTest')) `
+    @('CameraCallbackAdmissionTest: real native metadata, bounded requests/callbacks, ordered flush and nonjoining close passed') 120
   $env:GESHER_CAMERA_TEST = '1'
   $env:GESHER_MEDIA_TRACE_RECORD = '1'
   $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-single'
@@ -232,7 +245,7 @@ if (Test-Path "$Dir/recordapp.apk") {
   # standalone request-race regression above keeps its original VM options.
   $dvmRecTrace = $dvmRec + '-verbose:heap'
   # Single process.
-  $recOut = & $captureRuntime @dvmRecTrace com.gesher.app.Main (NoDrive "$Dir/recordapp.apk") 2>&1 | Out-String
+  $recOut = Invoke-FixtureProcess $captureRuntime ($dvmRecTrace + @('com.gesher.app.Main', (NoDrive "$Dir/recordapp.apk"))) 600 $recordIdentity
   $recCode = $LASTEXITCODE
   Write-Host "INFO  media3: $((($recOut -split "`n") | Where-Object { $_ -match 'GesherMedia.*(encoders:|capture:)|RecordTest codec list encoders' } | Select-Object -First 4 | ForEach-Object { $_.Trim() }) -join '; ')"
   RecordChecks 'single process' $recOut $recCode
@@ -241,9 +254,12 @@ if (Test-Path "$Dir/recordapp.apk") {
   try {
     $env:GESHER_VIDEO_ENCODERS = 'soft'
     $env:GESHER_TEST_CODEC_CONTROLS = '1'
-    CheckTimed 'media3: a live AVC encoder changes output rate and requests sync frames while preserving metrics and stream continuity' `
-      "$Dir/dalvikvm.exe" @($dvmRec + @('com.gesher.app.Main', (NoDrive "$Dir/recordapp.apk"))) `
-      @('RecordTest codec controls: live AVC rate and sync controls, ordered output, surface retirement, isolated metrics, and lifecycle passed') 120
+    $codecOut = Invoke-FixtureProcess "$Dir/dalvikvm.exe" ($dvmRec + @('com.gesher.app.Main', (NoDrive "$Dir/recordapp.apk"))) 120 $recordIdentity
+    $codecCode = $LASTEXITCODE
+    Check 'media3: a live AVC encoder changes output rate and requests sync frames while preserving metrics and stream continuity' {
+      $global:LASTEXITCODE = $codecCode
+      $codecOut
+    } @('RecordTest codec controls: live AVC rate and sync controls, ordered output, surface retirement, isolated metrics, and lifecycle passed')
   } finally {
     [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedVideoEncoders)
     Remove-Item Env:GESHER_TEST_CODEC_CONTROLS -ErrorAction SilentlyContinue
@@ -255,6 +271,11 @@ if (Test-Path "$Dir/recordapp.apk") {
   New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
   $launcherRec = $dvmRecTrace + 'com.gesher.app.Launcher'
   $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
+  $recordInstall = RunTimed $captureRuntime ($launcherRec + @('install', (NoDrive "$Dir/recordapp.apk"))) 180
+  if ($LASTEXITCODE -ne 0) { throw "Record fixture installation prerequisite failed: $recordInstall" }
+  $null = Grant-FixturePermissions $captureRuntime $dvmRec (NoDrive "$Dir/services-tests.dex") `
+    (NoDrive "$Dir/recordapp.apk") 'com.gesher.recordapp' @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO') `
+    -Installed -ExpectedUid $recordUid
   $recordDeviceLog = Join-Path $root 'logs/com.gesher.recordapp.log'
   if (Test-Path -LiteralPath $recordDeviceLog) { Remove-Item -LiteralPath $recordDeviceLog -Force }
   $devOut = & $captureRuntime @($launcherRec + 'launch', (NoDrive "$Dir/recordapp.apk"), '--headless', '--keep-task') 2>&1 | Out-String
@@ -263,8 +284,93 @@ if (Test-Path "$Dir/recordapp.apk") {
   RecordChecks 'Gesher device' $devOut $devCode
   $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
   Remove-Item Env:GESHER_CAMERA_TEST, Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_RECORD -ErrorAction SilentlyContinue
+
+  # A real EGL producer keeps the same connection while two AVC codecs and a
+  # recorder take successive exclusive leases. Decode all three actual files.
+  # Use ordinary runtime/soft AVC; no synthetic camera or microphone is involved.
+  $savedPersistentEncoder = [Environment]::GetEnvironmentVariable('GESHER_VIDEO_ENCODERS')
+  $savedPersistentAudio = [Environment]::GetEnvironmentVariable('GESHER_AUDIO_SOURCE')
+  $persistentPass = 'persistent input: PASS same EGL producer across codec-recorder-codec, exclusive owners, reset and release, 12 decoded frames'
+  $persistentFiles = @(
+    'persistent input: persistent-codec-first.mp4: decoded 3 real frames, colors and timestamps verified',
+    'persistent input: persistent-recorder.mp4: decoded 6 real frames, colors and timestamps verified',
+    'persistent input: persistent-codec-last.mp4: decoded 3 real frames, colors and timestamps verified')
+  try {
+    $env:GESHER_VIDEO_ENCODERS = 'soft'
+    Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
+    $persistentOut = RunTimed "$Dir/dalvikvm.exe" @($dvmRec + @('com.gesher.app.Main',
+      '--activity', 'com.gesher.recordapp.PersistentInputActivity', (NoDrive "$Dir/recordapp.apk"))) 150
+    $persistentCode = $LASTEXITCODE
+    LineCheck 'media3: persistent input Surface reuses one actual EGL producer through codec/recorder/codec and decodes every expected pixel' `
+      $persistentOut ($persistentFiles + @($persistentPass, 'persistent input: local EGL producer pid \d+ consumer pid \d+')) `
+      $persistentCode 'persistent-local' @('persistent input: FAILED')
+
+    $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+    $persistentLog = Join-Path $root 'logs/com.gesher.recordapp.log'
+    $persistentOffset = if (Test-Path -LiteralPath $persistentLog) { (Get-Item -LiteralPath $persistentLog).Length } else { 0 }
+    $persistentOut = RunTimed "$Dir/dalvikvm.exe" @($launcherRec + @('launch', (NoDrive "$Dir/recordapp.apk"),
+      '--activity', 'com.gesher.recordapp.PersistentInputActivity', '--ez', 'persistent.remote', 'true', '--headless', '--keep-task')) 180
+    $persistentCode = $LASTEXITCODE
+    if (Test-Path -LiteralPath $persistentLog) {
+      $persistentBytes = Read-SharedLogBytes $persistentLog
+      if ($persistentBytes.Length -ge $persistentOffset) {
+        $persistentOut += "`n" + [Text.Encoding]::UTF8.GetString($persistentBytes, [int]$persistentOffset,
+          [int]($persistentBytes.Length - $persistentOffset))
+      } else {
+        $persistentOut += "`npersistent input: FAILED app log was truncated across launch"
+      }
+    }
+    LineCheck 'media3: a separate EGL process keeps the parceled producer alive across all three native consumers' `
+      $persistentOut ($persistentFiles + @($persistentPass, 'persistent input: separate EGL producer pid \d+ consumer pid \d+')) `
+      $persistentCode 'persistent-device' @('persistent input: FAILED')
+  } finally {
+    $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+    [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedPersistentEncoder)
+    [Environment]::SetEnvironmentVariable('GESHER_AUDIO_SOURCE', $savedPersistentAudio)
+  }
+
+  # Ordinary runtime, real EGL input and real software AVC. Verify every
+  # decoded frame's submitted identifier across all three actual MP4 files.
+  $savedRolloverEncoder = [Environment]::GetEnvironmentVariable('GESHER_VIDEO_ENCODERS')
+  $savedRolloverAudio = [Environment]::GetEnvironmentVariable('GESHER_AUDIO_SOURCE')
+  $rolloverPass = 'recorder rollover: PASS same EGL producer and recorder across 3 decoded MP4 files; ordered 802/803/801, caller fd closure and lifecycle verified'
+  $rolloverFiles = @(0..2 | ForEach-Object {
+    "recorder rollover: rollover-$_\.mp4: decoded \d+ actual EGL frame identifiers; key, CSD, orientation and timestamps verified"
+  })
+  try {
+    $env:GESHER_VIDEO_ENCODERS = 'soft'
+    Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
+    $rolloverOut = RunTimed "$Dir/dalvikvm.exe" @($dvmRec + @('com.gesher.app.Main',
+      '--activity', 'com.gesher.recordapp.RecorderRolloverActivity', (NoDrive "$Dir/recordapp.apk"))) 150
+    $rolloverCode = $LASTEXITCODE
+    LineCheck 'media3: recorder MP4 rollover preserves one live EGL producer and real decoded input identifiers' `
+      $rolloverOut ($rolloverFiles + @($rolloverPass)) $rolloverCode 'rollover-local' @('recorder rollover: FAILED')
+
+    $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+    $rolloverLog = Join-Path $root 'logs/com.gesher.recordapp.log'
+    $rolloverOffset = if (Test-Path -LiteralPath $rolloverLog) { (Get-Item -LiteralPath $rolloverLog).Length } else { 0 }
+    $rolloverOut = RunTimed "$Dir/dalvikvm.exe" @($launcherRec + @('launch', (NoDrive "$Dir/recordapp.apk"),
+      '--activity', 'com.gesher.recordapp.RecorderRolloverActivity', '--headless', '--keep-task')) 180
+    $rolloverCode = $LASTEXITCODE
+    if (Test-Path -LiteralPath $rolloverLog) {
+      $rolloverBytes = Read-SharedLogBytes $rolloverLog
+      if ($rolloverBytes.Length -ge $rolloverOffset) {
+        $rolloverOut += "`n" + [Text.Encoding]::UTF8.GetString($rolloverBytes, [int]$rolloverOffset,
+          [int]($rolloverBytes.Length - $rolloverOffset))
+      } else {
+        $rolloverOut += "`nrecorder rollover: FAILED app log was truncated across launch"
+      }
+    }
+    LineCheck 'media3: the device app independently decodes its three selected MP4 files after rollover' `
+      $rolloverOut ($rolloverFiles + @($rolloverPass)) $rolloverCode 'rollover-device' @('recorder rollover: FAILED')
+  } finally {
+    $null = & "$Dir/dalvikvm.exe" @($launcherRec + 'shutdown') 2>&1 | Out-String
+    [Environment]::SetEnvironmentVariable('GESHER_VIDEO_ENCODERS', $savedRolloverEncoder)
+    [Environment]::SetEnvironmentVariable('GESHER_AUDIO_SOURCE', $savedRolloverAudio)
+  }
 } else {
-  Write-Host 'INFO  media3: recordapp.apk not in the build output; its checks skipped'
+  Write-Host 'FAIL  media3: recordapp.apk missing; persistent Surface and recorder rollover public API acceptance is required'
+  $failed++
 }
 Remove-Item Env:GESHER_AUDIO_SOURCE -ErrorAction SilentlyContinue
 

@@ -43,11 +43,15 @@ def main():
     pieces = {
         'reserve': section(paths[2], 'int ReserveFd() {', '\nint RegisterSocket('),
         'class': section(fence, 'class NativeFence {', '\nnamespace {'),
+        # Current native adoption records when this process sees completion.
+        # Keep the immutable older baseline usable when it has no timestamp.
+        'note_signaled': (section(fence, 'void NoteSignaled(', '\n}\n') + '\n}\n'
+                          if 'void NoteSignaled(' in sources[fence] else ''),
         'registry': section(fence, 'constexpr size_t kDescriptorCapacity', '\nbool MaybeFence('),
         'membership': section(fence, 'bool MaybeFence(', '\n// A wait registration'),
         'register': section(fence, 'int Register(', '\n// Only our immutable'),
         'lookup_retire': section(fence, 'std::shared_ptr<NativeFence> LookupNativeFence(', '\nvoid DupNativeFence('),
-        'adopt': section(fence, 'int AdoptNativeFence(', '\nshort PollNativeFence('),
+        'adopt': section(fence, 'int AdoptNativeFence(', '\n}\n') + '\n}\n',
         'reply': section(paths[3], 'struct Reply {', '\nstd::string Device()'),
         'receive': section(paths[3], 'bool ReadDelivered(Reply& reply,', '\n// A view of one'),
     }
@@ -61,7 +65,7 @@ def main():
         for name, value in pieces.items()), flush=True)
     template = (ROOT / 'tests/native/native_fence_receive_host.cc.in').read_text()
     bodies = '\n'.join(pieces[key] for key in (
-        'reserve', 'class', 'registry', 'membership', 'register', 'lookup_retire',
+        'reserve', 'class', 'note_signaled', 'registry', 'membership', 'register', 'lookup_retire',
         'declaration', 'adopt', 'reply', 'receive'))
     if template.count('@PRODUCTION@') != 1:
         raise ValueError('native-fence fixture marker changed')
@@ -79,4 +83,3 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
-

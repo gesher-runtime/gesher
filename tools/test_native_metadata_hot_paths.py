@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise production stdio, trampoline and memfd metadata fast paths.
+"""Exercise production trampoline and memfd metadata fast paths.
 
-The extracted bodies are unchanged. FILE tokens and the Win32 EA/handle layer
-are explicit host boundaries; this does not run Windows UCRT or ARM code.
-Existing stdio-lifetime and ARM64-pending-rollback fixtures cover their callers.
+The extracted bodies are unchanged. The Win32 EA/handle layer is an explicit
+host boundary; this does not run Windows or ARM code. The stdio adapter
+and lifetime fixtures exercise the separate shared-owner stdio path.
 """
 import argparse
 import hashlib
@@ -27,11 +27,9 @@ def main():
     parser.add_argument('--sanitize', action='store_true')
     parser.add_argument('--thread-sanitize', action='store_true')
     args = parser.parse_args()
-    stdio = (ROOT / 'compat/bionic/stdio_bionic.cc').read_text()
     arm64 = (ROOT / 'compat/arm64/dll/translator.cc').read_text()
     memfd = (ROOT / 'compat/posix/src/memfd_seals.cc').read_text()
     pieces = {
-        '@STDIO@': section(stdio, 'constexpr uint32_t kWeof', 'class StreamLock'),
         '@TRAMPOLINES@': section(arm64, 'struct Trampoline {', '// --- va_list host functions'),
         '@MEMFD_REGISTRY@': section(memfd, 'std::mutex g_registry_mutex;', '}  // namespace'),
         '@MEMFD_FUNCTIONS@': section(memfd, 'void RegisterMemfd(int fd)', 'int GetMemfdSeals('),

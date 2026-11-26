@@ -1,0 +1,17 @@
+{
+  "baseline": "5aa6b39027e9c38de2781ff9cda066418d25b1ba",
+  "paths": [
+    "compat/binder/binderd.cc"
+  ],
+  "patch_sha256": "1864085a254a4aaee67b3c6fa3fe4f8c3a8012596b5c1fac7fb3d953bcce6d36",
+  "previous_sha256": {
+    "compat/binder/binderd.cc": "16253eaad0845c440981be8691a288f04ad5a449a5e2c61bb0acdceb8e89b440"
+  },
+  "source_sha256": {
+    "compat/binder/binderd.cc": "6e9f04c0f7c54ba4b51cbea3079edd8da3bffbb4b0bfaa3b16c41bf3eb969769"
+  },
+  "contract_evidence": [
+    "docs/research/binder-direct-output-2026-11-23.md"
+  ],
+  "native_runtime_approval": false
+}

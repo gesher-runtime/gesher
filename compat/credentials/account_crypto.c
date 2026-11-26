@@ -18,6 +18,7 @@
 #include "../locale/ui_locale.h"
 
 static BOOL server_process = FALSE;
+static BOOL standalone_process = FALSE;
 
 static BOOL Equal(const WCHAR* a, const WCHAR* b) {
   while (*a && *a == *b) { ++a; ++b; }
@@ -46,6 +47,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
       if (Equal(args[i], L"-cp") || Equal(args[i], L"-classpath")) { ++i; continue; }
       if (args[i][0] == L'-') continue;
       server_process = Equal(args[i], L"com.gesher.server.SystemServer");
+      standalone_process = Equal(args[i], L"com.gesher.app.Main");
       break;
     }
     LocalFree(args);
@@ -110,27 +112,90 @@ Java_com_gesher_server_AccountSecretStore_nativeUnprotect(JNIEnv* env, jclass cl
 }
 
 #include "permission_dialog.inc"
+#include "background_permission_dialog.inc"
+#include "exact_alarm_dialog.inc"
 
 JNIEXPORT jboolean GESHER_NATIVE
-Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,
-                                                       jstring label, jstring permissions) {
+Java_com_gesher_server_ExactAlarmAccessRequests_nativeAvailable(JNIEnv* env, jclass cls) {
+  (void)env; (void)cls;
+  return server_process ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint GESHER_NATIVE
+Java_com_gesher_server_ExactAlarmAccessRequests_nativeEdit(JNIEnv* env, jclass cls,
+        jobjectArray packages, jbooleanArray allowed) {
   (void)cls;
-  if (!RequireServer(env)) return JNI_FALSE;
-  if (label == NULL || permissions == NULL) return JNI_FALSE;
+  if (!RequireServer(env) || packages == NULL || allowed == NULL) return -1;
+  jsize count = (*env)->GetArrayLength(env, packages);
+  if (count != (*env)->GetArrayLength(env, allowed) || count > 10000) return -1;
+  WCHAR** names = (WCHAR**)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+      ((SIZE_T)count + 1) * sizeof(WCHAR*));
+  jboolean* values = (jboolean*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (SIZE_T)count + 1);
+  int result = -1;
+  if (names == NULL || values == NULL) goto done;
+  (*env)->GetBooleanArrayRegion(env, allowed, 0, count, values);
+  if ((*env)->ExceptionCheck(env)) goto done;
+  for (jsize i = 0; i < count; ++i) {
+    jstring name = (jstring)(*env)->GetObjectArrayElement(env, packages, i);
+    if (name == NULL) goto done;
+    jsize length = (*env)->GetStringLength(env, name);
+    if (length <= 0 || length > 255) { (*env)->DeleteLocalRef(env, name); goto done; }
+    names[i] = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)length + 1) * sizeof(WCHAR));
+    if (names[i] == NULL) { (*env)->DeleteLocalRef(env, name); goto done; }
+    (*env)->GetStringRegion(env, name, 0, length, (jchar*)names[i]);
+    (*env)->DeleteLocalRef(env, name);
+    if ((*env)->ExceptionCheck(env)) goto done;
+  }
+  result = ExactAlarmDialog(GesherUiCurrentLanguage(), (const WCHAR* const*)names, values, count);
+done:
+  if (names != NULL) {
+    for (jsize i = 0; i < count; ++i) if (names[i] != NULL) HeapFree(GetProcessHeap(), 0, names[i]);
+    HeapFree(GetProcessHeap(), 0, names);
+  }
+  if (values != NULL) HeapFree(GetProcessHeap(), 0, values);
+  return result;
+}
+
+typedef int (*ConsentDialog)(enum GesherUiLanguage, const WCHAR*, const WCHAR*);
+
+// `failure` is the result when no dialog could be shown; it is never a user decision.
+static jint Consent(JNIEnv* env, jstring label, jstring permissions, ConsentDialog show, int failure) {
+  // Both runtime entry points host PermissionRequests, whose Java service
+  // authenticates the requesting APK/activity. Account storage and account
+  // token consent continue to require the separate system-server role.
+  if (!server_process && !standalone_process) {
+    Fail(env, "java/lang/SecurityException", "Permission consent requires an active runtime");
+    return failure;
+  }
+  if (label == NULL || permissions == NULL) return failure;
   jsize ln = (*env)->GetStringLength(env, label);
   jsize pn = (*env)->GetStringLength(env, permissions);
-  if (ln > 1024 || pn > 8192) return JNI_FALSE;
+  if (ln > 1024 || pn > 8192) return failure;
   enum GesherUiLanguage lang = GesherUiCurrentLanguage();
   SIZE_T length = (SIZE_T)ln + (SIZE_T)pn + 2;
   WCHAR* text = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, length * sizeof(WCHAR));
-  if (text == NULL) return JNI_FALSE;
+  if (text == NULL) return failure;
   WCHAR* permission_text = text + ln + 1;
   (*env)->GetStringRegion(env, label, 0, ln, (jchar*)text);
   (*env)->GetStringRegion(env, permissions, 0, pn, (jchar*)permission_text);
-  if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return JNI_FALSE; }
-  BOOL allowed = PermissionDialog(lang, text, permission_text);
+  if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return failure; }
+  int decision = show(lang, text, permission_text);
   HeapFree(GetProcessHeap(), 0, text);
-  return allowed ? JNI_TRUE : JNI_FALSE;
+  return decision;
+}
+
+JNIEXPORT jint GESHER_NATIVE
+Java_com_gesher_server_PermissionRequests_nativeConfirm(JNIEnv* env, jclass cls,
+                                                       jstring label, jstring permissions) {
+  (void)cls;
+  return Consent(env, label, permissions, PermissionDialog, PERMISSION_DISMISSED);
+}
+
+JNIEXPORT jint GESHER_NATIVE
+Java_com_gesher_server_PermissionRequests_nativeConfirmBackground(JNIEnv* env, jclass cls,
+                                                                 jstring label, jstring permissions) {
+  (void)cls;
+  return Consent(env, label, permissions, BackgroundPermissionDialog, BACKGROUND_UNAVAILABLE);
 }
 
 JNIEXPORT jboolean GESHER_NATIVE
@@ -160,12 +225,48 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
     text[at++] = 0x2069;
   }
   if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return JNI_FALSE; }
-  int choice = MessageBoxW(NULL, text, GesherUiText(lang, "account_title"),
-                          MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND
-                          | (GesherUiRtl(lang) ? MB_RTLREADING | MB_RIGHT : 0));
+  // The shared host prompt keeps No as the default, including Esc and close.
+  BOOL allowed = GesherHostPrompt(GesherUiText(lang, "account_title"), text,
+      GesherUiText(lang, "permission_allow"), GesherUiText(lang, "permission_deny"),
+      GesherUiRtl(lang), NULL, MB_ICONQUESTION);
   SecureZeroMemory(text, total * sizeof(WCHAR));
   HeapFree(GetProcessHeap(), 0, text);
-  return choice == IDYES ? JNI_TRUE : JNI_FALSE;
+  return allowed ? JNI_TRUE : JNI_FALSE;
 }
 
 #include "account_chooser.inc"
+
+JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_WindowsLocation_nativePromptEnable(JNIEnv* env, jclass cls,
+    jstring app_label) {
+  (void)cls;
+  if (!RequireServer(env) || app_label == NULL) return JNI_FALSE;
+  enum GesherUiLanguage lang = GesherUiCurrentLanguage();
+  const WCHAR* pattern = GesherUiText(lang, "location_off_prompt");
+  jsize label_len = (*env)->GetStringLength(env, app_label);
+  if (label_len <= 0 || label_len > 256) return JNI_FALSE;
+  SIZE_T pattern_len = (SIZE_T)wcslen(pattern);
+  SIZE_T total = pattern_len + (SIZE_T)label_len + 1;
+  WCHAR* text = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, total * sizeof(WCHAR));
+  if (text == NULL) return JNI_FALSE;
+  SIZE_T at = 0;
+  BOOL replaced = FALSE;
+  for (SIZE_T i = 0; i < pattern_len;) {
+    if (!replaced && i + 2 < pattern_len
+        && pattern[i] == L'{' && pattern[i + 1] == L'0' && pattern[i + 2] == L'}') {
+      (*env)->GetStringRegion(env, app_label, 0, label_len, (jchar*)(text + at));
+      if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return JNI_FALSE; }
+      at += (SIZE_T)label_len;
+      i += 3;
+      replaced = TRUE;
+    } else {
+      text[at++] = pattern[i++];
+    }
+  }
+  text[at] = 0;
+  BOOL open = GesherHostPrompt(GesherUiText(lang, "brand"), text,
+      GesherUiText(lang, "location_off_open"), GesherUiText(lang, "location_off_later"),
+      GesherUiRtl(lang), NULL, MB_ICONINFORMATION);
+  HeapFree(GetProcessHeap(), 0, text);
+  return open ? JNI_TRUE : JNI_FALSE;
+}

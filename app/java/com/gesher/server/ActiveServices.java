@@ -57,8 +57,9 @@ import java.util.function.Predicate;
  *     {@code scheduleUnbindService} → onUnbind; then the service is destroyed if nothing
  *     else keeps it.
  * <li>{@code startForeground}: {@code setServiceForeground} posts the notification to the
- *     stand-in notification manager ({@link NotificationManagerService}); nothing enforces
- *     the foreground service rules (types, the 10 s to call startForeground).
+ *     notification manager ({@link NotificationManagerService}) after checking the declared
+ *     types and foreground-service manifest permissions. Background-start exemptions,
+ *     type-specific runtime prerequisites and promotion deadlines remain incomplete.
  * </ul>
  *
  * <p>Unexpected process death restarts sticky/redelivery services and live auto-create
@@ -76,12 +77,17 @@ final class ActiveServices {
         final boolean system;
         final BooleanSupplier lifetime;
         final BooleanSupplier acceptance;
+        final ActivityTaskManagerService.ProcessRecord process;
         Sender(String packageName, boolean system, BooleanSupplier lifetime) {
             this(packageName, system, lifetime, lifetime);
         }
         Sender(String packageName, boolean system, BooleanSupplier lifetime, BooleanSupplier acceptance) {
+            this(packageName, system, lifetime, acceptance, null);
+        }
+        Sender(String packageName, boolean system, BooleanSupplier lifetime, BooleanSupplier acceptance,
+                ActivityTaskManagerService.ProcessRecord process) {
             this.packageName = packageName; this.system = system; this.lifetime = lifetime;
-            this.acceptance = acceptance;
+            this.acceptance = acceptance; this.process = process;
         }
     }
 
@@ -193,21 +199,30 @@ final class ActiveServices {
         final IBinder caller;
         final int callerPid;
         final BooleanSupplier lifetime;
+        final ActivityTaskManagerService.ProcessRecord client;
+        final ApkPackage clientCode;
+        final boolean systemClient;
 
         ConnectionRecord(IntentBindRecord binding, IServiceConnection conn, long flags,
-                IApplicationThread caller, BooleanSupplier lifetime) {
+                IApplicationThread caller, BooleanSupplier lifetime,
+                ActivityTaskManagerService.ProcessRecord client) {
             this.binding = binding;
             this.conn = conn;
             this.flags = flags;
             this.caller = caller == null ? null : caller.asBinder();
             this.callerPid = Binder.getCallingPid();
             this.lifetime = lifetime;
+            this.client = client;
+            this.clientCode = client == null ? null : client.packageCode;
+            this.systemClient = caller == null && Binder.getCallingPid() == android.os.Process.myPid()
+                    && Binder.getCallingUid() == android.os.Process.SYSTEM_UID;
         }
     }
 
     // Guarded by this.
     private final Map<ComponentName, ServiceRecord> mServices = new HashMap<>();
     private final Map<IBinder, List<ConnectionRecord>> mConnections = new HashMap<>();
+    private volatile ShortcutProcessState.Snapshot mShortcutSnapshot = ShortcutProcessState.Snapshot.EMPTY;
     private long mBindSeq;
     private final ScheduledExecutorService mRestarts = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread thread = new Thread(r, "service-restarts");
@@ -242,9 +257,16 @@ final class ActiveServices {
         if (beforeAuthentication != null) beforeAuthentication.run();
         if (mCallers.isSystem()) {
             ApkPackage owner = claimed == null ? null : mPm.get(claimed);
-            if (owner != null) return new Sender(owner.packageName, false,
-                    () -> delegatedLifetime.getAsBoolean() && mPm.get(owner.packageName) == owner
-                            && !mPm.isRemovalPending(owner.packageName));
+            if (owner != null) {
+                BooleanSupplier lifetime = () -> delegatedLifetime.getAsBoolean()
+                        && mPm.get(owner.packageName) == owner && !mPm.isRemovalPending(owner.packageName);
+                // Standalone applications use the local trusted-call path too.
+                // A claimed package alone cannot create a process dependency.
+                boolean actualClient = app != null && app.uid == uid && owner.uid() == uid
+                        && app.packageCode == owner && thread != null && app.thread != null
+                        && thread.asBinder().equals(app.thread.asBinder()) && mAtm.callerProcess(pid) == app;
+                return new Sender(owner.packageName, false, lifetime, lifetime, actualClient ? app : null);
+            }
             if (claimed != null && !"android".equals(claimed)) {
                 throw new SecurityException("Unknown service caller package");
             }
@@ -267,7 +289,7 @@ final class ActiveServices {
         BooleanSupplier acceptance = () -> lifetime.getAsBoolean()
                 && mAtm.callerProcess(pid) == app && !app.exiting;
         if (!acceptance.getAsBoolean()) throw new SecurityException("Service caller retired during authentication");
-        return new Sender(actual, false, lifetime, acceptance);
+        return new Sender(actual, false, lifetime, acceptance, app);
     }
 
     private void enforceAccess(ServiceInfo info, Sender sender) {
@@ -292,16 +314,7 @@ final class ActiveServices {
     private ServiceInfo resolve(Intent service, String resolvedType) {
         List<ResolveInfo> all = mPm.services(service, resolvedType,
                 PackageManager.GET_META_DATA | PackageManager.GET_SHARED_LIBRARY_FILES);
-        ServiceInfo info = all.isEmpty() ? null : all.get(0).serviceInfo;
-        // Play services' stand-in package (GmsPackageSupport) has no process to run its
-        // services in: one started for it ends at once ("No data directory found"), and a
-        // client's binding waits for its timeout (WhatsApp's SmsRetriever: 3 minutes before
-        // the code request). Not bound, the client library fails at once.
-        if (info != null && GmsPackageSupport.isSyntheticPackage(info.packageName)
-                && mPm.get(info.packageName) == null) {
-            return null;
-        }
-        return info;
+        return all.isEmpty() ? null : all.get(0).serviceInfo;
     }
 
     private ServiceRecord record(ServiceInfo info, ApkPackage owner) {
@@ -442,7 +455,7 @@ final class ActiveServices {
                 b = new IntentBindRecord(r, key.getIntent());
                 r.bindings.put(key, b);
             }
-            ConnectionRecord c = new ConnectionRecord(b, connection, flags, caller, sender.lifetime);
+            ConnectionRecord c = new ConnectionRecord(b, connection, flags, caller, sender.lifetime, sender.process);
             connectionRecord = c;
             b.connections.add(c);
             mConnections.computeIfAbsent(connection.asBinder(), k -> new ArrayList<>()).add(c);
@@ -450,7 +463,9 @@ final class ActiveServices {
             if (received) published = b.binder;
             // A new client: the idle reaper must not take this as an unused process.
             if (r.app != null) r.app.markActive(SystemClock.uptimeMillis());
+            publishShortcutStateLocked();
         }
+        mAtm.noteShortcutForeground(null, 0);
         SystemServer.log("bindService " + r + " from " + callingPackage + " (flags 0x"
                 + Long.toHexString(flags) + ")");
         long identity = Binder.clearCallingIdentity();
@@ -527,7 +542,9 @@ final class ActiveServices {
                 if (b.connections.isEmpty()) requestUnbindLocked(b);
                 if (!services.contains(b.service)) services.add(b.service);
             }
+            publishShortcutStateLocked();
         }
+        mAtm.noteShortcutForeground(null, 0);
         for (ServiceRecord r : services) SystemServer.log("unbindService " + r);
         for (ServiceRecord r : services) drainBindingCalls(r);
         for (ServiceRecord r : services) maybeBringDown(r);
@@ -590,6 +607,97 @@ final class ActiveServices {
         mNotifications.withChannelLifecycle(() -> setServiceForegroundLocked(className, token,
                 id, notification, flags, foregroundServiceType, visible));
         mPm.appOps().requestUidStateRefresh();
+        Dexopt.activityChanged();
+    }
+
+    /** Android 16's default manifest permission policy, before any promotion is published. */
+    private int admitForegroundType(ServiceRecord service, ApkPackage owner, int requestedType) {
+        if (owner == null || owner != service.owner) {
+            throw new SecurityException("Foreground service package is no longer installed");
+        }
+        int targetSdk = owner.parsed.getTargetSdkVersion();
+        if (targetSdk >= android.os.Build.VERSION_CODES.P) {
+            requireForegroundPermission(owner, android.Manifest.permission.FOREGROUND_SERVICE);
+        }
+        int manifestType = service.info.getForegroundServiceType();
+        int type = requestedType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
+                ? manifestType : requestedType;
+        if ((type & ~manifestType) != 0) {
+            throw new IllegalArgumentException("Foreground service type is not declared in the manifest");
+        }
+        // AOSP ignores SHORT_SERVICE when another type is selected. Keep the reported
+        // service type consistent, without claiming to implement its separate timeout.
+        if ((type & ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE) != 0
+                && type != ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE) {
+            type &= ~ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE;
+        }
+        // These AOSP compatibility changes are queried by UID, unlike the base P
+        // permission above. PlatformCompat requires the change to be enabled for
+        // every installed package sharing that UID; one older sibling keeps the
+        // legacy behavior. Read the current immutable package snapshot, not a cache
+        // that could retain an older target after update/removal of that sibling.
+        for (ApkPackage member : mPm.packages()) {
+            if (member.uid() == owner.uid()
+                    && member.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                return type;
+            }
+        }
+        if (type == ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE) {
+            if (requestedType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST) {
+                throw new android.app.MissingForegroundServiceTypeException(
+                        "Foreground service has no type declared in the manifest");
+            }
+            throw new android.app.InvalidForegroundServiceTypeException(
+                    "Foreground service type NONE is not allowed for target SDK " + targetSdk);
+        }
+        for (int remaining = type; remaining != 0;) {
+            int selected = Integer.highestOneBit(remaining);
+            remaining &= ~selected;
+            String permission = foregroundTypePermission(selected);
+            if (permission != null) {
+                requireForegroundPermission(owner, permission);
+            } else if (selected != ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE
+                    && (type & ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) == 0) {
+                // AOSP treats an unknown future type as NONE, unless SPECIAL_USE is
+                // also declared and selected. Its ordinary permission is checked above.
+                throw new android.app.InvalidForegroundServiceTypeException(
+                        "Unknown foreground service type 0x" + Integer.toHexString(selected));
+            }
+        }
+        return type;
+    }
+
+    private void requireForegroundPermission(ApkPackage owner, String permission) {
+        // The service's authenticated UID owns the permission, even when a system
+        // caller requests promotion. Do not authorize using the server's Binder UID.
+        if (mPm.permissions().checkUidPermission(owner.uid(), permission, 0)
+                != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Foreground service in " + owner.packageName
+                    + " requires " + permission);
+        }
+    }
+
+    private static String foregroundTypePermission(int type) {
+        // This is only the manifest ('all of') permission layer of AOSP's policy.
+        // Runtime grants, AppOps, roles and device/USB prerequisites are separate.
+        // FILE_MANAGEMENT is not registered in android-16.0.0_r4's default policy,
+        // so it uses the unknown-type fallback. SHORT_SERVICE has no extra permission.
+        return switch (type) {
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC -> android.Manifest.permission.FOREGROUND_SERVICE_DATA_SYNC;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK -> android.Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL -> android.Manifest.permission.FOREGROUND_SERVICE_PHONE_CALL;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION -> android.Manifest.permission.FOREGROUND_SERVICE_LOCATION;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE -> android.Manifest.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION -> android.Manifest.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA -> android.Manifest.permission.FOREGROUND_SERVICE_CAMERA;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE -> android.Manifest.permission.FOREGROUND_SERVICE_MICROPHONE;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH -> android.Manifest.permission.FOREGROUND_SERVICE_HEALTH;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING -> android.Manifest.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED -> android.Manifest.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING -> android.Manifest.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING;
+            case ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE -> android.Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE;
+            default -> null;
+        };
     }
 
     private void setServiceForegroundLocked(ComponentName className, IBinder token, int id,
@@ -598,6 +706,7 @@ final class ActiveServices {
         ServiceRecord r;
         int previous;
         ApkPackage captured;
+        ActivityTaskManagerService.ProcessRecord foregroundVisit;
         synchronized (this) {
             r = byToken(token);
             if (r == null) return;
@@ -605,12 +714,7 @@ final class ActiveServices {
             requireServiceOwner(r);
             if (id != 0 && notification == null) throw new IllegalArgumentException("Missing foreground notification");
             previous = r.foregroundId;
-            int selectedType = id == 0 ? 0
-                    : foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
-                            ? r.info.getForegroundServiceType() : foregroundServiceType;
-            if ((selectedType & ~r.info.getForegroundServiceType()) != 0) {
-                throw new IllegalArgumentException("Foreground service type is not declared in the manifest");
-            }
+            int selectedType = id == 0 ? 0 : admitForegroundType(r, captured, foregroundServiceType);
             int eligible = 0;
             AppOpsService.UidState state = captured == null ? null : visible.get(captured.uid());
             boolean whileInUse = captured != null && (captured.parsed.getTargetSdkVersion() < 30
@@ -639,14 +743,15 @@ final class ActiveServices {
             // use its current eligibility, not the earlier startService visibility.
             if (id == 0 && previous != 0) r.whileInUseAtStart = false;
             r.foregroundChannelId = id == 0 ? null : notification.getChannelId();
+            foregroundVisit = previous == 0 && shortcutForeground(r) ? r.app : null;
+            if ((previous == 0) != (id == 0)) publishShortcutStateLocked();
         }
+        if (foregroundVisit != null) {
+            mAtm.noteShortcutForeground(foregroundVisit, ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE);
+        } else mAtm.noteShortcutForeground(null, 0);
         if (id != 0) {
-            // FOREGROUND_SERVICE_TYPE_MANIFEST (startForeground(id, notification)): the
-            // manifest's types.
-            int type = foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
-                    ? r.info.getForegroundServiceType() : foregroundServiceType;
             SystemServer.log("setServiceForeground " + r + ": foreground, notification " + id
-                    + " (service type 0x" + Integer.toHexString(type) + ")");
+                    + " (service type 0x" + Integer.toHexString(r.foregroundType) + ")");
             mNotifications.postFor(captured, r.info.packageName, null, id, notification);
         } else {
             SystemServer.log("setServiceForeground " + r + ": background"
@@ -664,6 +769,36 @@ final class ActiveServices {
             if (r != null) requireServiceOwner(r);
             return r != null && r.foregroundId != 0 ? r.foregroundType : 0;
         }
+    }
+
+    /** A shortcut exemption belongs to the admitted service and live process generation. */
+    private boolean shortcutForeground(ServiceRecord service) {
+        return service.foregroundId != 0 && serviceCurrent(service) && service.app != null
+                && service.app.packageCode == service.owner && service.app.ready
+                && !service.app.dead && !service.app.exiting && !service.app.pidSuperseded;
+    }
+
+    ShortcutProcessState.Snapshot shortcutSnapshot() { return mShortcutSnapshot; }
+
+    /** Publish only owned service/connection metadata; no ATM lock or application callback. */
+    private void publishShortcutStateLocked() {
+        List<ShortcutProcessState.Owner> foreground = new ArrayList<>();
+        List<ShortcutProcessState.Link> links = new ArrayList<>();
+        for (ServiceRecord service : mServices.values()) {
+            if (service.app == null || !serviceCurrent(service)) continue;
+            ShortcutProcessState.Owner owner = new ShortcutProcessState.Owner(service.app, service.owner,
+                    service.info.name, ApkPackage.ComponentKind.SERVICE);
+            if (shortcutForeground(service)) foreground.add(owner);
+            for (IntentBindRecord binding : service.bindings.values()) {
+                for (ConnectionRecord connection : binding.connections) {
+                    if (!connection.systemClient && (connection.client == null || connection.client == service.app)) continue;
+                    links.add(new ShortcutProcessState.Link(connection.client, connection.clientCode, owner,
+                            connection.flags, connection.systemClient, false, connection.lifetime));
+                }
+            }
+        }
+        mShortcutSnapshot = foreground.isEmpty() && links.isEmpty() ? ShortcutProcessState.Snapshot.EMPTY
+                : new ShortcutProcessState.Snapshot(foreground, links);
     }
 
     synchronized void addAppOpsForegroundServices(java.util.Map<Integer, AppOpsService.UidState> states) {
@@ -805,8 +940,9 @@ final class ActiveServices {
             r.startRequested = false;
             r.lastStartIntent = null;
         }
+        boolean changed = false;
         for (IntentBindRecord binding : r.bindings.values()) {
-            binding.connections.removeIf(connection -> {
+            changed |= binding.connections.removeIf(connection -> {
                 if (connection.lifetime.getAsBoolean()) return false;
                 List<ConnectionRecord> owned = mConnections.get(connection.conn.asBinder());
                 if (owned != null) {
@@ -816,6 +952,7 @@ final class ActiveServices {
                 return true;
             });
         }
+        if (changed) publishShortcutStateLocked();
     }
 
     private synchronized boolean workCurrent(ServiceRecord r) {
@@ -837,7 +974,9 @@ final class ActiveServices {
                 if (!workCurrent(r) || r.bringingUp || r.app != null && r.app != app) return;
                 r.app = app;
                 r.bringingUp = true;
+                publishShortcutStateLocked();
             }
+            mAtm.noteShortcutForeground(null, 0);
             boolean release = true;
             try {
                 for (;;) {
@@ -944,10 +1083,13 @@ final class ActiveServices {
                     if (l != null) l.remove(c);
                 }
             }
+            publishShortcutStateLocked();
         }
         // Removing the service also removes its foreground capabilities even if
         // another service or an activity keeps the process alive.
+        mAtm.noteShortcutForeground(null, 0);
         mPm.appOps().requestUidStateRefresh();
+        Dexopt.activityChanged();
         synchronized (this) { clearStartGrants(r, Integer.MAX_VALUE); }
         if (r.foregroundId != 0) mNotifications.cancel(r.info.packageName, null, r.foregroundId);
         if (r.app == null || !r.created) return;
@@ -1023,6 +1165,7 @@ final class ActiveServices {
             e.getValue().removeIf(c -> c.binding.service.app == app);
             return e.getValue().isEmpty();
         });
+        publishShortcutStateLocked();
     }
 
     /** Explicit force-stop/uninstall also cancels a service waiting for its retry timer. */
@@ -1066,7 +1209,9 @@ final class ActiveServices {
                 }
                 stopped.add(r);
             }
+            publishShortcutStateLocked();
         }
+        mAtm.noteShortcutForeground(null, 0);
         for (ConnectionRecord c : disconnected) connected(c, null, disabled);
         for (ServiceRecord r : stopped) maybeBringDown(r);
     }
@@ -1113,6 +1258,7 @@ final class ActiveServices {
                     r.foregroundId = 0;
                     r.foregroundType = 0;
                     mPm.appOps().requestUidStateRefresh();
+                    Dexopt.activityChanged();
                     r.foregroundChannelId = null;
                 }
                 r.app = null;
@@ -1154,6 +1300,7 @@ final class ActiveServices {
                 }
             }
         }
+        synchronized (this) { publishShortcutStateLocked(); }
         for (ConnectionRecord c : disconnected) connected(c, null);
         for (ServiceRecord r : reconsider) {
             drainBindingCalls(r);

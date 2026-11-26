@@ -63,11 +63,29 @@ def main() -> int:
                      "  host.Navigate(url, headers, method, std::move(body));"
                     if legacy_number else
                     "host.Navigate(url, headers, method, std::move(body), number);")
+    # Keep the opt-in diagnostics in the extracted production functions. Older
+    # source controls have no tracing helpers and retain their original path.
+    trace = (function(source, "bool NavigationTracing(") +
+             function(source, "void TraceNavigation(")
+             if "bool NavigationTracing(" in source else "")
+    dispatch = function(source, "void Fail(") + "\n" + function(source, "void Do(")
+    for signature in ("void QueueAfterDocumentScript(", "void DoAfterDocumentScript(",
+                      "void DoNavigation(", "void StopNavigation("):
+        if signature in source:
+            dispatch += "\n" + function(source, signature)
+    # Execute the real Stop command body, including earlier source controls
+    # before the cancellation helper existed. Its STA dispatch is covered by
+    # the separate document-script contract suite.
+    run = function(source, "void Host::Run(Command command)")
+    stop = run[run.index("      case kStop:\n") + len("      case kStop:\n"):]
+    stop = stop[:stop.index("        break;")]
     replacements = {
         "@OWNED_STREAM@": str(helper), "@COM_POINTER@": com,
-        "@DO@": function(source, "void Do("),
+        "@DO@": dispatch,
+        "@STOP_COMMAND@": "void RunStopCommand(Impl* impl) {\n" + stop + "}\n",
         "@NAVIGATE_DECLARATION@": declaration,
         "@NAVIGATE@": navigate,
+        "@NAVIGATION_TRACE@": trace,
         "@NUMBERED_NAVIGATION@": "1" if numbered else "0",
         "@NAVIGATION_STATE@": state,
         "@NAV_START_CALLBACK@": callback,

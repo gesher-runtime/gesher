@@ -26,6 +26,7 @@
 #    windows (ADR 0088), so each task is a window of its own.
 # In a single process (gesher-app --window) and on the Gesher device.
 . "$PSScriptRoot/../graphics/WindowChecks.ps1"
+. "$PSScriptRoot/../clipboard/NativeForeground.ps1"
 if (-not ('ImeInput' -as [type])) { Add-Type -Path "$PSScriptRoot/../ime/ImeInput.cs" }
 if (-not ('GesherW3Win32' -as [type])) {
   Add-Type -TypeDefinition @'
@@ -234,13 +235,15 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
   if (-not $visible) { $out += 'the window was hidden (no taskbar button)' }
   if ($RequireClipboardDenial) {
     $foreign = $null
+    $foregroundHelper = $null
     $folder = Join-Path $env:RUNNER_TEMP "clipboard-foreground-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Path $folder | Out-Null
     $receiptPath = Join-Path $folder 'window.json'; $stopPath = Join-Path $folder 'stop'
     $foreignWindow = [IntPtr]::Zero
     try {
-      $foreign = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-File',
-        "`"$PSScriptRoot/../clipboard/ForeignForeground.ps1`"", '-Receipt', "`"$receiptPath`"", '-Stop', "`"$stopPath`"") -PassThru -WindowStyle Hidden
+      $foregroundHelper = Start-GesherForegroundHelper -Executable "$Dir/clipboard_foreground.exe" `
+        -Receipt $receiptPath -Stop $stopPath -Diagnostics $folder
+      $foreign = $foregroundHelper.Process
       $deadline = (Get-Date).AddSeconds(15)
       while (-not (Test-Path $receiptPath) -and -not $foreign.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 50 }
       if (-not (Test-Path $receiptPath)) { throw 'owned foreground window did not start' }
@@ -252,8 +255,26 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
       [void][GesherW3Win32]::ShowWindowAsync($foreignWindow, 5)
       if (-not [ImeInput]::Foreground($foreignWindow)) { throw 'owned foreign window did not become the actual foreground window' }
       $token = [Guid]::NewGuid().ToString('N')
-      Set-Clipboard -Value "background-denial-$token"
-      if ((Get-Clipboard -Raw) -cne "background-denial-$token") { throw 'denial probe needs a real nonempty Windows clipboard' }
+      # PowerShell can exhaust its immediate native clipboard retries without an error.
+      # Bound only fixture preparation; the application denial below is still requested once.
+      $clipboardClock = [Diagnostics.Stopwatch]::StartNew()
+      $clipboardAttempts = 0; $clipboardLength = 0; $clipboardReady = $false
+      do {
+        $clipboardAttempts++
+        Set-Clipboard -Value "background-denial-$token" -ErrorAction Stop
+        $clipboardReadback = [string](Get-Clipboard -Raw -ErrorAction Stop)
+        $clipboardLength = $clipboardReadback.Length
+        $clipboardElapsed = $clipboardClock.ElapsedMilliseconds
+        $clipboardReady = $clipboardReadback -ceq "background-denial-$token" -and $clipboardElapsed -lt 1000
+        if ($clipboardReady) { break }
+        $clipboardRemaining = 1000 - $clipboardElapsed
+        if ($clipboardRemaining -le 0) { break }
+        Start-Sleep -Milliseconds ([Math]::Min(20, $clipboardRemaining))
+      } while ($clipboardClock.ElapsedMilliseconds -lt 1000)
+      if (-not $clipboardReady) {
+        throw "denial probe needs a real nonempty Windows clipboard (attempts $clipboardAttempts, readback length $clipboardLength, elapsed $($clipboardClock.ElapsedMilliseconds) ms)"
+      }
+      Write-Host "CLIPBOARD_READY attempts=$clipboardAttempts readbackLength=$clipboardLength elapsedMs=$clipboardElapsed"
       if ([ImeInput]::GetForegroundWindow() -ne $foreignWindow) { throw 'foreground changed before the application probe' }
       $request = $env:GESHER_WINAPP_CLIPBOARD_PROBE
       if (-not $request -or (Test-Path $request)) { throw 'background request path is absent or reused' }
@@ -268,12 +289,7 @@ function W3BackChecks([string] $Mode, [IntPtr] $app, [scriptblock] $ReadLog,
       Write-Host "CLIPBOARD_FOREGROUND hwnd=$foreignWindow pid=$($foreign.Id) created=$($receipt.created) appPid=$([GesherWin32]::ProcessId($app)) probe=$token"
     } catch { $out += "background-denial prerequisite: $_" }
     finally {
-      [IO.File]::WriteAllText($stopPath, 'stop')
-      if ($foreign) {
-        if (-not $foreign.WaitForExit(10000)) { $foreign.Kill(); $out += 'owned foreground helper did not retire'; [void]$foreign.WaitForExit(5000) }
-        elseif ($foreign.ExitCode -ne 0) { $out += "owned foreground helper exited $($foreign.ExitCode)" }
-        $foreign.Dispose()
-      }
+      $out += @(Stop-GesherForegroundHelper $foregroundHelper)
       if ($foreignWindow -ne [IntPtr]::Zero -and [GesherWin32]::IsWindow($foreignWindow)) { $out += 'owned foreground HWND leaked after helper retirement' }
     }
   }

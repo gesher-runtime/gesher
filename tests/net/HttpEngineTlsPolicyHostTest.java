@@ -4,6 +4,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
 import java.security.KeyStore;
 import java.util.*;
 import java.util.concurrent.*;
@@ -25,6 +26,7 @@ public class HttpEngineTlsPolicyHostTest {
         final ExecutorService workers = Executors.newCachedThreadPool();
         final Set<Socket> sockets = ConcurrentHashMap.newKeySet();
         final AtomicInteger connections = new AtomicInteger();
+        final AtomicInteger requests = new AtomicInteger();
         final CompletableFuture<Void> failure = new CompletableFuture<>();
         volatile boolean closed;
         Peer(String store) throws Exception {
@@ -67,9 +69,10 @@ public class HttpEngineTlsPolicyHostTest {
             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
             for (String request; (request = in.readLine()) != null;) {
                 if (!request.startsWith("GET ")) throw new IOException("Expected GET");
+                requests.incrementAndGet();
                 for (String header; (header = in.readLine()) != null && !header.isEmpty();) {}
                 socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nX-Peer-Protocol: http/1.1\r\n"
-                        + "X-Peer-Connection: " + id + "\r\nContent-Length: 4\r\n\r\nPASS")
+                        + "X-Peer-Connection: " + id + "\r\nCache-Control: max-age=600\r\nContent-Length: 4\r\n\r\nPASS")
                         .getBytes(StandardCharsets.US_ASCII));
                 socket.getOutputStream().flush();
             }
@@ -102,11 +105,13 @@ public class HttpEngineTlsPolicyHostTest {
                 if (type == 4 && (flags & 1) == 0) frame(out, 4, 1, 0, new byte[0]);
                 else if (type == 6 && (flags & 1) == 0) frame(out, 6, 1, 0, payload);
                 else if (type == 1) {
+                    requests.incrementAndGet();
                     if ((flags & 4) == 0) throw new IOException("Unexpected split request headers");
                     ByteArrayOutputStream headers = new ByteArrayOutputStream();
                     headers.write(0x88); // HPACK indexed :status = 200.
                     literal(headers, "x-peer-protocol", "h2");
                     literal(headers, "x-peer-connection", Integer.toString(id));
+                    literal(headers, "cache-control", "max-age=600");
                     frame(out, 1, 4, stream, headers.toByteArray());
                     frame(out, 0, 1, stream, "PASS".getBytes(StandardCharsets.US_ASCII));
                 } else if (type == 7) return;
@@ -129,6 +134,9 @@ public class HttpEngineTlsPolicyHostTest {
         return connection.getHeaderField("X-Peer-Connection");
     }
     private static String async(HttpEngine engine, URL url, Executor callbacks, String protocol) throws Exception {
+        return async(engine,url,callbacks,protocol,null);
+    }
+    private static String async(HttpEngine engine, URL url, Executor callbacks, String protocol, Boolean cached) throws Exception {
         CompletableFuture<UrlResponseInfo> done = new CompletableFuture<>();
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         UrlRequest request = engine.newUrlRequestBuilder(url.toString(), callbacks, new UrlRequest.Callback() {
@@ -147,6 +155,10 @@ public class HttpEngineTlsPolicyHostTest {
             check(protocol.equals(response.getNegotiatedProtocol()), "Incorrect negotiated protocol");
             check(Collections.singletonList(protocol).equals(response.getHeaders().getAsMap().get("X-Peer-Protocol")),
                     "Async ALPN escaped engine policy");
+            if (cached != null) {
+                check(response.wasCached()==cached,"TLS cache reporting");
+                if (cached) check(response.getReceivedByteCount()==0,"TLS cached body counted as network bytes");
+            }
             return response.getHeaders().getAsMap().get("X-Peer-Connection").get(0);
         } finally { request.cancel(); }
     }
@@ -170,6 +182,36 @@ public class HttpEngineTlsPolicyHostTest {
             HttpEngine later = builder.setEnableHttp2(installed != enabled).build();
             try { direct(later, peer.url(), expected); async(later, peer.url(), callbacks, expected); }
             finally { later.shutdown(); }
+            for (boolean useHttp2:new boolean[]{false,true}) {
+                HttpEngine cached=builder.setEnableHttp2(useHttp2)
+                        .setEnableHttpCache(HttpEngine.Builder.HTTP_CACHE_IN_MEMORY,1024*1024).build();
+                try {
+                    String protocol=useHttp2?"h2":"http/1.1";
+                    String first=async(cached,peer.url(),callbacks,protocol,false);
+                    int sent=peer.requests.get();
+                    check(first.equals(async(cached,peer.url(),callbacks,protocol,true)),"TLS cache lost stored response metadata");
+                    direct(cached,peer.url(),protocol);
+                    check(peer.requests.get()==sent,"TLS private cache sent a fresh network request");
+                } finally { cached.shutdown(); }
+            }
+            Path disk=Files.createTempDirectory("gesher-tls-cache-");
+            try {
+                HttpEngine.Builder diskBuilder=new HttpEngine.Builder(new android.content.ContextWrapper(null))
+                        .setEnableHttp2(true).setStoragePath(disk.toString())
+                        .setEnableHttpCache(HttpEngine.Builder.HTTP_CACHE_DISK,1024*1024);
+                HttpEngine original=diskBuilder.build();
+                try { async(original,peer.url(),callbacks,"h2",false); }
+                finally { original.shutdown(); }
+                int sent=peer.requests.get();
+                HttpEngine reopened=diskBuilder.build();
+                try { async(reopened,peer.url(),callbacks,"h2",true); }
+                finally { reopened.shutdown(); }
+                check(peer.requests.get()==sent,"TLS disk reopen lost its body or historical protocol");
+            } finally {
+                try(java.util.stream.Stream<Path> paths=Files.walk(disk)) {
+                    for(Path path:paths.sorted(Comparator.reverseOrder()).toArray(Path[]::new)) Files.delete(path);
+                }
+            }
         } finally { callbacks.shutdownNow(); enabled.shutdown(); disabled.shutdown(); }
         System.out.println("HttpEngineTlsPolicyHostTest passed: " + checks + " TLS/ALPN and pooled connection checks (" + args[1] + ")");
     }

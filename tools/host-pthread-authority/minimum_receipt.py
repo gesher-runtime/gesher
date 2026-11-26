@@ -111,6 +111,11 @@ def context():
 
 def inputs(source, patched=False):
     context()
+    input_facts(source, patched)
+
+
+def input_facts(source, patched=False):
+    """Source facts only; typed entry points authenticate before calling."""
     assert command('git', '-C', str(source), 'rev-parse', 'HEAD').strip() == PIN['upstream_commit']
     for name, digest in PIN['ordered_patch_sha256'].items():
         assert sha(HERE / name) == digest
@@ -195,6 +200,13 @@ def map_symbols(text, names):
 def original(llvm, source, output):
     ctx = context()
     assert os.environ['GITHUB_JOB'] in ('compile','build')
+    record = dict(context=ctx, role='publisher-reference-unmodified-v1',
+                  **original_facts(llvm, source))
+    output.write_text(json.dumps(record, sort_keys=True, indent=2))
+
+
+def original_facts(llvm, source):
+    """Collect the unchanged publisher facts without issuing an authority role."""
     target = llvm / 'x86_64-w64-mingw32'
     assert not (llvm / 'gesher-winpthreads-authority.json').exists()
     assert sha(llvm.parent / 'compiler.tar.xz') == PIN['compiler_archive_sha256']
@@ -212,14 +224,13 @@ def original(llvm, source, output):
              'lib/libwinpthread.dll.a', 'lib/libpthread.dll.a', 'bin/libwinpthread-1.dll')}
     raw_exports = command(str(llvm / 'bin/llvm-readobj'), '--coff-exports', str(target / 'bin/libwinpthread-1.dll'))
     raw_imports = command(str(llvm / 'bin/llvm-readobj'), '--coff-imports', str(target / 'bin/libwinpthread-1.dll'))
-    record = dict(context=ctx, role='publisher-reference-unmodified-v1',
-                  compiler_archive_sha256=PIN['compiler_archive_sha256'], files=files,
+    record = dict(compiler_archive_sha256=PIN['compiler_archive_sha256'], files=files,
                   public_headers=headers, dll_exports=exports(raw_exports),
                   dll_import_names=imports(raw_imports), dll_exports_raw=raw_exports,
                   dll_imports_raw=raw_imports,
                   cxx_driver_sha256=sha(llvm / 'bin/x86_64-w64-mingw32-clang++'),
                   compiler_driver_sha256=sha(llvm / 'bin/x86_64-w64-mingw32-clang'))
-    output.write_text(json.dumps(record, sort_keys=True, indent=2))
+    return record
 
 
 def supplier(source, llvm, original_file):
@@ -228,6 +239,15 @@ def supplier(source, llvm, original_file):
     inputs(source, patched=True)
     baseline = json.loads(original_file.read_text())
     assert baseline['context'] == ctx and baseline['role'] == 'publisher-reference-unmodified-v1'
+    record = dict(ctx, role=ROLE, **supplier_facts(source, llvm, baseline))
+    payload = json.dumps(record, sort_keys=True, indent=2).encode('utf-8')
+    (llvm / 'gesher-winpthreads-authority.json').write_bytes(payload)
+    for line in receipt_lines(payload):
+        print(line, flush=True)
+
+
+def supplier_facts(source, llvm, baseline):
+    """Actual build/SDK/ABI/PE facts; callers validate the baseline's typed role."""
     build = source / 'build'
     log = (build / 'build-commands.log').read_text()
     install_log = (build / 'install-commands.log').read_text()
@@ -290,7 +310,7 @@ def supplier(source, llvm, original_file):
             name=Path(tokens[tokens.index('-o')+1])
             compiled_paths.add(str((name if name.is_absolute() else build/name).resolve()))
     assert {row['actual_reading_path'] for row in objects.values()}<=compiled_paths,'DLL map object was not the actual DLL_EXPORT source compile output'
-    record = dict(ctx, role=ROLE, pin=PIN, files=files, source_files={n: sha(source / n) for n in PIN['output_source_sha256']},
+    record = dict(pin=PIN, files=files, source_files={n: sha(source / n) for n in PIN['output_source_sha256']},
                   compiler_archive_sha256=sha(llvm.parent / 'compiler.tar.xz'),
                   compiler_driver_sha256=sha(llvm / 'bin/x86_64-w64-mingw32-clang'),
                   cxx_driver_sha256=sha(llvm / 'bin/x86_64-w64-mingw32-clang++'),
@@ -306,15 +326,17 @@ def supplier(source, llvm, original_file):
     assert record['compiler_archive_sha256'] == PIN['compiler_archive_sha256']
     assert record['compiler_driver_sha256'] == baseline['compiler_driver_sha256']
     assert record['cxx_driver_sha256'] == baseline['cxx_driver_sha256']
-    payload = json.dumps(record, sort_keys=True, indent=2).encode('utf-8')
-    (llvm / 'gesher-winpthreads-authority.json').write_bytes(payload)
-    for line in receipt_lines(payload):
-        print(line, flush=True)
+    return record
 
 
 def profile(build):
     context()
     assert os.environ['GITHUB_JOB']=='compile' or (os.environ['GITHUB_JOB']=='build' and os.environ['GESHER_HOST_PTHREAD_SELECTION']=='selected-minimum')
+    profile_facts(build)
+
+
+def profile_facts(build):
+    """Run the unchanged typed SDK prebuild checks after entry authentication."""
     profiles={}
     for prefix in ('sdk','supplier'):
         assert 'IMAGE_FILE_MACHINE_AMD64' in (build/(prefix+'-profile-machine.txt')).read_text()

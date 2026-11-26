@@ -122,6 +122,13 @@ if (-not (Test-Path "$Dir/gesher-launch.exe")) {
   $splashShell = Join-Path $splashData 'Gesher\data\data\com.gesher.splashprobe\gesher-shell'
   New-Item -ItemType Directory -Force $splashShell, (Join-Path $splashData 'Gesher\data\system') | Out-Null
   Copy-Item "$Dir/gesher-launch.exe" $splashDir -Force
+  $receiptHelpers = Join-Path $PSScriptRoot '..\shell\SplashReceipts.ps1'
+  . $receiptHelpers
+  Copy-Item -LiteralPath $receiptHelpers -Destination $splashDir -Force
+  & (Join-Path $PSScriptRoot '..\shell\SplashReceiptChecks.ps1')
+  # Run the held-reader negative control on the exact legacy host used by the launcher.
+  & (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot '..\shell\SplashReceiptChecks.ps1')
+  if ($LASTEXITCODE -ne 0) { $problems += 'Windows PowerShell splash receipt contracts failed' }
   # As Properties.store writes it: ISO-8859-1, other characters \u-escaped.
   Set-Content -LiteralPath (Join-Path $splashShell 'shortcut.properties') -Encoding ascii -Value @(
     '#Gesher device', 'package=com.gesher.splashprobe', 'label=Splash Probe \u00e9', 'app_user_model_id=Gesher.App.com.gesher.splashprobe')
@@ -138,6 +145,7 @@ if (-not (Test-Path "$Dir/gesher-launch.exe")) {
     "$($apkItem.Length)`t$apkMillis`t$(Join-Path $splashShell 'icon.ico')`tcom.gesher.splashprobe")
   Set-Content -LiteralPath (Join-Path $splashDir 'gesher-app.ps1') -Encoding utf8 -Value @'
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'SplashReceipts.ps1')
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @"
 using System;
@@ -261,7 +269,7 @@ if ($splash -ne [IntPtr]::Zero) {
   } elseif ($mode -eq 'close') {
     $lines += "close-hwnd=$($splash.ToInt64())", "worker-pid=$PID",
       "worker-start=$([Diagnostics.Process]::GetCurrentProcess().StartTime.ToFileTimeUtc())"
-    Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
+    Write-SplashReceipt -Path $env:SPLASH_PROBE_PARENT_RECEIPT -Lines $lines
     if (-not [SplashProbe]::PostMessageW($splash, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) { exit 23 }
     Start-Sleep -Milliseconds 1000
     $code = 5
@@ -277,13 +285,23 @@ if ($splash -ne [IntPtr]::Zero) {
         $record + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
       $lines += 'installed-package=com.gesher.splashprobe'
     }
-    Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
-    Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-      (Join-Path $PSScriptRoot 'splash-child.ps1'), $mode, $splash.ToInt64()
+    $childScript = Join-Path $PSScriptRoot 'splash-child.ps1'
+    $childHost = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $childArguments = '-NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File "' + $childScript + '" ' + $mode + ' ' + $splash.ToInt64()
+    $child = Start-Process -FilePath $childHost -WindowStyle Hidden -ArgumentList $childArguments -PassThru
+    try {
+      $null = $child.Handle
+      $lines += "child-pid=$($child.Id)", "child-start=$($child.StartTime.ToFileTimeUtc())"
+      Write-SplashReceipt -Path $env:SPLASH_PROBE_PARENT_RECEIPT -Lines $lines
+    } catch {
+      # Never detach an unrecorded worker if publishing its identity failed.
+      if (-not $child.HasExited) { $child.Kill(); $null = $child.WaitForExit(5000) }
+      throw
+    } finally { $child.Dispose() }
     exit 0
   }
 }
-Set-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value $lines
+Write-SplashReceipt -Path $env:SPLASH_PROBE_PARENT_RECEIPT -Lines $lines
 exit $code
 '@
   # The app's window after a detached launcher ended: 'late' shows it 3 s later and
@@ -293,6 +311,12 @@ exit $code
   # windows as they come and leaves the other splash alone.
   Set-Content -LiteralPath (Join-Path $splashDir 'splash-child.ps1') -Encoding utf8 -Value @'
 param([string] $mode, [long] $splashHandle)
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'SplashReceipts.ps1')
+$forms = @()
+$stage = 'compile'
+try {
+try {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @"
 using System;
@@ -359,6 +383,7 @@ function Show-App {
   return $form
 }
 $other = [IntPtr]::Zero
+$stage = 'delayed window'
 if ($mode -eq 'late-cancel') {
   Start-Sleep -Milliseconds 800
   $lines += "splash-after-exit=$([SplashChild]::IsWindow($splash))"
@@ -385,7 +410,15 @@ $closed = @($forms | Where-Object { $_.IsDisposed -or -not $_.Visible }).Count
 $lines += "app-closed=$closed/$($forms.Count)"
 if ($other -ne [IntPtr]::Zero) { $lines += "other-splash-kept=$([SplashChild]::IsWindow($other))" }
 foreach ($form in $forms) { if (-not $form.IsDisposed) { $form.Close() } }
-Add-Content -LiteralPath (Join-Path $PSScriptRoot "splash-$mode.txt") -Encoding ascii -Value ($lines + 'child-done=True')
+} finally {
+  foreach ($form in $forms) { if (-not $form.IsDisposed) { $form.Dispose() } }
+}
+$stage = 'receipt publication'
+Write-SplashReceipt -Path $env:SPLASH_PROBE_CHILD_RECEIPT -Lines ($lines + 'child-done=True')
+} catch {
+  Write-SplashReceipt -Path $env:SPLASH_PROBE_CHILD_ERROR -Lines @("child-stage=$stage", ($_ | Out-String))
+  exit 24
+}
 '@
   if (-not ('SplashLifetimeProbe' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -408,13 +441,21 @@ public static class SplashLifetimeProbe {
     @{ Mode = 'late-cancel'; Args = "`"$probeApk`""; Code = 1; Detach = $true; InitialUnknown = $true }
   )
   foreach ($case in $cases) {
-    $probeOut = Join-Path $splashDir "splash-$($case.Mode).txt"
-    Remove-Item $probeOut -ErrorAction SilentlyContinue
+    # Never reuse receipts between the two 'late' or 'late-cancel' cases.
+    $caseDir = Join-Path $splashDir ('case-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $caseDir | Out-Null
+    $probeOut = Join-Path $caseDir 'parent.txt'
+    $childOut = Join-Path $caseDir 'child.txt'
+    $childError = Join-Path $caseDir 'child-error.txt'
+    $child = $null
     $psi = [Diagnostics.ProcessStartInfo]::new((Join-Path $splashDir 'gesher-launch.exe'), $case.Args)
     $psi.UseShellExecute = $false
     $psi.WorkingDirectory = $splashDir
     $psi.EnvironmentVariables['LOCALAPPDATA'] = $splashData
     $psi.EnvironmentVariables['SPLASH_PROBE_MODE'] = $case.Mode
+    $psi.EnvironmentVariables['SPLASH_PROBE_PARENT_RECEIPT'] = $probeOut
+    $psi.EnvironmentVariables['SPLASH_PROBE_CHILD_RECEIPT'] = $childOut
+    $psi.EnvironmentVariables['SPLASH_PROBE_CHILD_ERROR'] = $childError
     foreach ($v in 'GESHER_APP_WINDOW', 'GESHER_SPLASH', 'GESHER_DISPLAY', 'GESHER_LAUNCH_DETACH', 'SPLASH_PROBE_APK') { $psi.EnvironmentVariables.Remove($v) }
     if ($case.InitialUnknown) {
       Remove-Item (Join-Path $splashData 'Gesher\data\system\apk-icons.list') -ErrorAction SilentlyContinue
@@ -424,14 +465,33 @@ public static class SplashLifetimeProbe {
     if ($case.Detach) { $psi.EnvironmentVariables['GESHER_LAUNCH_DETACH'] = '1' }
     $p = [Diagnostics.Process]::Start($psi)
     $what = "gesher-launch $($case.Args) ($($case.Mode))"
-    if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += "$($what): did not exit within 120 s"; continue }
-    if ($p.ExitCode -ne $case.Code) { $problems += "$($what): exit $($p.ExitCode), not $($case.Code)" }
-    # The child that shows the app's window reports last.
-    for ($i = 0; $case.Detach -and $i -lt 300; $i++) {
-      if ((Test-Path $probeOut) -and (Get-Content -LiteralPath $probeOut) -contains 'child-done=True') { break }
-      Start-Sleep -Milliseconds 100
+    try {
+    if (-not $p.WaitForExit(120000)) {
+      $p.Kill($true)
+      if (-not $p.WaitForExit(5000)) { $problems += "$($what): launcher survived forced retirement" }
+      $problems += "$($what): did not exit within 120 s"
+      continue
     }
-    $probe = if (Test-Path $probeOut) { @(Get-Content -LiteralPath $probeOut) } else { @() }
+    if ($p.ExitCode -ne $case.Code) { $problems += "$($what): exit $($p.ExitCode), not $($case.Code)" }
+    $probe = if ([IO.File]::Exists($probeOut)) { @([IO.File]::ReadAllLines($probeOut)) } else { @() }
+    # The child publishes a separate closed receipt. Polling existence cannot
+    # race a Windows PowerShell 5.1 append/read lock on the parent's report.
+    if ($case.Detach) {
+      $child = Get-SplashChildProcess -ParentReceipt $probe
+      $childDeadline = [Diagnostics.Stopwatch]::StartNew()
+      while ($childDeadline.ElapsedMilliseconds -lt 30000) {
+        if ([IO.File]::Exists($childOut) -or [IO.File]::Exists($childError)) { break }
+        if (-not $child -or $child.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+      }
+      if ([IO.File]::Exists($childOut)) { $probe += [IO.File]::ReadAllLines($childOut) }
+      if ([IO.File]::Exists($childError)) { $problems += "$($what): child error $([IO.File]::ReadAllText($childError))" }
+      if ($child) {
+        $remaining = [Math]::Max(0, 30000 - [int]$childDeadline.ElapsedMilliseconds)
+        if (-not $child.WaitForExit($remaining)) { $problems += "$($what): child did not retire within 30 s" }
+        elseif ($child.ExitCode -ne 0) { $problems += "$($what): child exit $($child.ExitCode)" }
+      }
+    }
     if ($case.Mode -eq 'close') {
       # The cancelled child cannot report its own retirement; observe it here.
       $closing = @($probe | Where-Object { $_ -match '^close-hwnd=\d+$' })
@@ -439,11 +499,12 @@ public static class SplashLifetimeProbe {
       $birth = @($probe | Where-Object { $_ -match '^worker-start=\d+$' })
       if ($closing.Count -eq 1 -and $worker.Count -eq 1 -and $birth.Count -eq 1) {
         $handle = [IntPtr][long]$closing[0].Split('=')[1]
-        $child = Get-Process -Id ([int]$worker[0].Split('=')[1]) -ErrorAction SilentlyContinue
-        $retired = -not $child
-        if ($child) {
-          try { $retired = $child.HasExited -or $child.StartTime.ToFileTimeUtc() -ne [long]$birth[0].Split('=')[1] }
-          catch { $retired = $child.HasExited }
+        $closingWorker = Get-Process -Id ([int]$worker[0].Split('=')[1]) -ErrorAction SilentlyContinue
+        $retired = -not $closingWorker
+        if ($closingWorker) {
+          try { $retired = $closingWorker.HasExited -or $closingWorker.StartTime.ToFileTimeUtc() -ne [long]$birth[0].Split('=')[1] }
+          catch { $retired = $closingWorker.HasExited }
+          finally { $closingWorker.Dispose() }
         }
         $probe += "gone=$(-not [SplashLifetimeProbe]::IsWindow($handle))", "worker-retired=$retired"
       }
@@ -459,6 +520,24 @@ public static class SplashLifetimeProbe {
     if ($case.InitialUnknown) { $want += 'installed-package=com.gesher.splashprobe' }
     if ($case.Mode -ne 'none' -and (Test-Path (Join-Path $splashShell 'icon.ico'))) { $want += 'icon=True' }
     foreach ($w in $want) { if ($probe -notcontains $w) { $problems += "$($what): no '$w' ($($probe -join '; '))" } }
+    } catch {
+      $problems += "$($what): fixture error $_"
+    } finally {
+      # Retire only the recorded process generation, including failed cases.
+      if (-not $child -and $case.Detach -and [IO.File]::Exists($probeOut)) {
+        try { $child = Get-SplashChildProcess -ParentReceipt ([IO.File]::ReadAllLines($probeOut)) } catch { }
+      }
+      if ($child) {
+        try {
+          if (-not $child.HasExited) {
+            $child.Kill($true)
+            if (-not $child.WaitForExit(5000)) { $problems += "$($what): child survived forced retirement" }
+          }
+        } catch { $problems += "$($what): child cleanup $_" }
+        finally { $child.Dispose() }
+      }
+      $p.Dispose()
+    }
   }
 }
 if (-not $problems) {

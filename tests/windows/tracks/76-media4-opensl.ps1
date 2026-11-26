@@ -7,6 +7,7 @@ $slExpected = @(
   'media4 opensl query: ok; typed global and engine queries, supported subsets, null/index/object controls',
   'media4 opensl negotiation: ok; copied UUIDs, all 53 required/optional engine outcomes, duplicate and invalid arrays',
   'media4 opensl player: ok; real PCM queue and volume, explicit exposure and unsupported effect rejection',
+  'media4 opensl effect: ok; required Android effect interface and per-player volume lifecycle',
   'media4 opensl callback trace: calls 1, TLS valid true, caller TLS unchanged true',
   'media4 opensl volume trace: requested -600, set 0, get 0, value -600',
   'media4 opensl volume trace: requested -32768, set 0, get 0, value -32768',
@@ -15,6 +16,7 @@ $slExpected = @(
   'media4 opensl: all passed')
 
 . "$PSScriptRoot/../helpers/CloseProcessReaders.ps1"
+. "$PSScriptRoot/../helpers/FixturePermissions.ps1"
 
 function InvokeOpenSl([string[]] $Arguments, [hashtable] $Environment = @{}, [string] $Exe = "$slHost/dalvikvm.exe") {
   $info = [Diagnostics.ProcessStartInfo]::new($Exe)
@@ -145,6 +147,10 @@ foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'
     if ($permission.Allowed) {
       $recordRuntime = "$slHost/dalvikvm-media-capture-test.exe"
       $recordEnvironment['GESHER_AUDIO_SOURCE'] = 'null'
+      $allowedUid = Grant-FixturePermissions "$slHost/dalvikvm.exe" $slAppVm (NoDrive "$Dir/services-tests.dex") `
+        (NoDrive $apk) 'com.gesher.opensl' @('android.permission.RECORD_AUDIO')
+      $recordEnvironment['GESHER_UID'] = [string]$allowedUid
+      $recordEnvironment['GESHER_BINDER_UID'] = [string]$allowedUid
     }
     $single = InvokeOpenSl ($slAppVm + @('com.gesher.app.Main', (NoDrive $apk))) $recordEnvironment -Exe $recordRuntime
     CheckOpenSl $abi.Name "single APK $($permission.Name)" $permission.Allowed $single @(
@@ -153,18 +159,39 @@ foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'
     New-Item -ItemType Directory -Force "$deviceRoot/data", "$deviceRoot/logs" | Out-Null
     $environment = @{ ANDROID_DATA = (NoDrive "$deviceRoot/data"); GESHER_LOGS = (NoDrive "$deviceRoot/logs") }
     if ($permission.Allowed) { $environment['GESHER_AUDIO_SOURCE'] = 'null' }
+    $savedDeviceData = [Environment]::GetEnvironmentVariable('ANDROID_DATA')
+    $savedDeviceLogs = [Environment]::GetEnvironmentVariable('GESHER_LOGS')
     try {
+      if ($permission.Allowed) {
+        # This device profile has a distinct real UID registry and fresh install.
+        # Explicit operator consent is not inherited from the standalone profile.
+        $env:ANDROID_DATA = $environment['ANDROID_DATA']
+        $env:GESHER_LOGS = $environment['GESHER_LOGS']
+        $deviceUid = Grant-FixturePermissions "$slHost/dalvikvm.exe" $slAppVm (NoDrive "$Dir/services-tests.dex") `
+          (NoDrive $apk) 'com.gesher.opensl' @('android.permission.RECORD_AUDIO')
+        $installed = InvokeOpenSl ($slAppVm + @('com.gesher.app.Launcher', 'install', (NoDrive $apk))) $environment -Exe $recordRuntime
+        if ($installed.Code -ne 0) { throw "OpenSL fixture installation prerequisite failed: $($installed.Text)" }
+        $null = Grant-FixturePermissions "$slHost/dalvikvm.exe" $slAppVm (NoDrive "$Dir/services-tests.dex") `
+          (NoDrive $apk) 'com.gesher.opensl' @('android.permission.RECORD_AUDIO') -Installed -ExpectedUid $deviceUid
+      }
       $device = InvokeOpenSl ($slAppVm + @('com.gesher.app.Launcher', 'launch', (NoDrive $apk), '--headless')) $environment -Exe $recordRuntime
       CheckOpenSl $abi.Name "device APK $($permission.Name)" $permission.Allowed $device @(
         'OpenSlActivity onResume: all passed', 'gesher-app: app process for com.gesher.opensl')
     } finally {
-      $shutdown = InvokeOpenSl ($slAppVm + @('com.gesher.app.Launcher', 'shutdown')) $environment -Exe $recordRuntime
-      if ($shutdown.Code -eq 0) {
-        Write-Host "PASS  media4 opensl ($($abi.Name); $($permission.Name)): device shutdown completes"
-      } else {
-        Write-Host "FAIL  media4 opensl ($($abi.Name); $($permission.Name)): device shutdown (exit $($shutdown.Code))"
-        Write-Host $shutdown.Text
-        $script:failed++
+      try {
+        $shutdown = InvokeOpenSl ($slAppVm + @('com.gesher.app.Launcher', 'shutdown')) $environment -Exe $recordRuntime
+        if ($shutdown.Code -eq 0) {
+          Write-Host "PASS  media4 opensl ($($abi.Name); $($permission.Name)): device shutdown completes"
+        } else {
+          Write-Host "FAIL  media4 opensl ($($abi.Name); $($permission.Name)): device shutdown (exit $($shutdown.Code))"
+          Write-Host $shutdown.Text
+          $script:failed++
+        }
+      } finally {
+        if ($null -eq $savedDeviceData) { Remove-Item Env:ANDROID_DATA -ErrorAction SilentlyContinue }
+        else { $env:ANDROID_DATA = $savedDeviceData }
+        if ($null -eq $savedDeviceLogs) { Remove-Item Env:GESHER_LOGS -ErrorAction SilentlyContinue }
+        else { $env:GESHER_LOGS = $savedDeviceLogs }
       }
     }
   }

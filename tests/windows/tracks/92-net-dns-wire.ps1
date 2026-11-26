@@ -1,8 +1,15 @@
-# Canonical full uses the exact current native2 ZIP receipt and production host/DLL.
+# Both scopes use the exact current native2 ZIP receipt and production host/DLL.
+# A fork diagnostic manifest cannot satisfy the separate canonical schema.
 try {
   $dnsNative = (Resolve-Path (Join-Path $Dir 'native2')).Path
   $dnsHost = Join-Path (Resolve-Path $Dir).Path 'gesher-exec.exe'
-  & python (Join-Path $PSScriptRoot '../../../tools/net-dns/payload.py') verify $dnsNative
+  $dnsArguments = @('verify', $dnsNative)
+  $dnsScope = 'canonical'
+  if ($env:GITHUB_REPOSITORY -cne 'gesher-runtime/gesher') {
+    $dnsArguments += '--fork-diagnostic'
+    $dnsScope = 'fork diagnostic'
+  }
+  & python (Join-Path $PSScriptRoot '../../../tools/net-dns/payload.py') @dnsArguments
   if ($LASTEXITCODE -ne 0) { throw 'DNS typed source/attempt/compiler/member verification failed' }
   foreach ($abi in 'x86_64', 'arm64-v8a') {
     $model = if ($abi -eq 'x86_64') { 'x86_64' } else { 'arm64' }
@@ -26,7 +33,7 @@ try {
           if ($rows -cne $expected) { throw "DNS $abi $mode differs from executed independent reference" }
         }
       }
-      Write-Host "PASS  DNS $abi ${mode}: actual canonical production host and matching DLL"
+      Write-Host "PASS  DNS $abi ${mode}: actual $dnsScope production host and matching DLL"
     }
   }
 } catch {

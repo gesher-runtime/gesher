@@ -12,12 +12,15 @@
 #include "exec_spawn.h"
 #include <gesher/egl_angle.h>
 #include <gesher/native_fence.h>
+#include <gesher/clocks.h>
 
 #include <d3d11_4.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <fcntl.h>
+#include <linux/sync_file.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
@@ -55,6 +58,15 @@ Wait wait_sync;
 ClientWait client_wait;
 Attrib attrib;
 Duplicate duplicate;
+// libsync's sync_file_info (system/core/libsync/sync.cpp): a first
+// SYNC_IOC_FILE_INFO for the fence count, a second for the fences.
+bool FileInfo(int fd, sync_file_info* file, sync_fence_info* fence) {
+  std::memset(file, 0, sizeof(*file));
+  if (ioctl(fd, SYNC_IOC_FILE_INFO, file) != 0 || file->num_fences != 1) return false;
+  file->sync_fence_info = reinterpret_cast<uintptr_t>(fence);
+  return ioctl(fd, SYNC_IOC_FILE_INFO, file) == 0 && file->num_fences == 1;
+}
+
 template <class F> F Gl(const char* name) { return reinterpret_cast<F>(gesher_egl_proc(name)); }
 
 struct Context {
@@ -194,6 +206,7 @@ void PendingEgl(EGLDisplay display, Context& main) {
     SetEvent(native_ready);
     bool start = WaitForSingleObject(native_start, 5000) == WAIT_OBJECT_0;
     EGLSyncKHR value = ok && start ? create_sync(display, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr) : EGL_NO_SYNC_KHR;
+    const int64_t created = gesher::MonotonicNanos();
     Check(value != EGL_NO_SYNC_KHR, "native fence creation succeeds");
     EGLint condition = 0;
     Check(value && attrib(display, value, EGL_SYNC_CONDITION_KHR, &condition) && condition == EGL_SYNC_PRIOR_COMMANDS_COMPLETE_KHR,
@@ -202,6 +215,13 @@ void PendingEgl(EGLDisplay display, Context& main) {
     int fd = value ? duplicate(display, value) : -1;
     SetEvent(native_done);
     Check(fd >= 0, "native export returns an owned descriptor after completion");
+    const int64_t exported = gesher::MonotonicNanos();
+    sync_file_info file{};
+    sync_fence_info fence{};
+    Check(fd >= 0 && FileInfo(fd, &file, &fence) && file.status == 1 && fence.status == 1,
+          "sync_file_info reports the exported fence signaled");
+    Check(fence.timestamp_ns >= static_cast<uint64_t>(created) && fence.timestamp_ns <= static_cast<uint64_t>(exported),
+          "its CLOCK_MONOTONIC timestamp lies between creation and export");
     if (fd >= 0) {
       int alias = dup(fd);
       pollfd records[2]{{fd, POLLIN, 0}, {alias, POLLIN, 0}};
@@ -279,6 +299,25 @@ void Validation(EGLDisplay display, Context& context) {
   Check(create_sync(display, EGL_SYNC_NATIVE_FENCE_ANDROID, bad) == EGL_NO_SYNC_KHR && get_error() == EGL_BAD_ATTRIBUTE,
         "an ordinary readable descriptor is not accepted as a native fence");
   Check(fcntl(invalid, F_GETFD) == -1, "rejected import still consumes its descriptor");
+  int file = open("/dev/null", O_RDONLY);
+  sync_file_info info{};
+  Check(file >= 0 && ioctl(file, SYNC_IOC_FILE_INFO, &info) == -1 && errno == ENOTTY,
+        "an ordinary file is not a sync file (ENOTTY, libsync's legacy fallback)");
+  if (file >= 0) close(file);
+  int info_fd = duplicate(display, sync);
+  info = sync_file_info{};
+  info.flags = 1;
+  Check(info_fd >= 0 && ioctl(info_fd, SYNC_IOC_FILE_INFO, &info) == -1 && errno == EINVAL,
+        "SYNC_IOC_FILE_INFO rejects nonzero flags");
+  info = sync_file_info{};
+  info.num_fences = 1;
+  Check(info_fd >= 0 && ioctl(info_fd, SYNC_IOC_FILE_INFO, &info) == -1 && errno == EFAULT,
+        "SYNC_IOC_FILE_INFO with a count needs the fence array");
+  sync_merge_data merge{};
+  merge.fd2 = info_fd;
+  Check(info_fd >= 0 && ioctl(info_fd, SYNC_IOC_MERGE, &merge) == -1 && errno == ENOTTY,
+        "SYNC_IOC_MERGE is not implemented");
+  if (info_fd >= 0) close(info_fd);
   int no_context_fd = duplicate(display, sync);
   const EGLint no_context[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, no_context_fd, EGL_NONE};
   Gl<decltype(&eglMakeCurrent)>("eglMakeCurrent")(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -345,6 +384,11 @@ int Child(int argc, char** argv) {
         "direct adoption keeps the same noninheritable default as Binder");
   pollfd record{fd, POLLIN, 0};
   if (fd >= 0) Check(poll(&record, 1, 0) == 1, "only completed native fences are exposed across processes");
+  sync_file_info file{};
+  sync_fence_info fence{};
+  Check(fd >= 0 && FileInfo(fd, &file, &fence) && fence.status == 1 && fence.timestamp_ns > 0 &&
+            fence.timestamp_ns <= static_cast<uint64_t>(gesher::MonotonicNanos()),
+        "an adopted fence reports signaled with a timestamp no later than now");
   SetEvent(ready); CloseHandle(ready);
   Check(WaitForSingleObject(proceed, 5000) == WAIT_OBJECT_0, "sender has retired all source descriptor references");
   CloseHandle(proceed);

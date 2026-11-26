@@ -20,6 +20,8 @@
 #include <new>
 #include <pthread.h>
 #include <string>
+#include <sys/socket.h>
+#include <unordered_map>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -35,6 +37,14 @@ static void check(const char* name, int ok) {
 }
 static bool fail_fdopen;
 static std::atomic<int> allocation_failure{-1};
+static thread_local size_t line_reallocations;
+static thread_local bool line_fail_realloc;
+extern "C" void* __real_realloc(void*, size_t);
+extern "C" void* __wrap_realloc(void* bytes, size_t size) {
+  ++line_reallocations;
+  if (line_fail_realloc) return errno = ENOMEM, nullptr;
+  return __real_realloc(bytes, size);
+}
 void* operator new(size_t count) {
   int remaining = allocation_failure.load();
   if (remaining >= 0 && allocation_failure.fetch_sub(1) == 0) throw std::bad_alloc();
@@ -87,6 +97,69 @@ inline TryLockResult TryLock(FILE* stream) {
 }
 }
 
+namespace socket_boundary {
+// Only native socket representation is a boundary here. Registry construction,
+// insertion, lookup and static lifetime below are the actual production code.
+static std::atomic<int> destroyed{0};
+struct Description {
+  size_t descriptor_refs = 0;
+  ~Description() { ++destroyed; }
+};
+struct SocketFd { int socket; std::shared_ptr<Description> description; };
+@SOCKET_REGISTRY@
+@SOCKET_INSERT@
+@SOCKET_LOOKUP@
+static bool probing, ordinary_destroyed, reported;
+static int socket_fd = -1;
+struct OrdinaryShutdown {
+  ~OrdinaryShutdown() { ordinary_destroyed = true; }
+} ordinary_shutdown;
+static bool Begin() {
+  int sockets[2];
+  if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) return false;
+  socket_fd = sockets[0];
+  Insert(socket_fd, SocketFd{socket_fd, std::make_shared<Description>()});
+  // Deliberately leave both real descriptors live through process shutdown,
+  // as an application may do. The OS owns final process resource reclamation.
+  probing = true;
+  return true;
+}
+}
+static void WriteShutdownDiagnostic(const char* bytes, size_t count) {
+  // Use real descriptor I/O: stdio ownership may already be tearing down.
+  // A missing or partial diagnostic must not be reported as a successful probe.
+  while (count != 0) {
+    const ssize_t written = ::write(STDERR_FILENO, bytes, count);
+    if (written < 0 && errno == EINTR) continue;
+    if (written <= 0) std::_Exit(89);
+    bytes += written;
+    count -= static_cast<size_t>(written);
+  }
+}
+static ssize_t HostDescriptorWrite(int fd, const void* bytes, size_t count) {
+  if (socket_boundary::probing && socket_boundary::ordinary_destroyed) {
+    // A negative control uses the old destructible registry. Diagnose its
+    // destroyed description before invoking undefined access to its dead map.
+    if (socket_boundary::destroyed.load() != 0) {
+      const char message[] = "SOCKET_EXIT_RETIRED before_final_stdio_write=1\n";
+      WriteShutdownDiagnostic(message, sizeof(message) - 1);
+      std::_Exit(87);
+    }
+    socket_boundary::SocketFd observed{};
+    if (!socket_boundary::LookupSocket(socket_boundary::socket_fd, &observed) ||
+        observed.socket != socket_boundary::socket_fd || observed.description->descriptor_refs != 1)
+      std::_Exit(88);
+    if (!socket_boundary::reported) {
+      const char message[] = "SOCKET_EXIT_RETAINED after_ordinary_destructors=1\n";
+      WriteShutdownDiagnostic(message, sizeof(message) - 1);
+      socket_boundary::reported = true;
+    }
+  }
+  socket_boundary::SocketFd unrelated{};
+  if (socket_boundary::LookupSocket(fd, &unrelated)) return errno = ENOSYS, -1;
+  return ::write(fd, bytes, count);
+}
+
 using HANDLE = void*;
 using HMODULE = HANDLE;
 using LPCWSTR = const wchar_t*;
@@ -105,8 +178,10 @@ static constexpr unsigned HANDLE_FLAG_INHERIT = 1;
 static constexpr int _O_BINARY = 0;
 static constexpr int _O_NOINHERIT = 0;
 static thread_local int last_error;
+static thread_local uint64_t registry_visits;
 static void SetLastError(int value) { last_error = value; }
 static int InitOnceExecuteOnce(PINIT_ONCE once, int (*callback)(PINIT_ONCE, void*, void**), void*, void**) {
+  ++registry_visits;
   std::lock_guard<std::mutex> lock(once->mutex);
   if (once->ready) return TRUE;
   once->ready = callback(once, nullptr, nullptr) != FALSE;
@@ -196,12 +271,38 @@ FILE* adapter_fdopen(int, const char*);
 @STDIO_ADAPTER@
 
 static void* GetProcAddress(HANDLE, const char* name) {
+#if @HAS_DELIMITED_OWNER@
+  if (strcmp(name, "gesher_stdio_delimited_v1") == 0)
+    return reinterpret_cast<void*>(&gesher::stdio::gesher_stdio_delimited_v1);
+#endif
   if (strcmp(name, "gesher_stdio_output_owner_v1") != 0) std::abort();
   return reinterpret_cast<void*>(&gesher::stdio::gesher_stdio_output_owner_v1);
 }
 using StreamLock = gesher::stdio::StreamGuard;
 @PARSE_MODE@
 @OPEN_CLOSE@
+
+@NATIVE_DELIMITED@
+namespace guest_line {
+#define BIONIC_SYSV
+static constexpr int kEINVAL = EINVAL, kENOMEM = ENOMEM;
+static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
+@GUEST_STREAM_LOCK@
+// Bionic metadata/orientation allocation is independently exercised by
+// test_stdio_lifetime_contracts.py. Keep this envelope on shared stream I/O.
+static int Orient(FILE* stream, int mode) { return gesher::stdio::Orient(stream, mode, true); }
+@GUEST_DELIMITED@
+@GUEST_LINE@
+#undef BIONIC_SYSV
+}
+
+namespace guest {
+#define BIONIC_SYSV
+static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
+@BIONIC_ORIENT@
+@BIONIC_READ_STREAM@
+@BIONIC_UNLOCKED@
+}
 
 // The envelope's formatting backend uses the host formatter, then the exact
 // fputc/fputwc callbacks used by MinGW's formatter in production.
@@ -257,6 +358,7 @@ extern "C" int __real___mingw_vfwscanf(FILE*, const wchar_t*, va_list) { return 
 #define GESHER_STDIO_HOST_ENVELOPE 1
 #include "stdio_ofd_contract.inc"
 #include "stdio_cancel_contract.inc"
+#include "stdio_line_input_host.inc"
 
 static void TestAllocationOwnership() {
   char path[] = "stdio-allocation-XXXXXX";
@@ -299,6 +401,24 @@ static void TestAllocationOwnership() {
     check("fresh-stream EOF query does not allocate", eof == 0 && eof_no_allocation);
     check("fresh-stream clearerr does not allocate", clear_no_allocation);
     check("first-I/O snapshot allocation failure retains ENOMEM", capture_error_preserved);
+    // The new shared Bionic guard must stop getdelim before a second admission
+    // attempt. A one-shot failure would otherwise recover inside Orient and
+    // consume real input after the guard itself failed.
+    check("guest line admission fixture rewinds the real descriptor", lseek(fd, 0, SEEK_SET) == 0);
+    char* line = nullptr;
+    size_t capacity = 0;
+    allocation_failure = 0;
+    errno = 0;
+    const int64_t length = guest_line::Getdelim(&line, &capacity, '\n', raw);
+    const int line_error = errno;
+    allocation_failure = -1;
+    check("failed guest line guard does not retry admission or consume input",
+          length == -1 && line_error == ENOMEM && line == nullptr && capacity == 0 &&
+          lseek(fd, 0, SEEK_CUR) == 0 && !gesher::stdio::Find(raw, false));
+    std::free(line);
+    const int line_lock = adapter_ftrylockfile(raw);
+    check("failed guest line guard releases its CRT lock", line_lock == 0);
+    if (line_lock == 0) adapter_funlockfile(raw);
     check("native stream remains usable after allocation-free queries", HostFclose(raw) == 0);
   } else close(fd);
   unlink(path);
@@ -306,6 +426,60 @@ static void TestAllocationOwnership() {
 
 static FILE* exit_stream;
 static void ExitOutput() { adapter_fputs("late", exit_stream); }
+static void TestBionicOwnerLifetime() {
+  char path[] = "stdio-bionic-state-XXXXXX";
+  int fd = mkstemp(path);
+  if (fd < 0) std::abort();
+  FILE* stream = adapter_fdopen(fd, "r+");
+  if (!stream) std::abort();
+  {
+    gesher::stdio::StreamGuard lock(stream);
+    auto* state = lock.Metadata();
+    check("Bionic metadata belongs to an actual locked stream", lock && state);
+    {
+      std::lock_guard<std::mutex> registry_lock(gesher::stdio::registry->mutex);
+      check("guard metadata remains accessible without a second registry lookup", lock.Metadata() == state);
+    }
+    state->conversion_error = true;
+    state->pushback = 0x1f642;
+    state->input_state[3] = 0x5a;
+  }
+  check("host error query sees Bionic conversion failure", adapter_ferror(stream) != 0);
+  adapter_clearerr(stream);
+  {
+    gesher::stdio::StreamGuard lock(stream);
+    auto* state = lock.Metadata();
+    check("host clearerr clears Bionic error without discarding unread wide state",
+          !state->conversion_error && state->pushback == 0x1f642 && state->input_state[3] == 0x5a);
+  }
+  check("failed seek retains the stream", adapter_fseek(stream, 0, -99) == -1 && errno == EINVAL);
+  {
+    gesher::stdio::StreamGuard lock(stream);
+    auto* state = lock.Metadata();
+    check("failed seek preserves pending Bionic input", state->pushback == 0x1f642 && state->input_state[3] == 0x5a);
+  }
+  check("successful seek reaches the real file", adapter_fseek(stream, 0, SEEK_SET) == 0);
+  {
+    gesher::stdio::StreamGuard lock(stream);
+    auto* state = lock.Metadata();
+    check("successful seek discards Bionic pushback and partial decoder state",
+          state->pushback == 0xffffffffu && state->input_state == std::array<uint8_t, 8>{});
+    state->conversion_error = true;
+    state->pushback = 'Q';
+    state->input_state[0] = 0x7f;
+  }
+  check("reinitializing the actual owner succeeds", gesher::stdio::Register(stream, O_RDWR) == 0);
+  {
+    gesher::stdio::StreamGuard lock(stream);
+    auto* state = lock.Metadata();
+    check("reinitialization retires every old Bionic metadata field",
+          !state->conversion_error && state->pushback == 0xffffffffu && state->input_state == std::array<uint8_t, 8>{});
+  }
+  check("host fclose releases its real descriptor", adapter_fclose(stream) == 0 && fcntl(fd, F_GETFD) == -1 && errno == EBADF);
+  check("host fclose leaves no Bionic metadata for a recycled token",
+        !gesher::stdio::Find(stream, false));
+  unlink(path);
+}
 static void TestCrtLockComposition() {
   char path[] = "stdio-crt-lock-XXXXXX";
   int fd = mkstemp(path);
@@ -340,18 +514,78 @@ static void TestCrtLockComposition() {
         done && result == 0 && fcntl(fd, F_GETFD) == -1);
   unlink(path);
 }
+static void TestBionicUnlockedProgress() {
+  for (bool writing : {false, true}) {
+    char path[] = "stdio-bionic-unlocked-XXXXXX";
+    int fd = mkstemp(path);
+    check("guest unlocked fixture opens", fd >= 0);
+    if (fd < 0) continue;
+    FILE* stream = adapter_fdopen(fd, "r+");
+    check("guest unlocked fixture attaches the real stream owner", stream != nullptr);
+    if (!stream) { close(fd); unlink(path); continue; }
+    check("guest unlocked fixture writes real source bytes", write(fd, "R", 1) == 1 && lseek(fd, 0, SEEK_SET) == 0);
+    adapter_flockfile(stream);
+    std::atomic<bool> entered{false}, completed{false};
+    size_t result = 0;
+    char byte = 0;
+    std::thread worker([&] {
+      entered.store(true, std::memory_order_release);
+      result = writing ? guest::FwriteUnlocked("W", 1, 1, stream)
+                       : guest::FreadUnlocked(&byte, 1, 1, stream);
+      completed.store(true, std::memory_order_release);
+    });
+    // The lock holder performs no stream access until the worker has finished.
+    // A bounded failure releases the real lock and joins, so the old source
+    // reports the regression instead of hanging the entire host test job.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    const bool before_unlock = completed.load(std::memory_order_acquire);
+    adapter_funlockfile(stream);
+    worker.join();
+    check(writing ? "Bionic fwrite_unlocked completes while another thread owns flockfile"
+                  : "Bionic fread_unlocked completes while another thread owns flockfile",
+          entered.load(std::memory_order_acquire) && before_unlock && result == 1 && (writing || byte == 'R'));
+    check("guest unlocked operation retains actual byte effects",
+          adapter_fflush(stream) == 0 && pread(fd, &byte, 1, 0) == 1 && byte == (writing ? 'W' : 'R'));
+    check("guest unlocked stream retires normally", adapter_fclose(stream) == 0);
+    unlink(path);
+  }
+}
 int main(int argc, char** argv) {
-  if (argc == 3 && std::strcmp(argv[1], "--exit-output") == 0) {
+  if (argc == 2 && std::strcmp(argv[1], "--bionic-unlocked") == 0) {
+    TestBionicUnlockedProgress();
+    char summary[128];
+    const int count = snprintf(summary, sizeof(summary), "Bionic unlocked production path: %d checks, %d failures\n", checks, failures);
+    if (count < 0 || static_cast<size_t>(count) >= sizeof(summary) ||
+        ::write(STDOUT_FILENO, summary, static_cast<size_t>(count)) != count) return 2;
+    return failures != 0;
+  }
+  if (argc == 3 && (std::strcmp(argv[1], "--exit-output") == 0 ||
+                    std::strcmp(argv[1], "--exit-socket") == 0)) {
     // This is deliberately registered before the first application stdio use.
     std::atexit(ExitOutput);
+    if (std::strcmp(argv[1], "--exit-socket") == 0 && !socket_boundary::Begin()) return 3;
     exit_stream = adapter_fopen(argv[2], "w");
     if (!exit_stream || adapter_fputs("early", exit_stream) < 0) return 2;
     return 0;
   }
+  if (argc == 2 && std::strcmp(argv[1], "--line-benchmark") == 0) return BenchmarkLines();
+  if (argc == 2 && std::strcmp(argv[1], "--line-only") == 0) {
+    TestLines();
+    char summary[128];
+    int count = snprintf(summary, sizeof(summary), "stdio line input: %d checks, %d failures\n", checks, failures);
+    if (count < 0 || static_cast<size_t>(count) >= sizeof(summary) ||
+        write(STDOUT_FILENO, summary, static_cast<size_t>(count)) != count) return 2;
+    return failures ? 1 : 0;
+  }
   test_stdio_ofd_contracts();
   TestAllocationOwnership();
+  TestBionicOwnerLifetime();
   test_stdio_cancel_contracts();
   TestCrtLockComposition();
+  TestLines();
+  TestBionicUnlockedProgress();
   char summary[128];
   int count = snprintf(summary, sizeof(summary), "stdio production adapter: %d checks, %d failures\n", checks, failures);
   if (count < 0 || static_cast<size_t>(count) >= sizeof(summary) ||

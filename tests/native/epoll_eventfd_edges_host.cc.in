@@ -22,7 +22,7 @@
 
 struct HostEvent { bool manual, signaled; };
 using HANDLE = HostEvent*;
-using DWORD = unsigned long;
+using DWORD = uint32_t;
 using ULONGLONG = unsigned long long;
 static constexpr bool TRUE = true, FALSE = false;
 static const HANDLE INVALID_HANDLE_VALUE = reinterpret_cast<HANDLE>(intptr_t(-1));
@@ -100,9 +100,15 @@ static int MillisUntil(ULONGLONG deadline) { auto now = MonotonicMicros(); retur
 static void WakePollers() {
   std::lock_guard<std::mutex> lock(host_events_mutex); ++host_epoch; host_events_changed.notify_all();
 }
+#ifdef GESHER_READONLY_EDGES
+void RefreshTimerFd(TimerFd&);
+int ReadTimerFd(TimerFd&, void*, unsigned);
+int ReadInotify(Inotify&, void*, unsigned);
+#else
 static void RefreshTimerFd(TimerFd&) {}
 static int ReadTimerFd(TimerFd&, void*, unsigned) { return errno = EINVAL, -1; }
 static int ReadInotify(Inotify&, void*, unsigned) { return errno = EINVAL, -1; }
+#endif
 static int PollFds(pollfd*, nfds_t, int, HANDLE, bool*);
 namespace record_locks {
 struct DescriptorGuard { std::lock_guard<std::recursive_mutex> guard{host_descriptors}; };
@@ -181,6 +187,9 @@ static void check(const char* label, int passed) {
 }
 #include "epoll_eventfd_edge_test.inc"
 #include "epoll_eventfd_edge_wait_test.inc"
+#ifdef GESHER_READONLY_EDGES
+#include "epoll_readonly_edges_host.cc"
+#else
 int main() {
   {
     // Every close path retires a possible native fence identity of that slot
@@ -216,3 +225,4 @@ int main() {
   printf("eventfd edge production host: %d checks, %d failures\n", checked, failed);
   return failed != 0;
 }
+#endif

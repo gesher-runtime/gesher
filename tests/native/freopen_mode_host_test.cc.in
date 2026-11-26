@@ -35,17 +35,21 @@ struct StreamLock {
 };
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+// Keep mode/descriptor contracts independent of storage policy decisions.
+// Actual authorization and revocation run in storage_policy_host_test.
+enum class AccessKind { kStat, kRead, kWrite };
+static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 // Device/OFD identity is exercised by test_stream_device_lifetime.py and the complete OFD corpus.
 void ForgetStreamDevice(int, bool) {}
 int HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? fd : INVALID_HANDLE_VALUE; }
 void ForgetOfd(int) {
   check("stdio retires OFD under its descriptor transaction",
-        stream_depth == expected_depth && transactions > completions);
+        stream_depth == 1 && transactions > completions);
   ++ofd_retirements;
 }
 int RegisterOfd(int fd, int flags) {
   check("freopen publishes OFD under its descriptor transaction",
-        stream_depth == expected_depth && transactions > completions);
+        stream_depth == 1 && transactions > completions);
   const int mask = O_ACCMODE | O_APPEND | O_NONBLOCK;
   check("freopen publishes actual replacement access and status flags",
         (fcntl(fd, F_GETFL) & mask) == (flags & mask));
@@ -132,10 +136,6 @@ static FILE* F(void* stream) { return static_cast<FILE*>(stream); }
 static FILE* HostFreopen(const char* path, const char* mode, FILE* stream, int* retired) {
   return host::gesher_freopen_state(path, mode, stream, retired);
 }
-// Actual state retirement is covered by test_stdio_lifetime_contracts.py.
-static void ResetStream(FILE*) {}
-@GUEST_CRT_MODE@
-@GUEST_CLOSE@
 @GUEST_FREOPEN@
 }  // namespace guest
 
@@ -154,13 +154,11 @@ int main(int argc, char** argv) {
     reopen_call = host::freopen;
     reopen64_call = host::freopen64;
   } else if (std::strcmp(argv[1], "guest") == 0) {
-    expected_depth = 2;  // Both layers hold the same recursive CRT stream lock.
     reopen_call = reopen64_call = GuestReopen;
   } else {
     return 2;
   }
   test_freopen_mode_contracts();
-  expected_depth = 1;  // The independent close controls call the host layer directly.
   for (bool flush_error : {false, true}) {
     FILE* stream = std::tmpfile();
     check("fclose OFD retirement fixture opens", stream != nullptr);
