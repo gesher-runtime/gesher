@@ -5,9 +5,11 @@
 package com.gesher.server;
 
 import android.app.ActivityManager;
+import android.app.ForegroundServiceStartNotAllowedException;
 import android.app.IApplicationThread;
 import android.app.IServiceConnection;
 import android.app.Notification;
+import android.app.RemoteServiceException.ForegroundServiceDidNotStartInTimeException;
 import android.app.Service;
 import android.app.ServiceStartArgs;
 import android.content.ComponentName;
@@ -20,6 +22,7 @@ import android.content.pm.ServiceInfo;
 import android.content.res.CompatibilityInfo;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Build;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.SystemClock;
@@ -33,6 +36,7 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
@@ -58,14 +62,16 @@ import java.util.function.Predicate;
  *     else keeps it.
  * <li>{@code startForeground}: {@code setServiceForeground} posts the notification to the
  *     notification manager ({@link NotificationManagerService}) after checking the declared
- *     types and foreground-service manifest permissions. Background-start exemptions,
- *     type-specific runtime prerequisites and promotion deadlines remain incomplete.
+ *     types and foreground-service manifest permissions. A foreground start also has
+ *     a deadline to call startForeground.
  * </ul>
  *
  * <p>Unexpected process death restarts sticky/redelivery services and live auto-create
  * bindings. An intentional exit/force-stop cancels recovery ({@link #processDied}).
  */
 final class ActiveServices {
+    private static final long FOREGROUND_START_TIMEOUT_MS = 30_000;
+
     private final ActivityTaskManagerService mAtm;
     private final PackageManagerService mPm;
     private final NotificationManagerService mNotifications;
@@ -100,6 +106,16 @@ final class ActiveServices {
         }
     }
 
+    /** A promotion timer belongs to one attachment of one service. */
+    private static final class ForegroundStartDeadline {
+        final ActivityTaskManagerService.ProcessRecord app;
+        ScheduledFuture<?> future;
+
+        ForegroundStartDeadline(ActivityTaskManagerService.ProcessRecord app) {
+            this.app = app;
+        }
+    }
+
     /** A service: ServiceRecord. */
     private static final class ServiceRecord extends Binder {
         final ServiceInfo info;
@@ -112,6 +128,9 @@ final class ActiveServices {
         int foregroundId;
         int foregroundType;
         int foregroundCapabilities;
+        boolean foregroundStartRequired;
+        boolean foregroundStartExpired;
+        ForegroundStartDeadline foregroundStartDeadline;
         boolean whileInUseAtStart;
         String foregroundChannelId;
         int startResult = Service.START_STICKY_COMPATIBILITY;
@@ -230,12 +249,19 @@ final class ActiveServices {
         return thread;
     });
 
+    private final ScheduledThreadPoolExecutor mForegroundStarts = new ScheduledThreadPoolExecutor(1, r -> {
+        Thread thread = new Thread(r, "foreground-service-starts");
+        thread.setDaemon(true);
+        return thread;
+    });
+
     ActiveServices(ActivityTaskManagerService atm, PackageManagerService pm,
             NotificationManagerService notifications) {
         mAtm = atm;
         mPm = pm;
         mNotifications = notifications;
         mCallers = new CallerIdentity(pm, atm);
+        mForegroundStarts.setRemoveOnCancelPolicy(true);
     }
 
     private Sender sender(IApplicationThread thread, String claimed, boolean requireThread) {
@@ -330,6 +356,7 @@ final class ActiveServices {
         ComponentName name = new ComponentName(info.packageName, info.name);
         ServiceRecord r = mServices.get(name);
         if (r == null || r.owner != owner || r.disabled) {
+            if (r != null) completeForegroundStartLocked(r);
             r = new ServiceRecord(info, owner);
             mServices.put(name, r);
         }
@@ -378,6 +405,12 @@ final class ActiveServices {
                     || mPm.get(info.packageName) != target || mPm.isRemovalPending(info.packageName)) return null;
             r = record(info, target);
             r.startRequested = true;
+            if (requireForeground && target.parsed.getTargetSdkVersion() >= Build.VERSION_CODES.O
+                    && r.foregroundId == 0 && !r.foregroundStartExpired) {
+                r.foregroundStartRequired = true;
+            } else {
+                completeForegroundStartLocked(r);
+            }
             r.whileInUseAtStart = whileInUseAtStart;
             r.lastStartIntent = new Intent(service);
             r.startLifetime = sender.lifetime;
@@ -640,6 +673,9 @@ final class ActiveServices {
                 && type != ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE) {
             type &= ~ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE;
         }
+        // Android waits for the call once it passes the initial permission and type
+        // checks. The separate type policy can still reject the promotion.
+        completeForegroundStartLocked(service);
         // These AOSP compatibility changes are queried by UID, unlike the base P
         // permission above. PlatformCompat requires the change to be enabled for
         // every installed package sharing that UID; one older sibling keeps the
@@ -721,6 +757,9 @@ final class ActiveServices {
             if (r == null) return;
             captured = mPm.get(r.info.packageName);
             requireServiceOwner(r);
+            if (id != 0 && r.foregroundStartExpired) {
+                throw new ForegroundServiceStartNotAllowedException("Promotion deadline expired for " + r);
+            }
             if (id != 0 && notification == null) throw new IllegalArgumentException("Missing foreground notification");
             previous = r.foregroundId;
             int selectedType = id == 0 ? 0 : admitForegroundType(r, captured, foregroundServiceType);
@@ -948,6 +987,7 @@ final class ActiveServices {
         if (!r.startLifetime.getAsBoolean()) {
             r.startRequested = false;
             r.lastStartIntent = null;
+            completeForegroundStartLocked(r);
         }
         boolean changed = false;
         for (IntentBindRecord binding : r.bindings.values()) {
@@ -1033,10 +1073,17 @@ final class ActiveServices {
                             currentStarts.add(start.args);
                         }
                     }
-                    if (!currentStarts.isEmpty() && workCurrent(r)) {
-                        SystemServer.log("scheduleServiceArgs " + r + ": " + currentStarts.size()
-                                + " start(s)");
-                        app.thread.scheduleServiceArgs(r, new ParceledListSlice<>(currentStarts));
+                    if (!currentStarts.isEmpty()) {
+                        boolean dispatch;
+                        synchronized (this) {
+                            dispatch = r.app == app && workCurrent(r);
+                            if (dispatch) scheduleForegroundStartDeadlineLocked(r, app);
+                        }
+                        if (dispatch) {
+                            SystemServer.log("scheduleServiceArgs " + r + ": " + currentStarts.size()
+                                    + " start(s)");
+                            app.thread.scheduleServiceArgs(r, new ParceledListSlice<>(currentStarts));
+                        }
                     }
                     for (IntentBindRecord b : binds) {
                         synchronized (this) {
@@ -1061,6 +1108,65 @@ final class ActiveServices {
         });
     }
 
+    /** Arm just before giving the attached process its start arguments. Guarded by this. */
+    private void scheduleForegroundStartDeadlineLocked(ServiceRecord r,
+            ActivityTaskManagerService.ProcessRecord app) {
+        if (!r.foregroundStartRequired || r.foregroundStartDeadline != null) return;
+        ForegroundStartDeadline deadline = new ForegroundStartDeadline(app);
+        r.foregroundStartDeadline = deadline;
+        deadline.future = mForegroundStarts.schedule(() -> foregroundStartTimedOut(r, deadline),
+                FOREGROUND_START_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelForegroundStartDeadlineLocked(ServiceRecord r) {
+        ForegroundStartDeadline deadline = r.foregroundStartDeadline;
+        r.foregroundStartDeadline = null;
+        if (deadline != null) deadline.future.cancel(false);
+    }
+
+    private void completeForegroundStartLocked(ServiceRecord r) {
+        r.foregroundStartRequired = false;
+        cancelForegroundStartDeadlineLocked(r);
+    }
+
+    private void foregroundStartTimedOut(ServiceRecord r, ForegroundStartDeadline deadline) {
+        boolean reportFailure;
+        synchronized (this) {
+            if (r.foregroundStartDeadline != deadline || r.app != deadline.app
+                    || mServices.get(r.name) != r || !serviceCurrent(r)
+                    || deadline.app.dead || deadline.app.exiting) return;
+            cancelForegroundStartDeadlineLocked(r);
+            r.foregroundStartExpired = true;
+            r.startRequested = false;
+            r.lastStartIntent = null;
+            r.pendingStarts.clear();
+            clearStartGrants(r, Integer.MAX_VALUE);
+            // An auto-create binding can keep the instance alive. Teardown will
+            // report the failure when its last owner releases it.
+            reportFailure = !r.hasAutoCreateConnections();
+            if (reportFailure) r.foregroundStartRequired = false;
+        }
+        if (reportFailure) reportForegroundStartFailure(r, deadline.app);
+        maybeBringDown(r);
+    }
+
+    /** Report to the original app thread, never to a process selected by recycled PID. */
+    private void reportForegroundStartFailure(ServiceRecord r, ActivityTaskManagerService.ProcessRecord app) {
+        if (app == null || app.dead || app.exiting || !serviceCurrent(r)) return;
+        String message = "Context.startForegroundService() did not then call Service.startForeground(): " + r;
+        SystemServer.log(message);
+        if (app.pid == android.os.Process.myPid()) return;
+        long identity = Binder.clearCallingIdentity();
+        try {
+            app.thread.scheduleCrash(message, ForegroundServiceDidNotStartInTimeException.TYPE_ID,
+                    ForegroundServiceDidNotStartInTimeException.createExtrasForService(r.name));
+        } catch (RemoteException | RuntimeException e) {
+            SystemServer.log("Unable to report foreground service start failure for " + r + ": " + e);
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
     private void clearStartGrants(ServiceRecord r, int throughId) {
         r.deliveredStarts.keySet().removeIf(id -> id <= throughId);
         UriGrants grants = mAtm.uriGrants();
@@ -1077,12 +1183,15 @@ final class ActiveServices {
             stopServices(candidate -> candidate == r && !serviceCurrent(candidate), true);
             return;
         }
+        ActivityTaskManagerService.ProcessRecord missingPromotion;
         synchronized (this) {
             pruneRetired(r);
             if (r.startRequested || r.hasAutoCreateConnections()) return;
             if (r.stopped || mServices.get(r.name) != r && !r.disabled) return;
             if (r.dispatchingBindings || r.bringingUp) return;
             r.stopped = true;
+            missingPromotion = r.foregroundStartRequired ? r.app : null;
+            completeForegroundStartLocked(r);
             mServices.remove(r.name, r);
             resetBindingsLocked(r);
             if (r.restart != null) { r.restart.cancel(false); r.restart = null; }
@@ -1094,6 +1203,8 @@ final class ActiveServices {
             }
             publishShortcutStateLocked();
         }
+        // Stopping before calling startForeground does not fulfill the start contract.
+        reportForegroundStartFailure(r, missingPromotion);
         // Removing the service also removes its foreground capabilities even if
         // another service or an activity keeps the process alive.
         mAtm.noteShortcutForeground(null, 0);
@@ -1166,6 +1277,7 @@ final class ActiveServices {
         }
         mServices.values().removeIf(r -> {
             if (r.app != app) return false;
+            completeForegroundStartLocked(r);
             resetBindingsLocked(r);
             clearStartGrants(r, Integer.MAX_VALUE);
             return true;
@@ -1186,9 +1298,29 @@ final class ActiveServices {
         stopServices(record -> change.disables(mPm, record.owner, record.info.name, ApkPackage.ComponentKind.SERVICE), true);
     }
 
+    /** Guarded by this. App clients still own an unbind after onBindingDied. */
+    private void retireConnectionsLocked(ServiceRecord r, List<ConnectionRecord> terminated) {
+        for (IntentBindRecord binding : r.bindings.values()) {
+            for (ConnectionRecord connection : binding.connections) {
+                terminated.add(connection);
+                // Server-local consumers use raw IServiceConnection and release
+                // their resources in their own terminal callback.
+                if (connection.systemClient) {
+                    IBinder token = connection.conn.asBinder();
+                    List<ConnectionRecord> owned = mConnections.get(token);
+                    if (owned != null) {
+                        owned.remove(connection);
+                        if (owned.isEmpty()) mConnections.remove(token);
+                    }
+                }
+            }
+            binding.connections.clear();
+        }
+    }
+
     private void stopServices(Predicate<ServiceRecord> selected, boolean disabled) {
         List<ServiceRecord> stopped = new ArrayList<>();
-        List<ConnectionRecord> disconnected = new ArrayList<>();
+        List<ConnectionRecord> terminated = new ArrayList<>();
         synchronized (this) {
             for (ServiceRecord r : mServices.values()) {
                 if (!selected.test(r)) continue;
@@ -1196,6 +1328,7 @@ final class ActiveServices {
                 r.preserveProcessOnStop |= disabled;
                 r.startRequested = false;
                 r.lastStartIntent = null;
+                completeForegroundStartLocked(r);
                 r.pendingStarts.clear();
                 clearStartGrants(r, Integer.MAX_VALUE);
                 // A running binding dispatch may defer the final stop, but a
@@ -1205,23 +1338,13 @@ final class ActiveServices {
                 }
                 resetBindingsLocked(r);
                 if (r.restart != null) { r.restart.cancel(false); r.restart = null; }
-                for (IntentBindRecord b : r.bindings.values()) {
-                    for (ConnectionRecord c : b.connections) {
-                        disconnected.add(c);
-                        List<ConnectionRecord> list = mConnections.get(c.conn.asBinder());
-                        if (list != null) {
-                            list.remove(c);
-                            if (list.isEmpty()) mConnections.remove(c.conn.asBinder());
-                        }
-                    }
-                    b.connections.clear();
-                }
+                retireConnectionsLocked(r, terminated);
                 stopped.add(r);
             }
             publishShortcutStateLocked();
         }
         mAtm.noteShortcutForeground(null, 0);
-        for (ConnectionRecord c : disconnected) connected(c, null, disabled);
+        for (ConnectionRecord c : terminated) connected(c, null, true);
         for (ServiceRecord r : stopped) maybeBringDown(r);
     }
 
@@ -1229,7 +1352,8 @@ final class ActiveServices {
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
         List<ServiceRecord> recovered = new ArrayList<>();
         List<ServiceRecord> reconsider = new ArrayList<>();
-        List<ConnectionRecord> disconnected = new ArrayList<>();
+        List<ConnectionRecord> internalDisconnects = new ArrayList<>();
+        List<ConnectionRecord> terminated = new ArrayList<>();
         synchronized (this) {
             // A dead client's BIND_AUTO_CREATE must not keep somebody else's process
             // alive forever. System-owned bindings have no app caller and survive.
@@ -1270,15 +1394,17 @@ final class ActiveServices {
                     Dexopt.activityChanged();
                     r.foregroundChannelId = null;
                 }
+                cancelForegroundStartDeadlineLocked(r);
+                r.foregroundStartExpired = false;
                 r.app = null;
                 r.created = false;
-                for (IntentBindRecord b : r.bindings.values()) {
-                    disconnected.addAll(b.connections);
-                }
                 resetBindingsLocked(r);
                 boolean started = r.startRequested && (r.startResult != Service.START_NOT_STICKY
                         || !r.pendingStarts.isEmpty());
-                if (!started) r.startRequested = false;
+                if (!started) {
+                    r.startRequested = false;
+                    completeForegroundStartLocked(r);
+                }
                 // Intentional force-stop suppresses recovery. Cached retirement removes
                 // unused/self-bound records at commit; if active work still survives here,
                 // its process may be restarted just as after an ordinary process death.
@@ -1299,18 +1425,25 @@ final class ActiveServices {
                     recovered.add(r);
                 } else {
                     r.startRequested = false;
+                    completeForegroundStartLocked(r);
                     mServices.remove(r.name);
-                    for (IntentBindRecord b : r.bindings.values()) {
-                        for (ConnectionRecord c : b.connections) {
-                            List<ConnectionRecord> list = mConnections.get(c.conn.asBinder());
-                            if (list != null) list.remove(c);
-                        }
+                    retireConnectionsLocked(r, terminated);
+                }
+            }
+            // LoadedApk monitors each published remote Binder. Synthesizing a
+            // null publication on a recoverable crash would signal onNullBinding.
+            // Preserve the direct disconnect for existing server-local callbacks.
+            for (ServiceRecord r : recovered) {
+                for (IntentBindRecord b : r.bindings.values()) {
+                    for (ConnectionRecord c : b.connections) {
+                        if (c.systemClient) internalDisconnects.add(c);
                     }
                 }
             }
+            publishShortcutStateLocked();
         }
-        synchronized (this) { publishShortcutStateLocked(); }
-        for (ConnectionRecord c : disconnected) connected(c, null);
+        for (ConnectionRecord c : terminated) connected(c, null, true);
+        for (ConnectionRecord c : internalDisconnects) connected(c, null);
         for (ServiceRecord r : reconsider) {
             drainBindingCalls(r);
             maybeBringDown(r);

@@ -218,6 +218,8 @@ public final class PackageServiceQueriesTest {
         int unnamed = 0;
         for (FeatureInfo feature : list) {
             if (feature.name != null) {
+                require(!PackageManager.FEATURE_APP_WIDGETS.equals(feature.name),
+                        "Available features claim widget hosting without a host");
                 require(service.hasSystemFeature(feature.name, feature.version),
                         "Listed feature " + feature.name + " is not reported by hasSystemFeature");
                 continue;
@@ -298,6 +300,7 @@ public final class PackageServiceQueriesTest {
 
         // Never claimed: no backend implements them (docs/system-features.md).
         for (String absent : new String[] {
+                PackageManager.FEATURE_APP_WIDGETS,
                 PackageManager.FEATURE_OPENGLES_EXTENSION_PACK,
                 PackageManager.FEATURE_VULKAN_HARDWARE_LEVEL,
                 PackageManager.FEATURE_VULKAN_HARDWARE_VERSION,
