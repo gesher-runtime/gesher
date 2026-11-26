@@ -7,6 +7,18 @@ The build was done on branch `wip/angle`, hwui's GL pipeline on it on
 `wip/hwui-gl`; the decision records are [0018](decisions/0018-angle-build.md)
 and [0030](decisions/0030-angle-hwui-skiagl.md).
 
+The declared OpenGL ES version (`ro.opengles.version`,
+`ConfigurationInfo.reqGlEsVersion`) is not in `app/build.prop`: the system
+server sets it at boot from the device Android's default EGL display runs on
+(`compat/bionic/egl_gles.cc`): ES 3.0 only on a hardware Direct3D 11 GPU that
+gives it, ES 2.0 on WARP (capped at feature level 10_0, so EGL gives no more)
+or on a GPU without ES 3 configs. Every process follows the boot's declaration,
+and ES 3.1 contexts are refused. Google Play hides apps whose
+`<uses-feature android:glEsVersion>` is above it (Chrome asks for 3.0).
+[system-features.md](system-features.md#opengl-es-version) has the full policy;
+`GlBindingsTest` checks the property against the default display's contexts and
+`GL_VERSION`.
+
 ## What is built, and how
 
 - **Source**: upstream ANGLE (`chromium.googlesource.com/angle/angle`) at
@@ -29,13 +41,42 @@ and [0030](decisions/0030-angle-hwui-skiagl.md).
   and a context switch between calls resyncs the calling context's state, so
   contexts current on different threads keep their own state, ADR 0089
   section 6), then `ninja libEGL libGLESv2`.
+- **Patches** (`compat/angle/patches/*.patch`): Gesher's fixes to ANGLE's own
+  source, applied in name order by `build-angle.ps1` after `gclient sync`
+  with `git apply --check` first; a patch that does not apply to
+  `ANGLE_COMMIT` fails the build. Each patch's header says why, the sequence
+  it fixes and its upstream status; the patches are under ANGLE's BSD license
+  and listed in `NOTICES.txt`. Moving `ANGLE_COMMIT` means rebasing them.
+  - `0001-forget-last-context-on-destroy.patch` (issue #485):
+    `eglDestroyContext` makes the doomed context current inside
+    `egl::Display::destroyContext` and switches back without
+    `SetContextCurrent`, which resets the display's shared `StateManager11`
+    caches (draw framebuffer, executable, vertex array) without recording a
+    context switch. With `angle_force_context_check_every_call`, the context
+    that made the previous GL call on another thread was then not dirtied
+    and its next draw dereferenced a null `Framebuffer11`
+    (`libGLESv2.dll+0x1ebea2` at this commit: Moovit's MapLibre maps, one GL
+    thread per `GLSurfaceView`). The `DestroyContext` stub now sets the
+    global last context to null, so every context is fully dirtied before
+    its next call. Tests: `tests/native/egl_context_destroy_test.cc` (track
+    40-native-libs, default adapter and WARP) and, through the guest thunks
+    and the arm64 translator, `tests/native2/egl_context_destroy_jni.cpp`
+    (track 44-native2), both from
+    `tests/native/egl_context_destroy_scenarios.h`.
+- **Host synchronization bridge** (`compat/angle/gesher_d3d11_context.cpp`):
+  the build adds two private DLL exports for Gesher's EGL fence adapter.
+  Synchronization submission executes under ANGLE's global GL mutex, with no
+  render-state changes or GPU completion waits inside the callback. A second
+  export reports exact EGL errors in ANGLE's thread-local state. These exports
+  are not APK-visible EGL extensions. Local fences record DXGI completion;
+  native fd export waits outside the mutex (ADR 0089 section 3).
 - **Output** (artifact `angle-sdk`): `bin/libEGL.dll`, `bin/libGLESv2.dll`,
   `lib/libEGL.dll.lib`, `lib/libGLESv2.dll.lib` (import libraries),
   `include/{EGL,GLES,GLES2,GLES3,KHR}`, `NOTICES.txt` and `ANGLE_COMMIT.txt`.
   The DLLs link the CRT and Chromium's libc++ statically and need only
   Windows' `d3d11.dll`, `dxgi.dll` and `d3dcompiler_47.dll`.
 - **Cache**: `angle.yml` caches `angle-sdk` under
-  `angle-sdk-<commit>-<hash of args.gn and build-angle.ps1>`; a hit skips the
+  `angle-sdk-<commit>-<hash of compat/angle build inputs>`; a hit skips the
   checkout and build entirely (the cache entry is a few MB).
 - **Probe** (`probes/angle/angle_probe.c`): built on Linux with Gesher's
   llvm-mingw (`-Wall -Wextra -Werror`), linked against the import libraries.
@@ -255,9 +296,10 @@ notice requirements. All of these are compatible with Gesher's Apache 2.0.
   swap chain; `SurfaceTexture.updateTexImage` latches the newest frame into
   the app's `GL_TEXTURE_EXTERNAL_OES` texture through an EGLImage of a
   Direct3D 11 texture holding its pixels (docs/graphics.md, "SurfaceTexture in
-  OpenGL ES"), one upload per latched frame; Android-only EGL
-  extensions (`eglPresentationTimeANDROID`, native fences) reach ANGLE's
-  exports, which fail on the Direct3D 11 backend.
+  OpenGL ES"), one upload per latched frame. Native fences are implemented by
+  Gesher's EGL adapter (ADR 0089); other Android-only EGL extensions such as
+  `eglPresentationTimeANDROID` still reach ANGLE's exports and may fail on the
+  Direct3D 11 backend.
 - The runners report OpenGL ES 3.0 on both devices; ES 3.1 and hwui on a
   real GPU through this build are unverified.
 - `gclient sync` still fetches `buildtools/reclient` (~470 MB, a CIPD

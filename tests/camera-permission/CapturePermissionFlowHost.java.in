@@ -1,0 +1,210 @@
+/* Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0 */
+package com.gesher.camera;
+
+import java.util.ArrayDeque;
+
+/** Actual activity methods with declared UI/permission/capture boundaries. */
+public final class CapturePermissionFlowHost extends ActivityBoundary {
+    private static final int REQUEST_CAMERA = 1;
+    private static final String EXTRA_AUTO_CAPTURE_MS = "auto";
+    private volatile boolean mDone;
+    private boolean mCameraStarted;
+    private final HandlerThread mThread = new HandlerThread();
+    private Handler mHandler;
+    private final Handler mMain = new Handler();
+    private CameraDevice mDevice;
+    private CameraCaptureSession mSession;
+    private ImageReader mPreviewReader, mStillReader;
+    private int opens;
+    private static int checks;
+
+    @PRODUCTION@
+
+    private void open(CameraManager camera, String id) {
+        opens++;
+        mDevice = new CameraDevice();
+        mSession = new CameraCaptureSession();
+        mPreviewReader = new ImageReader();
+        mStillReader = new ImageReader();
+    }
+    private static void log(String message) { }
+    private static void check(boolean value, String message) {
+        checks++;
+        if (!value) throw new AssertionError(message);
+    }
+    private void answer(int result) {
+        onRequestPermissionsResult(REQUEST_CAMERA, new String[] {Manifest.permission.CAMERA},
+                new int[] {result});
+    }
+    private static CapturePermissionFlowHost pending() {
+        CapturePermissionFlowHost activity = new CapturePermissionFlowHost();
+        activity.intent.auto = 40;
+        activity.requestCameraAccess();
+        check(activity.requests == 1 && activity.requestCode == REQUEST_CAMERA,
+                "missing ordinary camera permission request");
+        check(activity.requested.length == 1 && Manifest.permission.CAMERA.equals(activity.requested[0]),
+                "wrong permission requested");
+        check(activity.opens == 0 && activity.mThread.starts == 0 && activity.mHandler == null,
+                "camera work started before consent");
+        check(activity.mMain.delayed == 0, "auto-capture was scheduled before consent");
+        activity.capture();
+        check(activity.mMain.delayed == 0, "Take while permission pending started work");
+        return activity;
+    }
+
+    public static void main(String[] args) {
+        CapturePermissionFlowHost granted = pending();
+        granted.permission = PackageManager.PERMISSION_GRANTED;
+        granted.answer(PackageManager.PERMISSION_GRANTED);
+        check(granted.opens == 1 && granted.mThread.starts == 1 && granted.mMain.delayed == 1,
+                "grant did not start the requested camera and timer once");
+        granted.answer(PackageManager.PERMISSION_GRANTED);
+        granted.requestCameraAccess();
+        check(granted.opens == 1 && granted.mThread.starts == 1 && granted.mMain.delayed == 1,
+                "duplicate result restarted the camera");
+        granted.capture();
+        granted.mHandler.drain();
+        check(granted.mSession.captures == 1, "Take after grant did not capture");
+        granted.onDestroy();
+        granted.mHandler.drain();
+        check(granted.mSession.closed && granted.mDevice.closed && granted.mPreviewReader.closed
+                && granted.mStillReader.closed && granted.mThread.quits == 1,
+                "started camera resources were not closed on destruction");
+        check(granted.mMain.queue.isEmpty(), "destruction retained auto-capture callbacks");
+
+        CapturePermissionFlowHost denied = pending();
+        denied.answer(PackageManager.PERMISSION_DENIED);
+        check(denied.mDone && denied.opens == 0, "denial must retire before queued completion");
+        denied.permission = PackageManager.PERMISSION_GRANTED;
+        denied.answer(PackageManager.PERMISSION_GRANTED);
+        denied.mMain.drain();
+        check(denied.finishes == 1 && denied.result == RESULT_CANCELED && denied.opens == 0,
+                "late grant revived a denied operation");
+        denied.onDestroy();
+        check(denied.mThread.starts == 0 && denied.mHandler == null,
+                "destroying an unstarted activity created camera work");
+
+        CapturePermissionFlowHost cancelled = pending();
+        cancelled.done(RESULT_CANCELED, null, "cancel");
+        cancelled.permission = PackageManager.PERMISSION_GRANTED;
+        cancelled.answer(PackageManager.PERMISSION_GRANTED);
+        cancelled.mMain.drain();
+        check(cancelled.finishes == 1 && cancelled.opens == 0,
+                "late grant after Cancel opened the camera");
+
+        CapturePermissionFlowHost destroyed = pending();
+        destroyed.onDestroy();
+        destroyed.permission = PackageManager.PERMISSION_GRANTED;
+        destroyed.answer(PackageManager.PERMISSION_GRANTED);
+        check(destroyed.opens == 0 && destroyed.mThread.starts == 0,
+                "late grant after destruction opened the camera");
+
+        CapturePermissionFlowHost revoked = pending();
+        revoked.answer(PackageManager.PERMISSION_GRANTED);
+        revoked.mMain.drain();
+        check(revoked.result == RESULT_CANCELED && revoked.opens == 0,
+                "stale granted result bypassed current permission denial");
+
+        CapturePermissionFlowHost empty = pending();
+        empty.onRequestPermissionsResult(REQUEST_CAMERA, new String[0], new int[0]);
+        empty.mMain.drain();
+        check(empty.result == RESULT_CANCELED && empty.opens == 0,
+                "cancelled empty permission result was accepted");
+
+        CapturePermissionFlowHost other = pending();
+        other.permission = PackageManager.PERMISSION_GRANTED;
+        other.onRequestPermissionsResult(99, new String[] {Manifest.permission.CAMERA}, new int[] {0});
+        check(other.opens == 0 && !other.mDone, "unrelated permission result changed this operation");
+        other.answer(PackageManager.PERMISSION_GRANTED);
+        check(other.opens == 1, "real permission result lost after unrelated callback");
+
+        CapturePermissionFlowHost pregranted = new CapturePermissionFlowHost();
+        pregranted.permission = PackageManager.PERMISSION_GRANTED;
+        pregranted.requestCameraAccess();
+        check(pregranted.requests == 0 && pregranted.opens == 1,
+                "an existing grant was prompted again or ignored");
+
+        CapturePermissionFlowHost finishing = pending();
+        finishing.finishing = true;
+        finishing.permission = PackageManager.PERMISSION_GRANTED;
+        finishing.answer(PackageManager.PERMISSION_GRANTED);
+        check(finishing.opens == 0, "finishing activity started after a permission result");
+        System.out.println("CapturePermissionFlowHost: permission, cancel, late-result and cleanup lifecycle passed ("
+                + checks + " checks; UI and camera boundaries)");
+    }
+}
+
+class ActivityBoundary {
+    static final int RESULT_CANCELED = 0, RESULT_OK = -1;
+    int permission = PackageManager.PERMISSION_DENIED, requests, requestCode, finishes, result = -10;
+    boolean finishing, destroyed;
+    String[] requested;
+    final Intent intent = new Intent();
+    int checkSelfPermission(String permission) { return this.permission; }
+    void requestPermissions(String[] permissions, int code) {
+        requests++; requested = permissions; requestCode = code;
+    }
+    public void onRequestPermissionsResult(int code, String[] permissions, int[] results) { }
+    boolean isFinishing() { return finishing; }
+    boolean isDestroyed() { return destroyed; }
+    <T> T getSystemService(Class<T> type) { return type.cast(new CameraManager()); }
+    Intent getIntent() { return intent; }
+    void setResult(int value, Intent data) { result = value; }
+    void finish() { finishes++; finishing = true; }
+    protected void onDestroy() { destroyed = true; }
+}
+class Manifest { static class permission { static final String CAMERA = "android.permission.CAMERA"; } }
+class PackageManager { static final int PERMISSION_GRANTED = 0, PERMISSION_DENIED = -1; }
+class Intent {
+    long auto = -1;
+    long getLongExtra(String name, long fallback) { return auto; }
+}
+class Handler {
+    final ArrayDeque<Runnable> queue = new ArrayDeque<>();
+    int delayed;
+    Handler() { }
+    Handler(Object looper) { }
+    void post(Runnable action) { queue.add(action); }
+    void postDelayed(Runnable action, long delay) { delayed++; queue.add(action); }
+    void removeCallbacksAndMessages(Object owner) { queue.clear(); }
+    void drain() {
+        int remaining = 100;
+        while (!queue.isEmpty()) {
+            if (--remaining == 0) throw new AssertionError("unexpected callback loop");
+            queue.remove().run();
+        }
+    }
+}
+class HandlerThread {
+    int starts, quits;
+    void start() { if (++starts != 1) throw new AssertionError("thread restarted"); }
+    Object getLooper() { return this; }
+    void quitSafely() { quits++; }
+}
+class CameraAccessException extends Exception { }
+class CameraManager { String[] getCameraIdList() throws CameraAccessException { return new String[] {"0"}; } }
+class CameraDevice {
+    static final int TEMPLATE_STILL_CAPTURE = 2;
+    boolean closed;
+    CaptureRequest.Builder createCaptureRequest(int type) throws CameraAccessException { return new CaptureRequest.Builder(); }
+    void close() { closed = true; }
+}
+class CameraCaptureSession {
+    int captures;
+    boolean closed;
+    void capture(Object request, Object callback, Handler handler) throws CameraAccessException { captures++; }
+    void close() { closed = true; }
+}
+class ImageReader {
+    boolean closed;
+    Object getSurface() { return this; }
+    void close() { closed = true; }
+}
+class CaptureRequest {
+    static final Object JPEG_QUALITY = new Object();
+    static class Builder {
+        void addTarget(Object target) { }
+        void set(Object key, byte value) { }
+        Object build() { return this; }
+    }
+}

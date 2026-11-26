@@ -1,0 +1,635 @@
+{
+  "baseline_commit": "751d82310f7c4c470c098ccebfd5d2d04699a0cd",
+  "platform": "Linux 6.18.57 x86_64",
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "compiler": "g++ (Debian 14.2.0-19) 14.2.0",
+  "flags": [
+    "-std=c++20",
+    "-O2",
+    "-g",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-fno-exceptions"
+  ],
+  "timing": "Uninstrumented production and baseline in separate translation units; process CPU time per call; five alternating A/B pairs; input generation excluded; shared host, warm reused inputs.",
+  "production_maximum_compiled_frame_bytes": 80,
+  "sanitizer": "ASan and UBSan enabled; local LeakSanitizer disabled because container ptrace blocks its thread scan.",
+  "source_sha256": {
+    "compat/bionic/memmem_search.h": "ae673530674a38f0fc9a0752ef138c8f9d22a2ba08cdf29a0032f6a622f3cdf0",
+    "compat/bionic/shim.cc": "657c185ed9b77ebc6804ce485acc5b866411f7c2641774582a1b4552df21aa6e",
+    "tests/native/memmem_host.cc.in": "6bbe1f97fc07d9b5eb5ffaad4b0a7455ed0bc208ca7e8e20b7bed81c877da5c5",
+    "tests/native/memmem_test.inc": "2fbce824653ce661e8e78b016439ac7646d7149fc415579d1f7ba8508cbd9e0d",
+    "tools/test_memmem_performance.py": "420ac1e6735beaf780d9cedad18e7841f9848d9122b308d181a409d669e2601c"
+  },
+  "measurements": [
+    {
+      "kind": "work",
+      "haystack": 16384,
+      "needle": 1024,
+      "baseline_comparisons": 15729664,
+      "candidate_comparisons": 19455
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-end-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 0,
+      "baseline_cpu_ns": 97.44,
+      "candidate_cpu_ns": 8.9
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-end-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 1,
+      "baseline_cpu_ns": 92.47,
+      "candidate_cpu_ns": 7.92
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-end-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 2,
+      "baseline_cpu_ns": 97.34,
+      "candidate_cpu_ns": 8.745
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-end-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 3,
+      "baseline_cpu_ns": 90.16,
+      "candidate_cpu_ns": 8.82
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-end-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 4,
+      "baseline_cpu_ns": 93.51,
+      "candidate_cpu_ns": 8.73
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-immediate-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 0,
+      "baseline_cpu_ns": 4.575,
+      "candidate_cpu_ns": 6.89
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-immediate-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 1,
+      "baseline_cpu_ns": 4.08,
+      "candidate_cpu_ns": 6.17
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-immediate-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 2,
+      "baseline_cpu_ns": 4.15,
+      "candidate_cpu_ns": 5.835
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-immediate-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 3,
+      "baseline_cpu_ns": 4.06,
+      "candidate_cpu_ns": 6.1
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-immediate-match",
+      "haystack": 32,
+      "needle": 2,
+      "calls": 200000,
+      "repeat": 4,
+      "baseline_cpu_ns": 4.595,
+      "candidate_cpu_ns": 6.195
+    },
+    {
+      "kind": "timing",
+      "workload": "single-byte-end-match",
+      "haystack": 32,
+      "needle": 1,
+      "calls": 200000,
+      "repeat": 0,
+      "baseline_cpu_ns": 97.65,
+      "candidate_cpu_ns": 4.455
+    },
+    {
+      "kind": "timing",
+      "workload": "single-byte-end-match",
+      "haystack": 32,
+      "needle": 1,
+      "calls": 200000,
+      "repeat": 1,
+      "baseline_cpu_ns": 125.04,
+      "candidate_cpu_ns": 4.135
+    },
+    {
+      "kind": "timing",
+      "workload": "single-byte-end-match",
+      "haystack": 32,
+      "needle": 1,
+      "calls": 200000,
+      "repeat": 2,
+      "baseline_cpu_ns": 98.5,
+      "candidate_cpu_ns": 4.165
+    },
+    {
+      "kind": "timing",
+      "workload": "single-byte-end-match",
+      "haystack": 32,
+      "needle": 1,
+      "calls": 200000,
+      "repeat": 3,
+      "baseline_cpu_ns": 97.18,
+      "candidate_cpu_ns": 4.145
+    },
+    {
+      "kind": "timing",
+      "workload": "single-byte-end-match",
+      "haystack": 32,
+      "needle": 1,
+      "calls": 200000,
+      "repeat": 4,
+      "baseline_cpu_ns": 92.38,
+      "candidate_cpu_ns": 4.135
+    },
+    {
+      "kind": "timing",
+      "workload": "empty-needle",
+      "haystack": 32,
+      "needle": 0,
+      "calls": 200000,
+      "repeat": 0,
+      "baseline_cpu_ns": 1.775,
+      "candidate_cpu_ns": 2.795
+    },
+    {
+      "kind": "timing",
+      "workload": "empty-needle",
+      "haystack": 32,
+      "needle": 0,
+      "calls": 200000,
+      "repeat": 1,
+      "baseline_cpu_ns": 2.135,
+      "candidate_cpu_ns": 2.8
+    },
+    {
+      "kind": "timing",
+      "workload": "empty-needle",
+      "haystack": 32,
+      "needle": 0,
+      "calls": 200000,
+      "repeat": 2,
+      "baseline_cpu_ns": 1.665,
+      "candidate_cpu_ns": 2.875
+    },
+    {
+      "kind": "timing",
+      "workload": "empty-needle",
+      "haystack": 32,
+      "needle": 0,
+      "calls": 200000,
+      "repeat": 3,
+      "baseline_cpu_ns": 1.725,
+      "candidate_cpu_ns": 2.72
+    },
+    {
+      "kind": "timing",
+      "workload": "empty-needle",
+      "haystack": 32,
+      "needle": 0,
+      "calls": 200000,
+      "repeat": 4,
+      "baseline_cpu_ns": 1.92,
+      "candidate_cpu_ns": 2.93
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-miss",
+      "haystack": 32,
+      "needle": 8,
+      "calls": 200000,
+      "repeat": 0,
+      "baseline_cpu_ns": 66.87,
+      "candidate_cpu_ns": 5.495
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-miss",
+      "haystack": 32,
+      "needle": 8,
+      "calls": 200000,
+      "repeat": 1,
+      "baseline_cpu_ns": 65.88,
+      "candidate_cpu_ns": 5.925
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-miss",
+      "haystack": 32,
+      "needle": 8,
+      "calls": 200000,
+      "repeat": 2,
+      "baseline_cpu_ns": 65.0,
+      "candidate_cpu_ns": 5.21
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-miss",
+      "haystack": 32,
+      "needle": 8,
+      "calls": 200000,
+      "repeat": 3,
+      "baseline_cpu_ns": 67.605,
+      "candidate_cpu_ns": 5.31
+    },
+    {
+      "kind": "timing",
+      "workload": "tiny-miss",
+      "haystack": 32,
+      "needle": 8,
+      "calls": 200000,
+      "repeat": 4,
+      "baseline_cpu_ns": 71.58,
+      "candidate_cpu_ns": 5.21
+    },
+    {
+      "kind": "timing",
+      "workload": "short-random-miss",
+      "haystack": 4096,
+      "needle": 8,
+      "calls": 4000,
+      "repeat": 0,
+      "baseline_cpu_ns": 11771.0,
+      "candidate_cpu_ns": 120.75
+    },
+    {
+      "kind": "timing",
+      "workload": "short-random-miss",
+      "haystack": 4096,
+      "needle": 8,
+      "calls": 4000,
+      "repeat": 1,
+      "baseline_cpu_ns": 11629.5,
+      "candidate_cpu_ns": 124.75
+    },
+    {
+      "kind": "timing",
+      "workload": "short-random-miss",
+      "haystack": 4096,
+      "needle": 8,
+      "calls": 4000,
+      "repeat": 2,
+      "baseline_cpu_ns": 11301.0,
+      "candidate_cpu_ns": 121.0
+    },
+    {
+      "kind": "timing",
+      "workload": "short-random-miss",
+      "haystack": 4096,
+      "needle": 8,
+      "calls": 4000,
+      "repeat": 3,
+      "baseline_cpu_ns": 11174.75,
+      "candidate_cpu_ns": 122.75
+    },
+    {
+      "kind": "timing",
+      "workload": "short-random-miss",
+      "haystack": 4096,
+      "needle": 8,
+      "calls": 4000,
+      "repeat": 4,
+      "baseline_cpu_ns": 11500.25,
+      "candidate_cpu_ns": 128.25
+    },
+    {
+      "kind": "timing",
+      "workload": "long-random-miss",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 0,
+      "baseline_cpu_ns": 3020000.0,
+      "candidate_cpu_ns": 930500.0
+    },
+    {
+      "kind": "timing",
+      "workload": "long-random-miss",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 1,
+      "baseline_cpu_ns": 3015750.0,
+      "candidate_cpu_ns": 913875.0
+    },
+    {
+      "kind": "timing",
+      "workload": "long-random-miss",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 2,
+      "baseline_cpu_ns": 3014125.0,
+      "candidate_cpu_ns": 926375.0
+    },
+    {
+      "kind": "timing",
+      "workload": "long-random-miss",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 3,
+      "baseline_cpu_ns": 2945875.0,
+      "candidate_cpu_ns": 942250.0
+    },
+    {
+      "kind": "timing",
+      "workload": "long-random-miss",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 4,
+      "baseline_cpu_ns": 2899000.0,
+      "candidate_cpu_ns": 902875.0
+    },
+    {
+      "kind": "timing",
+      "workload": "middle-match",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 0,
+      "baseline_cpu_ns": 1578750.0,
+      "candidate_cpu_ns": 455750.0
+    },
+    {
+      "kind": "timing",
+      "workload": "middle-match",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 1,
+      "baseline_cpu_ns": 1617125.0,
+      "candidate_cpu_ns": 456625.0
+    },
+    {
+      "kind": "timing",
+      "workload": "middle-match",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 2,
+      "baseline_cpu_ns": 1643000.0,
+      "candidate_cpu_ns": 477125.0
+    },
+    {
+      "kind": "timing",
+      "workload": "middle-match",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 3,
+      "baseline_cpu_ns": 1495750.0,
+      "candidate_cpu_ns": 486250.0
+    },
+    {
+      "kind": "timing",
+      "workload": "middle-match",
+      "haystack": 1048576,
+      "needle": 64,
+      "calls": 8,
+      "repeat": 4,
+      "baseline_cpu_ns": 1468000.0,
+      "candidate_cpu_ns": 454375.0
+    },
+    {
+      "kind": "timing",
+      "workload": "repeated-prefix-miss",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 4,
+      "repeat": 0,
+      "baseline_cpu_ns": 53477750.0,
+      "candidate_cpu_ns": 905500.0
+    },
+    {
+      "kind": "timing",
+      "workload": "repeated-prefix-miss",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 4,
+      "repeat": 1,
+      "baseline_cpu_ns": 52916500.0,
+      "candidate_cpu_ns": 890750.0
+    },
+    {
+      "kind": "timing",
+      "workload": "repeated-prefix-miss",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 4,
+      "repeat": 2,
+      "baseline_cpu_ns": 56653000.0,
+      "candidate_cpu_ns": 879750.0
+    },
+    {
+      "kind": "timing",
+      "workload": "repeated-prefix-miss",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 4,
+      "repeat": 3,
+      "baseline_cpu_ns": 52073250.0,
+      "candidate_cpu_ns": 888750.0
+    },
+    {
+      "kind": "timing",
+      "workload": "repeated-prefix-miss",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 4,
+      "repeat": 4,
+      "baseline_cpu_ns": 52070750.0,
+      "candidate_cpu_ns": 869750.0
+    },
+    {
+      "kind": "timing",
+      "workload": "periodic-miss",
+      "haystack": 1048576,
+      "needle": 257,
+      "calls": 8,
+      "repeat": 0,
+      "baseline_cpu_ns": 3635500.0,
+      "candidate_cpu_ns": 876750.0
+    },
+    {
+      "kind": "timing",
+      "workload": "periodic-miss",
+      "haystack": 1048576,
+      "needle": 257,
+      "calls": 8,
+      "repeat": 1,
+      "baseline_cpu_ns": 3712875.0,
+      "candidate_cpu_ns": 873750.0
+    },
+    {
+      "kind": "timing",
+      "workload": "periodic-miss",
+      "haystack": 1048576,
+      "needle": 257,
+      "calls": 8,
+      "repeat": 2,
+      "baseline_cpu_ns": 4206125.0,
+      "candidate_cpu_ns": 1010625.0
+    },
+    {
+      "kind": "timing",
+      "workload": "periodic-miss",
+      "haystack": 1048576,
+      "needle": 257,
+      "calls": 8,
+      "repeat": 3,
+      "baseline_cpu_ns": 4015750.0,
+      "candidate_cpu_ns": 917000.0
+    },
+    {
+      "kind": "timing",
+      "workload": "periodic-miss",
+      "haystack": 1048576,
+      "needle": 257,
+      "calls": 8,
+      "repeat": 4,
+      "baseline_cpu_ns": 3826125.0,
+      "candidate_cpu_ns": 952875.0
+    },
+    {
+      "kind": "timing",
+      "workload": "immediate-long-match",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 0,
+      "baseline_cpu_ns": 52.8,
+      "candidate_cpu_ns": 56.78
+    },
+    {
+      "kind": "timing",
+      "workload": "immediate-long-match",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 1,
+      "baseline_cpu_ns": 52.44,
+      "candidate_cpu_ns": 55.31
+    },
+    {
+      "kind": "timing",
+      "workload": "immediate-long-match",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 2,
+      "baseline_cpu_ns": 54.17,
+      "candidate_cpu_ns": 51.76
+    },
+    {
+      "kind": "timing",
+      "workload": "immediate-long-match",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 3,
+      "baseline_cpu_ns": 52.22,
+      "candidate_cpu_ns": 50.97
+    },
+    {
+      "kind": "timing",
+      "workload": "immediate-long-match",
+      "haystack": 1048576,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 4,
+      "baseline_cpu_ns": 52.73,
+      "candidate_cpu_ns": 50.66
+    },
+    {
+      "kind": "timing",
+      "workload": "whole-buffer-miss",
+      "haystack": 4096,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 0,
+      "baseline_cpu_ns": 6.05,
+      "candidate_cpu_ns": 5.07
+    },
+    {
+      "kind": "timing",
+      "workload": "whole-buffer-miss",
+      "haystack": 4096,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 1,
+      "baseline_cpu_ns": 5.62,
+      "candidate_cpu_ns": 5.8
+    },
+    {
+      "kind": "timing",
+      "workload": "whole-buffer-miss",
+      "haystack": 4096,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 2,
+      "baseline_cpu_ns": 5.43,
+      "candidate_cpu_ns": 5.51
+    },
+    {
+      "kind": "timing",
+      "workload": "whole-buffer-miss",
+      "haystack": 4096,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 3,
+      "baseline_cpu_ns": 5.57,
+      "candidate_cpu_ns": 4.9
+    },
+    {
+      "kind": "timing",
+      "workload": "whole-buffer-miss",
+      "haystack": 4096,
+      "needle": 4096,
+      "calls": 100000,
+      "repeat": 4,
+      "baseline_cpu_ns": 6.42,
+      "candidate_cpu_ns": 5.16
+    }
+  ],
+  "result": "memmem: 426285 production contract/work checks passed"
+}

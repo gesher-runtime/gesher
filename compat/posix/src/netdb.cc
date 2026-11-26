@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <ifaddrs.h>
+#include <limits.h>
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <netdb.h>
@@ -16,6 +17,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 
+#include <gesher/fork.h>
 #include <gesher/inet.h>
 
 #include <string>
@@ -84,6 +86,16 @@ int gesher_getaddrinfo_interface(const char* node, const char* service, const st
   if (res == nullptr) return EAI_FAIL;
   *res = nullptr;
   if (node == nullptr && service == nullptr) return EAI_NONAME;
+  if (node != nullptr && gesher::InForkedChild()) {
+    // A forked child (gesher/fork.h, ADR 0092) cannot resolve names: Windows'
+    // resolver (dnsapi) faults loading in a clone, and the shared resolver
+    // runs on a thread pool the child has not. Numeric addresses still parse.
+    unsigned char numeric[16];
+    if (inet_pton(AF_INET, node, numeric) != 1 && inet_pton(AF_INET6, node, numeric) != 1) {
+      errno = ENOSYS;
+      return EAI_SYSTEM;
+    }
+  }
   if (node != nullptr && !gesher_inet_allowed()) {
     // No INTERNET permission (<gesher/inet.h>): only numeric addresses resolve.
     unsigned char numeric[16];
@@ -197,6 +209,11 @@ const char* gai_strerror(int errcode) {
 
 int getnameinfo(const struct sockaddr* addr, socklen_t addrlen, char* host, socklen_t hostlen,
                 char* serv, socklen_t servlen, int flags) {
+  // A forked child cannot look names up (see getaddrinfo).
+  if (gesher::InForkedChild() && host != nullptr && hostlen != 0 && (flags & NI_NUMERICHOST) == 0) {
+    errno = ENOSYS;
+    return EAI_SYSTEM;
+  }
   ws::Address address;
   if (!ToAddress(addr, addrlen, &address)) return EAI_FAMILY;
   if (address.family != ws::Family::kInet && address.family != ws::Family::kInet6) {
@@ -442,6 +459,17 @@ char* inet_ntoa(struct in_addr in) {
 
 namespace {
 
+unsigned ToIfFlags(unsigned flags) {
+  unsigned result = 0;
+  if (flags & ws::kIfUp) result |= IFF_UP;
+  if (flags & ws::kIfRunning) result |= IFF_RUNNING;
+  if (flags & ws::kIfLoopback) result |= IFF_LOOPBACK;
+  if (flags & ws::kIfBroadcast) result |= IFF_BROADCAST;
+  if (flags & ws::kIfMulticast) result |= IFF_MULTICAST;
+  if (flags & ws::kIfPointToPoint) result |= IFF_POINTOPOINT;
+  return result;
+}
+
 // One allocation per entry, freed by freeifaddrs.
 struct IfAddrsBlock {
   ifaddrs ifa;
@@ -585,6 +613,7 @@ int getifaddrs(struct ifaddrs** ifap) {
 
 namespace gesher::sock {
 
+// Use the Windows name when it fits IFNAMSIZ, as in if_indextoname.
 bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces) {
   if (!ws::ListInterfaces(interfaces)) return false;
   for (ws::Interface& iface : *interfaces) {
@@ -593,21 +622,71 @@ bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces) {
   return true;
 }
 
-unsigned ToIfFlags(unsigned flags) {
-  unsigned result = 0;
-  if (flags & ws::kIfUp) result |= IFF_UP;
-  if (flags & ws::kIfRunning) result |= IFF_RUNNING;
-  if (flags & ws::kIfLoopback) result |= IFF_LOOPBACK;
-  if (flags & ws::kIfBroadcast) result |= IFF_BROADCAST;
-  if (flags & ws::kIfMulticast) result |= IFF_MULTICAST;
-  if (flags & ws::kIfPointToPoint) result |= IFF_POINTOPOINT;
-  return result;
+namespace {
+
+// The bionic ioctl shim passes guest buffers through. In particular, an array
+// returned to a 64-bit caller uses the Linux LP64 ifreq stride.
+static_assert(sizeof(ifreq) == 40);
+static_assert(sizeof(ifconf) == 16 && offsetof(ifconf, ifc_ifcu) == 8);
+
+int ListInterfaceAddresses(ifconf* conf, const std::vector<ws::Interface>& interfaces) {
+  const uintptr_t buffer = reinterpret_cast<uintptr_t>(conf->ifc_buf);
+  const int capacity = buffer == 0 ? INT_MAX : conf->ifc_len;
+  constexpr int stride = sizeof(ifreq);
+  int bytes = 0;
+  for (const ws::Interface& iface : interfaces) {
+    for (const ws::InterfaceAddress& entry : iface.addresses) {
+      if (capacity - bytes < stride) break;
+      if (entry.address.family != ws::Family::kInet) continue;
+      if (buffer != 0) {
+        ifreq req = {};
+        snprintf(req.ifr_name, sizeof(req.ifr_name), "%s", iface.name.c_str());
+        socklen_t length = sizeof(req.ifr_addr);
+        FromAddress(entry.address, &req.ifr_addr, &length);
+        if (static_cast<uintptr_t>(bytes) > UINTPTR_MAX - buffer ||
+            !ws::CopyToUser(reinterpret_cast<void*>(buffer + bytes), &req, sizeof(req))) {
+          return errno = EFAULT, -1;
+        }
+      }
+      bytes += stride;
+    }
+    if (capacity - bytes < stride) break;
+  }
+  conf->ifc_len = bytes;
+  return 0;
 }
 
+int GetInterfaceAddress(ifreq* req, const ws::Interface& iface) {
+  sockaddr_in requested;
+  memcpy(&requested, &req->ifr_addr, sizeof(requested));
+  const ws::Address* selected = nullptr;
+  for (const ws::InterfaceAddress& entry : iface.addresses) {
+    if (entry.address.family != ws::Family::kInet) continue;
+    if (selected == nullptr) selected = &entry.address;
+    if (requested.sin_family != AF_INET) break;
+    sockaddr_in candidate = {};
+    socklen_t length = sizeof(candidate);
+    FromAddress(entry.address, reinterpret_cast<sockaddr*>(&candidate), &length);
+    if (candidate.sin_addr.s_addr == requested.sin_addr.s_addr) {
+      selected = &entry.address;
+      break;
+    }
+  }
+  if (selected == nullptr) return errno = EADDRNOTAVAIL, -1;
+  socklen_t length = sizeof(req->ifr_addr);
+  FromAddress(*selected, &req->ifr_addr, &length);
+  return 0;
+}
+
+}  // namespace
+
 bool InterfaceIoctl(unsigned long request, void* arg, int* result) {
-  if (request != SIOCGIFFLAGS && request != SIOCGIFMTU) return false;
-  auto* req = static_cast<struct ifreq*>(arg);
-  if (req == nullptr) {
+  if (request != SIOCGIFCONF && request != SIOCGIFADDR && request != SIOCGIFINDEX &&
+      request != SIOCGIFFLAGS && request != SIOCGIFMTU) return false;
+  ifreq req;
+  ifconf conf;
+  if (request == SIOCGIFCONF ? !ws::CopyFromUser(&conf, arg, sizeof(conf))
+                            : !ws::CopyFromUser(&req, arg, sizeof(req))) {
     *result = (errno = EFAULT, -1);
     return true;
   }
@@ -616,17 +695,31 @@ bool InterfaceIoctl(unsigned long request, void* arg, int* result) {
     *result = -1;
     return true;
   }
+  if (request == SIOCGIFCONF) {
+    *result = ListInterfaceAddresses(&conf, interfaces);
+    if (*result == 0 && !ws::CopyToUser(arg, &conf, sizeof(conf))) {
+      *result = (errno = EFAULT, -1);
+    }
+    return true;
+  }
   char name[IFNAMSIZ];
-  memcpy(name, req->ifr_name, IFNAMSIZ);
+  memcpy(name, req.ifr_name, IFNAMSIZ);
   name[IFNAMSIZ - 1] = '\0';
   for (const ws::Interface& iface : interfaces) {
     if (iface.name != name) continue;
-    if (request == SIOCGIFFLAGS) {
-      req->ifr_flags = static_cast<short>(ToIfFlags(iface.flags));
-    } else {
-      req->ifr_mtu = static_cast<int>(iface.mtu);
-    }
     *result = 0;
+    if (request == SIOCGIFFLAGS) {
+      req.ifr_flags = static_cast<short>(ToIfFlags(iface.flags));
+    } else if (request == SIOCGIFMTU) {
+      req.ifr_mtu = static_cast<int>(iface.mtu);
+    } else if (request == SIOCGIFINDEX) {
+      req.ifr_ifindex = static_cast<int>(iface.index);
+    } else {
+      *result = GetInterfaceAddress(&req, iface);
+    }
+    if (*result == 0 && !ws::CopyToUser(arg, &req, sizeof(req))) {
+      *result = (errno = EFAULT, -1);
+    }
     return true;
   }
   *result = (errno = ENODEV, -1);

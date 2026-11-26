@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +53,15 @@ def main() -> None:
             subprocess.run([str(args.java_home / "bin/java"), "-cp", str(work) + os.pathsep + classpath,
                             "com.gesher.server.AppStoragePolicyHost", str(library),
                             str(ROOT / "tests/dex-services/fixtures")], check=True, timeout=90)
+    if not args.expect_baseline_failure:
+        # The trusted, immutable framework recipe already invokes this runner
+        # against the caller's freshly built classes. Keep BlobStore's storage
+        # gates here so a PR does not depend on executing its workflow edits.
+        shared = []
+        for name in ("java-home", "framework-classes", "core-classes", "app-classes", "apksig"):
+            shared.extend(("--" + name, str(getattr(args, name.replace("-", "_")))))
+        for script in ("test_blobstore_quotas.py", "test_blobstore_identity.py"):
+            subprocess.run([sys.executable, str(ROOT / "tools" / script), *shared], check=True)
 
 
 if __name__ == "__main__":

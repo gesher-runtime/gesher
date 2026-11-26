@@ -19,7 +19,7 @@ flag annotation spelled as a string and the subrate callback's annotations remov
 ## Callback and value types
 
 `Attributable.java`, `BluetoothUuid.java`, and the six files under `le/` are
-unmodified AOSP sources from `packages/modules/Bluetooth`, tag
+based on AOSP sources from `packages/modules/Bluetooth`, tag
 `android-16.0.0_r4`, under `framework/java/android/bluetooth/`:
 
 https://android.googlesource.com/platform/packages/modules/Bluetooth/+/refs/tags/android-16.0.0_r4/framework/java/android/bluetooth/
@@ -28,7 +28,14 @@ They implement Android's real callback, scan result, advertisement parsing,
 transport data and parcel formats. They neither start scanning nor advertise a
 Bluetooth feature. `BluetoothDevice` supplies the address value/parcel and
 attribution contract those types need, while its hardware-dependent answers
-remain unavailable.
+remain unavailable. That includes the hidden `prepareToEnterProcess(AttributionSource)`
+framework.jar's `Intent.prepareToEnterProcess` calls on a Bluetooth broadcast's
+`EXTRA_DEVICE` (issue #303; the same missing method appears in issue #418's logs).
+This fix-up is specific to `BluetoothDevice.EXTRA_DEVICE`; `Intent` does not
+traverse arbitrary `Attributable` or `ScanResult` extras. `ScanResult` propagates
+attribution to its device through `setAttributionSource`, as in the pinned AOSP
+source. `app/gen/BootLinkCheck.java` (run by `app/build.sh`) fails
+the build when framework.jar references a member these classes lack.
 
 The additional scan settings/filter, advertisement data/settings/parameters,
 periodic parameters/report, transport filter and advertising callback use the

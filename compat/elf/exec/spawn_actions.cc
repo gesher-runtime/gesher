@@ -44,8 +44,8 @@ int ApplySpawnActions(const SpawnRequest& request) {
   auto fchdir = reinterpret_cast<Close>(gesher::bionic::LookupBionicSymbol("fchdir"));
   auto fcntl = reinterpret_cast<Fcntl>(gesher::bionic::LookupBionicSymbol("fcntl"));
   if (!open || !close || !dup2 || !chdir || !fchdir || !fcntl) return SpawnFailure("symbol lookup");
-  // The transport supplies NUL for absent standard handles so launcher startup
-  // is safe. Restore the parent's closed slots before actions such as dup2.
+  // Keep closed standard slots closed before applying actions, including
+  // requests received from a launcher without the Gesher startup manifest.
   for (int fd = 0; fd < 3; ++fd) {
     bool present = false;
     for (const auto& f : request.fd_flags) present = present || f.first == fd;
@@ -86,9 +86,9 @@ int ApplySpawnActions(const SpawnRequest& request) {
         break;
     }
   }
-  // The existing UCRT inherited-fd protocol supports descriptors below7000.
-  // Apply actions before closing these, so an explicit dup can retain one.
-  for (int fd = 0; fd < 7000; ++fd) {
+  // Apply actions before the final CLOEXEC pass, so an explicit dup can
+  // retain a descriptor. The manifest transports the full descriptor range.
+  for (int fd = 0; fd < static_cast<int>(ofd_transfer::kDescriptorLimit); ++fd) {
     intptr_t value = _get_osfhandle(fd);
     if (value == -1 || value == -2 || value == 0) continue;
     int flags = fcntl(fd, F_GETFD, 0);

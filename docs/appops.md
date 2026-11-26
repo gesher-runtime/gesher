@@ -67,11 +67,26 @@ platform's fuller fine-location grant when applicable. UID queries include these
 computed nondefault modes, even when there is no independently stored mode.
 
 `PermissionPolicy` retains UID permission decisions and API flags together.
-`REVOKED_COMPAT` and soft restrictions can deny AppOps while leaving the binary
-permission granted. Hard restrictions deny a modern runtime grant. A legacy
+`REVOKED_COMPAT` can deny AppOps while leaving the binary permission granted.
+Hard restrictions deny a modern runtime grant and its AppOp. As in AOSP
+`SoftRestrictedPermissionPolicy`, a soft-restricted storage permission without an
+exemption withholds the grant and its AppOp only from a UID whose minimum target
+SDK is below Q; from Q the restriction concerns only `OP_LEGACY_STORAGE`, which
+this policy does not derive or grant. Restriction exemptions are described in
+[microg.md](microg.md#restricted-and-background-permissions). A legacy
 requester supplies an automatic grant only for a runtime permission without
 runtime-only protection, and compatibility flags control that grant's AppOps
-access. The minimum target SDK is computed separately for each permission from
+access. As in AOSP `restorePermissionState`, that grant also covers restricted
+permissions, exempt or not, so `checkPermission` reports it; the restriction and
+the review withhold only its AppOp. A restricted permission's legacy grant gets
+no AppOp while the restriction applies or while it carries `REVIEW_REQUIRED`.
+AOSP `PermissionPolicyService` leaves the AppOp of a permission under review
+untouched and instead gates the app through the permission review screen before
+it runs. Gesher has no review screen, so it withholds the AppOp as the stand-in
+for that gate (PermissionChecker then soft-denies), and an exemption never makes
+such a grant effective until the system clears
+`REVIEW_REQUIRED`, and dropping the restriction of a legacy app's permission at
+admission or republication requires that review again. The minimum target SDK is computed separately for each permission from
 its actual requesters. A legacy shared-UID member that does not request a
 permission cannot turn another member's denial into a grant or supply its
 legacy review flag. Shared packages observe one UID policy; retiring the last requesting
@@ -106,7 +121,7 @@ The bounded ordinary-runtime transition rules are:
 | Publication or lifecycle change | Prior state | Result |
 | --- | --- | --- |
 | An actual legacy requester is admitted | Modern denial with user flags | Binary legacy grant; compatibility revocation keeps raw AppOps ignored |
-| An actual legacy requester is admitted | No previous grant or flags | Legacy grant with review required |
+| An actual legacy requester is admitted | No previous grant or flags | Legacy grant with review required; a restricted permission's AppOp is withheld until that review is cleared |
 | An actual legacy requester is admitted | Explicit runtime grant | Retain the grant without inventing compatibility revocation |
 | A legacy package is republished | A legitimate compatibility or review clear | Keep that clear and the stored legacy grant basis |
 | Requesters become modern | Reviewed, compatible legacy grant | Convert it to an explicit runtime grant |
@@ -255,7 +270,7 @@ and generation-reentry regressions remain required.
 
 The Windows `framework-fixes` track runs the fixture through generated AppOps and
 PermissionChecker Binder Parcel transports. Its required success marker includes
-`482 checks; binder=true`. `tools/test_appops.py` runs the same service contracts on a host JDK
+`494 checks; binder=true`. `tools/test_appops.py` runs the same service contracts on a host JDK
 with the existing declared JNI identity/clock boundary. Its host-only setup also
 supplies the pinned permission definitions, including their background and
 restriction metadata, when framework assets are
@@ -272,7 +287,7 @@ Service removal schedules a UID-state refresh so the published ledger and
 observers transition after settling without requiring a later query.
 
 The 2026-11-18 repair composes the reviewed SAF/task/result changes and typechecks
-288 production Java sources. All 482 host AppOps checks and the original
+288 production Java sources. All 489 host AppOps checks and the original
 independent attribution and foreground-lifecycle assertions pass. The expanded
 fixture rejects the original PR72 implementation at its missing-app-op mapping
 assertion. These are host/source results; the new Windows Binder marker remains

@@ -72,8 +72,10 @@ public final class GmsSetupContractTest {
         Object client = make(callerType, new Class<?>[] {String.class, String.class, boolean.class, int.class, int.class},
                 "fixture.client", "cert:client", false, 11001, 123);
         Method visibility = method(service, "visibility", callerType, entryType);
+        // The authenticator's hidden-category value is an unset ordinary client's default
+        // (AccountManagerService.resolveAccountVisibility); here it is NOT_VISIBLE.
         check((int) visibility.invoke(manager, client, entry) == AccountManager.VISIBILITY_NOT_VISIBLE,
-                "Policy-category metadata changed an ordinary client's grant");
+                "Hidden-category value did not apply to an unset ordinary client");
         Map<String, Integer> grants = (Map<String, Integer>) get(entry, "visibility");
         grants.put("fixture.client", AccountManager.VISIBILITY_VISIBLE);
         check((int) visibility.invoke(manager, client, entry) == AccountManager.VISIBILITY_NOT_VISIBLE,
@@ -87,6 +89,37 @@ public final class GmsSetupContractTest {
         check((int) read.invoke(manager, account, legacyVisible) == AccountManager.VISIBILITY_USER_MANAGED_VISIBLE
                         && (int) read.invoke(manager, account, legacyHidden) == AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE,
                 "Undefined category did not restore its own default");
+        // Android's defaults for clients with no stored value.
+        Object stranger = make(callerType, new Class<?>[] {String.class, String.class, boolean.class, int.class, int.class},
+                "fixture.stranger", "cert:stranger", false, 11002, 124);
+        Object sibling = make(callerType, new Class<?>[] {String.class, String.class, boolean.class, int.class, int.class},
+                "fixture.sibling", "cert:fixture", false, 11003, 125);
+        check((int) visibility.invoke(manager, stranger, entry) == AccountManager.VISIBILITY_USER_MANAGED_NOT_VISIBLE,
+                "Unset client did not get USER_MANAGED_NOT_VISIBLE");
+        check((int) visibility.invoke(manager, sibling, entry) == AccountManager.VISIBILITY_USER_MANAGED_VISIBLE,
+                "Authenticator-signed client did not get the visible-category default");
+        Method offered = method(service, "offered", callerType, Account.class, entryType);
+        Method visibleTo = method(service, "visible", callerType, Account.class, entryType);
+        check(!(boolean) visibleTo.invoke(manager, stranger, account, entry)
+                        && (boolean) offered.invoke(manager, stranger, account, entry),
+                "USER_MANAGED_NOT_VISIBLE was enumerated, or not offered to the authenticator");
+        String strangerKey = (String) method(callerType, "key").invoke(stranger);
+        grants.put(strangerKey, AccountManager.VISIBILITY_NOT_VISIBLE);
+        check(!(boolean) offered.invoke(manager, stranger, account, entry),
+                "Explicit denial was offered to the authenticator");
+        grants.remove(strangerKey);
+        write.invoke(manager, account, legacyHidden, AccountManager.VISIBILITY_USER_MANAGED_VISIBLE);
+        check((boolean) visibleTo.invoke(manager, stranger, account, entry),
+                "Authenticator's hidden-category default was ignored");
+        grants.put(strangerKey, AccountManager.VISIBILITY_NOT_VISIBLE);
+        check(!(boolean) visibleTo.invoke(manager, stranger, account, entry),
+                "Category default overrode an explicit denial");
+        grants.remove(strangerKey);
+        write.invoke(manager, account, legacyHidden, AccountManager.VISIBILITY_UNDEFINED);
+        Object unknown = make(callerType, new Class<?>[] {String.class, String.class, boolean.class, int.class, int.class},
+                "fixture.unknown", null, false, 11004, 126);
+        check((int) visibility.invoke(manager, unknown, entry) == AccountManager.VISIBILITY_NOT_VISIBLE,
+                "Client without code identity got a default");
         Class<?> writer = Class.forName(service.getName() + "$StoreWriter");
         set(manager, "mStoreWriter", Proxy.newProxyInstance(writer.getClassLoader(), new Class<?>[] {writer},
                 (p, m, a) -> { throw new java.io.IOException("fixture persistence failure"); }));

@@ -160,6 +160,12 @@ public final class AppOpsService extends IAppOpsService.Default {
     }
     /** Server-local raw policy for special-access consumers such as AlarmManager. */
     public int checkRawMode(int code, int uid, String name) {
+        int mode = checkRawModeForStoragePolicy(code, uid, name);
+        return ExternalStorageAccess.isStorageOp(switchOp(code))
+                && ExternalStorageAccess.publicationFailed(mPm, name) ? MODE_IGNORED : mode;
+    }
+    /** Desired ledger state used only to retry a failed storage-policy publication. */
+    int checkRawModeForStoragePolicy(int code, int uid, String name) {
         int op = switchOp(code);
         if (platformPackage(uid, name)) return MODE_ALLOWED;
         if (packageFor(uid, name) == null) return MODE_ERRORED;
@@ -179,6 +185,11 @@ public final class AppOpsService extends IAppOpsService.Default {
     @Override public int checkOperationForDevice(int code, int uid, String name, String tag, int device) {
         verifyReadableOp(code);
         if (device != 0) return MODE_IGNORED;
+        int mode = restricted(code, uid, name, null, true) ? MODE_IGNORED : checkRawMode(code, uid, name);
+        // Only MODE_FOREGROUND needs process/activity/service state. This API
+        // records no access history, unlike note/start, so an ordinary fixed-mode
+        // check need not rebuild every UID's state under the task/service locks.
+        if (mode != MODE_FOREGROUND) return mode;
         refreshUidStates();
         return effective(code, uid, name);
     }
@@ -189,14 +200,23 @@ public final class AppOpsService extends IAppOpsService.Default {
 
     @Override public void setMode(int code, int uid, String name, int mode) {
         enforce(Manifest.permission.MANAGE_APP_OPS_MODES);
+        setModeChecked(code, uid, name, null, mode);
+    }
+    /** setMode, committed only while this exact installed package generation is current. */
+    public boolean setModeIfCurrent(int code, ApkPackage expected, int mode) {
+        enforce(Manifest.permission.MANAGE_APP_OPS_MODES);
+        Objects.requireNonNull(expected);
+        return setModeChecked(code, expected.uid(), expected.packageName, expected, mode);
+    }
+    private boolean setModeChecked(int code, int uid, String name, ApkPackage expected, int mode) {
         int op = switchOp(code); validateMode(mode);
         // Android 16's checking service ignores package modes for runtime permission ops.
-        if (mPm.permissions().runtimePermissionForOp(op) != null) return;
+        if (mPm.permissions().runtimePermissionForOp(op) != null) return false;
         List<Change> changes;
         synchronized (mMutationLock) {
             synchronized (mPm) {
                 ApkPackage pkg = packageFor(uid, name);
-                if (pkg == null) return;
+                if (pkg == null || expected != null && pkg != expected) return false;
                 State before = mStore.state();
                 Map<PackageOp, PackageMode> packages = new HashMap<>(before.packages());
                 PackageOp key = new PackageOp(uid, name, op);
@@ -207,8 +227,21 @@ public final class AppOpsService extends IAppOpsService.Default {
                 if (!before.equals(after)) mStore.commit(after);
             }
         }
-        changed(changes);
+        if (op == AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE) {
+            try { ExternalStorageAccess.syncUid(mPm, uid); }
+            finally { storageChanged(changes); }
+        } else {
+            changed(changes);
+        }
+        return true;
     }
+    /** Serialize an install's final authorization and package commit against mode writes. */
+    <T> T withInstallSourceMode(java.util.concurrent.Callable<T> publication) throws Exception {
+        synchronized (mMutationLock) {
+            return publication.call();
+        }
+    }
+
     @Override public void setUidMode(int code, int uid, int mode) {
         enforce(Manifest.permission.MANAGE_APP_OPS_MODES);
         setUidModeChecked(code, uid, null, mode);
@@ -245,7 +278,12 @@ public final class AppOpsService extends IAppOpsService.Default {
                 if (!before.equals(after)) mStore.commit(after);
             }
         }
-        changed(changes);
+        if (op == AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE) {
+            try { ExternalStorageAccess.syncUid(mPm, uid); }
+            finally { storageChanged(changes); }
+        } else {
+            changed(changes);
+        }
         return true;
     }
     private List<ApkPackage> packagesForUid(int uid) {
@@ -259,6 +297,10 @@ public final class AppOpsService extends IAppOpsService.Default {
         for (ApkPackage pkg : packages) for (int op : ops) {
             int oldMode = raw(before, op, pkg.uid(), pkg.packageName);
             int newMode = raw(after, op, pkg.uid(), pkg.packageName);
+            if (ExternalStorageAccess.isStorageOp(op)
+                    && ExternalStorageAccess.publicationFailed(mPm, pkg.packageName)) {
+                oldMode = MODE_IGNORED;
+            }
             if (oldMode != newMode) changes.add(new Change(pkg, op, oldMode, newMode));
         }
         return changes;
@@ -276,6 +318,17 @@ public final class AppOpsService extends IAppOpsService.Default {
             } finally { Binder.restoreCallingIdentity(identity); }
             notifyMode(change.pkg, change.op, false);
         }
+    }
+    /** A partial UID publication still reports each package's actual transition. */
+    private void storageChanged(List<Change> changes) {
+        List<Change> effective = new ArrayList<>();
+        for (Change change : changes) {
+            int mode = checkRawMode(change.op, change.pkg.uid(), change.pkg.packageName);
+            if (mode != change.oldMode) {
+                effective.add(new Change(change.pkg, change.op, change.oldMode, mode));
+            }
+        }
+        changed(effective);
     }
     private void permissionModesChanged(int uid, Map<Integer, Integer> before, Map<Integer, Integer> after, Object publicationLock) {
         List<Change> changes = new ArrayList<>();
@@ -296,14 +349,15 @@ public final class AppOpsService extends IAppOpsService.Default {
         enforce(Manifest.permission.MANAGE_APP_OPS_MODES);
         if (user != UserHandle.USER_ALL && user != 0) throw new SecurityException("Unknown user " + user);
         List<Change> changes;
+        Set<Integer> ops = new HashSet<>();
+        ApkPackage selected;
         synchronized (mMutationLock) {
             synchronized (mPm) {
                 State before = mStore.state();
                 Map<UidOp, UidMode> uids = new HashMap<>(before.uids());
                 Map<PackageOp, PackageMode> packages = new HashMap<>(before.packages());
-                ApkPackage selected = name == null ? null : mPm.get(name);
+                selected = name == null ? null : mPm.get(name);
                 if (name != null && selected == null) return;
-                Set<Integer> ops = new HashSet<>();
                 uids.entrySet().removeIf(e -> {
                     boolean reset = (name == null || e.getKey().uid() == selected.uid())
                             && AppOpsManager.opAllowsReset(e.getKey().op());
@@ -319,7 +373,14 @@ public final class AppOpsService extends IAppOpsService.Default {
                 if (!before.equals(after)) mStore.commit(after);
             }
         }
-        changed(changes);
+        if (ops.contains(AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE)) {
+            try {
+                if (selected == null) ExternalStorageAccess.syncAll(mPm);
+                else ExternalStorageAccess.syncUid(mPm, selected.uid());
+            } finally { storageChanged(changes); }
+        } else {
+            changed(changes);
+        }
     }
 
     /** Current foreground capabilities are supplied only by authenticated process lifecycle. */

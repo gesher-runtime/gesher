@@ -1,0 +1,262 @@
+{
+  "baseline": "751d82310f7c4c470c098ccebfd5d2d04699a0cd",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "java": "openjdk version \"21.0.13.1\" 2026-11-17 LTS\nOpenJDK Runtime Environment Temurin-21.0.13.1+2 (build 21.0.13.1+2-LTS)\nOpenJDK 64-Bit Server VM Temurin-21.0.13.1+2 (build 21.0.13.1+2-LTS, mixed mode, sharing)\n",
+  "okhttp_commit": "e3d37d381375156dfad90887870775137e0481bf",
+  "source_sha256": {
+    "Http2Transport.java": "4f973db33362f8b4fe2c0935b21f891ef1afcdc961c749233209724daf4c73f1",
+    "JavaBidirectionalStream.java": "803a43bcb94e97bcef5ed0eb01d754971fd70a8fa453c29091d888d4b0dc970d"
+  },
+  "samples": [
+    {
+      "pair": 1,
+      "mode": "baseline",
+      "rows": [
+        {
+          "reusable": false,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 68488152,
+          "cpu_ns": 16450314,
+          "elapsed_ns": 30187550,
+          "checksum": 528384
+        },
+        {
+          "reusable": false,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 1261568,
+          "cpu_ns": 4421733,
+          "elapsed_ns": 4416208,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2410 checks; baseline"
+    },
+    {
+      "pair": 1,
+      "mode": "candidate",
+      "rows": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 9369979,
+          "elapsed_ns": 9362975,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 3337722,
+          "elapsed_ns": 3333585,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2415 checks; candidate"
+    },
+    {
+      "pair": 2,
+      "mode": "candidate",
+      "rows": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 8228843,
+          "elapsed_ns": 8417129,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 4851352,
+          "elapsed_ns": 4839355,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2415 checks; candidate"
+    },
+    {
+      "pair": 2,
+      "mode": "baseline",
+      "rows": [
+        {
+          "reusable": false,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 68488152,
+          "cpu_ns": 21389877,
+          "elapsed_ns": 22726261,
+          "checksum": 528384
+        },
+        {
+          "reusable": false,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 1261568,
+          "cpu_ns": 4435033,
+          "elapsed_ns": 4429417,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2410 checks; baseline"
+    },
+    {
+      "pair": 3,
+      "mode": "baseline",
+      "rows": [
+        {
+          "reusable": false,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 68488152,
+          "cpu_ns": 17319556,
+          "elapsed_ns": 19204181,
+          "checksum": 528384
+        },
+        {
+          "reusable": false,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 1261568,
+          "cpu_ns": 5824599,
+          "elapsed_ns": 5812462,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2410 checks; baseline"
+    },
+    {
+      "pair": 3,
+      "mode": "candidate",
+      "rows": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 6734771,
+          "elapsed_ns": 6724908,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 3423410,
+          "elapsed_ns": 3418213,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2415 checks; candidate"
+    },
+    {
+      "pair": 4,
+      "mode": "candidate",
+      "rows": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 10754467,
+          "elapsed_ns": 10744588,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 4466931,
+          "elapsed_ns": 4461305,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2415 checks; candidate"
+    },
+    {
+      "pair": 4,
+      "mode": "baseline",
+      "rows": [
+        {
+          "reusable": false,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 68488152,
+          "cpu_ns": 39094876,
+          "elapsed_ns": 41954332,
+          "checksum": 528384
+        },
+        {
+          "reusable": false,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 1261568,
+          "cpu_ns": 4321674,
+          "elapsed_ns": 4318811,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2410 checks; baseline"
+    },
+    {
+      "pair": 5,
+      "mode": "baseline",
+      "rows": [
+        {
+          "reusable": false,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 68488152,
+          "cpu_ns": 15901799,
+          "elapsed_ns": 17402444,
+          "checksum": 528384
+        },
+        {
+          "reusable": false,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 1261568,
+          "cpu_ns": 4166033,
+          "elapsed_ns": 4161745,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2410 checks; baseline"
+    },
+    {
+      "pair": 5,
+      "mode": "candidate",
+      "rows": [
+        {
+          "reusable": true,
+          "direction": "read",
+          "bytes": 67108864,
+          "allocated_bytes": 901368,
+          "cpu_ns": 9560112,
+          "elapsed_ns": 9552631,
+          "checksum": 528384
+        },
+        {
+          "reusable": true,
+          "direction": "write",
+          "bytes": 67108864,
+          "allocated_bytes": 294912,
+          "cpu_ns": 4437246,
+          "elapsed_ns": 4430649,
+          "checksum": 528384
+        }
+      ],
+      "result": "Http2TransferHost passed: 2415 checks; candidate"
+    }
+  ]
+}

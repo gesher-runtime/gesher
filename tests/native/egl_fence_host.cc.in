@@ -1,0 +1,449 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Unmodified production EGL fence bodies. GL/ANGLE, GPU completion and FD
+// ownership are declared adapters; no fake GPU backend enters production.
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cerrno>
+#include <chrono>
+#include <climits>
+#include <condition_variable>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <future>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <poll.h>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+#define BIONIC_SYSV
+using EGLBoolean = unsigned;
+using EGLint = int;
+using EGLenum = unsigned;
+using EGLAttrib = intptr_t;
+using EGLDisplay = void*;
+using EGLContext = void*;
+using EGLSync = void*;
+using EGLSyncKHR = void*;
+using EGLTime = uint64_t;
+using EGLTimeKHR = uint64_t;
+constexpr EGLBoolean EGL_FALSE = 0, EGL_TRUE = 1;
+constexpr EGLDisplay EGL_NO_DISPLAY = nullptr;
+constexpr EGLContext EGL_NO_CONTEXT = nullptr;
+constexpr EGLSyncKHR EGL_NO_SYNC_KHR = nullptr;
+constexpr EGLint EGL_SUCCESS = 0x3000, EGL_BAD_ALLOC = 0x3003, EGL_BAD_ATTRIBUTE = 0x3004,
+    EGL_BAD_DISPLAY = 0x3008, EGL_BAD_MATCH = 0x3009, EGL_BAD_PARAMETER = 0x300c,
+    EGL_CONTEXT_LOST = 0x300e, EGL_NONE = 0x3038, EGL_VERSION = 0x3054,
+    EGL_SYNC_PRIOR_COMMANDS_COMPLETE_KHR = 0x30f0, EGL_SYNC_STATUS_KHR = 0x30f1,
+    EGL_SIGNALED_KHR = 0x30f2, EGL_UNSIGNALED_KHR = 0x30f3,
+    EGL_TIMEOUT_EXPIRED_KHR = 0x30f5, EGL_CONDITION_SATISFIED_KHR = 0x30f6,
+    EGL_SYNC_TYPE_KHR = 0x30f7, EGL_SYNC_CONDITION_KHR = 0x30f8,
+    EGL_SYNC_FENCE_KHR = 0x30f9, EGL_SYNC_REUSABLE_KHR = 0x30fa,
+    EGL_SYNC_NATIVE_FENCE_ANDROID = 0x3144, EGL_SYNC_NATIVE_FENCE_FD_ANDROID = 0x3145,
+    EGL_SYNC_NATIVE_FENCE_SIGNALED_ANDROID = 0x3146,
+    EGL_NO_NATIVE_FENCE_FD_ANDROID = -1, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR = 1;
+constexpr EGLTimeKHR EGL_FOREVER_KHR = UINT64_MAX;
+extern "C" void glFlush();
+extern "C" void glFinish();
+extern "C" EGLSync eglCreateSync(EGLDisplay, EGLenum, const EGLAttrib*);
+extern "C" EGLBoolean eglGetSyncAttrib(EGLDisplay, EGLSync, EGLint, EGLAttrib*);
+extern "C" EGLBoolean eglSignalSyncKHR(EGLDisplay, EGLSyncKHR, EGLenum);
+
+namespace fixture {
+std::atomic<unsigned> checks{0}, failures{0}, flushes{0}, finishes{0}, exports{0}, waits{0};
+std::atomic<bool> fail_nothrow{false}, fail_create{false}, fail_export{false}, fail_dup{false};
+bool gpu_available = true;
+thread_local EGLint error = EGL_SUCCESS;
+const EGLDisplay display = reinterpret_cast<void*>(1);
+thread_local EGLContext current = reinterpret_cast<void*>(2);
+thread_local EGLDisplay current_display = reinterpret_cast<void*>(1);
+void Check(bool value, const char* what) {
+  ++checks;
+  if (!value) { ++failures; std::fprintf(stderr, "FAIL EGL fence: %s\n", what); }
+}
+template<class Predicate> bool Eventually(Predicate predicate) {
+  const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!predicate()) {
+    if (std::chrono::steady_clock::now() >= until) return false;
+    std::this_thread::yield();
+  }
+  return true;
+}
+}
+
+// Replace only the nothrow allocation boundary used by production Sync.
+// The ordinary allocator/deallocator still own every successfully allocated block.
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+  if (fixture::fail_nothrow.exchange(false)) return nullptr;
+  try { return ::operator new(size); } catch (const std::bad_alloc&) { return nullptr; }
+}
+void operator delete(void* value, const std::nothrow_t&) noexcept { ::operator delete(value); }
+
+namespace gesher {
+enum class FenceStatus { kPending, kSignaled, kFailed };
+class NativeFence {
+ public:
+  std::atomic<FenceStatus> status{FenceStatus::kPending};
+  std::mutex mutex;
+  std::condition_variable changed;
+};
+FenceStatus NativeFenceStatus(const std::shared_ptr<NativeFence>& fence) {
+  return fence ? fence->status.load() : FenceStatus::kFailed;
+}
+FenceStatus WaitNativeFence(const std::shared_ptr<NativeFence>& fence, uint64_t timeout) {
+  if (!fence) return FenceStatus::kFailed;
+  ++fixture::waits;
+  std::unique_lock<std::mutex> lock(fence->mutex);
+  auto ready = [&] { return fence->status.load() != FenceStatus::kPending; };
+  if (timeout == EGL_FOREVER_KHR) fence->changed.wait(lock, ready);
+  else fence->changed.wait_for(lock, std::chrono::nanoseconds(timeout), ready);
+  return fence->status.load();
+}
+}
+
+namespace fixture {
+std::shared_ptr<gesher::NativeFence> next_fence;
+std::mutex descriptors_mutex;
+struct Descriptor { std::shared_ptr<gesher::NativeFence> fence; };
+std::map<int, Descriptor> descriptors;
+int next_fd = 64;
+int NewDescriptor(const std::shared_ptr<gesher::NativeFence>& fence) {
+  std::lock_guard<std::mutex> lock(descriptors_mutex);
+  int fd = next_fd++; descriptors.emplace(fd, Descriptor{fence}); return fd;
+}
+bool Open(int fd) { std::lock_guard<std::mutex> lock(descriptors_mutex); return descriptors.count(fd) != 0; }
+void Complete(const std::shared_ptr<gesher::NativeFence>& fence,
+              gesher::FenceStatus status = gesher::FenceStatus::kSignaled) {
+  std::lock_guard<std::mutex> lock(fence->mutex);
+  fence->status.store(status); fence->changed.notify_all();
+}
+std::shared_ptr<gesher::NativeFence> Pending() {
+  return next_fence = std::make_shared<gesher::NativeFence>();
+}
+int Close(int fd) {
+  std::lock_guard<std::mutex> lock(descriptors_mutex);
+  return descriptors.erase(fd) ? 0 : (errno = EBADF, -1);
+}
+int Dup(int fd) {
+  if (fail_dup.exchange(false)) return errno = EMFILE, -1;
+  std::lock_guard<std::mutex> lock(descriptors_mutex);
+  auto found = descriptors.find(fd);
+  if (found == descriptors.end()) return errno = EBADF, -1;
+  int other = next_fd++; descriptors.emplace(other, found->second); return other;
+}
+int OpenNull(const char*, int) { return NewDescriptor(nullptr); }
+int Poll(pollfd* fds, nfds_t count, int timeout) {
+  int ready = 0;
+  for (nfds_t i = 0; i < count; ++i) {
+    auto& fd = fds[i]; std::shared_ptr<gesher::NativeFence> fence;
+    {
+      std::lock_guard<std::mutex> lock(descriptors_mutex);
+      auto found = descriptors.find(fd.fd);
+      if (found == descriptors.end()) { fd.revents = POLLNVAL; ++ready; continue; }
+      fence = found->second.fence;
+    }
+    if (!fence) { fd.revents = fd.events & POLLIN; ++ready; continue; }
+    const auto status = gesher::WaitNativeFence(fence, timeout < 0 ? EGL_FOREVER_KHR : uint64_t(timeout) * 1000000);
+    fd.revents = status == gesher::FenceStatus::kSignaled ? (fd.events & POLLIN)
+               : status == gesher::FenceStatus::kFailed ? POLLERR : 0;
+    ready += fd.revents != 0;
+  }
+  return ready;
+}
+}
+
+namespace gesher {
+int ExportNativeFence(const std::shared_ptr<NativeFence>& fence) {
+  ++fixture::exports;
+  if (fixture::fail_export.exchange(false)) return errno = ENOMEM, -1;
+  if (WaitNativeFence(fence, EGL_FOREVER_KHR) != FenceStatus::kSignaled) return errno = EIO, -1;
+  return fixture::NewDescriptor(fence);
+}
+std::shared_ptr<NativeFence> LookupNativeFence(int fd) {
+  std::lock_guard<std::mutex> lock(fixture::descriptors_mutex);
+  auto found = fixture::descriptors.find(fd);
+  return found == fixture::descriptors.end() ? nullptr : found->second.fence;
+}
+}
+
+extern "C" void glFlush() { ++fixture::flushes; }
+extern "C" void glFinish() { ++fixture::finishes; gesher::WaitNativeFence(fixture::next_fence, EGL_FOREVER_KHR); }
+void* gesher_egl_proc(const char* name) {
+  if (std::strcmp(name, "glFlush") == 0) return reinterpret_cast<void*>(&glFlush);
+  if (std::strcmp(name, "glFinish") == 0) return reinterpret_cast<void*>(&glFinish);
+  return nullptr;
+}
+
+namespace gesher::bionic {
+namespace gpu { struct Gl; }
+const gpu::Gl* G();
+}
+namespace gesher::bionic::gpu {
+struct Gl {
+  EGLContext (*eglGetCurrentContext)();
+  EGLDisplay (*eglGetCurrentDisplay)();
+  EGLSyncKHR (*eglCreateSyncKHR)(EGLDisplay, EGLenum, const EGLint*);
+  EGLBoolean (*eglDestroySyncKHR)(EGLDisplay, EGLSyncKHR);
+  EGLint (*eglClientWaitSyncKHR)(EGLDisplay, EGLSyncKHR, EGLint, EGLTimeKHR);
+  EGLint (*eglWaitSyncKHR)(EGLDisplay, EGLSyncKHR, EGLint);
+  EGLBoolean (*eglGetSyncAttribKHR)(EGLDisplay, EGLSyncKHR, EGLint, EGLint*);
+  const char* (*eglQueryString)(EGLDisplay, EGLint);
+};
+const Gl* Functions() { return fixture::gpu_available ? ::gesher::bionic::G() : nullptr; }
+std::shared_ptr<NativeFence> CreateCurrentFence(void*, int* error) {
+  *error = fixture::fail_create.exchange(false) ? EGL_BAD_ALLOC : EGL_SUCCESS;
+  return *error == EGL_SUCCESS ? fixture::next_fence : nullptr;
+}
+bool WaitCurrentFence(const std::shared_ptr<NativeFence>& fence, int* error) {
+  *error = NativeFenceStatus(fence) == FenceStatus::kFailed ? EGL_CONTEXT_LOST : EGL_SUCCESS;
+  return *error == EGL_SUCCESS;  // Actual queue ordering is the separate Windows fixture's boundary.
+}
+}
+namespace gesher::bionic {
+void SetError(EGLint value) { fixture::error = value; }
+EGLDisplay DefaultDisplay() { return fixture::display; }
+const gpu::Gl* G() {
+  static const gpu::Gl functions{
+    [] { return fixture::current; }, [] { return fixture::current_display; },
+    [](EGLDisplay, EGLenum, const EGLint*) -> EGLSyncKHR { SetError(EGL_BAD_ATTRIBUTE); return EGL_NO_SYNC_KHR; },
+    [](EGLDisplay, EGLSyncKHR) -> EGLBoolean { SetError(EGL_BAD_PARAMETER); return EGL_FALSE; },
+    [](EGLDisplay, EGLSyncKHR, EGLint, EGLTimeKHR) -> EGLint { SetError(EGL_BAD_PARAMETER); return EGL_FALSE; },
+    [](EGLDisplay, EGLSyncKHR, EGLint) -> EGLint { SetError(EGL_BAD_PARAMETER); return EGL_FALSE; },
+    [](EGLDisplay, EGLSyncKHR, EGLint, EGLint*) -> EGLBoolean { SetError(EGL_BAD_PARAMETER); return EGL_FALSE; },
+    [](EGLDisplay dpy, EGLint) -> const char* { return dpy == fixture::display ? "1.5" : nullptr; }
+  };
+  return &functions;
+}
+template<class Attribute> std::vector<EGLint> IntAttribs(const Attribute* attributes) {
+  std::vector<EGLint> result;
+  for (auto* at = attributes; at && at[0] != EGL_NONE; at += 2) {
+    result.push_back(static_cast<EGLint>(at[0])); result.push_back(static_cast<EGLint>(at[1]));
+  }
+  result.push_back(EGL_NONE); return result;
+}
+#define close fixture::Close
+#define dup fixture::Dup
+#define open fixture::OpenNull
+#define poll fixture::Poll
+@EGL_FENCES@
+#undef poll
+#undef open
+#undef dup
+#undef close
+}
+
+namespace fixture {
+using namespace gesher::bionic;
+void AsyncCreation() {
+  for (EGLenum type : {EGLenum(EGL_SYNC_FENCE_KHR), EGLenum(EGL_SYNC_NATIVE_FENCE_ANDROID)}) {
+    auto fence = Pending();
+    const unsigned before = exports.load();
+    std::promise<EGLSyncKHR> created; auto result = created.get_future();
+    std::thread creator([&] { created.set_value(CreateSyncKhr(display, type, nullptr)); });
+    // This is a deadlock watchdog around a deliberately unsignaled completion,
+    // not a speed threshold. Real creation has no need to wait for the gate.
+    const bool asynchronous = result.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    Check(asynchronous, "creation returns while prior queued GPU completion remains pending");
+    Check(exports.load() == before, "creation does not eagerly export/wait for a native fd");
+    if (!asynchronous) Complete(fence);  // Release the baseline negative control.
+    EGLSyncKHR sync = result.get(); creator.join();
+    Check(sync != EGL_NO_SYNC_KHR, "asynchronous creation returns a sync");
+    if (sync) {
+      EGLint condition = 0;
+      Check(GetSyncAttribKhr(display, sync, EGL_SYNC_CONDITION_KHR, &condition) == EGL_TRUE &&
+            condition == EGL_SYNC_PRIOR_COMMANDS_COMPLETE_KHR, "created sync reports prior-command condition");
+      Complete(fence);
+      Check(DestroySyncKhr(display, sync) == EGL_TRUE, "created sync destroys");
+    }
+  }
+}
+
+void WaitAndValidation() {
+  auto fence = Pending(); auto sync = CreateSyncKhr(display, EGL_SYNC_FENCE_KHR, nullptr);
+  Check(sync != nullptr, "wait fixture creates sync");
+  EGLint value = 0;
+  Check(GetSyncAttribKhr(display, sync, EGL_SYNC_STATUS_KHR, &value) == EGL_TRUE &&
+        value == EGL_UNSIGNALED_KHR, "queued sync starts unsignaled");
+  Check(ClientWaitSyncKhr(display, sync, 0, 0) == EGL_TIMEOUT_EXPIRED_KHR, "zero client wait observes pending state");
+  const unsigned initial_flushes = flushes.load();
+  Check(ClientWaitSyncKhr(display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0) == EGL_TIMEOUT_EXPIRED_KHR &&
+        flushes.load() == initial_flushes + 1, "pending client wait flushes calling current context");
+  current = EGL_NO_CONTEXT;
+  Check(ClientWaitSyncKhr(display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0) == EGL_TIMEOUT_EXPIRED_KHR &&
+        flushes.load() == initial_flushes + 1, "client flush ignored without current context");
+  Check(WaitSyncKhr(display, sync, 0) == EGL_FALSE && error == EGL_BAD_MATCH, "server wait rejects absent context");
+  current = reinterpret_cast<void*>(2);
+  Check(WaitSyncKhr(display, sync, 0) == EGL_TRUE, "ordered local server wait succeeds while completion pending");
+  Check(ClientWaitSyncKhr(display, sync, 2, 0) == EGL_FALSE && error == EGL_BAD_PARAMETER,
+        "client wait rejects unknown flags");
+  Check(WaitSyncKhr(display, sync, 1) == EGL_FALSE && error == EGL_BAD_PARAMETER,
+        "server wait rejects nonzero flags");
+  value = 0x12345;
+  Check(GetSyncAttribKhr(display, sync, 0x4321, &value) == EGL_FALSE && error == EGL_BAD_ATTRIBUTE &&
+        value == 0x12345, "invalid query leaves output untouched");
+  Check(GetSyncAttribKhr(display, sync, EGL_SYNC_STATUS_KHR, nullptr) == EGL_FALSE && error == EGL_BAD_PARAMETER,
+        "null query output rejected");
+  Check(SignalSyncKhr(display, sync, EGL_SIGNALED_KHR) == EGL_FALSE && error == EGL_BAD_MATCH,
+        "fence cannot be manually signaled");
+  Check(DestroySyncKhr(reinterpret_cast<void*>(3), sync) == EGL_FALSE && error == EGL_BAD_DISPLAY,
+        "wrong-display destruction rejects without retiring sync");
+  Complete(fence);
+  const unsigned completed_flushes = flushes.load();
+  Check(ClientWaitSyncKhr(display, sync, EGL_SYNC_FLUSH_COMMANDS_BIT_KHR, 0) == EGL_CONDITION_SATISFIED_KHR &&
+        flushes.load() == completed_flushes, "completed wait requires no flush");
+  Check(DupNativeFenceFd(display, sync) == -1 && error == EGL_BAD_PARAMETER, "KHR fence is not a native fd source");
+  Check(DestroySyncKhr(display, sync) == EGL_TRUE, "wait fixture retires sync");
+}
+
+void ImportOwnership() {
+  auto fence = Pending(); Complete(fence);
+  int fd = gesher::ExportNativeFence(fence);
+  const EGLint import[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fd, EGL_NONE};
+  auto sync = CreateSyncKhr(display, EGL_SYNC_NATIVE_FENCE_ANDROID, import);
+  Check(sync != nullptr && Open(fd), "successful import owns live fd");
+  EGLint condition = 0;
+  Check(GetSyncAttribKhr(display, sync, EGL_SYNC_CONDITION_KHR, &condition) == EGL_TRUE &&
+        condition == EGL_SYNC_NATIVE_FENCE_SIGNALED_ANDROID, "imported sync reports native condition");
+  int duplicate = DupNativeFenceFd(display, sync);
+  Check(duplicate >= 0 && duplicate != fd && Open(duplicate), "imported native sync duplicates descriptor");
+  Check(DestroySyncKhr(display, sync) == EGL_TRUE && !Open(fd) && Open(duplicate),
+        "destroy closes only owned imported descriptor");
+  Close(duplicate);
+  for (unsigned mode = 0; mode != 5; ++mode) {
+    fd = mode == 3 ? NewDescriptor(nullptr) : gesher::ExportNativeFence(fence);
+    const EGLint attrs[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fd, EGL_NONE};
+    const EGLint bad_attrs[] = {0x9999, 1, EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fd, EGL_NONE};
+    if (mode == 1) current = EGL_NO_CONTEXT;
+    if (mode == 4) fail_nothrow.store(true);
+    EGLDisplay dpy = mode == 2 ? reinterpret_cast<void*>(3) : display;
+    auto invalid = CreateSyncKhr(dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, mode == 0 ? bad_attrs : attrs);
+    const EGLint expected = mode == 1 ? EGL_BAD_MATCH : mode == 2 ? EGL_BAD_DISPLAY
+                          : mode == 4 ? EGL_BAD_ALLOC : EGL_BAD_ATTRIBUTE;
+    Check(invalid == nullptr && error == expected, "invalid import keeps exact error");
+    Check(!Open(fd), "failed import consumes supplied fd ownership");
+    current = reinterpret_cast<void*>(2);
+  }
+  fd = gesher::ExportNativeFence(fence);
+  const EGLAttrib wide[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, (EGLAttrib{1} << 32) + fd, EGL_NONE};
+  Check(CreateSync(display, EGL_SYNC_NATIVE_FENCE_ANDROID, wide) == nullptr && error == EGL_BAD_ATTRIBUTE && Open(fd),
+        "wide invalid fd cannot truncate to and close unrelated descriptor");
+  Close(fd);
+  fail_create.store(true);
+  Check(CreateSyncKhr(display, EGL_SYNC_FENCE_KHR, nullptr) == nullptr && error == EGL_BAD_ALLOC,
+        "GPU completion allocation failure remains EGL error");
+}
+
+void FailureAndCoreAbi() {
+  auto fence = Pending();
+  const EGLAttrib attributes[] = {EGL_NONE};
+  auto sync = CreateSync(display, EGL_SYNC_NATIVE_FENCE_ANDROID, attributes);
+  Check(sync != nullptr, "core EGL ABI creates the same native fence type");
+  EGLAttrib value = -1;
+  Check(GetSyncAttrib(display, sync, EGL_SYNC_TYPE_KHR, &value) == EGL_TRUE &&
+        value == EGL_SYNC_NATIVE_FENCE_ANDROID, "core query writes full-width native type");
+  Check(ClientWaitSync(display, sync, 0, 0) == EGL_TIMEOUT_EXPIRED_KHR,
+        "core zero-timeout wait observes pending completion");
+  Check(WaitSync(display, sync, 0) == EGL_TRUE, "core server wait preserves local ordering boundary");
+  Complete(fence);
+  fail_export.store(true);
+  Check(DupNativeFenceFd(display, sync) == -1 && error == EGL_BAD_ALLOC,
+        "native export allocation failure reports EGL_BAD_ALLOC");
+  int fd = DupNativeFenceFd(display, sync);
+  Check(fd >= 0, "export failure does not consume the sync");
+  const EGLint imported_attributes[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fd, EGL_NONE};
+  auto imported = CreateSyncKhr(display, EGL_SYNC_NATIVE_FENCE_ANDROID, imported_attributes);
+  fail_dup.store(true);
+  Check(DupNativeFenceFd(display, imported) == -1 && error == EGL_BAD_ALLOC && Open(fd),
+        "duplicate failure preserves the imported descriptor");
+  Check(DestroySyncKhr(display, imported) == EGL_TRUE && !Open(fd),
+        "failed duplication leaves one owned descriptor to retire");
+  Check(DestroySync(display, sync) == EGL_TRUE, "core destruction retires a native sync");
+
+  fence = Pending();
+  sync = CreateSync(display, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
+  Complete(fence, gesher::FenceStatus::kFailed);
+  value = 0x12345;
+  Check(GetSyncAttrib(display, sync, EGL_SYNC_STATUS_KHR, &value) == EGL_FALSE &&
+        error == EGL_CONTEXT_LOST && value == 0x12345,
+        "failed completion reports context loss without a fabricated status");
+  Check(ClientWaitSync(display, sync, 0, EGL_FOREVER_KHR) == EGL_FALSE && error == EGL_CONTEXT_LOST,
+        "failed completion ends an infinite client wait with context loss");
+  Check(WaitSync(display, sync, 0) == EGL_FALSE && error == EGL_CONTEXT_LOST,
+        "failed completion cannot satisfy a server wait");
+  Check(DupNativeFenceFd(display, sync) == -1 && error == EGL_CONTEXT_LOST,
+        "failed completion cannot produce a signaled descriptor");
+  Check(DestroySync(display, sync) == EGL_TRUE, "failed sync still releases its ownership");
+
+  fence = Pending();
+  const EGLint invalid_fd[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, -2, EGL_NONE};
+  Check(CreateSyncKhr(display, EGL_SYNC_NATIVE_FENCE_ANDROID, invalid_fd) == nullptr && error == EGL_BAD_ATTRIBUTE,
+        "negative fd other than native-fence sentinel is rejected");
+  current_display = reinterpret_cast<void*>(3);
+  Check(CreateSyncKhr(display, EGL_SYNC_FENCE_KHR, nullptr) == nullptr && error == EGL_BAD_MATCH,
+        "creation requires the context to be current on the requested display");
+  current_display = display;
+  gpu_available = false;
+  Check(CreateSyncKhr(display, EGL_SYNC_FENCE_KHR, nullptr) == nullptr && error == EGL_BAD_MATCH,
+        "missing ANGLE function table rejects creation without dereferencing it");
+  gpu_available = true;
+  fail_nothrow.store(true);
+  Check(CreateSyncKhr(display, EGL_SYNC_FENCE_KHR, nullptr) == nullptr && error == EGL_BAD_ALLOC,
+        "sync object allocation failure returns an EGL error");
+  Complete(fence);
+}
+
+void ConcurrentLifetime() {
+  auto fence = Pending(); auto sync = CreateSyncKhr(display, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
+  const unsigned before = exports.load();
+  std::promise<int> exported; auto exported_result = exported.get_future();
+  std::thread exporter([&] { exported.set_value(DupNativeFenceFd(display, sync)); });
+  Check(Eventually([&] { return exports.load() > before; }), "native export reaches real completion boundary");
+  Check(exported_result.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready,
+        "native descriptor is not exposed before completion");
+  std::promise<bool> observed; auto observed_result = observed.get_future();
+  std::thread observer([&] {
+    EGLint status = 0;
+    observed.set_value(GetSyncAttribKhr(display, sync, EGL_SYNC_STATUS_KHR, &status) == EGL_TRUE &&
+                       status == EGL_UNSIGNALED_KHR && DestroySyncKhr(display, sync) == EGL_TRUE);
+  });
+  const bool independent = observed_result.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  Check(independent, "export waits without sync-registry lock and destruction progresses");
+  Complete(fence);
+  Check(observed_result.get(), "concurrent query and destroy preserve pending state");
+  observer.join();
+  int fd = exported_result.get(); exporter.join();
+  Check(fd >= 0 && Open(fd), "in-flight export survives concurrent sync destruction");
+  Close(fd);
+
+  fence = Pending(); sync = CreateSyncKhr(display, EGL_SYNC_FENCE_KHR, nullptr);
+  const unsigned waiting_before = waits.load();
+  std::promise<EGLint> waited; auto waited_result = waited.get_future();
+  std::thread waiter([&] { waited.set_value(ClientWaitSyncKhr(display, sync, 0, EGL_FOREVER_KHR)); });
+  Check(Eventually([&] { return waits.load() > waiting_before; }), "client wait enters completion boundary");
+  Check(DestroySyncKhr(display, sync) == EGL_TRUE, "destroy retires handle during outstanding client wait");
+  Complete(fence);
+  Check(waited_result.get() == EGL_CONDITION_SATISFIED_KHR, "retired sync remains alive until client wait completes");
+  waiter.join();
+}
+}
+
+int main(int argc, char** argv) {
+  fixture::AsyncCreation();
+  if (!(argc > 1 && std::strcmp(argv[1], "async") == 0)) {
+    fixture::WaitAndValidation();
+    fixture::ImportOwnership();
+    fixture::FailureAndCoreAbi();
+    fixture::ConcurrentLifetime();
+  }
+  fixture::Check(fixture::descriptors.empty(), "all owned descriptors retired");
+  std::printf("EGL fence host contracts: %u checks, %u failures\n",
+              fixture::checks.load(), fixture::failures.load());
+  return fixture::failures ? 1 : 0;
+}

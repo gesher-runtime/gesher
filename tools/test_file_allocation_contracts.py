@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
+CASES = ("advice", "contents", "errors", "overflow", "faults", "reuse")
 
 
 def main():
@@ -21,6 +22,7 @@ def main():
     parser.add_argument("--source", type=Path, default=ROOT / "compat/posix/src/system.cc")
     parser.add_argument("--cxx", default=os.environ.get("CXX", "c++"))
     parser.add_argument("--sanitize", action="store_true")
+    parser.add_argument("--case", choices=CASES, help="Run one contract, including against --source")
     args = parser.parse_args()
     source = args.source.read_text(encoding="utf-8")
     first, last = "int posix_fadvise(", "// --- uio "
@@ -46,7 +48,7 @@ def main():
         if args.sanitize:
             env["UBSAN_OPTIONS"] = "halt_on_error=1:" + env.get("UBSAN_OPTIONS", "")
         failures = []
-        for case in ("advice", "contents", "errors", "overflow", "faults"):
+        for case in (args.case,) if args.case else CASES:
             result = subprocess.run([str(executable), case], cwd=folder, env=env,
                                     capture_output=True, text=True, timeout=30)
             print(result.stdout, end="", flush=True)

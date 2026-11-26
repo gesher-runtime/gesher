@@ -22,7 +22,7 @@ def main() -> None:
         parser.add_argument("--" + option, required=True, type=Path)
     parser.add_argument("--source-ref")
     parser.add_argument("--cc", help="Host C compiler (llvm-mingw on Windows)")
-    parser.add_argument("--case", default="all", choices=["all", "basic", "identity", "timeouts", "teardown", "subscriptions", "pending", "pending-cancel", "freshness"])
+    parser.add_argument("--case", default="all", choices=["all", "basic", "identity", "timeouts", "teardown", "subscriptions", "pending", "pending-cancel", "freshness", "cost"])
     args = parser.parse_args()
     cc = args.cc or shutil.which("cc")
     if not cc:
@@ -48,7 +48,7 @@ def main() -> None:
                                                  cwd=ROOT, capture_output=True, check=True).stdout)
             sources.append(str(source))
         subprocess.run([str(args.java_home / "bin/javac"), "-J-XX:-UsePerfData", "-encoding", "UTF-8", "-cp", classpath,
-                        "-d", str(classes), *sources,
+                        "-sourcepath", str(ROOT / "tests/dex-services"), "-d", str(classes), *sources,
                         str(ROOT / "tests/connectivity-callback/ConnectivityCallbackHost.java"),
                         str(ROOT / "tests/connectivity-callback/ConnectivityServiceSnapshotHost.java"),
                         str(ROOT / "tests/dex-services/gesher/services/ConnectivityCallbackContractTest.java")], check=True)

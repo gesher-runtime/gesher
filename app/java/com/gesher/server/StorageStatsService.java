@@ -20,6 +20,10 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * {@code storagestats}: StorageStatsManager (the storage screens of file managers and
@@ -29,29 +33,80 @@ import java.util.Objects;
  * <p>There is one volume, the private data volume (its emulated shared view is
  * {@code media/0} on the same Windows drive), and one user. Sizes are measured on the host
  * files: an app's code directory, both private storage areas with their caches, and its directories
- * under {@code media/0/Android}. Walks stop after {@link #MAX_ENTRIES} entries, so a huge
- * tree answers an underestimate instead of blocking the caller. Quotas and reserved space
+ * under {@code media/0/Android}. Overlapping identical requests share a scan; distinct
+ * scans have bounded concurrency. Incomplete walks report an I/O error instead of a
+ * successful underestimate. Quotas and reserved space
  * are not supported, as on a device without ext4 quotas.
  *
  * <p>As on Android, an app may ask about itself; anything else (other apps, the user's
- * totals, the volume's cache) needs PACKAGE_USAGE_STATS. That is an app-op permission the
- * user grants in Settings' "Usage access"; Gesher has no such screen and its usage stats
- * are open, so an app that declares the permission in its manifest has it. An app that
- * does not cannot list or size other apps.
+ * totals, the volume's cache) needs usage access: OP_GET_USAGE_STATS, which the user allows
+ * with the Control Center's "Usage access" switch, as in Settings (MODE_DEFAULT falls back
+ * to holding PACKAGE_USAGE_STATS). Declaring the permission alone does not give access.
  */
 final class StorageStatsService extends IStorageStatsManager.Default {
     static final int MAX_ENTRIES = 200_000;
 
     private final PackageManagerService mPm;
     private final File mData;
+    private final CallerCode mCallers;
+    private final StorageStatsScans mScans = new StorageStatsScans();
+
+    /** Capture both installed-object identity and paths before a query can wait. */
+    private static final class PackageScan {
+        final ApkPackage owner;
+        final String name;
+        final String apk;
+        final String ce;
+        final String de;
+        final int uid;
+
+        PackageScan(ApkPackage p) {
+            owner = p;
+            name = p.packageName;
+            apk = p.apkPath;
+            ce = p.credentialProtectedDataDir();
+            de = p.deviceProtectedDataDir();
+            uid = p.uid();
+        }
+
+        @Override public boolean equals(Object value) {
+            if (!(value instanceof PackageScan)) return false;
+            PackageScan p = (PackageScan) value;
+            return owner == p.owner && uid == p.uid && Objects.equals(apk, p.apk)
+                    && Objects.equals(ce, p.ce) && Objects.equals(de, p.de);
+        }
+
+        @Override public int hashCode() {
+            return Objects.hash(System.identityHashCode(owner), uid, apk, ce, de);
+        }
+    }
 
     StorageStatsService(PackageManagerService pm) {
         this(pm, android.os.Environment.getDataDirectory());
     }
 
+    StorageStatsService(PackageManagerService pm, CallerCode callers) {
+        this(pm, android.os.Environment.getDataDirectory(), callers);
+    }
+
+    /** Without caller authentication: only system, shell and own-UID queries are answered. */
     StorageStatsService(PackageManagerService pm, File dataDirectory) {
+        this(pm, dataDirectory, (pid, uid) -> null);
+    }
+
+    StorageStatsService(PackageManagerService pm, File dataDirectory, CallerCode callers) {
         mPm = Objects.requireNonNull(pm);
         mData = Objects.requireNonNull(dataDirectory);
+        mCallers = Objects.requireNonNull(callers);
+    }
+
+    /**
+     * The installed code of the live process behind a Binder PID and UID, while that code is
+     * still the package's current installation (ActivityTaskManagerService's authenticated
+     * process record); null for an unattached, dead or retired-installation process.
+     */
+    interface CallerCode {
+        ApkPackage current(int pid, int uid);
     }
 
     private static void volume(String volumeUuid) {
@@ -67,36 +122,68 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         if (userId != 0) throw new IllegalArgumentException("Unknown user " + userId);
     }
 
-    /** The caller is the system, or an app that declares PACKAGE_USAGE_STATS. */
-    private boolean callerHasUsageAccess() {
+    /**
+     * The caller is the system, or has usage access as AOSP's StorageStatsService
+     * (checkStatsPermission) decides it: the calling package must be the caller's, then
+     * OP_GET_USAGE_STATS MODE_ALLOWED allows, MODE_DEFAULT falls back to PACKAGE_USAGE_STATS
+     * and any other mode denies. The user decides the op with the Control Center's Usage
+     * access switch (SpecialAccess); declaring the permission alone is not access.
+     *
+     * <p>Package UIDs survive replacement and reinstallation, so the decision is bound to the
+     * caller's live process and the installation it runs: a process left from an earlier
+     * installation never uses a grant made to its replacement. The re-check after a scan
+     * repeats this, so a replacement during the scan withholds the result.
+     *
+     * @param note whether this check records the access (the first check of a call does; the
+     *     re-check after a scan only reads the current mode)
+     */
+    private boolean callerHasUsageAccess(String callingPackage, boolean note) {
+        int pid = android.os.Binder.getCallingPid();
         int uid = android.os.Binder.getCallingUid();
         // The shell holds PACKAGE_USAGE_STATS on Android (host commands run as it here).
+        // A standalone app hosts these services in its own process. Sharing the
+        // service's UID never grants that application access to other apps' data.
         if (uid == android.os.Process.SYSTEM_UID || uid == android.os.Process.ROOT_UID
-                || uid == android.os.Process.SHELL_UID || uid == android.os.Process.myUid()) {
+                || uid == android.os.Process.SHELL_UID) {
             return true;
         }
-        String[] packages = mPm.getPackagesForUid(uid);
-        if (packages == null) return false;
-        for (String name : packages) {
-            ApkPackage p = mPm.get(name);
-            if (p != null && p.parsed.getRequestedPermissions()
-                    .contains(android.Manifest.permission.PACKAGE_USAGE_STATS)) {
-                return true;
-            }
+        // The calling package may be the process's own installation or a current shared-UID peer.
+        ApkPackage code = mCallers.current(pid, uid);
+        ApkPackage caller = callingPackage == null ? null : mPm.get(callingPackage);
+        if (code == null || caller == null || caller.uid() != uid || code.uid() != uid
+                || mPm.isRemovalPending(callingPackage)) {
+            throw new SecurityException("Package " + callingPackage + " does not belong to " + uid);
         }
-        return false;
+        int mode = note
+                ? mPm.appOps().noteOperation(android.app.AppOpsManager.OP_GET_USAGE_STATS, uid,
+                        callingPackage, null, false, null, false).getOpMode()
+                : mPm.appOps().checkRawMode(android.app.AppOpsManager.OP_GET_USAGE_STATS, uid,
+                        callingPackage);
+        boolean allowed = mode == android.app.AppOpsManager.MODE_ALLOWED
+                || mode == android.app.AppOpsManager.MODE_DEFAULT
+                        && mPm.permissions().checkUidPermission(uid,
+                                android.Manifest.permission.PACKAGE_USAGE_STATS, 0)
+                                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        // A grant can only follow the installation it was made to. If both installations are
+        // unchanged after the decision was read, it was not the replacement's.
+        if (mCallers.current(pid, uid) != code || mPm.get(callingPackage) != caller
+                || mPm.isRemovalPending(callingPackage)) {
+            throw new SecurityException("Package " + callingPackage
+                    + " was replaced while its usage access was checked");
+        }
+        return allowed;
     }
 
-    private void enforceUsageAccess() {
-        if (!callerHasUsageAccess()) {
+    private void enforceUsageAccess(String callingPackage, boolean note) {
+        if (!callerHasUsageAccess(callingPackage, note)) {
             throw new SecurityException("uid " + android.os.Binder.getCallingUid()
                     + " does not have " + android.Manifest.permission.PACKAGE_USAGE_STATS);
         }
     }
 
     /** Its own uid, or usage access (as StorageStatsService.enforceStatsPermission). */
-    private void enforceUidOrUsageAccess(int uid) {
-        if (android.os.Binder.getCallingUid() != uid) enforceUsageAccess();
+    private void enforceUidOrUsageAccess(int uid, String callingPackage, boolean note) {
+        if (android.os.Binder.getCallingUid() != uid) enforceUsageAccess(callingPackage, note);
     }
 
     @Override
@@ -124,17 +211,22 @@ final class StorageStatsService extends IStorageStatsManager.Default {
     @Override
     public long getCacheBytes(String volumeUuid, String callingPackage) {
         volume(volumeUuid);
-        enforceUsageAccess();
-        int[] budget = {MAX_ENTRIES};
-        long total = 0;
-        for (ApkPackage p : mPm.packages()) total += cacheBytes(p, budget);
-        return total;
+        enforceUsageAccess(callingPackage, true);
+        List<PackageScan> packages = packages(null);
+        long[] result = scan(0, packages, () -> {
+            int[] budget = {MAX_ENTRIES};
+            long total = 0;
+            for (PackageScan p : packages) total += cacheBytes(p, budget);
+            return new long[] {total};
+        });
+        enforceUsageAccess(callingPackage, false);
+        return result[0];
     }
 
     @Override
     public long getCacheQuotaBytes(String volumeUuid, int uid, String callingPackage) {
         volume(volumeUuid);
-        enforceUidOrUsageAccess(uid);
+        enforceUidOrUsageAccess(uid, callingPackage, true);
         // No quota daemon: the share of free space Android's default policy allows one app.
         return Math.max(0, mData.getUsableSpace() / 10);
     }
@@ -146,39 +238,39 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         user(userId);
         ApkPackage p = packageName == null ? null : mPm.get(packageName);
         // Checked before the lookup answers, so an app without usage access cannot probe names.
-        if (p == null || p.uid() != android.os.Binder.getCallingUid()) enforceUsageAccess();
+        if (p == null || p.uid() != android.os.Binder.getCallingUid()) {
+            enforceUsageAccess(callingPackage, true);
+        }
         if (p == null || mPm.isRemovalPending(packageName)) {
             throw new android.os.ParcelableException(
                     new android.content.pm.PackageManager.NameNotFoundException(packageName));
         }
-        StorageStats stats = new StorageStats();
-        add(stats, p, new int[] {MAX_ENTRIES});
-        return stats;
+        List<PackageScan> packages = Collections.singletonList(new PackageScan(p));
+        long[] result = scan(1, packages, () -> totals(packages));
+        // Permission decisions belong to each caller, never to the shared result.
+        enforceUidOrUsageAccess(packages.get(0).uid, callingPackage, false);
+        return stats(result);
     }
 
     @Override
     public StorageStats queryStatsForUid(String volumeUuid, int uid, String callingPackage) {
         volume(volumeUuid);
-        enforceUidOrUsageAccess(uid);
-        StorageStats stats = new StorageStats();
-        int[] budget = {MAX_ENTRIES};
-        for (ApkPackage p : mPm.packages()) {
-            if (p.uid() == uid && !mPm.isRemovalPending(p.packageName)) add(stats, p, budget);
-        }
-        return stats;
+        enforceUidOrUsageAccess(uid, callingPackage, true);
+        List<PackageScan> packages = packages(uid);
+        long[] result = scan(2, packages, () -> totals(packages));
+        enforceUidOrUsageAccess(uid, callingPackage, false);
+        return stats(result);
     }
 
     @Override
     public StorageStats queryStatsForUser(String volumeUuid, int userId, String callingPackage) {
         volume(volumeUuid);
         user(userId);
-        enforceUsageAccess();
-        StorageStats stats = new StorageStats();
-        int[] budget = {MAX_ENTRIES};
-        for (ApkPackage p : mPm.packages()) {
-            if (!mPm.isRemovalPending(p.packageName)) add(stats, p, budget);
-        }
-        return stats;
+        enforceUsageAccess(callingPackage, true);
+        List<PackageScan> packages = packages(null);
+        long[] result = scan(3, packages, () -> totals(packages));
+        enforceUsageAccess(callingPackage, false);
+        return stats(result);
     }
 
     @Override
@@ -186,15 +278,27 @@ final class StorageStatsService extends IStorageStatsManager.Default {
             String callingPackage) {
         volume(volumeUuid);
         user(userId);
-        enforceUsageAccess();
-        File shared = new File(mData, "media/0");
+        enforceUsageAccess(callingPackage, true);
+        long[] result = scan(4, Collections.emptyList(), () -> externalTotals());
+        enforceUsageAccess(callingPackage, false);
         ExternalStorageStats stats = new ExternalStorageStats();
-        long[] byKind = new long[5];  // total, audio, video, image, app (Android/data|media|obb)
+        stats.totalBytes = result[0];
+        stats.audioBytes = result[1];
+        stats.videoBytes = result[2];
+        stats.imageBytes = result[3];
+        stats.appBytes = result[4];
+        stats.obbBytes = result[5];
+        return stats;
+    }
+
+    private long[] externalTotals() throws IOException {
+        File shared = new File(mData, "media/0");
+        long[] byKind = new long[6];  // total, audio, video, image, app, obb
         walk(shared, new int[] {MAX_ENTRIES}, (path, size) -> {
             byKind[0] += size;
             String rel = shared.toPath().relativize(path).toString().replace('\\', '/');
             if (rel.startsWith("Android/obb/")) {
-                stats.obbBytes += size;
+                byKind[5] += size;
                 byKind[4] += size;
                 return;
             }
@@ -209,12 +313,7 @@ final class StorageStatsService extends IStorageStatsManager.Default {
                 default: break;
             }
         });
-        stats.totalBytes = byKind[0];
-        stats.audioBytes = byKind[1];
-        stats.videoBytes = byKind[2];
-        stats.imageBytes = byKind[3];
-        stats.appBytes = byKind[4];
-        return stats;
+        return byKind;
     }
 
     @Override
@@ -253,36 +352,97 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         }
     }
 
-    private void add(StorageStats stats, ApkPackage p, int[] budget) {
+    private List<PackageScan> packages(Integer uid) {
+        List<PackageScan> result = new ArrayList<>();
+        for (ApkPackage p : mPm.packages()) {
+            if ((uid == null || p.uid() == uid) && !mPm.isRemovalPending(p.packageName)) {
+                result.add(new PackageScan(p));
+            }
+        }
+        return result;
+    }
+
+    private void validate(List<PackageScan> packages) throws IOException {
+        for (PackageScan p : packages) {
+            if (mPm.get(p.name) != p.owner || mPm.isRemovalPending(p.name)
+                    || !p.equals(new PackageScan(p.owner))) {
+                throw new IOException("Package changed during storage query: " + p.name);
+            }
+        }
+    }
+
+    private long[] scan(int kind, List<PackageScan> packages, StorageStatsScans.Work work) {
+        try {
+            long[] result = mScans.execute(Arrays.asList(kind, packages), () -> {
+                validate(packages);
+                long[] measured = work.run();
+                validate(packages);
+                return measured;
+            });
+            // A joined reader may resume after an install/uninstall completed.
+            validate(packages);
+            return result;
+        } catch (IOException failure) {
+            // StorageStatsManager unwraps this checked I/O failure across Binder.
+            throw new android.os.ParcelableException(failure);
+        }
+    }
+
+    private long[] totals(List<PackageScan> packages) throws IOException {
+        long[] result = new long[5];
+        int[] budget = {MAX_ENTRIES};
+        for (PackageScan p : packages) add(result, p, budget);
+        return result;
+    }
+
+    private static StorageStats stats(long[] result) {
+        // Never expose the shared scan's result as a mutable Binder value object.
+        StorageStats stats = new StorageStats();
+        stats.codeBytes = result[0];
+        stats.apkBytes = result[1];
+        stats.dataBytes = result[2];
+        stats.cacheBytes = result[3];
+        stats.externalCacheBytes = result[4];
+        return stats;
+    }
+
+    private void add(long[] stats, PackageScan p, int[] budget) throws IOException {
         long code = codeBytes(p, budget);
         long cache = cacheBytes(p, budget);
-        File external = new File(mData, "media/0/Android/data/" + p.packageName);
+        File external = new File(mData, "media/0/Android/data/" + p.name);
         long externalCache = size(new File(external, "cache"), budget);
         // Android's dataBytes includes the cache directories and the app's external dirs.
-        long data = size(directory(p.credentialProtectedDataDir()), budget)
-                + size(directory(p.deviceProtectedDataDir()), budget)
+        long data = size(directory(p.ce), budget)
+                + size(directory(p.de), budget)
                 + size(external, budget)
-                + size(new File(mData, "media/0/Android/media/" + p.packageName), budget);
-        stats.codeBytes += code;
-        stats.apkBytes += p.apkPath != null ? new File(p.apkPath).length() : 0;
-        stats.dataBytes += data;
-        stats.cacheBytes += cache + externalCache;
-        stats.externalCacheBytes += externalCache;
+                + size(new File(mData, "media/0/Android/media/" + p.name), budget);
+        stats[0] += code;
+        stats[1] += p.apk != null ? fileBytes(new File(p.apk)) : 0;
+        stats[2] += data;
+        stats[3] += cache + externalCache;
+        stats[4] += externalCache;
     }
 
     /** The installed code directory (data/app/<package>-N: APKs, native libraries, oat). */
-    private long codeBytes(ApkPackage p, int[] budget) {
-        if (p.apkPath == null) return 0;
-        File apk = new File(p.apkPath);
+    private long codeBytes(PackageScan p, int[] budget) throws IOException {
+        if (p.apk == null) return 0;
+        File apk = new File(p.apk);
         File dir = apk.getParentFile();
         File apps = new File(mData, "app");
         if (dir != null && apps.equals(dir.getParentFile())) return size(dir, budget);
-        return apk.length();
+        return fileBytes(apk);
     }
 
-    private long cacheBytes(ApkPackage p, int[] budget) {
+    private static long fileBytes(File file) throws IOException {
+        StorageStatsScans.checkInterrupted();
+        BasicFileAttributes a = Files.readAttributes(file.toPath(), BasicFileAttributes.class,
+                LinkOption.NOFOLLOW_LINKS);
+        return a.isRegularFile() ? a.size() : 0;
+    }
+
+    private long cacheBytes(PackageScan p, int[] budget) throws IOException {
         long total = 0;
-        for (String path : new String[] {p.credentialProtectedDataDir(), p.deviceProtectedDataDir()}) {
+        for (String path : new String[] {p.ce, p.de}) {
             if (path == null) continue;
             File data = new File(path);
             total += size(new File(data, "cache"), budget) + size(new File(data, "code_cache"), budget);
@@ -296,44 +456,57 @@ final class StorageStatsService extends IStorageStatsManager.Default {
         void file(Path path, long size);
     }
 
-    static long size(File root, int[] budget) {
+    static long size(File root, int[] budget) throws IOException {
         long[] total = {0};
         walk(root, budget, (path, size) -> total[0] += size);
         return total[0];
     }
 
     /**
-     * Every regular file under root, not following links, while the query's budget of
-     * entries lasts: one budget for all the walks of a query, so a huge tree does not hold
-     * a binder thread.
+     * Every regular file under root without following links. One entry budget covers
+     * the whole query, so a huge tree does not hold a Binder thread. Like installd's
+     * best-effort tree sizing, an entry that vanishes or cannot be read counts as
+     * zero bytes and does not fail the query; a missing optional root is empty.
      */
-    private static void walk(File root, int[] budget, Visitor visitor) {
-        if (root == null || budget[0] <= 0 || !root.exists()) return;
+    private static void walk(File root, int[] budget, Visitor visitor) throws IOException {
+        StorageStatsScans.checkInterrupted();
+        if (root == null || budget[0] <= 0) return;
         int[] entries = budget;
-        try {
-            Files.walkFileTree(root.toPath(), java.util.Collections.emptySet(), 64,
+        Files.walkFileTree(root.toPath(), Collections.emptySet(), 64,
                     new SimpleFileVisitor<Path>() {
-                        @Override
-                        public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes a) {
+                        private FileVisitResult next() throws IOException {
+                            StorageStatsScans.checkInterrupted();
                             return --entries[0] <= 0 ? FileVisitResult.TERMINATE
                                     : FileVisitResult.CONTINUE;
                         }
 
                         @Override
-                        public FileVisitResult visitFile(Path file, BasicFileAttributes a) {
+                        public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes a)
+                                throws IOException {
+                            return next();
+                        }
+
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes a)
+                                throws IOException {
+                            // At maxDepth, walkFileTree visits a directory as a file.
                             if (a.isRegularFile()) visitor.file(file, a.size());
-                            return --entries[0] <= 0 ? FileVisitResult.TERMINATE
-                                    : FileVisitResult.CONTINUE;
+                            return next();
                         }
 
                         @Override
-                        public FileVisitResult visitFileFailed(Path file, IOException e) {
-                            return --entries[0] <= 0 ? FileVisitResult.TERMINATE
-                                    : FileVisitResult.CONTINUE;
+                        public FileVisitResult visitFileFailed(Path file, IOException e)
+                                throws IOException {
+                            return next();
+                        }
+
+                        @Override
+                        public FileVisitResult postVisitDirectory(Path dir, IOException e)
+                                throws IOException {
+                            // A directory that fails while being listed keeps what was counted.
+                            StorageStatsScans.checkInterrupted();
+                            return FileVisitResult.CONTINUE;
                         }
                     });
-        } catch (IOException | RuntimeException e) {
-            // What was counted so far: a partial size, never a failure of the caller's query.
-        }
     }
 }

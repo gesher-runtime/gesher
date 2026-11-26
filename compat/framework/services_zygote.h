@@ -19,7 +19,46 @@ namespace zygote {
 // console or job the starter belongs to. Returns the pid, or -(Win32 error).
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
-          bool breakaway);
+          bool breakaway, uint32_t compiler_memory_mib = 0, uint32_t compiler_cpu_rate = 0);
+
+// Compiler-only wait. Pins the retained creation identity, waits without g_lock,
+// and reaps before returning. -2 deadline, -3 cancellation/low memory, -1 failure.
+int WaitChild(int pid, int64_t start_time, int timeout_ms, intptr_t cancel_event,
+              bool stop_on_low_memory);
+uint64_t AvailableMemory();
+
+// An app process's AppContainer (app_container.h, GESHER_SANDBOX=appcontainer):
+// the profile name (1..64 of [A-Za-z0-9.-]), its display name and the
+// capability names ("internetClient", "gesherRuntimeFiles", ...) its token has.
+struct AppContainerSpec {
+  std::u16string name;
+  std::u16string display_name;
+  std::vector<std::u16string> capabilities;
+};
+
+// Spawn, never breaking away, in the container `sandbox` (its profile created
+// if needed), TEMP and TMP set to the container's own folder.
+int SpawnInAppContainer(const std::u16string& command_line,
+                        const std::vector<std::u16string>& set,
+                        const std::vector<std::u16string>& unset, const std::u16string& log_path,
+                        const AppContainerSpec& sandbox);
+
+// The container's profile for this Windows user, created if it does not exist.
+uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& display_name);
+
+// Adds an allow ACE for the container `name` (or the capability) to `path`'s
+// DACL, inherited by and propagated to its children when `inherit`. 0 or a Win32 error.
+uint32_t GrantToAppContainer(const std::u16string& path, const std::u16string& name,
+                             uint32_t access, bool inherit);
+uint32_t RevokeFromAppContainer(const std::u16string& path, const std::u16string& name);
+uint32_t SetAppContainerStorageAccess(const std::u16string& path, const std::u16string& name,
+                                      uint32_t access, bool inherit);
+uint32_t ProtectPrivateStorage(const std::u16string& path);
+uint32_t GrantToCapability(const std::u16string& path, const std::u16string& capability,
+                           uint32_t access, bool inherit);
+
+// Removes the container's profile (its folder and registry key); 0 when it did not exist.
+uint32_t DeleteAppContainer(const std::u16string& name);
 
 // Re-enters this executable/command under `uid` before ART caches its identity.
 // Inherits only duplicates of the three standard handles, retains the original

@@ -45,6 +45,7 @@ inline constexpr int kMsgPeek = 2;
 inline constexpr int kMsgDontRoute = 4;
 inline constexpr int kMsgWaitAll = 8;
 inline constexpr int kMsgTrunc = 16;
+inline constexpr int kMsgCmsgCloexec = 32;
 
 // Options with an int value. Timeouts are in milliseconds.
 enum class Option {
@@ -96,6 +97,7 @@ struct SocketDescription {
   // sender's credentials (winsock.cc's UnixDatagramHeader); SO_PASSCRED delivers them.
   std::atomic<bool> unix_datagram_pair{false};
   std::atomic<bool> pass_credentials{false};  // SO_PASSCRED
+  std::atomic<bool> recv_pktinfo{false};  // IP_PKTINFO: recvmsg delivers in_pktinfo
   // A stream pair (SOCK_STREAM): SCM_RIGHTS goes through the broker's queue for
   // the connection, keyed by both loopback ports (stream_ports: local << 16 |
   // peer, 0 until first needed), at stream positions that SendOwned and
@@ -195,6 +197,21 @@ int UnixDatagramPayload(int available);
 // A stream pair end's loopback ports (SocketDescription::stream_ports, cached
 // there); false with errno if they cannot be known.
 bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint16_t* peer);
+
+// IP_PKTINFO of an IPv4 datagram: the interface it arrived on, its
+// destination address and the local address it was received at (Linux's
+// ipi_spec_dst, fib_compute_spec_dst), each 4 bytes in network order.
+struct PacketInfo {
+  bool valid = false;
+  uint32_t ifindex = 0;
+  uint8_t address[4] = {};
+  uint8_t local[4] = {};
+};
+// Asks Windows to report each received IPv4 datagram's packet information.
+int SetPacketInfo(Socket s, bool on);
+// While set on this thread, a UDP receive (Recv) stores its IPv4 datagram's
+// packet information there (a dual-stack IPv6 socket's v4-mapped ones too) (valid = false if there was none). Null: none.
+void SetReceivePacketInfo(PacketInfo* info);
 
 int GetOption(Socket s, Option option, int* value);
 int SetOption(Socket s, Option option, int value);
@@ -348,10 +365,11 @@ bool UnixRightsAvailable();
 bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t position,
                    ws::RightsToken* token);
 // The deposited descriptors as new fds here (-1 for one that could not be
-// adopted). With `fds` null, the descriptors are discarded.
-bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds);
+// adopted). With `fds` null, the descriptors are discarded. close_on_exec
+// belongs to this receive, not to the sender's descriptor or the shared OFD.
+bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec = false);
 // The groups of a stream connection's queue whose position is below `limit`.
-bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds);
+bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec = false);
 // A sender's deposit whose message was not sent: discarded, if still queued.
 void CancelRights(const ws::RightsToken& token);
 // Whether a group waits in the queue of a connection whose receiving end is

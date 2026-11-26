@@ -413,6 +413,43 @@ class Mp4Muxer : public Muxer {
     return true;
   }
 
+  bool SwitchFile(int fd, std::string* error) override {
+    if (three_gpp_ || !started_) {
+      *error = "MPEG-4: next output file requires a running MP4 writer";
+      return false;
+    }
+    // Secure the new descriptor before finalizing the old file. The recorder
+    // owns its pending duplicate until this call returns, including on error.
+    const int next = dup(fd);
+    if (next < 0) return Fail(error);
+    if (lseek(next, 0, SEEK_SET) < 0) {
+      Fail(error);
+      close(next);
+      return false;
+    }
+    if (!Stop(error)) {
+      close(next);
+      return false;
+    }
+    // Keep actual codec configuration, dimensions, track order and container
+    // metadata. Reuse each sample table's capacity; storage depends on the
+    // largest individual segment, rather than the entire recording.
+    for (Track& t : tracks_) {
+      t.sizes.clear();
+      t.offsets.clear();
+      t.times.clear();
+      t.keys.clear();
+      t.duration_runs = t.elapsed_ticks = 0;
+      t.last_duration = 0;
+      t.ended = false;
+      t.last_duration_ticks = -1;
+    }
+    ResetFileSizeStatus();
+    mdat_at_ = pos_ = 0;
+    fd_ = next;
+    return Start(error);
+  }
+
   void SetOrientationHint(int degrees) override { rotation_ = degrees; }
   void SetLocation(int latitude_e4, int longitude_e4) override {
     latitude_e4_ = latitude_e4;

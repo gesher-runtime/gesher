@@ -13,6 +13,8 @@
 #include <syslog.h>
 #include <termios.h>
 #include <unistd.h>
+#include <gesher/ptrace_state.h>
+#include <gesher/stdio.h>
 
 #include <limits>
 
@@ -137,9 +139,20 @@ int prctl(int option, ...) {
       break;
     }
     case PR_GET_DUMPABLE:
-      result = 1;
+      result = gesher::ptrace::GetDumpable();
       break;
     case PR_SET_DUMPABLE:
+    case PR_SET_PTRACER: {
+      // Both take an unsigned long, which callers here pass as 32 bits;
+      // PR_SET_PTRACER_ANY is then all ones and sign-extends to the kernel's.
+      const int value = va_arg(args, int);
+      const uint64_t wide = static_cast<uint64_t>(static_cast<int64_t>(value));
+      const int error = option == PR_SET_DUMPABLE
+                            ? gesher::ptrace::SetDumpable(static_cast<uint32_t>(value))
+                            : gesher::ptrace::SetPtracer(wide);
+      result = error == 0 ? 0 : (errno = -error, -1);
+      break;
+    }
     case PR_SET_NO_NEW_PRIVS:
       result = 0;
       break;
@@ -233,19 +246,26 @@ char* hasmntopt(const struct mntent* mnt, const char* opt) {
 // Reads up to and including `delim` into *lineptr, growing it with realloc.
 ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
   if (lineptr == nullptr || n == nullptr || stream == nullptr) return errno = EINVAL, -1;
+  gesher::stdio::StreamGuard lock(stream);
+  if (!lock) return -1;
   if (*lineptr == nullptr || *n == 0) {
+    char* initial = static_cast<char*>(realloc(*lineptr, 128));
+    if (initial == nullptr) { gesher::stdio::SetError(stream, ENOMEM); return -1; }
+    *lineptr = initial;
     *n = 128;
-    *lineptr = static_cast<char*>(realloc(*lineptr, *n));
-    if (*lineptr == nullptr) return errno = ENOMEM, -1;
   }
   size_t length = 0;
   for (;;) {
-    int c = getc(stream);
+    int c = gesher::stdio::Get(stream, true);
     if (c == EOF) break;
     if (length + 2 > *n) {  // room for c and the terminator
+      if (*n > static_cast<size_t>(std::numeric_limits<ssize_t>::max()) / 2) {
+        gesher::stdio::SetError(stream, EOVERFLOW);
+        return -1;
+      }
       size_t bigger = *n * 2;
       char* grown = static_cast<char*>(realloc(*lineptr, bigger));
-      if (grown == nullptr) return errno = ENOMEM, -1;
+      if (grown == nullptr) { gesher::stdio::SetError(stream, ENOMEM); return -1; }
       *lineptr = grown;
       *n = bigger;
     }
@@ -273,11 +293,8 @@ ssize_t sendfile(int out_fd, int in_fd, off_t* offset, size_t count) {
   }
   if (count == 0) return 0;
   auto seek_input = [in_fd](off_t position, int whence) {
-    off_t result = lseek(in_fd, position, whence);
-    // lseek is the CRT's 64-bit entry under _FILE_OFFSET_BITS=64. Do not
-    // narrow its result through the int-sized CrtResult helper.
-    if (result < 0) errno = gesher_errno_from_crt(errno);
-    return result;
+    // The descriptor adapter returns Linux errno and a full-width offset.
+    return lseek(in_fd, position, whence);
   };
   off_t position = offset != nullptr ? *offset : seek_input(0, SEEK_CUR);
   if (position < 0) {

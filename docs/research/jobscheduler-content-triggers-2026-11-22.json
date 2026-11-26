@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "date_utc": "2026-11-22",
+  "issue": "https://github.com/gesher-runtime/gesher/issues/56",
+  "scope": "F29/T12 fresh content-trigger batches; broader rows remain open",
+  "measurement_kind": "actual-production retained URI entries under unsatisfied charging; not measured bytes, CPU, RSS or general throughput",
+  "baseline_commit": "6759e71cde265d0c76fef8725d8b1ceecd246279",
+  "baseline_production_sha256": "913e733dab2111b1232ba09b4275331f561df21b1525844c5cc84971ec93ae39",
+  "candidate_source_checkpoint": "0bc2d57c46adc6eeade4bc136e5e686fd8dd81be",
+  "candidate_source_sha256": {
+    "app/java/com/gesher/server/JobSchedulerService.java": "75c9bc08a8d7f26ec54bfd1f3b413341ad2a85c546cc2c3fe6e299b79cf989ca",
+    "tests/dex-services/gesher/services/JobSchedulerConstraintContractTest.java": "8867fe5f140ba1c0c7939cce0aecff8f232b616155b19832e80470023d9e4bbd",
+    "tests/dex-services/gesher/services/JobSchedulerContentTriggerTest.java": "1d9fcfe7db101fbb62bbd92069d01ec1c1a026c17e5c005ba2b9affb560e8034",
+    "tests/scheduler/SchedulerWorkHost.java": "1561916bc72ec23cff1176295bf34631a0e0f16a0e3d77cdf861f2ef970c4a35",
+    "tools/test_connectivity_callback_contracts.py": "cc5000264d209e62a606f6b86556e56e9dc0d0ec61671cac51d4484ed8757189",
+    "tools/test_scheduler_work_contracts.py": "949982bf75f2f35347cd9b5cf3854a2067f591051b0e38bdc35200a004da4499"
+  },
+  "android_contract_tag": "android-16.0.0_r4",
+  "android_source": {
+    "ContentObserverController.java": {
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/apex/jobscheduler/service/java/com/android/server/job/controllers/ContentObserverController.java",
+      "sha256": "8e6ad7e9ff6108ff92b74b168af2a0dbf0ce2f83ab79879ec8af7c89b3f78718"
+    },
+    "JobStatus.java": {
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/apex/jobscheduler/service/java/com/android/server/job/controllers/JobStatus.java",
+      "sha256": "7c35e3ae357278f4b089cc344042380d92a91c91557c4e5070232c029ad3f6d5"
+    },
+    "JobServiceContext.java": {
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/apex/jobscheduler/service/java/com/android/server/job/JobServiceContext.java",
+      "sha256": "f01524707235c950e7b3d6d32ac25a0dc9c22fabacf1525360ef116e12d304c0"
+    }
+  },
+  "results": [
+    {
+      "source": "baseline",
+      "notifications": 100000,
+      "retained_uri_entries": 100000,
+      "changed_authorities": 1,
+      "running_jobs": 0,
+      "charging_unsatisfied": true
+    },
+    {
+      "source": "candidate",
+      "notifications": 100000,
+      "retained_uri_entries": 50,
+      "changed_authorities": 1,
+      "running_jobs": 0,
+      "charging_unsatisfied": true
+    }
+  ],
+  "retained_entry_reduction_percent": 99.95,
+  "preservation_controls": {
+    "carried_retry_union_delivered": 150,
+    "fresh_batch_cap": 50,
+    "urgent_batch_uris": 40,
+    "explicit_update_minimum_ms": 500,
+    "explicit_maximum_minimum_ms": 1000,
+    "default_update_ms": 10000,
+    "default_maximum_ms": 120000,
+    "listener_worker_timeout_ms": 3000,
+    "host_poll_interval_ms": 30000
+  },
+  "candidate_pass_counts": {
+    "content": 77,
+    "shared_constraints": 405,
+    "scheduler_work": 155,
+    "connectivity_callbacks": 80,
+    "connectivity_snapshots": 9
+  },
+  "negative_control": {
+    "exit_code": 1,
+    "required_failure": "40 URIs did not trigger urgently"
+  },
+  "local_composition": {
+    "commit": "dd965c46ddd61ecf4a22eaecc9f17e6d2930fc07",
+    "tree": "cf8805efe33181e5ec0de962b3ea31d35873a5b5",
+    "pr271_head": "a083bc97a66b7544ed2fa0719ba6241215d8f6cc",
+    "pr284_head": "6beb87479465a57cefddc24def53ef9f2f4e77cf",
+    "pass_counts": {
+      "admission": 238,
+      "content": 77,
+      "shared_constraints": 409,
+      "scheduler_work": 155,
+      "connectivity_callbacks": 80,
+      "connectivity_snapshots": 9,
+      "connectivity_demand": 74,
+      "max_native_waiters": 1
+    },
+    "app_java_dex": true,
+    "services_java_dex": true
+  },
+  "runtime": {
+    "jdk": "OpenJDK 21.0.13.1+2",
+    "real_framework_core_classes": true,
+    "app_java_dex": true,
+    "services_java_dex": true,
+    "target_binder_parcel_tests_compiled": true,
+    "target_windows_art_executed": false
+  },
+  "receipts": {
+    "baseline_work": {
+      "filename": "java-r4-content-baseline.log",
+      "sha256": "b38459e4b268b87b3357d64616d88b1730c28ce84d240ab1aa0fd2d9e9f9941c",
+      "expected_exit_code": 0
+    },
+    "baseline_contract_negative": {
+      "filename": "java-r4-content-negative.log",
+      "sha256": "f9066116fa2cf9bf50dcc11972c49fec284ebb96456f0f987d86debfb9216cb9",
+      "expected_exit_code": 1
+    },
+    "candidate_scheduler": {
+      "filename": "java-r4-scheduler-final.log",
+      "sha256": "b57509a4718c02c708a234fd4782bee6793b57094132701cd25753c857aa7cdd",
+      "expected_exit_code": 0
+    },
+    "candidate_connectivity": {
+      "filename": "java-r4-connectivity-final.log",
+      "sha256": "5a6838a9102dd387c36f4b5fd6438e24140cf2e29c4096bcb244225fa824ff5b",
+      "expected_exit_code": 0
+    },
+    "candidate_app_build": {
+      "filename": "java-r4-app-final.log",
+      "sha256": "b0edcaa87b8a14c997fdf2664c595314ed2eb7a14253c3f9c926cf249cf38551",
+      "expected_exit_code": 0
+    },
+    "candidate_services_build": {
+      "filename": "java-r4-services-final.log",
+      "sha256": "1d2f0fb253b1f19d80f3b8bc2e609d5ce841e7b8cd472be7ed942a25c99d33c2",
+      "expected_exit_code": 0
+    },
+    "peer_content_review": {
+      "filename": "native-java-r4-content-review.log",
+      "sha256": "1cc696bffe84d37df1bad79129ea29c6db6e71fa4cd614e3d21a38671fb317d3",
+      "expected_exit_code": 0
+    },
+    "union_app_build": {
+      "filename": "java-r4-union-app-build.log",
+      "sha256": "d5f566e6a87c2267da2c9f18d1466d50d8fdbf40d6bab9825d8dc793b0447807",
+      "expected_exit_code": 0
+    },
+    "union_services_build": {
+      "filename": "java-r4-union-services.log",
+      "sha256": "ce6a2366b56a9daf42abd7c0c7e6a9b63a199288743f12070c48a72012cd46f7",
+      "expected_exit_code": 0
+    },
+    "union_scheduler": {
+      "filename": "java-r4-union-scheduler.log",
+      "sha256": "cac3c5250bbcdf6f26ad636965e46d4bae466656390350d4c139cc245ced3ac7",
+      "expected_exit_code": 0
+    },
+    "union_connectivity": {
+      "filename": "java-r4-union-connectivity.log",
+      "sha256": "005905ce5cd987239f887ab2c0dc051bfd3b163616f8bc99d1861e6d8e9e8eaa",
+      "expected_exit_code": 0
+    }
+  },
+  "limitations": [
+    "Fresh notification accumulation is capped; carry-over unions are preserved and may exceed 50.",
+    "Authorities and URI payload sizes are not capped.",
+    "The production match loop and logging still process all notifications.",
+    "Host tests construct package/process metadata and use declared native identity/clock/allocation and write-size-only Parcel boundaries.",
+    "Most run dispatch is controlled; the listener/worker regression runs the actual ContentService and scheduler worker.",
+    "Windows/ART, real target Binder/Parcel execution and complete remote CI are separate gates."
+  ]
+}

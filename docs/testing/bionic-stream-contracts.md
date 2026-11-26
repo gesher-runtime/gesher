@@ -47,10 +47,22 @@ before close preserves the live record; a failure after retirement does not
 restore it. `pclose` preserves its child association and returns immediately if
 the pipe was never closed, allowing a retry without waiting on an open writer.
 
-This change does not qualify the inherited `freopen(nullptr, mode, stream)`
-implementation: it currently returns the stream without performing Android's
-descriptor-based reopen. Named-path reopen and the distinction between failures
-before and after retirement are the scope of these lifetime tests.
+The shared descriptor-backed buffer owns byte I/O, stream position and
+orientation for both native and Bionic callers. The real CRT FILE lock remains
+outermost, including close/reopen and `flockfile`/`ftrylockfile`: a native CRT
+owner must delay descriptor retirement just as an ordinary stdio owner does.
+Bionic wide conversion and pushback metadata is retired under that same lock.
+
+`freopen(nullptr, mode, stream)` reports `EOPNOTSUPP` and retires the stream;
+the runtime does not claim that it performed Android's descriptor-based reopen.
+Named-path reopen and the distinction between failures before and after
+retirement remain covered separately.
+
+Final buffered output runs after application exit callbacks and static
+destructors. The socket registry therefore has process lifetime, as does the
+shared stream registry. Its descriptor reference counts and lookup/retirement
+operations are unchanged; this keeps both live and quarantined native owners
+available when final stdio output dispatches through the descriptor layer.
 
 ## Validation boundaries
 
@@ -59,6 +71,8 @@ Run the production-source lifetime checks on Linux with:
 ```sh
 python3 tools/test_stdio_lifetime_contracts.py --sanitize
 python3 tools/test_stream_device_lifetime.py --sanitize
+python3 tools/test_stdio_contracts.py --sanitize
+python3 tools/test_socket_registry_lifetime.py --sanitize
 bash tools/ci/test-freopen-reference.sh
 ```
 
@@ -71,6 +85,16 @@ The lifetime tool also injects real C++ allocation failures into the extracted
 metadata registry and stdio entry points. It verifies that failures preserve the
 live stream and return before I/O; its wide codec functions are counting
 boundaries, so this check does not establish conversion behavior.
+
+The shared-stdio fixture executes the production buffer, close and locking
+paths over real Linux files and pipes. A separate persistent recursive-lock
+boundary models the CRT FILE lock lifetime; the contention regression checks
+that trylock observes its owner and that close cannot retire the real descriptor
+until the owner unlocks. The socket-registry fixture executes the production
+registry functions with a declared native payload boundary, including a lookup
+registered before ordinary static destruction. Both runners accept
+`--source-ref` for unchanged-fixture negative controls against historical code.
+These controls do not substitute for Windows contention or Winsock execution.
 
 `bionic_stdio_contract_test` exercises exported Bionic symbols on Windows. It
 contains CRT lock witnesses, wide I/O, buffer errors, partial stream output,

@@ -93,8 +93,9 @@ static void test_pair(int type, const char* name) {
   // A pipe and a memfd.
   int pipefd[2];
   check("pipe", pipe(pipefd) == 0);
-  int memfd = (int)syscall(SYS_memfd_create, "rights", MFD_CLOEXEC);
+  int memfd = (int)syscall(SYS_memfd_create, "rights", MFD_CLOEXEC | MFD_ALLOW_SEALING);
   check("memfd_create", memfd >= 0 && write(memfd, "sealed?", 7) == 7);
+  check("seal the transferred file", fcntl(memfd, F_ADD_SEALS, F_SEAL_FUTURE_WRITE) == 0);
   int out[2] = {pipefd[1], memfd};
   snprintf(what, sizeof(what), "%s: sendmsg with two descriptors", name);
   check(what, send_fds(sv[0], "fds", 3, out, 2) == 3);
@@ -113,6 +114,9 @@ static void test_pair(int type, const char* name) {
               memcmp(buf, "pipe", 4) == 0);
     check("the received memfd is the same file",
           pread(got[1], buf, 7, 0) == 7 && memcmp(buf, "sealed?", 7) == 0);
+    errno = 0;
+    check("the received description obeys the original write seal",
+          pwrite(got[1], "x", 1, 0) == -1 && errno == EPERM);
     close(got[0]);
     close(got[1]);
   }

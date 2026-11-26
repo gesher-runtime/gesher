@@ -31,12 +31,15 @@
 #include <gesher/reserved_names.h>
 
 #include <io.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <windows.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -89,14 +92,15 @@ bool IsNumber(const std::string& s) {
 // Writes all of `s` to `h`; false if the handle is closed or broken (EPIPE).
 bool WriteAll(HANDLE h, const std::string& s) {
   if (h == nullptr || h == INVALID_HANDLE_VALUE) return false;
+  auto description = gesher::CaptureFileHandle(h);
+  if (!description) return false;
   size_t done = 0;
   while (done < s.size()) {
-    DWORD wrote = 0;
-    DWORD chunk =
-        static_cast<DWORD>(std::min<size_t>(s.size() - done, 1u << 20));
-    if (!WriteFile(h, s.data() + done, chunk, &wrote, nullptr) || wrote == 0)
-      return false;
-    done += wrote;
+    unsigned chunk = static_cast<unsigned>(std::min<size_t>(s.size() - done, 0x7ffff000u));
+    int wrote = gesher::WriteFileDescription(description, s.data() + done, chunk);
+    if (wrote < 0 && errno == EINTR) continue;
+    if (wrote <= 0) return false;
+    done += static_cast<unsigned>(wrote);
   }
   return true;
 }
@@ -110,6 +114,20 @@ bool WriteAll(HANDLE h, const std::string& s) {
 constexpr int kMaxSig = 65;
 std::atomic<int> g_trap_mode[kMaxSig];  // 0 default, 1 ignored, 2 trapped
 std::atomic<uint64_t> g_pending_signals[2];
+std::atomic<HANDLE> g_pipe_signal_event{nullptr};
+INIT_ONCE g_pipe_signal_once = INIT_ONCE_STATIC_INIT;
+
+HANDLE PipeSignalEvent() {
+  // One process-lifetime event, shared by the shell's serial command reader.
+  // A signal hook may run concurrently, so never close or recycle this handle.
+  if (!InitOnceExecuteOnce(&g_pipe_signal_once, [](PINIT_ONCE, void*, void**) -> BOOL {
+        HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!event) return FALSE;
+        g_pipe_signal_event.store(event, std::memory_order_release);
+        return TRUE;
+      }, nullptr, nullptr)) return nullptr;
+  return g_pipe_signal_event.load(std::memory_order_acquire);
+}
 std::mutex g_fg_mutex;
 std::set<DWORD> g_fg_pids;
 
@@ -159,6 +177,7 @@ int ShellSignalHook(int sig, int /*sender*/) {
   if (mode == 1) return 1;  // ignored
   if (mode == 2) {
     g_pending_signals[sig / 64].fetch_or(uint64_t{1} << (sig % 64));
+    if (HANDLE event = g_pipe_signal_event.load(std::memory_order_acquire)) SetEvent(event);
     return 1;
   }
   if (DefaultIgnored(sig)) return 1;
@@ -199,9 +218,29 @@ using NodeP = std::shared_ptr<Node>;
 // last user lets go.
 struct OwnedHandle {
   HANDLE h = nullptr;
-  explicit OwnedHandle(HANDLE handle) : h(handle) {}
+  int descriptor = -1;
+  explicit OwnedHandle(HANDLE handle, int adopted_descriptor = -1, int fresh_pipe_flags = -1)
+      : h(handle), descriptor(adopted_descriptor) {
+    if (descriptor >= 0 || !h || h == INVALID_HANDLE_VALUE) return;
+    // Process job handles keep their native ownership. File/pipe handles
+    // enter the canonical fd table, so repeated launches and shell aliases
+    // retain one description rather than rediscovering unrelated flag copies.
+    if (GetFileType(h) == FILE_TYPE_UNKNOWN) return;
+    auto snapshot = gesher::CaptureFileHandle(h);
+    // Only the creator can attest the initial mode of an unpublished pipe.
+    // Raw inherited/native handles keep their actual access without an
+    // invented wait policy.
+    if (snapshot && fresh_pipe_flags >= 0 &&
+        gesher::InitializePipeDescription(snapshot, fresh_pipe_flags) < 0) snapshot.reset();
+    descriptor = snapshot ? gesher::AttachFileDescription(snapshot, true) : -1;
+    int error = errno;
+    CloseHandle(h);
+    h = descriptor >= 0 ? reinterpret_cast<HANDLE>(_get_osfhandle(descriptor)) : INVALID_HANDLE_VALUE;
+    errno = error;
+  }
   ~OwnedHandle() {
-    if (h != nullptr && h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    if (descriptor >= 0) ::close(descriptor);
+    else if (h != nullptr && h != INVALID_HANDLE_VALUE) CloseHandle(h);
   }
   OwnedHandle(const OwnedHandle&) = delete;
   OwnedHandle& operator=(const OwnedHandle&) = delete;
@@ -377,6 +416,8 @@ struct Token {
   bool heredoc_expand = true;
   int io_number = -1;  // a redirection's explicit fd, or -1
   bool incomplete = false;
+  // mksh's &>, &>>, &>| and &>&: the redirection, then 2>&<its fd>.
+  bool and_stderr = false;
 };
 
 // Scans one raw word from src[*i], honouring '', "", \, and the $(...), ${...},
@@ -553,7 +594,7 @@ std::vector<Token> Tokenize(const std::string& src) {
       }
       continue;
     }
-    if (c == '&') {
+    if (c == '&' && !(i + 1 < n && src[i + 1] == '>')) {
       if (i + 1 < n && src[i + 1] == '&') {
         out.push_back({Tok::Op, "&&", false, "", true, -1});
         i += 2;
@@ -578,12 +619,14 @@ std::vector<Token> Tokenize(const std::string& src) {
       ++i;
       continue;
     }
-    // A redirection, possibly with a leading fd number.
+    // A redirection, possibly with a leading fd number. As in mksh (lex.c),
+    // "&>" starts one: [n]&>file is [n]>file 2>&n, as are &>>, &>| and &>&.
     size_t j = i;
     std::string digits;
     while (j < n && IsDigitC(src[j])) digits += src[j++];
-    if (j < n && (src[j] == '<' || src[j] == '>')) {
-      size_t k = j;
+    bool and_stderr = j + 1 < n && src[j] == '&' && src[j + 1] == '>';
+    if (j < n && (src[j] == '<' || src[j] == '>' || and_stderr)) {
+      size_t k = and_stderr ? j + 1 : j;
       std::string op = ScanRedirOp(src, &k);
       if (!op.empty()) {
         i = k;
@@ -597,6 +640,7 @@ std::vector<Token> Tokenize(const std::string& src) {
           pending_heredocs.push_back(out.size() - 1);
         } else {
           Token t{Tok::Op, op, false, "", true, ionum};
+          t.and_stderr = and_stderr;
           out.push_back(t);
         }
         continue;
@@ -861,6 +905,13 @@ struct Parser {
         advance();
       }
       redirs->push_back(r);
+      if (rt.and_stderr) {
+        Redir dup;
+        dup.fd = 2;
+        dup.op = ">&";
+        dup.target = std::to_string(r.fd);
+        redirs->push_back(dup);
+      }
     }
   }
 

@@ -1,8 +1,6 @@
 // compat/posix/src/netlink.cc + fd.cc + socket.cc + system.cc:
-// Exercise AF_NETLINK / NETLINK_ROUTE including WebRTC's ifaddrs_android.cc
-// dump sequence (RTM_GETADDR + recvfrom 4096 + if_indextoname + SIOCGIFFLAGS),
-// RTM_GETLINK, poll() wakeup, O_NONBLOCK/MSG_DONTWAIT, MSG_PEEK/MSG_TRUNC,
-// setsockopt/getsockopt, dup/close, and error cases.
+// Exercise real Windows interface dumps, descriptor operations, and
+// permissions on the application-facing AF_NETLINK / NETLINK_ROUTE path.
 //
 //   netlink_route_test.exe -> "netlink_route_test all passed" (exit 0)
 
@@ -14,7 +12,6 @@
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
-#include <net/if_arp.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/ioctl.h>
@@ -103,10 +100,13 @@ void TestSocketValidation() {
   }
 }
 
-void TestWebRtcIfaddrsFlow() {
+void TestInterfaceAddresses() {
   int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
   Check(fd >= 0, "socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE)");
   if (fd < 0) return;
+  const timeval timeout = {1, 0};
+  Check(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0,
+        "bound the wait for dump data");
 
   sockaddr_nl bind_addr = {};
   bind_addr.nl_family = AF_NETLINK;
@@ -120,13 +120,29 @@ void TestWebRtcIfaddrsFlow() {
             local_addr.nl_pid != 0,
         "getsockname returns bound nl_pid");
 
+  int second_fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+  Check(second_fd >= 0, "open a second route socket");
+  if (second_fd >= 0) {
+    Check(bind(second_fd, reinterpret_cast<sockaddr*>(&local_addr), sizeof(local_addr)) < 0 &&
+              errno == EADDRINUSE,
+          "duplicate explicit port binding is refused");
+    Check(bind(second_fd, reinterpret_cast<sockaddr*>(&bind_addr), sizeof(bind_addr)) == 0,
+          "a second zero-port bind allocates a distinct port");
+    sockaddr_nl second_addr = {};
+    socklen_t second_len = sizeof(second_addr);
+    Check(getsockname(second_fd, reinterpret_cast<sockaddr*>(&second_addr), &second_len) == 0 &&
+              second_addr.nl_pid != 0 && second_addr.nl_pid != local_addr.nl_pid,
+          "bound port identities are distinct");
+    close(second_fd);
+  }
+
   const int sent = SendDumpRequest(fd, RTM_GETADDR, 1, AF_UNSPEC);
   Check(sent == static_cast<int>(NLMSG_LENGTH(sizeof(rtgenmsg))),
-        "sendto RTM_GETADDR sends 0x18 bytes");
+        "sendto RTM_GETADDR sends the whole request");
 
   std::set<AddrEntry> netlink_addrs;
   bool saw_done = false;
-  bool seen_v4_label_and_flags = true;
+  bool valid_interface_labels = true;
   bool all_packets_fit_4k = true;
   char buf[4096];
 
@@ -144,6 +160,8 @@ void TestWebRtcIfaddrsFlow() {
     int len = static_cast<int>(n);
     for (nlmsghdr* nlh = reinterpret_cast<nlmsghdr*>(buf); NLMSG_OK(nlh, len);
          nlh = NLMSG_NEXT(nlh, len)) {
+      if (nlh->nlmsg_seq != 1 || nlh->nlmsg_pid != local_addr.nl_pid ||
+          (nlh->nlmsg_flags & NLM_F_MULTI) == 0) all_packets_fit_4k = false;
       if (nlh->nlmsg_type == NLMSG_DONE) {
         saw_done = true;
         break;
@@ -176,21 +194,18 @@ void TestWebRtcIfaddrsFlow() {
         }
         char ifname[IF_NAMESIZE] = {};
         if (if_indextoname(ifa->ifa_index, ifname) == nullptr) {
-          seen_v4_label_and_flags = false;
+          valid_interface_labels = false;
         } else {
           if (ifa->ifa_family == AF_INET && !label.empty() && label != ifname) {
-            seen_v4_label_and_flags = false;
+            valid_interface_labels = false;
           }
-          ifreq ifr = {};
-          snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", ifname);
-          if (ioctl(fd, SIOCGIFFLAGS, &ifr) != 0) seen_v4_label_and_flags = false;
         }
       }
     }
   }
   Check(saw_done, "RTM_GETADDR terminates with NLMSG_DONE");
-  Check(all_packets_fit_4k, "All RTM_GETADDR netlink packets fit 4096 bytes with AF_NETLINK peer");
-  Check(seen_v4_label_and_flags, "if_indextoname, IFA_LABEL, and ioctl(SIOCGIFFLAGS) succeed");
+  Check(all_packets_fit_4k, "Address packets fit 4096 bytes and carry kernel sender and request identity");
+  Check(valid_interface_labels, "IPv4 labels and interface indexes match if_indextoname");
 
   struct ifaddrs* ifap = nullptr;
   Check(getifaddrs(&ifap) == 0 && ifap != nullptr, "getifaddrs succeeds for parity comparison");
@@ -237,27 +252,10 @@ void TestWebRtcIfaddrsFlow() {
   }
   Check(filtered_done && !saw_v6_in_filtered, "AF_INET RTM_GETADDR filter omits IPv6");
 
-  // RTM_GETLINK check
-  Check(SendDumpRequest(fd, RTM_GETLINK, 3, AF_UNSPEC) > 0, "sendto RTM_GETLINK");
-  bool saw_link = false;
-  bool link_done = false;
-  while (!link_done) {
-    const ssize_t n = recv(fd, buf, sizeof(buf), 0);
-    if (n <= 0) break;
-    int len = static_cast<int>(n);
-    for (nlmsghdr* nlh = reinterpret_cast<nlmsghdr*>(buf); NLMSG_OK(nlh, len);
-         nlh = NLMSG_NEXT(nlh, len)) {
-      if (nlh->nlmsg_type == NLMSG_DONE) {
-        link_done = true;
-        break;
-      }
-      if (nlh->nlmsg_type == RTM_NEWLINK) {
-        auto* ifi = static_cast<ifinfomsg*>(NLMSG_DATA(nlh));
-        if (ifi->ifi_index > 0) saw_link = true;
-      }
-    }
-  }
-  Check(link_done && saw_link, "RTM_GETLINK returns RTM_NEWLINK and NLMSG_DONE");
+  Check(SendDumpRequest(fd, RTM_GETLINK, 3, AF_UNSPEC) < 0 && errno == EACCES,
+        "RTM_GETLINK is denied at send time");
+  Check(recv(fd, buf, sizeof(buf), MSG_DONTWAIT) < 0 && errno == EAGAIN,
+        "denied link query publishes no data");
 
   // Unsupported request yields NLMSG_ERROR with -EOPNOTSUPP
   nlmsghdr unsupported = {};
@@ -290,27 +288,35 @@ void TestFlagsPollTimeoutAndDup() {
         "Nonblocking recv on empty queue returns EAGAIN");
 
   int off = 0;
-  Check(ioctl(fd, FIONBIO, &off) == 0, "ioctl FIONBIO disables nonblocking");
+  Check(ioctl(fd, FIONBIO, &off) < 0 && errno == EACCES, "route netlink ioctl is denied");
+  const int file_flags = fcntl(fd, F_GETFL);
+  Check(file_flags >= 0 && (file_flags & O_NONBLOCK) &&
+            fcntl(fd, F_SETFL, file_flags & ~O_NONBLOCK) == 0 &&
+            fcntl(fd, F_GETFL) == O_RDWR,
+        "fcntl reads and clears nonblocking");
+  timeval tv = {0, 30000};  // 30 ms
+  Check(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0, "setsockopt SO_RCVTIMEO");
 
-  // MSG_PEEK, MSG_TRUNC, FIONREAD
-  Check(SendDumpRequest(fd, RTM_GETLINK, 4, AF_UNSPEC) > 0, "Send RTM_GETLINK for peek/trunc");
-  int avail = 0;
-  Check(ioctl(fd, FIONREAD, &avail) == 0 && avail > 0, "FIONREAD reports queued bytes");
+  // MSG_PEEK, MSG_TRUNC
+  Check(SendDumpRequest(fd, RTM_GETADDR, 4, AF_UNSPEC) > 0, "send address dump for peek/trunc");
 
   const ssize_t peek_len = recv(fd, buf, 16, MSG_PEEK | MSG_TRUNC);
-  Check(peek_len == avail && peek_len > 16, "MSG_PEEK | MSG_TRUNC returns full datagram length");
+  Check(peek_len > 16, "MSG_PEEK | MSG_TRUNC returns full datagram length");
   const ssize_t trunc_len = recv(fd, buf, 16, MSG_TRUNC);
-  Check(trunc_len == avail, "MSG_TRUNC returns full datagram length while consuming");
+  Check(trunc_len == peek_len, "MSG_TRUNC returns full datagram length while consuming");
   // Drain rest
   while (recv(fd, buf, sizeof(buf), MSG_DONTWAIT) > 0) {
   }
 
   // Timeout check with SO_RCVTIMEO
-  timeval tv = {0, 30000};  // 30 ms
-  Check(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0, "setsockopt SO_RCVTIMEO");
   int group = 1;
-  Check(setsockopt(fd, SOL_NETLINK, NETLINK_ADD_MEMBERSHIP, &group, sizeof(group)) == 0,
-        "setsockopt SOL_NETLINK NETLINK_ADD_MEMBERSHIP");
+  for (int option : {NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP}) {
+    Check(setsockopt(fd, SOL_NETLINK, option, &group, sizeof(group)) < 0 && errno == EOPNOTSUPP,
+          "NETLINK_ROUTE multicast membership is explicitly unsupported");
+  }
+  Check(setsockopt(fd, SOL_NETLINK, NETLINK_GET_STRICT_CHK, &group, sizeof(group)) < 0 &&
+            errno == ENOPROTOOPT,
+        "unsupported strict parsing mode reports ENOPROTOOPT");
 
   errno = 0;
   const auto t0 = std::chrono::steady_clock::now();
@@ -324,13 +330,22 @@ void TestFlagsPollTimeoutAndDup() {
   // Connection/control edge cases
   sockaddr_nl kernel = {};
   kernel.nl_family = AF_NETLINK;
+  kernel.nl_groups = 1;
+  Check(bind(fd, reinterpret_cast<sockaddr*>(&kernel), sizeof(kernel)) < 0 && errno == EOPNOTSUPP,
+        "multicast bind reports EOPNOTSUPP");
+  Check(connect(fd, reinterpret_cast<sockaddr*>(&kernel), sizeof(kernel)) < 0 &&
+            errno == EOPNOTSUPP,
+        "multicast destination reports EOPNOTSUPP");
+  kernel.nl_groups = 0;
   Check(connect(fd, reinterpret_cast<sockaddr*>(&kernel), sizeof(kernel)) == 0,
         "connect to AF_NETLINK kernel pid=0 succeeds");
   errno = 0;
   Check(listen(fd, 1) < 0 && errno == EOPNOTSUPP, "listen on netlink returns EOPNOTSUPP");
-  errno = 0;
-  Check(getpeername(fd, reinterpret_cast<sockaddr*>(&kernel), nullptr) < 0 && errno == ENOTCONN,
-        "getpeername on netlink returns ENOTCONN");
+  socklen_t peerlen = sizeof(kernel);
+  Check(getpeername(fd, reinterpret_cast<sockaddr*>(&kernel), &peerlen) == 0 &&
+            peerlen == sizeof(kernel) && kernel.nl_family == AF_NETLINK &&
+            kernel.nl_pid == 0 && kernel.nl_groups == 0,
+        "getpeername reports the kernel destination");
 
   // poll() immediate POLLOUT and cross-thread POLLIN wakeup
   pollfd pfd = {fd, POLLIN | POLLOUT, 0};
@@ -339,7 +354,7 @@ void TestFlagsPollTimeoutAndDup() {
 
   std::thread sender([fd]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
-    SendDumpRequest(fd, RTM_GETLINK, 9, AF_UNSPEC);
+    SendDumpRequest(fd, RTM_GETADDR, 9, AF_UNSPEC);
   });
   pollfd wait_in = {fd, POLLIN, 0};
   const int pr = poll(&wait_in, 1, 2000);
@@ -359,12 +374,39 @@ void TestFlagsPollTimeoutAndDup() {
   }
 }
 
+void TestReceiveBufferLimit() {
+  int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_NONBLOCK, NETLINK_ROUTE);
+  Check(fd >= 0, "create nonblocking netlink descriptor for queue test");
+  if (fd < 0) return;
+  int bufsize = 128;
+  socklen_t len = sizeof(bufsize);
+  Check(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsize, len) == 0 &&
+            getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsize, &len) == 0 && bufsize == 256,
+        "SO_RCVBUF sets the bounded queue budget");
+  nlmsghdr request = {};
+  request.nlmsg_len = NLMSG_LENGTH(0);
+  request.nlmsg_type = NLMSG_NOOP;
+  request.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+  const int expected = bufsize / NLMSG_LENGTH(sizeof(nlmsgerr));
+  int admitted = 0;
+  while (admitted <= expected && write(fd, &request, sizeof(request)) == sizeof(request)) {
+    ++admitted;
+  }
+  Check(admitted == expected && errno == ENOBUFS, "queue exhaustion returns ENOBUFS");
+  char message[NLMSG_LENGTH(sizeof(nlmsgerr))];
+  Check(recv(fd, message, sizeof(message), 0) == sizeof(message) &&
+            write(fd, &request, sizeof(request)) == sizeof(request),
+        "reading a reply releases queue capacity");
+  close(fd);
+}
+
 }  // namespace
 
 int main() {
   TestSocketValidation();
-  TestWebRtcIfaddrsFlow();
+  TestInterfaceAddresses();
   TestFlagsPollTimeoutAndDup();
+  TestReceiveBufferLimit();
 
   if (g_failures == 0) {
     std::printf("netlink_route_test all passed\n");

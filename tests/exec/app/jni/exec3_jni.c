@@ -1,4 +1,8 @@
 // Run the existing nine native process checks in the ART app process itself.
+// Feature selection must precede jni.h, which includes bionic system headers.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1  // pipe2 and pwritev in the included exec2 corpus
+#endif
 #include <jni.h>
 
 #define main Exec2Main

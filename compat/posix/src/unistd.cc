@@ -14,15 +14,24 @@
 #include <winioctl.h>
 #include <winternl.h>
 #include <gesher/font_environment.h>
+#include <gesher/environment.h>
+#include <gesher/file_description.h>
 
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "internal.h"
+#include "revocable_internal.h"
 #include "binder_internal.h"
 #include "event_internal.h"
+#include "fifo_internal.h"
 #include "record_lock_descriptors.h"
+#include "pipe_io.h"
+#include "system_linker.h"
+#include "storage_policy.h"
 
 namespace {
 
@@ -69,35 +78,39 @@ bool FinalPath(HANDLE h, std::string* out) {
 // frees the string _putenv_s replaces, so before a change the CRT's string for
 // the variable is swapped for a copy, which the CRT frees, and the original is
 // kept for the life of the process. Gesher's own writes are serialized here.
-std::mutex& EnvironmentWrites() {
-  static std::mutex* mutex = new std::mutex();
-  return *mutex;
-}
-
-void KeepEnvironmentString(const char* name) {
-  if (_environ == nullptr) return;
+bool KeepEnvironmentString(const char* name) {
+  if (_environ == nullptr) return true;
   const size_t length = strlen(name);
   for (char** entry = _environ; *entry != nullptr; ++entry) {
     // The CRT matches names without regard to case.
     if (_strnicmp(*entry, name, length) != 0 || (*entry)[length] != '=') continue;
-    if (char* copy = _strdup(*entry)) *entry = copy;
-    return;
+    char* copy = _strdup(*entry);
+    if (!copy) return false;
+    *entry = copy;
+    return true;
   }
+  return true;
 }
-
-// _putenv_s(name, value), or the removal of name for nullptr, keeping the
-// replaced string. Setting the value it already has changes nothing.
-int PutEnvironment(const char* name, const char* value) {
-  if (name == nullptr || *name == '\0' || strchr(name, '=') != nullptr) return errno = EINVAL, -1;
-  std::lock_guard<std::mutex> lock(EnvironmentWrites());
-  const char* current = getenv(name);
-  if (value != nullptr ? current != nullptr && strcmp(current, value) == 0 : current == nullptr)
-    return 0;
-  KeepEnvironmentString(name);
-  return _putenv_s(name, value != nullptr ? value : "") == 0 ? 0 : (errno = EINVAL, -1);
-}
-
 }  // namespace
+
+namespace gesher {
+bool PreserveCrtEnvironment(const char* name) { return KeepEnvironmentString(name); }
+int WriteNativeEnvironment(const char* name, const char* value) {
+  // The POSIX owner serialized and prepared this transaction. The CRT sees
+  // copied bytes only, never a putenv buffer, and its older pointers remain
+  // protected for native users that read the raw CRT environment directly.
+  if (!KeepEnvironmentString(name)) return ENOMEM;
+  if (auto result = WriteFontEnvironment(name, value ? value : "", 1)) return *result;
+  return RawPutEnvironment(name, value ? value : "");
+}
+int WriteWideNativeEnvironment(const char* name, const char* value,
+                               const wchar_t* wide_name, const wchar_t* wide_value) {
+  if (!KeepEnvironmentString(name)) return ENOMEM;
+  if (auto result = WriteWideFontEnvironment(name, value ? value : "", wide_name, wide_value))
+    return *result;
+  return RawPutWideEnvironment(wide_name, wide_value);
+}
+}  // namespace gesher
 
 extern "C" {
 
@@ -272,6 +285,7 @@ long fpathconf(int fd, int name) {
 }
 
 int chown(const char* path, uid_t owner, gid_t group) {
+  if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   struct stat st;
   if (stat(path, &st) != 0) return -1;
   return CheckOwner(owner, group);
@@ -330,9 +344,8 @@ pid_t getpgrp(void) { return static_cast<pid_t>(GetCurrentProcessId()); }
 pid_t fork(void) { return errno = ENOSYS, -1; }
 
 int pipe2(int fds[2], int flags) {
-  int mode = _O_BINARY | ((flags & O_CLOEXEC) != 0 ? _O_NOINHERIT : 0);
-  gesher::record_locks::DescriptorGuard descriptor_guard;
-  return gesher::CrtResult(_pipe(fds, 64 * 1024, mode));
+  if ((flags & ~(O_CLOEXEC | O_NONBLOCK)) != 0) return errno = EINVAL, -1;
+  return gesher::CreatePipeDescriptors(fds, flags);
 }
 
 int pipe(int fds[2]) { return pipe2(fds, 0); }
@@ -340,29 +353,139 @@ int pipe(int fds[2]) { return pipe2(fds, 0); }
 // Only files are flushed: FlushFileBuffers on a pipe waits until the reader
 // has read everything, where Linux fails at once with EINVAL (pipes, sockets,
 // character devices).
-int fsync(int fd) {
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-  if (GetFileType(h) != FILE_TYPE_DISK) return errno = EINVAL, -1;
-  // A directory (opened for reading, as Linux programs do to fsync a rename):
-  // NTFS journals its entries; FlushFileBuffers would need write access.
-  BY_HANDLE_FILE_INFORMATION info;
-  if (GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-    return 0;
+//
+// Linux fsync and fdatasync flush a regular file's data whatever the
+// descriptor's access mode (an O_RDONLY descriptor included: programs fsync
+// every file of a tree they wrote by opening each for reading, or a file they
+// made read-only). FlushFileBuffers needs a handle with write access. A
+// descriptor without one is flushed, in order of preference:
+//  1. through a second handle to the same file opened for writing (ReOpenFile).
+//     It is used only for this flush and never reaches the descriptor, so the
+//     descriptor stays read-only (the rule of PositionedDescriptorIo).
+//  2. through another descriptor of this process open for writing on the same
+//     file, when Windows refuses that handle: a read-only file
+//     (FILE_ATTRIBUTE_READONLY, Gesher's mode 0444), an ACL that denies
+//     writing, another open that does not share writing, or a read-only
+//     volume (ERROR_WRITE_PROTECT; Linux's ext4 and f2fs fsync succeed on a
+//     file of a read-only mount).
+//  3. otherwise by writing the file's cached data back through a read-only
+//     mapping of it (FlushViewOfFile), the one flush Windows offers without
+//     write access. It waits for the cached data to reach the device, but
+//     does not make the file system commit the file's metadata or the device
+//     flush its own write cache, as FlushFileBuffers does. A process that may
+//     not open the file for writing cannot ask Windows for more; failing would
+//     report an error Linux never gives for this call (EACCES), while the
+//     data is as durable as Windows lets this process make it. The common case
+//     (a file written and closed earlier, then made read-only) has no
+//     metadata left to commit beyond what NTFS's lazy writer and journal
+//     already handle.
+namespace {
+// FlushFileBuffers through another descriptor of this process that is open
+// for writing on `file`. False if there is none.
+bool FlushThroughWritableAlias(const gesher::record_locks::File& file, int* result) {
+  std::vector<std::pair<int, gesher::DescriptorSnapshotPtr>> descriptors;
+  if (gesher::CaptureDescriptors(&descriptors, true) != 0) return false;
+  for (const auto& [fd, snapshot] : descriptors) {
+    if (!snapshot || GetFileType(snapshot->handle) != FILE_TYPE_DISK) continue;
+    gesher::FileOperationLease operation(snapshot);
+    if (operation.Error()) continue;
+    uint32_t access = 0;
+    if (gesher::record_locks::HandleAccess(snapshot->handle, &access) != 0 ||
+        (access & (FILE_WRITE_DATA | FILE_APPEND_DATA)) == 0) continue;
+    gesher::record_locks::File identity{};
+    if (gesher::record_locks::FileIdentity(snapshot->handle, &identity) != 0 || !(identity == file))
+      continue;
+    *result = FlushFileBuffers(snapshot->handle) ? 0 : gesher::FailWithLastError();
+    return true;
   }
-  return gesher::CrtResult(_commit(fd));
+  return false;
+}
+
+// Writes the file's cached data back to the device through read-only views.
+int WriteBackCachedData(HANDLE file) {
+  LARGE_INTEGER size{};
+  if (!GetFileSizeEx(file, &size)) return gesher::FailWithLastError();
+  if (size.QuadPart == 0) return 0;  // nothing cached; an empty file cannot be mapped
+  HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+  if (mapping == nullptr) return gesher::FailWithLastError();
+  // Windows of 256 MiB (a multiple of the allocation granularity) bound the
+  // address space a large file needs.
+  constexpr uint64_t kWindow = uint64_t{256} << 20;
+  const uint64_t total = static_cast<uint64_t>(size.QuadPart);
+  int result = 0;
+  for (uint64_t at = 0; at < total && result == 0; at += kWindow) {
+    const SIZE_T length = static_cast<SIZE_T>(total - at < kWindow ? total - at : kWindow);
+    void* view = MapViewOfFile(mapping, FILE_MAP_READ, static_cast<DWORD>(at >> 32),
+                               static_cast<DWORD>(at), length);
+    if (view == nullptr) { result = gesher::FailWithLastError(); break; }
+    if (!FlushViewOfFile(view, 0)) result = gesher::FailWithLastError();
+    UnmapViewOfFile(view);
+  }
+  const int saved = errno;
+  CloseHandle(mapping);
+  errno = saved;
+  return result;
+}
+}  // namespace
+
+int fsync(int fd) {
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  gesher::record_locks::File identity{};
+  {
+    gesher::FileOperationLease operation(snapshot);
+    if (operation.Error()) return errno = operation.Error(), -1;
+    // An O_PATH descriptor refers to a file without opening it: Linux's fsync
+    // (fdget) does not accept it, as read and write do not.
+    const int flags = gesher::FileDescriptionIoFlags(snapshot);
+    if (flags < 0) return -1;
+    if ((flags & O_PATH) != 0) return errno = EBADF, -1;
+    const HANDLE h = snapshot->handle;
+    if (GetFileType(h) != FILE_TYPE_DISK) return errno = EINVAL, -1;
+    // A directory (opened for reading, as Linux programs do to fsync a rename):
+    // NTFS journals its entries; FlushFileBuffers would need write access.
+    BY_HANDLE_FILE_INFORMATION info;
+    if (GetFileInformationByHandle(h, &info) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      return 0;
+    }
+    uint32_t access = 0;
+    if (gesher::record_locks::HandleAccess(h, &access) != 0 ||
+        (access & (FILE_WRITE_DATA | FILE_APPEND_DATA)) != 0) {
+      return FlushFileBuffers(h) ? 0 : gesher::FailWithLastError();
+    }
+    HANDLE writable = ReOpenFile(h, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+    if (writable != INVALID_HANDLE_VALUE) {
+      const BOOL flushed = FlushFileBuffers(writable);
+      const DWORD error = flushed ? ERROR_SUCCESS : GetLastError();
+      CloseHandle(writable);
+      if (!flushed) return errno = gesher::ErrnoFromWin32(error), -1;
+      return 0;
+    }
+    const DWORD error = GetLastError();
+    if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION &&
+        error != ERROR_WRITE_PROTECT)
+      return errno = gesher::ErrnoFromWin32(error), -1;
+    if (int failed = gesher::record_locks::FileIdentity(h, &identity)) return errno = failed, -1;
+  }
+  // Without this descriptor's lease: each alias takes its own.
+  int result = 0;
+  if (FlushThroughWritableAlias(identity, &result)) return result;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  return WriteBackCachedData(snapshot->handle);
 }
 int gesher_ftruncate(int fd, off_t length) {
   if (length < 0) return errno = EINVAL, -1;
-  // A memfd sealed against growing or shrinking keeps its size (memfd_seals.cc).
-  if (const int sealed = gesher::MemfdResizeError(fd, static_cast<uint64_t>(length))) {
-    return errno = sealed, -1;
+  // Pin the exact object without holding the descriptor table lock while a
+  // revocation barrier or filesystem operation waits.
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  const HANDLE file = snapshot->handle;
+  if (gesher::FileDescriptionIsMemfd(snapshot)) {
+    if (int error = gesher::MemfdResizeHandleError(file, static_cast<uint64_t>(length))) return errno = error, -1;
   }
-  // Pin the actual descriptor throughout the resize and cache update. A path
-  // lookup or an unguarded fd would allow close/dup2 to change the target.
-  gesher::record_locks::DescriptorGuard descriptor_guard;
-  HANDLE file = gesher::HandleFromFd(fd);
-  if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
   uint32_t access = 0;
   int error = gesher::record_locks::HandleAccess(file, &access);
   if (error) return errno = error, -1;
@@ -372,9 +495,12 @@ int gesher_ftruncate(int fd, off_t length) {
   if ((access & FILE_WRITE_DATA) == 0) return errno = EINVAL, -1;
   LARGE_INTEGER before{};
   const bool have_size = GetFileSizeEx(file, &before) != FALSE;
-  int result = _chsize_s(fd, length);
-  // Keep the existing guest wrapper's CRT error convention.
-  if (result != 0) return errno = result == EBADF ? EBADF : EINVAL, -1;
+  if (!have_size || before.QuadPart != length) {
+    FILE_END_OF_FILE_INFO end{};
+    end.EndOfFile.QuadPart = length;
+    if (!SetFileInformationByHandle(file, FileEndOfFileInfo, &end, sizeof(end)))
+      return gesher::FailWithLastError();
+  }
   if (!have_size || length == 0 || before.QuadPart != length) return 0;
 
   SYSTEM_INFO system{};
@@ -476,59 +602,11 @@ static int PositionedNullDevice(HANDLE file, bool* is_null) {
   return 0;
 }
 
-static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool writing) {
-  if (offset < 0) return errno = EINVAL, -1;
-  PositionedHandle anchor, positioned, event;
-  DWORD type, access;
-  // Linux's MAX_RW_COUNT for the 4 KiB pages exposed by this Windows backend.
+static ssize_t PositionedNativeIo(HANDLE anchor, DWORD type, DWORD access, bool append,
+                                   void* buf, size_t count, off_t offset, bool writing) {
+  PositionedHandle positioned, event;
+  HANDLE file = anchor;
   const DWORD want = count > 0x7ffff000 ? 0x7ffff000 : static_cast<DWORD>(count);
-  {
-    // Capture the exact object before close/dup2 can recycle its fd or HANDLE.
-    // No descriptor lock is held during the filesystem open or pending I/O.
-    gesher::record_locks::DescriptorGuard descriptor_guard;
-    HANDLE file = gesher::HandleFromFd(fd);
-    if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
-    short ready;
-    if (gesher_is_socket(fd) || gesher::IsBinderFd(fd) || gesher::LookupEventFd(fd) ||
-        gesher::PollEpoll(fd, 0, &ready)) return errno = ESPIPE, -1;
-    SetLastError(ERROR_SUCCESS);
-    type = GetFileType(file);
-    if (type == FILE_TYPE_UNKNOWN && GetLastError() != ERROR_SUCCESS) return gesher::FailWithLastError();
-    if (type == FILE_TYPE_PIPE) return errno = ESPIPE, -1;
-    DWORD console_mode;
-    if (type == FILE_TYPE_CHAR && GetConsoleMode(file, &console_mode)) return errno = ESPIPE, -1;
-    uint32_t granted = 0;
-    int error = gesher::record_locks::HandleAccess(file, &granted);
-    if (error) return errno = error, -1;
-    access = writing ? (granted & FILE_WRITE_DATA ? FILE_WRITE_DATA : FILE_APPEND_DATA) : FILE_READ_DATA;
-    // ReOpenFile can request more access than the original. Never use that to
-    // turn O_RDONLY/O_WRONLY/O_PATH descriptors into writable/readable ones.
-    if ((granted & access) == 0) return errno = EBADF, -1;
-    if (count != 0 && buf == nullptr) {
-      // Linux access_ok checks the user address range before dispatch, even
-      // when a backend will not actually dereference the buffer.
-      SYSTEM_INFO system{};
-      GetSystemInfo(&system);
-      if (count - 1 > reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress))
-        return errno = EFAULT, -1;
-    }
-    gesher::Device device;
-    if (gesher::DeviceFromFd(fd, &device)) {
-      if (!writing) {
-        // Zero/random reads really fill the caller's memory. Unlike Windows
-        // ReadFile, the virtual device backend does not probe bad pointers.
-        if (count != 0 && buf == nullptr) return errno = EFAULT, -1;
-        return read(fd, buf, want);
-      }
-      // Random writes consume entropy input on Linux, whereas zero writes
-      // discard it. The two logical devices share the same native NUL handle.
-      if (device == gesher::Device::kRandom && count != 0 && buf == nullptr)
-        return errno = EFAULT, -1;
-    }
-    if (!DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &anchor.value,
-                         0, FALSE, DUPLICATE_SAME_ACCESS)) return gesher::FailWithLastError();
-  }
-  HANDLE file = anchor.value;
   if (type == FILE_TYPE_DISK) {
     BY_HANDLE_FILE_INFORMATION information{};
     if (!GetFileInformationByHandle(file, &information)) return gesher::FailWithLastError();
@@ -566,8 +644,8 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
   if (event.value == nullptr) return gesher::FailWithLastError();
   OVERLAPPED ov{};
   ov.hEvent = event.value;
-  ov.Offset = static_cast<DWORD>(static_cast<unsigned long long>(offset));
-  ov.OffsetHigh = static_cast<DWORD>(static_cast<unsigned long long>(offset) >> 32);
+  ov.Offset = append ? MAXDWORD : static_cast<DWORD>(static_cast<unsigned long long>(offset));
+  ov.OffsetHigh = append ? MAXDWORD : static_cast<DWORD>(static_cast<unsigned long long>(offset) >> 32);
   DWORD transferred = 0;
   BOOL done = writing ? WriteFile(file, buf, want, &transferred, &ov)
                       : ReadFile(file, buf, want, &transferred, &ov);
@@ -583,8 +661,78 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
     if (error == ERROR_NOACCESS || error == ERROR_INVALID_USER_BUFFER) return errno = EFAULT, -1;
     return errno = gesher::ErrnoFromWin32(error), -1;
   }
-  if (writing && transferred > 0) gesher::InotifyNoteWrite(anchor.value);
+  if (writing && transferred > 0) gesher::InotifyNoteWrite(anchor);
   return static_cast<ssize_t>(transferred);
+}
+
+static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool writing) {
+  if (offset < 0) return errno = EINVAL, -1;
+  gesher::DescriptorSnapshotPtr snapshot;
+  gesher::Device device{};
+  bool is_device = false;
+  // Linux's MAX_RW_COUNT for the 4 KiB pages exposed by this Windows backend.
+  const DWORD want = count > 0x7ffff000 ? 0x7ffff000 : static_cast<DWORD>(count);
+  {
+    // Capture the exact object before close/dup2 can recycle its fd or HANDLE.
+    // No descriptor lock is held during the filesystem open or pending I/O.
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    HANDLE file = gesher::HandleFromFd(fd);
+    if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+    short ready;
+    if (gesher_is_socket(fd) || gesher::IsBinderFd(fd) || gesher::LookupEventFd(fd) ||
+        gesher::PollEpoll(fd, 0, &ready)) return errno = ESPIPE, -1;
+    snapshot = gesher::CaptureDescriptor(fd);
+    is_device = gesher::DeviceFromFd(fd, &device);
+  }
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  const HANDLE file = snapshot->handle;
+  SetLastError(ERROR_SUCCESS);
+  const DWORD type = GetFileType(file);
+  if (type == FILE_TYPE_UNKNOWN && GetLastError() != ERROR_SUCCESS) return gesher::FailWithLastError();
+  if (type == FILE_TYPE_PIPE) return errno = ESPIPE, -1;
+  DWORD console_mode;
+  if (type == FILE_TYPE_CHAR && GetConsoleMode(file, &console_mode)) return errno = ESPIPE, -1;
+  const int status_flags = gesher::FileDescriptionFlags(snapshot);
+  if (status_flags < 0) return -1;
+  if ((status_flags & O_PATH) != 0 ||
+      (status_flags & O_ACCMODE) == (writing ? O_RDONLY : O_WRONLY)) return errno = EBADF, -1;
+  // Android uses Linux's pwrite behavior: O_APPEND overrides the explicit
+  // offset, but the caller's shared ordinary file position stays unchanged.
+  const bool append = writing && type == FILE_TYPE_DISK && (status_flags & O_APPEND) != 0;
+  if (writing && gesher::FileDescriptionIsMemfd(snapshot)) {
+    if (int error = gesher::MemfdWriteHandleError(file, false, static_cast<uint64_t>(offset), count, append))
+      return errno = error, -1;
+  }
+  uint32_t granted = 0;
+  int error = gesher::record_locks::HandleAccess(file, &granted);
+  if (error) return errno = error, -1;
+  const DWORD access = writing ? (granted & FILE_WRITE_DATA ? FILE_WRITE_DATA : FILE_APPEND_DATA) : FILE_READ_DATA;
+  // ReOpenFile can request more access than the original. Never use that to
+  // turn O_RDONLY/O_WRONLY/O_PATH descriptors into writable/readable ones.
+  if ((granted & access) == 0) return errno = EBADF, -1;
+  if (count != 0 && buf == nullptr) {
+    // Linux access_ok checks the user address range before dispatch, even
+    // when a backend will not actually dereference the buffer.
+    SYSTEM_INFO system{};
+    GetSystemInfo(&system);
+    if (count - 1 > reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress))
+      return errno = EFAULT, -1;
+  }
+  if (is_device) {
+    if (!writing) {
+      // Zero/random reads really fill the caller's memory. Unlike Windows
+      // ReadFile, the virtual device backend does not probe bad pointers.
+      if (count != 0 && buf == nullptr) return errno = EFAULT, -1;
+      return gesher::ReadFileDescription(snapshot, buf, want);
+    }
+    // Random writes consume entropy input on Linux, whereas zero writes
+    // discard it. The two logical devices share the same native NUL handle.
+    if (device == gesher::Device::kRandom && count != 0 && buf == nullptr)
+      return errno = EFAULT, -1;
+  }
+  return PositionedNativeIo(file, type, access, append, buf, count, offset, writing);
 }
 
 ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
@@ -592,12 +740,6 @@ ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
 }
 
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
-  // A memfd's seals may forbid the write (memfd_seals.cc).
-  if (offset >= 0) {
-    if (const int sealed = gesher::MemfdWriteError(fd, false, static_cast<uint64_t>(offset), count)) {
-      return errno = sealed, -1;
-    }
-  }
   return PositionedIo(fd, const_cast<void*>(buf), count, offset, true);
 }
 
@@ -606,6 +748,64 @@ ssize_t pread64(int fd, void* buf, size_t count, off_t offset) {
 }
 ssize_t pwrite64(int fd, const void* buf, size_t count, off_t offset) {
   return pwrite(fd, buf, count, offset);
+}
+
+// MinGW declares lseek as the lseek64 symbol under _FILE_OFFSET_BITS=64.
+// Every host caller and the bionic bridge therefore use this same policy.
+off_t lseek(int fd, off_t offset, int whence) {
+  gesher::DescriptorSnapshotPtr snapshot;
+  bool is_stream = false, no_position = false;
+  {
+    gesher::record_locks::DescriptorGuard descriptor_guard;
+    HANDLE file = gesher::HandleFromFd(fd);
+    if (file == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+    snapshot = gesher::CaptureDescriptor(fd);
+    is_stream = gesher_is_socket(fd) || gesher::IsBinderFd(fd);
+    short ready;
+    // Linux anon-inode event descriptors and these memory devices use
+    // noop_llseek: they have no byte position and return zero even for a
+    // negative offset. A NUL placeholder alone is not evidence of this kind.
+    gesher::Device device;
+    no_position = gesher::LookupEventFd(fd) || gesher::PollEpoll(fd, 0, &ready) ||
+                  gesher::DeviceFromFd(fd, &device);
+  }
+  if (!snapshot) return -1;
+  gesher::FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  const int flags = gesher::FileDescriptionIoFlags(snapshot);
+  if (flags < 0) return -1;
+  if ((flags & O_PATH) != 0) return errno = EBADF, -1;
+  if (whence < SEEK_SET || whence > SEEK_HOLE) return errno = EINVAL, -1;
+  if (is_stream) return errno = ESPIPE, -1;
+  if (no_position) return 0;
+  const HANDLE file = snapshot->handle;
+  SetLastError(ERROR_SUCCESS);
+  DWORD type = GetFileType(file);
+  if (type == FILE_TYPE_UNKNOWN && GetLastError() != ERROR_SUCCESS) return gesher::FailWithLastError();
+  if (type == FILE_TYPE_PIPE) return errno = ESPIPE, -1;
+  if (type == FILE_TYPE_CHAR) {
+    DWORD console_mode;
+    if (GetConsoleMode(file, &console_mode)) return errno = ESPIPE, -1;
+    bool is_null = false;
+    int error = PositionedNullDevice(file, &is_null);
+    if (error) return errno = error, -1;
+    return is_null ? 0 : (errno = ESPIPE, -1);
+  }
+  DWORD origin = static_cast<DWORD>(whence);
+  LARGE_INTEGER distance{}, result{};
+  distance.QuadPart = offset;
+  if (whence == SEEK_DATA || whence == SEEK_HOLE) {
+    // Linux's generic filesystem fallback may treat every byte before EOF as
+    // data. This backend does not claim finer sparse-extent information.
+    if (offset < 0) return errno = EINVAL, -1;
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size)) return gesher::FailWithLastError();
+    if (offset >= size.QuadPart) return errno = ENXIO, -1;
+    if (whence == SEEK_HOLE) distance = size;
+    origin = FILE_BEGIN;
+  }
+  if (!SetFilePointerEx(file, distance, &result, origin)) return gesher::FailWithLastError();
+  return static_cast<off_t>(result.QuadPart);
 }
 
 int nice(int inc) {
@@ -656,6 +856,12 @@ char* realpath(const char* path, char* resolved_path) {
       out = "/" + gesher::Narrow(wpath.c_str());
       break;
     }
+    // Following a map_files link is EPERM (bionic's realpath opens the
+    // path O_PATH, which follows it).
+    if (const int error = gesher::procfs::Describe(wpath).follow_error) {
+      errno = error;
+      return nullptr;
+    }
     std::string target;
     if (!gesher::procfs::ReadLink(wpath, &target)) return nullptr;
     if (target.empty() || target[0] != '/' || depth > 8) {
@@ -671,13 +877,21 @@ char* realpath(const char* path, char* resolved_path) {
     return nullptr;
   }
   if (kind == gesher::PathKind::kFile) {
-    HANDLE h = CreateFileW(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (!gesher::CheckExternalStorageAccess(wpath, gesher::AccessKind::kStat)) return nullptr;
+    HANDLE h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                               FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS);
     if (h == INVALID_HANDLE_VALUE) {
       gesher::FailWithLastError();
       return nullptr;
     }
-    bool ok = FinalPath(h, &out);
+    if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
+      CloseHandle(h);
+      errno = EACCES;
+      return nullptr;
+    }
+    // Gesher's ELF loader by its name, however it was reached (system_linker.h).
+    bool ok = gesher::system_linker::IsFileHandle(h) ? (out = gesher::system_linker::kPath, true)
+                                                      : FinalPath(h, &out);
     CloseHandle(h);
     if (!ok) return nullptr;
   } else if (kind != gesher::PathKind::kVirtual) {
@@ -697,17 +911,35 @@ char* realpath(const char* path, char* resolved_path) {
 }
 
 int setenv(const char* name, const char* value, int overwrite) {
-  if (auto result = gesher::WriteFontEnvironment(name, value, overwrite))
-    return *result == 0 ? 0 : (errno = EINVAL, -1);
-  if (!overwrite && name != nullptr && getenv(name) != nullptr) return 0;
-  if (value == nullptr) return errno = EINVAL, -1;
-  return PutEnvironment(name, value);
+  return gesher::SetEnvironment(name, value, overwrite);
 }
 
 int unsetenv(const char* name) {
-  if (auto result = gesher::WriteFontEnvironment(name, "", 1))
-    return *result == 0 ? 0 : (errno = EINVAL, -1);
-  return PutEnvironment(name, nullptr);
+  return gesher::UnsetEnvironment(name);
 }
 
 }  // extern "C"
+
+namespace gesher {
+int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,
+                              unsigned count, int64_t offset) {
+  if (offset < 0) return errno = EINVAL, -1;
+  FileOperationLease operation(snapshot);
+  if (operation.Error()) return errno = operation.Error(), -1;
+  const int flags = FileDescriptionIoFlags(snapshot);
+  if (flags < 0) return -1;
+  if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_RDONLY) return errno = EBADF, -1;
+  if (snapshot->kind != DescriptorKind::kFile || GetFileType(snapshot->handle) != FILE_TYPE_DISK)
+    return errno = ESPIPE, -1;
+  uint32_t granted = 0;
+  if (int error = record_locks::HandleAccess(snapshot->handle, &granted)) return errno = error, -1;
+  const DWORD access = granted & FILE_WRITE_DATA ? FILE_WRITE_DATA : FILE_APPEND_DATA;
+  if ((granted & access) == 0) return errno = EBADF, -1;
+  if (FileDescriptionIsMemfd(snapshot)) {
+    if (int error = MemfdWriteHandleError(snapshot->handle, false, static_cast<uint64_t>(offset), count,
+                                         (flags & O_APPEND) != 0)) return errno = error, -1;
+  }
+  return PositionedNativeIo(snapshot->handle, FILE_TYPE_DISK, access, (flags & O_APPEND) != 0,
+                            const_cast<void*>(bytes), count, offset, true);
+}
+}  // namespace gesher

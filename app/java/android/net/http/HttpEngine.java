@@ -27,6 +27,9 @@ public abstract class HttpEngine {
                 HTTP_CACHE_DISK_NO_HTTP=2, HTTP_CACHE_DISK=3;
         private String agent;
         private boolean http2Enabled = true;
+        private int cacheMode = HTTP_CACHE_DISABLED;
+        private long cacheSize;
+        private String storagePath;
         public Builder(Context context) { Objects.requireNonNull(context, "Context is required"); }
         public String getDefaultUserAgent() { return System.getProperty("http.agent", "Gesher/1.0"); }
         public Builder setUserAgent(String value) { agent=Objects.requireNonNull(value); return this; }
@@ -41,12 +44,19 @@ public abstract class HttpEngine {
         public Builder setEnablePublicKeyPinningBypassForLocalTrustAnchors(boolean enabled) { return this; }
         public Builder setEnableHttpCache(int mode, long size) {
             if (mode<0 || mode>3 || size<0) throw new IllegalArgumentException("Invalid HTTP cache configuration");
-            return this; // This adapter deliberately does not install a process-global cache.
+            validateCachePath(mode);
+            cacheMode = mode; cacheSize = size;
+            return this;
         }
         public Builder setStoragePath(String path) {
             if (!new java.io.File(Objects.requireNonNull(path)).isDirectory())
                 throw new IllegalArgumentException("Storage path must be an existing directory");
+            storagePath = path;
             return this;
+        }
+        private void validateCachePath(int mode) {
+            boolean disk = mode == HTTP_CACHE_DISK || mode == HTTP_CACHE_DISK_NO_HTTP;
+            if (disk && storagePath == null) throw new IllegalArgumentException("Storage path must be set");
         }
         public Builder addQuicHint(String host, int port, int alternatePort) {
             Objects.requireNonNull(host);
@@ -63,7 +73,9 @@ public abstract class HttpEngine {
         public Builder setDnsOptions(DnsOptions options) { Objects.requireNonNull(options); return this; }
         public Builder setQuicOptions(QuicOptions options) { Objects.requireNonNull(options); return this; }
         public HttpEngine build() {
-            return new JavaHttpEngine(agent == null ? getDefaultUserAgent() : agent, http2Enabled);
+            validateCachePath(cacheMode);
+            return new JavaHttpEngine(agent == null ? getDefaultUserAgent() : agent, http2Enabled,
+                    new EngineHttpCache(cacheMode, cacheSize, storagePath));
         }
     }
 }

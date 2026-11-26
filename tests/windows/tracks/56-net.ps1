@@ -4,6 +4,24 @@
 # Dot-sourced by run-tests.ps1: Check, RunDex, NoDrive, $Dir, $root, $bcp and
 # $failed are its.
 
+# Production settings and Android's repeated app-bind proxy setter, followed by a
+# real SOCKS5/HTTP loopback exchange on ART and Windows sockets. Track 50 supplies
+# the bounded process helper; no native Windows settings are changed by this fixture.
+$proxyTestBoot = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') |
+  ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
+Check 'SOCKS5 settings, app-bind bypass and real Java HTTP transport' {
+  $proxyTestSavedOverride = $env:GESHER_PROXY
+  try {
+    $env:GESHER_PROXY = 'direct'
+    RunTimed "$Dir/dalvikvm.exe" @("-Xbootclasspath:$proxyTestBoot",
+      "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
+      '-cp', (NoDrive "$Dir/services-tests.dex"), 'com.gesher.net.ProxySettingsRuntimeTest', 'art') 120
+  } finally {
+    if ($null -eq $proxyTestSavedOverride) { Remove-Item Env:GESHER_PROXY -ErrorAction SilentlyContinue }
+    else { $env:GESHER_PROXY = $proxyTestSavedOverride }
+  }
+} @('PROXY_RUNTIME_CONTRACTS_OK')
+
 # Runs gesher.NetTest (net-tests.dex, tests/dex-net) on the core boot class path,
 # with a time limit; each of its "OK"/"FAIL" lines becomes a PASS/FAIL line here.
 function NetDex([string] $Name, [string[]] $Arguments, [int] $Seconds = 300, [hashtable] $Environment = @{}) {
@@ -54,6 +72,10 @@ function NetDex([string] $Name, [string[]] $Arguments, [int] $Seconds = 300, [ha
 
 $cacerts = Join-Path $root 'system/etc/security/cacerts'
 
+Check 'net: NETLINK_ROUTE address dumps, limits and Android restrictions' {
+  & "$Dir/netlink_route_test.exe"
+} @('netlink_route_test all passed')
+
 # On this machine: DNS, TCP and UDP on loopback, NIO, HTTP through OkHttp, BigInteger
 # (NativeBN), the JCA providers (Conscrypt, BouncyCastle) and the default SSLContext.
 $null = NetDex 'sockets, DNS, NIO, HTTP and crypto on this machine' @('local')
@@ -62,11 +84,38 @@ $null = NetDex 'sockets, DNS, NIO, HTTP and crypto on this machine' @('local')
 # Conscrypt and the network security config read.
 $files = @(Get-ChildItem $cacerts -ErrorAction SilentlyContinue | Where-Object Name -match '^[0-9a-f]{8}\.\d+$')
 $bundled = @(Get-ChildItem "$Dir/cacerts" -ErrorAction SilentlyContinue).Count
-if ($bundled -gt 100 -and $files.Count -ge $bundled -and (Test-Path (Join-Path $cacerts '.gesher-cacerts'))) {
+# Only certificates in it (Conscrypt reads every file as one): the manifest is next to it.
+$others = @(Get-ChildItem $cacerts -Force -ErrorAction SilentlyContinue | Where-Object Name -notmatch '^[0-9a-f]{8}\.\d+$')
+if ($bundled -gt 100 -and $files.Count -ge $bundled -and $others.Count -eq 0 -and
+    (Test-Path -LiteralPath (Join-Path (Split-Path $cacerts) '.gesher-cacerts'))) {
   Write-Host "PASS  net: the system CA certificates in `$ANDROID_ROOT/etc/security/cacerts: $($files.Count) ($bundled Android's, the rest from Windows' stores)"
 } else {
-  Write-Host "FAIL  net: the system CA certificates in `$ANDROID_ROOT/etc/security/cacerts: $($files.Count) files, $bundled bundled"
+  Write-Host "FAIL  net: the system CA certificates in `$ANDROID_ROOT/etc/security/cacerts: $($files.Count) files, $($others.Count) others, $bundled bundled"
   $failed++
+}
+# The same layout in a directory of its own, upgrading what earlier versions left in it.
+if (Test-Path "$Dir/trust_store_layout_test.exe") {
+  $layout = (& "$Dir/trust_store_layout_test.exe" 2>&1 | Out-String)
+  if ($LASTEXITCODE -eq 0 -and $layout -match 'trust store layout: all passed') {
+    Write-Host "PASS  net: the system CA directory holds only certificates ($($layout.Trim()))"
+  } else {
+    Write-Host "FAIL  net: the system CA directory layout`n$layout"
+    $failed++
+  }
+}
+
+# The user-added CAs (misc/user/0/cacerts-added): synthetic roots classified and laid out
+# as Android's TrustedCertificateStore keeps them, in temporary directories; then this
+# machine's real stores, whose user-added roots must all be in Windows' ROOT store and
+# outside Microsoft's root program.
+if (Test-Path "$Dir/trust_store_user_test.exe") {
+  $userCas = (& "$Dir/trust_store_user_test.exe" 2>&1 | Out-String)
+  if ($LASTEXITCODE -eq 0 -and $userCas -match 'user CA certificates: all passed') {
+    Write-Host "PASS  net: the user-added CA certificates ($(($userCas -split "`r?`n" | Where-Object { $_ }) -join '; '))"
+  } else {
+    Write-Host "FAIL  net: the user-added CA certificates`n$userCas"
+    $failed++
+  }
 }
 
 # TCP and UDP echo servers that are not Java: .NET's, on another thread of this script.
@@ -164,11 +213,23 @@ try {
     Write-Host "FAIL  net: the Windows root is in `$ANDROID_ROOT/etc/security/cacerts $($found.Count) times"
     $failed++
   }
+  # Installed on this PC (not one of Microsoft's root program): a user-added CA too, as
+  # Android lists a root its user or a device admin installed ("user:" in AndroidCAStore,
+  # what Chrome trusts besides its own root store). A root Microsoft distributes (one
+  # Windows put in its AuthRoot store, and so a system CA) is not.
+  $casArgs = @('cas', $rootPublic.Thumbprint, 'user')
+  $microsoftRoot = Get-ChildItem Cert:\LocalMachine\AuthRoot -ErrorAction SilentlyContinue | Where-Object {
+    $b64 = [Convert]::ToBase64String($_.RawData).Substring(0, 64)
+    @(Get-ChildItem $cacerts | Where-Object { (Get-Content -Raw $_.FullName).Contains($b64) }).Count -gt 0
+  } | Select-Object -First 1
+  if ($microsoftRoot) { $casArgs += @($microsoftRoot.Thumbprint, 'system') }
+  $null = NetDex "the Windows root is a user-added CA$(if ($microsoftRoot) { ", $($microsoftRoot.GetNameInfo('SimpleName', $false)) (Microsoft's) a system CA only" })" $casArgs 180
   $null = NetDex 'GESHER_WINDOWS_CERTS=0: only Android''s CAs, the Windows root is not trusted' @('https', $url, 'reject') 180 @{ GESHER_WINDOWS_CERTS = '0' }
   $machineRoot.Open('ReadWrite')
   $machineRoot.Remove($rootPublic)
   $machineRoot.Close()
   $null = NetDex 'the test root removed from Windows'' store is not trusted any more' @('https', $url, 'reject') 180
+  $null = NetDex 'the test root removed from Windows'' store is no CA any more, user-added or system' @('cas', $rootPublic.Thumbprint, 'absent') 180
 } finally {
   Write-Host 'INFO  net TLS cleanup: root-test server stop'
   try { $tlsServer.Dispose() } finally {
@@ -312,12 +373,13 @@ $machineRoot.Open('ReadWrite')
 $machineRoot.Add($rootPublic)
 $machineRoot.Close()
 $env:GESHER_NETAPP_HTTPS = "https://localhost:$($appTls.Port)/"
+$env:GESHER_NETAPP_USER_CA = $rootPublic.Thumbprint
 try {
 $out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/netapp.apk")) 400
 NetExpect 'netapp.apk in one process: ConnectivityManager (Windows'' active network, its capabilities, link properties and NetworkInfo), a default and a request callback, HTTPS through HttpsURLConnection, cleartext refused (target SDK 36)' $out $LASTEXITCODE @(
   'NetApp state: internet true', 'connected true', 'NetApp default callback: available true',
   'NetApp request callback (INTERNET): available true', 'NetApp https: 200 expected page from https://localhost:',
-  'NetApp cleartext http: refused', 'NetApp done', 'gesher-app: done')
+  'NetApp cleartext http: refused', "NetApp user CA: $($rootPublic.Thumbprint) user true", 'NetApp done', 'gesher-app: done')
 
 $out = NetRun ($dvmNet + 'com.gesher.app.Main', (NoDrive "$Dir/nonetapp.apk")) 300
 NetExpect 'nonetapp.apk without INTERNET and ACCESS_NETWORK_STATE: name lookups and sockets refused (EACCES), ConnectivityManager throws SecurityException' $out $LASTEXITCODE @(
@@ -392,12 +454,13 @@ if (-not $route) { $out += "`n(no default route on this machine)" }
 $failedBefore = $failed
 NetExpect "netapp.apk in an app process of a system server: ConnectivityManager over binder; an address added to and removed from the adapter of Windows' default route (interface $($route.ifIndex)) reaches its default network callback" $out $appCode @(
   'NetApp state: internet true', 'NetApp default callback: available true', 'NetApp https: 200 expected page from https://localhost:',
-  'NetApp watch: added seen true', 'NetApp watch: removed seen true', 'NetApp done', 'gesher-app: done')
+  "NetApp user CA: $($rootPublic.Thumbprint) user true", 'NetApp watch: added seen true', 'NetApp watch: removed seen true', 'NetApp done', 'gesher-app: done')
 if ($failed -ne $failedBefore) {
   Get-Content "$netLogs/system_server.out", "$netLogs/system_server.err" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
 }
 } finally {
   Remove-Item Env:GESHER_NETAPP_HTTPS -ErrorAction SilentlyContinue
+  Remove-Item Env:GESHER_NETAPP_USER_CA -ErrorAction SilentlyContinue
   Write-Host 'INFO  net TLS cleanup: app server stop'
   try { $appTls.Dispose() } finally {
     Write-Host 'INFO  net TLS cleanup: app certificate store remove'

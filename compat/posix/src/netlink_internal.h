@@ -16,11 +16,10 @@ struct NetlinkState;
 std::shared_ptr<NetlinkState> CreateNetlinkState(int sock_type);
 void NetlinkClose(NetlinkState& state);
 bool NetlinkReadable(NetlinkState& state);
-int NetlinkAvailable(NetlinkState& state);
 
 int NetlinkBind(NetlinkState& state, const void* addr, uint32_t len);
 int NetlinkConnect(NetlinkState& state, const void* addr, uint32_t len);
-int NetlinkGetSockName(NetlinkState& state, void* addr, uint32_t* len);
+int NetlinkGetName(NetlinkState& state, void* addr, uint32_t* len, bool peer);
 
 ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count, int flags,
                     const void* addr, uint32_t addrlen);

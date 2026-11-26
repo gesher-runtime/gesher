@@ -32,4 +32,8 @@ FontEnvironmentValue ReadFontEnvironment(FontEnvironmentKey key) noexcept;
 // not promise general callback/environment synchronization.
 std::optional<int> WriteFontEnvironment(const char* name, const char* value,
                                       int overwrite) noexcept;
+// A native wide write publishes its immutable UTF8 view only after the wide
+// primitive succeeds; malformed UTF16 remains invalid in that view.
+std::optional<int> WriteWideFontEnvironment(const char* name, const char* value,
+    const wchar_t* wide_name, const wchar_t* wide_value) noexcept;
 }  // namespace gesher

@@ -87,11 +87,9 @@ inline int FromType(ws::Type type) {
   return 0;
 }
 
-// The interface ioctls (SIOCGIFFLAGS, SIOCGIFMTU) on a struct ifreq; false
-// if `request` is not one (netdb.cc).
+// Network interface ioctls on ifreq/ifconf; false for unhandled requests.
 bool InterfaceIoctl(unsigned long request, void* arg, int* result);
-// Shared normalized interface enumeration and IFF_* flag translation (netdb.cc).
+// Shared normalized interface enumeration (netdb.cc).
 bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces);
-unsigned ToIfFlags(unsigned flags);
 
 }  // namespace gesher::sock

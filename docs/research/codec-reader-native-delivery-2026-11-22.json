@@ -1,0 +1,84 @@
+{
+  "scope": "Check actual MediaCodec/ImageReader delivery against a pixel/lifetime oracle.\n\nProduction reader, queue, acquisition, close, converters and codec delivery are\ncompiled together. JNI/Java arrays and ANativeWindow are explicit host adapters.\nA/B counts real native allocations and the minimum Java array/copy payload;\nJava pinning intentionally makes no extra copy. It is not a Windows timing or\nwhole-process memory measurement.",
+  "sanitized": true,
+  "asan_options": "detect_leaks=0",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "compiler": "c++",
+  "baseline_ref": "751d82310f7c4c470c098ccebfd5d2d04699a0cd",
+  "baseline": {
+    "source_sha256": {
+      "compat/devices/camera_frames.cc": "490604099ff401e494addc1a5d76b18c83b696f0e801c44566e7b86f4723ce25",
+      "compat/media/jni/media_codec_jni.cc": "d7adc76beb6d7a0bd446b1bbe8261b76cfc987d1fba8b943dde60a2dc8e416ac"
+    },
+    "measurements": [
+      {
+        "width": 1280,
+        "height": 720,
+        "frames": 12,
+        "checksum": 10218863875005173760,
+        "retained_image_bytes": 1382400,
+        "native_allocated_bytes": 33180480,
+        "java_array_bytes": 16588800,
+        "java_copy_bytes": 16588800
+      },
+      {
+        "width": 1920,
+        "height": 1080,
+        "frames": 12,
+        "checksum": 10698057992962751488,
+        "retained_image_bytes": 3110400,
+        "native_allocated_bytes": 74652480,
+        "java_array_bytes": 37324800,
+        "java_copy_bytes": 37324800
+      },
+      {
+        "width": 3840,
+        "height": 2160,
+        "frames": 12,
+        "checksum": 12934435032818030592,
+        "retained_image_bytes": 12441600,
+        "native_allocated_bytes": 298601280,
+        "java_array_bytes": 149299200,
+        "java_copy_bytes": 149299200
+      }
+    ]
+  },
+  "candidate": {
+    "source_sha256": {
+      "compat/devices/camera_frames.cc": "5cf8388aac7fe4cb5bc0977213e07ce03610a80947c0e11bcd5206cc638d41c4",
+      "compat/media/jni/media_codec_jni.cc": "31beecf709bf8c3f5f061cbe0436c2fbd78419d1d783d9bdf8a13c7188ca5374"
+    },
+    "measurements": [
+      {
+        "width": 1280,
+        "height": 720,
+        "frames": 12,
+        "checksum": 10218863875005173760,
+        "retained_image_bytes": 1382400,
+        "native_allocated_bytes": 16591680,
+        "java_array_bytes": 0,
+        "java_copy_bytes": 0
+      },
+      {
+        "width": 1920,
+        "height": 1080,
+        "frames": 12,
+        "checksum": 10698057992962751488,
+        "retained_image_bytes": 3110400,
+        "native_allocated_bytes": 37327680,
+        "java_array_bytes": 0,
+        "java_copy_bytes": 0
+      },
+      {
+        "width": 3840,
+        "height": 2160,
+        "frames": 12,
+        "checksum": 12934435032818030592,
+        "retained_image_bytes": 12441600,
+        "native_allocated_bytes": 149302080,
+        "java_array_bytes": 0,
+        "java_copy_bytes": 0
+      }
+    ]
+  }
+}

@@ -99,6 +99,14 @@ an account-data wipe. Clear any explicit `GESHER_MICROG_SPOOF` override before
 relying on the marker's disabled state. Without an installed real GMS package,
 Gesher retains its synthetic GMS/dummy-account compatibility path. Synthetic
 sign-in, token and push tests are separate from real microG/Google results.
+The synthetic package's data areas are where an installed package of that name
+has them (`$ANDROID_DATA/data/<package>`, `user_de/0/<package>`); Gesher never
+creates them. While they do not exist, another app's
+`createPackageContext(...).getSharedPreferences(...)` reads nothing and cannot
+commit, as with another package's private directory on Android, and nothing
+reaches `/data/data/...`, which on Windows is a folder at the root of the current
+drive. Data that a disabled microG left there is protected from other apps only
+as any installed package's data is (see ADR 0090).
 
 ## APK verification and certificate compatibility
 
@@ -133,6 +141,30 @@ Unsigned developer fixtures remain supported; replacing their code invalidates
 old code-bound capabilities. Loaded APK files must remain unchanged. The
 installer prevents installing an application as the reserved `android` owner.
 
+Later certificate-compatibility policy checks reuse the full verification owned
+by that exact `ApkPackage` generation. They still require the official current
+signer and the allowed signing scheme; v1 additionally requires the complete GSF
+artifact hash above. A replacement object verifies its own contents, even at the
+same path, size and modification time. Addon admission and override selection
+still independently verify the current file's actual manifest name and complete
+signed contents: cached object identity cannot replace that boundary. The
+standalone packaging verifier and the bundled addon's explicit check before
+`PackageParser2` also remain. No result is transferred from a path-based
+preflight into a later parsed object.
+
+This removes a conditional duplicate present since the November 5 microG
+integration: the first certificate-compatibility check used to reopen an APK
+whose parsed object had already fully verified it. It is separate from the
+November 19 addition of full verification to ordinary UID boot admission, which
+remains mandatory. `tools/test_microg_identity.py` exercises actual official
+Companion and exact-pinned GSF APKs, tampered contents, a new generation at the
+same path and a valid v1 signature with a changed ZIP comment that must fail the
+whole-file pin. It also counts digest input through production verification:
+after Companion's full verification, the additional policy check hashes its
+753-byte certificate instead of reopening the 4,210,169-byte APK. The test uses
+constructed Android manifest objects on the host; `MicrogTest` retains ART
+parser coverage. These are operation counts, not Windows startup timings.
+
 ## Permissions and application identity
 
 With `GESHER_MICROG_SPOOF=1`, each package receives a durable distinct Android
@@ -149,6 +181,89 @@ verified-addon allowlist. A runtime permission request uses the host's
 default-deny confirmation dialog and returns the framework grant result.
 Unavailable confirmation denies the request. Cache invalidation reaches existing
 app processes, so grants and revocations do not require restarting the client.
+
+### Restricted and background permissions
+
+Hard-restricted permissions (`ACCESS_BACKGROUND_LOCATION`, the SMS and call-log
+groups, `PROCESS_OUTGOING_CALLS`, ...) can be granted only with a restriction
+exemption, as on Android 16 (issue #485). Gesher records the same exemptions as
+AOSP:
+
+- **Installer exemption** (`FLAG_PERMISSION_RESTRICTION_INSTALLER_EXEMPT`). Like
+  `PackageInstaller.SessionParams` and `pm install`, every Gesher install path
+  defaults to `INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS`. A session that
+  calls `setWhitelistedRestrictedPermissions(set)` allowlists exactly that set
+  (an empty set keeps every restricted permission restricted, like
+  `--restrict-permissions`); an update adds to existing exemptions and never
+  removes one.
+- **System exemption** (`FLAG_PERMISSION_RESTRICTION_SYSTEM_EXEMPT`) for verified
+  system addons such as microG, from `ApkPackage.isSystemAddon()`, not from a
+  package name.
+- **One-time migration.** Packages admitted before this change were installed
+  through paths that now default to the installer allowlist. The first boot with
+  a runtime-permission ledger lacking `restriction-exemptions=1` adds the
+  installer exemption to their requested restricted permissions and clears
+  `APPLY_RESTRICTION` there, as AOSP `restorePermissionState` does for exempt
+  permissions. Grants, denials, `USER_SET` and `USER_FIXED` are unchanged. Only
+  this migration supplies a default exemption at boot: afterwards a restricted
+  permission with no recorded state (a permission new to the catalogue, or an
+  install whose ledger write was lost) stays restricted. Installs write the
+  ledger before reporting success, so an opt-out session never becomes exempt.
+
+An exemption only makes the permission requestable; it never grants it, and the
+user consents to every grant through the dialogs below. Legacy apps (target SDK
+below 23) are the case where Android grants without a request: AOSP gives an
+exempt legacy app its restricted permissions with `REVIEW_REQUIRED` and makes
+the user review the app's permissions before it runs (its
+`PermissionPolicyService` leaves their AppOps untouched meanwhile). Gesher keeps
+those legacy grants (`checkPermission` reports them, as on Android) but has no
+such review screen, so it withholds their AppOps as the stand-in for that review
+gate, whatever the exemptions (also after the migration): the framework
+soft-denies the access,
+for example an empty call log. Its unrestricted permissions keep their legacy
+grants and AppOps as before.
+`PackageManager.get/add/removeWhitelistedRestrictedPermission`
+(`IPermissionManager` allowlist calls) follow AOSP: the system allowlist needs
+`WHITELIST_RESTRICTED_PERMISSIONS`, the installer and upgrade allowlists also
+accept the installer of record, only a privileged caller may add to the upgrade
+allowlist, and immutably restricted permissions (storage) need the privilege.
+
+Background permissions follow Android 16's `BackgroundGrantBehavior`: the
+foreground "Allow" never grants background access. For targets R and newer,
+foreground and background requested together are denied without UI, and a
+background request after a foreground grant opens the background choice (Settings
+on a phone). For older targets (microG targets 29) the foreground dialog comes
+first, then the background choice. A background request without its foreground
+is denied without UI. The background choice is a separate native Windows dialog
+with, in Android's order, **Allow all the time**, **Allow only while using the
+app** (the default) and **Don't allow, not even while using the app**, which
+removes all of that access, foreground included, and stops the app if it held it.
+
+The choice follows the rules of the screen Android shows at that point:
+
+- **Request dialog of an older target** (PermissionController's upgrade dialog).
+  Each half keeps its own decision history: a repeated refusal sets
+  `USER_FIXED`, and a fixed choice is not asked again. Closing the dialog is not
+  a decision.
+- **Settings page** (App info, below, and the target R+ request, which Android
+  sends to Settings). "Allow only while using the app" leaves the ungranted
+  background permission as it is, except that one the user fixed is revoked
+  again with `USER_SET` only, clearing `USER_FIXED`; "Don't allow" revokes the
+  same way (AOSP `AppPermissionViewModel`). A background permission
+  the user fixed is still offered there; one that is policy or system fixed is
+  not. For the target R+ request, returning without a choice counts against the
+  app as in AOSP `sendDirectlyToSettings`: the first time sets `USER_SET`, the
+  next `USER_FIXED`, after which the app's requests are denied without UI. A
+  dialog that could not be shown is not counted.
+
+When an app opens its own `ACTION_APPLICATION_DETAILS_SETTINGS` while one of its
+background permissions is ungranted, changeable on the Settings page and its
+foreground is granted, Gesher shows that background dialog instead of the
+Control Center and delivers the activity result (`RESULT_CANCELED`, as Settings
+does) after the user's choice. microG's `AskPermissionActivity` uses this path
+after its first request, so its location service no longer reopens the Control
+Center in a loop, even after the user refused twice in the request dialog. Other
+App info requests open the Control Center as before.
 
 The trusted host can grant or revoke a requested dangerous permission for user 0:
 
@@ -192,6 +307,21 @@ Accounts belong to the installed authenticator's package and code identity.
 Only that owner or the trusted host can read passwords/user data or mutate
 protected account secrets. Enumeration respects per-client visibility;
 visibility alone does not grant a normal authentication token.
+
+Visibility resolves as Android's `resolveAccountVisibility`: the authenticator
+always sees its accounts, and a value stored for a client's package and code
+identity wins. A client with no stored value gets the authenticator's
+`PACKAGE_NAME_KEY_LEGACY_VISIBLE` value (default `USER_MANAGED_VISIBLE`) when
+it shares the authenticator's signing certificate, holds
+`GET_ACCOUNTS_PRIVILEGED`, targets below API 26 with `GET_ACCOUNTS`, or holds
+`READ_CONTACTS` for a type whose authenticator holds `WRITE_CONTACTS`.
+Otherwise it gets the `PACKAGE_NAME_KEY_LEGACY_NOT_VISIBLE` value (default
+`USER_MANAGED_NOT_VISIBLE`), so an unset client sees nothing in ordinary
+enumeration unless the authenticator changed that default. As on Android,
+`getAccountsByTypeForPackage` called by the type's authenticator also returns
+accounts that are `USER_MANAGED_NOT_VISIBLE` to the client, but never explicit
+denials. microG's account provider (`com.google.android.gms.auth.accounts`)
+uses this call to list the accounts it may offer a calling app.
 
 Token requests bind the real declared authenticator service and retain the
 authenticated requesting application's identity. Normal token access requires
@@ -547,3 +677,4 @@ the caller's final receiver after garbage collection.
   protect the implemented API/storage paths; they do not isolate hostile code
   running as that same Windows user. Use trusted APKs and test accounts for this
   integration. Personal credentials are not an established supported deployment.
+  Per-app AppContainer isolation is in development ([sandbox.md](sandbox.md)).

@@ -1,5 +1,5 @@
 // libexec2child.so: the program the exec2 driver (exec2_test.c) starts through
-// fork+exec, system, popen and posix_spawn, and signals. Built by
+// exec, system, popen and posix_spawn, and signals. Built by
 // .github/workflows/exec.yml with the NDK; run on Windows through gesher-exec
 // (docs/exec.md, ADR 0055).
 //
@@ -11,6 +11,9 @@
 //   libexec2child.so sigloop          install SIGTERM/SIGUSR1 handlers, print
 //                                     "child-ready", then wait; SIGTERM exits
 //                                     42 if a SIGUSR1 arrived first, else 43
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1  // pwritev in the shared OFD process corpus
+#endif
 #include <dlfcn.h>
 #include <android/log.h>
 #include <signal.h>
@@ -22,6 +25,8 @@
 #include <sys/system_properties.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "ofd_process_contract.inc"
 
 static volatile sig_atomic_t g_usr1;
 
@@ -186,6 +191,8 @@ static int log_abi(const char* tag) {
 }
 
 int main(int argc, char** argv) {
+  int ofd_result = ofd_process_child(argc, argv);
+  if (ofd_result >= 0) return ofd_result;
   const char* mode = argc > 1 ? argv[1] : "echo";
   if (strcmp(mode, "log-abi") == 0 && argc > 2) return log_abi(argv[2]);
   if (strcmp(mode, "log-write") == 0 && argc > 4) {
@@ -194,11 +201,28 @@ int main(int argc, char** argv) {
     write_log(atoi(argv[3]), argv[2], argv[4]);
     return 0;
   }
+  // One message formatted from four arguments, as a credential split across them.
+  if (strcmp(mode, "log-print") == 0 && argc > 7) {
+    int (*print_log)(int, const char*, const char*, ...) = dlsym(RTLD_DEFAULT, "__android_log_print");
+    if (!print_log) return 5;
+    print_log(atoi(argv[3]), argv[2], "%s%s%s%s", argv[4], argv[5], argv[6], argv[7]);
+    return 0;
+  }
   if (strcmp(mode, "echo") == 0) {
     for (int i = 2; i < argc; ++i) printf("%s%s", i > 2 ? " " : "", argv[i]);
     printf("\n");
     fflush(stdout);
     return 0;
+  }
+  if ((strcmp(mode, "env-mutated-exec") == 0 || strcmp(mode, "env-empty-exec") == 0) && argc > 2) {
+    char assignment[] = "GESHER_EXEC4_ENV=first";
+    if (putenv(assignment) != 0) return 1;
+    char* value = strchr(assignment, '=') + 1;
+    if (strcmp(mode, "env-empty-exec") == 0) *value = '\0';
+    else memcpy(value, "after", sizeof("after"));
+    char* next[] = {argv[0], (char*)"env", (char*)"GESHER_EXEC4_ENV", NULL};
+    execv(argv[0], next);
+    return 1;
   }
   if (strcmp(mode, "env") == 0 && argc > 2) {
     const char* v = getenv(argv[2]);

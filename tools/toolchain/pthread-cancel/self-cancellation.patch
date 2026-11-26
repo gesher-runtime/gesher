@@ -1,0 +1,37 @@
+--- a/mingw-w64-libraries/winpthreads/src/thread.c
++++ b/mingw-w64-libraries/winpthreads/src/thread.c
+@@ -1492,11 +1492,12 @@
+   return 0;
+ }
+ 
++/* These callers already own the current thread record and its p_clock.
++   Re-entering the global registry here can invert an application lock held
++   by a caller against another thread's TLS destructor. */
+ static void
+-test_cancel_locked (pthread_t t)
+-{
+-  struct _pthread_v *tv = __pth_gpointer_locked (t);
+-
++test_cancel_locked (_pthread_v *tv)
++{
+   if (!tv || tv->in_cancel || tv->ended != 0 || (tv->p_state & PTHREAD_CANCEL_ENABLE) == 0)
+     return;
+   if ((tv->p_state & PTHREAD_CANCEL_ASYNCHRONOUS) == 0)
+@@ -1520,7 +1521,7 @@
+     *oldstate = t->p_state & PTHREAD_CANCEL_ENABLE;
+   t->p_state &= ~PTHREAD_CANCEL_ENABLE;
+   t->p_state |= state;
+-  test_cancel_locked (t->x);
++  test_cancel_locked (t);
+   pthread_mutex_unlock (&t->p_clock);
+ 
+   return 0;
+@@ -1539,7 +1540,7 @@
+     *oldtype = t->p_state & PTHREAD_CANCEL_ASYNCHRONOUS;
+   t->p_state &= ~PTHREAD_CANCEL_ASYNCHRONOUS;
+   t->p_state |= type;
+-  test_cancel_locked (t->x);
++  test_cancel_locked (t);
+   pthread_mutex_unlock (&t->p_clock);
+ 
+   return 0;

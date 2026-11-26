@@ -10,8 +10,8 @@ commit or run. A step saving one with actions/cache, actions/cache/save or
 any version of them must be limited to main, and actions/cache must be
 paired with an actions/cache/restore step for other refs. Every
 local-build-cache save is governed by that action's own main-only hosted
-save. Note that workflows pinning local-build-cache or framework.yml to an
-older commit keep that commit's behavior until their pins move.
+save. Note that workflows pinning local-build-cache to an older commit keep
+that commit's behavior until their pins move.
 """
 from pathlib import Path
 import re

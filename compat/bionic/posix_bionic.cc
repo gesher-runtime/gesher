@@ -13,6 +13,9 @@
 #include "shim_internal.h"
 
 #include <gesher/reserved_names.h>
+#include <gesher/file_description.h>
+#include <gesher/procfs_fd.h>
+#include <gesher/environment.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -69,6 +72,16 @@ bool IsAbsolute(const char* p) {
 
 // The directory an fd refers to, as a path gesher-base's calls accept.
 bool PathOfFd(int fd, std::string* out) {
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return false;
+  // These callers resolve directory-relative paths. A session capability is
+  // a file, and must not reveal/reopen its private backing pathname here.
+  if (gesher::FileDescriptionIsRevocable(snapshot)) return errno = kENOTDIR, false;
+  // A /proc directory fd: its own path (a /proc file is no directory).
+  bool proc_directory;
+  if (gesher::ProcfsDescriptor(fd, out, &proc_directory)) {
+    return proc_directory || (errno = kENOTDIR, false);
+  }
   auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, false;
   wchar_t buf[32768];
@@ -306,6 +319,11 @@ int BIONIC_SYSV Scandirat(int dirfd, const char* path, BionicDirent*** list,
 
 // --- the *at() calls and other path calls ---------------------------------------
 
+// getdents64(2): struct linux_dirent64 is the same on every architecture.
+int64_t BIONIC_SYSV Getdents64(int fd, void* buffer, size_t size) {
+  return getdents64(fd, buffer, size);
+}
+
 // gesher-base's struct stat with its 32-bit tv_nsec widened (shim.cc's FixStat).
 void WidenStat(struct stat* st) {
   for (struct timespec* ts : {&st->st_atim, &st->st_mtim, &st->st_ctim}) {
@@ -439,6 +457,8 @@ int BIONIC_SYSV Fchdir(int fd) {
 char* BIONIC_SYSV Realpath(const char* path, char* resolved) { return realpath(path, resolved); }
 int64_t BIONIC_SYSV Readlink(const char* path, char* buf, size_t n) { return readlink(path, buf, n); }
 int64_t BIONIC_SYSV Readlinkat(int dirfd, const char* path, char* buf, size_t n) {
+  // An empty path reads the link the fd itself is open on (O_PATH | O_NOFOLLOW).
+  if (path != nullptr && path[0] == '\0' && dirfd != kAtFdcwd) return readlinkat(dirfd, "", buf, n);
   std::string p;
   if (!AtPath(dirfd, path, &p)) return -1;
   return readlink(p.c_str(), buf, n);
@@ -461,6 +481,8 @@ int BIONIC_SYSV Ftruncate(int fd, int64_t length) {
   return gesher_ftruncate(fd, length);
 }
 int BIONIC_SYSV Truncate(const char* path, int64_t length) {
+  // Linux refuses a FIFO without opening it (an open would wait for a reader).
+  if (gesher_is_fifo_path(path)) return errno = kEINVAL, -1;
   int fd = open(path, O_WRONLY);
   if (fd < 0) return -1;
   int rc = Ftruncate(fd, length);
@@ -472,7 +494,7 @@ int BIONIC_SYSV Truncate(const char* path, int64_t length) {
 int BIONIC_SYSV Fsync(int fd) { return fsync(fd); }
 int BIONIC_SYSV Fdatasync(int fd) { return fdatasync(fd); }
 uint32_t BIONIC_SYSV Umask(uint32_t mask) { return static_cast<uint32_t>(_umask(static_cast<int>(mask & 0777))); }
-int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return errno = kEPERM, -1; }
+int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return mkfifo(path, static_cast<mode_t>(mode)); }
 
 int64_t BIONIC_SYSV Sendfile(int out_fd, int in_fd, int64_t* offset, size_t count) {
   return sendfile(out_fd, in_fd, reinterpret_cast<off_t*>(offset), count);
@@ -773,6 +795,7 @@ void RegisterPosix(SymbolTable& t) {
   E("telldir", Telldir);
   E("seekdir", Seekdir);
   E("dirfd", Dirfd);
+  E("getdents64", Getdents64);
   E("scandir", Scandir);
   E("scandir64", Scandir);
   E("scandirat", Scandirat);
@@ -872,12 +895,15 @@ void RegisterPosix(SymbolTable& t) {
   E("__gnu_basename", Basename);
   E("dirname", Dirname);
 #undef E
-  // Export the live data object, not a snapshot of its array. Host startup
-  // (including Java Os.setenv and the property session's _wputenv_s) can
-  // resize/free that array after ELF relocations have bound this address.
-  // The CRT keeps this slot current for both narrow and wide mutations.
-  t["environ"] = &_environ;
-  t["__environ"] = &_environ;
+  // Export the stable owner slot, shared with host setenv and guest putenv.
+  // The caller-owned putenv strings never become CRT-owned allocations.
+  char*** environment = gesher::EnvironmentSlot();
+  if (!environment) {
+    std::fputs("gesher: cannot initialize the POSIX environment\n", stderr);
+    std::abort();
+  }
+  t["environ"] = environment;
+  t["__environ"] = environment;
   t["__progname"] = &g_progname;
 }
 

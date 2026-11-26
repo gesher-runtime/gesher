@@ -135,6 +135,10 @@ int Start(const Shell& sh, const std::vector<std::string>& args, const Io& io,
   }
   fds.insert(fds.end(), extra.begin(), extra.end());
   std::wstring environment = EnvironmentBlock(ChildEnv(sh));
+  if (environment.empty()) {
+    ShErr(sh, io, args[0] + ": " + ErrorText(EILSEQ));
+    return 126;
+  }
   DWORD failed = SpawnWithFds(launch, environment.c_str(), WindowsPath(sh.cwd),
                               fds, process);
   if (failed != 0) {
@@ -170,6 +174,22 @@ int StartSubshell(const Shell& sh, const std::string& src, const Io& io,
                io, process, {{63, script->h}});
 }
 
+// An asynchronous list's descriptors. Without job control (this shell never
+// has it) its stdin is /dev/null before its own redirections, as in mksh
+// (jobs.c exchild) and POSIX: a background command must not consume input
+// meant for the commands after it, such as a script on the shell's stdin.
+Io BackgroundIo(const Io& io) {
+  Io background = io;
+  // Opened as a `</dev/null` redirection opens it (Redirect), so the child
+  // receives a descriptor with its open file description.
+  int descriptor = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+  if (descriptor >= 0) {
+    HANDLE null = reinterpret_cast<HANDLE>(_get_osfhandle(descriptor));
+    background.set(0, null, std::make_shared<OwnedHandle>(null, descriptor));
+  }
+  return background;
+}
+
 int RunSubshell(Shell* sh, const std::string& src, Io io, bool background) {
   PROCESS_INFORMATION process = {};
   int failed = StartSubshell(*sh, src, io, &process);
@@ -200,8 +220,8 @@ HandleP Temporary(const std::string& text) {
     return nullptr;
   }
   auto owned = std::make_shared<OwnedHandle>(handle);
-  if (!WriteAll(handle, text)) return nullptr;
-  SetFilePointer(handle, 0, nullptr, FILE_BEGIN);
+  if (!WriteAll(owned->h, text)) return nullptr;
+  if (::lseek(owned->descriptor, 0, SEEK_SET) != 0) return nullptr;
   return owned;
 }
 
@@ -230,46 +250,56 @@ bool Redirect(Shell* sh, const std::vector<Redir>& redirs, Io* io) {
     }
     const std::string& target = targets[0];
     if (r.op == "<&" || r.op == ">&") {
+      // mksh (exec.c iosetup, main.c check_fd): "sh: >&word: <reason>",
+      // the fd shown only when it is not the operator's default.
+      std::string shown = (r.fd == (r.op == "<&" ? 0 : 1) ? "" : std::to_string(r.fd)) +
+                          r.op + target;
       if (target == "-")
         io->set(r.fd, nullptr);
       else if (target.size() == 1 && IsDigitC(target[0])) {
         int from = target[0] - '0';
-        if (io->fd[from] == nullptr || io->fd[from] == INVALID_HANDLE_VALUE)
+        if (io->fd[from] == nullptr || io->fd[from] == INVALID_HANDLE_VALUE) {
+          ShErr(*sh, *io, shown + ": bad file descriptor");
           return false;
+        }
         io->set(r.fd, io->fd[from], io->owned[from]);
-      } else
+      } else {
+        ShErr(*sh, *io, shown + ": illegal file descriptor name");
         return false;
+      }
       continue;
     }
-    bool input = r.op == "<" || r.op == "<>";
-    DWORD access = input ? GENERIC_READ : GENERIC_WRITE;
-    if (r.op == "<>") access |= GENERIC_WRITE;
-    if (r.op == ">>") access = FILE_APPEND_DATA;
-    DWORD disposition = r.op == "<"                    ? OPEN_EXISTING
-                        : r.op == ">>" || r.op == "<>" ? OPEN_ALWAYS
-                                                       : CREATE_ALWAYS;
-    std::wstring path =
-        target == "/dev/null" ? L"NUL" : WindowsPath(target, sh->cwd);
-    HANDLE file =
-        CreateFileW(path.c_str(), access,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    nullptr, disposition, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
+    int flags = r.op == "<" ? O_RDONLY : r.op == "<>" ? O_RDWR : O_WRONLY;
+    if (r.op != "<") flags |= O_CREAT;
+    if (r.op == ">>") flags |= O_APPEND;
+    else if (r.op != "<" && r.op != "<>") flags |= O_TRUNC;
+    std::string path = target;
+    if (!path.empty() && path[0] != '/' && path[0] != '\\' &&
+        !gesher::reserved_names::DriveRoot(path.c_str())) path = sh->cwd + "/" + path;
+    int descriptor = ::open(path.c_str(), flags | O_CLOEXEC, 0666);
+    if (descriptor < 0) {
       ShErr(*sh, *io,
-            target + ": " + ErrorText(ErrnoFromWin32(GetLastError())));
+            target + ": " + ErrorText(errno));
       return false;
     }
-    io->set(r.fd, file, std::make_shared<OwnedHandle>(file));
+    HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(descriptor));
+    io->set(r.fd, file, std::make_shared<OwnedHandle>(file, descriptor));
   }
   return true;
 }
 
-std::string ReadAll(HANDLE input) {
+std::string ReadAll(HANDLE input, bool* complete) {
   std::string text;
+  *complete = false;
+  auto description = gesher::CaptureFileHandle(input);
+  if (!description) return text;
   char buffer[8192];
-  DWORD count = 0;
-  while (ReadFile(input, buffer, sizeof(buffer), &count, nullptr) && count)
-    text.append(buffer, count);
+  for (;;) {
+    int count = gesher::ReadFileDescription(description, buffer, sizeof(buffer));
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) { *complete = count == 0; break; }
+    text.append(buffer, static_cast<unsigned>(count));
+  }
   return text;
 }
 
@@ -566,7 +596,7 @@ int ExecNode(Shell* sh, const NodeP& node, Io io) {
           bool background =
               i < node->terminators.size() && node->terminators[i] == "&";
           status = background
-                       ? RunSubshell(sh, Source(node->children[i]), io, true)
+                       ? RunSubshell(sh, Source(node->children[i]), BackgroundIo(io), true)
                        : ExecNode(sh, node->children[i], io);
           sh->status = status;
           if (sh->exiting || sh->returning || sh->breaking || sh->continuing)
@@ -671,8 +701,12 @@ int ExecNode(Shell* sh, const NodeP& node, Io io) {
               status = 1;
               break;
             }
-            reader = std::make_shared<OwnedHandle>(read_end);
-            writer = std::make_shared<OwnedHandle>(write_end);
+            reader = std::make_shared<OwnedHandle>(read_end, -1, O_RDONLY);
+            writer = std::make_shared<OwnedHandle>(write_end, -1, O_WRONLY);
+            if (reader->h == INVALID_HANDLE_VALUE || writer->h == INVALID_HANDLE_VALUE) {
+              status = 1;
+              break;
+            }
             stage.set(1, writer->h, writer);
           }
           PROCESS_INFORMATION child = {};
@@ -749,23 +783,31 @@ int RunPendingSignals(Shell* sh, Io io) {
   return caught;
 }
 
-// ProcessBuilder and shell pipeline input are synchronous Win32 pipes. Do not
-// block in ReadFile with no data: mailbox traps must run on the shell thread.
-// Return one byte, EOF, or minus the caught signal for an interruptible read.
+// Pipe reads keep their real native wait policy. The mailbox event interrupts
+// a pending operation so traps still run on the shell thread. Return one byte,
+// EOF, or minus the caught signal for an interruptible read.
 int ReadByte(Shell* sh, Io io, HANDLE input, char* value, bool interruptible) {
+  auto description = gesher::CaptureFileHandle(input);
+  if (!description) return -256;  // An I/O error, distinct from a caught signal.
+  int flags = gesher::FileDescriptionIoFlags(description);
+  if (flags < 0) return -256;
+  if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) { errno = EBADF; return -256; }
+  const bool pipe = GetFileType(description->handle) == FILE_TYPE_PIPE;
+  HANDLE interrupted = pipe ? PipeSignalEvent() : nullptr;
+  if (pipe && !interrupted) { errno = ErrnoFromWin32(GetLastError()); return -256; }
   for (;;) {
+    // Reset before draining the mailbox. A signal arriving after the drain
+    // sets the event and cancels a pending native read, including its entry race.
+    if (interrupted && !ResetEvent(interrupted)) {
+      errno = ErrnoFromWin32(GetLastError());
+      return -256;
+    }
     int caught = RunPendingSignals(sh, io);
     if (sh->exiting) return 0;
     if (caught && interruptible) return -caught;
-    if (GetFileType(input) == FILE_TYPE_PIPE) {
-      DWORD available = 0;
-      if (!PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr)) return 0;
-      if (!available) {
-        Sleep(10);
-        continue;
-      }
-    }
-    DWORD count = 0;
-    return ReadFile(input, value, 1, &count, nullptr) && count ? 1 : 0;
+    int count = pipe ? gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)
+                     : gesher::ReadFileDescription(description, value, 1);
+    if (count < 0 && errno == EINTR) continue;
+    return count < 0 ? -256 : count;
   }
 }

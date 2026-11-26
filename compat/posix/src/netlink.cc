@@ -1,7 +1,7 @@
 // gesher-base: AF_NETLINK / NETLINK_ROUTE socket backend over Windows interface enumeration.
 //
 // Android's NDK/WebRTC callers (such as chromium/webrtc ifaddrs_android.cc) open
-// socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE) to dump RTM_GETADDR / RTM_GETLINK
+// socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE) to dump RTM_GETADDR
 // instead of calling bionic's getifaddrs(). This module translates those route
 // queries into standard Linux rtnetlink replies built from ws::ListInterfaces().
 
@@ -10,7 +10,6 @@
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
-#include <net/if_arp.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -23,7 +22,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "event_internal.h"
@@ -40,17 +39,32 @@ struct NetlinkState {
   std::condition_variable cv;
   int sock_type = SOCK_RAW;
   uint32_t bound_pid = 0;
-  uint32_t bound_groups = 0;
   bool closed = false;
   int rcv_timeout_ms = 0;
   int rcvbuf = 65536;
   int sndbuf = 65536;
+  size_t queued_bytes = 0;
   std::deque<std::vector<uint8_t>> queue;
 };
 
 namespace {
 
-constexpr size_t kMaxNetlinkRequestBytes = 65536;
+constexpr int kMaxNetlinkRequestBytes = 65536;
+constexpr int kMaxNetlinkReceiveBytes = 256 * 1024;
+
+// This backend supports kernel requests only. Keep distinct local port
+// identities for sockets in the same guest process, including descriptor aliases.
+struct PortRegistry {
+  std::mutex mutex;
+  std::unordered_set<uint32_t> bound;
+  uint32_t next = UINT32_MAX;
+};
+
+PortRegistry& Ports() {
+  // Socket descriptors can be closed by application shutdown handlers.
+  static auto* const registry = new PortRegistry;
+  return *registry;
+}
 // Pack dump replies into <= 4096-byte datagrams so callers using fixed 4 KiB
 // buffers (including WebRTC's ifaddrs_android.cc) never truncate an nlmsghdr.
 constexpr size_t kMaxNetlinkPacketBytes = 4096;
@@ -58,6 +72,25 @@ constexpr size_t kMaxNetlinkPacketBytes = 4096;
 uint32_t SelfNetlinkPid() {
   const int32_t pid = ws::LocalCredentials().pid;
   return pid > 0 ? static_cast<uint32_t>(pid) : 1u;
+}
+
+bool BindPort(NetlinkState& state, uint32_t requested) {
+  if (state.bound_pid) {
+    if (requested == 0 || requested == state.bound_pid) return true;
+    return errno = EINVAL, false;
+  }
+  PortRegistry& registry = Ports();
+  std::lock_guard<std::mutex> lock(registry.mutex);
+  uint32_t port = requested ? requested : SelfNetlinkPid();
+  if (!registry.bound.insert(port).second) {
+    if (requested) return errno = EADDRINUSE, false;
+    do {
+      port = registry.next--;
+      if (registry.next == INT32_MAX) registry.next = UINT32_MAX;
+    } while (!registry.bound.insert(port).second);
+  }
+  state.bound_pid = port;
+  return true;
 }
 
 void AppendAttr(std::vector<uint8_t>* msg, unsigned short type, const void* data, size_t len) {
@@ -88,25 +121,31 @@ void FinalizeNlmsg(std::vector<uint8_t>* msg, uint16_t type, uint16_t flags,
 struct PacketBatcher {
   std::vector<std::vector<uint8_t>> packets;
   std::vector<uint8_t> current;
+  size_t bytes = 0;
 
-  void Push(const std::vector<uint8_t>& msg) {
+  bool Push(const std::vector<uint8_t>& msg) {
+    if (msg.size() > kMaxNetlinkPacketBytes ||
+        msg.size() > kMaxNetlinkReceiveBytes - bytes) return errno = ENOBUFS, false;
+    bytes += msg.size();
     if (!current.empty() && current.size() + msg.size() > kMaxNetlinkPacketBytes) {
       packets.push_back(std::move(current));
       current.clear();
     }
     current.insert(current.end(), msg.begin(), msg.end());
+    return true;
   }
 
-  void PushDone(uint32_t seq, uint32_t pid) {
+  bool PushDone(uint32_t seq, uint32_t pid) {
     std::vector<uint8_t> done(NLMSG_LENGTH(sizeof(int)), 0);
     int err = 0;
     memcpy(done.data() + NLMSG_HDRLEN, &err, sizeof(err));
     FinalizeNlmsg(&done, NLMSG_DONE, NLM_F_MULTI, seq, pid);
-    Push(done);
+    if (!Push(done)) return false;
     if (!current.empty()) {
       packets.push_back(std::move(current));
       current.clear();
     }
+    return true;
   }
 };
 
@@ -150,7 +189,6 @@ bool AppendAddrDump(uint8_t req_family, uint32_t seq, uint32_t pid, PacketBatche
         ifaddrmsg ifa = {};
         ifa.ifa_family = AF_INET;
         ifa.ifa_prefixlen = static_cast<uint8_t>(prefix);
-        ifa.ifa_flags = IFA_F_PERMANENT;
         ifa.ifa_scope = Ipv4Scope(iface.flags, sin.sin_addr);
         ifa.ifa_index = iface.index;
         memcpy(msg.data() + sizeof(nlmsghdr), &ifa, sizeof(ifa));
@@ -168,7 +206,7 @@ bool AppendAddrDump(uint8_t req_family, uint32_t seq, uint32_t pid, PacketBatche
           AppendAttr(&msg, IFA_LABEL, iface.name.c_str(), iface.name.size() + 1);
         }
         FinalizeNlmsg(&msg, RTM_NEWADDR, NLM_F_MULTI, seq, pid);
-        out->Push(msg);
+        if (!out->Push(msg)) return false;
       } else if (entry.address.family == ws::Family::kInet6) {
         if (req_family != AF_UNSPEC && req_family != AF_INET6) continue;
         sockaddr_in6 sin6 = {};
@@ -181,49 +219,17 @@ bool AppendAddrDump(uint8_t req_family, uint32_t seq, uint32_t pid, PacketBatche
         ifaddrmsg ifa = {};
         ifa.ifa_family = AF_INET6;
         ifa.ifa_prefixlen = static_cast<uint8_t>(prefix);
-        ifa.ifa_flags = IFA_F_PERMANENT;
         ifa.ifa_scope = Ipv6Scope(iface.flags, sin6.sin6_addr);
         ifa.ifa_index = iface.index;
         memcpy(msg.data() + sizeof(nlmsghdr), &ifa, sizeof(ifa));
 
         AppendAttr(&msg, IFA_ADDRESS, &sin6.sin6_addr, sizeof(sin6.sin6_addr));
         FinalizeNlmsg(&msg, RTM_NEWADDR, NLM_F_MULTI, seq, pid);
-        out->Push(msg);
+        if (!out->Push(msg)) return false;
       }
     }
   }
-  out->PushDone(seq, pid);
-  return true;
-}
-
-bool AppendLinkDump(uint32_t seq, uint32_t pid, PacketBatcher* out) {
-  std::vector<ws::Interface> interfaces;
-  if (!sock::ListNamedInterfaces(&interfaces)) return false;
-
-  for (const ws::Interface& iface : interfaces) {
-    if (iface.index == 0) continue;
-    std::vector<uint8_t> msg(sizeof(nlmsghdr) + sizeof(ifinfomsg), 0);
-    ifinfomsg ifi = {};
-    ifi.ifi_family = AF_UNSPEC;
-    ifi.ifi_type = (iface.flags & ws::kIfLoopback) != 0 ? ARPHRD_LOOPBACK : ARPHRD_ETHER;
-    ifi.ifi_index = static_cast<int>(iface.index);
-    ifi.ifi_flags = sock::ToIfFlags(iface.flags);
-    ifi.ifi_change = 0;
-    memcpy(msg.data() + sizeof(nlmsghdr), &ifi, sizeof(ifi));
-
-    if (!iface.name.empty()) {
-      AppendAttr(&msg, IFLA_IFNAME, iface.name.c_str(), iface.name.size() + 1);
-    }
-    uint32_t mtu = iface.mtu;
-    AppendAttr(&msg, IFLA_MTU, &mtu, sizeof(mtu));
-    if (iface.hardware_len > 0 && iface.hardware_len <= sizeof(iface.hardware)) {
-      AppendAttr(&msg, IFLA_ADDRESS, iface.hardware, iface.hardware_len);
-    }
-    FinalizeNlmsg(&msg, RTM_NEWLINK, NLM_F_MULTI, seq, pid);
-    out->Push(msg);
-  }
-  out->PushDone(seq, pid);
-  return true;
+  return out->PushDone(seq, pid);
 }
 
 void AppendErrorPacket(int error_code, const nlmsghdr& req, uint32_t pid, PacketBatcher* out) {
@@ -243,6 +249,7 @@ bool ValidateNetlinkPeerAddr(const void* addr, uint32_t addrlen) {
   sockaddr_nl peer = {};
   if (!ws::CopyFromUser(&peer, addr, sizeof(peer))) return errno = EFAULT, false;
   if (peer.nl_family != AF_NETLINK) return errno = EAFNOSUPPORT, false;
+  if (peer.nl_groups != 0) return errno = EOPNOTSUPP, false;
   if (peer.nl_pid != 0) return errno = EPERM, false;
   return true;
 }
@@ -276,7 +283,14 @@ void NetlinkClose(NetlinkState& state) {
   {
     std::lock_guard<std::mutex> lock(state.mu);
     state.closed = true;
+    if (state.bound_pid) {
+      PortRegistry& registry = Ports();
+      std::lock_guard<std::mutex> ports_lock(registry.mutex);
+      registry.bound.erase(state.bound_pid);
+      state.bound_pid = 0;
+    }
     state.queue.clear();
+    state.queued_bytes = 0;
   }
   state.cv.notify_all();
   if (HasPollWaiters()) WakePollers();
@@ -287,39 +301,38 @@ bool NetlinkReadable(NetlinkState& state) {
   return !state.queue.empty() || state.closed;
 }
 
-int NetlinkAvailable(NetlinkState& state) {
-  std::lock_guard<std::mutex> lock(state.mu);
-  if (state.queue.empty()) return 0;
-  const size_t sz = state.queue.front().size();
-  return sz > 0x7fffffff ? 0x7fffffff : static_cast<int>(sz);
-}
-
 int NetlinkBind(NetlinkState& state, const void* addr, uint32_t len) {
   if (addr == nullptr) return errno = EFAULT, -1;
   if (len < sizeof(sockaddr_nl)) return errno = EINVAL, -1;
   sockaddr_nl local = {};
   if (!ws::CopyFromUser(&local, addr, sizeof(local))) return errno = EFAULT, -1;
   if (local.nl_family != AF_NETLINK) return errno = EINVAL, -1;
+  if (local.nl_groups) return errno = EOPNOTSUPP, -1;
   std::lock_guard<std::mutex> lock(state.mu);
-  state.bound_pid = local.nl_pid != 0 ? local.nl_pid : SelfNetlinkPid();
-  state.bound_groups = local.nl_groups;
-  return 0;
+  if (state.closed) return errno = EBADF, -1;
+  return BindPort(state, local.nl_pid) ? 0 : -1;
 }
 
 int NetlinkConnect(NetlinkState& state, const void* addr, uint32_t len) {
-  (void)state;
   if (addr == nullptr) return errno = EFAULT, -1;
-  return ValidateNetlinkPeerAddr(addr, len) ? 0 : -1;
+  sa_family_t family = AF_UNSPEC;
+  if (len < sizeof(family)) return errno = EINVAL, -1;
+  if (!ws::CopyFromUser(&family, addr, sizeof(family))) return errno = EFAULT, -1;
+  // The kernel is the only destination, including after disconnecting.
+  if (family == AF_UNSPEC) return 0;
+  if (!ValidateNetlinkPeerAddr(addr, len)) return -1;
+  std::lock_guard<std::mutex> lock(state.mu);
+  if (state.closed) return errno = EBADF, -1;
+  return BindPort(state, 0) ? 0 : -1;
 }
 
-int NetlinkGetSockName(NetlinkState& state, void* addr, uint32_t* len) {
+int NetlinkGetName(NetlinkState& state, void* addr, uint32_t* len, bool peer) {
   if (addr == nullptr || len == nullptr) return errno = EFAULT, -1;
   sockaddr_nl local = {};
   local.nl_family = AF_NETLINK;
-  {
+  if (!peer) {
     std::lock_guard<std::mutex> lock(state.mu);
     local.nl_pid = state.bound_pid;
-    local.nl_groups = state.bound_groups;
   }
   uint32_t capacity = 0;
   if (!ws::CopyFromUser(&capacity, len, sizeof(capacity))) return errno = EFAULT, -1;
@@ -334,7 +347,8 @@ int NetlinkGetSockName(NetlinkState& state, void* addr, uint32_t* len) {
 
 ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count, int flags,
                     const void* addr, uint32_t addrlen) {
-  (void)flags;
+  constexpr int kSupportedFlags = MSG_DONTWAIT | MSG_NOSIGNAL;
+  if ((flags & ~kSupportedFlags) != 0) return errno = EOPNOTSUPP, -1;
   if (addr != nullptr && !ValidateNetlinkPeerAddr(addr, addrlen)) return -1;
   if (count > 0 && buffers == nullptr) return errno = EFAULT, -1;
 
@@ -354,47 +368,43 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
   }
   if (req.size() < sizeof(nlmsghdr)) return errno = EINVAL, -1;
 
-  uint32_t reply_pid = 0;
+  // A multipart dump request occupies one datagram. Reading only its
+  // first message would silently ignore subsequent requests.
+  nlmsghdr hdr = {};
+  memcpy(&hdr, req.data(), sizeof(hdr));
+  if (hdr.nlmsg_len < NLMSG_HDRLEN || hdr.nlmsg_len > req.size()) return errno = EINVAL, -1;
+  if (req.size() > NLMSG_ALIGN(hdr.nlmsg_len)) return errno = EOPNOTSUPP, -1;
+  // SELinux denies RTM_GETLINK to ordinary Android apps at send time.
+  if (hdr.nlmsg_type == RTM_GETLINK) return errno = EACCES, -1;
+
   {
     std::lock_guard<std::mutex> lock(state.mu);
     if (state.closed) return errno = EPIPE, -1;
-    reply_pid = state.bound_pid != 0 ? state.bound_pid : SelfNetlinkPid();
-  }
+    if (req.size() > static_cast<size_t>(state.sndbuf)) return errno = EMSGSIZE, -1;
+    if (!BindPort(state, 0)) return -1;
 
-  PacketBatcher batch;
-  size_t offset = 0;
-  while (offset + sizeof(nlmsghdr) <= req.size()) {
-    nlmsghdr hdr = {};
-    memcpy(&hdr, req.data() + offset, sizeof(hdr));
-    if (hdr.nlmsg_len < sizeof(nlmsghdr) || hdr.nlmsg_len > req.size() - offset) {
-      return errno = EINVAL, -1;
-    }
-    const uint8_t* payload = req.data() + offset + NLMSG_HDRLEN;
-    const size_t payload_len = hdr.nlmsg_len - NLMSG_HDRLEN;
-
-    if (hdr.nlmsg_type == RTM_GETADDR) {
-      const uint8_t req_family = payload_len >= 1 ? payload[0] : AF_UNSPEC;
-      if (!AppendAddrDump(req_family, hdr.nlmsg_seq, reply_pid, &batch)) return -1;
-    } else if (hdr.nlmsg_type == RTM_GETLINK) {
-      if (!AppendLinkDump(hdr.nlmsg_seq, reply_pid, &batch)) return -1;
+    PacketBatcher batch;
+    if (hdr.nlmsg_type == RTM_GETADDR &&
+        (hdr.nlmsg_flags & (NLM_F_REQUEST | NLM_F_DUMP)) == (NLM_F_REQUEST | NLM_F_DUMP) &&
+        hdr.nlmsg_len > NLMSG_HDRLEN) {
+      const uint8_t family = req[NLMSG_HDRLEN];
+      if (family != AF_UNSPEC && family != AF_INET && family != AF_INET6) {
+        AppendErrorPacket(-EAFNOSUPPORT, hdr, state.bound_pid, &batch);
+      } else {
+        if (!state.queue.empty()) return errno = EBUSY, -1;
+        if (!AppendAddrDump(family, hdr.nlmsg_seq, state.bound_pid, &batch)) return -1;
+      }
     } else if (hdr.nlmsg_type == NLMSG_NOOP) {
       if ((hdr.nlmsg_flags & NLM_F_ACK) != 0) {
-        AppendErrorPacket(0, hdr, reply_pid, &batch);
+        AppendErrorPacket(0, hdr, state.bound_pid, &batch);
       }
     } else {
-      AppendErrorPacket(-EOPNOTSUPP, hdr, reply_pid, &batch);
+      AppendErrorPacket(-EOPNOTSUPP, hdr, state.bound_pid, &batch);
     }
-
-    const size_t step = NLMSG_ALIGN(hdr.nlmsg_len);
-    if (step > req.size() - offset) break;
-    offset += step;
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(state.mu);
-    for (auto& pkt : batch.packets) {
-      state.queue.push_back(std::move(pkt));
-    }
+    if (batch.bytes + state.queued_bytes > static_cast<size_t>(state.rcvbuf) &&
+        !batch.packets.empty()) return errno = ENOBUFS, -1;
+    for (auto& pkt : batch.packets) state.queue.push_back(std::move(pkt));
+    state.queued_bytes += batch.bytes;
   }
   state.cv.notify_all();
   if (HasPollWaiters()) WakePollers();
@@ -411,21 +421,25 @@ ssize_t NetlinkRecv(NetlinkState& state, ws::Buffer* buffers, size_t count, int 
   std::vector<uint8_t> pkt;
   {
     std::unique_lock<std::mutex> lock(state.mu);
-    while (state.queue.empty()) {
-      if (state.closed) return 0;
+    const auto ready = [&state] { return !state.queue.empty() || state.closed; };
+    if (!ready()) {
       if (nonblocking || (flags & MSG_DONTWAIT) != 0) return errno = EAGAIN, -1;
       if (state.rcv_timeout_ms > 0) {
-        const auto status = state.cv.wait_for(lock, std::chrono::milliseconds(state.rcv_timeout_ms));
-        if (state.queue.empty()) {
-          if (state.closed) return 0;
-          if (status == std::cv_status::timeout) return errno = EAGAIN, -1;
+        if (!state.cv.wait_for(lock, std::chrono::milliseconds(state.rcv_timeout_ms), ready)) {
+          return errno = EAGAIN, -1;
         }
       } else {
-        state.cv.wait(lock);
+        state.cv.wait(lock, ready);
       }
     }
-    pkt = state.queue.front();
-    if ((flags & MSG_PEEK) == 0) state.queue.pop_front();
+    if (state.closed) return 0;
+    if (flags & MSG_PEEK) {
+      pkt = state.queue.front();
+    } else {
+      pkt = std::move(state.queue.front());
+      state.queue.pop_front();
+      state.queued_bytes -= pkt.size();
+    }
   }
 
   size_t copied = 0;
@@ -467,14 +481,14 @@ int NetlinkSetSockOpt(NetlinkState& state, int level, int name, const void* valu
         if (!ReadIntOpt(value, len, &v)) return -1;
         {
           std::lock_guard<std::mutex> lock(state.mu);
-          state.rcvbuf = std::max(v, 256);
+          state.rcvbuf = std::clamp(v, 128, kMaxNetlinkReceiveBytes / 2) * 2;
         }
         return 0;
       case SO_SNDBUF:
         if (!ReadIntOpt(value, len, &v)) return -1;
         {
           std::lock_guard<std::mutex> lock(state.mu);
-          state.sndbuf = std::max(v, 256);
+          state.sndbuf = std::clamp(v, 128, kMaxNetlinkRequestBytes / 2) * 2;
         }
         return 0;
       case SO_RCVTIMEO: {
@@ -482,39 +496,19 @@ int NetlinkSetSockOpt(NetlinkState& state, int level, int name, const void* valu
         timeval tv = {};
         if (!ws::CopyFromUser(&tv, value, sizeof(tv))) return errno = EFAULT, -1;
         if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= 1000000) return errno = EDOM, -1;
-        long long ms = static_cast<long long>(tv.tv_sec) * 1000 + (tv.tv_usec + 999) / 1000;
-        if (ms > 0x7fffffff) ms = 0x7fffffff;
+        const long long ms = std::min(2147483647LL,
+            std::min(2147484LL, static_cast<long long>(tv.tv_sec)) * 1000 + (tv.tv_usec + 999) / 1000);
         std::lock_guard<std::mutex> lock(state.mu);
         state.rcv_timeout_ms = static_cast<int>(ms);
         return 0;
       }
-      case SO_SNDTIMEO: {
-        if (value == nullptr || len < sizeof(timeval)) return errno = EINVAL, -1;
-        timeval tv = {};
-        if (!ws::CopyFromUser(&tv, value, sizeof(tv))) return errno = EFAULT, -1;
-        if (tv.tv_sec < 0 || tv.tv_usec < 0 || tv.tv_usec >= 1000000) return errno = EDOM, -1;
-        return 0;
-      }
-      case SO_REUSEADDR:
-        return ReadIntOpt(value, len, &v) ? 0 : -1;
       default:
         return errno = ENOPROTOOPT, -1;
     }
   }
-  if (level == SOL_NETLINK) {
-    switch (name) {
-      case NETLINK_ADD_MEMBERSHIP:
-      case NETLINK_DROP_MEMBERSHIP:
-      case NETLINK_PKTINFO:
-      case NETLINK_BROADCAST_ERROR:
-      case NETLINK_NO_ENOBUFS:
-      case NETLINK_CAP_ACK:
-      case NETLINK_EXT_ACK:
-      case NETLINK_GET_STRICT_CHK:
-        return ReadIntOpt(value, len, &v) ? 0 : -1;
-      default:
-        return errno = ENOPROTOOPT, -1;
-    }
+  if (level == SOL_NETLINK &&
+      (name == NETLINK_ADD_MEMBERSHIP || name == NETLINK_DROP_MEMBERSHIP)) {
+    return errno = EOPNOTSUPP, -1;
   }
   return errno = ENOPROTOOPT, -1;
 }
@@ -565,18 +559,6 @@ int NetlinkGetSockOpt(NetlinkState& state, int level, int name, void* value, uin
         timeval tv = {};
         tv.tv_sec = ms / 1000;
         tv.tv_usec = (ms % 1000) * 1000;
-        const uint32_t actual = sizeof(tv);
-        if (!ws::CopyToUser(value, &tv, actual) || !ws::CopyToUser(len, &actual, sizeof(actual))) {
-          return errno = EFAULT, -1;
-        }
-        return 0;
-      }
-      case SO_SNDTIMEO: {
-        if (value == nullptr || len == nullptr) return errno = EFAULT, -1;
-        uint32_t capacity = 0;
-        if (!ws::CopyFromUser(&capacity, len, sizeof(capacity))) return errno = EFAULT, -1;
-        if (capacity < sizeof(timeval)) return errno = EINVAL, -1;
-        timeval tv = {};
         const uint32_t actual = sizeof(tv);
         if (!ws::CopyToUser(value, &tv, actual) || !ws::CopyToUser(len, &actual, sizeof(actual))) {
           return errno = EFAULT, -1;

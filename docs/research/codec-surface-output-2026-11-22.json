@@ -1,0 +1,195 @@
+{
+  "scope": "exact production output methods, controlled host JNI/window/decoder boundaries",
+  "sanitized": false,
+  "baseline_ref": "8b316aebf09ab46d5407e955bf86ed748a1e739f",
+  "baseline": {
+    "source_sha256": "8a3e8990bd555232c831da04925efa62db92f1bdfa5b8ba3af187fc0a13f946b",
+    "measurements": [
+      {
+        "mode": "cpu",
+        "width": 1280,
+        "height": 720,
+        "frames": 120,
+        "frame_bytes": 1382400,
+        "copied_bytes": 165888000,
+        "slot_capacity_bytes": 11059200,
+        "elapsed_us": 4755
+      },
+      {
+        "mode": "window",
+        "width": 1280,
+        "height": 720,
+        "frames": 120,
+        "frame_bytes": 1382400,
+        "copied_bytes": 165888000,
+        "slot_capacity_bytes": 11059200,
+        "elapsed_us": 16084
+      },
+      {
+        "mode": "reader",
+        "width": 1280,
+        "height": 720,
+        "frames": 120,
+        "frame_bytes": 1382400,
+        "copied_bytes": 165888000,
+        "slot_capacity_bytes": 11059200,
+        "elapsed_us": 4198
+      },
+      {
+        "mode": "cpu",
+        "width": 1920,
+        "height": 1080,
+        "frames": 120,
+        "frame_bytes": 3110400,
+        "copied_bytes": 373248000,
+        "slot_capacity_bytes": 24883200,
+        "elapsed_us": 21302
+      },
+      {
+        "mode": "window",
+        "width": 1920,
+        "height": 1080,
+        "frames": 120,
+        "frame_bytes": 3110400,
+        "copied_bytes": 373248000,
+        "slot_capacity_bytes": 24883200,
+        "elapsed_us": 20572
+      },
+      {
+        "mode": "reader",
+        "width": 1920,
+        "height": 1080,
+        "frames": 120,
+        "frame_bytes": 3110400,
+        "copied_bytes": 373248000,
+        "slot_capacity_bytes": 24883200,
+        "elapsed_us": 30526
+      },
+      {
+        "mode": "cpu",
+        "width": 3840,
+        "height": 2160,
+        "frames": 120,
+        "frame_bytes": 12441600,
+        "copied_bytes": 1492992000,
+        "slot_capacity_bytes": 99532800,
+        "elapsed_us": 97374
+      },
+      {
+        "mode": "window",
+        "width": 3840,
+        "height": 2160,
+        "frames": 120,
+        "frame_bytes": 12441600,
+        "copied_bytes": 1492992000,
+        "slot_capacity_bytes": 99532800,
+        "elapsed_us": 93572
+      },
+      {
+        "mode": "reader",
+        "width": 3840,
+        "height": 2160,
+        "frames": 120,
+        "frame_bytes": 12441600,
+        "copied_bytes": 1492992000,
+        "slot_capacity_bytes": 99532800,
+        "elapsed_us": 91983
+      }
+    ]
+  },
+  "candidate": {
+    "source_sha256": "d7adc76beb6d7a0bd446b1bbe8261b76cfc987d1fba8b943dde60a2dc8e416ac",
+    "measurements": [
+      {
+        "mode": "cpu",
+        "width": 1280,
+        "height": 720,
+        "frames": 120,
+        "frame_bytes": 1382400,
+        "copied_bytes": 165888000,
+        "slot_capacity_bytes": 11059200,
+        "elapsed_us": 4564
+      },
+      {
+        "mode": "window",
+        "width": 1280,
+        "height": 720,
+        "frames": 120,
+        "frame_bytes": 1382400,
+        "copied_bytes": 0,
+        "slot_capacity_bytes": 0,
+        "elapsed_us": 4
+      },
+      {
+        "mode": "reader",
+        "width": 1280,
+        "height": 720,
+        "frames": 120,
+        "frame_bytes": 1382400,
+        "copied_bytes": 0,
+        "slot_capacity_bytes": 0,
+        "elapsed_us": 4
+      },
+      {
+        "mode": "cpu",
+        "width": 1920,
+        "height": 1080,
+        "frames": 120,
+        "frame_bytes": 3110400,
+        "copied_bytes": 373248000,
+        "slot_capacity_bytes": 24883200,
+        "elapsed_us": 18914
+      },
+      {
+        "mode": "window",
+        "width": 1920,
+        "height": 1080,
+        "frames": 120,
+        "frame_bytes": 3110400,
+        "copied_bytes": 0,
+        "slot_capacity_bytes": 0,
+        "elapsed_us": 4
+      },
+      {
+        "mode": "reader",
+        "width": 1920,
+        "height": 1080,
+        "frames": 120,
+        "frame_bytes": 3110400,
+        "copied_bytes": 0,
+        "slot_capacity_bytes": 0,
+        "elapsed_us": 4
+      },
+      {
+        "mode": "cpu",
+        "width": 3840,
+        "height": 2160,
+        "frames": 120,
+        "frame_bytes": 12441600,
+        "copied_bytes": 1492992000,
+        "slot_capacity_bytes": 99532800,
+        "elapsed_us": 98249
+      },
+      {
+        "mode": "window",
+        "width": 3840,
+        "height": 2160,
+        "frames": 120,
+        "frame_bytes": 12441600,
+        "copied_bytes": 0,
+        "slot_capacity_bytes": 0,
+        "elapsed_us": 5
+      },
+      {
+        "mode": "reader",
+        "width": 3840,
+        "height": 2160,
+        "frames": 120,
+        "frame_bytes": 12441600,
+        "copied_bytes": 0,
+        "slot_capacity_bytes": 0,
+        "elapsed_us": 6
+      }
+    ]
+  }
+}

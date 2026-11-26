@@ -23,8 +23,11 @@
 // error=2, No such file or directory".
 
 #include <fcntl.h>
+#include <errno.h>
+#include <gesher/file_description.h>
 #include <io.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include <jni.h>
 #include <nativehelper/JNIHelp.h>
@@ -32,6 +35,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <windows.h>
@@ -54,13 +58,68 @@ constexpr DWORD kPipeBuffer = 256 * 1024;
 std::mutex g_mutex;
 std::map<jint, HANDLE> g_children;  // pid -> process handle, until waited for
 
-// The program being started, for the log line of a failure.
+// The program being started and its arguments' log text, for the log line
+// of a failure.
 thread_local const char* t_program = "";
+thread_local std::string t_arguments;
+
+// The exec log lines' ", args: ..." suffix for argv[1..] ("" without
+// arguments): each argument as a shell word (single-quoted unless plain,
+// control bytes escaped, so one record stays one line), at most
+// kExecLogArgumentBytes of argument text, cut at a UTF-8 character boundary
+// and marked "... [truncated]". The child's stdin is never logged.
+constexpr size_t kExecLogArgumentBytes = 200;
+std::string ExecLogArguments(const std::vector<std::string>& argv) {
+  std::string text;
+  for (size_t i = 1; i < argv.size() && text.size() <= kExecLogArgumentBytes; ++i) {
+    const std::string& a = argv[i];
+    if (i > 1) text += ' ';
+    bool plain = !a.empty();
+    for (unsigned char c : a) {
+      if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            std::string_view("_@%+=:,./-").find(static_cast<char>(c)) != std::string_view::npos)) {
+        plain = false;
+        break;
+      }
+    }
+    if (plain) {
+      text += a;
+      continue;
+    }
+    text += '\'';
+    for (unsigned char c : a) {
+      if (c == '\'') {
+        text += "'\\''";
+      } else if (c == '\n') {
+        text += "\\n";
+      } else if (c == '\r') {
+        text += "\\r";
+      } else if (c == '\t') {
+        text += "\\t";
+      } else if (c < 0x20 || c == 0x7f) {
+        char escaped[8];
+        snprintf(escaped, sizeof(escaped), "\\x%02x", c);
+        text += escaped;
+      } else {
+        text += static_cast<char>(c);
+      }
+    }
+    text += '\'';
+  }
+  if (text.empty()) return text;
+  if (text.size() > kExecLogArgumentBytes) {
+    size_t cut = kExecLogArgumentBytes;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xc0) == 0x80) --cut;
+    text.resize(cut);
+    text += "... [truncated]";
+  }
+  return ", args: " + text;
+}
 
 void ThrowIOException(JNIEnv* env, int error, const char* what = nullptr) {
   char message[512];
   snprintf(message, sizeof(message), "error=%d, %s", error, what != nullptr ? what : ex::ErrorText(error));
-  fprintf(stderr, "gesher: exec %s failed: %s\n", t_program, message);
+  fprintf(stderr, "gesher: exec %s failed: %s%s\n", t_program, message, t_arguments.c_str());
   fflush(stderr);
   jclass c = env->FindClass("java/io/IOException");
   if (c != nullptr) env->ThrowNew(c, message);
@@ -87,22 +146,18 @@ std::vector<std::string> Strings(const std::string& block, int count) {
   return out;
 }
 
-HANDLE Inheritable(HANDLE h) {
-  HANDLE dup = nullptr;
-  if (h == nullptr || h == INVALID_HANDLE_VALUE ||
-      !DuplicateHandle(GetCurrentProcess(), h, GetCurrentProcess(), &dup, 0, TRUE, DUPLICATE_SAME_ACCESS)) {
-    // No usable handle behind the fd (a GUI process's missing console): NUL.
-    SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
-    dup = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING,
-                      0, nullptr);
-    if (dup == INVALID_HANDLE_VALUE) dup = nullptr;
-  }
-  return dup;
-}
-
 void CloseIf(HANDLE* h) {
   if (*h != nullptr && *h != INVALID_HANDLE_VALUE) CloseHandle(*h);
   *h = nullptr;
+}
+
+// GESHER_TRACE_EXEC=1 adds the arguments themselves to the exec log lines.
+bool TraceExecArguments() {
+  static const bool trace = [] {
+    const char* value = getenv("GESHER_TRACE_EXEC");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return trace;
 }
 
 jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_block, jint argc,
@@ -113,6 +168,10 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
   t_program = program.c_str();
   std::vector<std::string> argv{program};
   for (std::string& a : Strings(ByteString(env, arg_block), argc)) argv.push_back(std::move(a));
+  // Arguments can carry tokens or personal data and these logs are shared in
+  // bug reports, so only their count is logged unless GESHER_TRACE_EXEC is set.
+  t_arguments = TraceExecArguments() ? ExecLogArguments(argv)
+      : argv.size() > 1 ? ", " + std::to_string(argv.size() - 1) + " args" : std::string();
   std::string dir = ByteString(env, dir_bytes);
   if (!dir.empty() && dir.back() == '\0') dir.pop_back();
 
@@ -136,16 +195,22 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
   if (error != 0) return ThrowIOException(env, error), -1;
 
   std::wstring environment;
-  if (env_block != nullptr) environment = ex::EnvironmentBlock(Strings(ByteString(env, env_block), envc));
+  if (env_block != nullptr) {
+    environment = ex::EnvironmentBlock(Strings(ByteString(env, env_block), envc));
+    if (environment.empty()) return ThrowIOException(env, EILSEQ), -1;
+  }
 
   jint fds[3];
   env->GetIntArrayRegion(std_fds, 0, 3, fds);
   HANDLE child[3] = {nullptr, nullptr, nullptr};
   HANDLE parent[3] = {nullptr, nullptr, nullptr};
+  int parent_fds[3] = {-1, -1, -1};
+  gesher::DescriptorSnapshotPtr descriptions[3];
   auto cleanup = [&] {
     for (int i = 0; i < 3; ++i) {
       CloseIf(&child[i]);
       CloseIf(&parent[i]);
+      if (parent_fds[i] >= 0) { close(parent_fds[i]); parent_fds[i] = -1; }
     }
   };
   for (int i = 0; i < 3; ++i) {
@@ -159,15 +224,42 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
       }
       child[i] = i == 0 ? read_end : write_end;
       parent[i] = i == 0 ? write_end : read_end;
-      SetHandleInformation(child[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+      descriptions[i] = gesher::CaptureFileHandle(child[i]);
+      auto parent_description = gesher::CaptureFileHandle(parent[i]);
+      if (!descriptions[i] || !parent_description ||
+          gesher::InitializePipeDescription(descriptions[i], i == 0 ? O_RDONLY : O_WRONLY) < 0 ||
+          gesher::InitializePipeDescription(parent_description, i == 0 ? O_WRONLY : O_RDONLY) < 0 ||
+          (parent_fds[i] = gesher::AttachFileDescription(parent_description, true)) < 0) {
+        int e = errno;
+        cleanup();
+        return ThrowIOException(env, e), -1;
+      }
     } else {
-      child[i] = Inheritable(reinterpret_cast<HANDLE>(_get_osfhandle(fds[i])));
+      // Capture the native object AND its open description under the descriptor
+      // transaction. Reconstructing from a lone DuplicateHandle later could
+      // lose status/lifecycle metadata if the original fd closes or is reused.
+      descriptions[i] = gesher::CaptureDescriptor(fds[i]);
+    }
+    if (!descriptions[i]) {
+      int e = errno;
+      cleanup();
+      return ThrowIOException(env, e), -1;
     }
   }
 
+  std::vector<ex::ChildFd> child_fds;
+  child_fds.reserve(3);
+  for (int i = 0; i < 3; ++i) {
+    auto snapshot = descriptions[i == 2 && redirect_error_stream ? 1 : i];
+    child_fds.push_back({i, snapshot->handle, std::move(snapshot)});
+  }
   PROCESS_INFORMATION pi = {};
-  DWORD spawn_error = ex::Spawn(launch, environment.empty() ? nullptr : environment.c_str(), cwd, child[0],
-                                child[1], redirect_error_stream ? child[1] : child[2], &pi);
+  DWORD spawn_error = ex::SpawnWithFds(launch, environment.empty() ? nullptr : environment.c_str(),
+                                       cwd, child_fds, &pi);
+  // No launcher-owned snapshot may keep a pipe endpoint alive while Java waits
+  // for EOF. SpawnWithFds explicitly transferred the child's references.
+  child_fds.clear();
+  for (auto& snapshot : descriptions) snapshot.reset();
   for (HANDLE& h : child) CloseIf(&h);
   if (spawn_error != 0) {
     cleanup();
@@ -180,21 +272,16 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
     g_children[pid] = pi.hProcess;
   }
 
-  // The parent's ends become fds that FileInputStream/FileOutputStream own.
+  // Descriptor allocation happened before launch, so a failure cannot leave
+  // a running child with missing Java streams. Transfer the prepared slots.
   for (int i = 0; i < 3; ++i) {
-    if (parent[i] == nullptr) {
-      fds[i] = -1;
-      continue;
-    }
-    int fd = _open_osfhandle(reinterpret_cast<intptr_t>(parent[i]),
-                             (i == 0 ? _O_WRONLY : _O_RDONLY) | _O_BINARY | _O_NOINHERIT);
-    if (fd < 0) CloseIf(&parent[i]);
-    fds[i] = fd;
-    parent[i] = nullptr;
+    fds[i] = parent_fds[i];
+    parent_fds[i] = -1;
+    CloseIf(&parent[i]);
   }
   env->SetIntArrayRegion(std_fds, 0, 3, fds);
-  fprintf(stderr, "gesher: exec %s (%s) started as pid %d\n", program.c_str(), launch.kind.c_str(),
-          static_cast<int>(pid));
+  fprintf(stderr, "gesher: exec %s (%s) started as pid %d%s\n", program.c_str(), launch.kind.c_str(),
+          static_cast<int>(pid), t_arguments.c_str());
   fflush(stderr);
   return pid;
 }

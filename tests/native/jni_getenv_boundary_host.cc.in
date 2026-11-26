@@ -1,0 +1,188 @@
+// The production GetEnv body is inserted unchanged. Only its VM lookup,
+// host call and proxy-selection dependencies are controlled here.
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <initializer_list>
+
+#if defined(__x86_64__)
+#define SYSV __attribute__((sysv_abi))
+#define HOST_ABI __attribute__((ms_abi))
+#else
+#define SYSV
+#define HOST_ABI
+#endif
+
+// JNI scalars/status and the versions in the pinned Android16r4 jni.h.
+// https://android.googlesource.com/platform/libnativehelper/+/android-16.0.0_r4/include_jni/jni.h
+using jint = int32_t;
+constexpr jint JNI_OK = 0, JNI_ERR = -1, JNI_EDETACHED = -2, JNI_EVERSION = -3;
+constexpr jint JNI_ENOMEM = -4;
+constexpr jint JNI_VERSION_1_1 = 0x00010001, JNI_VERSION_1_2 = 0x00010002;
+constexpr jint JNI_VERSION_1_4 = 0x00010004, JNI_VERSION_1_6 = 0x00010006;
+struct JNIEnv { uintptr_t identity; };
+struct JavaVM;
+struct HostFunctions { jint (HOST_ABI *GetEnv)(JavaVM*, void**, jint); };
+struct JavaVM { const HostFunctions* functions; };
+
+JNIEnv real_env{1}, x86_proxy_env{2}, arm_proxy_env{3};
+JavaVM x86_proxy_vm{}, arm_proxy_vm{};
+int lookup_calls, host_calls, wrap_calls, environment_allocations;
+jint host_result, requested_version;
+void* host_output;
+void* allocated_environment;
+bool allocate_environment, write_output, wrapped_guest;
+JNIEnv* wrapped_env;
+int failures, queries;
+
+void Require(bool ok, const char* message, jint version, bool guest) {
+  if (!ok) {
+    if (failures < 16) {
+      std::fprintf(stderr, "FAIL %s: version=0x%08x guest=%d\n", message,
+                   static_cast<uint32_t>(version), guest);
+    }
+    ++failures;
+  }
+}
+
+jint HOST_ABI HostGetEnv(JavaVM*, void** env, jint version) {
+  ++host_calls;
+  requested_version = version;
+  if (allocate_environment) {
+    // A successful tooling request has a resource obligation. This host
+    // deliberately accepts every requested ID, regardless of ART's plugins.
+    allocated_environment = std::malloc(1);
+    if (allocated_environment == nullptr) std::abort();
+    ++environment_allocations;
+    host_output = allocated_environment;
+  }
+  if (write_output) *env = host_output;
+  return host_result;
+}
+const HostFunctions host_functions{HostGetEnv};
+JavaVM host_vm{&host_functions};
+JavaVM* RealVm() {
+  ++lookup_calls;
+  return &host_vm;
+}
+bool IsGuestVm(JavaVM* vm) { return vm == &arm_proxy_vm; }
+JNIEnv* WrapFor(bool guest, JNIEnv* env) {
+  ++wrap_calls;
+  wrapped_guest = guest;
+  wrapped_env = env;
+  return env == nullptr ? nullptr : (guest ? &arm_proxy_env : &x86_proxy_env);
+}
+
+@GET_ENV@
+
+void Reset(jint result = JNI_OK, void* output = &real_env) {
+  std::free(allocated_environment);
+  allocated_environment = nullptr;
+  lookup_calls = host_calls = wrap_calls = environment_allocations = 0;
+  host_result = result;
+  host_output = output;
+  requested_version = 0;
+  allocate_environment = false;
+  write_output = true;
+  wrapped_guest = false;
+  wrapped_env = nullptr;
+}
+
+void UnsupportedInterfaces(bool guest) {
+  int total_host_calls = 0, total_environment_allocations = 0;
+  // JVMTI IDs from jvmti.h (1.0/1.1/1.2/9/11/21), ART's best-effort
+  // tooling ID, unknown interface families, and newer standard JNI families
+  // that this bridge does not implement. The JNI 1.x family is tested below.
+  // https://docs.oracle.com/en/java/javase/24/docs/specs/jvmti.html#GetVersionNumber
+  // https://android.googlesource.com/platform/art/+/android-16.0.0_r4/openjdkjvmti/art_jvmti.h
+  constexpr jint versions[] = {
+      0x30010000, 0x30010100, 0x30010200, 0x30090000, 0x300b0000, 0x30150000,
+      0x70010200, 0x10010006, 0x20010006, 0x40010006, 0x50010006, 0x60010006,
+      0x00000000, 0x00020000, 0x00090000, 0x00150000, 0x7fffffff,
+      static_cast<jint>(0x80010006u), static_cast<jint>(0xffffffffu)};
+  for (jint version : versions) {
+    // Calibrate the controlled host: each ID would succeed, return a raw
+    // pointer and allocate. This happens outside the production invocation.
+    Reset();
+    allocate_environment = true;
+    void* raw = nullptr;
+    Require(HostGetEnv(&host_vm, &raw, version) == JNI_OK && raw != nullptr &&
+                raw == allocated_environment && host_calls == 1 && environment_allocations == 1,
+            "accepting host calibration", version, guest);
+    for (int repeat = 0; repeat < 64; ++repeat) {
+      Reset();
+      allocate_environment = true;
+      void* output = &real_env;  // The bridge must clear a preexisting value.
+      jint result = GetEnvSysv(guest ? &arm_proxy_vm : &x86_proxy_vm, &output, version);
+      ++queries;
+      total_host_calls += host_calls;
+      total_environment_allocations += environment_allocations;
+      Require(result == JNI_EVERSION, "unsupported interface returns JNI_EVERSION", version, guest);
+      Require(output == nullptr, "unsupported interface clears output", version, guest);
+      Require(lookup_calls == 0 && host_calls == 0,
+              "unsupported interface never reaches host", version, guest);
+      Require(environment_allocations == 0,
+              "unsupported interface creates no host environment", version, guest);
+      Require(wrap_calls == 0, "unsupported interface creates no JNI proxy", version, guest);
+    }
+  }
+  std::printf("GetEnv unsupported queries (%s proxy): host calls=%d, environment allocations=%d\n",
+              guest ? "ARM" : "x86", total_host_calls, total_environment_allocations);
+}
+
+void JniVersions(bool guest) {
+  JavaVM* vm = guest ? &arm_proxy_vm : &x86_proxy_vm;
+  JNIEnv* expected = guest ? &arm_proxy_env : &x86_proxy_env;
+  for (jint version : {JNI_VERSION_1_1, JNI_VERSION_1_2, JNI_VERSION_1_4, JNI_VERSION_1_6}) {
+    Reset();
+    void* output = nullptr;
+    Require(GetEnvSysv(vm, &output, version) == JNI_OK && output == expected,
+            "supported JNI returns the matching proxy", version, guest);
+    Require(lookup_calls == 1 && host_calls == 1 && requested_version == version,
+            "JNI version forwarded unchanged", version, guest);
+    Require(wrap_calls == 1 && wrapped_guest == guest && wrapped_env == &real_env,
+            "JNI proxy wraps exactly the returned host environment", version, guest);
+  }
+  // These are not an allowlist in the bridge. Even unknown JNI 1.x versions
+  // must reach the VM, which decides whether they are supported.
+  for (jint version : {0x00010000, 0x00010003, 0x00010008, 0x0001ffff}) {
+    Reset(JNI_EVERSION);
+    void* output = &real_env;
+    Require(GetEnvSysv(vm, &output, version) == JNI_EVERSION && output == nullptr,
+            "host rejects unknown JNI version with null output", version, guest);
+    Require(lookup_calls == 1 && host_calls == 1 && requested_version == version && wrap_calls == 0,
+            "host validates unknown JNI version", version, guest);
+    // A future host may support an additional version within this family.
+    Reset();
+    Require(GetEnvSysv(vm, &output, version) == JNI_OK && output == expected && host_calls == 1,
+            "host acceptance within JNI family is preserved", version, guest);
+  }
+  for (jint error : {JNI_ERR, JNI_EDETACHED, JNI_EVERSION, JNI_ENOMEM}) {
+    for (bool dirty_output : {false, true}) {
+      Reset(error);
+      write_output = dirty_output;
+      void* output = &real_env;
+      Require(GetEnvSysv(vm, &output, JNI_VERSION_1_6) == error && output == nullptr,
+              "host error preserved with null output", JNI_VERSION_1_6, guest);
+      Require(host_calls == 1 && wrap_calls == 0 && environment_allocations == 0,
+              "host error never wraps an environment", JNI_VERSION_1_6, guest);
+    }
+  }
+  Reset(JNI_OK, nullptr);
+  void* output = &real_env;
+  Require(GetEnvSysv(vm, &output, JNI_VERSION_1_6) == JNI_OK && output == nullptr,
+          "null host environment remains null", JNI_VERSION_1_6, guest);
+  Require(host_calls == 1 && wrap_calls == 1 && wrapped_env == nullptr,
+          "null host environment uses the existing wrapper contract", JNI_VERSION_1_6, guest);
+}
+
+int main() {
+  for (bool guest : {false, true}) {
+    UnsupportedInterfaces(guest);
+    JniVersions(guest);  // Valid queries still work after repeated rejections.
+  }
+  Reset();
+  std::printf("GetEnv boundary: %s (%d unsupported queries, both proxy modes; %d failures)\n",
+              failures == 0 ? "all passed" : "FAILED", queries, failures);
+  return failures == 0 ? 0 : 1;
+}

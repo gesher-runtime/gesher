@@ -24,14 +24,20 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 #include <vector>
 
 #include "event_internal.h"
 #include "internal.h"
+#include "native_fence_internal.h"
 #include "poll_scratch.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 
@@ -49,6 +55,9 @@ struct EpollWakeChannels {
 
 struct EventFdEdgeWatch {
   uint32_t events;  // protected by the owning EventFd mutex; zero after ONESHOT
+  // Level-triggered entries only need a wake when the source becomes ready;
+  // repeated writes to an already readable counter do not change the level.
+  bool level = false;
   std::shared_ptr<EpollWakeChannels> wake;
 };
 
@@ -81,7 +90,8 @@ struct EventFd {
   void Update(uint32_t notification = 0) {
     bool r = counter > 0, w = counter < kMax;
     // A poll waiting in WSAPoll, next to sockets, sees no event.
-    const bool became_ready = (r && !readable_set) || (w && !writable_set);
+    const uint32_t became_ready = (r && !readable_set ? uint32_t{EPOLLIN} : 0) |
+                                 (w && !writable_set && !read_only ? uint32_t{EPOLLOUT} : 0);
     if (r != readable_set) {
       if (r) SetEvent(readable); else ResetEvent(readable);
       readable_set = r;
@@ -94,15 +104,21 @@ struct EventFd {
     // including zero writes and writes while already readable. A successful
     // read similarly publishes a write notification. Levels alone lose those
     // notifications, and lose a drain/refill entirely between epoll waits.
+    // Read-only producers publish when they enqueue a new inotify record or
+    // expire an armed timer; an unread periodic timer is not a new producer.
     bool edge_notified = false;
-    if (!read_only && notification != 0) {
+    if (notification != 0) {
       if ((notification & EPOLLIN) != 0) ++read_generation;
       if ((notification & EPOLLOUT) != 0) ++write_generation;
+    }
+    const uint32_t wake_notification = notification | became_ready;
+    if (wake_notification != 0) {
       size_t kept = 0;
       for (auto& weak : edge_watches) {
         if (auto watch = weak.lock()) {
           edge_watches[kept++] = weak;
-          if ((watch->events & notification) != 0) {
+          const uint32_t match = watch->level ? became_ready : wake_notification;
+          if ((watch->events & match) != 0) {
             watch->wake->Notify();
             edge_notified = true;
           }
@@ -118,17 +134,45 @@ struct EventFd {
 namespace {
 
 struct Epoll;
+struct ObjectOwner;
+// The number supplied to epoll_ctl is only half of Linux's registration key.
+// Weak ownership compares control blocks even after retirement, without keeping
+// the watched description alive or confusing a later allocation at its address.
+struct EntryKey {
+  int fd;
+  std::weak_ptr<ObjectOwner> owner;
+  EntryKey(int descriptor = -1, std::weak_ptr<ObjectOwner> description = {})
+      : fd(descriptor), owner(std::move(description)) {}
+  bool operator<(const EntryKey& other) const {
+    return fd < other.fd || (fd == other.fd && owner.owner_before(other.owner));
+  }
+  bool IsVirtual() const {
+    return owner.owner_before(std::weak_ptr<ObjectOwner>{}) ||
+           std::weak_ptr<ObjectOwner>{}.owner_before(owner);
+  }
+};
+
+struct OwnerWatch {
+  std::weak_ptr<Epoll> epoll;
+  std::shared_ptr<EpollWakeChannels> wake;
+  EntryKey key;
+  uint64_t id;
+};
+
 struct Entry {
   uint32_t events;
   epoll_data_t data;
   uint64_t id;  // tells a re-added fd from the entry a wait started with
   bool armed;   // false once an EPOLLONESHOT entry fired, until EPOLL_CTL_MOD
   std::weak_ptr<Epoll> child;
+  std::shared_ptr<OwnerWatch> owner_watch = nullptr;
   bool ordinary_eventfd = false;
-  // Only ordinary eventfds have producer notifications in this increment.
-  // Timer/inotify, sockets, pipes and nested targets retain their prior path.
+  uint32_t readable_events = EPOLLIN;
+  // Eventfd, timerfd and inotify publish producer notifications. Sockets,
+  // pipes and nested targets retain their separate readiness path.
   std::shared_ptr<EventFd> edge_source = nullptr;
   std::shared_ptr<EventFdEdgeWatch> edge_watch = nullptr;
+  std::shared_ptr<EventFd> watch_source = nullptr;
   uint64_t read_generation = 0;
   uint64_t write_generation = 0;
   bool edge_initial = true;
@@ -138,11 +182,11 @@ std::atomic<size_t> epoll_count{0};
 
 struct Epoll {
   std::mutex mutex;
-  std::map<int, Entry> entries;
+  std::map<EntryKey, Entry> entries;
   uint64_t next_id = 1;
   // Shared by all aliases and waiters. A descriptor number survives removal
   // without retaining an invalidated iterator or a stale Entry generation.
-  int last_ready_fd = -1;
+  EntryKey last_ready;
   std::shared_ptr<EpollWakeChannels> wake = std::make_shared<EpollWakeChannels>();
 
   void NotifyLocked() {
@@ -158,8 +202,13 @@ struct Epoll {
 struct EpollPollScratch {
   std::vector<pollfd> fds;
   std::vector<uint64_t> ids;
+  std::vector<EntryKey> keys;
+  // Only populated during nonblocking delivery, never across the actual wait.
+  std::vector<std::shared_ptr<ObjectOwner>> owners;
 
   void Reset() {
+    ClearPollScratch(owners);
+    ClearPollScratch(keys);
     ClearPollScratch(ids);
     ClearPollScratch(fds);
   }
@@ -196,9 +245,9 @@ class EpollWaiter {
 uint32_t EventFdEdgeReady(Entry& entry, bool consume) {
   EventFd& source = *entry.edge_source;
   std::lock_guard<std::mutex> lock(source.mutex);
-  // eventfd publishes the canonical IN/OUT bits, not the normal-band bits.
-  const uint32_t input = entry.events & EPOLLIN;
-  const uint32_t output = entry.events & EPOLLOUT;
+  // Inotify also reports RDNORM; eventfd and timerfd report canonical IN.
+  const uint32_t input = entry.events & entry.readable_events;
+  const uint32_t output = source.read_only ? 0 : entry.events & EPOLLOUT;
   if (!entry.edge_initial &&
       (input == 0 || entry.read_generation == source.read_generation) &&
       (output == 0 || entry.write_generation == source.write_generation)) return 0;
@@ -214,17 +263,37 @@ uint32_t EventFdEdgeReady(Entry& entry, bool consume) {
 }
 
 void ConfigureEventFdEntry(Entry& entry, const std::shared_ptr<EventFd>& source,
-                      const std::shared_ptr<EpollWakeChannels>& wake) {
+                      const std::shared_ptr<EpollWakeChannels>& wake, bool inotify) {
   entry.ordinary_eventfd = source && !source->read_only;
-  if ((entry.events & EPOLLET) == 0 || !entry.ordinary_eventfd) return;
+  entry.readable_events = EPOLLIN | (inotify ? uint32_t{EPOLLRDNORM} : 0);
+  if (!source) return;
+  const bool edge = (entry.events & EPOLLET) != 0;
   auto watch = std::make_shared<EventFdEdgeWatch>();
-  watch->events = entry.events & (EPOLLIN | EPOLLOUT);
+  // Edge entries match the bits their file reports (inotify adds RDNORM).
+  // Level entries match the generic level path, which reports IN and RDNORM
+  // for every read-only readiness and only canonical IN for an eventfd.
+  const uint32_t input = edge ? entry.readable_events
+                              : EPOLLIN | (source->read_only ? uint32_t{EPOLLRDNORM} : 0);
+  watch->events = ((entry.events & input) != 0 ? uint32_t{EPOLLIN} : 0) |
+                  (source->read_only ? 0 : entry.events & EPOLLOUT);
+  // Eventfd, timerfd and inotify all publish producer notifications, so every
+  // edge entry uses its source's generations; level entries wake on readiness.
+  watch->level = !edge;
   watch->wake = wake;
   std::lock_guard<std::mutex> lock(source->mutex);
   std::erase_if(source->edge_watches, [](const auto& weak) { return weak.expired(); });
   source->edge_watches.push_back(watch);
-  entry.edge_source = source;
+  if (edge) entry.edge_source = source;
   entry.edge_watch = std::move(watch);
+  entry.watch_source = source;
+}
+
+void DisarmEntry(Entry& entry) {
+  entry.armed = false;
+  if (entry.watch_source) {
+    std::lock_guard<std::mutex> lock(entry.watch_source->mutex);
+    entry.edge_watch->events = 0;
+  }
 }
 
 // fd -> object, for each kind. Inotify and timerfd use a read-only EventFd
@@ -236,8 +305,17 @@ struct Object {
   std::shared_ptr<TimerFd> timer;
 };
 
+struct ObjectOwner {
+  Object object;
+  // Registry aliases and subscriptions are protected by objects_mutex.
+  std::set<int> aliases;
+  std::vector<std::weak_ptr<OwnerWatch>> watches;
+  explicit ObjectOwner(Object value) : object(std::move(value)) {}
+  ~ObjectOwner();
+};
+
 std::mutex objects_mutex;
-std::unordered_map<int, Object> objects;
+std::unordered_map<int, std::shared_ptr<ObjectOwner>> objects;
 // Lets processes without eventfds or epolls skip the lock.
 std::atomic<size_t> object_count{0};
 
@@ -248,34 +326,97 @@ std::vector<std::weak_ptr<Epoll>> epolls;
 // Readiness sampling never holds this mutex while it recurses into a child.
 std::mutex epoll_graph_mutex;
 
-bool Lookup(int fd, Object* object) {
-  if (object_count.load(std::memory_order_acquire) == 0) return false;
+std::shared_ptr<ObjectOwner> Lookup(int fd) {
+  if (object_count.load(std::memory_order_acquire) == 0) return nullptr;
   std::lock_guard<std::mutex> lock(objects_mutex);
   auto it = objects.find(fd);
-  if (it == objects.end()) return false;
-  *object = it->second;
-  return true;
+  return it == objects.end() ? nullptr : it->second;
 }
 
 std::shared_ptr<Epoll> LookupEpoll(int fd) {
-  Object object;
-  return Lookup(fd, &object) ? object.epoll : nullptr;
+  auto owner = Lookup(fd);
+  return owner && owner->object.epoll
+             ? std::shared_ptr<Epoll>(owner, owner->object.epoll.get()) : nullptr;
 }
 
-void Insert(int fd, Object object) {
-  Object old;  // released after the lock, as it may be the last reference
-  std::lock_guard<std::mutex> lock(objects_mutex);
-  auto [it, inserted] = objects.try_emplace(fd);
-  if (inserted) object_count.fetch_add(1, std::memory_order_release);
-  old = std::move(it->second);
-  it->second = std::move(object);
+// No parent state lock is taken while the registry lock is held. A wake channel
+// owns no file description, so releasing it cannot trigger owner retirement.
+void NotifyAliasesLocked(ObjectOwner& owner) {
+  size_t kept = 0;
+  for (auto& weak : owner.watches) {
+    if (auto watch = weak.lock()) {
+      owner.watches[kept++] = weak;
+      watch->wake->Notify();
+    }
+  }
+  owner.watches.resize(kept);
+  if (kept != 0) WakePollers();
+}
+
+ObjectOwner::~ObjectOwner() {
+  // Epoll observations retain weak identity only. Real in-flight I/O aliases
+  // this owner and may outlive the final fd, just as a Linux file reference can.
+  bool changed = false;
+  for (auto& weak : watches) {
+    if (auto watch = weak.lock()) {
+      if (auto ep = watch->epoll.lock()) {
+        std::lock_guard<std::mutex> lock(ep->mutex);
+        auto found = ep->entries.find(watch->key);
+        if (found != ep->entries.end() && found->second.id == watch->id) {
+          ep->entries.erase(found);
+          ep->NotifyLocked();
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) WakePollers();
+  if (object.epoll) {
+    // Keep the nesting census bounded when only virtual descriptors are used.
+    std::lock_guard<std::mutex> lock(epolls_mutex);
+    std::erase_if(epolls, [](const auto& weak) { return weak.expired(); });
+  }
+}
+
+void Insert(int fd, const std::shared_ptr<ObjectOwner>& owner) {
+  std::shared_ptr<ObjectOwner> old;  // retire outside the registry lock
+  {
+    std::lock_guard<std::mutex> lock(objects_mutex);
+    auto [it, inserted] = objects.try_emplace(fd);
+    if (inserted) object_count.fetch_add(1, std::memory_order_release);
+    old = std::move(it->second);
+    if (old) {
+      old->aliases.erase(fd);
+      NotifyAliasesLocked(*old);
+    }
+    owner->aliases.insert(fd);
+    it->second = owner;
+  }
 }
 
 // Registers a new object under a fresh fd on NUL.
 int Register(Object object) {
   int fd = ReserveFd();
-  if (fd >= 0) Insert(fd, std::move(object));
+  if (fd >= 0) {
+    auto owner = std::make_shared<ObjectOwner>(std::move(object));
+    if (owner->object.epoll) {
+      std::lock_guard<std::mutex> lock(epolls_mutex);
+      epolls.emplace_back(std::shared_ptr<Epoll>(owner, owner->object.epoll.get()));
+    }
+    Insert(fd, owner);
+  }
   return fd;
+}
+
+void ConfigureOwnerEntry(Entry& entry, const EntryKey& key,
+                         const std::shared_ptr<ObjectOwner>& owner,
+                         const std::shared_ptr<Epoll>& ep) {
+  if (!owner) return;
+  auto watch = std::make_shared<OwnerWatch>(OwnerWatch{ep, ep->wake, key, entry.id});
+  std::lock_guard<std::mutex> lock(objects_mutex);
+  std::erase_if(owner->watches, [](const auto& weak) { return weak.expired(); });
+  owner->watches.push_back(watch);
+  entry.owner_watch = std::move(watch);
 }
 
 int ReadEventFd(EventFd& e, void* buf, unsigned int count) {
@@ -329,6 +470,25 @@ short EpollPollInterest(const Entry& entry) {
   return static_cast<short>(events);
 }
 
+bool SnapshotEpoll(const std::shared_ptr<Epoll>& ep, EpollPollScratch& scratch) {
+  // Dropping an actual I/O reference may retire its registrations. Do that
+  // before taking any epoll state lock, and do not retain it across a wait.
+  scratch.owners.clear();
+  scratch.keys.clear();
+  scratch.ids.clear();
+  scratch.fds.clear();
+  bool ready = false;
+  std::lock_guard<std::mutex> lock(ep->mutex);
+  for (auto& [key, entry] : ep->entries) {
+    if (!entry.armed) continue;
+    if (entry.edge_source && EventFdEdgeReady(entry, false) != 0) ready = true;
+    scratch.keys.push_back(key);
+    scratch.ids.push_back(entry.id);
+    scratch.fds.push_back({key.fd, EpollPollInterest(entry), 0});
+  }
+  return ready;
+}
+
 // Linux permits at most five epoll instances on a nesting path. Validate the
 // whole affected graph, so adding above OR below an existing chain cannot
 // bypass the bound. Called with graph and descriptor transactions held.
@@ -374,8 +534,11 @@ bool Pollable(int fd) {
 
 }  // namespace
 
-bool PollEpoll(int fd, short events, short* ready) {
-  auto ep = LookupEpoll(fd);
+int SampleVirtualEntries(EpollPollScratch& scratch, bool prepare_wait);
+
+// Observe the shared epoll directly: a reused numeric alias is never authority
+// for an older registration, including when the target is a nested epoll.
+bool PollEpollOwned(const std::shared_ptr<Epoll>& ep, short events, short* ready) {
   if (!ep) return false;
   *ready = 0;
   if ((events & (POLLIN | POLLRDNORM)) == 0) return true;
@@ -391,20 +554,17 @@ bool PollEpoll(int fd, short events, short* ready) {
     ~Leave() { --depth; }
   } leave{depth};
   PollScratchLease<EpollPollScratch> lease;
-  auto& fds = lease.get().fds;
-  auto& ids = lease.get().ids;
-  {
-    std::lock_guard<std::mutex> lock(ep->mutex);
-    for (const auto& [watched, entry] : ep->entries) {
-      if (!entry.armed) continue;
-      fds.push_back({watched, EpollPollInterest(entry), 0});
-      ids.push_back(entry.id);
-    }
-  }
+  auto& scratch = lease.get();
+  auto& fds = scratch.fds;
+  auto& ids = scratch.ids;
+  SnapshotEpoll(ep, scratch);
+  SampleVirtualEntries(scratch, true);
   if (PollFds(fds.data(), fds.size(), 0, nullptr, nullptr) < 0) return true;
+  SampleVirtualEntries(scratch, false);
   std::lock_guard<std::mutex> lock(ep->mutex);
   for (size_t i = 0; i < fds.size(); ++i) {
-    auto found = ep->entries.find(fds[i].fd);
+    if (scratch.keys[i].IsVirtual() && !scratch.owners[i]) continue;
+    auto found = ep->entries.find(scratch.keys[i]);
     if (found != ep->entries.end() && found->second.id == ids[i] && found->second.armed &&
         (fds[i].revents & POLLNVAL) == 0 &&
         (found->second.edge_source ? EventFdEdgeReady(found->second, false)
@@ -416,11 +576,16 @@ bool PollEpoll(int fd, short events, short* ready) {
   return true;
 }
 
+bool PollEpoll(int fd, short events, short* ready) {
+  return PollEpollOwned(LookupEpoll(fd), events, ready);
+}
+
 std::shared_ptr<EventFd> LookupEventFd(int fd) {
-  Object object;
-  if (!Lookup(fd, &object)) return nullptr;
-  if (object.timer != nullptr) RefreshTimerFd(*object.timer);
-  return object.eventfd;
+  auto owner = Lookup(fd);
+  if (!owner) return nullptr;
+  if (owner->object.timer) RefreshTimerFd(*owner->object.timer);
+  return owner->object.eventfd
+             ? std::shared_ptr<EventFd>(owner, owner->object.eventfd.get()) : nullptr;
 }
 
 short PollEventFd(EventFd& e, short events, HANDLE* wake) {
@@ -438,6 +603,44 @@ short PollEventFd(EventFd& e, short events, HANDLE* wake) {
   return ready;
 }
 
+int SampleVirtualEntries(EpollPollScratch& scratch, bool prepare_wait) {
+  scratch.owners.clear();
+  if (!prepare_wait) scratch.owners.resize(scratch.keys.size());
+  int result = 0;
+  for (size_t i = 0; i < scratch.keys.size(); ++i) {
+    const auto& key = scratch.keys[i];
+    if (!key.IsVirtual()) continue;
+    auto owner = key.owner.lock();
+    auto& item = scratch.fds[i];
+    item.revents = 0;
+    if (prepare_wait) {
+      item.fd = -1;
+      // Generic poll pins LookupEventFd's result for its entire wait. Giving it
+      // a virtual readiness alias would let mere epoll observation keep the
+      // file alive after final close. Its source subscription wakes our own
+      // channel instead. Nested epolls are sampled without a retained owner
+      // by generic poll and still need its pipe/socket fallback.
+      if (owner && owner->object.epoll) {
+        std::lock_guard<std::mutex> lock(objects_mutex);
+        if (!owner->aliases.empty()) item.fd = *owner->aliases.begin();
+      }
+    } else {
+      scratch.owners[i] = owner;
+    }
+    if (!owner) continue;
+    const Object& object = owner->object;
+    if (object.timer) RefreshTimerFd(*object.timer);
+    if (object.eventfd) item.revents = PollEventFd(*object.eventfd, item.events, nullptr);
+    else if (object.epoll) PollEpollOwned(object.epoll, item.events, &item.revents);
+    if (item.revents != 0) result |= 1;
+    // A genuine in-flight epoll operation can retain a target after all its
+    // fds close. There is then no numeric poll target for its generic pipe or
+    // socket children. Keep the same bounded fallback cadence as mixed poll.
+    if (prepare_wait && item.fd < 0 && object.epoll && item.events != 0) result |= 2;
+  }
+  return result;
+}
+
 bool IsNonBlocking(EventFd& e) {
   std::lock_guard<std::mutex> lock(e.mutex);
   return e.nonblocking;
@@ -450,8 +653,9 @@ void SetNonBlocking(EventFd& e, bool on) {
 }
 
 bool ReadEventObject(int fd, void* buf, unsigned int count, int* result) {
-  Object object;
-  if (!Lookup(fd, &object)) return false;
+  auto owner = Lookup(fd);
+  if (!owner) return false;
+  const Object& object = owner->object;
   *result = object.timer     ? ReadTimerFd(*object.timer, buf, count)
             : object.inotify ? ReadInotify(*object.inotify, buf, count)
             : object.eventfd ? ReadEventFd(*object.eventfd, buf, count)
@@ -460,8 +664,9 @@ bool ReadEventObject(int fd, void* buf, unsigned int count, int* result) {
 }
 
 bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result) {
-  Object object;
-  if (!Lookup(fd, &object)) return false;
+  auto owner = Lookup(fd);
+  if (!owner) return false;
+  const Object& object = owner->object;
   *result = object.inotify ? (errno = EBADF, -1)
             : object.eventfd ? WriteEventFd(*object.eventfd, buf, count)
                              : (errno = EINVAL, -1);
@@ -469,21 +674,30 @@ bool WriteEventObject(int fd, const void* buf, unsigned int count, int* result) 
 }
 
 int EventObjectWriteError(int fd) {
-  Object object;
-  if (!Lookup(fd, &object)) return 0;
+  if (LookupNativeFence(fd)) return EINVAL;
+  auto owner = Lookup(fd);
+  if (!owner) return 0;
+  const Object& object = owner->object;
   if (object.inotify) return EBADF;
   return object.eventfd && !object.eventfd->read_only ? 0 : EINVAL;
 }
 
 bool ForgetEventObject(int fd) {
+  // Completed native fences are NUL-backed virtual objects as well. Every
+  // close, dup2 replacement and CRT stream retirement reaches this point.
+  ForgetNativeFence(fd);
   if (object_count.load(std::memory_order_acquire) == 0) return false;
-  Object old;  // released after the lock
-  std::lock_guard<std::mutex> lock(objects_mutex);
-  auto it = objects.find(fd);
-  if (it == objects.end()) return false;
-  old = std::move(it->second);
-  objects.erase(it);
-  object_count.fetch_sub(1, std::memory_order_release);
+  std::shared_ptr<ObjectOwner> old;  // final-reference cleanup is outside the lock
+  {
+    std::lock_guard<std::mutex> lock(objects_mutex);
+    auto it = objects.find(fd);
+    if (it == objects.end()) return false;
+    old = std::move(it->second);
+    old->aliases.erase(fd);
+    NotifyAliasesLocked(*old);
+    objects.erase(it);
+    object_count.fetch_sub(1, std::memory_order_release);
+  }
   return true;
 }
 
@@ -502,12 +716,13 @@ std::shared_ptr<EventFd> NewReadiness(bool nonblocking) {
 void SetReadable(EventFd& e, bool readable) {
   std::lock_guard<std::mutex> lock(e.mutex);
   e.counter = readable ? 1 : 0;
-  e.Update();
+  e.Update(readable ? uint32_t{EPOLLIN} : 0);
 }
 
 std::shared_ptr<Inotify> LookupInotify(int fd) {
-  Object object;
-  return Lookup(fd, &object) ? object.inotify : nullptr;
+  auto owner = Lookup(fd);
+  return owner && owner->object.inotify
+             ? std::shared_ptr<Inotify>(owner, owner->object.inotify.get()) : nullptr;
 }
 
 int RegisterInotify(std::shared_ptr<Inotify> inotify, std::shared_ptr<EventFd> readiness) {
@@ -515,8 +730,9 @@ int RegisterInotify(std::shared_ptr<Inotify> inotify, std::shared_ptr<EventFd> r
 }
 
 std::shared_ptr<TimerFd> LookupTimerFd(int fd) {
-  Object object;
-  return Lookup(fd, &object) ? object.timer : nullptr;
+  auto owner = Lookup(fd);
+  return owner && owner->object.timer
+             ? std::shared_ptr<TimerFd>(owner, owner->object.timer.get()) : nullptr;
 }
 
 int RegisterTimerFd(std::shared_ptr<TimerFd> timer, std::shared_ptr<EventFd> readiness) {
@@ -524,14 +740,13 @@ int RegisterTimerFd(std::shared_ptr<TimerFd> timer, std::shared_ptr<EventFd> rea
 }
 
 void DupEventObject(int fd, int fd2) {
-  Object object;
-  if (Lookup(fd, &object)) Insert(fd2, std::move(object));
+  if (auto owner = Lookup(fd)) Insert(fd2, owner);
 }
 
-// Linux drops an entry when the last fd for its open file closes; here it
-// goes when its own fd number does, so a number reused by a later open is
-// never reported for the old registration.
+// Virtual registrations retire with their shared owner, independently of the
+// original number. Other descriptor backends retain their existing retirement.
 void ForgetEpollEntries(int fd) {
+  if (Lookup(fd)) return;
   if (epoll_count.load(std::memory_order_acquire) == 0) return;
   std::vector<std::shared_ptr<Epoll>> live;
   {
@@ -547,7 +762,7 @@ void ForgetEpollEntries(int fd) {
   }
   for (auto& ep : live) {
     std::lock_guard<std::mutex> lock(ep->mutex);
-    if (ep->entries.erase(fd) != 0) ep->NotifyLocked();
+    if (ep->entries.erase(EntryKey(fd)) != 0) ep->NotifyLocked();
   }
 }
 
@@ -588,17 +803,13 @@ int eventfd_write(int fd, eventfd_t value) {
 int epoll_create1(int flags) {
   if ((flags & ~EPOLL_CLOEXEC) != 0) return errno = EINVAL, -1;  // always CLOEXEC, as eventfd
   auto ep = std::make_shared<Epoll>();
-  {
-    std::lock_guard<std::mutex> lock(gesher::epolls_mutex);
-    gesher::epolls.push_back(ep);
-  }
   return gesher::Register({nullptr, std::move(ep), nullptr, nullptr});
 }
 
 int epoll_create(int size) { return size <= 0 ? (errno = EINVAL, -1) : epoll_create1(0); }
 
-// Ordinary eventfds publish edge notifications. The other descriptor backends
-// still use level readiness; their edge and exclusive contracts remain open.
+// Eventfds, timerfds and inotify publish edge notifications. Other descriptor
+// backends still use level readiness; their edge/exclusive contracts remain open.
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
   gesher::record_locks::DescriptorGuard descriptors;
   if (gesher::HandleFromFd(epfd) == INVALID_HANDLE_VALUE ||
@@ -614,30 +825,34 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
   uint32_t events = event != nullptr ? event->events : 0;
   if (op == EPOLL_CTL_MOD && (events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
   if (child && (events & EPOLLEXCLUSIVE) != 0 && op != EPOLL_CTL_DEL) return errno = EINVAL, -1;
-  gesher::Object object;
-  gesher::Lookup(fd, &object);
+  auto owner = gesher::Lookup(fd);
+  gesher::EntryKey key(fd, owner);
   std::lock_guard<std::mutex> graph(gesher::epoll_graph_mutex);
   if (op == EPOLL_CTL_ADD && child) {
     {
       std::lock_guard<std::mutex> lock(ep->mutex);
-      if (ep->entries.count(fd) != 0) return errno = EEXIST, -1;
+      if (ep->entries.count(key) != 0) return errno = EEXIST, -1;
     }
     if (!gesher::CanNest(ep, child)) return errno = ELOOP, -1;
   }
   {
     std::lock_guard<std::mutex> lock(ep->mutex);
-    auto it = ep->entries.find(fd);
+    auto it = ep->entries.find(key);
     switch (op) {
       case EPOLL_CTL_ADD:
         if (it != ep->entries.end()) return errno = EEXIST, -1;
-        ep->entries[fd] = {events, event->data, ep->next_id++, true, child};
-        gesher::ConfigureEventFdEntry(ep->entries[fd], object.eventfd, ep->wake);
+        ep->entries[key] = {events, event->data, ep->next_id++, true, child};
+        gesher::ConfigureOwnerEntry(ep->entries[key], key, owner, ep);
+        gesher::ConfigureEventFdEntry(ep->entries[key], owner ? owner->object.eventfd : nullptr,
+                                      ep->wake, owner && owner->object.inotify != nullptr);
         break;
       case EPOLL_CTL_MOD:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
         if ((it->second.events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
         it->second = {events, event->data, ep->next_id++, true, child};
-        gesher::ConfigureEventFdEntry(it->second, object.eventfd, ep->wake);
+        gesher::ConfigureOwnerEntry(it->second, key, owner, ep);
+        gesher::ConfigureEventFdEntry(it->second, owner ? owner->object.eventfd : nullptr,
+                                      ep->wake, owner && owner->object.inotify != nullptr);
         break;
       case EPOLL_CTL_DEL:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
@@ -663,51 +878,41 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
   if (waiter.changed() == nullptr) return gesher::FailWithLastError();
   ULONGLONG deadline = gesher::DeadlineAfter(timeout);
   gesher::PollScratchLease<gesher::EpollPollScratch> lease;
-  auto& fds = lease.get().fds;
-  auto& ids = lease.get().ids;
+  auto& scratch = lease.get();
+  auto& fds = scratch.fds;
+  auto& ids = scratch.ids;
   for (;;) {
-    fds.clear();
-    ids.clear();
-    bool edge_ready = false;
-    {
-      std::lock_guard<std::mutex> lock(ep->mutex);
-      for (auto& [fd, entry] : ep->entries) {
-        if (!entry.armed) continue;
-        // Consumed edges must not wait on the still-signaled level handle.
-        // Keep their fd positions for identity validation and fair delivery;
-        // producer subscriptions wake this epoll's persistent channel instead.
-        if (entry.edge_source && gesher::EventFdEdgeReady(entry, false) != 0) edge_ready = true;
-        fds.push_back({fd, gesher::EpollPollInterest(entry), 0});
-        ids.push_back(entry.id);
-      }
-    }
+    bool edge_ready = gesher::SnapshotEpoll(ep, scratch);
     if (observer != nullptr) {
       auto call = observer;
       observer = nullptr;
       call(context);
     }
+    const int virtual_sample = gesher::SampleVirtualEntries(scratch, true);
     int wait_ms = -1;
     if (timeout >= 0) {
       wait_ms = gesher::MillisUntil(deadline);
     }
-    if (edge_ready) wait_ms = 0;
+    if (edge_ready || (virtual_sample & 1) != 0) wait_ms = 0;
+    else if ((virtual_sample & 2) != 0 && (wait_ms < 0 || wait_ms > 10)) wait_ms = 10;
     bool interrupted = false;
     int ready = gesher::PollFds(fds.data(), fds.size(), wait_ms, waiter.changed(), &interrupted);
     if (ready < 0) return -1;
+    const int virtual_ready = gesher::SampleVirtualEntries(scratch, false);
 
     int count = 0;
-    if (ready > 0 || edge_ready || interrupted) {
+    if (ready > 0 || edge_ready || interrupted || (virtual_ready & 1) != 0) {
       std::lock_guard<std::mutex> lock(ep->mutex);
       // A continuously ready low-numbered fd must not starve the rest when
       // the caller's output buffer is smaller than the ready set. Consult the
       // current cursor under the delivery lock, including another waiter's
       // progress since this snapshot was taken.
-      auto next = std::upper_bound(fds.begin(), fds.end(), ep->last_ready_fd,
-                                  [](int fd, const pollfd& p) { return fd < p.fd; });
-      size_t i = static_cast<size_t>(next - fds.begin());
+      auto next = std::upper_bound(scratch.keys.begin(), scratch.keys.end(), ep->last_ready);
+      size_t i = static_cast<size_t>(next - scratch.keys.begin());
       for (size_t scanned = 0; scanned < fds.size() && count < maxevents; ++scanned, ++i) {
         if (i == fds.size()) i = 0;
-        auto it = ep->entries.find(fds[i].fd);
+        if (scratch.keys[i].IsVirtual() && !scratch.owners[i]) continue;
+        auto it = ep->entries.find(scratch.keys[i]);
         // Gone, replaced or fired (EPOLLONESHOT) since the list was taken.
         if (it == ep->entries.end() || it->second.id != ids[i] || !it->second.armed) continue;
         if ((fds[i].revents & POLLNVAL) != 0) {
@@ -722,8 +927,8 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
         events[count].events = r;
         events[count].data = it->second.data;
         ++count;
-        ep->last_ready_fd = fds[i].fd;
-        if ((it->second.events & EPOLLONESHOT) != 0) it->second.armed = false;
+        ep->last_ready = scratch.keys[i];
+        if ((it->second.events & EPOLLONESHOT) != 0) gesher::DisarmEntry(it->second);
       }
     }
     if (count > 0) return count;
@@ -751,3 +956,10 @@ int EpollWaitWithObserver(int epfd, epoll_event* events, int maxevents, int time
   return EpollWaitImpl(epfd, events, maxevents, timeout, observer, context);
 }
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): epoll/eventfd registries in a forked child.
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::epoll_graph_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::epolls_mutex);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::objects_mutex);
+#endif

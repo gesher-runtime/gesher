@@ -25,8 +25,24 @@ public final class CallerIdentity {
     public int callerPid() { return Binder.getCallingPid(); }
     public int callerUid() { return Binder.getCallingUid(); }
 
+    void attachShortcuts(DesktopShortcutService shortcuts) {
+        if (mAtm != null) mAtm.attachShortcuts(shortcuts);
+    }
+
+    boolean shortcutForeground(int uid) {
+        return uid == Process.SYSTEM_UID || mAtm != null && mAtm.shortcutForeground(uid);
+    }
+
     public String packageForPid(int pid) {
         return mAtm == null ? null : mAtm.authenticatedPackageForPid(pid);
+    }
+
+    /**
+     * The installed code of the attached live process with this PID and UID, only while it is
+     * still its package's current installation; null otherwise.
+     */
+    public ApkPackage packageCodeForPid(int pid, int uid) {
+        return mAtm == null ? null : mAtm.authenticatedPackageCodeForPid(pid, uid);
     }
 
     public boolean isSystem() {
@@ -59,6 +75,25 @@ public final class CallerIdentity {
             }
         }
         return actual;
+    }
+
+    /** Authenticate the attached installation, rather than adopting a name's replacement. */
+    public ApkPackage requireCurrentPackage(String claimedPackage) {
+        if (isSystem()) return mPm.get(claimedPackage);
+        String actual = requirePackage(claimedPackage);
+        ApkPackage code = mAtm == null ? null
+                : mAtm.authenticatedPackageCodeForPid(callerPid(), callerUid());
+        if (code == null || !actual.equals(code.packageName)) {
+            throw new SecurityException("Caller belongs to retired package code");
+        }
+        if (actual.equals(claimedPackage)) return code;
+        // A shared-UID caller can name an admitted peer. Retain that peer's
+        // installation, rather than combining its name with the caller's code.
+        ApkPackage claimed = mPm.get(claimedPackage);
+        if (claimed == null || claimed.uid() != code.uid() || mPm.isRemovalPending(claimedPackage)) {
+            throw new SecurityException("Claimed package no longer belongs to the caller's UID");
+        }
+        return claimed;
     }
 
     public void requireSystemOrPackage(String ownerPackage) {

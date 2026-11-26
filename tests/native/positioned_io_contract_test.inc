@@ -23,6 +23,19 @@ static void test_positioned_io_contents(void) {
   check("positioned I/O: zero lengths do not move cursor", pread(fd, NULL, 0, 0) == 0 && pwrite(fd, NULL, 0, 1000) == 0 && lseek(fd, 0, SEEK_CUR) == 8);
   struct stat info;
   check("positioned I/O: zero write does not extend file", fstat(fd, &info) == 0 && info.st_size == (off_t)sizeof(initial));
+  check("positioned append: set shared append status", fcntl(fd, F_SETFL, O_APPEND) == 0);
+  check("positioned append: pwrite ignores explicit offset as Linux does",
+        pwrite(alias >= 0 ? alias : fd, "ap", 2, 0) == 2 &&
+            pread(fd, data, 2, sizeof(initial)) == 2 && memcmp(data, "ap", 2) == 0);
+  check("positioned append: pwrite64 also appends", pwrite64(fd, "q", 1, 2) == 1 &&
+        pread(fd, data, 3, sizeof(initial)) == 3 && memcmp(data, "apq", 3) == 0);
+  check("positioned append: ordinary cursor is unchanged for every alias",
+        lseek(fd, 0, SEEK_CUR) == 8 && (alias < 0 || lseek(alias, 0, SEEK_CUR) == 8));
+  check("positioned append: clearing on an alias restores explicit offsets",
+        fcntl(alias >= 0 ? alias : fd, F_SETFL, 0) == 0 && pwrite(fd, "b", 1, sizeof(initial)) == 1 &&
+            pread(fd, data, 3, sizeof(initial)) == 3 && memcmp(data, "bpq", 3) == 0);
+  check("positioned append: toggling leaves size and ordinary cursor intact",
+        fstat(fd, &info) == 0 && info.st_size == (off_t)sizeof(initial) + 3 && lseek(fd, 0, SEEK_CUR) == 8);
   int ro = open(path, O_RDONLY), wo = open(path, O_WRONLY);
   check("positioned I/O: access witnesses", ro >= 0 && wo >= 0);
   if (ro >= 0) {
@@ -164,8 +177,63 @@ static void test_positioned_io_null_buffers(void) {
   }
 }
 
+static void test_descriptor_seek_contracts(void) {
+  char path[] = "gesher-seek-XXXXXX";
+  int fd = mkstemp(path);
+  check("descriptor seek: regular fixture", fd >= 0);
+  if (fd < 0) return;
+  check("descriptor seek: initial bytes", write(fd, "bytes", 5) == 5);
+  int alias = dup(fd);
+  check("descriptor seek: alias shares native position", alias >= 0 && lseek(fd, 1, SEEK_SET) == 1 &&
+        lseek(alias, 2, SEEK_CUR) == 3 && lseek(fd, 0, SEEK_CUR) == 3);
+  check("descriptor seek: data in a populated extent", lseek(fd, 1, SEEK_DATA) == 1);
+  check("descriptor seek: EOF is a trailing hole", lseek(fd, 0, SEEK_HOLE) == 5);
+  errno = 0;
+  check("descriptor seek: data search at EOF is ENXIO", lseek(fd, 5, SEEK_DATA) == -1 && errno == ENXIO);
+  errno = 0;
+  check("descriptor seek: hole search at EOF is ENXIO", lseek(fd, 5, SEEK_HOLE) == -1 && errno == ENXIO);
+  errno = 0;
+  check("descriptor seek: negative result is EINVAL", lseek(fd, -1, SEEK_SET) == -1 && errno == EINVAL);
+  errno = 0;
+  check("descriptor seek: unsupported origin is EINVAL", lseek(fd, 0, 5) == -1 && errno == EINVAL);
+  check("descriptor seek: failed seeks retain alias position", lseek(fd, 0, SEEK_CUR) == 5 &&
+        (alias < 0 || lseek(alias, 0, SEEK_CUR) == 5));
+  int pathfd = open(path, O_PATH);
+  check("descriptor seek: path-only fixture", pathfd >= 0);
+  if (pathfd >= 0) {
+    errno = 0;
+    check("descriptor seek: path-only is EBADF", lseek(pathfd, 0, SEEK_CUR) == -1 && errno == EBADF);
+    close(pathfd);
+  }
+  int pipes[2];
+  int opened = pipe(pipes);
+  check("descriptor seek: nonseekable fixture", opened == 0);
+  if (opened == 0) {
+    errno = 0;
+    check("descriptor seek: pipe reader is ESPIPE", lseek(pipes[0], 0, SEEK_CUR) == -1 && errno == ESPIPE);
+    errno = 0;
+    check("descriptor seek: pipe writer is ESPIPE", lseek(pipes[1], 0, SEEK_SET) == -1 && errno == ESPIPE);
+    close(pipes[0]); close(pipes[1]);
+  }
+  const char* devices[] = {"/dev/null", "/dev/zero", "/dev/urandom"};
+  for (unsigned index = 0; index < sizeof(devices) / sizeof(devices[0]); ++index) {
+    int device = open(devices[index], O_RDWR);
+    check("descriptor seek: actual device fixture", device >= 0);
+    if (device >= 0) {
+      check("descriptor seek: byte-position-free device returns zero",
+            lseek(device, -1, SEEK_SET) == 0 && lseek(device, 5, SEEK_END) == 0 &&
+                lseek(device, 1, SEEK_HOLE) == 0);
+      close(device);
+    }
+  }
+  if (alias >= 0) close(alias);
+  close(fd);
+  unlink(path);
+}
+
 static void test_positioned_io_contracts(void) {
   test_positioned_io_contents();
   test_positioned_io_nonseekable();
   test_positioned_io_null_buffers();
+  test_descriptor_seek_contracts();
 }

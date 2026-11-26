@@ -1,0 +1,68 @@
+name: performance-contracts
+
+on:
+  pull_request:
+    paths:
+      - 'tools/perf/**'
+      - 'tests/e2e/**'
+      - 'tests/windows/graphics/WindowChecks.ps1'
+      - '.github/workflows/performance-contracts.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/perf/**'
+      - 'tests/e2e/**'
+      - 'tests/windows/graphics/WindowChecks.ps1'
+      - '.github/workflows/performance-contracts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Concurrent protocol snapshots and bounded native sharing failures
+        run: python tools/perf/test_protocol.py -v
+      - name: Frozen manifests, failure accounting, statistics and actual subprocesses
+        run: python tools/perf/test_contracts.py -v
+      - name: Actual Windows job accounting and descendant cleanup
+        if: runner.os == 'Windows'
+        run: python tools/perf/test_windows.py -v
+      - name: Shared E2E render, input and close behavior
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tests/e2e/performance-protocol.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/e2e/render-readiness.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/e2e/test-evidence.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File tests/e2e/performance-ownership.test.ps1
+          exit $LASTEXITCODE
+      - name: Isolated adapter parses on Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null; $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD 'tools/perf/e2e-workload.ps1'), [ref]$tokens, [ref]$errors)
+          if ($errors.Count) { throw ($errors -join "`n") }
+          # The fixtures declare different native boundary types with the same
+          # names. Each needs a fresh Windows PowerShell process.
+          powershell.exe -NoProfile -File tests/e2e/performance-protocol.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -File tests/e2e/render-readiness.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -File tests/e2e/performance-ownership.test.ps1
+          exit $LASTEXITCODE

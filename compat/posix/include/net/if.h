@@ -2,6 +2,7 @@
 // use iphlpapi (src/socket.cc).
 #pragma once
 
+#include <stdint.h>
 #include <sys/socket.h>
 
 #ifdef __cplusplus
@@ -29,8 +30,9 @@ extern "C" {
 #define IFF_DYNAMIC     0x8000
 
 struct ifmap {
-  unsigned long mem_start;
-  unsigned long mem_end;
+  // Android's unsigned long is pointer-sized. Win64's unsigned long is not.
+  uintptr_t mem_start;
+  uintptr_t mem_end;
   unsigned short base_addr;
   unsigned char irq;
   unsigned char dma;
