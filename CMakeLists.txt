@@ -128,6 +128,10 @@ target_compile_definitions(madvise_probe PRIVATE GESHER_MADVISE_MAIN)
 target_compile_options(madvise_probe PRIVATE -Wall -Wextra -Werror)
 set_target_properties(madvise_probe PROPERTIES LINKER_LANGUAGE CXX)
 
+# Native SIGSEGV delivery and recovery through the Windows exception bridge.
+add_executable(fault_context_probe probes/posix/fault_context_probe.cc)
+target_compile_options(fault_context_probe PRIVATE -Wall -Wextra -Werror)
+
 # eventfd and epoll, for libutils' Looper; also run in CI on Windows.
 add_executable(epoll_probe probes/posix/epoll_probe.cc)
 target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
