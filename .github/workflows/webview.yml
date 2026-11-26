@@ -98,6 +98,17 @@ jobs:
             --cxx "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++" \
             --sdk-include "${sdk_headers[0]}" --output out-webview/webstorage_native_negative.exe --no-run --negative-control
 
+      - name: Build document script ordering and cancellation COM gate
+        run: |
+          sdk_headers=(out-webview/webview2-sdk-*/build/native/include)
+          test "${#sdk_headers[@]}" -eq 1
+          "$HOME/toolchain/$LLVM_MINGW_NAME/bin/x86_64-w64-mingw32-clang++" \
+            -std=c++20 -Wall -Werror -Wno-unused-parameter -UNDEBUG -static \
+            -I compat/webview -isystem compat/webview/include -isystem "${sdk_headers[0]}" \
+            tests/native/webview_document_script_test.cc compat/webview/webview2_loader.cc \
+            -lole32 -loleaut32 -luuid -lshlwapi -lurlmon -luser32 -lgdi32 -ladvapi32 -lbcrypt \
+            -o out-webview/webview_document_script_test.exe
+
       - name: Collect the probes
         run: |
           mkdir -p dist-webview
@@ -203,9 +214,12 @@ jobs:
           }
           exit $code
 
-      - name: Agile content stream COM gate
+      - name: Native WebView COM gates
         shell: pwsh
         run: |
-          $p = Start-Process 'dist/webview_owned_stream_test.exe' -NoNewWindow -PassThru
-          if (-not $p.WaitForExit(60000)) { $p.Kill($true); throw 'Owned stream COM gate timed out' }
-          if ($p.ExitCode -ne 0) { throw "Owned stream COM gate failed: $($p.ExitCode)" }
+          foreach ($exe in 'webview_owned_stream_test', 'webview_document_script_test') {
+            if (-not (Test-Path "dist/$exe.exe")) { throw "$exe.exe is missing" }
+            $p = Start-Process "dist/$exe.exe" -NoNewWindow -PassThru
+            if (-not $p.WaitForExit(60000)) { $p.Kill($true); $p.WaitForExit(); throw "$exe timed out" }
+            if ($p.ExitCode -ne 0) { throw "$exe failed: $($p.ExitCode)" }
+          }

@@ -19,6 +19,20 @@ Check 'services: a browser for apps that look for one (com.gesher.browser: VIEW 
   'BrowserIntentTest: starting VIEW http(s) for com.gesher.browser (package, component, implicit) delegates the URL to Windows',
   'BrowserIntentTest all passed')
 
+# Windows' mailto/tel/sms/geo protocol handlers as Android activities (WindowsUriHandlers):
+# each resolves and opens exactly when this machine's Windows has a handler registered for
+# the scheme (AssocQueryStringW), and is ActivityNotFoundException otherwise. The opener is
+# replaced: nothing opens. The per-scheme lines show the runner's own associations.
+Check 'services: mailto/tel/sms/geo resolve and open only through a registered Windows handler; otherwise no activity' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.UriHandlerIntentTest
+} @('UriHandlerIntentTest: mailto Windows handler',
+  'UriHandlerIntentTest: tel Windows handler',
+  'UriHandlerIntentTest: sms Windows handler',
+  'UriHandlerIntentTest: geo Windows handler',
+  'UriHandlerIntentTest: CALL, mms and SEND message/rfc822 have no Windows handler activity',
+  'UriHandlerIntentTest all passed')
+
 Check 'services: app and channel notification settings open Windows controls; unsupported intents and failed launches stay unresolved' {
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.NotificationSettingsIntentTest
@@ -44,3 +58,28 @@ Check 'services: concurrent Control Center requests stay whole on the runtime fi
   & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
     -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.ControlCenterRequestsTest
 } @('ControlCenterRequestsTest all passed:')
+
+# Restrict background (ConnectivityManager.getRestrictBackgroundStatus): Gesher enforces no
+# background-data restriction, so DISABLED and no background line in the snapshot. Read only.
+Check 'services: restrict-background status is DISABLED (no restriction is enforced)' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.RestrictBackgroundTest
+} @('RestrictBackgroundTest: getRestrictBackgroundStatus 1;',
+  'RestrictBackgroundTest all passed')
+
+# Caption style (CaptioningBridge): Windows' ClosedCaptionProperties read through the
+# production natives and mapped to CaptioningManager's Settings.Secure keys. Read only.
+Check 'services: Windows caption style reads and maps to CaptioningManager''s settings' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.CaptioningWindowsTest
+} @('CaptioningWindowsTest: Windows caption style ',
+  'CaptioningWindowsTest all passed')
+
+# country_detector (CountryDetectorService over WindowsCountry): this machine's Windows
+# "Country or region", or the default Locale's country without one, as
+# COUNTRY_SOURCE_LOCALE, through StandIn's generated ICountryDetector stub.
+Check 'services: CountryDetector reports Windows'' Country or region as the locale source' {
+  & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpBrowser" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+    -Xint '-Xusejit:false' -cp (NoDrive "$Dir/services-tests.dex") gesher.services.CountryDetectorTest
+} @('CountryDetectorTest: detectCountry is ',
+  'CountryDetectorTest all passed')

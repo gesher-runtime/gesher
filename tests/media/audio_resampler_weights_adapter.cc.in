@@ -1,0 +1,63 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+
+#include "audio_resampler_weights_bench.h"
+namespace {
+using namespace gesher::media;
+Engine pilot_engine;
+struct PilotTrack {
+  std::shared_ptr<Track> track;
+  uint64_t markers = 0, updates = 0, ends = 0;
+};
+}
+extern "C" void* track_create(const Spec* spec) {
+  auto* owner = new PilotTrack;
+  TrackParams params;
+  params.channels = spec->channels;
+  params.sample_rate = spec->input_rate;
+  params.format = PcmFormat::kFloat;
+  params.capacity_frames = spec->streaming ? spec->capacity : std::max(spec->frames, 1u);
+  params.is_static = !spec->streaming;
+  owner->track.reset(new Track(&pilot_engine, params));
+  owner->track->SetSpeed(spec->speed);
+  owner->track->SetVolume(0.75f, 0.875f);
+  owner->track->SetMarker(spec->frames / 2);
+  owner->track->SetUpdatePeriod(97);
+  TrackEvents events;
+  events.marker = [owner](uint32_t value) { owner->markers += value; };
+  events.new_position = [owner](uint32_t value) { owner->updates += value; };
+  events.end = [owner] { ++owner->ends; };
+  owner->track->SetEvents(std::move(events));
+  return owner;
+}
+extern "C" size_t track_write(void* handle, const float* data, size_t frames) {
+  auto* owner = static_cast<PilotTrack*>(handle);
+  const size_t bytes = frames * owner->track->frame_size();
+  ssize_t committed = owner->track->Write(data, bytes, false);
+  if (committed < 0 || static_cast<size_t>(committed) % owner->track->frame_size()) std::abort();
+  return static_cast<size_t>(committed) / owner->track->frame_size();
+}
+extern "C" void track_start(void* handle) {
+  if (static_cast<PilotTrack*>(handle)->track->Start() != kOk) std::abort();
+}
+extern "C" void track_stop(void* handle) {
+  static_cast<PilotTrack*>(handle)->track->Stop();
+}
+extern "C" void track_mix(void* handle, float* output, unsigned frames, unsigned rate, int64_t time_ns) {
+  gesher::fixture_playback_ns = time_ns;
+  static_cast<PilotTrack*>(handle)->track->MixInto(output, frames, rate, 2);
+  gesher::fixture_playback_ns = -1;
+}
+extern "C" bool track_ended(void* handle) {
+  return static_cast<PilotTrack*>(handle)->ends != 0;
+}
+extern "C" FinalState track_final(void* handle) {
+  auto* owner = static_cast<PilotTrack*>(handle);
+  return {owner->track->Position(), owner->markers, owner->updates, owner->ends,
+          owner->track->underrun_count(), owner->track->Queued()};
+}
+extern "C" void track_destroy(void* handle) {
+  auto* owner = static_cast<PilotTrack*>(handle);
+  owner->track->Stop();
+  owner->track->Release();
+  delete owner;
+}

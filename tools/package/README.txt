@@ -3,6 +3,16 @@ Gesher: ART (Android's runtime) on Windows - a trial build
 
 Requirements: Windows 10 or 11, x64. Nothing else needs installing.
 
+Security
+--------
+Android apps are not isolated from Windows. Gesher runs each app as an
+ordinary Windows program, with the permissions of your Windows account.
+Android's permission prompts control what an app can do through Android's
+APIs; they do not stop its code, especially its native code, from reading and
+changing your files, using the network or starting programs. Treat an .apk
+like a downloaded .exe: install only apps you trust, from sources you trust.
+Per-app isolation (Windows AppContainer) is under development and disabled.
+
 Updating Gesher
 ---------------
 Open Gesher Control Center from the Start menu, or run:
@@ -79,7 +89,9 @@ Other options: --activity .Other (another Activity), --ez KEY true|false
 the launcher closes it; with --keep-task the app runs until it finishes;
 GESHER_APP_WINDOW=headless makes it the default), --hidden-window (the
 window is drawn off the desktop).
-The logs are in %LOCALAPPDATA%\Gesher\logs (<package>.log for an app).
+The logs are in %LOCALAPPDATA%\Gesher\logs (<package>.log for an app);
+the Control Center's "Open logs location" opens that folder (Data\logs in
+the installation folder of a portable install).
 
 Without the device, the app alone in one process with stand-in services:
 

@@ -1,0 +1,2055 @@
+{
+  "created_utc": "2026-11-23T10:30:16.241081+00:00",
+  "protocol": "ABBA x4, all16 fresh-process samples retained; actual provider before scalar-reference provider; no warm/cold sample exclusions",
+  "source_hashes": {
+    "compat/media/video/video_decoder.cc": "51d987de24f4f34954b7f5e105b7139e3109296a26ccf9551db6d2b5122445a7",
+    "tests/media/rgba_i420_test.cc": "c349eda3c8acdeac6b88a739ca0c11868725ac2ef8939a693e6c6d475e77b551",
+    "tests/media/rgba_i420_callbacks.h.in": "7f1242cb32c765a27d2c75f6987873b5c2a2c2a4b292fd53266648fc53948311",
+    "tools/test_rgba_i420.py": "b1b86ea3ec1b960664173538bc669c3b72c9bda43e0d28f12c1ccae31944fbaf"
+  },
+  "provider_library_sha256": "e9aa57711c1cb02a5f82feb262eab9c44463ea683d381ac6f7b7e96fe6126a0b",
+  "compiler": "c++ (Debian 14.2.0-19) 14.2.0",
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ],
+  "samples": [
+    {
+      "index": 0,
+      "revision": "baseline",
+      "elapsed_seconds": 4.866696733000936,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 118718052,
+          "wall_ns": 118699262,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 179477681,
+          "wall_ns": 179504390,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 298313607,
+          "wall_ns": 298396065,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 28529670,
+          "wall_ns": 15068907
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 28558802,
+          "wall_ns": 17113682
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 441461952,
+          "wall_ns": 228221492
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 670524363,
+          "wall_ns": 321383225
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 422263030,
+          "wall_ns": 217198103
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 350731273,
+          "wall_ns": 165237152
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=118718052 wall_ns=118699262 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=179477681 wall_ns=179504390 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=298313607 wall_ns=298396065 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=28529670 wall_ns=15068907\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=28558802 wall_ns=17113682\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=441461952 wall_ns=228221492\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=670524363 wall_ns=321383225\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=422263030 wall_ns=217198103\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=350731273 wall_ns=165237152\nrgba_i420_test: 1179 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 1,
+      "revision": "candidate",
+      "elapsed_seconds": 3.852755501999127,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 50694050,
+          "wall_ns": 50678711,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 73713050,
+          "wall_ns": 73705409,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 112847722,
+          "wall_ns": 112838242,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 18602176,
+          "wall_ns": 10114004
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 33852757,
+          "wall_ns": 18136816
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 426862022,
+          "wall_ns": 184425207
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 385589918,
+          "wall_ns": 157675661
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 334585917,
+          "wall_ns": 126096624
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 308014805,
+          "wall_ns": 125331537
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=50694050 wall_ns=50678711 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=73713050 wall_ns=73705409 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=112847722 wall_ns=112838242 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=18602176 wall_ns=10114004\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=33852757 wall_ns=18136816\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=426862022 wall_ns=184425207\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=385589918 wall_ns=157675661\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=334585917 wall_ns=126096624\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=308014805 wall_ns=125331537\nrgba_i420_test: 1179 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 2,
+      "revision": "candidate",
+      "elapsed_seconds": 3.654163024000809,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 49574786,
+          "wall_ns": 49558753,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 67095439,
+          "wall_ns": 67088678,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 104474891,
+          "wall_ns": 104477485,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 23636128,
+          "wall_ns": 11721636
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 22883565,
+          "wall_ns": 13250953
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 461911528,
+          "wall_ns": 185689877
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 353359151,
+          "wall_ns": 157970381
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 301845157,
+          "wall_ns": 114698652
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 264894291,
+          "wall_ns": 106639693
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=49574786 wall_ns=49558753 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=67095439 wall_ns=67088678 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=104474891 wall_ns=104477485 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=23636128 wall_ns=11721636\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=22883565 wall_ns=13250953\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=461911528 wall_ns=185689877\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=353359151 wall_ns=157970381\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=301845157 wall_ns=114698652\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=264894291 wall_ns=106639693\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 3,
+      "revision": "baseline",
+      "elapsed_seconds": 4.497485296000377,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 232415373,
+          "wall_ns": 232665781,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 198282541,
+          "wall_ns": 198277342,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 312490914,
+          "wall_ns": 312538443,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 25805981,
+          "wall_ns": 14180583
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 30830903,
+          "wall_ns": 17617922
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 464180966,
+          "wall_ns": 257745652
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 472066361,
+          "wall_ns": 231601448
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 354662004,
+          "wall_ns": 172193748
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 416099484,
+          "wall_ns": 194142055
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=232415373 wall_ns=232665781 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=198282541 wall_ns=198277342 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=312490914 wall_ns=312538443 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=25805981 wall_ns=14180583\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=30830903 wall_ns=17617922\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=464180966 wall_ns=257745652\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=472066361 wall_ns=231601448\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=354662004 wall_ns=172193748\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=416099484 wall_ns=194142055\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 4,
+      "revision": "baseline",
+      "elapsed_seconds": 4.3532339409994165,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 134535164,
+          "wall_ns": 134523221,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 185466497,
+          "wall_ns": 185571414,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 299744803,
+          "wall_ns": 299765665,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 23436146,
+          "wall_ns": 13763878
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 24485956,
+          "wall_ns": 14969682
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 434133761,
+          "wall_ns": 218875891
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 438371593,
+          "wall_ns": 213576947
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 371405442,
+          "wall_ns": 166793617
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 777647560,
+          "wall_ns": 286319389
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=134535164 wall_ns=134523221 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=185466497 wall_ns=185571414 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=299744803 wall_ns=299765665 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=23436146 wall_ns=13763878\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=24485956 wall_ns=14969682\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=434133761 wall_ns=218875891\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=438371593 wall_ns=213576947\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=371405442 wall_ns=166793617\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=777647560 wall_ns=286319389\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 5,
+      "revision": "candidate",
+      "elapsed_seconds": 3.7085044599989487,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 46629783,
+          "wall_ns": 46622824,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 66733544,
+          "wall_ns": 66727096,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 113126284,
+          "wall_ns": 113117056,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 18987163,
+          "wall_ns": 10948588
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 37136456,
+          "wall_ns": 22751185
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 369423310,
+          "wall_ns": 157754937
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 414773653,
+          "wall_ns": 176580611
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 324018225,
+          "wall_ns": 129423333
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 354422526,
+          "wall_ns": 139709479
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=46629783 wall_ns=46622824 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=66733544 wall_ns=66727096 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=113126284 wall_ns=113117056 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=18987163 wall_ns=10948588\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=37136456 wall_ns=22751185\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=369423310 wall_ns=157754937\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=414773653 wall_ns=176580611\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=324018225 wall_ns=129423333\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=354422526 wall_ns=139709479\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 6,
+      "revision": "candidate",
+      "elapsed_seconds": 3.4347293339997123,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 45937750,
+          "wall_ns": 45922873,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 65136010,
+          "wall_ns": 65129184,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 102862714,
+          "wall_ns": 102854027,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 18546230,
+          "wall_ns": 10073777
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 31315506,
+          "wall_ns": 15753200
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 355454087,
+          "wall_ns": 139970557
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 418182506,
+          "wall_ns": 182286284
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 306198012,
+          "wall_ns": 119772337
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 347467825,
+          "wall_ns": 128195659
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=45937750 wall_ns=45922873 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=65136010 wall_ns=65129184 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=102862714 wall_ns=102854027 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=18546230 wall_ns=10073777\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=31315506 wall_ns=15753200\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=355454087 wall_ns=139970557\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=418182506 wall_ns=182286284\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=306198012 wall_ns=119772337\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=347467825 wall_ns=128195659\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 7,
+      "revision": "baseline",
+      "elapsed_seconds": 4.415050614999927,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 122754801,
+          "wall_ns": 122811526,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 195924077,
+          "wall_ns": 201394225,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 282325680,
+          "wall_ns": 285577045,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 30531013,
+          "wall_ns": 16442948
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 20908647,
+          "wall_ns": 14297434
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 479179491,
+          "wall_ns": 242469371
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 511934110,
+          "wall_ns": 242824507
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 450878487,
+          "wall_ns": 194680175
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 461771377,
+          "wall_ns": 231924380
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=122754801 wall_ns=122811526 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=195924077 wall_ns=201394225 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=282325680 wall_ns=285577045 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=30531013 wall_ns=16442948\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=20908647 wall_ns=14297434\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=479179491 wall_ns=242469371\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=511934110 wall_ns=242824507\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=450878487 wall_ns=194680175\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=461771377 wall_ns=231924380\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 8,
+      "revision": "baseline",
+      "elapsed_seconds": 4.129601607999575,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 141913217,
+          "wall_ns": 141946589,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 186562741,
+          "wall_ns": 186555117,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 293811282,
+          "wall_ns": 293857740,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 21646646,
+          "wall_ns": 13006241
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 27620833,
+          "wall_ns": 15560208
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 430104358,
+          "wall_ns": 225698557
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 405725596,
+          "wall_ns": 193728967
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 368644227,
+          "wall_ns": 164758573
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 350424980,
+          "wall_ns": 158320153
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=141913217 wall_ns=141946589 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=186562741 wall_ns=186555117 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=293811282 wall_ns=293857740 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=21646646 wall_ns=13006241\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=27620833 wall_ns=15560208\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=430104358 wall_ns=225698557\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=405725596 wall_ns=193728967\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=368644227 wall_ns=164758573\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=350424980 wall_ns=158320153\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 9,
+      "revision": "candidate",
+      "elapsed_seconds": 3.5339739239989285,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 48685009,
+          "wall_ns": 50475096,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 67011028,
+          "wall_ns": 67003677,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 136899301,
+          "wall_ns": 136890104,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 20602680,
+          "wall_ns": 10916856
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 24197203,
+          "wall_ns": 14053488
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 374529013,
+          "wall_ns": 156834488
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 373196322,
+          "wall_ns": 148866287
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 309631048,
+          "wall_ns": 131321292
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 268965438,
+          "wall_ns": 103280815
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=48685009 wall_ns=50475096 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=67011028 wall_ns=67003677 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=136899301 wall_ns=136890104 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=20602680 wall_ns=10916856\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=24197203 wall_ns=14053488\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=374529013 wall_ns=156834488\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=373196322 wall_ns=148866287\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=309631048 wall_ns=131321292\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=268965438 wall_ns=103280815\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 10,
+      "revision": "candidate",
+      "elapsed_seconds": 3.470176648001143,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 46350497,
+          "wall_ns": 46344932,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 69687168,
+          "wall_ns": 69680159,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 103021412,
+          "wall_ns": 103163892,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 21115353,
+          "wall_ns": 12747066
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 23755276,
+          "wall_ns": 15542301
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 389979929,
+          "wall_ns": 168713617
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 315805612,
+          "wall_ns": 126124854
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 309019374,
+          "wall_ns": 118520062
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 290233069,
+          "wall_ns": 113138721
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=46350497 wall_ns=46344932 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=69687168 wall_ns=69680159 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=103021412 wall_ns=103163892 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=21115353 wall_ns=12747066\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=23755276 wall_ns=15542301\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=389979929 wall_ns=168713617\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=315805612 wall_ns=126124854\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=309019374 wall_ns=118520062\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=290233069 wall_ns=113138721\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 11,
+      "revision": "baseline",
+      "elapsed_seconds": 4.278069130999938,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 124194069,
+          "wall_ns": 124175481,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 184147594,
+          "wall_ns": 184762799,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 300444037,
+          "wall_ns": 300462217,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 20829562,
+          "wall_ns": 11945977
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 31569124,
+          "wall_ns": 17650237
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 453251358,
+          "wall_ns": 230856446
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 424157723,
+          "wall_ns": 207770523
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 352280521,
+          "wall_ns": 179382881
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 320195364,
+          "wall_ns": 157363629
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=124194069 wall_ns=124175481 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=184147594 wall_ns=184762799 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=300444037 wall_ns=300462217 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=20829562 wall_ns=11945977\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=31569124 wall_ns=17650237\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=453251358 wall_ns=230856446\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=424157723 wall_ns=207770523\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=352280521 wall_ns=179382881\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=320195364 wall_ns=157363629\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 12,
+      "revision": "baseline",
+      "elapsed_seconds": 4.593058110000129,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 131522608,
+          "wall_ns": 131538523,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 202579665,
+          "wall_ns": 202736753,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 354836695,
+          "wall_ns": 354893708,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 25740513,
+          "wall_ns": 15789249
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 27293285,
+          "wall_ns": 16100973
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 611191850,
+          "wall_ns": 282694771
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 446719997,
+          "wall_ns": 228249479
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 468370106,
+          "wall_ns": 239456634
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 343757444,
+          "wall_ns": 166530363
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=131522608 wall_ns=131538523 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=202579665 wall_ns=202736753 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=354836695 wall_ns=354893708 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=25740513 wall_ns=15789249\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=27293285 wall_ns=16100973\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=611191850 wall_ns=282694771\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=446719997 wall_ns=228249479\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=468370106 wall_ns=239456634\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=343757444 wall_ns=166530363\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 13,
+      "revision": "candidate",
+      "elapsed_seconds": 3.676213407999967,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 52819968,
+          "wall_ns": 52804900,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 75474016,
+          "wall_ns": 75466005,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 114432835,
+          "wall_ns": 114400288,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 28660387,
+          "wall_ns": 14512417
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 24905535,
+          "wall_ns": 15194593
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 365301554,
+          "wall_ns": 149957439
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 366620534,
+          "wall_ns": 145981885
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 268141771,
+          "wall_ns": 113777934
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 298301547,
+          "wall_ns": 115270443
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=52819968 wall_ns=52804900 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=75474016 wall_ns=75466005 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=114432835 wall_ns=114400288 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=28660387 wall_ns=14512417\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=24905535 wall_ns=15194593\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=365301554 wall_ns=149957439\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=366620534 wall_ns=145981885\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=268141771 wall_ns=113777934\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=298301547 wall_ns=115270443\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 14,
+      "revision": "candidate",
+      "elapsed_seconds": 3.835422957001356,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 49868841,
+          "wall_ns": 49852800,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 69146146,
+          "wall_ns": 69138997,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 103259750,
+          "wall_ns": 103251147,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 29481090,
+          "wall_ns": 18730052
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 28029932,
+          "wall_ns": 16069095
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 404876542,
+          "wall_ns": 165529264
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 394565782,
+          "wall_ns": 157640228
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 478314522,
+          "wall_ns": 179754054
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 439085300,
+          "wall_ns": 203606913
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=49868841 wall_ns=49852800 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=69146146 wall_ns=69138997 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=103259750 wall_ns=103251147 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=29481090 wall_ns=18730052\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=28029932 wall_ns=16069095\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=404876542 wall_ns=165529264\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=394565782 wall_ns=157640228\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=478314522 wall_ns=179754054\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=439085300 wall_ns=203606913\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    },
+    {
+      "index": 15,
+      "revision": "baseline",
+      "elapsed_seconds": 4.001193414000227,
+      "metrics": [
+        {
+          "kind": "CONVERT",
+          "name": "1280x720",
+          "frames": 30,
+          "cpu_ns": 116165728,
+          "wall_ns": 118294359,
+          "digest": 15550807747471376219
+        },
+        {
+          "kind": "CONVERT",
+          "name": "1920x1080",
+          "frames": 20,
+          "cpu_ns": 174095058,
+          "wall_ns": 174242256,
+          "digest": 13738479335178469623
+        },
+        {
+          "kind": "CONVERT",
+          "name": "3840x2160",
+          "frames": 8,
+          "cpu_ns": 274504324,
+          "wall_ns": 276147580,
+          "digest": 8689061212130979285
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-small-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 23577665,
+          "wall_ns": 13038355
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-scaled-12",
+          "frames": 12,
+          "mappings": 0,
+          "cpu_ns": 24489755,
+          "wall_ns": 15570543
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 437590769,
+          "wall_ns": 210570465
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-720p-24",
+          "frames": 24,
+          "mappings": 0,
+          "cpu_ns": 410637911,
+          "wall_ns": 205097244
+        },
+        {
+          "kind": "STREAM",
+          "name": "codec-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 345699527,
+          "wall_ns": 156892547
+        },
+        {
+          "kind": "STREAM",
+          "name": "recorder-1080p-8",
+          "frames": 8,
+          "mappings": 0,
+          "cpu_ns": 370053031,
+          "wall_ns": 170513449
+        }
+      ],
+      "stdout": "CONVERT 1280x720 frames=30 cpu_ns=116165728 wall_ns=118294359 digest=15550807747471376219\nCONVERT 1920x1080 frames=20 cpu_ns=174095058 wall_ns=174242256 digest=13738479335178469623\nCONVERT 3840x2160 frames=8 cpu_ns=274504324 wall_ns=276147580 digest=8689061212130979285\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=23577665 wall_ns=13038355\nSTREAM recorder-scaled-12 frames=12 mappings=0 cpu_ns=24489755 wall_ns=15570543\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=437590769 wall_ns=210570465\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=410637911 wall_ns=205097244\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=345699527 wall_ns=156892547\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=370053031 wall_ns=170513449\nrgba_i420_test: 967 checks; complete pixels, actual callbacks and real AVC packets passed\n"
+    }
+  ],
+  "summary": {
+    "1280x720": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            118718052,
+            232415373,
+            134535164,
+            122754801,
+            141913217,
+            124194069,
+            131522608,
+            116165728
+          ],
+          "candidate": [
+            50694050,
+            49574786,
+            46629783,
+            45937750,
+            48685009,
+            46350497,
+            52819968,
+            49868841
+          ]
+        },
+        "median": {
+          "baseline": 127858338.5,
+          "candidate": 49129897.5
+        },
+        "change_percent": -61.574741173412015
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            118699262,
+            232665781,
+            134523221,
+            122811526,
+            141946589,
+            124175481,
+            131538523,
+            118294359
+          ],
+          "candidate": [
+            50678711,
+            49558753,
+            46622824,
+            45922873,
+            50475096,
+            46344932,
+            52804900,
+            49852800
+          ]
+        },
+        "median": {
+          "baseline": 127857002.0,
+          "candidate": 49705776.5
+        },
+        "change_percent": -61.123930858319355
+      }
+    },
+    "1920x1080": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            179477681,
+            198282541,
+            185466497,
+            195924077,
+            186562741,
+            184147594,
+            202579665,
+            174095058
+          ],
+          "candidate": [
+            73713050,
+            67095439,
+            66733544,
+            65136010,
+            67011028,
+            69687168,
+            75474016,
+            69146146
+          ]
+        },
+        "median": {
+          "baseline": 186014619.0,
+          "candidate": 68120792.5
+        },
+        "change_percent": -63.37879631922908
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            179504390,
+            198277342,
+            185571414,
+            201394225,
+            186555117,
+            184762799,
+            202736753,
+            174242256
+          ],
+          "candidate": [
+            73705409,
+            67088678,
+            66727096,
+            65129184,
+            67003677,
+            69680159,
+            75466005,
+            69138997
+          ]
+        },
+        "median": {
+          "baseline": 186063265.5,
+          "candidate": 68113837.5
+        },
+        "change_percent": -63.39210895984194
+      }
+    },
+    "3840x2160": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            298313607,
+            312490914,
+            299744803,
+            282325680,
+            293811282,
+            300444037,
+            354836695,
+            274504324
+          ],
+          "candidate": [
+            112847722,
+            104474891,
+            113126284,
+            102862714,
+            136899301,
+            103021412,
+            114432835,
+            103259750
+          ]
+        },
+        "median": {
+          "baseline": 299029205.0,
+          "candidate": 108661306.5
+        },
+        "change_percent": -63.66197525756723
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            298396065,
+            312538443,
+            299765665,
+            285577045,
+            293857740,
+            300462217,
+            354893708,
+            276147580
+          ],
+          "candidate": [
+            112838242,
+            104477485,
+            113117056,
+            102854027,
+            136890104,
+            103163892,
+            114400288,
+            103251147
+          ]
+        },
+        "median": {
+          "baseline": 299080865.0,
+          "candidate": 108657863.5
+        },
+        "change_percent": -63.6694030893618
+      }
+    },
+    "codec-small-12": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            28529670,
+            25805981,
+            23436146,
+            30531013,
+            21646646,
+            20829562,
+            25740513,
+            23577665
+          ],
+          "candidate": [
+            18602176,
+            23636128,
+            18987163,
+            18546230,
+            20602680,
+            21115353,
+            28660387,
+            29481090
+          ]
+        },
+        "median": {
+          "baseline": 24659089.0,
+          "candidate": 20859016.5
+        },
+        "change_percent": -15.410433451130334
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            15068907,
+            14180583,
+            13763878,
+            16442948,
+            13006241,
+            11945977,
+            15789249,
+            13038355
+          ],
+          "candidate": [
+            10114004,
+            11721636,
+            10948588,
+            10073777,
+            10916856,
+            12747066,
+            14512417,
+            18730052
+          ]
+        },
+        "median": {
+          "baseline": 13972230.5,
+          "candidate": 11335112.0
+        },
+        "change_percent": -18.87399796331731
+      }
+    },
+    "recorder-scaled-12": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            28558802,
+            30830903,
+            24485956,
+            20908647,
+            27620833,
+            31569124,
+            27293285,
+            24489755
+          ],
+          "candidate": [
+            33852757,
+            22883565,
+            37136456,
+            31315506,
+            24197203,
+            23755276,
+            24905535,
+            28029932
+          ]
+        },
+        "median": {
+          "baseline": 27457059.0,
+          "candidate": 26467733.5
+        },
+        "change_percent": -3.6031735955405875
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            17113682,
+            17617922,
+            14969682,
+            14297434,
+            15560208,
+            17650237,
+            16100973,
+            15570543
+          ],
+          "candidate": [
+            18136816,
+            13250953,
+            22751185,
+            15753200,
+            14053488,
+            15542301,
+            15194593,
+            16069095
+          ]
+        },
+        "median": {
+          "baseline": 15835758.0,
+          "candidate": 15647750.5
+        },
+        "change_percent": -1.187233980211111
+      }
+    },
+    "codec-720p-24": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            441461952,
+            464180966,
+            434133761,
+            479179491,
+            430104358,
+            453251358,
+            611191850,
+            437590769
+          ],
+          "candidate": [
+            426862022,
+            461911528,
+            369423310,
+            355454087,
+            374529013,
+            389979929,
+            365301554,
+            404876542
+          ]
+        },
+        "median": {
+          "baseline": 447356655.0,
+          "candidate": 382254471.0
+        },
+        "change_percent": -14.55263563699527
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            228221492,
+            257745652,
+            218875891,
+            242469371,
+            225698557,
+            230856446,
+            282694771,
+            210570465
+          ],
+          "candidate": [
+            184425207,
+            185689877,
+            157754937,
+            139970557,
+            156834488,
+            168713617,
+            149957439,
+            165529264
+          ]
+        },
+        "median": {
+          "baseline": 229538969.0,
+          "candidate": 161642100.5
+        },
+        "change_percent": -29.579669541863286
+      }
+    },
+    "recorder-720p-24": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            670524363,
+            472066361,
+            438371593,
+            511934110,
+            405725596,
+            424157723,
+            446719997,
+            410637911
+          ],
+          "candidate": [
+            385589918,
+            353359151,
+            414773653,
+            418182506,
+            373196322,
+            315805612,
+            366620534,
+            394565782
+          ]
+        },
+        "median": {
+          "baseline": 442545795.0,
+          "candidate": 379393120.0
+        },
+        "change_percent": -14.27031410387709
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            321383225,
+            231601448,
+            213576947,
+            242824507,
+            193728967,
+            207770523,
+            228249479,
+            205097244
+          ],
+          "candidate": [
+            157675661,
+            157970381,
+            176580611,
+            182286284,
+            148866287,
+            126124854,
+            145981885,
+            157640228
+          ]
+        },
+        "median": {
+          "baseline": 220913213.0,
+          "candidate": 157657944.5
+        },
+        "change_percent": -28.633537868103886
+      }
+    },
+    "codec-1080p-8": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            422263030,
+            354662004,
+            371405442,
+            450878487,
+            368644227,
+            352280521,
+            468370106,
+            345699527
+          ],
+          "candidate": [
+            334585917,
+            301845157,
+            324018225,
+            306198012,
+            309631048,
+            309019374,
+            268141771,
+            478314522
+          ]
+        },
+        "median": {
+          "baseline": 370024834.5,
+          "candidate": 309325211.0
+        },
+        "change_percent": -16.40420259413696
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            217198103,
+            172193748,
+            166793617,
+            194680175,
+            164758573,
+            179382881,
+            239456634,
+            156892547
+          ],
+          "candidate": [
+            126096624,
+            114698652,
+            129423333,
+            119772337,
+            131321292,
+            118520062,
+            113777934,
+            179754054
+          ]
+        },
+        "median": {
+          "baseline": 175788314.5,
+          "candidate": 122934480.5
+        },
+        "change_percent": -30.06675054046326
+      }
+    },
+    "recorder-1080p-8": {
+      "cpu_ns": {
+        "samples": {
+          "baseline": [
+            350731273,
+            416099484,
+            777647560,
+            461771377,
+            350424980,
+            320195364,
+            343757444,
+            370053031
+          ],
+          "candidate": [
+            308014805,
+            264894291,
+            354422526,
+            347467825,
+            268965438,
+            290233069,
+            298301547,
+            439085300
+          ]
+        },
+        "median": {
+          "baseline": 360392152.0,
+          "candidate": 303158176.0
+        },
+        "change_percent": -15.881027287186878
+      },
+      "wall_ns": {
+        "samples": {
+          "baseline": [
+            165237152,
+            194142055,
+            286319389,
+            231924380,
+            158320153,
+            157363629,
+            166530363,
+            170513449
+          ],
+          "candidate": [
+            125331537,
+            106639693,
+            139709479,
+            128195659,
+            103280815,
+            113138721,
+            115270443,
+            203606913
+          ]
+        },
+        "median": {
+          "baseline": 168521906.0,
+          "candidate": 120300990.0
+        },
+        "change_percent": -28.61403430839431
+      }
+    }
+  },
+  "baseline_revision": "5aa6b39027e9c38de2781ff9cda066418d25b1ba",
+  "scope": "T12 same-size software RGBA conversion component; no complete roadmap row closure",
+  "compiler_flags": {
+    "wrapper_and_probe": [
+      "-std=c++20",
+      "-O2",
+      "-g",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-Wno-unused-parameter",
+      "-fno-exceptions",
+      "-DGESHER_MEDIA_STANDALONE"
+    ],
+    "provider": [
+      "-O3",
+      "-g",
+      "-msse4.2",
+      "-mno-avx",
+      "-DX86",
+      "-DDISABLE_AVX2",
+      "-pthread"
+    ],
+    "encoder_only": [
+      "-DNDEBUG",
+      "-DN_MB_ENABLE",
+      "-UHP_PL"
+    ],
+    "provider_inventory": "cmake/aosp/media_video_codecs.cmake _avc_srcs plus _avcenc_srcs; all _avc_ithread renames preserved"
+  },
+  "provider_revision": "d380d04a78c6c08702e36aca86d0fd4baee390f9",
+  "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+  "ffmpeg_version": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+  "correctness": {
+    "candidate_checks": 68727,
+    "reference_checks": 68583,
+    "rgb_triples": 16777216,
+    "actual_frames_per_corpus": 88,
+    "reference_encoded_frames_per_corpus": 88,
+    "streams": 6,
+    "mutants": [
+      "disabled-fast-path",
+      "height-guard",
+      "chroma-position",
+      "padding-write"
+    ],
+    "final_ci_shape_source": {
+      "sources": {
+        "compat/media/video/video_decoder.cc": "51d987de24f4f34954b7f5e105b7139e3109296a26ccf9551db6d2b5122445a7",
+        "compat/media/encode/soft_avc_encoder.cc": "f8ec608062b562e9896554a97f31ddfc875eba093f6212211e0477aad80ebf30",
+        "compat/media/jni/media_codec_jni.cc": "6d8c93c1dc87fcb65a28ef4d30ee6aa18939d4a3410d631c57d770cf1ba23976",
+        "compat/media/record/recorder.cc": "796bf898168f69d2f05fdd0eb77d096d217363f3d8b58ea3535461666be0309a"
+      },
+      "provider_revision": "d380d04a78c6c08702e36aca86d0fd4baee390f9",
+      "provider_library_sha256": "e9165a8178bc10eaa31529deedf45a31f8e5424c536a05fc04d85c9aee0dcdf3",
+      "mapping_observer": true,
+      "sanitize": true,
+      "decoded_streams": 6
+    },
+    "candidate_gate_log": "RGBA_ALL_RGB_PASS triples=16777216\nSTREAM codec-small-12 frames=12 mappings=0 cpu_ns=142992995 wall_ns=90712347\nSTREAM recorder-scaled-12 frames=12 mappings=1152000 cpu_ns=162287555 wall_ns=104179966\nSTREAM codec-720p-24 frames=24 mappings=0 cpu_ns=2549536354 wall_ns=1717007523\nSTREAM recorder-720p-24 frames=24 mappings=0 cpu_ns=2409465439 wall_ns=1584367240\nSTREAM codec-1080p-8 frames=8 mappings=0 cpu_ns=1716210453 wall_ns=1127269587\nSTREAM recorder-1080p-8 frames=8 mappings=0 cpu_ns=2063839330 wall_ns=1270775858\nrgba_i420_test: 68727 checks; complete pixels, actual callbacks and real AVC packets passed\n",
+    "baseline_gate_log": "RGBA_ALL_RGB_PASS triples=16777216\nSTREAM codec-small-12 frames=12 mappings=1152000 cpu_ns=174352973 wall_ns=100335379\nSTREAM recorder-scaled-12 frames=12 mappings=1152000 cpu_ns=180915778 wall_ns=107339892\nSTREAM codec-720p-24 frames=24 mappings=27648000 cpu_ns=3549949034 wall_ns=2211966029\nSTREAM recorder-720p-24 frames=24 mappings=27648000 cpu_ns=2894312841 wall_ns=1813306092\nSTREAM codec-1080p-8 frames=8 mappings=20736000 cpu_ns=2999327057 wall_ns=1813863792\nSTREAM recorder-1080p-8 frames=8 mappings=20736000 cpu_ns=2660921100 wall_ns=1707728781\nrgba_i420_test: 68583 checks; complete pixels, actual callbacks and real AVC packets passed\n",
+    "baseline_negative": "rgba_i420 check failed at 150: same-size mapping budget\n",
+    "decoded": {
+      "codec-1080p-8.actual.h264": {
+        "bitstream_sha256": "0fe375c253d6c67c1bed9c11aebcd2c8619121b952cf5e7f8e10922aa10965ed",
+        "frames": [
+          "0,          0,          0,        1,  3110400, cc10ac7e1b12b34d3f2446ec076ef702",
+          "0,          1,          1,        1,  3110400, ba23e724e1cc87b8e383912e23f833da",
+          "0,          2,          2,        1,  3110400, 3d9123d9fb78c48ea6a0c08a706ec316",
+          "0,          3,          3,        1,  3110400, 059182a3dc6be844c2d64fd8c536922b",
+          "0,          4,          4,        1,  3110400, 166016f6279f720723c15ead21f06666",
+          "0,          5,          5,        1,  3110400, 6611b157f9f812e348549f2c52482e79",
+          "0,          6,          6,        1,  3110400, dcb0cde8f8b706941b0956fd072e2fa7",
+          "0,          7,          7,        1,  3110400, 9b42e5ba3bc9014926a67d69603059f3"
+        ]
+      },
+      "codec-720p-24.actual.h264": {
+        "bitstream_sha256": "328deb921ee6d30afaebc1f0238229649e8cf62fa7672926a59b1155aa59d145",
+        "frames": [
+          "0,          0,          0,        1,  1382400, 03d66eb97bff20bd65c7472b8a1489b7",
+          "0,          1,          1,        1,  1382400, 92ce26c8f31a6cfe6408317c9a58fed4",
+          "0,          2,          2,        1,  1382400, c1b06346d19fd3995d6083f33bf7d349",
+          "0,          3,          3,        1,  1382400, 0e23d797ac8b73fbf03b0e7719db4b81",
+          "0,          4,          4,        1,  1382400, 62cda372eb8a38f024418f085a89e4b5",
+          "0,          5,          5,        1,  1382400, 129d1705f1a631924e2e20618b099e74",
+          "0,          6,          6,        1,  1382400, 41c43af8606a02739e19c9abaf9e493e",
+          "0,          7,          7,        1,  1382400, 87c7b546bffec60c2170c5dd847be9dc",
+          "0,          8,          8,        1,  1382400, fa18c022709d3fca7ffcd291587582e0",
+          "0,          9,          9,        1,  1382400, b2d67b043ae73401189d1232d8be6ac5",
+          "0,         10,         10,        1,  1382400, 2e45d6da12942ddea50ead624e93c701",
+          "0,         11,         11,        1,  1382400, f983efeed70d4efbd2f7c1ae810d6035",
+          "0,         12,         12,        1,  1382400, 0f71803823ab21ddf3040e4d86e05ce8",
+          "0,         13,         13,        1,  1382400, 505069d384adb3c40a0c9b2083192c68",
+          "0,         14,         14,        1,  1382400, c2b5766ffe4832c7fa06f6356a8b03a1",
+          "0,         15,         15,        1,  1382400, 8f92066d4ff17cd0de14c9881b3e16f0",
+          "0,         16,         16,        1,  1382400, d26a420b32a353f2f5552395664f8be0",
+          "0,         17,         17,        1,  1382400, 8951638120a1ac172fdf05c2cac48b45",
+          "0,         18,         18,        1,  1382400, 6030083a3edf04ddf8e7aca66b5aa61e",
+          "0,         19,         19,        1,  1382400, 6dd6a1c72bcc148c4dda6832360d1549",
+          "0,         20,         20,        1,  1382400, b53245396ea5d1a2d4308fe72f7d7594",
+          "0,         21,         21,        1,  1382400, 71ad72be8432080afa631f6bd8942370",
+          "0,         22,         22,        1,  1382400, 4823c1e1dec4f8f4e2aa4884a936bea7",
+          "0,         23,         23,        1,  1382400, 21610f36dba2878367f37f3c13ba0f6c"
+        ]
+      },
+      "codec-small-12.actual.h264": {
+        "bitstream_sha256": "fb65eb71541bdeb8cbe3d04dd9b1231eac2897cee2535b913977b9fb83eaf908",
+        "frames": [
+          "0,          0,          0,        1,   115200, 52dbcf7842d86234e08658f41006a631",
+          "0,          1,          1,        1,   115200, 74add485ad29198a50e358c592cd0ddf",
+          "0,          2,          2,        1,   115200, 5c2a1b64564ee45fe66ac524ea186025",
+          "0,          3,          3,        1,   115200, 85382f7dfb1eafcace9188ae36dd617d",
+          "0,          4,          4,        1,   115200, 062060c12552a9f87d691c37135070c5",
+          "0,          5,          5,        1,   115200, 723725250eea8d0999f3535b03258bb4",
+          "0,          6,          6,        1,   115200, 39d07b776a02d50f2d2beb86cce9d7c0",
+          "0,          7,          7,        1,   115200, efe5c5e443e0d314e1c1cfe3a7e9034f",
+          "0,          8,          8,        1,   115200, dfa0b869fe282a1de80ea962e9e64861",
+          "0,          9,          9,        1,   115200, 42ecdcc917580d400b9f99f62ff6911c",
+          "0,         10,         10,        1,   115200, c76fbafaf53c618ecf17f009df92e054",
+          "0,         11,         11,        1,   115200, 3c6e3e76c8e74e099ae3ea1ed05ef6e8"
+        ]
+      },
+      "recorder-1080p-8.actual.h264": {
+        "bitstream_sha256": "0fe375c253d6c67c1bed9c11aebcd2c8619121b952cf5e7f8e10922aa10965ed",
+        "frames": [
+          "0,          0,          0,        1,  3110400, cc10ac7e1b12b34d3f2446ec076ef702",
+          "0,          1,          1,        1,  3110400, ba23e724e1cc87b8e383912e23f833da",
+          "0,          2,          2,        1,  3110400, 3d9123d9fb78c48ea6a0c08a706ec316",
+          "0,          3,          3,        1,  3110400, 059182a3dc6be844c2d64fd8c536922b",
+          "0,          4,          4,        1,  3110400, 166016f6279f720723c15ead21f06666",
+          "0,          5,          5,        1,  3110400, 6611b157f9f812e348549f2c52482e79",
+          "0,          6,          6,        1,  3110400, dcb0cde8f8b706941b0956fd072e2fa7",
+          "0,          7,          7,        1,  3110400, 9b42e5ba3bc9014926a67d69603059f3"
+        ]
+      },
+      "recorder-720p-24.actual.h264": {
+        "bitstream_sha256": "328deb921ee6d30afaebc1f0238229649e8cf62fa7672926a59b1155aa59d145",
+        "frames": [
+          "0,          0,          0,        1,  1382400, 03d66eb97bff20bd65c7472b8a1489b7",
+          "0,          1,          1,        1,  1382400, 92ce26c8f31a6cfe6408317c9a58fed4",
+          "0,          2,          2,        1,  1382400, c1b06346d19fd3995d6083f33bf7d349",
+          "0,          3,          3,        1,  1382400, 0e23d797ac8b73fbf03b0e7719db4b81",
+          "0,          4,          4,        1,  1382400, 62cda372eb8a38f024418f085a89e4b5",
+          "0,          5,          5,        1,  1382400, 129d1705f1a631924e2e20618b099e74",
+          "0,          6,          6,        1,  1382400, 41c43af8606a02739e19c9abaf9e493e",
+          "0,          7,          7,        1,  1382400, 87c7b546bffec60c2170c5dd847be9dc",
+          "0,          8,          8,        1,  1382400, fa18c022709d3fca7ffcd291587582e0",
+          "0,          9,          9,        1,  1382400, b2d67b043ae73401189d1232d8be6ac5",
+          "0,         10,         10,        1,  1382400, 2e45d6da12942ddea50ead624e93c701",
+          "0,         11,         11,        1,  1382400, f983efeed70d4efbd2f7c1ae810d6035",
+          "0,         12,         12,        1,  1382400, 0f71803823ab21ddf3040e4d86e05ce8",
+          "0,         13,         13,        1,  1382400, 505069d384adb3c40a0c9b2083192c68",
+          "0,         14,         14,        1,  1382400, c2b5766ffe4832c7fa06f6356a8b03a1",
+          "0,         15,         15,        1,  1382400, 8f92066d4ff17cd0de14c9881b3e16f0",
+          "0,         16,         16,        1,  1382400, d26a420b32a353f2f5552395664f8be0",
+          "0,         17,         17,        1,  1382400, 8951638120a1ac172fdf05c2cac48b45",
+          "0,         18,         18,        1,  1382400, 6030083a3edf04ddf8e7aca66b5aa61e",
+          "0,         19,         19,        1,  1382400, 6dd6a1c72bcc148c4dda6832360d1549",
+          "0,         20,         20,        1,  1382400, b53245396ea5d1a2d4308fe72f7d7594",
+          "0,         21,         21,        1,  1382400, 71ad72be8432080afa631f6bd8942370",
+          "0,         22,         22,        1,  1382400, 4823c1e1dec4f8f4e2aa4884a936bea7",
+          "0,         23,         23,        1,  1382400, 21610f36dba2878367f37f3c13ba0f6c"
+        ]
+      },
+      "recorder-scaled-12.actual.h264": {
+        "bitstream_sha256": "5768e2aa6bfbcc5a2d6a181074ab3c49d0d07b279e396ed1bb310fbbd55d3b78",
+        "frames": [
+          "0,          0,          0,        1,   115200, bc2727651f1055c9df01495c24501c10",
+          "0,          1,          1,        1,   115200, 909c46432c673067f366934ae8642685",
+          "0,          2,          2,        1,   115200, 81deedfadca33ba2214f76e7e0edbb0f",
+          "0,          3,          3,        1,   115200, dc85c5681c68e24d1d71f36cedce7d01",
+          "0,          4,          4,        1,   115200, db002e849d43f6deca02032ad5d44e00",
+          "0,          5,          5,        1,   115200, 372cf2325e93777ede8c8deb5d27967d",
+          "0,          6,          6,        1,   115200, e957409f080b03bbf7c56434ac4da18d",
+          "0,          7,          7,        1,   115200, 8e8991254b0b5736dd9940572a92d967",
+          "0,          8,          8,        1,   115200, c8da7475f760f471e8df290a22bfa7b4",
+          "0,          9,          9,        1,   115200, da9095fc241ce85c22f733513a080cc4",
+          "0,         10,         10,        1,   115200, 367121233392bce7b349932d7c32c59d",
+          "0,         11,         11,        1,   115200, c43c7a70b5d4c229dd63cee92bb21e17"
+        ]
+      }
+    }
+  },
+  "validation_limits": [
+    "Linux measurements; no Windows performance/ART/presentation/RSS claim",
+    "Callback bodies are actual, surrounding clock/state adapters explicit; JNI dispatch, producer, worker scheduling and muxing excluded",
+    "Timed converter/encoder are separate TUs; no constant folding across a combined test TU",
+    "No sanitizers or coordinate observers in timing; all16 processes retained",
+    "Native Windows x64/ARM64 source objects compiled; x64 actual provider probe linked; full fork Windows runtime pending",
+    "Local ASan detects no memory error; LeakSanitizer disabled because executor ptrace prevents it; CI sanitizer settings unchanged"
+  ],
+  "baseline_timing_sources": {
+    "compat/media/video/video_decoder.cc": "b05dd3d584f4ed9b7bc80676968b5a78ea6d02451a0ca7d305567b9dc1c48487",
+    "compat/media/encode/soft_avc_encoder.cc": "f8ec608062b562e9896554a97f31ddfc875eba093f6212211e0477aad80ebf30",
+    "compat/media/jni/media_codec_jni.cc": "6d8c93c1dc87fcb65a28ef4d30ee6aa18939d4a3410d631c57d770cf1ba23976",
+    "compat/media/record/recorder.cc": "796bf898168f69d2f05fdd0eb77d096d217363f3d8b58ea3535461666be0309a"
+  },
+  "candidate_timing_sources": {
+    "compat/media/video/video_decoder.cc": "51d987de24f4f34954b7f5e105b7139e3109296a26ccf9551db6d2b5122445a7",
+    "compat/media/encode/soft_avc_encoder.cc": "f8ec608062b562e9896554a97f31ddfc875eba093f6212211e0477aad80ebf30",
+    "compat/media/jni/media_codec_jni.cc": "6d8c93c1dc87fcb65a28ef4d30ee6aa18939d4a3410d631c57d770cf1ba23976",
+    "compat/media/record/recorder.cc": "796bf898168f69d2f05fdd0eb77d096d217363f3d8b58ea3535461666be0309a"
+  },
+  "whole_stream_mapping_calls": {
+    "baseline": 99072000,
+    "candidate": 1152000,
+    "scaled_control_unchanged": 1152000
+  }
+}

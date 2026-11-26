@@ -1,0 +1,186 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package com.gesher.server;
+
+import android.Manifest;
+import android.app.AppOpsManager;
+import android.content.pm.PackageManager;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Android Settings' "Special app access" switches for one installed app, which Gesher's
+ * Control Center shows on the app's details ({@link SettingsIntents} sends the per-app
+ * screens there; there is no Settings APK).
+ *
+ * <p>Each switch is an app-op the user decides, as AOSP Settings writes it
+ * (packages/apps/Settings, Android 16 r4): Display over other apps (DrawOverlayDetails:
+ * package mode), Install unknown apps (ExternalSourcesDetails: package mode), Modify system
+ * settings (WriteSettingsDetails: package mode), Usage access (UsageAccessDetails: package
+ * mode, denial MODE_IGNORED). On is
+ * MODE_ALLOWED; off is the denial mode Settings writes. The modes go through
+ * {@link AppOpsService} like any other mode change: persisted with the package's signing
+ * identity and reported to app-op watchers ({@code OnOpChangedListener}).
+ *
+ * <p>As in Settings, a switch exists only for an app whose manifest requests the
+ * permission. Install unknown apps is fixed on for an app holding INSTALL_PACKAGES: AOSP's
+ * canRequestPackageInstalls allows such an installer whatever the mode, so the switch could
+ * not turn it off (the row says {@code fixed}, and a change is refused). Nothing is granted unless the user turns a switch on; the permission itself
+ * stays ungranted (these are appop permissions: the framework's checks read the mode, and
+ * fall back to the permission only for MODE_DEFAULT).
+ *
+ * <p>Left out: Media management. Gesher has no MediaProvider enforcing media consent.
+ * Writing its app-op would report a grant without changing the requested operation.
+ * It is therefore absent from both the query and the writable allowlist.
+ * Also left out: exact alarms (AlarmManagerService allows every app exact alarms, so the
+ * switch would change nothing an app observes), full-screen intents
+ * (NotificationManagerService does not implement {@code canUseFullScreenIntent}), and
+ * the screens with no app-op (battery optimization, locale, open by default, picture in
+ * picture, long-running jobs, app usage).
+ *
+ * <p>Only the host shell reaches this ({@link GesherService}, whose callers must be the
+ * system or the shell, never an attached app), and {@link AppOpsService} enforces
+ * MANAGE_APP_OPS_MODES again on the write.
+ */
+final class SpecialAccess {
+    private SpecialAccess() {
+    }
+
+    /** One switch: the app-op (by its public name), its permission and how Settings writes it. */
+    record Kind(String opName, int op, String permission, int deniedMode) {
+    }
+
+    /** The switches, in Settings' order. */
+    static final List<Kind> KINDS = List.of(
+            new Kind(AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW, AppOpsManager.OP_SYSTEM_ALERT_WINDOW,
+                    Manifest.permission.SYSTEM_ALERT_WINDOW, AppOpsManager.MODE_ERRORED),
+            new Kind(AppOpsManager.OPSTR_REQUEST_INSTALL_PACKAGES,
+                    AppOpsManager.OP_REQUEST_INSTALL_PACKAGES,
+                    Manifest.permission.REQUEST_INSTALL_PACKAGES, AppOpsManager.MODE_ERRORED),
+            new Kind(AppOpsManager.OPSTR_WRITE_SETTINGS, AppOpsManager.OP_WRITE_SETTINGS,
+                    Manifest.permission.WRITE_SETTINGS, AppOpsManager.MODE_ERRORED),
+            new Kind(AppOpsManager.OPSTR_GET_USAGE_STATS, AppOpsManager.OP_GET_USAGE_STATS,
+                    Manifest.permission.PACKAGE_USAGE_STATS, AppOpsManager.MODE_IGNORED),
+            new Kind(AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE,
+                    AppOpsManager.OP_MANAGE_EXTERNAL_STORAGE,
+                    Manifest.permission.MANAGE_EXTERNAL_STORAGE, AppOpsManager.MODE_ERRORED));
+
+    /**
+     * A switch's state for one app: whether the app's own check reads "allowed", and whether
+     * the switch cannot change that (fixed).
+     */
+    record Entry(Kind kind, boolean allowed, boolean fixed) {
+        /** One row of the host protocol: op name TAB allowed|denied [TAB fixed]. */
+        String row() {
+            return kind.opName + "\t" + (allowed ? "allowed" : "denied") + (fixed ? "\tfixed" : "");
+        }
+    }
+
+    static Kind kind(String opName) {
+        if (opName != null) {
+            for (Kind kind : KINDS) {
+                if (kind.opName.equals(opName)) return kind;
+            }
+        }
+        throw new IllegalArgumentException("Not a special access: " + opName);
+    }
+
+    private static ApkPackage installed(PackageManagerService pm, String packageName) {
+        if (!SettingsIntents.validPackageName(packageName)) {
+            throw new IllegalArgumentException("Invalid package name");
+        }
+        ApkPackage pkg = pm.get(packageName);
+        if (pkg == null || pm.isRemovalPending(packageName)) {
+            throw new IllegalArgumentException("Unknown package: " + packageName);
+        }
+        return pkg;
+    }
+
+    /** Android permits pre-O installers to request confirmation without the manifest permission. */
+    static boolean installSourceEligible(ApkPackage pkg) {
+        return pkg.parsed.getTargetSdkVersion() < android.os.Build.VERSION_CODES.O
+                || pkg.parsed.getRequestedPermissions().contains(Manifest.permission.REQUEST_INSTALL_PACKAGES);
+    }
+
+    /** A legacy source appears after it requests an install or the user has set its mode. */
+    private static boolean shows(PackageManagerService pm, ApkPackage pkg, Kind kind) {
+        if (kind.op != AppOpsManager.OP_REQUEST_INSTALL_PACKAGES) return declares(pkg, kind);
+        return declares(pkg, kind) || (installSourceEligible(pkg)
+                && (pkg.parsed.getRequestedPermissions().contains(kind.permission)
+                    || pm.appOps().checkRawMode(kind.op, pkg.uid(), pkg.packageName)
+                            != AppOpsManager.opToDefaultMode(kind.op)
+                    || pm.packageInstallerService().hasSourceConfirmation(pkg)));
+    }
+
+    /** Whether the app's manifest requests the permission for this switch. */
+    static boolean declares(ApkPackage pkg, Kind kind) {
+        return pkg.parsed.getRequestedPermissions().contains(kind.permission)
+                && (kind.op != AppOpsManager.OP_REQUEST_INSTALL_PACKAGES
+                    || pkg.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.O);
+    }
+
+    /** Whether the mode cannot change the app's answer (an INSTALL_PACKAGES installer). */
+    private static boolean fixed(PackageManagerService pm, ApkPackage pkg, Kind kind) {
+        return kind.op == AppOpsManager.OP_REQUEST_INSTALL_PACKAGES
+                && pm.permissions().checkPermission(pkg.packageName, Manifest.permission.INSTALL_PACKAGES)
+                        == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** What the app's own check answers (Environment, Settings, PackageManager...). */
+    private static boolean allowed(PackageManagerService pm, ApkPackage pkg, Kind kind) {
+        if (kind.op == AppOpsManager.OP_REQUEST_INSTALL_PACKAGES) {
+            return fixed(pm, pkg, kind) || pm.appOps().checkRawMode(kind.op, pkg.uid(),
+                    pkg.packageName) == AppOpsManager.MODE_ALLOWED;
+        }
+        int mode = pm.appOps().checkRawMode(kind.op, pkg.uid(), pkg.packageName);
+        if (mode == AppOpsManager.MODE_DEFAULT) {
+            return pm.permissions().checkPermission(pkg.packageName, kind.permission)
+                    == PackageManager.PERMISSION_GRANTED;
+        }
+        return mode == AppOpsManager.MODE_ALLOWED;
+    }
+
+    /** The switches of an installed app; none for an app that requests none. */
+    static List<Entry> query(PackageManagerService pm, String packageName) {
+        ApkPackage pkg = installed(pm, packageName);
+        List<Entry> entries = new ArrayList<>();
+        for (Kind kind : KINDS) {
+            if (shows(pm, pkg, kind)) {
+                entries.add(new Entry(kind, allowed(pm, pkg, kind), fixed(pm, pkg, kind)));
+            }
+        }
+        return entries;
+    }
+
+    /**
+     * The user turned a switch on or off: writes the mode as Settings does, and answers
+     * the switch's state afterwards.
+     */
+    static Entry set(PackageManagerService pm, String packageName, String opName, boolean allow) {
+        Kind kind = kind(opName);
+        ApkPackage pkg = installed(pm, packageName);
+        if (!shows(pm, pkg, kind)) {
+            throw new IllegalArgumentException(packageName + " does not request " + kind.permission);
+        }
+        if (fixed(pm, pkg, kind)) {
+            throw new IllegalStateException(packageName + " holds INSTALL_PACKAGES: "
+                    + "its install requests are always allowed");
+        }
+        int mode = allow ? AppOpsManager.MODE_ALLOWED : kind.deniedMode;
+        AppOpsService ops = pm.appOps();
+        // Commit only for this package generation: a replaced or removed
+        // package is refused before anything is written.
+        boolean written = ops.setModeIfCurrent(kind.op, pkg, mode);
+        if (!written) throw new IllegalStateException(packageName + " changed; try again");
+        return new Entry(kind, allowed(pm, pkg, kind), false);
+    }
+
+    static String[] rows(List<Entry> entries) {
+        String[] rows = new String[entries.size()];
+        for (int i = 0; i < rows.length; i++) rows[i] = entries.get(i).row();
+        return rows;
+    }
+}

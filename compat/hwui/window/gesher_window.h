@@ -11,6 +11,8 @@
 // readable while the queue is not empty, so a Looper can watch it.
 #pragma once
 
+#include "surface_damage.h"
+
 #include <stdint.h>
 
 #include "input_modifiers.h"
@@ -153,9 +155,11 @@ class Window {
 
   // The back buffer, locked for drawing: BGRA pixels, `*stride` pixels a row,
   // the size the window had when it was locked (*width x *height).
-  uint8_t* Lock(int* width, int* height, int* stride);
+  uint8_t* Lock(int* width, int* height, int* stride, uint64_t* version = nullptr);
   // Unlocks the back buffer and has the window repaint from it.
-  void UnlockAndPost();
+  // A null/empty damage rectangle means the complete frame. The back buffer
+  // must retain the previous frame outside a nonempty damage rectangle.
+  void UnlockAndPost(const PixelRect* dirty = nullptr);
   // Unlocks without repainting.
   void Unlock();
 
@@ -252,7 +256,7 @@ class Window {
   // gesher_popup.cc: UpdateLayeredWindow from the back buffer (the window's thread).
   void PresentLayered();
   // gesher_popup.cc: GDI pixels of the buffer, dimmed (with buffer_mutex_ held).
-  const uint8_t* DimmedPixels();
+  const uint8_t* DimmedPixels(const PixelRect* dirty = nullptr);
   void Paint(void* hdc);
   void ResizeBuffer(int width, int height);  // with mutex_ held
   // The window's thread: has the touch keyboard's IFrameworkInputPane report
@@ -286,6 +290,9 @@ class Window {
   mutable std::mutex buffer_mutex_;
   std::vector<uint8_t> pixels_;
   int buffer_width_ = 0, buffer_height_ = 0;
+  uint64_t buffer_version_ = 0;  // changed by resize and every posted writer
+  PixelRect layered_dirty_;     // union of frames not yet published, buffer_mutex_
+  bool layered_full_dirty_ = true;
   int client_width_ = 0, client_height_ = 0;  // what WM_SIZE reported
   std::atomic<uint64_t> frames_{0};
 
@@ -339,6 +346,7 @@ class Window {
   std::atomic<bool> no_activate_{false}, passthrough_{false};
   std::atomic<int> dim_{0};           // 0..255
   std::vector<uint8_t> dimmed_;       // buffer_mutex_
+  int layered_dim_ = -1;             // dim amount in the last published DIB
   // Created, used and released by the window thread. Released when translucency
   // is disabled, on display changes, and before the window thread exits.
   std::unique_ptr<LayeredBitmap> layered_bitmap_;
