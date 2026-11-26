@@ -58,10 +58,17 @@ $exec3SavedLogFile = $env:GESHER_LOG_FILE
 $env:GESHER_LOG_FILE = "$root/exec3-standalone.logcat"
 try {
   Check 'exec3: Java/NDK logcat records, filters, formats, clear and follow' {
-    & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
-      -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3LogTest (NoDrive $Dir) --load-runtime
+    $exec3LogText = & "$Dir/dalvikvm.exe" "-Xbootclasspath:$bcpApp" "-Ximage:$(NoDrive "$root/system")/framework/boot.art" `
+      -Xint '-Xusejit:false' -cp (NoDrive "$Dir/exec-test.dex") gesher.Exec3LogTest (NoDrive $Dir) --load-runtime 2>&1 | Out-String
+    $exec3LogText
+    # The process's stderr (Java and native log echo) and its logcat file hold no credential.
+    $exec3LogFile = [IO.File]::ReadAllText("$root/exec3-standalone.logcat")
+    if ($exec3LogText.Contains('SYNTHETIC') -or $exec3LogFile.Contains('SYNTHETIC')) { 'exec3: a credential reached a log' }
+    else { 'exec3: no credential in stderr or the logcat file' }
   } @('Exec3LogTest PASS actual Java/NDK records, tags, priority filters, nine formats and live loggability properties',
-      'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear')
+      'Exec3LogTest PASS credentials are redacted in the logcat file and stderr for Java, split native arguments, multi-line and non-ASCII text',
+      'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear',
+      'exec3: no credential in stderr or the logcat file')
 } finally {
   if ($null -eq $exec3SavedLogFile) { Remove-Item Env:GESHER_LOG_FILE -ErrorAction SilentlyContinue }
   else { $env:GESHER_LOG_FILE = $exec3SavedLogFile }
@@ -117,13 +124,19 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
       'com.gesher.app.Main', (NoDrive "$Dir/exec3.apk")) -Trace
     $global:LASTEXITCODE = $result.Code
     $result.Text
-  } @('exec2: SUMMARY pass=15 fail=0',
+    # Its stdout/stderr (Main's redacting System.out/err and the log echo) hold no credential.
+    if ($result.Text.Contains('SYNTHETIC')) { 'exec3: a credential reached the app output' }
+    else { 'exec3: no credential in the app output' }
+  } @('exec2: SUMMARY pass=16 fail=0',
       'exec2: PASS competing waiters collect one child once and both retire',
       'exec2: PASS any-child wait retains fast-exit identities and statuses',
+      'exec2: PASS ignored SIGCHLD wakes a blocking waiter without a zombie',
       'Exec4DeviceTest PASS host environment changes reach native environ and spawned children',
       'Exec3DeviceTest PASS native exec, spawn, popen, system, signals and waitpid in an app',
       'Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device',
-      'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear')
+      'Exec3LogTest PASS credentials are redacted in the logcat file and stderr for Java, split native arguments, multi-line and non-ASCII text',
+      'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear',
+      'exec3: no credential in the app output')
   $exec3SavedEnvironment = @{}
   foreach ($exec3Name in 'ANDROID_DATA', 'GESHER_BINDER', 'GESHER_LOGS', 'GESHER_SHORTCUTS') {
     $exec3SavedEnvironment[$exec3Name] = [Environment]::GetEnvironmentVariable($exec3Name)
@@ -143,18 +156,28 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
     if ($exec3Target.Code -ne 0) { throw "exec3 target install failed: $($exec3Target.Text)" }
     $exec3App = InvokeExec3Timed -Arguments ($exec3DeviceVm + 'com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless', '--ez', 'exec3.commands', 'true') -Trace
     $exec3Wanted = @(
-      'exec2: SUMMARY pass=15 fail=0',
+      'exec2: SUMMARY pass=16 fail=0',
       'exec2: PASS competing waiters collect one child once and both retire',
       'exec2: PASS any-child wait retains fast-exit identities and statuses',
+      'exec2: PASS ignored SIGCHLD wakes a blocking waiter without a zombie',
       'Exec4DeviceTest PASS host environment changes reach native environ and spawned children',
       'gesher-app: app process for com.gesher.exec3',
       'Exec3DeviceTest PASS native exec, spawn, popen, system, signals and waitpid in an app',
+      'Exec3LogTest PASS credentials are redacted in the logcat file and stderr for Java, split native arguments, multi-line and non-ASCII text',
       'Exec3LogTest PASS clear removes old records and a live follower observes new records after clear',
       'Exec3CommandsTest PASS pm list packages and path query the actual device package manager',
       'Exec3CommandsTest PASS am start resumes a separate app and broadcast reaches its real receiver',
       'Exec3CommandsTest PASS am force-stop terminates the target app process',
       'Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device')
-    $exec3Missing = $exec3Wanted | Where-Object { -not $exec3App.Text.Contains($_) }
+    $exec3Missing = @($exec3Wanted | Where-Object { -not $exec3App.Text.Contains($_) })
+    # The device's persisted logs (package .log/.logcat, system_server.log) hold no credential.
+    # The device is still running: its processes hold their logs open for writing.
+    $exec3Leaks = @(Get-ChildItem -LiteralPath $exec3Logs -File -Recurse | Where-Object {
+      $exec3Stream = [IO.File]::Open($_.FullName, 'Open', 'Read', 'ReadWrite, Delete')
+      try { (New-Object IO.StreamReader($exec3Stream)).ReadToEnd().Contains('SYNTHETIC') }
+      finally { $exec3Stream.Dispose() } } | ForEach-Object { $_.Name })
+    if ($exec3App.Text.Contains('SYNTHETIC')) { $exec3Leaks += 'launcher output' }
+    if ($exec3Leaks) { $exec3Missing += "no credential in the device logs (found in: $($exec3Leaks -join ', '))" }
     if ($exec3App.Code -eq 0 -and -not $exec3Missing -and -not $exec3App.Text.Contains('Exec3DeviceTest FAIL')) {
       Write-Host 'PASS  exec3: native processes, shell, signals, tools and shared properties from an APK on the device'
     } else {

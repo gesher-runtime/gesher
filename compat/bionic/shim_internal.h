@@ -15,6 +15,8 @@
 #include <string>
 #include <unordered_map>
 
+struct gesher_futex_interrupt;  // <gesher/futex_interrupt.h>
+
 namespace gesher::bionic {
 
 // bionic's semaphore bound, shared by enforcement and _SC_SEM_VALUE_MAX.
@@ -140,11 +142,24 @@ void RegisterDnsWire(SymbolTable& table); // dns_wire.cc
 void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
 void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
 void RegisterTime(SymbolTable& table);     // time_bionic.cc
+// libstdc++.so: operator new/delete, static-local guards, __cxa_pure_virtual.
+void RegisterCxx(SymbolTable& table);      // cxx_bionic.cc
 // x86-64 Linux numeric timerfd syscalls share the libc exports' implementation.
 bool DispatchTimerfdSyscall(int64_t nr, int64_t a1, int64_t a2, int64_t a3, int64_t a4,
                            int64_t* result);
-// ptrace (a process nobody traces) and the POSIX regex functions.
+// The raw system call table and the POSIX regex functions.
 void RegisterSyscall(SymbolTable& table);  // syscall_bionic.cc
+// ptrace between Gesher processes (ADR 0093).
+void RegisterPtrace(SymbolTable& table);  // ptrace_bionic.cc
+// wait4's hook for this process's tracees (ptrace_bionic.cc): a stop or exit
+// of a tracee `pid` selects (any for -1/0) as a Linux status word, returning
+// its pid; 0 if none is ready. `*matched` says whether `pid` selects any
+// tracee. An exit of a tracee that is also this process's child is left to the
+// child's own wait (`is_child`).
+int PtraceWaitPoll(int pid, int options, int* status, bool* matched, bool (*is_child)(int));
+// In a forked child, with the fork set held: it traces none of the parent's
+// tracees (ADR 0092, 0093).
+void PtraceForkChild();
 // A raw x86-64 Linux system call, as the kernel takes it: the shim function
 // that does the same, and the kernel's result or -errno. The ELF loader's
 // handler for `syscall` instructions in loaded code (ADR 0084), and
@@ -168,13 +183,15 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
 // A nonzero error reports unavailable delivery/registration, never completion.
 bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
 
-// Wait without a deadline until an owner changes its generation or a signal
-// reaches this thread. The owner publishes the generation before notifying;
-// the wait checks it under the same signal mutex used to arm the condition.
-// Signal delivery/errors retain InterruptibleSleep's existing contract.
-bool InterruptibleWaitForChange(const std::atomic<uint64_t>& generation,
-                                uint64_t observed, int* error);
+// A blocking call's wait (wait4): up to `ms`, running the handlers of signals
+// that arrive. 0, or EINTR when a handler without SA_RESTART ran (one with
+// SA_RESTART returns 0: the call restarts), or a delivery error.
+// A wait also ends when its owner publishes a changed generation. A zero
+// timeout waits indefinitely. Wake publishers must hold no signal-state lock.
+int InterruptibleWaitPoint(uint32_t ms, const std::atomic<uint64_t>& generation,
+                           uint64_t observed);
 void NotifyInterruptibleWaiters();
+void ChildWaitStateChanged();
 
 // As above, observing an interruption before delivering its handlers. The
 // observer is an internal host callback, never loaded application code; it
@@ -189,6 +206,42 @@ int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*),
 // and sleeps, and wherever the signal mask is lowered. Cheap when none are
 // pending.
 void DeliverPendingSignals();
+// Waits a signal directed at the calling thread (pthread_kill, tgkill,
+// tkill from another thread) interrupts, as Linux interrupts a blocked futex:
+// AttachSignalInterrupt makes the thread's futex waits through ::syscall end
+// with EINTR then (nullptr if the thread has no signal state; Detach undoes
+// it); DeliverAfterInterrupt runs the deliverable signals and says which
+// handlers ran (kNoHandler, kHandlersRestart: all with SA_RESTART,
+// kHandlersWithoutRestart: one without).
+// InterruptibleAddressWait is WaitOnAddress (true: woken, false: timed out)
+// that also wakes, after running the signals, for such a signal.
+::gesher_futex_interrupt* AttachSignalInterrupt();
+void DetachSignalInterrupt();
+constexpr int kNoHandler = 0, kHandlersRestart = 1, kHandlersWithoutRestart = 2;
+int DeliverAfterInterrupt();
+bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
+                              unsigned long ms);
+
+// fork for translated arm64 code (process_bionic.cc, ADR 0092). The locks are
+// in gesher-base's fork set (gesher/fork.h); in the child, while they are
+// still held, each part drops what belonged to the parent's other threads.
+// pthread_bionic.cc: the thread registry and pthread_atfork handlers.
+int RegisterAtfork(void* prepare, void* parent, void* child);
+void RunAtforkPrepare();
+void RunAtforkParent();
+void RunAtforkChild();
+void PthreadForkPrepare();  // before the fork set is taken
+void PthreadForkChild();
+// Whether no thread the program made (pthread_create) runs besides the caller.
+bool OnlyProgramThread();
+// signal_bionic.cc: per-thread signal state and the shim's signal thread.
+void SignalForkChild();
+// Whether the loaded program is the whole process (gesher-exec), not a guest
+// of ART's (signal_bionic.cc, InstallSignalHook).
+bool SignalsAuthoritative();
+// Whether children are reaped at their exit: SIGCHLD is SIG_IGN or its
+// action has SA_NOCLDWAIT (signal_bionic.cc).
+bool ChildrenAutoReaped();
 
 // bionic's pthread_t of the calling thread (pthread_bionic.cc).
 uint64_t PthreadSelfId();

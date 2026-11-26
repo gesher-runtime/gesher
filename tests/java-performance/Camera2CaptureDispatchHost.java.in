@@ -20,6 +20,7 @@ public final class Camera2CaptureDispatchHost {
     private final Callbacks mCallbacks = new Callbacks();
     private WindowsCamera.Capture mCapture;
     private Size mCaptureFor;
+    private final CameraImageSource.Choice mSourceChoice = new CameraImageSource.Choice();
 
     private Frame next(CaptureTiming timing) { return frames.poll(); }
     private void fail(Frame f, int error) { f.callbacks.terminal = true; event("fail:" + f.frameNumber + ":" + error); }
@@ -32,6 +33,15 @@ public final class Camera2CaptureDispatchHost {
     private static CameraMetadataNative result(CameraMetadataNative settings, long timestamp) {
         return settings;
     }
+    private static CameraMetadataNative result(CameraMetadataNative settings, long timestamp,
+            int afState, boolean lensMoving) {
+        return settings;
+    }
+    // Autofocus is outside this fixture: its cameras have fixed focus (AF INACTIVE).
+    private static final int AF_STATE_MASK = 0xff, AF_LENS_MOVING = 0x100;
+    private int autoFocusFrame(CameraMetadataNative settings, byte[] nv12) { return 0; }
+    private void startAutoFocus(WindowsCamera.Capture capture) {}
+    private void stopAutoFocus() {}
     private static void event(String value) { if (record) EVENTS.add(value); }
     private static void check(boolean condition, String message) {
         checks++;
@@ -122,6 +132,14 @@ public final class Camera2CaptureDispatchHost {
             event("open:" + width + "x" + height);
             if (openFails) { openFails = false; throw new OpenException(); }
             Capture value = new Capture(); value.width = width; value.height = height; return value;
+        }
+    }
+    /** The image-picker setting off: every open is the fixture's camera. */
+    private static final class CameraImageSource {
+        static final class Choice {}
+        static WindowsCamera.Capture open(String device, int width, int height, Choice choice)
+                throws WindowsCamera.OpenException {
+            return WindowsCamera.open(device, width, height);
         }
     }
     private static final class CameraFrames {

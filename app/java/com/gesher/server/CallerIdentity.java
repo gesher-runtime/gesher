@@ -25,8 +25,24 @@ public final class CallerIdentity {
     public int callerPid() { return Binder.getCallingPid(); }
     public int callerUid() { return Binder.getCallingUid(); }
 
+    void attachShortcuts(DesktopShortcutService shortcuts) {
+        if (mAtm != null) mAtm.attachShortcuts(shortcuts);
+    }
+
+    boolean shortcutForeground(int uid) {
+        return uid == Process.SYSTEM_UID || mAtm != null && mAtm.shortcutForeground(uid);
+    }
+
     public String packageForPid(int pid) {
         return mAtm == null ? null : mAtm.authenticatedPackageForPid(pid);
+    }
+
+    /**
+     * The installed code of the attached live process with this PID and UID, only while it is
+     * still its package's current installation; null otherwise.
+     */
+    public ApkPackage packageCodeForPid(int pid, int uid) {
+        return mAtm == null ? null : mAtm.authenticatedPackageCodeForPid(pid, uid);
     }
 
     public boolean isSystem() {

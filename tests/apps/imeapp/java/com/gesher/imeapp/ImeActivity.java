@@ -86,7 +86,8 @@ public class ImeActivity extends Activity {
         watch(findViewById(R.id.search), "search", true);
         watch(findViewById(R.id.next), "next", false);
         watch(findViewById(R.id.last), "last", true);
-        watch(findViewById(R.id.password), "password", true);
+        // Not "password: text": Gesher redacts password values in persisted logs (docs/logging.md).
+        watch(findViewById(R.id.password), "password field", true);
         mEdit.requestFocus();
         say("ImeActivity onCreate");
     }

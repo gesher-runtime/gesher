@@ -1,215 +1,138 @@
 diff --git a/compat/bionic/process_bionic.cc b/compat/bionic/process_bionic.cc
-index cd003d22..b05fa9d5 100644
+index 576e95da8..fd8ce4168 100644
 --- a/compat/bionic/process_bionic.cc
 +++ b/compat/bionic/process_bionic.cc
-@@ -32,6 +32,7 @@
- #include <unistd.h>
- 
- #include <algorithm>
-+#include <atomic>
- #include <cstdio>
- #include <cstring>
- #include <map>
-@@ -68,6 +69,7 @@ struct Child {
- 
- std::mutex g_children_mutex;
- std::map<int, Child> g_children;  // pid -> child
-+std::atomic<uint64_t> g_children_generation{0};
- 
- void CALLBACK OnChildExit(void* param, BOOLEAN) {
-   int pid = static_cast<int>(reinterpret_cast<intptr_t>(param));
-@@ -83,20 +85,31 @@ void CALLBACK OnChildExit(void* param, BOOLEAN) {
-       it->second.exited = true;
-       sig_status = it->second.status;
-       deliver = true;
-+      g_children_generation.fetch_add(1, std::memory_order_release);
-     }
-   }
--  if (deliver) DeliverExternalSignal(kSigchld, 0, kCldExited, sig_status, false);
-+  if (deliver) {
-+    NotifyInterruptibleWaiters();
-+    DeliverExternalSignal(kSigchld, 0, kCldExited, sig_status, false);
-+  }
- }
- 
- void Track(int pid, HANDLE process) {
+@@ -71,0 +72 @@ struct Child {
++  bool watched = false;
+@@ -80,0 +82 @@ std::map<int, Child> g_children;  // pid -> child
++std::atomic<uint64_t> g_child_wait_generation{0};
+@@ -121 +123,2 @@ void ChildExited(int pid) {
+-    if (it == g_children.end()) return;
++    if (it == g_children.end() || it->second.exited ||
++        WaitForSingleObject(it->second.process, 0) != WAIT_OBJECT_0) return;
+@@ -131,0 +135 @@ void ChildExited(int pid) {
++  ChildWaitStateChanged();
+@@ -154,7 +158 @@ DWORD WINAPI WatchChild(void* raw) {
+-void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = false) {
 -  std::lock_guard<std::mutex> lock(g_children_mutex);
 -  Child& c = g_children[pid];
+-  c = Child{};
 -  c.process = process;
--  c.exited = false;
--  c.status = 0;
--  RegisterWaitForSingleObject(&c.wait, process, OnChildExit,
--                              reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
--                              WT_EXECUTEONLYONCE);
+-  c.exit_signal = exit_signal;
+-  c.forked = forked;
++bool StartChildWatcher(int pid, Child& child) {
+@@ -162,4 +160,3 @@ void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = fa
+-    RegisterWaitForSingleObject(&c.wait, process, OnChildExit,
+-                                reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
+-                                WT_EXECUTEONLYONCE);
+-    return;
++    return RegisterWaitForSingleObject(&child.wait, child.process, OnChildExit,
++                                       reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
++                                       WT_EXECUTEONLYONCE) != FALSE;
+@@ -168,2 +165,2 @@ void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = fa
+-  if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &own, SYNCHRONIZE, FALSE, 0)) {
+-    return;  // wait still sees its exit; only its exit signal is not sent
++  if (!DuplicateHandle(GetCurrentProcess(), child.process, GetCurrentProcess(), &own, SYNCHRONIZE, FALSE, 0)) {
++    return false;
+@@ -172,3 +169,15 @@ void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = fa
+-  if (watch == nullptr || !gesher::StartHelperThread(WatchChild, watch, 64 * 1024)) {
+-    delete watch;
+-    CloseHandle(own);
++  if (watch != nullptr && gesher::StartHelperThread(WatchChild, watch, 64 * 1024)) return true;
++  delete watch;
++  CloseHandle(own);
++  return false;
++}
++
++void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = false) {
 +  {
 +    std::lock_guard<std::mutex> lock(g_children_mutex);
 +    Child& c = g_children[pid];
++    c = Child{};
 +    c.process = process;
-+    c.exited = false;
-+    c.status = 0;
-+    c.wait = nullptr;
-+    if (!RegisterWaitForSingleObject(&c.wait, process, OnChildExit,
-+                                    reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
-+                                    WT_EXECUTEONLYONCE)) c.wait = nullptr;
-+    g_children_generation.fetch_add(1, std::memory_order_release);
-+  }
-+  // A failed watcher registration must also wake an existing any-child
-+  // waiter so it can use the explicitly bounded fallback below.
++    c.exit_signal = exit_signal;
++    c.forked = forked;
++    c.watched = StartChildWatcher(pid, c);
+@@ -175,0 +185 @@ void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = fa
++  ChildWaitStateChanged();
+@@ -446,0 +457,2 @@ bool IsChild(int pid) {
++struct ChildExitSignal { int pid, signal, status; };
++
+@@ -453,0 +466,3 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
++    // Capture before scanning either registry: a publisher can change state
++    // after its scan and before this thread arms its wait.
++    const uint64_t observed = g_child_wait_generation.load(std::memory_order_acquire);
+@@ -459 +474,4 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-    std::vector<HANDLE> running;  // duplicates: another thread may reap meanwhile
++    bool found = false;
++    bool needs_poll = traced;
++    bool removed = false;
++    std::vector<ChildExitSignal> auto_reaped_signals;
+@@ -462 +479,0 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-      bool found = false;
+@@ -471,6 +488 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-          HANDLE own = nullptr;
+-          if (running.size() < MAXIMUM_WAIT_OBJECTS &&
+-              DuplicateHandle(GetCurrentProcess(), child.process, GetCurrentProcess(), &own,
+-                              SYNCHRONIZE, FALSE, 0)) {
+-            running.push_back(own);
+-          }
++          needs_poll |= !child.watched;
+@@ -485 +497 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-          SendExitSignal(it->first, sig, child.status);
++          if (sig != 0) auto_reaped_signals.push_back({it->first, sig, child.status});
+@@ -488,0 +501 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
++          removed = true;
+@@ -496,0 +510 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
++        removed = true;
+@@ -499,4 +512,0 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-      if (got == 0 && !found && !traced) {
+-        for (HANDLE h : running) CloseHandle(h);
+-        return errno = 10 /*ECHILD*/, -1;
+-      }
+@@ -503,0 +514,3 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
++    for (const auto& exited : auto_reaped_signals) SendExitSignal(exited.pid, exited.signal, exited.status);
++    if (removed) ChildWaitStateChanged();
++    if (!found && !traced) return errno = 10 /*ECHILD*/, -1;
+@@ -505 +517,0 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-      for (HANDLE h : running) CloseHandle(h);
+@@ -514,4 +526 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-    if ((options & kWNOHANG) != 0) {
+-      for (HANDLE h : running) CloseHandle(h);
+-      return 0;
+-    }
++    if ((options & kWNOHANG) != 0) return 0;
+@@ -521 +529,0 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-      for (HANDLE h : running) CloseHandle(h);
+@@ -524,17 +532,8 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
+-    // Wait for one of them to end. The thread waits as a signal waiter
+-    // (signals sent to the process are delivered to it, and a handler that
+-    // runs ends the wait with EINTR, or with SA_RESTART lets it go on), in
+-    // short slices between which the children's handles are looked at.
+-    bool ended = false;
+-    if (!running.empty()) {
+-      ended = WaitForMultipleObjects(static_cast<DWORD>(running.size()), running.data(), FALSE, 0) <
+-              WAIT_OBJECT_0 + running.size();
+-      for (HANDLE h : running) CloseHandle(h);
+-    }
+-    if (!ended) {
+-      const int error = InterruptibleWaitPoint(waited_slices++ < 50 ? 2 : 20);
+-      if (error == kEINTR) {
+-        interrupted = true;  // look at the children once more first
+-      } else if (error != 0) {
+-        return errno = error, -1;
+-      }
++    // Remote ptrace stops and children without a watcher have no local exit
++    // callback to wake us. Retain the current polling cadence for them only.
++    const uint32_t timeout = needs_poll ? (waited_slices++ < 50 ? 2 : 20) : 0;
++    const int error = InterruptibleWaitPoint(timeout, g_child_wait_generation, observed);
++    if (error == kEINTR) {
++      interrupted = true;  // look at the children once more first
++    } else if (error != 0) {
++      return errno = error, -1;
+@@ -1118,0 +1118,5 @@ unsigned BIONIC_SYSV SignalExitCodeForTranslator(int sig) { return gesher::Signa
++void ChildWaitStateChanged() {
++  g_child_wait_generation.fetch_add(1, std::memory_order_release);
 +  NotifyInterruptibleWaiters();
- }
- 
- // --- the environment and working directory as UTF-8 ----------------------------
-@@ -231,6 +244,10 @@ constexpr int kWNOHANG = 1;
- 
- int CollectOne(int pid, int* status, int options) {
-   for (;;) {
-+    uint64_t observed;
-+    HANDLE retired_wait = nullptr, retired_process = nullptr;
-+    int got = 0, sig_status = 0;
-+    bool fallback = false, deliver = false;
-     {
-       std::lock_guard<std::mutex> lock(g_children_mutex);
-       if (g_children.empty()) return errno = 10 /*ECHILD*/, -1;
-@@ -239,23 +256,56 @@ int CollectOne(int pid, int* status, int options) {
-       for (auto& kv : g_children) {
-         if (pid > 0 && kv.first != pid) continue;
-         found = true;
-+        if (!kv.second.exited && kv.second.wait == nullptr) {
-+          // Registration failure cannot strand an already spawned child.
-+          // Only this fallback probes native state; successfully watched
-+          // children wait indefinitely on actual lifecycle notifications.
-+          DWORD ready = WaitForSingleObject(kv.second.process, 0);
-+          if (ready == WAIT_FAILED) return errno = ex::ErrnoFromWin32(GetLastError()), -1;
-+          if (ready == WAIT_OBJECT_0) {
-+            DWORD code = 0;
-+            if (!GetExitCodeProcess(kv.second.process, &code)) {
-+              return errno = ex::ErrnoFromWin32(GetLastError()), -1;
-+            }
-+            kv.second.status = ex::WaitStatus(code);
-+            kv.second.exited = true;
-+            sig_status = kv.second.status;
-+            deliver = true;
-+          } else {
-+            fallback = true;
-+          }
-+        }
-         if (kv.second.exited) {
-           if (status != nullptr) *status = kv.second.status;
--          int got = kv.first;
--          if (kv.second.wait != nullptr) UnregisterWaitEx(kv.second.wait, nullptr);
--          if (kv.second.process != nullptr) CloseHandle(kv.second.process);
-+          got = kv.first;
-+          retired_wait = kv.second.wait;
-+          retired_process = kv.second.process;
-           g_children.erase(kv.first);
--          return got;
-+          g_children_generation.fetch_add(1, std::memory_order_release);
-+          break;
-         }
-         if (pid > 0) break;
-       }
-       // None exited: wait below with the lock released.
-       if (!found) return errno = 10 /*ECHILD*/, -1;  // no such child
-+      observed = g_children_generation.load(std::memory_order_relaxed);
-+    }
-+    if (got != 0) {
-+      // Other waiters must observe removal even if one of them missed the
-+      // earlier exit notification. No callback/handle retirement runs under
-+      // the child registry lock.
-+      NotifyInterruptibleWaiters();
-+      if (retired_wait != nullptr) UnregisterWaitEx(retired_wait, nullptr);
-+      if (retired_process != nullptr) CloseHandle(retired_process);
-+      if (deliver) DeliverExternalSignal(kSigchld, 0, kCldExited, sig_status, false);
-+      return got;
-     }
-     if ((options & kWNOHANG) != 0) return 0;
--    // Block until a child exits (the watcher sets `exited`), then re-scan.
-+    // Generation is captured with the eligibility scan. A change before
-+    // arming is observed by the predicate; a later change wakes the condition.
-     int error = 0;
--    InterruptibleSleep(20, nullptr, &error);
-+    if (fallback) InterruptibleSleep(20, nullptr, &error);
-+    else InterruptibleWaitForChange(g_children_generation, observed, &error);
-     if (error != 0) return errno = error, -1;
-   }
- }
-diff --git a/compat/bionic/shim_internal.h b/compat/bionic/shim_internal.h
-index 036f6578..2fa70e60 100644
---- a/compat/bionic/shim_internal.h
-+++ b/compat/bionic/shim_internal.h
-@@ -9,6 +9,7 @@
- #include <stddef.h>
- #include <stdio.h>
- 
-+#include <atomic>
- #include <cstring>
- 
- #include <string>
-@@ -167,6 +168,14 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
- // A nonzero error reports unavailable delivery/registration, never completion.
- bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
- 
-+// Wait without a deadline until an owner changes its generation or a signal
-+// reaches this thread. The owner publishes the generation before notifying;
-+// the wait checks it under the same signal mutex used to arm the condition.
-+// Signal delivery/errors retain InterruptibleSleep's existing contract.
-+bool InterruptibleWaitForChange(const std::atomic<uint64_t>& generation,
-+                                uint64_t observed, int* error);
-+void NotifyInterruptibleWaiters();
-+
- // As above, observing an interruption before delivering its handlers. The
- // observer is an internal host callback, never loaded application code; it
- // runs without the signal-state lock and must only record the wake instant.
-diff --git a/compat/bionic/signal_bionic.cc b/compat/bionic/signal_bionic.cc
-index 296c04cf..04d6db9c 100644
---- a/compat/bionic/signal_bionic.cc
-+++ b/compat/bionic/signal_bionic.cc
-@@ -948,7 +948,9 @@ void InstallSignalHook(bool authoritative) {
- namespace {
- bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
-                           void (*observe)(void*), void* context, int* error,
--                          int64_t boottime_deadline = -1) {
-+                          int64_t boottime_deadline = -1,
-+                          const std::atomic<uint64_t>* generation = nullptr,
-+                          uint64_t observed = 0) {
-   if (error != nullptr) *error = 0;
-   ThreadState* self = Self();
-   if (self == nullptr) {
-@@ -974,6 +976,7 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
-   {
-     std::unique_lock<std::mutex> lock(S().mutex);
-     for (;;) {
-+      if (generation != nullptr && generation->load(std::memory_order_acquire) != observed) break;
-       uint64_t deliverable = (self->pending.Mask() | S().process_pending.Mask()) & ~self->mask;
-       if (observe != nullptr && deliverable != 0) {
-         // Ignored signals do not interrupt nanosleep. Discard these pending
-@@ -1016,7 +1019,9 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
-         break;
-       }
-       self->waiting_for = ~self->mask;
--      if (boottime_deadline >= 0) {
-+      if (generation != nullptr) {
-+        S().sent.wait(lock);
-+      } else if (boottime_deadline >= 0) {
-         const int64_t now = gesher::BoottimeNanos();
-         if (now >= boottime_deadline) break;
-         const int64_t left = boottime_deadline - now;
-@@ -1053,6 +1058,18 @@ bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error = nullptr) {
-   return SleepWithObservation(ms, left_ms, nullptr, nullptr, error);
- }
- 
-+bool InterruptibleWaitForChange(const std::atomic<uint64_t>& generation,
-+                                uint64_t observed, int* error) {
-+  return SleepWithObservation(0, nullptr, nullptr, nullptr, error, -1, &generation, observed);
 +}
 +
-+void NotifyInterruptibleWaiters() {
-+  // A notifier cannot pass the generation check and condition arming while
-+  // the waiter holds this mutex. The owner must not hold its state lock here.
-+  std::lock_guard<std::mutex> lock(S().mutex);
-+  S().sent.notify_all();
-+}
-+
- bool InterruptibleSleepObserved(uint32_t ms, void (*observe)(void*), void* context,
-                                 int* error = nullptr) {
-   return SleepWithObservation(ms, nullptr, observe, context, error);

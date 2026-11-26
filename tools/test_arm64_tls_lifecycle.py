@@ -43,7 +43,7 @@ def main() -> None:
     attach = section(source, "  void Attach() {", "  // The thread is exiting.")
     detach = section(source, "  void Detach() {", "  // Whether another thread may reuse")
     park = section(source, "  void Park() {", "  // One Jit per nesting depth:")
-    lease = section(source, "struct EnvRelease {", "uint64_t EnterGuest(")
+    lease = section(source, "std::atomic<bool> g_fork_holds_all{false};", "uint64_t EnterGuest(")
     template = (ROOT / "tests/native/arm64_tls_lifecycle_windows.cc.in").read_text(encoding="utf-8")
     template = template.replace("@TLS@", tls).replace("@ATTACH@", attach).replace("@DETACH@", detach)
     template = template.replace("@PARK@", park).replace("@LEASE@", lease)

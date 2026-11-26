@@ -87,4 +87,21 @@ static void child_wait_notification_contract(const char* child) {
   }
   ok("any-child wait retains fast-exit identities and statuses", started == 4 && collected == 4 && valid,
       "four independent spawned children");
+
+  struct sigaction ignore = {0}, previous;
+  ignore.sa_handler = SIG_IGN;
+  sigemptyset(&ignore.sa_mask);
+  int auto_reaped = 0;
+  if (sigaction(SIGCHLD, &ignore, &previous) == 0) {
+    char* arguments[] = {(char*)child, (char*)"exit", (char*)"39", NULL};
+    pid_t ignored;
+    if (posix_spawn(&ignored, child, NULL, NULL, arguments, environ) == 0) {
+      int status = 0x2468;
+      errno = 0;
+      auto_reaped = waitpid(ignored, &status, 0) == -1 && errno == ECHILD && status == 0x2468;
+    }
+    auto_reaped &= sigaction(SIGCHLD, &previous, NULL) == 0;
+  }
+  ok("ignored SIGCHLD wakes a blocking waiter without a zombie", auto_reaped,
+      "auto-reap returns ECHILD and preserves status");
 }
