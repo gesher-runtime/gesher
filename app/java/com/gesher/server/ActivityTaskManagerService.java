@@ -4994,6 +4994,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     void processDied(ProcessRecord app) {
         List<ActivityRecord> released = new ArrayList<>();
+        List<ActivityResultRoute> canceledResults = new ArrayList<>();
         java.util.Set<Integer> affectedTasks = new java.util.LinkedHashSet<>();
         synchronized (this) {
             if (!mProcesses.remove(app)) return;
@@ -5024,6 +5025,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
+                    // A removed activity cannot return its result. A finishing activity
+                    // already submitted its result and must keep that outcome.
+                    if (!r.finishing && r.state != State.DESTROYED && r.resultTo != null) {
+                        canceledResults.add(new ActivityResultRoute(r.resultTo, r.resultWho, r.requestCode));
+                        r.resultTo = null;
+                    }
                     r.state = State.DESTROYED;
                     accountActivityFinished(r);
                     mActivities.remove(r);
@@ -5050,6 +5057,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             updateIdle();
             notifyAll();
         }
+        // Make cancellations available before resuming or restoring the caller.
+        for (ActivityResultRoute route : canceledResults) cancelActivityResult(route);
         updateTopResumed();
         SystemServer.log(app + " died");
         if (mAm != null) mAm.processDied(app);
