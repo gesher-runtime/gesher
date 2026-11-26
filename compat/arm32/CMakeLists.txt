@@ -111,6 +111,16 @@ if(GESHER_ARM32_WITH_DYNARMIC)
       add_test(NAME arm32_program_${fixture_name} COMMAND arm32_program_test ${fixture})
       set_tests_properties(arm32_program_${fixture_name} PROPERTIES TIMEOUT 60)
     endforeach()
+    set(ARM32_ALIGNED_FIXTURE_DIR "" CACHE PATH "Directory containing 64-KiB-aligned real ARM/Thumb fixtures")
+    if(ARM32_ALIGNED_FIXTURE_DIR)
+      foreach(mode IN ITEMS arm thumb)
+        add_test(NAME arm32_alignment_${mode}
+          COMMAND arm32_program_test
+            "${ARM32_ALIGNED_FIXTURE_DIR}/fixture-${mode}.so"
+            "${ARM32_ALIGNED_FIXTURE_DIR}/fixture-${mode}-align64k.so")
+        set_tests_properties(arm32_alignment_${mode} PROPERTIES TIMEOUT 60)
+      endforeach()
+    endif()
     set(ARM32_GUEST_DEPENDENCY_DIR "" CACHE PATH "Directory containing two-DSO ARM/Thumb fixtures")
     if(ARM32_GUEST_DEPENDENCY_DIR)
       foreach(mode IN ITEMS arm thumb)
