@@ -211,7 +211,28 @@ struct Entry {
   std::string name;
   unsigned char type;
 };
+struct NameStatus {
+  unsigned type = 0;
+  unsigned mode = 0;
+  int follow_error = 0;
+  int fd = -1;
+};
 }  // namespace procfs
+
+// ptrace_state.cc is not part of this fixture: no tracer.
+namespace ptrace {
+static inline int TracerPid() { return 0; }
+}  // namespace ptrace
+
+// mman.cc is not part of this fixture: no view records its file's open mode.
+static inline bool MappedFileWritable(const void*) { return false; }
+
+// system_linker.cc is not part of this fixture: no file, nothing mapped.
+namespace system_linker {
+inline constexpr char kPath[] = "/system/bin/linker64";
+static inline bool IsFile(const std::wstring&) { return false; }
+static inline void EnsureMapped() {}
+}  // namespace system_linker
 
 }  // namespace gesher
 
@@ -428,6 +449,40 @@ int main() {
   Check(Lookup(L"sys/devices/system/cpu/possible", false).type == S_IFREG,
         "Lookup /sys/devices/system/cpu/possible is file");
 
+  // /proc/sys/kernel/random
+  Check(Lookup(L"proc/sys", false).type == S_IFDIR, "Lookup /proc/sys is dir");
+  Check(Lookup(L"proc/sys/kernel", false).type == S_IFDIR, "Lookup /proc/sys/kernel is dir");
+  Check(Lookup(L"proc/sys/kernel/random", false).type == S_IFDIR, "Lookup /proc/sys/kernel/random is dir");
+  Check(Lookup(L"proc/sys/kernel/random", true).entries.size() == 1, "random lists boot_id");
+  Check(Lookup(L"proc/sys/kernel/random/boot_id", false).type == S_IFREG, "Lookup boot_id is file");
+  Check(Lookup(L"proc/sys/kernel/random/uuid", false).type == 0, "Lookup does not expose a snapshot uuid");
+  Check(Lookup(L"proc/sys/kernel/osrelease", false).type == 0, "Lookup unimplemented /proc/sys leaf returns 0");
+  Check(Lookup(L"proc/sys/net", false).type == 0, "Lookup unimplemented /proc/sys dir returns 0");
+  {
+    Node boot_node;
+    boot_node.type = S_IFREG;
+    boot_node.file = "boot_id";
+    std::string b1 = Content(boot_node);
+    Check(b1.size() == 37 && b1[14] == '4' && b1.back() == '\n', "boot_id is a v4 UUID line");
+    Check(Content(boot_node) == b1, "boot_id is stable");
+
+    // A named device does not leak a process-local fallback on lock failure.
+    const std::wstring original_binder = EnvironmentValue(L"GESHER_BINDER");
+    const std::wstring binder = L"procfs-boot-host-" + std::to_wstring(my_pid);
+    SetEnvironmentVariableW(L"GESHER_BINDER", binder.c_str());
+    const std::wstring mutex = L"Local\\gesher-boot-id-" + BootKey(L"device-" + binder);
+    HANDLE blocker = CreateEventW(nullptr, FALSE, FALSE, mutex.c_str());
+    Check(blocker != nullptr, "Windows test can block the boot mutex name");
+    if (blocker != nullptr) {
+      errno = 0;
+      int fd = Open(L"proc/sys/kernel/random/boot_id", O_RDONLY);
+      Check(fd < 0 && errno == EIO, "device boot_id fails without shared identity");
+      if (fd >= 0) _close(fd);
+      CloseHandle(blocker);
+    }
+    SetEnvironmentVariableW(L"GESHER_BINDER", original_binder.empty() ? nullptr : original_binder.c_str());
+  }
+
   // Negative paths
   Check(Lookup(L"sys/devices/system/cpu/unknown", false).type == 0,
         "Lookup invalid sysfs leaf returns 0");
@@ -527,6 +582,63 @@ int main() {
           "NOFOLLOW rejection does not call the revocable boundary");
     gesher::revocable_boundary = {};
     _close(backing);
+  }
+
+  // 9. /proc/self/map_files: an entry is looked up directly (one
+  // VirtualQuery run), and finds exactly the file mappings the full scan
+  // lists, by the same "start-end" names.
+  {
+    const std::string self = "proc/" + std::to_string(GetCurrentProcessId()) + "/map_files/";
+    size_t files = 0, found = 0;
+    for (const Vma& v : Vmas(false)) {
+      Vma direct;
+      const bool at = FileMappingAt(v.start, v.end, &direct);
+      if (!v.file) {
+        if (at) Check(false, "FileMappingAt finds no file at a mapping that is not one");
+        continue;
+      }
+      ++files;
+      if (at && direct.name == v.name && std::memcmp(direct.perms, v.perms, 4) == 0) ++found;
+      const NameStatus name = Describe(Widen((self + MapFileName(v)).c_str()));
+      if (name.type != S_IFLNK || name.follow_error != EPERM || (name.mode & 0400) == 0) {
+        Check(false, "a map_files entry is a link, 0400 or 0600, that EPERM refuses to follow");
+      }
+      // A run's start alone, or a range across two runs, is no entry.
+      Vma none;
+      Check(!FileMappingAt(v.start, v.end + 4096, &none) &&
+                (v.end - v.start <= 4096 || !FileMappingAt(v.start + 4096, v.end, &none)),
+            "FileMappingAt matches whole runs only");
+    }
+    Check(files > 0 && found == files, "FileMappingAt finds every file mapping Vmas() lists");
+    unsigned long long start = 0, end = 0;
+    Check(ParseRange("7FF6A000-7ff6b000", &start, &end) && start == 0x7ff6a000ULL && end == 0x7ff6b000ULL,
+          "ParseRange takes either case, as the kernel's _parse_integer");
+    Check(!ParseRange("07ff6a000-7ff6b000", &start, &end) && !ParseRange("7ff6a000-07ff6b000", &start, &end),
+          "ParseRange refuses leading zeros");
+    Check(!ParseRange("10000000000000000-1", &start, &end), "ParseRange refuses more than 64 bits");
+    Check(Describe(Widen(("proc/" + std::to_string(GetCurrentProcessId()) + "/map_files").c_str())).mode == 0500,
+          "map_files is dr-x------");
+    // The mark an fd's file carries: type, mode fixed at open, Linux path.
+    {
+      const int marked = memfd_create("procfs", 0);
+      unsigned type = 0, mode = 0;
+      std::string path;
+      const bool set = marked >= 0 &&
+                       SetTag(gesher::HandleFromFd(marked), 'l', 0600, "/proc/1/map_files/1000-2000");
+      Check(!set || (DescribeHandle(gesher::HandleFromFd(marked), &type, &path, &mode) &&
+                     type == S_IFLNK && mode == 0600 && path == "/proc/1/map_files/1000-2000"),
+            "a /proc fd's mark keeps its type, open-time mode and path");
+      const int plain = memfd_create("plain", 0);
+      Check(plain >= 0 && !DescribeTemporaryFile(gesher::HandleFromFd(plain), &type, &path, &mode),
+            "a memfd carries no mark");
+      if (marked >= 0) _close(marked);
+      if (plain >= 0) _close(plain);
+    }
+    const long long started = Time("/proc/self/maps");
+    Check(started != 0 && Time("/proc/" + std::to_string(GetCurrentProcessId()) + "/status") == started,
+          "a process's /proc files carry its start time");
+    Check(Time("/proc/meminfo") == Time("/sys/devices/system/cpu/online") && Time("/proc/meminfo") <= started,
+          "the other names carry the boot time");
   }
 
   if (g_failed == 0) {
