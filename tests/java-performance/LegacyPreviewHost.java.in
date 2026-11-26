@@ -2,6 +2,7 @@
 package com.gesher.server;
 
 import java.lang.management.ManagementFactory;
+import java.lang.ref.Cleaner;
 import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -87,6 +88,11 @@ public final class LegacyPreviewHost {
             }
         }
     }
+    // This fixture drives buffer delivery without a camera service or AppOps.
+    private static final class CameraService {
+        static final class CameraAccess {}
+    }
+
     /** The session's camera-or-image answer (the image-picker setting); unused here. */
     private static final class CameraImageSource {
         static final class Choice {}

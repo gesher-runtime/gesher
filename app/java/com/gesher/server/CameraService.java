@@ -544,25 +544,23 @@ public final class CameraService extends ICameraService.Default {
         ICameraDeviceUser connection;
         long identity = Binder.clearCallingIdentity();
         try {
-            IBinder binder = ServiceManager.checkService(Context.APP_OPS_SERVICE);
-            if (binder == null) {
-                throw new ServiceSpecificException(ERROR_DISABLED, "camera AppOps unavailable");
-            }
-            OpenCamera opened = new OpenCamera(packageName, clientAttribution.attributionTag, binder);
-            synchronized (opened) {
+            CameraAccess access = newCameraAccess(packageName, clientAttribution.attributionTag);
+            CameraDeviceUser user = null;
+            synchronized (access) {
                 try {
-                    opened.watch();
-                    opened.user = new CameraDeviceUser(this, cameraId, d, callbacks);
-                    connection = StandIn.of(ICameraDeviceUser.class, opened.user).asInterface();
+                    access.watch();
+                    user = new CameraDeviceUser(this, cameraId, d, callbacks);
+                    connection = StandIn.of(ICameraDeviceUser.class, user).asInterface();
+                    access.onRevoked = user::disabled;
                     synchronized (mOpen) {
-                        previous = mOpen.put(cameraId, opened);
+                        previous = mOpen.put(cameraId, new OpenCamera(user, access));
                     }
                 } catch (RemoteException | SecurityException e) {
-                    opened.close();
+                    access.close();
                     throw new ServiceSpecificException(ERROR_DISABLED, "camera AppOps unavailable");
                 } catch (RuntimeException | Error e) {
-                    if (opened.user != null) opened.user.disconnect();
-                    opened.close();
+                    if (user != null) user.disconnect();
+                    access.close();
                     throw e;
                 }
             }
@@ -574,7 +572,7 @@ public final class CameraService extends ICameraService.Default {
             try {
                 previous.user.evicted();
             } finally {
-                previous.close();
+                previous.access.close();
             }
         }
         log("connectDevice " + cameraId + " (" + d.name + ") for " + packageName);
@@ -590,12 +588,12 @@ public final class CameraService extends ICameraService.Default {
 
     boolean startCapture(String cameraId, CameraDeviceUser user) {
         OpenCamera opened = owner(cameraId, user);
-        return opened != null && opened.startCapture();
+        return opened != null && opened.access.startCapture();
     }
 
     void captureFailedToOpen(String cameraId, CameraDeviceUser user) {
         OpenCamera opened = owner(cameraId, user);
-        if (opened != null) opened.finishCapture();
+        if (opened != null) opened.access.finishCapture();
     }
 
     void closed(String cameraId, CameraDeviceUser user) {
@@ -605,11 +603,21 @@ public final class CameraService extends ICameraService.Default {
             if (opened == null || opened.user != user) return;
             mOpen.remove(cameraId);
         }
-        opened.close();
+        opened.access.close();
     }
 
-    /** One AppOps watcher per camera owner, with an operation only while using the source. */
-    private static final class OpenCamera extends IAppOpsCallback.Stub
+    private record OpenCamera(CameraDeviceUser user, CameraAccess access) {}
+
+    static CameraAccess newCameraAccess(String packageName, String tag) {
+        IBinder binder = ServiceManager.checkService(Context.APP_OPS_SERVICE);
+        if (binder == null) {
+            throw new ServiceSpecificException(ERROR_DISABLED, "camera AppOps unavailable");
+        }
+        return new CameraAccess(packageName, tag, binder);
+    }
+
+    /** Shared policy for the Camera2 and legacy camera owners. */
+    static final class CameraAccess extends IAppOpsCallback.Stub
             implements IBinder.DeathRecipient {
         private final int uid = Process.myUid();
         private final String packageName;
@@ -617,13 +625,13 @@ public final class CameraService extends ICameraService.Default {
         private final IBinder binder;
         private final IAppOpsService ops;
         private final IBinder token = new Binder();
-        private CameraDeviceUser user;
+        Runnable onRevoked;  // Guarded by this, assigned before publishing the owner.
         private boolean watching;
         private boolean linked;
         private boolean started;
         private boolean stopped;
 
-        OpenCamera(String packageName, String tag, IBinder binder) {
+        CameraAccess(String packageName, String tag, IBinder binder) {
             this.packageName = packageName;
             this.tag = tag;
             this.binder = binder;
@@ -646,7 +654,7 @@ public final class CameraService extends ICameraService.Default {
         }
 
         synchronized boolean startCapture() {
-            if (stopped) return false;
+            if (stopped || onRevoked == null) return false;
             long identity = Binder.clearCallingIdentity();
             try {
                 if (!hasCameraPermission(packageName)) return false;
@@ -678,8 +686,7 @@ public final class CameraService extends ICameraService.Default {
             }
         }
 
-        private synchronized boolean allowed() {
-            if (stopped || user == null) return true;
+        private boolean allowed() {
             long identity = Binder.clearCallingIdentity();
             try {
                 return hasCameraPermission(packageName)
@@ -694,23 +701,30 @@ public final class CameraService extends ICameraService.Default {
 
         @Override
         public void opChanged(int op, int changedUid, String name, String deviceId) {
-            if (op == AppOpsManager.OP_CAMERA && uid == changedUid && packageName.equals(name)
-                    && !allowed()) user.disabled();
+            if (op == AppOpsManager.OP_CAMERA && uid == changedUid && packageName.equals(name)) {
+                revoke(false);
+            }
         }
 
         @Override
         public void binderDied() {
-            CameraDeviceUser opened;
+            revoke(true);
+        }
+
+        private void revoke(boolean authorityDied) {
+            Runnable notify;
             synchronized (this) {
-                if (stopped) return;
-                opened = user;
+                if (stopped || onRevoked == null || (!authorityDied && allowed())) return;
+                notify = onRevoked;
+                onRevoked = null;
             }
-            if (opened != null) opened.disabled();
+            notify.run();
         }
 
         synchronized void close() {
             if (stopped) return;
             stopped = true;
+            onRevoked = null;
             finishCapture();
             long identity = Binder.clearCallingIdentity();
             try {

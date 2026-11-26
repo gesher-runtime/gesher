@@ -11,6 +11,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.IPackageManager;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.hardware.Camera;
 import android.hardware.ICameraService;
 import android.hardware.camera2.ICameraDeviceCallbacks;
 import android.hardware.camera2.ICameraDeviceUser;
@@ -27,6 +28,7 @@ import com.android.internal.app.IAppOpsCallback;
 import com.android.internal.app.IAppOpsService;
 import com.gesher.server.CameraService;
 import com.gesher.server.LegacyCamera;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -39,9 +41,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Runs both complete production admission paths and Camera2 AppOps ownership.
- * Package, AppOps and device enumeration are controlled boundaries. Neither
- * camera hardware nor remote Binder is used.
+ * Exercises both production admission paths and live AppOps ownership.
+ * Camera1 starts real preview/picture workers with a fixture-only frame source;
+ * package, AppOps and device discovery boundaries are isolated from hardware.
  */
 public final class CameraPermissionContractTest {
     private static final String OWNER = "com.gesher.camera.permission.owner";
@@ -254,6 +256,93 @@ public final class CameraPermissionContractTest {
         }
     }
 
+    private static void installFrameFixture(Object session) throws Exception {
+        Object choice = field(session.getClass(), "sourceChoice").get(session);
+        Class<?> selection = Class.forName("com.gesher.server.CameraImageSource$Selection");
+        Constructor<?> constructor = selection.getDeclaredConstructor(int.class, byte[].class);
+        constructor.setAccessible(true);
+        Object image = constructor.newInstance(field(selection, "IMAGE").getInt(null), new byte[] {1});
+        Method set = choice.getClass().getDeclaredMethod("set", selection);
+        Method keepFrame = choice.getClass().getDeclaredMethod("keepFrame", byte[].class, int.class, int.class);
+        set.setAccessible(true);
+        keepFrame.setAccessible(true);
+        set.invoke(choice, image);
+        keepFrame.invoke(choice, new byte[320 * 240 * 3 / 2], 320, 240);
+    }
+
+    private static void activeLegacy(Packages packages, CameraOps ops) throws Exception {
+        var sessions = (Map<?, ?>) field(LegacyCamera.class, "sSessions").get(null);
+        ops.notifyMode(OWNER, AppOpsManager.MODE_IGNORED);
+        check(LegacyCamera.setup(null, new WeakReference<Camera>(null), 0) == -13,
+                "legacy camera rejects a soft AppOps denial before publication");
+        check(sessions.isEmpty() && ops.watchers.isEmpty(), "legacy denial retained a session or watcher");
+
+        ops.notifyMode(OWNER, AppOpsManager.MODE_ALLOWED);
+        check(LegacyCamera.setup(null, new WeakReference<Camera>(null), 0) == 0,
+                "legacy camera opens after AppOps recovery");
+        Object active = sessions.get(null);
+        try {
+            check(ops.watchers.size() == 1 && ops.running.isEmpty(), "legacy access watched before preview");
+            installFrameFixture(active);
+            LegacyCamera.startPreview(null);
+            Field preview = field(active.getClass(), "capture");
+            Object previewCapture = preview.get(active);
+            check(previewCapture != null && LegacyCamera.previewEnabled(null) && ops.running.size() == 1,
+                    "legacy preview owns one active camera operation");
+            LegacyCamera.stopPreview(null);
+            check(!LegacyCamera.previewEnabled(null) && ops.running.isEmpty()
+                    && ops.watchers.size() == 1, "legacy stop finishes only the streaming operation");
+
+            LegacyCamera.startPreview(null);
+            IAppOpsCallback watcher = ops.watchers.keySet().iterator().next();
+            watcher.opChanged(AppOpsManager.OP_CAMERA, Process.myUid() + 1, OWNER, "default:0");
+            check(LegacyCamera.previewEnabled(null), "legacy preview ignores callbacks for other UIDs");
+            ops.notifyMode(OWNER, AppOpsManager.MODE_IGNORED);
+            check(ops.watchers.isEmpty() && ops.running.isEmpty() && preview.get(active) == null,
+                    "revocation releases the legacy preview, operation and mode watcher");
+            try {
+                LegacyCamera.startPreview(null);
+                throw new AssertionError("retired legacy client reopened the camera");
+            } catch (RuntimeException expected) {
+                check(true, "retired legacy client is disconnected");
+            }
+        } finally {
+            LegacyCamera.release(null);
+            ops.notifyMode(OWNER, AppOpsManager.MODE_ALLOWED);
+            packages.granted = true;
+        }
+
+        Camera opened = (Camera) allocate(Camera.class);
+        check(LegacyCamera.setup(opened, new WeakReference<>(opened), 0) == 0, "legacy release path opens");
+        LegacyCamera.release(opened);
+        check(sessions.isEmpty() && ops.watchers.isEmpty(), "explicit close runs the camera cleanup once");
+
+        check(LegacyCamera.setup(null, new WeakReference<Camera>(null), 0) == 0, "new legacy connection");
+        try {
+            Object next = sessions.get(null);
+            installFrameFixture(next);
+            LegacyCamera.startPreview(null);
+            LegacyCamera.takePicture(null, 0);
+            Field picture = field(next.getClass(), "picture");
+            Object pictureCapture = null;
+            for (int i = 0; i < 500 && pictureCapture == null; ++i) {
+                synchronized (next) { pictureCapture = picture.get(next); }
+                if (pictureCapture == null) Thread.sleep(1);
+            }
+            check(pictureCapture != null && ops.running.size() == 1,
+                    "the still owns the same operation after preview stops");
+            packages.granted = false;
+            ops.notifyMode(OWNER, AppOpsManager.MODE_ALLOWED);
+            int result = (int) pictureCapture.getClass().getMethod("read", byte[].class)
+                    .invoke(pictureCapture, new byte[320 * 240 * 3 / 2]);
+            check(result != 0 && ops.watchers.isEmpty() && ops.running.isEmpty(),
+                    "live runtime denial closes the still and revokes its operation");
+        } finally {
+            LegacyCamera.release(null);
+            packages.granted = true;
+        }
+    }
+
     private static AttributionSourceState source(String name) {
         AttributionSourceState source = new AttributionSourceState();
         source.uid = Process.myUid();
@@ -347,6 +436,7 @@ public final class CameraPermissionContractTest {
             packages.granted = true;
             both(service, application, OWNER, true, "explicit runtime grant");
             activeCamera2(service, packages, ops);
+            activeLegacy(packages, ops);
             ICameraDeviceUser active = camera2(service, source(OWNER));
             packages.granted = false;
             denied(service, source(OWNER), "revoked caller cannot evict an existing owner");
@@ -404,7 +494,7 @@ public final class CameraPermissionContractTest {
             devices.set(service, oldDevices);
         }
         System.out.println("CameraPermissionContractTest: both admission paths, live grants and UID attribution passed ("
-                + checks + " checks; includes Camera2 AppOps lifetime and revoke)");
+                + checks + " checks; includes Camera2 and legacy AppOps lifetime and revoke)");
     }
 
     public static void main(String[] args) throws Exception {

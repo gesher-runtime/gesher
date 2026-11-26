@@ -5,10 +5,14 @@
 package com.gesher.server;
 
 import android.app.ActivityThread;
+import android.app.Application;
 import android.hardware.Camera;
+import android.os.Binder;
+import android.os.RemoteException;
 import android.util.Size;
 import android.view.Surface;
 
+import java.lang.ref.Cleaner;
 import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.Arrays;
@@ -103,6 +107,14 @@ public final class LegacyCamera {
         Thread preview;
         volatile boolean previewing;
         WindowsCamera.Capture capture;
+        WindowsCamera.Capture picture;
+        CameraService.CameraAccess access;
+        Cleaner.Cleanable cleanup;
+        volatile boolean retired;
+        boolean openingPreview;
+        boolean takingPicture;
+        long previewGeneration;
+        int sourceUsers;
         /** The camera-or-image answer (CameraImageSource), kept until the camera's release. */
         final CameraImageSource.Choice sourceChoice = new CameraImageSource.Choice();
         int audioRestriction;
@@ -125,10 +137,14 @@ public final class LegacyCamera {
 
     private static final Map<Camera, Session> sSessions = new WeakHashMap<>();
 
+    private static final class Cleanup {
+        static final Cleaner CLEANER = Cleaner.create();
+    }
+
     private static Session session(Camera camera) {
         synchronized (sSessions) {
             Session s = sSessions.get(camera);
-            if (s == null) throw new RuntimeException("Camera is being used after Camera.release() was called");
+            if (s == null || s.retired) throw new RuntimeException("Camera is disconnected");
             return s;
         }
     }
@@ -249,8 +265,30 @@ public final class LegacyCamera {
         }
         Session s = new Session(weakThis, d.get(id));
         defaults(s);
-        synchronized (sSessions) {
-            sSessions.put(camera, s);
+        Application application = ActivityThread.currentApplication();
+        long identity = Binder.clearCallingIdentity();
+        try {
+            s.access = CameraService.newCameraAccess(pkg,
+                    application == null ? null : application.getAttributionTag());
+            synchronized (s.access) {
+                s.access.watch();
+                s.access.onRevoked = () -> retire(s, true);
+                // Weak session keys can be cleared before Camera.finalize() calls
+                // native_release. The camera itself is never retained by this action.
+                if (camera != null) s.cleanup = Cleanup.CLEANER.register(camera, () -> retire(s, false));
+                synchronized (sSessions) {
+                    sSessions.put(camera, s);
+                }
+            }
+        } catch (RemoteException | RuntimeException e) {
+            if (s.access != null) s.access.close();
+            log("camera policy denied " + pkg + ": " + e);
+            return -EACCES;
+        } catch (Error e) {
+            if (s.access != null) s.access.close();
+            throw e;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
         }
         log("open " + id + " (" + s.device.name + ") for " + pkg);
         return 0;
@@ -261,7 +299,28 @@ public final class LegacyCamera {
         synchronized (sSessions) {
             s = sSessions.remove(camera);
         }
-        if (s != null) stop(s);
+        if (s == null) return;
+        if (s.cleanup != null) s.cleanup.clean();
+        else retire(s, false);
+    }
+
+    private static void retire(Session s, boolean disabled) {
+        WindowsCamera.Capture picture;
+        synchronized (s) {
+            if (s.retired) return;
+            s.retired = true;
+            picture = s.picture;
+        }
+        try {
+            try {
+                if (picture != null) picture.close();
+            } finally {
+                stop(s, !disabled);
+            }
+        } finally {
+            s.access.close();
+            if (disabled) post(s, MSG_ERROR, Camera.CAMERA_ERROR_DISABLED, 0, null);
+        }
     }
 
     // --- parameters -----------------------------------------------------------------------
@@ -410,18 +469,74 @@ public final class LegacyCamera {
             s.sourceChoice.resetCancelled();
             throw new RuntimeException("startPreview failed");
         }
+        Size size;
+        long generation;
         synchronized (s) {
-            if (s.previewing) return;
-            Size size = size(s, "preview-size");
-            s.capture = open(s, size);
-            if (s.capture == null) throw new RuntimeException("startPreview failed");
-            s.previewing = true;
-            WindowsCamera.Capture capture = s.capture;
-            s.preview = new Thread(() -> previewLoop(s, capture, size), "legacy-camera-preview");
-            s.preview.setDaemon(true);
-            s.preview.start();
+            if (s.previewing || s.openingPreview) return;
+            size = size(s, "preview-size");
+            if (!beginSource(s)) throw new RuntimeException("startPreview failed");
+            s.openingPreview = true;
+            generation = s.previewGeneration;
         }
-        log("preview started at " + size(s, "preview-size"));
+        WindowsCamera.Capture capture = null;
+        boolean started = false;
+        try {
+            capture = open(s, size);
+            synchronized (s) {
+                if (capture == null || s.retired || generation != s.previewGeneration) {
+                    throw new RuntimeException("startPreview failed");
+                }
+                WindowsCamera.Capture current = capture;
+                Thread preview = new Thread(() -> runPreview(s, current, size), "legacy-camera-preview");
+                preview.setDaemon(true);
+                s.capture = capture;
+                s.preview = preview;
+                s.previewing = true;
+                try {
+                    preview.start();
+                    started = true;
+                } finally {
+                    if (!started) clearPreview(s);
+                }
+            }
+        } finally {
+            try {
+                if (!started && capture != null) capture.close();
+            } finally {
+                synchronized (s) {
+                    s.openingPreview = false;
+                    if (!started) finishSource(s);
+                }
+            }
+        }
+        log("preview started at " + size);
+    }
+
+    private static void runPreview(Session s, WindowsCamera.Capture capture, Size size) {
+        try {
+            previewLoop(s, capture, size);
+        } finally {
+            try {
+                capture.close();
+            } finally {
+                synchronized (s) {
+                    if (s.capture == capture) clearPreview(s);
+                    finishSource(s);
+                }
+            }
+        }
+    }
+
+    // Both preview and still capture may own the source while transitioning.
+    // The AppOps token stays active until the last of their resources is retired.
+    private static boolean beginSource(Session s) {
+        if (s.retired || !s.access.startCapture()) return false;
+        ++s.sourceUsers;
+        return true;
+    }
+
+    private static void finishSource(Session s) {
+        if (--s.sourceUsers == 0) s.access.finishCapture();
     }
 
     /** The Camera2 AF mode of a legacy focus mode (OFF: no autofocus). */
@@ -456,7 +571,7 @@ public final class LegacyCamera {
                 || state == android.hardware.camera2.CameraMetadata
                         .CONTROL_AF_STATE_NOT_FOCUSED_LOCKED;
         synchronized (s) {
-            if (!s.previewing || s.capture != capture) return;
+            if (s.retired || !s.previewing || s.capture != capture) return;
             s.focusLocked = locked;
             if (s.focusPending && locked && s.afTrigger != AF_TRIGGER_CANCEL
                     && s.focusStarted == s.focusRequest) {
@@ -477,13 +592,13 @@ public final class LegacyCamera {
                 : null;
         while (true) {
             synchronized (s) {
-                if (!s.previewing || s.capture != capture) break;
+                if (s.retired || !s.previewing || s.capture != capture) break;
             }
             int hr = capture.read(nv12);
             synchronized (s) {
                 // A blocked read can outlive stop's bounded join and a restart.
                 // Its old capture must not publish into the replacement preview.
-                if (!s.previewing || s.capture != capture) break;
+                if (s.retired || !s.previewing || s.capture != capture) break;
                 if (hr != 0) post(s, MSG_ERROR, 1 /* CAMERA_ERROR_UNKNOWN */, 0, null);
             }
             if (hr != 0) {
@@ -499,7 +614,7 @@ public final class LegacyCamera {
             boolean inFlight;
             long callbackGeneration;
             synchronized (s) {
-                if (!s.previewing || s.capture != capture) break;
+                if (s.retired || !s.previewing || s.capture != capture) break;
                 surface = s.previewSurface;
                 callback = s.callback;
                 manual = s.manualBuffers;
@@ -520,14 +635,14 @@ public final class LegacyCamera {
             }
             synchronized (s) {
                 // Native surface delivery can also outlive the bounded stop join.
-                if (!s.previewing || s.capture != capture) break;
+                if (s.retired || !s.previewing || s.capture != capture) break;
             }
             if (callback && (manual || !inFlight)) {
                 byte[] frame = frame(s, nv12, capture.width, capture.height, w, h, manual,
                         capture, callbackGeneration);
                 if (frame != null) {
                     synchronized (s) {
-                        if (!s.previewing || s.capture != capture) break;
+                        if (s.retired || !s.previewing || s.capture != capture) break;
                         if (!s.callback || s.callbackGeneration != callbackGeneration) continue;
                         // Camera.postEventFromNative only enqueues a Handler message;
                         // keep admission atomic with stop/restart, never conversion.
@@ -546,7 +661,7 @@ public final class LegacyCamera {
         synchronized (s) {
             // Recheck while reserving a buffer, including a restart immediately
             // after the post-delivery check above.
-            if (!s.previewing || s.capture != capture) return null;
+            if (s.retired || !s.previewing || s.capture != capture) return null;
             if (!s.callback || s.callbackGeneration != callbackGeneration) return null;
             format = s.params.get("preview-format");
             buffer = manual ? s.buffers.poll() : null;
@@ -593,31 +708,39 @@ public final class LegacyCamera {
     }
 
     private static void stop(Session s) {
+        stop(s, true);
+    }
+
+    private static void stop(Session s, boolean waitForPreview) {
         Thread t;
         WindowsCamera.Capture capture;
         synchronized (s) {
-            if (!s.previewing && s.capture == null) return;
-            s.previewing = false;
-            s.frameInFlight = false;
-            // A stopped preview runs no scan: a pending autoFocus is not answered.
-            s.focusPending = false;
-            s.afTrigger = AF_TRIGGER_IDLE;
+            ++s.previewGeneration;
             t = s.preview;
             capture = s.capture;
-            s.preview = null;
-            s.capture = null;
+            clearPreview(s);
         }
-        // The preview thread ends after the frame it is reading (a closed capture must not
-        // be read from), then the capture closes.
-        if (t != null && t != Thread.currentThread()) {
+        if (capture == null) return;
+        // A blocked read retains its native handle and closes it on exit. Closing
+        // here immediately prevents a new read, including during policy revocation.
+        capture.close();
+        if (waitForPreview && t != null && t != Thread.currentThread()) {
             try {
                 t.join(3000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
-        if (capture != null) capture.close();
         log("preview stopped");
+    }
+
+    private static void clearPreview(Session s) {
+        s.previewing = false;
+        s.frameInFlight = false;
+        s.focusPending = false;
+        s.afTrigger = AF_TRIGGER_IDLE;
+        s.preview = null;
+        s.capture = null;
     }
 
     // --- pictures -------------------------------------------------------------------------
@@ -637,7 +760,7 @@ public final class LegacyCamera {
             }
         }
         // No autofocus in this mode: success at once, as Android documents for fixed focus.
-        post(s, MSG_FOCUS, 1 /* success */, 0, null);
+        postWhileOpen(s, MSG_FOCUS, 1 /* success */, null);
     }
 
     public static void cancelAutoFocus(Camera camera) {
@@ -650,50 +773,76 @@ public final class LegacyCamera {
 
     public static void takePicture(Camera camera, int msgType) {
         Session s = session(camera);
-        if (!s.previewing) throw new RuntimeException("takePicture failed");
         Size picture = size(s, "picture-size");
         int quality = intParam(s, "jpeg-quality", 90);
-        Thread t = new Thread(() -> {
-            // The frame comes from a capture at the picture size; the preview stops, as
-            // a picture ends it on Android.
+        synchronized (s) {
+            if (!s.previewing || s.takingPicture || !beginSource(s)) {
+                throw new RuntimeException("takePicture failed");
+            }
+            s.takingPicture = true;
+            try {
+                Thread t = new Thread(() -> capturePicture(s, picture, quality, msgType),
+                        "legacy-camera-picture");
+                t.setDaemon(true);
+                t.start();
+            } catch (RuntimeException | Error failure) {
+                s.takingPicture = false;
+                finishSource(s);
+                throw failure;
+            }
+        }
+    }
+
+    private static void capturePicture(Session s, Size picture, int quality, int msgType) {
+        try {
             boolean keepFocus;
             synchronized (s) {
                 keepFocus = s.device.autofocus && s.focusLocked;
             }
             stop(s);
-            WindowsCamera.Capture c = open(s, picture);
-            if (c == null) {
-                post(s, MSG_ERROR, 1, 0, null);
-                return;
+            if (s.retired) return;
+            try (WindowsCamera.Capture c = open(s, picture)) {
+                if (c == null) {
+                    postWhileOpen(s, MSG_ERROR, 1, null);
+                    return;
+                }
+                synchronized (s) {
+                    if (s.retired) return;
+                    s.picture = c;
+                }
+                // A locked focus stays locked for the picture's capture.
+                if (keepFocus) c.focus(WindowsCamera.Capture.FOCUS_LOCK, null);
+                byte[] nv12 = new byte[c.width * c.height * 3 / 2];
+                if (c.read(nv12) != 0) {
+                    postWhileOpen(s, MSG_ERROR, 1, null);
+                    return;
+                }
+                if (s.retired) return;
+                if ((msgType & MSG_SHUTTER) != 0) postWhileOpen(s, MSG_SHUTTER, 0, null);
+                if ((msgType & MSG_RAW_IMAGE) != 0) postWhileOpen(s, MSG_RAW_IMAGE, 0, null);
+                if ((msgType & MSG_POSTVIEW_FRAME) != 0) {
+                    postWhileOpen(s, MSG_POSTVIEW_FRAME, 0,
+                            CameraFrames.nv21(nv12, c.width, c.height, c.width, c.height));
+                }
+                if ((msgType & MSG_COMPRESSED_IMAGE) != 0) {
+                    byte[] jpeg = CameraFrames.jpeg(nv12, c.width, c.height, picture.getWidth(),
+                            picture.getHeight(), quality);
+                    postWhileOpen(s, MSG_COMPRESSED_IMAGE, 0, jpeg);
+                }
             }
-            // A locked focus stays locked for the picture's capture.
-            if (keepFocus) c.focus(WindowsCamera.Capture.FOCUS_LOCK, null);
-            byte[] nv12 = new byte[c.width * c.height * 3 / 2];
-            int hr;
-            try {
-                hr = c.read(nv12);
-            } finally {
-                c.close();
+        } finally {
+            synchronized (s) {
+                s.picture = null;
+                s.takingPicture = false;
+                finishSource(s);
             }
-            if (hr != 0) {
-                post(s, MSG_ERROR, 1, 0, null);
-                return;
-            }
-            if ((msgType & MSG_SHUTTER) != 0) post(s, MSG_SHUTTER, 0, 0, null);
-            if ((msgType & MSG_RAW_IMAGE) != 0) post(s, MSG_RAW_IMAGE, 0, 0, null);
-            if ((msgType & MSG_POSTVIEW_FRAME) != 0) {
-                post(s, MSG_POSTVIEW_FRAME, 0, 0,
-                        CameraFrames.nv21(nv12, c.width, c.height, c.width, c.height));
-            }
-            if ((msgType & MSG_COMPRESSED_IMAGE) != 0) {
-                byte[] jpeg = CameraFrames.jpeg(nv12, c.width, c.height, picture.getWidth(),
-                        picture.getHeight(), quality);
-                log("picture taken: " + picture + ", JPEG " + jpeg.length + " bytes");
-                post(s, MSG_COMPRESSED_IMAGE, 0, 0, jpeg);
-            }
-        }, "legacy-camera-picture");
-        t.setDaemon(true);
-        t.start();
+        }
+    }
+
+    private static void postWhileOpen(Session s, int message, int arg1, Object value) {
+        synchronized (s) {
+            if (!s.retired) post(s, message, arg1, 0, value);
+        }
     }
 
     // --- what a fixed-focus camera without zoom or face detection answers --------------------
