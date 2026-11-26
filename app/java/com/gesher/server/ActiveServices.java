@@ -150,6 +150,15 @@ final class ActiveServices {
             return false;
         }
 
+        boolean hasPendingReviews() {
+            for (IntentBindRecord b : bindings.values()) {
+                for (ConnectionRecord c : b.connections) {
+                    if (c.reviewPending && c.lifetime.getAsBoolean()) return true;
+                }
+            }
+            return false;
+        }
+
         @Override
         public String toString() {
             return name.flattenToShortString();
@@ -202,6 +211,7 @@ final class ActiveServices {
         final ActivityTaskManagerService.ProcessRecord client;
         final ApkPackage clientCode;
         final boolean systemClient;
+        boolean reviewPending;
 
         ConnectionRecord(IntentBindRecord binding, IServiceConnection conn, long flags,
                 IApplicationThread caller, BooleanSupplier lifetime,
@@ -363,19 +373,46 @@ final class ActiveServices {
             return null;
         }
         enforceAccess(info, sender);
-        UriGrants uriGrants = mAtm.uriGrants();
+        Intent request = new Intent(service);
         ApkPackage grantSender = sender.system ? null : mPm.get(sender.packageName);
         if (!sender.system && grantSender == null) throw new SecurityException("Retired service caller");
         int grantUid = sender.system ? android.os.Process.SYSTEM_UID : grantSender.uid();
-        List<UriGrants.Grant> prepared = uriGrants == null ? java.util.Collections.emptyList()
-                : uriGrants.prepareIntent(grantUid, info.packageName, service);
         AppOpsService.UidState callerState = mAtm.appOpsUidStates().get(grantUid);
         boolean whileInUseAtStart = sender.system || callerState != null
                 && callerState.state() <= android.app.AppOpsManager.UID_STATE_TOP;
+        if (!sender.acceptance.getAsBoolean() || !targetCurrent(target, info)) return null;
+        if (mPm.permissions().isReviewRequired(target)) {
+            mAtm.requestComponentPermissionReview(target,
+                    mAtm.componentReviewForeground(grantUid, sender.system),
+                    () -> sender.lifetime.getAsBoolean() && targetCurrent(target, info),
+                    () -> startServiceAuthorized(sender, sender.lifetime, target, info, request,
+                            requireForeground, grantUid, whileInUseAtStart), () -> {});
+            return null;
+        }
+        return startServiceAuthorized(sender, sender.acceptance, target, info, request,
+                requireForeground, grantUid, whileInUseAtStart);
+    }
+
+    private boolean targetCurrent(ApkPackage target, ServiceInfo info) {
+        return target != null && mPm.get(info.packageName) == target
+                && !mPm.isRemovalPending(info.packageName)
+                && target.componentEnabled(info.name, ApkPackage.ComponentKind.SERVICE);
+    }
+
+    /** The original authenticated sender owns a deferred start, including URI authority. */
+    private ComponentName startServiceAuthorized(Sender sender, BooleanSupplier admission,
+            ApkPackage target, ServiceInfo info, Intent service, boolean requireForeground,
+            int grantUid, boolean whileInUseAtStart) {
+        if (!admission.getAsBoolean() || !targetCurrent(target, info)
+                || mPm.permissions().isReviewRequired(target)) return null;
+        enforceAccess(info, sender);
+        UriGrants uriGrants = mAtm.uriGrants();
+        List<UriGrants.Grant> prepared = uriGrants == null ? java.util.Collections.emptyList()
+                : uriGrants.prepareIntent(grantUid, info.packageName, service);
         ServiceRecord r;
         synchronized (this) {
-            if (!sender.acceptance.getAsBoolean() || target == null
-                    || mPm.get(info.packageName) != target || mPm.isRemovalPending(info.packageName)) return null;
+            if (!admission.getAsBoolean() || !targetCurrent(target, info)
+                    || mPm.permissions().isReviewRequired(target)) return null;
             r = record(info, target);
             r.startRequested = true;
             r.whileInUseAtStart = whileInUseAtStart;
@@ -387,7 +424,7 @@ final class ActiveServices {
             pending.grants = prepared;
             r.pendingStarts.add(pending);
         }
-        SystemServer.log("startService " + r + " from " + callingPackage
+        SystemServer.log("startService " + r + " from " + sender.packageName
                 + (requireForeground ? " (foreground)" : ""));
         long identity = Binder.clearCallingIdentity();
         try { bringUp(r); } finally { Binder.restoreCallingIdentity(identity); }
@@ -449,14 +486,17 @@ final class ActiveServices {
             return 0;
         }
         enforceAccess(info, sender);
+        ApkPackage senderCode = sender.system ? null : mPm.get(sender.packageName);
+        if (!sender.system && senderCode == null) throw new SecurityException("Retired service caller");
+        int senderUid = sender.system ? android.os.Process.SYSTEM_UID : senderCode.uid();
+        boolean foreground = mAtm.componentReviewForeground(senderUid, sender.system);
         ServiceRecord r;
         IntentBindRecord b;
-        IBinder published = null;
-        boolean received;
         ConnectionRecord connectionRecord;
         synchronized (this) {
-            if (!sender.acceptance.getAsBoolean() || target == null
-                    || mPm.get(info.packageName) != target || mPm.isRemovalPending(info.packageName)) return 0;
+            if (!sender.acceptance.getAsBoolean() || !targetCurrent(target, info)) return 0;
+            boolean review = mPm.permissions().isReviewRequired(target);
+            if (review && !foreground) return 0;
             r = record(info, target);
             Intent.FilterComparison key = new Intent.FilterComparison(new Intent(service));
             b = r.bindings.get(key);
@@ -465,11 +505,10 @@ final class ActiveServices {
                 r.bindings.put(key, b);
             }
             ConnectionRecord c = new ConnectionRecord(b, connection, flags, caller, sender.lifetime, sender.process);
+            c.reviewPending = review;
             connectionRecord = c;
             b.connections.add(c);
             mConnections.computeIfAbsent(connection.asBinder(), k -> new ArrayList<>()).add(c);
-            received = b.received;
-            if (received) published = b.binder;
             // A new client: the idle reaper must not take this as an unused process.
             if (r.app != null) r.app.markActive(SystemClock.uptimeMillis());
             publishShortcutStateLocked();
@@ -479,19 +518,72 @@ final class ActiveServices {
                 + Long.toHexString(flags) + ")");
         long identity = Binder.clearCallingIdentity();
         try {
-            // onBind may have completed with null. That is a published null binding,
-            // not a pending bind: every later client must receive onNullBinding too.
-            if (received) {
-                connected(connectionRecord, published);
-                // The Binder (including a published null) survives ordinary unbinding.
-                // A callback may have unbound again before this point.
-                synchronized (this) { requestBindingLocked(r, b, true); }
-                drainBindingCalls(r);
-            } else if ((flags & Context.BIND_AUTO_CREATE) != 0 || r.created) {
-                bringUp(r);
+            if (connectionRecord.reviewPending) {
+                mAtm.requestComponentPermissionReview(target, foreground,
+                        () -> connectionCurrent(connectionRecord),
+                        () -> resumeBinding(connectionRecord, sender),
+                        () -> cancelBinding(connectionRecord));
+            } else {
+                resumeBinding(connectionRecord, sender);
             }
         } finally { Binder.restoreCallingIdentity(identity); }
         return 1;
+    }
+
+    private synchronized boolean connectionCurrent(ConnectionRecord connection) {
+        return connection.lifetime.getAsBoolean() && serviceCurrent(connection.binding.service)
+                && mServices.get(connection.binding.service.name) == connection.binding.service
+                && connection.binding.connections.contains(connection)
+                && mConnections.getOrDefault(connection.conn.asBinder(), List.of()).contains(connection);
+    }
+
+    /** Resume the original binding, so unbind/cancellation during review stays effective. */
+    private void resumeBinding(ConnectionRecord connection, Sender sender) {
+        ServiceRecord r = connection.binding.service;
+        IntentBindRecord b = connection.binding;
+        boolean received;
+        IBinder published;
+        boolean ready;
+        try {
+            enforceAccess(r.info, sender);
+        } catch (RuntimeException denied) {
+            cancelBinding(connection);
+            throw denied;
+        }
+        synchronized (this) {
+            ready = connectionCurrent(connection) && serviceReviewed(r);
+            if (ready) connection.reviewPending = false;
+            received = b.received;
+            published = b.binder;
+        }
+        if (!ready) { cancelBinding(connection); return; }
+        // A published null binder still completes onNullBinding after approval.
+        if (received) {
+            connected(connection, published);
+            synchronized (this) { requestBindingLocked(r, b, true); }
+            drainBindingCalls(r);
+        } else if ((connection.flags & Context.BIND_AUTO_CREATE) != 0 || r.created) {
+            bringUp(r);
+        }
+    }
+
+    private void cancelBinding(ConnectionRecord connection) {
+        ServiceRecord r = connection.binding.service;
+        synchronized (this) {
+            if (!connection.binding.connections.remove(connection)) return;
+            List<ConnectionRecord> owned = mConnections.get(connection.conn.asBinder());
+            if (owned != null) {
+                owned.remove(connection);
+                if (owned.isEmpty()) mConnections.remove(connection.conn.asBinder());
+            }
+            connection.reviewPending = false;
+            if (connection.binding.connections.isEmpty()) requestUnbindLocked(connection.binding);
+            publishShortcutStateLocked();
+        }
+        mAtm.noteShortcutForeground(null, 0);
+        connected(connection, null, true);
+        drainBindingCalls(r);
+        maybeBringDown(r);
     }
 
     void publishService(IBinder token, IBinder bindToken, IBinder service) {
@@ -519,7 +611,8 @@ final class ActiveServices {
 
     private void connected(ConnectionRecord connection, IBinder service, boolean dead) {
         ServiceRecord r = connection.binding.service;
-        if (!connection.lifetime.getAsBoolean() || service != null && !serviceCurrent(r)) return;
+        if (!connection.lifetime.getAsBoolean() || !dead && connection.reviewPending) return;
+        if (!dead && !serviceReviewed(r)) { cancelBinding(connection); return; }
         try {
             connection.conn.connected(r.name, service, null /* session */, dead);
         } catch (RemoteException e) {
@@ -721,6 +814,7 @@ final class ActiveServices {
             if (r == null) return;
             captured = mPm.get(r.info.packageName);
             requireServiceOwner(r);
+            if (id != 0 && !serviceReviewed(r)) throw new SecurityException("Service permission review is pending");
             if (id != 0 && notification == null) throw new IllegalArgumentException("Missing foreground notification");
             previous = r.foregroundId;
             int selectedType = id == 0 ? 0 : admitForegroundType(r, captured, foregroundServiceType);
@@ -782,7 +876,7 @@ final class ActiveServices {
 
     /** A shortcut exemption belongs to the admitted service and live process generation. */
     private boolean shortcutForeground(ServiceRecord service) {
-        return service.foregroundId != 0 && serviceCurrent(service) && service.app != null
+        return service.foregroundId != 0 && serviceReviewed(service) && service.app != null
                 && service.app.packageCode == service.owner && service.app.ready
                 && !service.app.dead && !service.app.exiting && !service.app.pidSuperseded;
     }
@@ -794,7 +888,7 @@ final class ActiveServices {
         List<ShortcutProcessState.Owner> foreground = new ArrayList<>();
         List<ShortcutProcessState.Link> links = new ArrayList<>();
         for (ServiceRecord service : mServices.values()) {
-            if (service.app == null || !serviceCurrent(service)) continue;
+            if (service.app == null || !serviceReviewed(service)) continue;
             ShortcutProcessState.Owner owner = new ShortcutProcessState.Owner(service.app, service.owner,
                     service.info.name, ApkPackage.ComponentKind.SERVICE);
             if (shortcutForeground(service)) foreground.add(owner);
@@ -812,7 +906,8 @@ final class ActiveServices {
 
     synchronized void addAppOpsForegroundServices(java.util.Map<Integer, AppOpsService.UidState> states) {
         for (ServiceRecord service : mServices.values()) {
-            if (service.foregroundId == 0 || service.app == null || service.app.dead || service.app.exiting) continue;
+            if (service.foregroundId == 0 || service.app == null || service.app.dead || service.app.exiting
+                    || !serviceReviewed(service)) continue;
             ApkPackage pkg = mPm.get(service.info.packageName);
             if (pkg == null || pkg != service.app.packageCode || mPm.isRemovalPending(pkg.packageName)) continue;
             AppOpsService.UidState previous = states.get(pkg.uid());
@@ -828,7 +923,7 @@ final class ActiveServices {
         for (ServiceRecord record : mServices.values()) {
             if (record.foregroundId != 0 && record.info.packageName.equals(pkg)
                     && java.util.Objects.equals(record.foregroundChannelId, channelId)
-                    && serviceCurrent(record)) return true;
+                    && serviceReviewed(record)) return true;
         }
         return false;
     }
@@ -840,7 +935,7 @@ final class ActiveServices {
         enforceAccess(info, sender);
         synchronized (this) {
             ServiceRecord r = mServices.get(new ComponentName(info.packageName, info.name));
-            if (r == null) return null;
+            if (r == null || !serviceReviewed(r)) return null;
             IntentBindRecord b = r.bindings.get(new Intent.FilterComparison(service));
             return b != null ? b.binder : null;
         }
@@ -850,8 +945,9 @@ final class ActiveServices {
 
     /** Guarded by this. Match AOSP's distinct publication and lifecycle states. */
     private void requestBindingLocked(ServiceRecord r, IntentBindRecord b, boolean rebind) {
-        if (mServices.get(r.name) != r || r.app == null || !r.created || !serviceCurrent(r)
-                || b.connections.isEmpty() || b.hasBound) return;
+        if (mServices.get(r.name) != r || r.app == null || !r.created || !serviceReviewed(r)
+                || b.connections.stream().noneMatch(c -> !c.reviewPending && c.lifetime.getAsBoolean())
+                || b.hasBound) return;
         if (rebind ? !b.doRebind : b.requested) return;
         if (!rebind) b.requested = true;
         b.hasBound = true;
@@ -890,7 +986,7 @@ final class ActiveServices {
                     }
                     if (mServices.get(r.name) != r || r.app == null || !r.created
                             || r.app.thread != call.thread || r.bindingGeneration != call.generation
-                            || !serviceCurrent(r)) continue;
+                            || !serviceReviewed(r)) continue;
                     if (call.unbind) {
                         call.binding.unbindPending = true;
                         r.pendingUnbinds.addLast(call.binding);
@@ -922,6 +1018,7 @@ final class ActiveServices {
             if (release) synchronized (this) { r.dispatchingBindings = false; }
             // A final unbind/stop can arrive while another thread owns this
             // queue. Teardown must follow all admitted binding submissions.
+            cancelUnreviewedWork(r);
             maybeBringDown(r);
         }
     }
@@ -940,6 +1037,10 @@ final class ActiveServices {
     private boolean serviceCurrent(ServiceRecord r) {
         return !r.disabled && r.owner != null && mPm.get(r.info.packageName) == r.owner
                 && !mPm.isRemovalPending(r.info.packageName) && r.owner.componentEnabled(r.info.name, ApkPackage.ComponentKind.SERVICE);
+    }
+
+    private boolean serviceReviewed(ServiceRecord r) {
+        return serviceCurrent(r) && !mPm.permissions().isReviewRequired(r.owner);
     }
 
     /** Guarded by this. Retire queued authority without entering any application. */
@@ -966,17 +1067,17 @@ final class ActiveServices {
 
     private synchronized boolean workCurrent(ServiceRecord r) {
         pruneRetired(r);
-        if (mServices.get(r.name) != r || !serviceCurrent(r)) return false;
+        if (mServices.get(r.name) != r || !serviceReviewed(r)) return false;
         if (r.startRequested) return true;
         for (IntentBindRecord binding : r.bindings.values()) {
-            if (!binding.connections.isEmpty()) return true;
+            if (binding.connections.stream().anyMatch(c -> !c.reviewPending)) return true;
         }
         return false;
     }
 
     /** ActiveServices.bringUpServiceLocked: create, then the starts and bind requests. */
     private void bringUp(ServiceRecord r) {
-        if (!workCurrent(r)) { maybeBringDown(r); return; }
+        if (!workCurrent(r)) { cancelUnreviewedWork(r); maybeBringDown(r); return; }
         mAtm.withProcess(r.owner, r.info.name, ApkPackage.ComponentKind.SERVICE,
                 r.info.processName, "service " + r, app -> {
             synchronized (this) {
@@ -1023,7 +1124,7 @@ final class ActiveServices {
                     List<ServiceStartArgs> currentStarts = new ArrayList<>();
                     for (PendingStart start : starts) {
                         synchronized (this) {
-                            if (!start.lifetime.getAsBoolean() || !serviceCurrent(r) || !r.startRequested) continue;
+                            if (!start.lifetime.getAsBoolean() || !serviceReviewed(r) || !r.startRequested) continue;
                             if (!start.grants.isEmpty()) {
                                 IBinder owner = new Binder();
                                 mAtm.uriGrants().publish(owner, start.grants);
@@ -1052,13 +1153,43 @@ final class ActiveServices {
                 if (release) synchronized (this) { r.bringingUp = false; }
                 // A disabled record can already have been replaced by a fresh one.
                 // Finish this record only after its admitted submissions return.
+                cancelUnreviewedWork(r);
                 maybeBringDown(r);
             }
         }, () -> {
             // An attachment can reject a disabled target before PM's event runs.
-            if (workCurrent(r)) bringUp(r);
-            else maybeBringDown(r);
+            if (workCurrent(r)) scheduleRestart(r);
+            else { cancelUnreviewedWork(r); maybeBringDown(r); }
         });
+    }
+
+    /** Revalidation may retire queued work; settle it while retaining explicit review waiters. */
+    private void cancelUnreviewedWork(ServiceRecord r) {
+        List<ConnectionRecord> canceled = new ArrayList<>();
+        synchronized (this) {
+            if (r.owner == null || !mPm.permissions().isReviewRequired(r.owner)) return;
+            r.startRequested = false;
+            r.lastStartIntent = null;
+            r.pendingStarts.clear();
+            clearStartGrants(r, Integer.MAX_VALUE);
+            resetBindingsLocked(r);
+            for (IntentBindRecord b : r.bindings.values()) {
+                b.connections.removeIf(c -> {
+                    if (c.reviewPending) return false;
+                    canceled.add(c);
+                    List<ConnectionRecord> owned = mConnections.get(c.conn.asBinder());
+                    if (owned != null) {
+                        owned.remove(c);
+                        if (owned.isEmpty()) mConnections.remove(c.conn.asBinder());
+                    }
+                    return true;
+                });
+            }
+            publishShortcutStateLocked();
+        }
+        mAtm.noteShortcutForeground(null, 0);
+        for (ConnectionRecord c : canceled) connected(c, null, true);
+        maybeBringDown(r);
     }
 
     private void clearStartGrants(ServiceRecord r, int throughId) {
@@ -1079,7 +1210,7 @@ final class ActiveServices {
         }
         synchronized (this) {
             pruneRetired(r);
-            if (r.startRequested || r.hasAutoCreateConnections()) return;
+            if (r.startRequested || r.hasAutoCreateConnections() || r.hasPendingReviews()) return;
             if (r.stopped || mServices.get(r.name) != r && !r.disabled) return;
             if (r.dispatchingBindings || r.bringingUp) return;
             r.stopped = true;
@@ -1101,7 +1232,7 @@ final class ActiveServices {
         Dexopt.activityChanged();
         synchronized (this) { clearStartGrants(r, Integer.MAX_VALUE); }
         if (r.foregroundId != 0) mNotifications.cancel(r.info.packageName, null, r.foregroundId);
-        if (r.app == null || !r.created) return;
+        if (r.app == null || !r.created || mPm.permissions().isReviewRequired(r.owner)) return;
         for (IntentBindRecord binding : r.teardownBindings) {
             try { r.app.thread.scheduleUnbindService(r, binding, binding.intent); }
             catch (RemoteException | RuntimeException e) { SystemServer.log("teardown unbind " + r + ": " + e); }
@@ -1287,7 +1418,7 @@ final class ActiveServices {
                 boolean recover = (!app.exiting || app.reaped || app.recoverAfterPidSupersession)
                         && (started || r.hasAutoCreateConnections())
                         && r.owner != null && r.owner.serviceInfo(r.info.name, 0) != null;
-                if (serviceCurrent(r) && recover) {
+                if (serviceReviewed(r) && recover) {
                     if (r.startRequested && r.pendingStarts.isEmpty() && started) {
                         Intent redelivery = r.startResult == Service.START_REDELIVER_INTENT
                                 && r.lastStartIntent != null ? new Intent(r.lastStartIntent) : null;
@@ -1324,11 +1455,12 @@ final class ActiveServices {
             long delay = Math.min(60_000, 1000L << Math.min(r.restartAttempts++, 6));
             SystemServer.log("restarting service " + r + " after " + delay + " ms");
             r.restart = mRestarts.schedule(() -> {
+                cancelUnreviewedWork(r);
                 synchronized (ActiveServices.this) {
                     r.restart = null;
                     pruneRetired(r);
                     if (mServices.get(r.name) != r
-                            || !serviceCurrent(r) || r.owner.serviceInfo(r.info.name, 0) == null
+                            || !serviceReviewed(r) || r.owner.serviceInfo(r.info.name, 0) == null
                             || (!r.startRequested && !r.hasAutoCreateConnections())) return;
                 }
                 try { bringUp(r); }

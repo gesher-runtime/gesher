@@ -14,6 +14,7 @@ import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -26,8 +27,10 @@ public final class PermissionRequestsTest {
     private static final String LOCATION = "android.permission.ACCESS_COARSE_LOCATION";
     private static final String FINE = "android.permission.ACCESS_FINE_LOCATION";
     private static final String BACKGROUND = "android.permission.ACCESS_BACKGROUND_LOCATION";
-    // PermissionRequests' background dialog protocol values.
-    private static final int DENIED = 1, FOREGROUND_ONLY = 3, ALWAYS = 4;
+    // PermissionRequests' dialog protocol values.
+    private static final int UNAVAILABLE = -1, DISMISSED = 0, DENIED = 1, ALLOWED = 2,
+            FOREGROUND_ONLY = 3, ALWAYS = 4;
+    private static final String CAMERA = "android.permission.CAMERA";
     private static final String INTERNET = "android.permission.INTERNET";
     private static final String PRIVILEGED = "android.permission.MANAGE_USB";
     private static final String UNKNOWN = "com.gesher.permission.NOT_DECLARED";
@@ -47,14 +50,26 @@ public final class PermissionRequestsTest {
         return controller(pm, pmClass, executor, decision, (owner, names) -> DENIED);
     }
 
+    private interface ReviewHandler {
+        int review(String owner, String[] groups, boolean[] enabled);
+    }
+
     private static Object controller(Object pm, Class<?> pmClass, Executor executor,
             BiPredicate<String, String> decision, ToIntBiFunction<String, String> background) throws Exception {
+        return controller(pm, pmClass, executor, decision, background, (owner, groups, enabled) -> UNAVAILABLE);
+    }
+
+    private static Object controller(Object pm, Class<?> pmClass, Executor executor,
+            BiPredicate<String, String> decision, ToIntBiFunction<String, String> background,
+            ReviewHandler review) throws Exception {
         Class<?> requests = Class.forName("com.gesher.server.PermissionRequests");
         Class<?> choices = Class.forName("com.gesher.server.PermissionRequests$Decision");
         Object choice = Proxy.newProxyInstance(choices.getClassLoader(), new Class<?>[]{choices},
-                (proxy, called, args) -> called.getName().equals("decideBackground")
-                        ? background.applyAsInt((String) args[0], (String) args[1])
-                        : decision.test((String) args[0], (String) args[1]) ? 2 : 1);
+                (proxy, called, args) -> switch (called.getName()) {
+                    case "decideBackground" -> background.applyAsInt((String) args[0], (String) args[1]);
+                    case "decideReview" -> review.review((String) args[0], (String[]) args[1], (boolean[]) args[2]);
+                    default -> decision.test((String) args[0], (String) args[1]) ? ALLOWED : DENIED;
+                });
         Constructor<?> constructor = requests.getDeclaredConstructor(pmClass, Executor.class, choices);
         constructor.setAccessible(true);
         return constructor.newInstance(pm, executor, choice);
@@ -207,6 +222,111 @@ public final class PermissionRequestsTest {
                         && grant(policy, pkg, LOCATION) == PackageManager.PERMISSION_DENIED,
                 "replacement inherited an in-flight consent grant");
         background(pm, pmClass, apkClass, method(pmClass, "get", String.class).invoke(pm, pkg), pkg, policy);
+        review(pm, pmClass, apkClass, policy);
         System.out.println("PermissionRequestsTest: async grant/deny, result mapping and replacement race passed");
+    }
+
+    private static Object legacyPackage(Class<?> apkClass, String name, int uid) throws Exception {
+        Class<?> parsedImpl = Class.forName("com.android.internal.pm.parsing.pkg.PackageImpl");
+        Object parsed = parsedImpl.getMethod("forTesting", String.class, String.class)
+                .invoke(null, name, "/fixture/" + name + "/base.apk");
+        parsedImpl.getMethod("setEnabled", boolean.class).invoke(parsed, true);
+        parsedImpl.getMethod("setTargetSdkVersion", int.class).invoke(parsed, 22);
+        Class<?> usesClass = Class.forName("com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl");
+        Constructor<?> usesCtor = usesClass.getConstructor(String.class, int.class, java.util.Set.class);
+        Method addUses = parsedImpl.getMethod("addUsesPermission",
+                Class.forName("com.android.internal.pm.pkg.component.ParsedUsesPermission"));
+        addUses.invoke(parsed, usesCtor.newInstance(LOCATION, 0, Collections.emptySet()));
+        addUses.invoke(parsed, usesCtor.newInstance(CAMERA, 0, Collections.emptySet()));
+        Class<?> parsedPkg = Class.forName("com.android.internal.pm.parsing.pkg.ParsedPackage");
+        Constructor<?> ctor = apkClass.getDeclaredConstructor(String.class, parsedPkg);
+        ctor.setAccessible(true);
+        Object apk = ctor.newInstance("/fixture/" + name + "/base.apk", parsed);
+        java.lang.reflect.Field uidField = apkClass.getDeclaredField("mUid");
+        uidField.setAccessible(true);
+        uidField.setInt(apk, uid);
+        return apk;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void review(Object pm, Class<?> pmClass, Class<?> apkClass, Object policy) throws Exception {
+        String legacyName = "fixture.permission.requests.legacy";
+        Object legacy = legacyPackage(apkClass, legacyName, 19881);
+        method(pmClass, "add", apkClass).invoke(pm, legacy);
+        Method isReviewRequired = method(policy.getClass(), "isReviewRequired", apkClass);
+        Method getFlags = policy.getClass().getMethod("getPermissionFlags", String.class, String.class,
+                String.class, int.class);
+        require((Boolean) isReviewRequired.invoke(policy, legacy),
+                "legacy fixture did not start with REVIEW_REQUIRED");
+
+        // 1. Cancel / dismiss and unavailable must NOT clear REVIEW_REQUIRED.
+        for (int outcome : new int[]{DISMISSED, UNAVAILABLE}) {
+            Object cancelled = controller(pm, pmClass, Runnable::run, (o, n) -> false,
+                    (o, n) -> DENIED, (o, groups, enabled) -> {
+                        require(groups.length == 2 && enabled[0] && enabled[1],
+                                "review dialog did not default all groups to checked");
+                        return outcome;
+                    });
+            CompletableFuture<Boolean> future = (CompletableFuture<Boolean>) method(cancelled.getClass(),
+                    "reviewPermissions", apkClass).invoke(cancelled, legacy);
+            require(!future.get() && (Boolean) isReviewRequired.invoke(policy, legacy),
+                    "cancelled/unavailable review cleared REVIEW_REQUIRED or allowed launch");
+        }
+
+        // 2. Selective toggle + concurrent launch coalescing (single dialog for two launches).
+        List<Runnable> queue = new ArrayList<>();
+        AtomicInteger prompts = new AtomicInteger();
+        Object selective = controller(pm, pmClass, queue::add, (o, n) -> false,
+                (o, n) -> DENIED, (o, groups, enabled) -> {
+                    prompts.incrementAndGet();
+                    for (int i = 0; i < groups.length; i++) {
+                        if (groups[i].contains("CAMERA")) enabled[i] = false;
+                    }
+                    return ALLOWED;
+                });
+        Method reviewMethod = method(selective.getClass(), "reviewPermissions", apkClass);
+        CompletableFuture<Boolean> first = (CompletableFuture<Boolean>) reviewMethod.invoke(selective, legacy);
+        CompletableFuture<Boolean> second = (CompletableFuture<Boolean>) reviewMethod.invoke(selective, legacy);
+        require(first == second && queue.size() == 1,
+                "concurrent launch attempts did not coalesce onto one review dialog");
+        queue.remove(0).run();
+        require(first.get() && second.get() && prompts.get() == 1,
+                "coalesced review did not complete cleanly");
+        require(!(Boolean) isReviewRequired.invoke(policy, legacy),
+                "confirmed selective review left REVIEW_REQUIRED pending");
+        int camFlags = (Integer) getFlags.invoke(policy, legacyName, CAMERA, "default:0", 0);
+        int locFlags = (Integer) getFlags.invoke(policy, legacyName, LOCATION, "default:0", 0);
+        require((camFlags & PackageManager.FLAG_PERMISSION_REVOKED_COMPAT) != 0
+                && (camFlags & PackageManager.FLAG_PERMISSION_USER_SET) != 0
+                && (locFlags & PackageManager.FLAG_PERMISSION_REVOKED_COMPAT) == 0,
+                "selective review did not soft-revoke only the toggled-off group");
+
+        // 3. Confirm-all + replacement race on a fresh legacy package.
+        String raceName = "fixture.permission.requests.legacy.race";
+        Object raceApk = legacyPackage(apkClass, raceName, 19882);
+        method(pmClass, "add", apkClass).invoke(pm, raceApk);
+        Object replacement = legacyPackage(apkClass, raceName, 19882);
+        Object stale = controller(pm, pmClass, Runnable::run, (o, n) -> false,
+                (o, n) -> DENIED, (o, groups, enabled) -> {
+                    try { method(pmClass, "add", apkClass).invoke(pm, replacement); }
+                    catch (Exception e) { throw new AssertionError(e); }
+                    return ALLOWED;
+                });
+        CompletableFuture<Boolean> staleFuture = (CompletableFuture<Boolean>) method(stale.getClass(),
+                "reviewPermissions", apkClass).invoke(stale, raceApk);
+        require(!staleFuture.get() && (Boolean) isReviewRequired.invoke(policy, replacement),
+                "stale review cleared REVIEW_REQUIRED on replacement package");
+
+        Object confirmAll = controller(pm, pmClass, Runnable::run, (o, n) -> false,
+                (o, n) -> DENIED, (o, groups, enabled) -> ALLOWED);
+        CompletableFuture<Boolean> allFuture = (CompletableFuture<Boolean>) method(confirmAll.getClass(),
+                "reviewPermissions", apkClass).invoke(confirmAll, replacement);
+        require(allFuture.get() && !(Boolean) isReviewRequired.invoke(policy, replacement),
+                "confirm-all review did not clear REVIEW_REQUIRED");
+        method(policy.getClass(), "forgetPackage", String.class).invoke(policy, legacyName);
+        method(pmClass, "remove", String.class).invoke(pm, legacyName);
+        method(policy.getClass(), "forgetPackage", String.class).invoke(policy, raceName);
+        method(pmClass, "remove", String.class).invoke(pm, raceName);
+        System.out.println("PermissionRequestsTest: legacy permission review passed");
     }
 }

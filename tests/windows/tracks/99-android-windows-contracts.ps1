@@ -13,8 +13,26 @@ Check 'services: native permission dialog explicit consent and Hebrew/English co
 } @('permission_dialog_test:', ' checks, 0 failures')
 
 foreach ($serviceFixture in @('RunningTaskSnapshotTest', 'TaskStackContractTest', 'TextServicesContractTest', 'MediaRouterContractTest', 'HandwritingUnavailableContractTest')) {
-  $serviceContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + $serviceFixture) 90
-  $serviceContractCode = $LASTEXITCODE
+  $taskStackData = $null
+  $taskStackSavedData = [Environment]::GetEnvironmentVariable('ANDROID_DATA', 'Process')
+  try {
+    if ($serviceFixture -eq 'TaskStackContractTest') {
+      # Permission decisions are deliberately durable. Keep a repeated invocation
+      # from inheriting a prior fixture's UID ledger in the shared runner profile.
+      $taskStackCandidate = Join-Path $root ('taskstack-data-' + [Guid]::NewGuid().ToString('N'))
+      New-Item -ItemType Directory -Path $taskStackCandidate -ErrorAction Stop | Out-Null
+      $taskStackData = $taskStackCandidate
+      $env:ANDROID_DATA = NoDrive $taskStackData
+    }
+    $serviceContractOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + $serviceFixture) 90
+    $serviceContractCode = $LASTEXITCODE
+  } finally {
+    if ($null -ne $taskStackData) {
+      if ($null -eq $taskStackSavedData) { Remove-Item Env:ANDROID_DATA -ErrorAction SilentlyContinue }
+      else { [Environment]::SetEnvironmentVariable('ANDROID_DATA', $taskStackSavedData, 'Process') }
+      Remove-Item -LiteralPath $taskStackData -Recurse -Force -ErrorAction Stop
+    }
+  }
   Check "services: $serviceFixture public manager and generated Binder contracts" {
     $global:LASTEXITCODE = $serviceContractCode
     $serviceContractOut

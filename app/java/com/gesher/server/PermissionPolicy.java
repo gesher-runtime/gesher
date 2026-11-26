@@ -999,6 +999,131 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                 permissions.stream().anyMatch(ExternalStorageAccess::isStoragePermission));
     }
 
+    /** An editable logical group, or an individual permission whose state is managed. */
+    record ReviewGroup(String groupName, List<String> permissions, boolean changeable,
+            boolean enabled, boolean mixed) {}
+
+    /** Whether {@code expected} still has any runtime permission carrying REVIEW_REQUIRED. */
+    synchronized boolean isReviewRequired(ApkPackage expected) {
+        if (expected == null || mPm.get(expected.packageName) != expected
+                || mPm.isRemovalPending(expected.packageName)) return false;
+        List<ApkPackage> members = uidMembers(expected.uid());
+        if (minimumTargetSdk(members) >= 23) return false;
+        for (String name : expected.parsed.getRequestedPermissions()) {
+            PermissionInfo info = mCatalog.get(name);
+            if (info == null || !info.isRuntime()) continue;
+            if ((permissionState(expected.uid(), name, members, info).flags
+                    & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Logical permission groups (via {@link RuntimePermissionGroups#group}) needing review. */
+    synchronized List<ReviewGroup> pendingReviewGroups(ApkPackage expected) {
+        if (expected == null || mPm.get(expected.packageName) != expected
+                || mPm.isRemovalPending(expected.packageName)) return List.of();
+        List<ApkPackage> members = uidMembers(expected.uid());
+        if (minimumTargetSdk(members) >= 23) return List.of();
+        java.util.Set<String> reviewedGroups = new java.util.HashSet<>();
+        for (String name : expected.parsed.getRequestedPermissions()) {
+            PermissionInfo info = mCatalog.get(name);
+            if (info == null || !info.isRuntime()
+                    || (permissionState(expected.uid(), name, members, info).flags
+                            & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) == 0) continue;
+            String group = RuntimePermissionGroups.group(info);
+            reviewedGroups.add(group != null ? group : name);
+        }
+        if (reviewedGroups.isEmpty()) return List.of();
+        Map<String, List<String>> grouped = new LinkedHashMap<>();
+        List<ReviewGroup> managed = new ArrayList<>();
+        java.util.Set<String> managedGroups = new java.util.HashSet<>();
+        for (String name : expected.parsed.getRequestedPermissions()) {
+            PermissionInfo info = mCatalog.get(name);
+            if (info == null || !info.isRuntime()) continue;
+            PermissionState state = permissionState(expected.uid(), name, members, info);
+            String group = RuntimePermissionGroups.group(info);
+            String key = group != null ? group : name;
+            boolean immutable = state.restricted || (state.flags & (PackageManager.FLAG_PERMISSION_SYSTEM_FIXED
+                    | PackageManager.FLAG_PERMISSION_POLICY_FIXED)) != 0;
+            // A previously reviewed fixed or restricted sibling must remain visible
+            // when another permission in its logical group needs review.
+            if ((state.flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) == 0
+                    && !(immutable && reviewedGroups.contains(key))) continue;
+            if (immutable) {
+                // Review clears the temporary review gate, never the enforced
+                // grant/revocation. Show that effective state as an immutable row.
+                boolean enabled = state.granted && !state.restricted
+                        && (state.flags & PackageManager.FLAG_PERMISSION_REVOKED_COMPAT) == 0;
+                managed.add(new ReviewGroup(name, List.of(name), false, enabled, false));
+                managedGroups.add(key);
+            } else {
+                grouped.computeIfAbsent(key, unused -> new ArrayList<>()).add(name);
+            }
+        }
+        if (grouped.isEmpty() && managed.isEmpty()) return List.of();
+        List<ReviewGroup> result = new ArrayList<>(grouped.size() + managed.size());
+        for (Map.Entry<String, List<String>> entry : grouped.entrySet()) {
+            result.add(new ReviewGroup(entry.getKey(), List.copyOf(entry.getValue()), true, true,
+                    managedGroups.contains(entry.getKey())));
+        }
+        result.addAll(managed);
+        return List.copyOf(result);
+    }
+
+    /**
+     * Commit a confirmed legacy permission review. Clears {@code FLAG_PERMISSION_REVIEW_REQUIRED}
+     * on reviewed permissions, keeps enabled groups unrevoked (clearing {@code REVOKED_COMPAT}),
+     * and soft-revokes turned-off groups ({@code REVOKED_COMPAT | USER_SET}). Never called on
+     * cancellation or dismissal.
+     */
+    boolean recordPermissionReview(ApkPackage expected, List<ReviewGroup> shown,
+            java.util.Set<String> enabledGroups) {
+        requireSystem();
+        if (expected == null || shown == null || enabledGroups == null) return false;
+        boolean changed = false;
+        synchronized (mPm) { synchronized (this) {
+            if (mPm.get(expected.packageName) != expected
+                    || mPm.isRemovalPending(expected.packageName)
+                    || !pendingReviewGroups(expected).equals(shown)) return false;
+            List<ApkPackage> members = uidMembers(expected.uid());
+            Map<Integer, Integer> before = runtimeModes(expected.uid());
+            for (String name : expected.parsed.getRequestedPermissions()) {
+                PermissionInfo info = mCatalog.get(name);
+                if (info == null || !info.isRuntime()) continue;
+                PermissionState state = permissionState(expected.uid(), name, members, info);
+                if ((state.flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) == 0) continue;
+                String group = RuntimePermissionGroups.group(info);
+                String key = group != null ? group : name;
+                boolean enabled = enabledGroups.contains(key);
+                int flags = state.flags & ~PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED;
+                // An enforced restriction is not a user denial. Acknowledging
+                // this row clears review without fabricating or erasing consent.
+                if (!state.restricted && (flags & (PackageManager.FLAG_PERMISSION_SYSTEM_FIXED
+                        | PackageManager.FLAG_PERMISSION_POLICY_FIXED)) == 0) {
+                    if (enabled) {
+                        flags &= ~PackageManager.FLAG_PERMISSION_REVOKED_COMPAT;
+                    } else {
+                        flags |= PackageManager.FLAG_PERMISSION_REVOKED_COMPAT
+                                | PackageManager.FLAG_PERMISSION_USER_SET;
+                    }
+                }
+                if (flags == state.flags) continue;
+                changed = true;
+                mDecisions.setProperty(legacyGrantKey(expected.uid(), name), Boolean.toString(
+                        storedLegacyGrant(expected.uid(), name, info, requestingTargetSdk(name, members))));
+                mDecisions.setProperty(flagsKey(expected.uid(), name), Integer.toString(flags));
+            }
+            if (changed) {
+                scheduleWrite();
+                publishRuntimeModes(expected.uid(), before);
+            }
+        } }
+        if (changed) permissionsChanged(expected, () -> false);
+        return true;
+    }
+
     /**
      * Store an explicit user choice; false when nothing changed. {@code revokeGranted}: a
      * denial also revokes the listed permissions' existing grants, added to {@code revoked}.
