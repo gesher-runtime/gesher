@@ -58,9 +58,11 @@ foreach ($shard in $shards) {
       }
     }
   }
-  # These tracks consume data or evidence produced by earlier tracks.
+  # These tracks consume runtime state, native types or evidence from earlier tracks.
   foreach ($pair in @(
       @('30-graphics.ps1', '32-fonts.ps1'), @('34-windows.ps1', '49-locale.ps1'),
+      @('34-windows.ps1', '81-locale2.ps1'), @('49-locale.ps1', '81-locale2.ps1'),
+      @('52-surfaces.ps1', '80-surface-invalidation.ps1'), @('52-surfaces.ps1', '84-ci-processes.ps1'),
       @('41-native-activity.ps1', '47-arm64.ps1'), @('44-native2.ps1', '46-native3.ps1'),
       @('44-native2.ps1', '66-native3-wide.ps1'), @('44-native2.ps1', '69-arm64-fpcr.ps1'),
       @('44-native2.ps1', '75-arm64-fpsr.ps1'), @('44-native2.ps1', '82-net4-resolver.ps1'),

@@ -51,6 +51,7 @@ concurrency:
 
 jobs:
   runner-route:
+    if: inputs.local-runner
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -66,7 +67,9 @@ jobs:
   # Linux build host from the pinned AOSP sources.
   host-tools:
     needs: runner-route
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runner) }}
+    # The default hosted path doesn't need another runner to authorize it.
+    if: ${{ !cancelled() && (!inputs.local-runner || needs.runner-route.result == 'success') }}
+    runs-on: ${{ fromJSON(!inputs.local-runner && '"ubuntu-24.04"' || needs.runner-route.outputs.runner) }}
     timeout-minutes: 75
     outputs:
       key: ${{ steps.key.outputs.key }}
@@ -134,8 +137,14 @@ jobs:
       - name: Install build tools
         if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
+          packages=(ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev)
+          for package in "${packages[@]}"; do
+            if [[ $(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null) != installed ]]; then
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends "${packages[@]}"
+              break
+            fi
+          done
 
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
@@ -195,7 +204,8 @@ jobs:
 
   framework:
     needs: [host-tools, runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runner) }}
+    if: ${{ !cancelled() && needs.host-tools.result == 'success' && (!inputs.local-runner || needs.runner-route.result == 'success') }}
+    runs-on: ${{ fromJSON(!inputs.local-runner && '"ubuntu-24.04"' || needs.runner-route.outputs.runner) }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
@@ -229,7 +239,8 @@ jobs:
       # The tools are linked against libc++, as Soong links them.
       - name: Install the host tools' runtime
         run: |
-          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]] &&
+             [[ $(dpkg-query -W -f='${db:Status-Status}\n' libc++1-18 libc++abi1-18 2>/dev/null) != $'installed\ninstalled' ]]; then
             sudo apt-get install -y --no-install-recommends libc++1-18 libc++abi1-18
           fi
           missing=$(for t in $(find dist-host -type f); do ldd "$t" | sed -n "s|^|$t: |; /not found/p"; done)

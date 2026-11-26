@@ -1,9 +1,9 @@
 name: cache-prune
 
 # Deletes superseded per-commit ccache and CodeQL cache entries
-# (tools/ci/prune_caches.py) after the workflows that save them, so they do
-# not fill the repository's cache quota and evict main's AOSP, NDK and
-# framework caches.
+# (tools/ci/prune_caches.py) after the runs that save them, protecting main's
+# AOSP, NDK and framework entries from eviction. The schedule also sweeps
+# caches from older or separately dispatched workflows.
 on:
   workflow_run:
     workflows: [ci, CodeQL Advanced]
@@ -21,12 +21,21 @@ permissions:
   actions: write  # list and delete Actions caches
   contents: read
 
-concurrency:
-  group: cache-prune
-  cancel-in-progress: true
-
 jobs:
   prune:
+    # Ordinary ci PR runs restore the main ccache without saving it. Advanced
+    # CodeQL can save overlay databases on internal PRs as well as main.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.head_repository.full_name == github.repository &&
+      ((github.event.workflow_run.name == 'ci' && github.event.workflow_run.head_branch == 'main' &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')) ||
+      (github.event.workflow_run.name == 'CodeQL Advanced' && vars.GESHER_CODEQL_ADVANCED == 'true')))
+    # Skipped events never join the queue. Finish the active sweep and coalesce
+    # a burst of eligible events into the newest pending sweep.
+    concurrency:
+      group: cache-prune
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

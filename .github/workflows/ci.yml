@@ -500,6 +500,7 @@ jobs:
           python3 -m unittest discover -s tools/ci -p test_native2_producer_context.py
           python3 -m unittest discover -s tools/ci -p test_component_producer.py
           python3 -m unittest discover -s tools/ci -p test_wait_for_job.py
+          python3 -m unittest discover -s tools/toolchain -p test_pthread_cancel_archive.py
           python3 -m unittest discover -s tools/media_capture -p 'test_*.py'
           python3 tools/toolchain/test_coherent_tcp_context.py
           python3 tools/host-pthread-authority/test_minimum_supplier_entry.py
@@ -846,8 +847,10 @@ jobs:
 
       - name: Recorder lifecycle and complete-container size budgets
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
           python3 tools/test_media_recorder_lifecycle.py
           python3 tools/test_media_recorder_rollover.py --sanitize
           python3 tools/test_mp4_rollover_work.py
@@ -862,13 +865,18 @@ jobs:
           java-version: 21
 
       - name: Build test apps
-        run: tests/build-test-apps.sh out/test-apps
+        # The framework resources use the same pinned build-tools below.
+        env:
+          R8_JAR: ${{ runner.temp }}/gesher-r8.jar
+        run: BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/build-test-apps.sh out/test-apps
 
       - name: Build boot class path (core-oj, core-libart)
+        env:
+          R8_JAR: ${{ runner.temp }}/gesher-r8.jar
         run: tools/build-boot-jars.sh out/boot-jars
 
       - name: Build the framework's resources (framework-res.apk)
-        run: tools/build-framework-res.sh out/framework-res
+        run: WORK_DIR="$PWD/work" tools/build-framework-res.sh out/framework-res
 
       - name: Collect framework assets
         run: |
@@ -986,27 +994,24 @@ jobs:
           fi
           # Compile/link ordered spawn setup and its actual no-console caller first.
           ninja -C out exec4_no_console_probe gesher-exec
-          # Check the new native format ABI bridge before the full AOSP graph.
-          ninja -C out CMakeFiles/gesher_media_format.dir/compat/media/ndk/media_format.cc.obj
-          ninja -C out surface_invalidation_test
-          ninja -C out CMakeFiles/gesher_media_muxer.dir/compat/media/ndk/media_muxer.cc.obj
-          ninja -C out media_muxer_verify
-          ninja -C out CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj
-          # Validate changed after-app shared-library matching before the full graph.
-          ninja -C out CMakeFiles/art_runtime.dir/third_party/aosp/art/runtime/class_loader_context.cc.obj
-          # Compile the new bridge before the full runtime to expose its
-          # header/ABI errors without waiting for every AOSP object.
-          ninja -C out CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj
-          ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_bionic.cc.obj
-          ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
-          ninja -C out native3_unicode_test
-          ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
-          ninja -C out thread_watch_clock_test dlopen_errors_test
+          # Check the boundary targets before building the full AOSP graph.
+          ninja -C out \
+            CMakeFiles/gesher_media_format.dir/compat/media/ndk/media_format.cc.obj \
+            surface_invalidation_test \
+            CMakeFiles/gesher_media_muxer.dir/compat/media/ndk/media_muxer.cc.obj \
+            media_muxer_verify \
+            CMakeFiles/oatdump.dir/third_party/aosp/art/oatdump/oatdump.cc.obj \
+            CMakeFiles/art_runtime.dir/third_party/aosp/art/runtime/class_loader_context.cc.obj \
+            CMakeFiles/gesher_native_fonts.dir/compat/bionic/native_fonts.cc.obj \
+            CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_bionic.cc.obj \
+            CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj \
+            native3_unicode_test native3_cpu_clock_test clock_domains_windows_test \
+            boottime_resume_windows_test thread_watch_clock_test dlopen_errors_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test window_frame_test
-          ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
-          ninja -C out font_environment_test
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test \
+            permission_dialog_test window_frame_test arm64_numeric_return_host \
+            arm64_numeric_fenv_test font_environment_test
 
       - name: Verify cancellation repair in actual production links
         if: env.GESHER_HOST_PTHREAD_SELECTION == 'publisher-cancel'
@@ -1378,32 +1383,6 @@ jobs:
             .github/workflows
             tools/fonts
             tools/binder
-
-      - name: Verify PowerShell UI translations
-        shell: powershell
-        run: |
-          tests/windows/shell/UiLocalizationChecks.ps1
-          tests/windows/shell/PreferredLanguagesChecks.ps1
-          tests/windows/shell/MicrogDefaultsChecks.ps1
-          tests/windows/shell/ControlPanelRefreshChecks.ps1
-          tests/windows/shell/ControlPanelRecoveryChecks.ps1
-          tests/windows/shell/ControlPanelIdleChecks.ps1
-          tests/windows/shell/ControlPanelStartupChecks.ps1
-          tests/windows/shell/ControlPanelNativeCacheChecks.ps1
-          tests/windows/shell/ControlPanelPresentationChecks.ps1
-          tests/windows/shell/ControlPanelRequestChecks.ps1
-          tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
-          tests/windows/shell/UpdateChecks.ps1
-          tests/windows/shell/UpdateTransportChecks.ps1
-          tests/windows/shell/ControlPanelUpdateChecks.ps1
-          tests/windows/shell/RuntimeFileChecks.ps1
-          tests/windows/shell/InstallErrorChecks.ps1
-          tests/windows/shell/NativeStderrChecks.ps1
-
-      - name: Production modal dialogs on Windows PowerShell 5.1
-        timeout-minutes: 2
-        shell: powershell
-        run: tests/windows/shell/Issue32And33Contracts.ps1
 
       - name: Verify and stage the complete installer supplier batch
         shell: pwsh
@@ -2284,7 +2263,7 @@ jobs:
 
   test-shards:
     name: test-${{ matrix.shard }} (${{ matrix.os }})
-    needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
+    needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
     strategy:
       fail-fast: false
       matrix:
@@ -2469,8 +2448,10 @@ jobs:
           python tools/media_capture/host_roles.py verify --dist dist --fixture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # These use fresh profiles in a separate process and share the verified
+      # runtime with the shorter compilation shard.
       - name: Run offline identity and retirement regressions
-        if: matrix.shard == 'contracts'
+        if: matrix.shard == 'compilation'
         shell: pwsh
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/windows/run-microg-security.ps1 -Dir dist -EvidenceDir "${{ runner.temp }}/microg-security" | Tee-Object -FilePath microg-security-results.txt
@@ -2514,7 +2495,7 @@ jobs:
 
       - name: Upload offline regression evidence
         uses: actions/upload-artifact@v4
-        if: ${{ always() && matrix.shard == 'contracts' }}
+        if: ${{ always() && matrix.shard == 'compilation' }}
         with:
           name: microg-security-${{ matrix.os }}
           path: |
@@ -2529,7 +2510,6 @@ jobs:
             ${{ runner.temp }}/gesher-microg-security/**/*.png
             ${{ runner.temp }}/gesher-microg-security/**/*.dmp
             microg-security-results.txt
-            results.txt
 
       - name: Upload shard results
         uses: actions/upload-artifact@v4

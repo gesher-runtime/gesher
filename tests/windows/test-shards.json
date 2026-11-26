@@ -40,14 +40,8 @@
     "tracks": [
       "30-graphics.ps1",
       "32-fonts.ps1",
-      "33-input.ps1",
-      "34-windows.ps1",
-      "35-ime.ps1",
-      "39-rtl.ps1",
-      "49-locale.ps1",
       "52-surfaces.ps1",
       "80-surface-invalidation.ps1",
-      "81-locale2.ps1",
       "84-ci-processes.ps1"
     ],
     "helpers": {
@@ -59,6 +53,10 @@
       ],
       "44-native2.ps1": [
         "N2Run"
+      ],
+      "49-locale.ps1": [
+        "LocaleStart",
+        "LocaleWait"
       ],
       "50-services.ps1": [
         "RunTimed",
@@ -73,11 +71,17 @@
   "windowing": {
     "tracks": [
       "31-angle.ps1",
+      "33-input.ps1",
+      "34-windows.ps1",
+      "35-ime.ps1",
       "36-popups.ps1",
       "37-webview.ps1",
+      "39-rtl.ps1",
       "48-lifecycle.ps1",
+      "49-locale.ps1",
       "51-windows3.ps1",
-      "54-windows4.ps1"
+      "54-windows4.ps1",
+      "81-locale2.ps1"
     ],
     "helpers": {
       "50-services.ps1": [

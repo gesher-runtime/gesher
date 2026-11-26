@@ -51,7 +51,7 @@ class GitHubReadTest(unittest.TestCase):
         self.sleep.assert_not_called()
 
     def test_each_observed_http_status_recovers_without_changing_identity(self):
-        for status in (502, 503, 504):
+        for status in (500, 502, 503, 504):
             with self.subTest(status=status):
                 self.run.reset_mock()
                 self.sleep.reset_mock()
@@ -130,7 +130,7 @@ class GitHubReadTest(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, GitHubTransientError)
 
     def test_permanent_and_unobserved_errors_fail_without_retry(self):
-        permanent = (400, 401, 403, 404, 408, 429, 500, 501)
+        permanent = (400, 401, 403, 404, 408, 429, 501)
         errors = [f'gh: rejected (HTTP {status})' for status in permanent]
         errors += [f'gh: HTTP {status}\r\n' for status in permanent]
         errors += ['connection reset by peer', 'context deadline exceeded',
@@ -183,7 +183,7 @@ class GitHubReadTest(unittest.TestCase):
         self.sleep.assert_not_called()
 
     def test_terminal_json_eof_reports_status_without_response_body(self):
-        for status in (401, 403, 404, 429, 500, 502, 503, 504):
+        for status in (401, 403, 404, 429, 502, 503, 504):
             with self.subTest(status=status):
                 self.run.reset_mock()
                 self.sleep.reset_mock()
@@ -590,6 +590,21 @@ class JobsTest(unittest.TestCase):
         self.assertEqual([c.args[0] for c in read.call_args_list],
             [JOBS_ENDPOINT + '?per_page=100&page=1', JOBS_ENDPOINT + '?per_page=50&page=1',
              JOBS_ENDPOINT + '?per_page=50&page=2'])
+        sleep.assert_not_called()
+
+    def test_large_inventory_http_500_uses_small_pages_immediately(self):
+        first, second = inventory(73), inventory(73, 51, 23)
+        truncated = response(code=1, stderr=GH_JSON_EOF + '\r\n')
+        truncated.stdout = b'HTTP/2.0 500\r\n\r\n{"message":'
+        with patch('github_read.subprocess.run', side_effect=[
+            truncated, response(first), response(second),
+        ]) as run, patch('github_read.time.sleep') as sleep:
+            result = get_jobs(JOBS_ENDPOINT)
+        self.assertEqual(result, {'total_count': 73, 'jobs': first['jobs'] + second['jobs']})
+        self.assertEqual([entry.args[0][-1] for entry in run.call_args_list], [
+            JOBS_ENDPOINT + '?per_page=100&page=1', JOBS_ENDPOINT + '?per_page=50&page=1',
+            JOBS_ENDPOINT + '?per_page=50&page=2',
+        ])
         sleep.assert_not_called()
 
     def test_one_hundred_row_page_is_a_complete_inventory_in_one_request(self):

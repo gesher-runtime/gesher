@@ -130,11 +130,12 @@ def _transient(stderr, http_status):
     # an error message. In particular, never turn a 401/403/404 into a retry.
     statuses = _HTTP_STATUS.findall(stderr) + _GH_HTTP_STATUS.findall(stderr)
     if statuses:
-        return all(status in ('502', '503', '504') for status in statuses)
-    # gh can exit before passing on a job page when its own JSON decoder hits
-    # the end of the response. Discard that output and repeat only the GET.
+        return all(status in ('500', '502', '503', '504') for status in statuses)
+    # gh can exit before passing on a job page when its JSON decoder hits
+    # the end of a response, including an observed HTTP 500 on a large page.
+    # Discard the partial output and repeat only the GET.
     if stderr.strip() == 'unexpected end of JSON input':
-        return http_status is None or 200 <= http_status < 300
+        return http_status is None or 200 <= http_status < 300 or http_status == 500
     # Go's HTTPS dial timeout precedes any response. Require its single
     # diagnostic so it cannot override an additional error from gh.
     return bool(_DIAL_TIMEOUT.fullmatch(stderr.strip())) or any(
