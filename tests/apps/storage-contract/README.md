@@ -1,4 +1,4 @@
-# CE/DE storage across app process restart
+# App storage and dynamic DEX across process restart
 
 This signed test APK runs the same public Android operations on Android 16 and
 Gesher. It opens an app's default credential-encrypted context and an explicit
@@ -6,10 +6,19 @@ device-protected context after user unlock. Both use the same file, preference
 and SQLite database names. The test checks separation immediately after writes
 and persistence when a different process opens the same app data.
 
+Each process also loads a fixture-only class from a separately compiled DEX
+archive and from memory through the public
+[DexClassLoader](https://developer.android.com/reference/dalvik/system/DexClassLoader)
+and [InMemoryDexClassLoader](https://developer.android.com/reference/dalvik/system/InMemoryDexClassLoader)
+APIs. The fixture checks parent isolation, class identity, independent static
+state, explicit direct-buffer bounds and rejection of a malformed DEX. The
+archive is made read-only before its data is written to follow the
+[Android 14+ dynamic-code rule](https://developer.android.com/about/versions/14/behavior-changes-14#safer-dynamic-code-loading).
+
 The Android contract is documented by
 [Direct Boot](https://developer.android.com/privacy-and-security/direct-boot)
 and [Context.createDeviceProtectedStorageContext](https://developer.android.com/reference/android/content/Context#createDeviceProtectedStorageContext()).
-This fixture covers F50 and T02 in [issue #56](https://github.com/gesher-runtime/gesher/issues/56).
+This fixture covers F50, K09 and T02 in [issue #56](https://github.com/gesher-runtime/gesher/issues/56).
 A locked-user boot, user unlock transition, migration and multi-user storage
 require separate cases.
 
@@ -84,7 +93,7 @@ python3 compare.py --android out/android.log --windows out/windows.log \
     --android-apk-sha256 "$ANDROID_APK_SHA256" --windows-apk-sha256 "$WINDOWS_APK_SHA256"
 ```
 
-The comparator requires the ten checks in both phases and verifies that the
+The comparator requires every storage and class-loader check in both phases and verifies that the
 startup IDs differ while the storage token persists within each platform.
 Retain an unsuccessful startup, blocked result or missing phase as a test
 failure to complete. Keep launch-only evidence outside the functional result.

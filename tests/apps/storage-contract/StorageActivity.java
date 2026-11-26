@@ -14,7 +14,6 @@ import android.util.Log;
 import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.UUID;
 
 public final class StorageActivity extends Activity {
@@ -39,7 +38,9 @@ public final class StorageActivity extends Activity {
                 return;
             }
             runStorageContract(report);
-        } catch (Exception failure) {
+            DexContract.observe(this, report.getJSONObject("checks"));
+            report.put("status", "observed");
+        } catch (Exception | LinkageError failure) {
             Log.e(TAG, "Storage contract failed", failure);
             try {
                 report.put("status", "error");
@@ -61,7 +62,7 @@ public final class StorageActivity extends Activity {
         Context de = createDeviceProtectedStorageContext();
         java.io.File marker = getFileStreamPath(MARKER);
         boolean seed = !marker.exists();
-        String nonce = seed ? UUID.randomUUID().toString() : Files.readString(marker.toPath());
+        String nonce = seed ? UUID.randomUUID().toString() : readFile(ce, MARKER);
         report.put("phase", seed ? "seed" : "restart");
         report.put("nonce", nonce);
 
@@ -89,7 +90,6 @@ public final class StorageActivity extends Activity {
         if (seed) {
             writeFile(ce, MARKER, nonce);
         }
-        report.put("status", "observed");
     }
 
     private static void writeScope(Context context, String value) throws Exception {

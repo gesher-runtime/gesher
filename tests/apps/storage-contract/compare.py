@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Compare two installed-APK credential/device storage observations."""
+"""Compare installed-APK storage and dynamic DEX observations."""
 import argparse
 import json
 from pathlib import Path
@@ -15,6 +15,9 @@ CASES = frozenset((
     "file_paths_differ", "database_paths_differ",
     "ce_file", "de_file", "ce_preferences", "de_preferences",
     "ce_database", "de_database",
+    "dex_parent_cannot_resolve_plugin", "dex_memory_loader_executes", "dex_archive_loader_executes",
+    "dex_loaders_have_distinct_class_identity", "dex_invalid_memory_does_not_resolve",
+    "dex_direct_slice_executes",
 ))
 MAX_LOG_SIZE = 4 * 1024 * 1024
 
@@ -81,7 +84,7 @@ def main():
         print(failure, file=sys.stderr)
     if failures:
         return 1
-    print(f"PASS {2 * len(CASES)} paired CE/DE checks across fresh processes")
+    print(f"PASS {2 * len(CASES)} paired storage and dynamic DEX checks across fresh processes")
     return 0
 
 

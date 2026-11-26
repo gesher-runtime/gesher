@@ -15,13 +15,18 @@ tools=$sdk/build-tools/36.0.0
 platform=$sdk/platforms/android-36/android.jar
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-mkdir "$work/classes" "$work/dex"
-
-"$tools/aapt2" link -I "$platform" --manifest "$here/AndroidManifest.xml" \
+mkdir "$work/classes" "$work/dex" "$work/plugin-classes" "$work/assets"
+javac -source 8 -target 8 -Xlint:-options -bootclasspath "$platform" \
+    -d "$work/plugin-classes" "$here/Plugin.java"
+"$tools/d8" --min-api 36 --lib "$platform" --output "$work/assets/plugin.jar" \
+    "$work/plugin-classes/org/gesher/contracts/storage/plugin/Plugin.class"
+unzip -p "$work/assets/plugin.jar" classes.dex > "$work/assets/plugin.dex"
+"$tools/aapt2" link -I "$platform" --manifest "$here/AndroidManifest.xml" -A "$work/assets" \
     --min-sdk-version 36 --target-sdk-version 36 -o "$work/unaligned.apk"
-javac --release 17 -classpath "$platform" -d "$work/classes" "$here/StorageActivity.java"
+javac -source 8 -target 8 -Xlint:-options -bootclasspath "$platform" \
+    -d "$work/classes" "$here/StorageActivity.java" "$here/DexContract.java"
 "$tools/d8" --min-api 36 --lib "$platform" --output "$work/dex" \
-    "$work/classes/org/gesher/contracts/storage/StorageActivity.class"
+    "$work/classes/org/gesher/contracts/storage/"*.class
 (cd "$work/dex" && jar -u -M -f "$work/unaligned.apk" classes.dex)
 "$tools/zipalign" -f 4 "$work/unaligned.apk" "$work/aligned.apk"
 # Use a dedicated local fixture-only key. Reuse it for repeatable reinstall tests.
