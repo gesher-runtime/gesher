@@ -468,17 +468,18 @@ public static class SplashLifetimeProbe {
   }
   # The steps each case's gesher-launch ran (regular expressions, in order).
   $bare = "`"$probeApk`""
-  # The bare-file flow hands on the file's full path; the command line, what it was given.
+  # Only the bare-file flow replaces the original path with the private snapshot.
   $probePath = '(?:' + [regex]::Escape($probeApk) + '|' + [regex]::Escape([IO.Path]::GetFullPath($probeApk)) + ')'
-  $apkInfoStep = '^apk-info\|' + $probePath + '\|.+'
-  $installStep = '^install\|' + $probePath + '$'
-  $desktopStep = '^install\|' + $probePath + '\|--desktop-shortcut$'
+  $snapshotPath = '.+\\gesher-install-[0-9a-f-]+\\payload\\' + [regex]::Escape([IO.Path]::GetFileName($probeApk))
+  $apkInfoStep = '^apk-info\|' + $snapshotPath + '\|.+\\info\.txt$'
+  $installStep = '^install\|' + $snapshotPath + '\|--confirmed\|com\.gesher\.splashprobe\|2$'
+  $desktopStep = $installStep.TrimEnd('$') + '\|--desktop-shortcut$'
   $launchStep = '^launch\|com\.gesher\.splashprobe$'
   $cases = @(
     @{ Mode = 'app'; Args = 'launch com.gesher.splashprobe'; Code = 0 },
     @{ Mode = 'app'; Args = "$bare --window"; Code = 0; Steps = @('^' + [regex]::Escape($probeApk) + '\|--window$') },
     @{ Mode = 'close'; Args = 'launch com.gesher.splashprobe'; Code = 1 },
-    @{ Mode = 'none'; Args = "install $bare"; Code = 0; Steps = @($installStep) },
+    @{ Mode = 'none'; Args = "install $bare"; Code = 0; Steps = @('^install\|' + $probePath + '$') },
     @{ Mode = 'none'; Args = 'launch com.gesher.splashprobe --headless'; Code = 0 },
     @{ Mode = 'late'; Args = 'launch com.gesher.splashprobe'; Code = 0; Detach = $true },
     @{ Mode = 'late'; Args = 'launch com.gesher.splashprobe --ez --wait true'; Code = 0; Detach = $true },
@@ -586,6 +587,15 @@ public static class SplashLifetimeProbe {
       $stepsOk = $steps.Count -eq $case.Steps.Count
       for ($i = 0; $stepsOk -and $i -lt $steps.Count; $i++) { $stepsOk = $steps[$i] -match $case.Steps[$i] }
       if (-not $stepsOk) { $problems += "$($what): gesher-app.ps1 ran $($steps.Count) step(s): $($steps -join ' ; ')" }
+      if ($stepsOk -and $case.Info) {
+        $readPath = ($steps[0] -split '\|')[1]
+        if ($steps.Count -gt 1 -and $steps[1].StartsWith('install|') -and
+            ($steps[1] -split '\|')[1] -cne $readPath) {
+          $problems += "$($what): install read a different snapshot than apk-info"
+        }
+        $snapshotDir = Split-Path -Parent (Split-Path -Parent $readPath)
+        if (Test-Path -LiteralPath $snapshotDir) { $problems += "$($what): snapshot was not cleaned up" }
+      }
     }
     $probe = if ([IO.File]::Exists($probeOut)) { @([IO.File]::ReadAllLines($probeOut)) } else { @() }
     # The child publishes a separate closed receipt. Polling existence cannot

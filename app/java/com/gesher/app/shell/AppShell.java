@@ -900,7 +900,7 @@ public final class AppShell {
      * exit code: 0 when the file is recorded.
      */
     public static int apkIcon(File apk) {
-        return apkIcon(apk, null);
+        return apkIcon(apk, null, null);
     }
 
     /** What {@link #apkIcon} read of the file, for {@link #apkInfo}. */
@@ -915,7 +915,7 @@ public final class AppShell {
         String error;
     }
 
-    private static int apkIcon(File apk, ApkFacts facts) {
+    private static int apkIcon(File apk, ApkFacts facts, File promptIcon) {
         long size = apk.length();
         long time = apk.lastModified();
         if (!apk.isFile() || size == 0) {
@@ -939,9 +939,10 @@ public final class AppShell {
             AppIcon icon = AppIcon.load(inputs.paths, pkg.applicationInfo(0),
                     launcherActivity(pkg));
             if (icon.hasImages()) {
-                File ico = new File(new File(Device.dataDir(), APK_ICON_CACHE),
-                        size + "-" + time + ".ico");
-                icon.writeIco(ico);
+                File ico = promptIcon != null ? promptIcon
+                        : new File(new File(Device.dataDir(), APK_ICON_CACHE), size + "-" + time + ".ico");
+                if (promptIcon != null) java.nio.file.Files.write(ico.toPath(), icon.ico());
+                else icon.writeIco(ico);
                 iconPath = Zygote.windowsPath(ico.getPath());
                 what = packageName + " (" + icon.label + "): " + iconPath + " from "
                         + icon.source;
@@ -968,6 +969,9 @@ public final class AppShell {
             if (facts != null) facts.error = "the file changed while it was read";
             return 1;
         }
+        // The consent prompt's icon is private to this snapshot. Explorer should never
+        // be told to cache the identity of the temporary package.
+        if (promptIcon != null) return 0;
         if (iconPath == null) {
             iconPath = installDir() + "\\gesher.ico";
             what += "; Gesher's icon";
@@ -990,8 +994,8 @@ public final class AppShell {
     /**
      * {@code gesher-app apk-info APK OUT}, what gesher-launch runs before it asks the user to
      * install an APK or split APK bundle opened from Explorer: reads the file as {@link
-     * #apkIcon} does (also recording its icon for Explorer), without installing it or
-     * starting the device, and writes {@code out} (UTF-8, atomically), a {@code key=value}
+     * #apkIcon} does (drawing its icon beside the result), without installing it or
+     * starting the device, and writes {@code out} (UTF-8), a {@code key=value}
      * line each: {@code package}, {@code version_code}, {@code version_name}, {@code label},
      * {@code icon} (the drawn .ico, when there is one), {@code installed_version_code} and
      * {@code installed_version_name} (when the package is installed: its installed base.apk,
@@ -1000,7 +1004,8 @@ public final class AppShell {
      */
     public static void apkInfo(File apk, File out) throws Exception {
         ApkFacts facts = new ApkFacts();
-        int code = apkIcon(apk, facts);
+        File target = out.getAbsoluteFile();
+        int code = apkIcon(apk, facts, new File(target.getPath() + ".ico"));
         if (facts.packageName == null || facts.error != null || code != 0) {
             // The first line is the user's (gesher-launch shows it); the detail is for logs.
             throw new IllegalArgumentException(text("install_unreadable", apk.getName())
@@ -1026,17 +1031,9 @@ public final class AppShell {
             text.append(e.getKey()).append('=')
                     .append(e.getValue().replace('\r', ' ').replace('\n', ' ')).append('\n');
         }
-        File target = out.getAbsoluteFile();
-        File tmp = File.createTempFile("apk-info-", ".tmp", target.getParentFile());
-        try {
-            java.nio.file.Files.write(tmp.toPath(),
-                    text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            java.nio.file.Files.move(tmp.toPath(), target.toPath(),
-                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-        } finally {
-            tmp.delete();
-        }
+        // The launcher reads this private report only after this command exits successfully.
+        java.nio.file.Files.write(target.toPath(),
+                text.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         log("apk-info: " + facts.packageName + " " + values.get("version_code")
                 + (installed != null ? ", installed " + values.get("installed_version_code")
                         : ", not installed"));
