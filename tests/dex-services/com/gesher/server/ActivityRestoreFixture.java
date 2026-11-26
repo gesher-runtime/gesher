@@ -7,6 +7,7 @@ import android.app.ActivityManager;
 import android.app.IActivityClientController;
 import android.app.IApplicationThread;
 import android.app.ResultInfo;
+import android.app.servertransaction.ActivityResultItem;
 import android.app.servertransaction.ActivityTransactionItem;
 import android.app.servertransaction.ClientTransaction;
 import android.app.servertransaction.ClientTransactionItem;
@@ -518,6 +519,92 @@ public final class ActivityRestoreFixture {
         System.out.println("Activity state restore: pendingResults retention and LaunchActivityItem delivery passed");
     }
 
+    @SuppressWarnings("unchecked")
+    private static List<ResultInfo> pendingResults(Object record) throws Exception {
+        return (List<ResultInfo>) get(record, "pendingResults");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void testChildDeathCompletesResult(boolean detachedRecipient) throws Exception {
+        Harness h = new Harness();
+        int task = 7;
+        Object parent = h.record("ParentAct", task, "a", "STOPPED");
+        Bundle snapshot = new Bundle();
+        snapshot.putString("screen", "awaiting_result");
+        h.activityStopped(parent, snapshot, null);
+        Object childProcess = detachedRecipient ? h.process : h.newProcess(PID + 2, new AppThread());
+        Object child = h.record("ChildAct", task, "a", "RESUMED", childProcess, parent, "child", 51);
+
+        h.processDied(childProcess);
+        h.processDied(childProcess); // Repeated Binder/host notification for the same death.
+        check(!h.records.contains(child), "Unrestorable child was not removed");
+
+        List<ResultInfo> results = new ArrayList<>();
+        if (detachedRecipient) {
+            check(get(parent, "app") == null, "Retained parent still has a dead process");
+            check(pendingResults(parent).size() == 1, "Cancellation was not queued for the detached parent");
+            AppThread replacement = new AppThread();
+            h.newProcess(PID + 3, replacement);
+            h.moveTaskToFront(task);
+            LaunchActivityItem launch = replacement.findLaunchItem(parent);
+            check(launch != null, "Detached parent did not relaunch");
+            Bundle restored = (Bundle) field(LaunchActivityItem.class, "mState").get(launch);
+            check(restored != null && "awaiting_result".equals(restored.getString("screen")),
+                    "Parent did not restore its saved state alongside the cancellation");
+            List<ResultInfo> delivered = (List<ResultInfo>) field(LaunchActivityItem.class, "mPendingResults").get(launch);
+            check(delivered != null, "Restored launch did not carry a cancellation");
+            results.addAll(delivered);
+        } else {
+            IBinder parentToken = token(parent);
+            boolean resumed = false;
+            for (Event event : h.thread.events) {
+                if (event.token != parentToken) continue;
+                if (event.item instanceof ResumeActivityItem) resumed = true;
+                if (event.item instanceof ActivityResultItem resultItem) {
+                    check(!resumed, "Cancellation was sent after the parent resumed");
+                    results.addAll((List<ResultInfo>) field(ActivityResultItem.class, "mResultInfoList").get(resultItem));
+                }
+            }
+            check(resumed, "Removing the dead child did not resume its live parent");
+        }
+        check(results.size() == 1, "Expected exactly one cancellation, got " + results.size());
+        ResultInfo result = results.get(0);
+        check(result.mRequestCode == 51 && "child".equals(result.mResultWho)
+                        && result.mResultCode == Activity.RESULT_CANCELED && result.mData == null,
+                "Canceled result did not preserve the request routing");
+        check(pendingResults(parent).isEmpty(), "Delivered cancellation remained queued");
+    }
+
+    private static void testSavedChildDeathRetainsResultRoute() throws Exception {
+        Harness h = new Harness();
+        Object parent = h.record("ParentAct", 8, "a", "STOPPED");
+        AppThread childThread = new AppThread();
+        Object childProcess = h.newProcess(PID + 2, childThread);
+        Object child = h.record("ChildAct", 8, "a", "STOPPED", childProcess, parent, "child", 51);
+        h.activityStopped(child, new Bundle(), null);
+        h.processDied(childProcess);
+        check(h.records.contains(child) && get(child, "resultTo") == parent,
+                "Retained child lost its result destination");
+        check(pendingResults(parent).isEmpty(), "Retained child canceled its result prematurely");
+    }
+
+    private static void testFinishingChildDeathKeepsResult() throws Exception {
+        Harness h = new Harness();
+        Object parent = h.record("ParentAct", 9, "a", "STOPPED");
+        Object child = h.record("ChildAct", 9, "a", "RESUMED", parent, "child", 51);
+        h.activityStopped(parent, new Bundle(), null);
+        h.thread.autoAck = false;
+        Intent data = new Intent("fixture.restore.ALREADY_FINISHED");
+        h.asApp(() -> h.controller.finishActivity(token(child), Activity.RESULT_OK, data,
+                Activity.DONT_FINISH_TASK_WITH_ACTIVITY));
+        h.processDied(h.process);
+
+        List<ResultInfo> results = pendingResults(parent);
+        check(results.size() == 1 && results.get(0).mResultCode == Activity.RESULT_OK
+                        && data.getAction().equals(results.get(0).mData.getAction()),
+                "Death replaced or duplicated the already committed result");
+    }
+
     private static void testMoveTaskToFrontRelaunch() throws Exception {
         Harness h = new Harness();
         Object root = h.record("TaskRoot", 5, "a", "STOPPED");
@@ -630,7 +717,13 @@ public final class ActivityRestoreFixture {
             testFinishingActivitiesCleanedUpWhileNonFinishingPreserved();
             testForceStopLiveSavedRecord();
         }
-        if (group.equals("all") || group.equals("results")) testPendingResultsPreservedAcrossProcessDeath();
+        if (group.equals("all") || group.equals("results")) {
+            testPendingResultsPreservedAcrossProcessDeath();
+            testChildDeathCompletesResult(false);
+            testChildDeathCompletesResult(true);
+            testSavedChildDeathRetainsResultRoute();
+            testFinishingChildDeathKeepsResult();
+        }
         if (group.equals("all") || group.equals("movetask")) testMoveTaskToFrontRelaunch();
         if (group.equals("all") || group.equals("paused")) testActivityPausedFinishingRelaunchesUnderlying();
         return checks;
