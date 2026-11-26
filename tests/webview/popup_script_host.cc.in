@@ -1,0 +1,391 @@
+// Copyright (C) 2026 The Gesher Authors; All rights reserved.
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <deque>
+#include <functional>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+// Isolated STA/COM boundary. Production functions below are extracted verbatim.
+using HRESULT = int32_t;
+using LPCWSTR = const wchar_t*;
+using HWND = void*;
+using BOOL = int;
+constexpr HRESULT S_OK = 0, E_FAIL = -1;
+constexpr BOOL TRUE = 1, FALSE = 0;
+#define SUCCEEDED(hr) ((hr) >= 0)
+#define FAILED(hr) ((hr) < 0)
+constexpr int kFailed = 2, kNewWindow = 3, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC = 0;
+HWND g_parking = nullptr;
+HWND GetFocus() { return nullptr; }
+bool IsChild(HWND, HWND) { return false; }
+HWND GetParent(HWND) { return nullptr; }
+void SetFocus(HWND) {}
+std::wstring Hex(HRESULT hr) { return std::to_wstring(hr); }
+struct ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler {
+  std::function<HRESULT(HRESULT, LPCWSTR)> invoke;
+  template<class F> explicit ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler(F f) : invoke(std::move(f)) {}
+};
+#define GESHER_CALLBACK(Type, ...) std::make_shared<Type>(__VA_ARGS__)
+struct FakeWebView {
+  struct Pending { std::wstring script; std::function<HRESULT(HRESULT, LPCWSTR)> done; };
+  struct Record { std::wstring command, target; std::vector<std::wstring> scripts; };
+  std::deque<Pending> pending;
+  std::map<std::wstring, std::wstring> scripts;
+  std::vector<Record> records;
+  int next_id = 0, add_calls = 0, remove_calls = 0;
+  HRESULT next_add = S_OK;
+  HRESULT AddScriptToExecuteOnDocumentCreated(LPCWSTR script, ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler* done) {
+    ++add_calls;
+    if (FAILED(next_add)) { HRESULT value = next_add; next_add = S_OK; return value; }
+    pending.push_back({script, done->invoke}); return S_OK;
+  }
+  HRESULT RemoveScriptToExecuteOnDocumentCreated(LPCWSTR id) { ++remove_calls; scripts.erase(id); return S_OK; }
+  std::vector<std::wstring> Active() const { std::vector<std::wstring> out; for (const auto& s : scripts) out.push_back(s.second); return out; }
+  HRESULT RecordCommand(std::wstring command, std::wstring target = L"") { records.push_back({std::move(command), std::move(target), Active()}); return S_OK; }
+  HRESULT NavigateToString(LPCWSTR text) { return RecordCommand(L"navigate", text); }
+  HRESULT Reload() { return RecordCommand(L"reload"); }
+  HRESULT Stop() { return RecordCommand(L"stop"); }
+  HRESULT GoBack() { return RecordCommand(L"back"); }
+  HRESULT GoForward() { return RecordCommand(L"forward"); }
+  HRESULT OpenDevToolsWindow() { return RecordCommand(L"devtools"); }
+  void Complete(HRESULT hr) {
+    if (pending.empty()) { std::fprintf(stderr, "unexpected empty completion queue\n"); std::abort(); }
+    Pending p = std::move(pending.front()); pending.pop_front();
+    std::wstring id;
+    if (SUCCEEDED(hr)) { id = L"script-" + std::to_wstring(++next_id); scripts[id] = p.script; }
+    p.done(hr, SUCCEEDED(hr) ? id.c_str() : nullptr);
+  }
+  size_t Count(const std::wstring& command) const { return std::count_if(records.begin(), records.end(), [&](const Record& r) { return r.command == command; }); }
+};
+struct FakeController { void MoveFocus(int) {} };
+
+using ICoreWebView2 = FakeWebView;
+struct CoString {
+  wchar_t* value = nullptr;
+  wchar_t** Put() { return &value; }
+  std::wstring str() const { return value ? value : L""; }
+};
+struct Deferral : std::enable_shared_from_this<Deferral> {
+  int completed = 0;
+  void Complete() { ++completed; }
+};
+using ICoreWebView2Deferral = Deferral;
+struct ICoreWebView2WindowFeatures {
+  HRESULT get_HasSize(BOOL* value) { *value = FALSE; return S_OK; }
+  HRESULT get_HasPosition(BOOL* value) { *value = FALSE; return S_OK; }
+};
+struct ICoreWebView2NewWindowRequestedEventArgs
+    : std::enable_shared_from_this<ICoreWebView2NewWindowRequestedEventArgs> {
+  int assignments = 0;
+  int handled_calls = 0, deferral_requests = 0;
+  BOOL handled = FALSE;
+  std::wstring uri = L"http://127.0.0.1/popup";
+  std::shared_ptr<Deferral> event_deferral = std::make_shared<Deferral>();
+  std::vector<std::wstring> scripts_when_assigned;
+  HRESULT put_NewWindow(ICoreWebView2* value) { ++assignments; scripts_when_assigned = value->Active(); return S_OK; }
+  HRESULT put_Handled(BOOL value) { ++handled_calls; handled = value; return S_OK; }
+  HRESULT get_Uri(wchar_t** value) { *value = uri.data(); return S_OK; }
+  HRESULT get_IsUserInitiated(BOOL* value) { *value = FALSE; return S_OK; }
+  HRESULT get_WindowFeatures(ICoreWebView2WindowFeatures** value) { *value = nullptr; return S_OK; }
+  HRESULT GetDeferral(ICoreWebView2Deferral** value) {
+    ++deferral_requests; *value = event_deferral.get(); return S_OK;
+  }
+};
+constexpr int IID_ICoreWebView2NewWindowRequestedEventArgs = 1;
+template<class T> struct Com {
+  std::shared_ptr<T> value;
+  // The event adapter lends output pointers; Impl::Defer below retains their
+  // shared owners. This models ownership, not Windows COM reference counting.
+  T* output = nullptr;
+  T* get() const { return value ? value.get() : output; }
+  T** Put() { value.reset(); output = nullptr; return &output; }
+  T* operator->() const { return get(); }
+  explicit operator bool() const { return get() != nullptr; }
+};
+struct PopupArgs {
+  std::shared_ptr<ICoreWebView2NewWindowRequestedEventArgs> value;
+  bool As(int, Com<ICoreWebView2NewWindowRequestedEventArgs>* out) { out->value=value; return !!value; }
+};
+
+struct Host {
+  struct Impl;
+  enum Command { kReload=1, kStop, kGoBack, kGoForward, kFocus, kBlur, kDevTools };
+  std::shared_ptr<Impl> impl_;
+  explicit Host(std::shared_ptr<Impl> i) : impl_(std::move(i)) {}
+  void NavigateToString(const std::wstring& html);
+  void Run(Command command);
+  void SetDocumentScript(const std::wstring& script);
+  void CompleteNewWindow(int64_t id, Host* window);
+  void Destroy();
+};
+struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
+  struct Deferred { PopupArgs args; std::shared_ptr<Deferral> deferral; };
+  std::map<int64_t, Deferred> deferred;
+  int64_t next_deferred = 1;
+  int64_t Defer(ICoreWebView2NewWindowRequestedEventArgs* args, ICoreWebView2Deferral* deferral) {
+    int64_t id = next_deferred++;
+    deferred.emplace(id, Deferred{PopupArgs{args->shared_from_this()}, deferral->shared_from_this()});
+    return id;
+  }
+  bool Undefer(int64_t id, Deferred* out) { auto it=deferred.find(id); if(it==deferred.end()) return false; *out=it->second; deferred.erase(it); return true; }
+  bool ready = true, destroyed = false, closing = false, failed = false;
+  bool document_script_in_flight = false, api_navigation = false;
+  std::wstring document_script_id;
+  uint64_t document_script_generation = 0, navigation_generation = 0;
+  std::vector<std::function<void(Impl*)>> pending;
+  std::deque<std::function<void(Impl*)>> document_script_waiters;
+  std::vector<std::function<void(void*)>> service_waiting;
+  std::shared_ptr<FakeWebView> webview = std::make_shared<FakeWebView>();
+  std::shared_ptr<FakeController> controller = std::make_shared<FakeController>();
+  HWND container = nullptr;
+  int reports = 0;
+  int popup_reports = 0;
+  int64_t last_popup_id = 0;
+  bool bridge_guarded = true;
+  std::set<int> bridge_acknowledgments;
+@POPUP_STATE@
+  void Report(int type, int64_t id, int32_t, const std::wstring&, const std::wstring& = L"") {
+    ++reports;
+    if (type == kNewWindow) { ++popup_reports; last_popup_id = id; }
+  }
+};
+using Impl = Host::Impl;
+std::deque<std::function<void()>> sta;
+void PostToWebViewThread(std::function<void()> fn) { sta.push_back(std::move(fn)); }
+void Pump() { while (!sta.empty()) { auto fn = std::move(sta.front()); sta.pop_front(); fn(); } }
+
+
+// Final native controller teardown is outside this popup queue envelope. The
+// real Host::Destroy below must already have retired incoming popup deferrals.
+std::map<Impl*, std::shared_ptr<Impl>> g_retiring;
+void Reparent(Impl*, HWND) {}
+constexpr int SW_HIDE = 0;
+void ShowWindow(HWND, int) {}
+void CancelBridgeRequests(Impl*) {}
+bool FinishDestroy(const std::shared_ptr<Impl>& impl) {
+  impl->destroyed = true;
+  impl->webview.reset();
+  g_retiring.erase(impl.get());
+  return true;
+}
+
+@PRODUCTION@
+
+void CompleteReady(const std::shared_ptr<Impl>& impl) {
+  impl->ready = true;
+@DRAIN_PENDING@
+}
+int failures = 0, checks = 0;
+void Check(bool okay, const char* name) {
+  ++checks;
+  std::printf("%s %s\n", okay ? "PASS" : "FAIL", name);
+  if (!okay) ++failures;
+}
+struct RequestFixture {
+  std::shared_ptr<ICoreWebView2NewWindowRequestedEventArgs> args =
+      std::make_shared<ICoreWebView2NewWindowRequestedEventArgs>();
+  std::shared_ptr<Deferral> deferral = std::make_shared<Deferral>();
+  RequestFixture(const std::shared_ptr<Impl>& opener, int64_t id) {
+    opener->deferred.emplace(id, Impl::Deferred{PopupArgs{args}, deferral});
+  }
+  bool Canceled() const { return args->assignments == 0 && deferral->completed == 1; }
+};
+
+void PopupWaits(bool ready) {
+  auto opener = std::make_shared<Impl>();
+  auto target = std::make_shared<Impl>(); target->ready = ready;
+  Host parent(opener), child(target);
+  RequestFixture request(opener, 7);
+  child.SetDocumentScript(L"old-settings");
+  child.SetDocumentScript(L"required-settings");
+  parent.CompleteNewWindow(7, &child);
+  Pump();
+  if (!ready) CompleteReady(target);
+  Check(request.args->assignments == 0 && request.deferral->completed == 0,
+        "popup waits for script registration on ready/initializing target");
+  target->webview->Complete(S_OK);
+  Check(request.args->assignments == 0 && request.deferral->completed == 0,
+        "popup also waits for queued replacement settings");
+  target->webview->Complete(S_OK);
+  Check(request.args->assignments == 1 && request.deferral->completed == 1,
+        "configured popup is handed off and completed once");
+  Check(request.args->scripts_when_assigned == std::vector<std::wstring>{L"required-settings"},
+        "popup receives only the final required settings");
+  Check(target->pending_new_windows.empty() && opener->deferred.empty(),
+        "successful popup retires both bookkeeping records");
+}
+
+void CancelPopup(bool ready, const std::string& action) {
+  auto opener = std::make_shared<Impl>();
+  auto target = std::make_shared<Impl>(); target->ready = ready;
+  auto webview = target->webview;
+  Host parent(opener);
+  auto* child = new Host(target);
+  RequestFixture request(opener, 8);
+  child->SetDocumentScript(L"required-settings");
+  parent.CompleteNewWindow(8, child);
+  Pump();
+  if (action == "stop") { child->Run(Host::kStop); Pump(); }
+  else if (action == "fail") Fail(target.get(), E_FAIL, L"fixture controller failure");
+  else if (action == "destroy") { child->Destroy(); child = nullptr; Pump(); }
+  Check(request.Canceled(), "target Stop/failure/destruction retires pending popup with no handoff");
+  Check(target->pending_new_windows.empty() && opener->deferred.empty(),
+        "canceled popup releases opener deferral and target record");
+  if (!ready && !target->closing && !target->failed) CompleteReady(target);
+  if (!webview->pending.empty()) webview->Complete(S_OK);
+  Check(request.Canceled(), "late script completion cannot revive or double-complete canceled popup");
+  delete child;
+}
+
+void FailedRegistration(bool asynchronous) {
+  auto opener = std::make_shared<Impl>();
+  auto target = std::make_shared<Impl>(); target->ready = asynchronous;
+  Host parent(opener), child(target);
+  RequestFixture request(opener, 9);
+  if (!asynchronous) target->webview->next_add = E_FAIL;
+  child.SetDocumentScript(L"required-settings");
+  parent.CompleteNewWindow(9, &child);
+  Pump();
+  if (asynchronous) target->webview->Complete(E_FAIL);
+  else CompleteReady(target);
+  Check(request.Canceled() && target->failed,
+        "actual sync/async script registration failure retires popup without handoff");
+  Check(target->pending_new_windows.empty(), "registration failure retains no popup completion");
+}
+
+void StopThenNewPopup() {
+  auto opener = std::make_shared<Impl>();
+  auto target = std::make_shared<Impl>();
+  Host parent(opener), child(target);
+  RequestFixture old_request(opener, 10), new_request(opener, 11);
+  child.SetDocumentScript(L"settings");
+  parent.CompleteNewWindow(10, &child); Pump();
+  child.Run(Host::kStop); Pump();
+  Check(old_request.Canceled(), "Stop retires an earlier popup before script completion");
+  parent.CompleteNewWindow(11, &child); Pump();
+  Check(new_request.deferral->completed == 0, "new popup after Stop still waits for settings");
+  target->webview->Complete(S_OK);
+  Check(old_request.Canceled() && new_request.args->assignments == 1
+            && new_request.deferral->completed == 1,
+        "old queued ticket cannot consume the newer popup after Stop");
+  Check(target->pending_new_windows.empty(), "new popup delivery clears its own pending record");
+}
+
+void NewWindowAdmission() {
+  for (const std::string state : {"healthy", "stopped", "failed", "closing"}) {
+    auto opener = std::make_shared<Impl>();
+    Host parent(opener);
+    if (state == "stopped") { parent.Run(Host::kStop); Pump(); }
+    if (state == "failed") Fail(opener.get(), E_FAIL, L"required document settings");
+    if (state == "closing") opener->closing = true;
+    int reports = opener->reports;
+    auto args = std::make_shared<ICoreWebView2NewWindowRequestedEventArgs>();
+    NewWindowRequestHandler(opener)(nullptr, args.get());
+    Check(args->handled_calls == 1 && args->handled,
+          "popup event always suppresses WebView2's own window");
+    if (state == "healthy" || state == "stopped") {
+      Check(opener->popup_reports == 1 && opener->deferred.size() == 1
+                && args->deferral_requests == 1 && args->assignments == 0,
+            "healthy host and ordinary Stop admit a later popup for the app to decide");
+      parent.CompleteNewWindow(opener->last_popup_id, nullptr); Pump();
+      Check(args->event_deferral->completed == 1 && opener->deferred.empty(),
+            "accepted popup event can retire its actual deferral exactly once");
+    } else {
+      Check(opener->reports == reports && opener->popup_reports == 0
+                && opener->deferred.empty() && args->deferral_requests == 0
+                && args->event_deferral->completed == 0 && args->assignments == 0,
+            "failed or closing opener neither reports, opens nor retains a popup deferral");
+    }
+  }
+}
+
+void RetiredOpenerCompletion() {
+  for (bool closing : {false, true}) {
+    auto opener = std::make_shared<Impl>();
+    auto target = std::make_shared<Impl>();
+    auto* parent = new Host(opener);
+    Host child(target);
+    RequestFixture request(opener, 15);
+    child.SetDocumentScript(L"required-settings");
+    parent->CompleteNewWindow(15, &child); Pump();
+    Check(request.args->assignments == 0 && request.deferral->completed == 0,
+          "popup accepted before opener retirement waits for target settings");
+    if (closing) {
+      // Exercise real logical Destroy while the declared bridge-acknowledgment
+      // boundary holds final native teardown, so the deferral still exists.
+      opener->bridge_acknowledgments.insert(1);
+      parent->Destroy(); parent = nullptr; Pump();
+    } else {
+      Fail(opener.get(), E_FAIL, L"opener document settings failed");
+    }
+    target->webview->Complete(S_OK);
+    Check(request.Canceled(),
+          "late popup completion declines a failed or logically destroyed opener exactly once");
+    Check(opener->deferred.empty() && target->pending_new_windows.empty(),
+          "declined late popup releases both bookkeeping records");
+    if (closing) {
+      opener->bridge_acknowledgments.clear();
+      FinishDestroy(opener);
+    }
+    delete parent;
+  }
+}
+
+void ImmediateCases() {
+  auto opener = std::make_shared<Impl>();
+  Host parent(opener);
+  RequestFixture empty(opener, 12);
+  parent.CompleteNewWindow(12, nullptr); Pump();
+  Check(empty.Canceled(), "null target completes without a popup");
+  for (const std::string state : {"ready", "closing", "failed", "destroyed"}) {
+    auto target = std::make_shared<Impl>();
+    Host child(target);
+    RequestFixture request(opener, 13);
+    target->closing = state == "closing";
+    target->failed = state == "failed";
+    target->destroyed = state == "destroyed";
+    parent.CompleteNewWindow(13, &child); Pump();
+    Check(state == "ready" ? request.args->assignments == 1 && request.deferral->completed == 1
+                             : request.Canceled(),
+          "ready targets without scripts complete, retired targets decline immediately");
+    Check(target->pending_new_windows.empty(), "immediate completion retains no target record");
+  }
+}
+
+void PendingCompletionReleasesOpener() {
+  auto opener = std::make_shared<Impl>();
+  std::weak_ptr<Impl> weak = opener;
+  auto target = std::make_shared<Impl>();
+  Host child(target);
+  RequestFixture request(opener, 14);
+  child.SetDocumentScript(L"settings");
+  {
+    Host parent(opener);
+    parent.CompleteNewWindow(14, &child); Pump();
+  }
+  opener.reset();
+  Check(!weak.expired(), "pending completion retains the opener until it can retire the deferral");
+  child.Run(Host::kStop); Pump();
+  Check(request.Canceled() && weak.expired(), "canceling popup releases the retained opener owner");
+  target->webview->Complete(S_OK);
+  Check(request.Canceled(), "retired completion remains inert after opener owner is released");
+}
+
+int main() {
+  for (bool ready : {true, false}) {
+    PopupWaits(ready);
+    for (const std::string action : {"stop", "fail", "destroy"}) CancelPopup(ready, action);
+  }
+  FailedRegistration(true); FailedRegistration(false);
+  StopThenNewPopup(); NewWindowAdmission(); RetiredOpenerCompletion();
+  ImmediateCases(); PendingCompletionReleasesOpener();
+  Check(sta.empty() && g_retiring.empty(), "fixture leaves no queued task or native retirement owner");
+  std::printf("popup-script: %d checks, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

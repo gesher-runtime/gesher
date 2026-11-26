@@ -48,7 +48,7 @@ void RgbaPixelCases() {
   const std::array<int,4> cases[] = {
     {1,1,1,1}, {1,7,1,7}, {7,1,7,1}, {3,5,3,5}, {7,9,7,9},
     {17,13,17,13}, {64,32,64,32}, {257,129,257,129},
-    {4,8,4,4}, {8,4,4,4}, {3,4,4,3}, {2,2,7,9}, {7,9,2,2},
+    {4,8,4,4}, {4,4,4,8}, {8,4,4,4}, {3,4,4,3}, {2,2,7,9}, {7,9,2,2},
     {0,0,0,0}, {0,5,0,5}
   };
   for (const auto& dims : cases) {
@@ -65,9 +65,9 @@ void RgbaPixelCases() {
     auto* image = target.Acquire();
     Check(image != nullptr, "RGBA queued image can be acquired");
     if (!image) continue;
-    Check(image->data.size() == expected.size()*4, "RGBA exact owned storage extent");
+    Check(ImageStorage(*image).size() == expected.size()*4, "RGBA exact owned storage extent");
     for (size_t i=0; i<expected.size(); ++i) {
-      uint32_t actual; std::memcpy(&actual,image->data.data()+i*4,4);
+      uint32_t actual; std::memcpy(&actual,ImageStorage(*image).data()+i*4,4);
       Check(actual == expected[i], "RGBA pixels match independent scaling oracle");
     }
     Check(image->width == tw && image->height == th && image->timestampNs == 4567 &&
@@ -83,8 +83,8 @@ void RgbaPixelCases() {
     Check(rgba_copy_calls == (copied ? 1u : 0u), "matching extent uses one bounded bulk copy");
     Check(rgba_copy_bytes == (copied ? expected.size()*4 : 0), "RGBA copy byte extent is exact");
 #endif
-    if (!input.empty() && !image->data.empty()) {
-      image->data[0] ^= 0xff;
+    if (!input.empty() && !ImageStorage(*image).empty()) {
+      ImageStorage(*image)[0] ^= 0xff;
       Check(input == saved, "RGBA acquired image has independent writable storage");
     }
     ReleaseImage(target.reader,image);
@@ -128,12 +128,12 @@ void RgbaLifetimeCases() {
   auto* held = target.Acquire();
   Check(held != nullptr, "RGBA first image acquired");
   if (!held) return;
-  const auto saved = held->data;
+  const auto saved = ImageSnapshot(*held);
   for (int i=2; i<=7; ++i) {
     input = RgbaPixels(16,8,static_cast<uint32_t>(i));
     RgbaPush(target,input.data(),16,8,i);
   }
-  Check(held->data == saved && target.reader->pending.size() == 2,
+  Check(ImageStorageMatches(*held,saved) && target.reader->pending.size() == 2,
         "RGBA held image survives producer reuse and bounded pending replacement");
   auto* next = target.Acquire();
   Check(next && next->timestampNs == 6, "RGBA pending FIFO drops only oldest images");
@@ -147,7 +147,7 @@ void RgbaLifetimeCases() {
   target.Close();
   // Internal native storage ownership only: Android forbids public Image access
   // after ImageReader.close(); this assertion does not extend that API contract.
-  Check(held->data == saved, "RGBA acquired storage lives until explicit release");
+  Check(ImageStorageMatches(*held,saved), "RGBA acquired storage lives until explicit release");
   ReleaseImage(target.reader,held);
   const int events = target.env.events;
   RgbaPush(target,input.data(),16,8,8);
@@ -230,8 +230,8 @@ uint64_t RgbaCycle(const RgbaWorkload& work, int frames,
       Image* image = target.Acquire();
       Check(image != nullptr,"timed RGBA image acquired");
       if (!image) continue;
-      Check(image->data.size() == oracle.size()*sizeof(uint32_t) &&
-            (oracle.empty() || !std::memcmp(image->data.data(),oracle.data(),image->data.size())),
+      Check(ImageStorage(*image).size() == oracle.size()*sizeof(uint32_t) &&
+            (oracle.empty() || !std::memcmp(ImageStorage(*image).data(),oracle.data(),ImageStorage(*image).size())),
             "timed RGBA full pixel oracle");
       Check(image->width == work.tw && image->height == work.th && image->halFormat == 1 &&
             image->timestampNs == i+1 && image->dataSpace == target.reader->dataSpace &&
@@ -239,8 +239,8 @@ uint64_t RgbaCycle(const RgbaWorkload& work, int frames,
             image->planes[0].size == oracle.size()*sizeof(uint32_t) &&
             image->planes[0].rowStride == work.tw*4 && image->planes[0].pixelStride == 4,
             "timed RGBA public metadata");
-      checksum += image->timestampNs + image->data.size();
-      if (!image->data.empty()) checksum += image->data.front()+image->data.back();
+      checksum += image->timestampNs + ImageStorage(*image).size();
+      if (!ImageStorage(*image).empty()) checksum += ImageStorage(*image).front()+ImageStorage(*image).back();
       ReleaseImage(target.reader,image);
     }
     Check(target.env.events == frames && target.reader->acquired == 0 &&

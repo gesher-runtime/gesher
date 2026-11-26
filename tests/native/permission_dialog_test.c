@@ -9,6 +9,7 @@
 #include <wchar.h>
 #include "../../compat/locale/ui_locale.h"
 #include "../../compat/credentials/permission_dialog.inc"
+#include "../../compat/credentials/background_permission_dialog.inc"
 #include "../../compat/credentials/exact_alarm_dialog.inc"
 
 enum { DENY, ALLOW, CLOSE, ENTER, ESCAPE, TAB_ALLOW };
@@ -20,12 +21,16 @@ static BOOL expect_icon;
 static enum GesherUiLanguage language;
 static WCHAR permissions[8193];
 static int exact_action;
+// Background dialog actions: its three buttons, then Enter, Escape and close.
+enum { BG_ALWAYS, BG_FOREGROUND, BG_DENY, BG_ENTER, BG_ESCAPE, BG_CLOSE, BG_TAB_DENY };
+static int background_action;
 static unsigned char exact_initial[] = {0, 1};
 static BOOL prompt_confirmation;
 static int prompt_action;
 static const WCHAR* prompt_message = L"com.example.app\r\nandroid.permission.CAMERA";
 static BOOL prompt_scrolls;
 static BOOL prompt_truncated;
+static UINT prompt_icon;
 static WCHAR prompt_text[40002];
 static WCHAR huge_message[40001];
 
@@ -126,6 +131,66 @@ static void CALLBACK InspectExactAlarm(HWND dialog, UINT message, UINT_PTR timer
   SendMessageW(apply, BM_CLICK, 0, 0);
 }
 
+/* The separate background-access choice (Android 16 BackgroundGrantBehavior). */
+static void CALLBACK InspectBackground(HWND dialog, UINT message, UINT_PTR timer, DWORD time) {
+  (void)message; (void)time;
+  KillTimer(dialog, timer);
+  HWND always = GetDlgItem(dialog, BACKGROUND_ALWAYS);
+  HWND foreground = GetDlgItem(dialog, BACKGROUND_FOREGROUND);
+  HWND deny = GetDlgItem(dialog, BACKGROUND_DENY);
+  if (phase == 1) {
+    // Android order: Allow all the time, Allow only while using the app (default), Don't allow.
+    Check(GetFocus() == deny, "Tab from the default reaches Don't allow");
+    PostMessageW(GetFocus(), WM_KEYDOWN, VK_RETURN, 0);
+    return;
+  }
+  HWND package = GetDlgItem(dialog, BACKGROUND_PACKAGE);
+  HWND details = GetDlgItem(dialog, BACKGROUND_DETAILS);
+  Check(always && foreground && deny && package && details, "all background dialog controls exist");
+  Check(GetWindow(dialog, GW_OWNER) == NULL && (GetWindowLongW(dialog, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) == 0,
+      "background dialog gets its own taskbar button");
+  Check(GetFocus() == foreground, "background dialog focuses the choice that grants no background access");
+  Check(LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == BACKGROUND_FOREGROUND,
+      "background dialog default grants no background access");
+  Check((GetWindowLongW(package, GWL_EXSTYLE) & (WS_EX_RTLREADING | WS_EX_LAYOUTRTL)) == 0,
+      "background dialog package identifier stays LTR");
+  Check((GetWindowLongW(details, GWL_STYLE) & (ES_READONLY | ES_MULTILINE)) == (ES_READONLY | ES_MULTILINE),
+      "background permission text is read-only");
+  WCHAR value[256];
+  GetWindowTextW(always, value, 256);
+  Check(wcscmp(value, GesherUiText(language, "background_permission_always")) == 0, "localized Allow all the time label");
+  GetWindowTextW(foreground, value, 256);
+  Check(wcscmp(value, GesherUiText(language, "background_permission_foreground")) == 0,
+      "localized Allow only while using the app label");
+  GetWindowTextW(deny, value, 256);
+  Check(wcscmp(value, GesherUiText(language, "background_permission_deny")) == 0, "localized background Deny label");
+  RECT client, bounds;
+  GetClientRect(dialog, &client);
+  GetWindowRect(deny, &bounds);
+  MapWindowPoints(NULL, dialog, (POINT*)&bounds, 2);
+  Check(bounds.right <= client.right && bounds.bottom <= client.bottom, "background choices fit inside the dialog");
+  RECT first, second;
+  GetWindowRect(always, &first);
+  GetWindowRect(foreground, &second);
+  GetWindowRect(deny, &bounds);
+  Check(first.bottom <= second.top && second.bottom <= bounds.top,
+      "background choices follow Android's order: all the time, while using, don't allow");
+  Check(GetNextDlgTabItem(dialog, always, FALSE) == foreground && GetNextDlgTabItem(dialog, foreground, FALSE) == deny,
+      "background choices tab in Android's order");
+  if (background_action <= BG_DENY) {
+    HWND button = background_action == BG_ALWAYS ? always : background_action == BG_FOREGROUND ? foreground : deny;
+    SendMessageW(button, BM_CLICK, 0, 0);
+  } else if (background_action == BG_CLOSE) {
+    PostMessageW(dialog, WM_CLOSE, 0, 0);
+  } else if (background_action == BG_TAB_DENY) {
+    phase = 1;
+    PostMessageW(GetFocus(), WM_KEYDOWN, VK_TAB, 0);
+    SetTimer(dialog, 1, 20, InspectBackground);
+  } else {
+    PostMessageW(GetFocus(), WM_KEYDOWN, background_action == BG_ESCAPE ? VK_ESCAPE : VK_RETURN, 0);
+  }
+}
+
 /* The same UI component handles the system-server's account-token consent and
  * the shell's error/crash messages. Verify those real paths, not a duplicate UI. */
 static void CALLBACK InspectHostPrompt(HWND dialog, UINT message, UINT_PTR timer, DWORD time) {
@@ -153,6 +218,35 @@ static void CALLBACK InspectHostPrompt(HWND dialog, UINT message, UINT_PTR timer
       "initial prompt focus follows the safe default");
   Check((GetWindowLongW(accept, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW,
       "host prompt uses the shared modern action");
+  // The MessageBox icon kind shows the system icon, leading the text in reading order.
+  HWND icon = GetDlgItem(dialog, GESHER_HOST_MESSAGE_ICON);
+  if (prompt_icon != 0) {
+    RECT icon_bounds = {0}, text_bounds = {0};
+    HICON image = icon ? (HICON)SendMessageW(icon, STM_GETICON, 0, 0) : NULL;
+    Check(icon != NULL && (GetWindowLongW(icon, GWL_STYLE) & SS_TYPEMASK) == SS_ICON
+        && image != NULL, "host prompt shows its system icon");
+    if (icon != NULL) {
+      GetWindowRect(icon, &icon_bounds);
+      GetWindowRect(text, &text_bounds);
+      Check(GesherUiRtl(language) ? icon_bounds.left >= text_bounds.right
+          : icon_bounds.right <= text_bounds.left,
+          "host prompt icon leads the text in reading order");
+    }
+    // The icon is extracted at the window's DPI, not stretched from the system size.
+    ICONINFO info = {0};
+    BITMAP bitmap = {0};
+    HDC screen = GetDC(NULL);
+    int expected = MulDiv(32, GesherHostDpi(dialog, screen), 96);
+    ReleaseDC(NULL, screen);
+    if (image != NULL && GetIconInfo(image, &info)) {
+      GetObjectW(info.hbmColor ? info.hbmColor : info.hbmMask, sizeof(bitmap), &bitmap);
+      if (info.hbmColor) DeleteObject(info.hbmColor);
+      if (info.hbmMask) DeleteObject(info.hbmMask);
+    }
+    Check(bitmap.bmWidth == expected, "host prompt icon matches the window DPI");
+  } else {
+    Check(icon == NULL, "host prompt without an icon kind shows none");
+  }
   WCHAR klass[16] = {0};
   GetClassNameW(text, klass, 16);
   if (prompt_scrolls) {
@@ -194,6 +288,7 @@ static LRESULT CALLBACK AfterInit(int code, WPARAM wparam, LPARAM lparam) {
     CWPRETSTRUCT* call = (CWPRETSTRUCT*)lparam;
     if (call->message == WM_INITDIALOG) {
       if (GetDlgItem(call->hwnd, PERMISSION_DETAILS)) SetTimer(call->hwnd, 1, 20, Inspect);
+      else if (GetDlgItem(call->hwnd, BACKGROUND_DETAILS)) SetTimer(call->hwnd, 1, 20, InspectBackground);
       else if (GetDlgItem(call->hwnd, GESHER_HOST_MESSAGE_TEXT))
         SetTimer(call->hwnd, 1, 20, InspectHostPrompt);
     }
@@ -309,6 +404,17 @@ int main(void) {
       Check(decision == expected, "only explicit buttons record a permission decision");
       printf("scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", action, decision);
     }
+    for (background_action = BG_ALWAYS; background_action <= BG_TAB_DENY; ++background_action) {
+      phase = 0;
+      int choice = BackgroundPermissionDialog(language, L"com.google.android.gms",
+          L"access location in the background \u202a(android.permission.ACCESS_BACKGROUND_LOCATION)\u202c");
+      int expected = background_action == BG_ALWAYS ? BACKGROUND_ALWAYS_ALLOWED
+          : background_action == BG_FOREGROUND || background_action == BG_ENTER ? BACKGROUND_FOREGROUND_ONLY
+          : background_action == BG_DENY || background_action == BG_TAB_DENY ? BACKGROUND_DENIED
+          : BACKGROUND_DISMISSED;
+      Check(choice == expected, "only explicit background choices record a decision");
+      printf("background scenario: locale=%s action=%d result=%d\n", locale ? "he" : "en", background_action, choice);
+    }
     const WCHAR* packages[] = {L"com.gesher.test.clock", L"com.gesher.test.reminder"};
     for (exact_action = 0; exact_action < 3; ++exact_action) {
       int result = ExactAlarmDialog(language, packages, exact_initial, 2);
@@ -322,24 +428,26 @@ int main(void) {
   for (int locale = 0; locale < 2; ++locale) {
     language = locale ? GESHER_UI_HE : GESHER_UI_EN;
     prompt_confirmation = TRUE;
+    prompt_icon = MB_ICONQUESTION;
     for (prompt_action = DENY; prompt_action <= TAB_ALLOW; ++prompt_action) {
       phase = 0;
       BOOL accepted = GesherHostPrompt(GesherUiText(language, "account_title"),
           L"com.example.app\r\nandroid.permission.CAMERA",
           GesherUiText(language, "permission_allow"),
           GesherUiText(language, "permission_deny"),
-          GesherUiRtl(language), NULL);
+          GesherUiRtl(language), NULL, prompt_icon);
       Check(accepted == (prompt_action == ALLOW || prompt_action == TAB_ALLOW),
           "only an explicit account-token Allow grants access");
     }
     // Launcher notices are informational: OK closes them, and X cancels safely.
     prompt_confirmation = FALSE;
+    prompt_icon = MB_ICONERROR;
     for (prompt_action = ALLOW; prompt_action <= CLOSE; ++prompt_action) {
       phase = 0;
       BOOL accepted = GesherHostPrompt(GesherUiText(language, "brand"),
           L"com.example.app\r\nandroid.permission.CAMERA",
           GesherUiText(language, "cp_dialog_ok"), NULL,
-          GesherUiRtl(language), NULL);
+          GesherUiRtl(language), NULL, prompt_icon);
       Check(accepted == (prompt_action == ALLOW), "information popup exits safely");
     }
   }
@@ -349,16 +457,26 @@ int main(void) {
   phase = 0;
   prompt_scrolls = TRUE;
   prompt_message = permissions;
+  prompt_icon = 0;
   Check(GesherHostPrompt(GesherUiText(language, "brand"), prompt_message,
-      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL),
+      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL, prompt_icon),
       "long information popup is presented");
   for (int i = 0; i < 40000; ++i) huge_message[i] = (i % 8 == 7) ? L' ' : L'a' + (i % 7);
   huge_message[40000] = 0;
   prompt_message = huge_message;
   prompt_truncated = TRUE;
+  prompt_icon = MB_ICONERROR;
   Check(GesherHostPrompt(GesherUiText(language, "brand"), prompt_message,
-      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL),
+      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL, prompt_icon),
       "oversized information popup is presented");
+  // A short message without an icon kind keeps the full-width static text.
+  prompt_message = L"com.example.app\r\nandroid.permission.CAMERA";
+  prompt_scrolls = FALSE;
+  prompt_truncated = FALSE;
+  prompt_icon = 0;
+  Check(GesherHostPrompt(GesherUiText(language, "brand"), prompt_message,
+      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL, prompt_icon),
+      "short information popup without an icon is presented");
   if (fixture_icon) DeleteFileW(icon_path);
   UnhookWindowsHookEx(hook);
   SetThreadDesktop(original);

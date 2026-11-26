@@ -16,6 +16,10 @@
 #include <windows.h>
 
 #include <atomic>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 extern "C" void __real_free(void* ptr);
 extern "C" void* __real_realloc(void* ptr, size_t size);
@@ -175,3 +179,8 @@ extern "C" void* __wrap_realloc(void* ptr, size_t size) {
   }
   return __real_realloc(ptr, size);
 }
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderLeaf, SRWLOCK, g_lock);
+#endif

@@ -22,7 +22,18 @@ struct Device {
   std::string id;    // the symbolic link, or "gesher-test"
   std::string name;  // the friendly name
   bool test = false;
+  // The driver's focus control (IAMCameraControl's CameraControl_Focus) offers
+  // automatic focus and a manual position, so focus can run and be locked. The
+  // test camera has fixed focus.
+  bool autofocus = false;
   std::vector<std::pair<int, int>> sizes;  // frame sizes it offers, largest first
+};
+
+// What Capture::Focus does.
+enum FocusOp {
+  kFocusGet = 0,   // the lens position and the driver's flags (1 auto, 2 manual)
+  kFocusAuto = 1,  // the driver's automatic focus on
+  kFocusLock = 2,  // automatic focus off, the lens kept where it is
 };
 
 // The capture devices (enumerated once per process; `status` says what Media
@@ -36,6 +47,14 @@ class Capture {
   // The next frame into `nv12` (width * height * 3 / 2 bytes); blocks until
   // there is one. S_OK, or the failure.
   virtual HRESULT Read(uint8_t* nv12) = 0;
+  // Controls the device's focus (FocusOp); `value` and `flags` receive the lens
+  // position and the driver's flags afterwards. E_NOTIMPL without a focus control.
+  virtual HRESULT Focus(int op, long* value, long* flags) {
+    (void)op;
+    *value = 0;
+    *flags = 0;
+    return E_NOTIMPL;
+  }
   int width = 0, height = 0;
   const char* via = "";  // how frames are read, for the logs
   // nativeRead keeps one scratch frame for this capture. Its mutex also keeps
