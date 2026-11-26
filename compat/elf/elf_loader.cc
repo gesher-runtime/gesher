@@ -29,6 +29,7 @@
 
 #include <windows.h>
 
+#include <gesher/application_target_sdk.h>
 #include <gesher/arm64_runtime.h>
 // The fork set (gesher/fork.h); a host test that compiles this file alone
 // supplies a stub of it, or none.
@@ -142,7 +143,7 @@ struct ImageIdentity {
 // A loaded object. File-backed objects keep the identity of the opened file.
 struct Library {
   std::string name;       // file base name or given name
-  std::string soname;     // DT_SONAME, else name
+  std::string soname;     // DT_SONAME, or a basename for legacy targets
   std::string path;       // the file's absolute path (realpath), else name
   std::optional<ImageIdentity> file_id;
   uint8_t* base = nullptr;   // where the first PT_LOAD landed
@@ -554,6 +555,7 @@ Library* FindLocked(const std::string& name) {
 }
 
 Library* FindSoname(const std::vector<Library*>& libraries, const std::string& name) {
+  if (name.empty()) return nullptr;
   for (Library* lib : libraries) {
     if (lib->soname == name) return lib;
   }
@@ -1170,7 +1172,8 @@ void RegisterGuestCode(Library* lib, const uint8_t* data) {
     if (phdr[i].p_type != PT_LOAD || !(phdr[i].p_flags & PF_X)) continue;
     uint8_t* start = lib->load_bias + PageDown(phdr[i].p_vaddr);
     size_t len = PageUp(phdr[i].p_vaddr + phdr[i].p_memsz) - PageDown(phdr[i].p_vaddr);
-    gesher::arm64::AddCode(start, len, lib->soname.c_str());
+    const std::string& name = lib->soname.empty() ? lib->name : lib->soname;
+    gesher::arm64::AddCode(start, len, name.c_str());
   }
 }
 
@@ -1197,8 +1200,8 @@ std::optional<std::string_view> DynamicString(const Library& lib, const uint8_t*
 }
 
 // Parses PT_DYNAMIC and PT_TLS.
-bool ParseDynamic(Library* lib, const uint8_t* data, std::string_view* runpath,
-                  std::string* error) {
+bool ParseDynamic(Library* lib, const uint8_t* data, bool main_executable,
+                  std::string_view* runpath, std::string* error) {
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
   const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
   const Elf64_Dyn* dyn = nullptr;
@@ -1311,7 +1314,13 @@ bool ParseDynamic(Library* lib, const uint8_t* data, std::string_view* runpath,
       *runpath = *path;
     }
   }
-  if (lib->soname.empty()) lib->soname = lib->name;
+  // Bionic kept basename lookup for applications targeting pre-M. A modern
+  // object with no DT_SONAME is still accessible through its file identity.
+  const uint32_t target_sdk = ApplicationTargetSdkVersion();
+  if (lib->soname.empty() && !main_executable && target_sdk != 0 && target_sdk < 23) {
+    const size_t slash = lib->path.find_last_of("/\\");
+    lib->soname = slash == std::string::npos ? lib->path : lib->path.substr(slash + 1);
+  }
   return true;
 }
 
@@ -2130,7 +2139,7 @@ class LoadTransaction {
     node->image = std::move(image);
     if (!MapSegments(lib, data, size, file ? file->fd : -1, options, error)) return nullptr;
     std::string_view runpath;
-    if (!ParseDynamic(lib, data, &runpath, error)) return nullptr;
+    if (!ParseDynamic(lib, data, options.main_executable, &runpath, error)) return nullptr;
     std::string_view origin;
     if (path != nullptr) {
       const size_t slash = lib->path.find_last_of("/\\");
@@ -2290,7 +2299,7 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
       if (lib->is_closed || lib->phdr == nullptr) continue;
       PhdrInfo info;
       info.addr = reinterpret_cast<uintptr_t>(lib->load_bias);
-      info.name = lib->soname.c_str();
+      info.name = (lib->soname.empty() ? lib->name : lib->soname).c_str();
       info.path = lib->path.c_str();
       info.phdr = lib->phdr;
       info.phnum = lib->phnum;

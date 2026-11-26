@@ -120,7 +120,7 @@ Library* OpenLoaded(const char* name, bool keep_resident = false);
 // starting its constructors.
 Library* Find(const char* name);
 
-// The soname (DT_SONAME, else the file base name) of a loaded object.
+// The effective SONAME of a loaded object, empty when it has none.
 const char* Soname(Library* library);
 
 // Releases one explicit Load/OpenLoaded reference. Runs finalizers and retires

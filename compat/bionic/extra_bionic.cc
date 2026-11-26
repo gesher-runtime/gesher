@@ -19,6 +19,7 @@
 #include "unicode_bionic.h"
 #include "search_bionic.h"
 
+#include <gesher/application_target_sdk.h>
 #include <gesher/bionic_shim.h>
 #include <gesher/stdio.h>
 #include <gesher/system_properties.h>
@@ -1437,9 +1438,8 @@ int BIONIC_SYSV GetDeviceApiLevel() {
   return GetProp("ro.build.version.sdk", &value) ? std::atoi(value.c_str()) : -1;
 }
 // android_get_application_target_sdk_version and friends (libc, API 24).
-int g_target_sdk = 36;
-int BIONIC_SYSV GetTargetSdk() { return g_target_sdk; }
-void BIONIC_SYSV SetTargetSdk(int v) { g_target_sdk = v; }
+int BIONIC_SYSV GetTargetSdk() { return static_cast<int>(ApplicationTargetSdkVersion()); }
+void BIONIC_SYSV SetTargetSdk(uint32_t version) { SetApplicationTargetSdkVersion(version); }
 void BIONIC_SYSV GetLdLibraryPath(char* buf, size_t size) {
   std::string all;
   for (const std::string& d : LibraryDirectories()) all += (all.empty() ? "" : ":") + d;
