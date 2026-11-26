@@ -162,7 +162,6 @@ public final class BluetoothLeScanner {
         long housekeepingAt = 0;
         int received = 0;
         int delivered = 0;
-        Set<String> unique = new HashSet<>();
         try {
             for (;;) {
                 synchronized (sLock) {
@@ -178,7 +177,6 @@ public final class BluetoothLeScanner {
                     received++;
                     ScanResult report = result(data, meta);
                     if (report != null) {
-                        unique.add(report.getDevice().getAddress());
                         delivered += deliver(report);
                     }
                 } else if (meta[5] != 0) {
@@ -194,8 +192,8 @@ public final class BluetoothLeScanner {
             }
         } finally {
             WindowsBluetooth.nativeScanStop(scan);
-            Log.i(TAG, "LE scan stopped (received " + received + " ads from "
-                    + unique.size() + " devices, delivered " + delivered + ")");
+            Log.i(TAG, "LE scan stopped (received " + received + " ads, matched "
+                    + delivered + " client reports)");
         }
     }
 
