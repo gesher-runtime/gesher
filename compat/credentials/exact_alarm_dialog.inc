@@ -13,6 +13,8 @@ typedef struct {
 
 static BOOL ExactAlarmCreateControls(HWND dialog, ExactAlarmDialogState* state) {
   BOOL rtl = GesherUiRtl(state->language);
+  BOOL rtl_layout = rtl || GesherDesktopRtl();
+  if (rtl_layout) GesherSetNonclientRtl(dialog, TRUE);
   DWORD reading = rtl ? WS_EX_RTLREADING : 0;
   DWORD alignment = rtl ? SS_RIGHT : SS_LEFT;
   HWND heading = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language, "exact_alarm_title"),
@@ -26,9 +28,9 @@ static BOOL ExactAlarmCreateControls(HWND dialog, ExactAlarmDialogState* state) 
   HWND details = PermissionControl(dialog, reading, L"STATIC", GesherUiText(state->language,
       state->count == 0 ? "exact_alarm_empty" : "exact_alarm_detail"), alignment, -1, 16, 124, 258, 52);
   HWND close = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "exact_alarm_close"),
-      BS_DEFPUSHBUTTON | WS_TABSTOP, IDCANCEL, 108, 186, 76, 22);
+      BS_DEFPUSHBUTTON | WS_TABSTOP, IDCANCEL, rtl_layout ? 106 : 108, 186, 76, 22);
   HWND apply = PermissionControl(dialog, 0, L"BUTTON", GesherUiText(state->language, "exact_alarm_apply"),
-      BS_PUSHBUTTON | WS_TABSTOP, IDOK, 192, 186, 82, 22);
+      BS_PUSHBUTTON | WS_TABSTOP, IDOK, rtl_layout ? 16 : 192, 186, 82, 22);
   if (!heading || !label || !packages || !allowed || !details || !close || !apply) {
     return FALSE;
   }
