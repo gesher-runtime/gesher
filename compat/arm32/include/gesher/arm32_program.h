@@ -39,6 +39,10 @@ class Program {
                       ValueKind result, HostCallback callback,
                       std::string* error = nullptr);
 
+  // Retrieves the guest address of a previously bound host thunk. Never a
+  // host function pointer. Call only between guest executions, as with Bind.
+  bool HostSymbolAddress(std::string_view name, uint32_t* guest_address) const;
+
   // Recursively loads a dependency DAG using the provider. Cycles, unresolved
   // imports, unsupported ELF features, overlapping images, and budget failures
   // are explicit errors. All newly mapped modules are rolled back on failure;
