@@ -449,7 +449,7 @@ $appOpsCode = $LASTEXITCODE
 Check 'services: AppOps defaults, authority, attributed delivery, foreground lifecycle and signed persistence' {
   $global:LASTEXITCODE = $appOpsCode
   $appOpsOut
-} @('AppOpsContractTest all passed: 494 checks; binder=true')
+} @('AppOpsContractTest all passed: 497 checks; binder=true')
 
 $specialAccessOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'SpecialAccessTest') 90
 $specialAccessCode = $LASTEXITCODE
