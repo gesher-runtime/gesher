@@ -266,8 +266,6 @@ int HasPeer(FifoEndpoint& endpoint, uint32_t role) {
   if (endpoint.trailer->role & role) return 1;
   FifoRing& ring = *endpoint.ring;
   RingHeader& header = *ring.header;
-  if ((role == kRead ? header.readers : header.writers) == 0) return 0;
-
   bool changed = false;
   int result = 0;
   for (Slot& slot : header.slots) {
@@ -279,12 +277,13 @@ int HasPeer(FifoEndpoint& endpoint, uint32_t role) {
       break;
     }
     const DWORD error = GetLastError();
-    if (error != ERROR_FILE_NOT_FOUND) {
+    if (error == ERROR_FILE_NOT_FOUND) {
+      std::memset(&slot, 0, sizeof(slot));
+      changed = true;
+    } else {
+      // A later accessible peer can still establish liveness.
       result = -ErrnoFromWin32(error);
-      break;
     }
-    std::memset(&slot, 0, sizeof(slot));
-    changed = true;
   }
   if (changed) {
     Recount(header);
