@@ -105,8 +105,13 @@ bool NativeLibrarySession::Open(
         !jni_.SetNativeRegistrationHandler(
             std::move(registration_handler), error))
       return false;
-    if (!program_.LoadLibrary(root_, error) || !program_.Initialize(error))
+    if (!program_.LoadLibrary(root_, error) || !program_.Initialize(error)) {
+      // Partial constructor success may leave initialized dependencies whose
+      // finalizers call through JNI. Shut them down *while jni_ is alive*,
+      // rather than deferring Program's destructor until after Jni32 dies.
+      (void)program_.Shutdown(nullptr);
       return false;
+    }
     if (require_jni_onload) {
       jint version = 0;
       if (!jni_.CallOnLoad(root_, &version, error)) {
