@@ -158,6 +158,12 @@ static int ChildCrash(const char* path) {
   return 52;
 }
 
+static int ChildReaderUntilExit(const char* path) {
+  if (open(path, O_RDONLY | O_NONBLOCK) < 0) return 53;
+  Sleep(INFINITE);
+  return 54;
+}
+
 // --- parent checks -----------------------------------------------------------
 
 static void FileSystem(const char* path) {
@@ -406,8 +412,11 @@ static void Crash(const char* path) {
   PROCESS_INFORMATION child{};
   Check("Crash: start a writer that dies", reader >= 0 && StartIndependent("--crash", path, &child));
   if (!child.hProcess) return;
-  Finish(&child);
-  // Blocking read: the byte, then end of file once the dead writer is swept.
+  Check("Crash: the writer process exited", Finish(&child) == 0);
+  pollfd ready{reader, POLLIN, 0};
+  Check("Crash: poll reports the dead writer with its last byte still readable",
+        poll(&ready, 1, 0) == 1 && ready.revents == (POLLIN | POLLHUP));
+  // Blocking read returns the byte, then end of file.
   fcntl(reader, F_SETFL, 0);
   char byte = 0;
   Check("Crash: the dead writer's byte remains readable", read(reader, &byte, 1) == 1 && byte == 'z');
@@ -415,6 +424,38 @@ static void Crash(const char* path) {
   Check("Crash: a dead writer is counted out (end of file)", read(reader, &byte, 1) == 0);
   Check("Crash: promptly", GetTickCount64() - start < 2000);
   close(reader);
+}
+
+static void DeadReader(const char* path) {
+  for (bool poll_first : {false, true}) {
+    PROCESS_INFORMATION child{};
+    Check("Dead reader: start an independent reader", StartIndependent("--reader-until-exit", path, &child));
+    if (!child.hProcess) return;
+    int writer = -1;
+    const ULONGLONG deadline = GetTickCount64() + 3000;
+    do {
+      writer = open(path, O_WRONLY | O_NONBLOCK);
+      if (writer >= 0 || errno != ENXIO) break;
+      Sleep(1);
+    } while (GetTickCount64() < deadline && WaitForSingleObject(child.hProcess, 0) == WAIT_TIMEOUT);
+    Check("Dead reader: open only once the reader exists", writer >= 0);
+    const bool killed = TerminateProcess(child.hProcess, 0) != 0;
+    const DWORD status = Finish(&child);
+    Check("Dead reader: observe the final reader process exit", killed && status == 0);
+    if (writer < 0) return;
+
+    pollfd ready{writer, POLLOUT, 0};
+    auto poll_peer = [&] {
+      Check("Dead reader: report missing peer with buffer room immediately",
+            poll(&ready, 1, 0) == 1 && ready.revents == (POLLERR | POLLOUT));
+    };
+    if (poll_first) poll_peer();
+    Check("Dead reader: first write fails with EPIPE", write(writer, "x", 1) == -1 && errno == EPIPE);
+    if (!poll_first) poll_peer();
+    int queued = -1;
+    Check("Dead reader: the failed write added no data", ioctl(writer, FIONREAD, &queued) == 0 && queued == 0);
+    close(writer);
+  }
 }
 
 // The only remaining endpoint is inherited by a child that has not touched
@@ -583,6 +624,7 @@ int main(int argc, char** argv) {
   if (argc == 3 && std::strcmp(argv[1], "--writer") == 0) return ChildWriter(argv[2]);
   if (argc == 3 && std::strcmp(argv[1], "--realm") == 0) return ChildRealm(argv[2]);
   if (argc == 3 && std::strcmp(argv[1], "--crash") == 0) return ChildCrash(argv[2]);
+  if (argc == 3 && std::strcmp(argv[1], "--reader-until-exit") == 0) return ChildReaderUntilExit(argv[2]);
   if (argc == 2 && std::strcmp(argv[1], "--inherited") == 0) return ChildInherited();
   if (argc == 2 && std::strcmp(argv[1], "--inherited-only") == 0) return ChildInheritedOnly();
   if (argc == 3 && std::strcmp(argv[1], "--exporter") == 0) return ChildExporter(argv[2]);
@@ -598,6 +640,7 @@ int main(int argc, char** argv) {
   Realm(path);
   Inheritance(path);
   Crash(path);
+  DeadReader(path);
   Unlink(path);
   InheritedOnly((std::string(path) + "-handoff").c_str());
   ExporterExits((std::string(path) + "-exporter").c_str());
