@@ -864,6 +864,8 @@ jobs:
           python3 tools/test_media_recorder_rollover.py --sanitize
           python3 tools/test_mp4_rollover_work.py
           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
+          python3 tools/test_annexb_scan.py --sanitize --negative-controls
+          python3 tools/test_annexb_report.py
 
       - name: Real software AVC output ownership and independent decoded pixels
         run: >-
