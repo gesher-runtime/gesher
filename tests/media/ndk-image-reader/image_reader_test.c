@@ -3,7 +3,9 @@
 
 #include <android/hardware_buffer.h>
 #include <android/native_window.h>
+#include <android/rect.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <media/NdkImageReader.h>
 #include <poll.h>
 #include <pthread.h>
@@ -42,6 +44,44 @@ static uint32_t read_pixel(const uint8_t* pixels, int row_stride, int x, int y) 
     uint32_t result;
     memcpy(&result, pixels + y * row_stride + x * 4, sizeof(result));
     return result;
+}
+
+static void expect_buffer_lock_regions(AHardwareBuffer* buffer, int stride, uint32_t color) {
+    const uint64_t usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+    const ARect inner = {1, 1, kWidth - 1, kHeight - 1};
+    const ARect outside[] = {{-1, 0, 2, 2}, {1, 1, kWidth + 1, kHeight}};
+    const ARect empty[] = {{1, 1, 1, 2}, {2, 2, 1, 1}};
+    for (size_t i = 0; i < sizeof(outside) / sizeof(outside[0]); ++i) {
+        void* data = NULL;
+        AHardwareBuffer_Planes planes = {0};
+        int32_t pixel_stride = -1, row_stride = -1;
+        CHECK(AHardwareBuffer_lock(buffer, usage, -1, &outside[i], &data) == -EINVAL);
+        CHECK(AHardwareBuffer_lockPlanes(buffer, usage, -1, &outside[i], &planes) == -EINVAL);
+        CHECK(AHardwareBuffer_lockAndGetInfo(buffer, usage, -1, &outside[i], &data,
+                                            &pixel_stride, &row_stride) == -EINVAL);
+    }
+    for (size_t i = 0; i < sizeof(empty) / sizeof(empty[0]); ++i) {
+        void* data = NULL;
+        AHardwareBuffer_Planes planes = {0};
+        int32_t pixel_stride = -1, row_stride = -1;
+        CHECK(AHardwareBuffer_lock(buffer, usage, -1, &empty[i], &data) != 0);
+        CHECK(AHardwareBuffer_lockPlanes(buffer, usage, -1, &empty[i], &planes) != 0);
+        CHECK(AHardwareBuffer_lockAndGetInfo(buffer, usage, -1, &empty[i], &data,
+                                            &pixel_stride, &row_stride) != 0);
+    }
+    void* data = NULL;
+    int32_t pixel_stride = -1, row_stride = -1;
+    CHECK(AHardwareBuffer_lockAndGetInfo(buffer, usage, -1, &inner, &data,
+                                        &pixel_stride, &row_stride) == 0);
+    CHECK(data != NULL && pixel_stride == 4 && row_stride == stride);
+    CHECK(read_pixel(data, row_stride, 1, 1) == pixel(color, 1, 1));
+    CHECK(AHardwareBuffer_unlock(buffer, NULL) == 0);
+    AHardwareBuffer_Planes planes = {0};
+    CHECK(AHardwareBuffer_lockPlanes(buffer, usage, -1, &inner, &planes) == 0);
+    CHECK(planes.planeCount == 1 && planes.planes[0].data != NULL);
+    CHECK(planes.planes[0].pixelStride == 4 && planes.planes[0].rowStride == (uint32_t)stride);
+    CHECK(read_pixel(planes.planes[0].data, stride, 1, 1) == pixel(color, 1, 1));
+    CHECK(AHardwareBuffer_unlock(buffer, NULL) == 0);
 }
 
 static void post_size(ANativeWindow* window, uint32_t color, int width, int height) {
@@ -390,6 +430,7 @@ static int run_test(void) {
     AHardwareBuffer_describe(retained, &desc);
     CHECK(desc.width == kWidth && desc.height == kHeight && desc.stride >= kWidth);
     CHECK(desc.format == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM);
+    expect_buffer_lock_regions(retained, (int)desc.stride * 4, fifth);
     void* mapped = NULL;
     CHECK(AHardwareBuffer_lock(retained, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, NULL, &mapped) == 0);
     CHECK(read_pixel(mapped, (int)desc.stride * 4, 0, 0) == pixel(fifth, 0, 0));
