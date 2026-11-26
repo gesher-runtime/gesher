@@ -483,7 +483,10 @@ class Loader {
     if (size < 4 || stream == nullptr || std::memcmp(stream, "APS2", 4) != 0)
       return Fail("invalid Android APS2 relocation header");
     size_t pos = 4;
-    auto number = [&](uint32_t* out) {
+    // The packed stream uses signed LEB128 even for the unsigned ELF32
+    // fields. Preserve negative deltas for offset arithmetic; negative
+    // relocation info is an allowed 32-bit bit pattern, not a host pointer.
+    auto number = [&](int64_t* out) {
       uint64_t bits = 0;
       unsigned shift = 0;
       for (unsigned i = 0; i < 5; ++i) {
@@ -493,41 +496,50 @@ class Loader {
         shift += 7;
         if ((byte & 128) != 0) continue;
         if ((byte & 64) != 0) bits |= ~uint64_t{0} << shift;
-        if (static_cast<int64_t>(bits) < 0 || bits > UINT32_MAX) return false;
-        *out = static_cast<uint32_t>(bits);
+        const int64_t signed_bits = static_cast<int64_t>(bits);
+        // A five-byte encoding may include high bits not representing an
+        // ELF32 value. Reject them before any narrowing conversion.
+        if (signed_bits < INT32_MIN || signed_bits > UINT32_MAX) return false;
+        *out = signed_bits;
         return true;
       }
       return false;
     };
-    uint32_t count = 0, offset = 0;
-    if (!number(&count) || !number(&offset) || count > options_.max_relocations)
+    int64_t count = 0, offset = 0;
+    if (!number(&count) || !number(&offset) || count < 0 ||
+        static_cast<uint64_t>(count) > options_.max_relocations ||
+        offset < 0 || offset > UINT32_MAX)
       return Fail("invalid Android APS2 relocation count or initial offset");
-    uint32_t remaining = count;
-    uint64_t next = offset;
+    uint64_t remaining = static_cast<uint64_t>(count);
+    int64_t next = offset;
     while (remaining != 0) {
-      uint32_t group = 0, flags = 0, delta = 0, info = 0;
-      if (!number(&group) || !number(&flags) || group == 0 || group > remaining)
+      int64_t group = 0, flags = 0, delta = 0, info = 0;
+      if (!number(&group) || !number(&flags) || group <= 0 ||
+          static_cast<uint64_t>(group) > remaining || flags < 0)
         return Fail("invalid Android APS2 group size or flags");
-      if ((flags & ~uint32_t{3}) != 0)
+      // Android ELF32 REL ignores GROUPED_BY_ADDEND without HAS_ADDEND;
+      // the latter is invalid for a format without explicit addends.
+      if ((flags & ~int64_t{7}) != 0)
         return Fail("Android APS2 REL group has invalid flags or addends");
       if ((flags & 2) != 0 && !number(&delta))
         return Fail("truncated Android APS2 group offset");
       if ((flags & 1) != 0 && !number(&info))
         return Fail("truncated Android APS2 group info");
-      for (uint32_t i = 0; i < group; ++i) {
-        uint32_t step = delta;
+      for (int64_t i = 0; i < group; ++i) {
+        int64_t step = delta;
         if ((flags & 2) == 0 && !number(&step))
           return Fail("truncated Android APS2 relocation offset");
         next += step;
-        if (next > UINT32_MAX)
+        if (next < 0 || next > UINT32_MAX)
           return Fail("Android APS2 relocation address overflow");
-        uint32_t record_info = info;
+        int64_t record_info = info;
         if ((flags & 1) == 0 && !number(&record_info))
           return Fail("truncated Android APS2 relocation info");
-        if (!AppendRelocation(static_cast<uint32_t>(next), record_info, false))
+        if (!AppendRelocation(static_cast<uint32_t>(next),
+                              static_cast<uint32_t>(record_info), false))
           return false;
       }
-      remaining -= group;
+      remaining -= static_cast<uint64_t>(group);
     }
     if (pos != size) return Fail("trailing Android APS2 relocation data");
     return true;
