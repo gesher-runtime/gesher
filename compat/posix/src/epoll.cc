@@ -680,7 +680,10 @@ int SampleVirtualEntries(EpollPollScratch& scratch, bool prepare_wait) {
     }
     if (!owner) continue;
     const Object& object = owner->object;
-    if (object.timer) RefreshTimerFd(*object.timer);
+    // A refresh can itself publish an edge after the epoll snapshot. An
+    // exclusive publisher retains the edge for idle registrations without
+    // interrupting a nonblocking waiter, so force the locked delivery sample.
+    if (object.timer && RefreshTimerFd(*object.timer)) result |= 1;
     if (object.eventfd) item.revents = PollEventFd(*object.eventfd, item.events, nullptr);
     else if (object.epoll) PollEpollOwned(object.epoll, item.events, &item.revents);
     if (item.revents != 0) result |= 1;
@@ -958,7 +961,7 @@ static int EpollWaitImpl(int epfd, struct epoll_event* events, int maxevents, in
     const int virtual_ready = gesher::SampleVirtualEntries(scratch, false);
 
     int count = 0;
-    if (ready > 0 || edge_ready || interrupted || (virtual_ready & 1) != 0) {
+    if (ready > 0 || edge_ready || interrupted || ((virtual_sample | virtual_ready) & 1) != 0) {
       std::lock_guard<std::mutex> lock(ep->mutex);
       // A continuously ready low-numbered fd must not starve the rest when
       // the caller's output buffer is smaller than the ready set. Consult the

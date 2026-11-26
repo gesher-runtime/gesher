@@ -188,7 +188,7 @@ struct Inotify {};
 int ReadInotify(Inotify&, void*, unsigned int) { return errno = EINVAL, -1; }
 struct TimerFd;
 struct EventFd;
-void RefreshTimerFd(TimerFd&);
+bool RefreshTimerFd(TimerFd&);
 int ReadTimerFd(TimerFd&, void*, unsigned int);
 std::shared_ptr<TimerFd> LookupTimerFd(int);
 int RegisterTimerFd(std::shared_ptr<TimerFd>, std::shared_ptr<EventFd>);

@@ -60,7 +60,8 @@ std::shared_ptr<Inotify> LookupInotify(int fd);
 struct TimerFd;
 // A caller can run after resume before Windows dispatches the power callback.
 // Sample the selected clock when acquiring readiness, as read/gettime do.
-void RefreshTimerFd(TimerFd& timer);
+// True when sampling the timer published new readable readiness.
+bool RefreshTimerFd(TimerFd& timer);
 int RegisterTimerFd(std::shared_ptr<TimerFd> timer, std::shared_ptr<EventFd> readiness);
 std::shared_ptr<TimerFd> LookupTimerFd(int fd);
 int ReadTimerFd(TimerFd& timer, void* buf, unsigned int count);
