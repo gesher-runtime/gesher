@@ -24,7 +24,8 @@ DLL, or advertised by `NativeLibs.SUPPORTED` or `build.prop`.
 | `arm32_image_memory` | Mapping relocated image bytes into guest pages, inaccessible segment holes and read-only RELRO protection. |
 | `arm32_executor` | ARM/Thumb execution through the pinned Dynarmic A32 frontend, finite instruction budgets, checked instruction/data access, explicit faults and typed host-function thunks. |
 | `arm32_program` | Isolated dependency-DAG loader, guest-address allocation, typed host import bindings, transactional load rollback, guest constructors and reverse-order finalizers, exported function calls and explicit shutdown. Not integrated with ART or APK packaging. |
-| `arm32_bionic` | A narrow ILP32 guest-memory libc adapter for malloc/calloc/realloc/free, memcpy/memmove/memset/memcmp and strlen/strnlen/strcmp/strncmp; a guest `__errno` cell with ENOMEM on allocation failure, bounds checks and typed imports. Not a complete Bionic implementation or JNI32 bridge. |
+| `arm32_bionic` | A narrow ILP32 guest-memory libc adapter for malloc/calloc/realloc/free, memcpy/memmove/memset/memcmp and strlen/strnlen/strcmp/strncmp; a guest `__errno` cell with ENOMEM on allocation failure, bounds checks and typed imports. Not a complete Bionic implementation. |
+| `arm32_jni` | Initial guest `JNIEnv*` and read-only 32-bit function table with typed JNI host callbacks, opaque generation-checked Java references, local/global reference ownership, UTF copies, and descriptor-aware host-to-guest named native invocation, including `@CriticalNative` scalar calls. This is an isolated component with an injected host JNIEnv, not ART native registration or complete JNI32. |
 
 The linked-program test loads and calls the compiled ARM and Thumb fixtures through `Program`, including their constructors and typed host imports. Additional actual compiler-generated ARM/Thumb fixtures test libc imports and a two-DSO `DT_NEEDED` graph with guest-side constructor/finalizer ordering assertions. The dependency's destructor traps if the consumer has not run its own destructor first. The `arm32_bionic` adapter confines pointers to `GuestMemory`; it does not expose host pointers to 32-bit guest code. Its `__errno` cell is per standalone Program, not thread-local: real guest threads require a distinct errno/TLS design before application use. These are component test paths, not Windows/ART APK runs. The executor runs the compiler-generated fixtures in `tests/arm32`: constructors,
 relocated data pointers, integer and floating-point calls, 64-bit register/stack
@@ -47,13 +48,25 @@ parameter remains a guest value; the adapter explicitly reads or writes its
 buffer through `GuestMemory`. No generic cast to an arbitrary host function is
 available.
 
-JNI descriptor parsing and opaque tokens are foundations for a future JNI32
-bridge. They do not implement JNIEnv/JavaVM tables, reference ownership,
-thread affinity, array/string pinning or ART native registration.
+The isolated `Jni32` component maps an actual guest `JNIEnv*` function table with
+four-byte entries, and binds only implemented slots. It handles reference
+lifetimes, host Java-thread affinity, bounded copied UTF strings, exceptions
+and several common object/array operations. `CallNative` marshals scalar and
+reference arguments according to the JVM method descriptor, runs guest
+`Java_*` exports with AAPCS32 and translates their return values. Host
+references are never truncated into a 32-bit guest pointer. CriticalNative
+calls omit JNIEnv and receiver. Unknown table slots are null and fault
+closed; they are not silently simulated. The test harness supplies an
+in-process fake host JNIEnv, not a running ART instance. The actual JVM native
+registration/dlsym path, JavaVM guest table, most JNI functions, attached
+threads, array pinning and cross-ABI callbacks remain unsupported. A native
+frame must release its guest local references before returning to ART.
 
 ### ELF and execution limits
 
-DT_NEEDED names may be passed to an explicitly supplied dependency callback before import resolution. This only exposes the dependency contract: the caller must provide its own namespace, recursive loading, lifecycle and external rollback. With no callback, a DT_NEEDED image is rejected. Callbacks run only after ELF metadata and relocation ranges have been checked, avoiding external loads for malformed tables. This is **not yet a dependency manager**.\n\nThe image loader supports `R_ARM_NONE`, `R_ARM_RELATIVE`, `R_ARM_ABS32`,
+DT_NEEDED names may be passed to an explicitly supplied dependency callback before import resolution. This only exposes the dependency contract: the caller must provide its own namespace, recursive loading, lifecycle and external rollback. With no callback, a DT_NEEDED image is rejected. Callbacks run only after ELF metadata and relocation ranges have been checked, avoiding external loads for malformed tables. This is **not yet a dependency manager**.
+
+The image loader supports `R_ARM_NONE`, `R_ARM_RELATIVE`, `R_ARM_ABS32`,
 `R_ARM_REL32`, `R_ARM_GLOB_DAT` and `R_ARM_JUMP_SLOT`, together with standard ELF32 RELR and Android's earlier RELR tag family. RELR entries are checked for size, range, writable targets, duplicates and bounded expansion before relocation writes. Android APS2 REL groups use checked SLEB128 decoding (including negative offset deltas) and are validated against the same relocation and rollback rules. Neither format establishes full Android dependency or JNI support. It preserves Thumb symbol
 bits and rejects unresolved required imports. Weak imports follow the relevant
 relocation contract. ELF tables and relocation targets are range checked;
@@ -65,7 +78,9 @@ executable interpreters and preinit arrays are explicitly rejected. The loader
 does not claim general Android DSO compatibility. It accepts System V/Linux
 OSABI values with ABI version zero and rejects unsupported FDPIC variants.
 
-The standalone `Program` coordinates up to 64 guest dependency objects in dependency-first order and maps each into a reserved guest range. It rejects cyclic dependency graphs; its provider, symbol namespace and host bindings are intentionally explicit. Loaded objects are not Android linker namespaces, and a successful `DT_NEEDED` callback is not proof that an Android dependency is present. A failed load unmaps only objects created by that transaction. Any side effects of a guest constructor cannot be rolled back. The program deliberately has no native threads or nested JNI callbacks.\n\nImage mapping and execution require exclusive ownership of the guest address
+The standalone `Program` coordinates up to 64 guest dependency objects in dependency-first order and maps each into a reserved guest range. It rejects cyclic dependency graphs; its provider, symbol namespace and host bindings are intentionally explicit. Loaded objects are not Android linker namespaces, and a successful `DT_NEEDED` callback is not proof that an Android dependency is present. A failed load unmaps only objects created by that transaction. Any side effects of a guest constructor cannot be rolled back. The program deliberately has no native threads or nested JNI callbacks.
+
+Image mapping and execution require exclusive ownership of the guest address
 space while loading/running. One executor call can be active at a time;
 same-executor reentry fails explicitly. Guest threads, nested JNI callbacks,
 signals, TLS and system calls require further runtime work. An unimplemented
@@ -113,6 +128,7 @@ cmake -S compat/arm32 -B out-arm32 -DCMAKE_BUILD_TYPE=Release \
   -DBoost_INCLUDE_DIR=/path/to/boost_1_83_0 \
   -DARM32_GUEST_FIXTURES="$PWD/out-arm32-fixtures/fixture-arm.so;$PWD/out-arm32-fixtures/fixture-thumb.so" \
   -DARM32_GUEST_BIONIC_FIXTURES="$PWD/out-arm32-fixtures/bionic-arm.so;$PWD/out-arm32-fixtures/bionic-thumb.so" \
+  -DARM32_GUEST_JNI_FIXTURES="$PWD/out-arm32-fixtures/jni-arm.so;$PWD/out-arm32-fixtures/jni-thumb.so" \
   -DARM32_GUEST_DEPENDENCY_DIR="$PWD/out-arm32-fixtures"
 cmake --build out-arm32 --parallel 4
 ctest --test-dir out-arm32 --output-on-failure
@@ -153,7 +169,7 @@ load alignment and cancellation of queued code-cache invalidation. These
 specific failures have regression tests. ASan/UBSan results do not include
 LeakSanitizer when leak detection is disabled in a ptrace-supervised environment.
 
-The later RELR, APS2, dependency-callback, linked-program and libc adapter additions have not yet been compiled or executed in a verified complete component test run. The ELF32 guest test source was separately compiled with local Clang 17 and LLD for both ARM and Thumb; `readelf` confirmed actual libc imports, `DT_NEEDED` and cross-library symbol imports plus constructor/finalizer arrays. The pinned Zig guest compiler and Dynarmic executor were not available in that local environment. These checks verify fixture shape only, not guest execution. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
+The later RELR, APS2, dependency-callback, linked-program, guest libc and JNI32 adapter additions have not yet been executed in a verified complete component test run. The ELF32 guest test source was separately compiled with local Clang 17 and LLD for both ARM and Thumb; `readelf` confirmed actual libc imports, `DT_NEEDED` and cross-library symbol imports plus constructor/finalizer arrays. The pinned Zig guest compiler and Dynarmic executor were not available in that local environment. Clang 17 and LLD also compiled the JNI table-call fixture separately for ARM and Thumb: `readelf` verified ELF32 EM_ARM, EABI5 softfp, exported JNI methods and the Thumb-bit distinction. A local JDK verified the host JNI table slot offsets and CMake's ability to find JNI headers. These checks verify build inputs and fixture shapes only, not complete bridge execution. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
 Existing x86-64/AArch64 production sources, packaging and advertised ABI lists
 are unchanged by these standalone components.
 
@@ -162,8 +178,8 @@ are unchanged by these standalone components.
 | Gate | Required behavior and evidence |
 | --- | --- |
 | Full ELF runtime | Dependency namespaces and lifecycle, Android packed relocations, TLS, dynamic loader services, guest C++ runtime and unwind behavior. |
-| JNI32 | Four-byte guest JNIEnv/JavaVM tables; references/IDs; arrays, strings and direct buffers; exceptions; thread attachment; both named `Java_*` lookup and `RegisterNatives`. |
-| ART signatures | Signature-aware native resolution, including `@CriticalNative`, so normal named native methods can be marshalled without guessing types. |
+| JNI32 | Extend the partially implemented guest JNIEnv table to the full JNI API, JavaVM table, methods/fields, arrays and direct buffers, thread attachment, nested callbacks and native registration. The initial guest JNIEnv, opaque references, UTF operations and descriptor-marshaled named calls have isolated fake-host tests but no ART end-to-end proof. |
+| ART signatures | Connect the existing descriptor-aware `Jni32::CallNative` adapter to ART's actual `dlsym`, native method resolution and `RegisterNatives` paths without guessing Java signatures. CriticalNative scalar call packing exists only in the standalone adapter. |
 | Bionic32 | Correct ILP32 data layouts, allocations, errno, pthread objects, callbacks, variadics, filesystem/network/time/signal APIs and ARM system-call contracts. |
 | Android NDK objects | NativeActivity, windows, input queues, graphics/media and other guest-visible structures and callbacks. |
 | Lifecycle | Nested guest/host calls, guest threads, TLS teardown, cache/exclusive-monitor coherence and real process shutdown. |
