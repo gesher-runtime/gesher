@@ -13,6 +13,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devices/caption_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/caption_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/camera_metadata_jni.cc
+  ${CMAKE_SOURCE_DIR}/compat/devices/camera_ndk.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/camera_mf.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/devices_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/hello_jni.cc
