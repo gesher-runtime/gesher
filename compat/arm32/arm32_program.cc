@@ -80,18 +80,23 @@ bool Program::BindHostSymbol(std::string name, std::vector<ValueKind> arguments,
       next_thunk_ >= kStackBase)
     return Fail(error, "invalid or duplicate ARM32 host symbol binding");
   const uint32_t address = static_cast<uint32_t>(next_thunk_);
+  bool inserted = false;
+  std::map<std::string, uint32_t, std::less<>>::iterator bound = host_symbols_.end();
   try {
-    // Reserve the name first. A failed bind rolls it back; a successful bind
-    // remains permanent, just like the executable page and callback.
-    const auto [it, inserted] = host_symbols_.emplace(std::move(name), address);
-    if (!inserted) return Fail(error, "duplicate ARM32 host symbol");
+    // Reserve the name first. A failed or throwing bind must erase its name:
+    // otherwise a later guest import could resolve to an unmapped thunk.
+    const auto [it, fresh] = host_symbols_.emplace(std::move(name), address);
+    if (!fresh) return Fail(error, "duplicate ARM32 host symbol");
+    bound = it;
+    inserted = true;
     if (!executor_.BindHostFunction(address, std::move(arguments), result,
                                      std::move(callback), error)) {
-      host_symbols_.erase(it);
+      host_symbols_.erase(bound);
       return false;
     }
     next_thunk_ += kPage;
   } catch (...) {
+    if (inserted) host_symbols_.erase(bound);
     return Fail(error, "cannot allocate ARM32 host symbol");
   }
   if (error) error->clear();
