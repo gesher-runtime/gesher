@@ -2613,13 +2613,16 @@ jobs:
         run: |
           pwsh -NoProfile -File tests/windows/run-web3-query-component.ps1 -Dir "$PWD/dist" -RuntimeExe "$PWD/dist/dalvikvm-web3-query-test.exe" | Tee-Object -FilePath web3-query-results.txt
           exit $LASTEXITCODE
+      # Preserve process and device logs without copying the staged runtime and host fonts.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: web3-query-full-logs-${{ matrix.os }}
           path: |
             web3-query-results.txt
-            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/**
+            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/*.log
+            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/logs-web3/**
+            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/logs-query-device/**
           if-no-files-found: warn
 
   # Ordinary Binder scope is mandatory and separate from production installer
