@@ -487,8 +487,9 @@ public final class NotificationChannelGroupsTest {
         Class<?> servicesType = services.getClass(), recordType = Class.forName(servicesType.getName() + "$ServiceRecord");
         PackageInfo installed = (PackageInfo) f.apkType.getMethod("packageInfo", long.class)
                 .invoke(f.owner, (long) PackageManager.GET_SERVICES);
-        ServiceInfo info = Arrays.stream(installed.services).filter(s -> s.enabled)
-                .findFirst().orElseThrow(() -> new AssertionError("Fixture has no enabled declared service"));
+        ServiceInfo info = Arrays.stream(installed.services)
+                .filter(s -> s.enabled && s.name.equals(f.pkg + ".NotificationForegroundService"))
+                .findFirst().orElseThrow(() -> new AssertionError("Fixture has no declared foreground service"));
         Object record = make(recordType, new Class<?>[]{ServiceInfo.class, f.apkType}, info, f.owner);
         ComponentName component = new ComponentName(info.packageName, info.name);
         ((Map<ComponentName,Object>)field(servicesType,"mServices").get(services)).put(component, record);
@@ -515,13 +516,15 @@ public final class NotificationChannelGroupsTest {
         ((List<Object>)field(NotificationManagerService.class, "mListeners").get(f.service)).add(listener);
         field(NotificationManagerService.class, "mListenersBound").setBoolean(f.service, true);
         android.system.Os.setenv("GESHER_MICROG_SPOOF", "0", true);
-        try { foreground.invoke(services, component, record, 31, f.notification("fgs"), 0, 0); }
+        try { foreground.invoke(services, component, record, 31, f.notification("fgs"), 0,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST); }
         finally { android.system.Os.setenv("GESHER_MICROG_SPOOF", "1", true); }
         require(callbacks.get() == 1, "Foreground post did not exercise actual listener dispatch");
         rejects(SecurityException.class, () -> f.nm.deleteNotificationChannelGroup("active"), "Deleted a foreground-service group");
         rejects(SecurityException.class, () -> f.nm.deleteNotificationChannel("fgs"), "Deleted an active foreground-service channel");
         require(f.nm.getNotificationChannelGroup("active").getChannels().size() == 2, "Failed preflight partially deleted a group");
-        foreground.invoke(services, component, record, 32, f.notification("ungrouped"), 0, 0);
+        foreground.invoke(services, component, record, 32, f.notification("ungrouped"), 0,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST);
         f.nm.deleteNotificationChannel("fgs");
         require(f.nm.getNotificationChannel("fgs") == null, "Replacing foreground notification retained its old association");
         foreground.invoke(services, component, record, 0, null, Service.STOP_FOREGROUND_DETACH, 0);

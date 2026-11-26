@@ -35,6 +35,10 @@ struct StreamLock {
 };
 enum class PathKind { kFile, kNull, kMissing };
 namespace gesher {
+// Keep mode/descriptor contracts independent of storage policy decisions.
+// Actual authorization and revocation run in storage_policy_host_test.
+enum class AccessKind { kStat, kRead, kWrite };
+static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 // Device/OFD identity is exercised by test_stream_device_lifetime.py and the complete OFD corpus.
 void ForgetStreamDevice(int, bool) {}
 int HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? fd : INVALID_HANDLE_VALUE; }

@@ -10,6 +10,7 @@
 #include <opus_multistream.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #include "../audio/log.h"
@@ -105,7 +106,10 @@ class Mp3Decoder : public AudioDecoder {
 
   bool Decode(const Sample& in, std::vector<uint8_t>* out) override {
     size_t pos = 0;
-    std::vector<int16_t> pcm(4608);
+    // The provider writes every returned sample before releasing this pointer.
+    // Keep its scratch storage; Append still gives callers independent PCM.
+    pcm_.resize(4608);
+    auto& pcm = pcm_;
     while (pos < in.data.size()) {
       config_.pInputBuffer = const_cast<uint8_t*>(in.data.data() + pos);
       config_.inputBufferCurrentLength = static_cast<int32_t>(in.data.size() - pos);
@@ -139,6 +143,7 @@ class Mp3Decoder : public AudioDecoder {
   }
 
   void Drain(std::vector<uint8_t>* out) override {
+    std::vector<int16_t>().swap(pcm_);
     // The decoder's delay, as C2SoftMp3Dec adds it at the end.
     std::vector<int16_t> zeros(static_cast<size_t>(kMp3DecoderDelay) * info_.channels, 0);
     Append(out, zeros.data(), zeros.size() * 2);
@@ -149,6 +154,7 @@ class Mp3Decoder : public AudioDecoder {
   tPVMP3DecoderExternal config_;
   void* mem_;
   size_t to_skip_ = kMp3DecoderDelay;
+  std::vector<int16_t> pcm_;
 };
 
 // --- Vorbis (Tremolo) --------------------------------------------------------------------
@@ -217,7 +223,8 @@ class VorbisDecoder : public AudioDecoder {
     ogg_packet pack = {};
     pack.packet = &ref;
     pack.bytes = static_cast<long>(ref.length);
-    std::vector<int16_t> pcm(static_cast<size_t>(kVorbisMaxSamples) * info_.channels);
+    pcm_.resize(static_cast<size_t>(kVorbisMaxSamples) * info_.channels);
+    auto& pcm = pcm_;
     int frames = 0;
     if (vorbis_dsp_synthesis(&state_, &pack, 1) == 0) {
       frames = vorbis_dsp_pcmout(&state_, pcm.data(), kVorbisMaxSamples);
@@ -236,11 +243,14 @@ class VorbisDecoder : public AudioDecoder {
     frames_left_on_page_ = -1;
   }
 
+  void Drain(std::vector<uint8_t>*) override { std::vector<int16_t>().swap(pcm_); }
+
  private:
   vorbis_info vi_ = {};
   vorbis_dsp_state state_ = {};
   PcmInfo info_;
   int frames_left_on_page_ = -1;
+  std::vector<int16_t> pcm_;
 };
 
 // --- Opus (libopus) ----------------------------------------------------------------------
@@ -295,7 +305,8 @@ class OpusDecoder : public AudioDecoder {
 
   bool Decode(const Sample& in, std::vector<uint8_t>* out) override {
     if (in.time_us == 0) to_discard_ = codec_delay_;
-    std::vector<int16_t> pcm(static_cast<size_t>(kOpusMaxPacketSamples) * info_.channels);
+    pcm_.resize(static_cast<size_t>(kOpusMaxPacketSamples) * info_.channels);
+    auto& pcm = pcm_;
     int n = opus_multistream_decode(dec_, in.data.data(), static_cast<opus_int32>(in.data.size()),
                                     pcm.data(), kOpusMaxPacketSamples, 0);
     if (n < 0) {
@@ -313,6 +324,8 @@ class OpusDecoder : public AudioDecoder {
     to_discard_ = time_us == 0 ? codec_delay_ : seek_preroll_;
   }
 
+  void Drain(std::vector<uint8_t>*) override { std::vector<int16_t>().swap(pcm_); }
+
  private:
   static uint64_t Read64(const void* p) {
     uint64_t v;
@@ -323,6 +336,7 @@ class OpusDecoder : public AudioDecoder {
   OpusMSDecoder* dec_ = nullptr;
   uint64_t codec_delay_ = 0, seek_preroll_ = 0, to_discard_ = 0;
   PcmInfo info_;
+  std::vector<int16_t> pcm_;
 };
 
 PcmFormat FromEncoding(int32_t encoding) {

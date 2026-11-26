@@ -163,6 +163,8 @@ class Track : public std::enable_shared_from_this<Track> {
   bool MixInto(float* mix, size_t frames, uint32_t out_rate, uint32_t out_channels);
   // Reads up to `frames` source frames as float (the track's channels).
   size_t ReadSource(float* dst, size_t frames, bool* ended);
+  // Copies only available ring capacity; both callers hold mu_.
+  size_t CopyToRing(const uint8_t* source, size_t frames);
   void QueueEvents(uint64_t before, uint64_t after);
 
   Engine* engine_;
@@ -176,6 +178,10 @@ class Track : public std::enable_shared_from_this<Track> {
   bool drained_ = false;  // kStopping: all played
   // A writer must observe pause/stop even if start() runs before it reacquires mu_.
   uint64_t write_interrupt_ = 0;
+  // Borrowed only while a blocking Write is waiting with its input still alive.
+  struct PendingWrite;
+  PendingWrite* pending_write_head_ = nullptr;
+  PendingWrite* pending_write_tail_ = nullptr;
 
   // Streaming ring, or static data.
   std::vector<uint8_t> data_;
@@ -200,7 +206,7 @@ class Track : public std::enable_shared_from_this<Track> {
   uint32_t underrun_count_ = 0;
   bool was_underrun_ = false;
   bool end_signalled_ = false;
-  int starved_ticks_ = 0;
+  int64_t starved_since_ns_ = -1;
 
   float vol_left_ = 1.0f, vol_right_ = 1.0f;
   float applied_left_ = 1.0f, applied_right_ = 1.0f;  // ramps toward vol_*

@@ -1,8 +1,8 @@
 diff --git a/compat/posix/src/stdio_output.cc b/compat/posix/src/stdio_output.cc
-index 83ab9abc..91c8c2b8 100644
+index 9f9f9eda691f648c829cd7c1f0a66815f27a6c0b..197dcfeb0861c74fe5931dbfd567432e57c4d469 100644
 --- a/compat/posix/src/stdio_output.cc
 +++ b/compat/posix/src/stdio_output.cc
-@@ -80,6 +80,25 @@ class FormatScope {
+@@ -84,6 +84,25 @@ class FormatScope {
    State* previous_;
    CancellationCleanup cleanup_;
  };
@@ -28,7 +28,7 @@ index 83ab9abc..91c8c2b8 100644
  using Streams = std::map<FILE*, StatePtr>;
  struct Registry {
    std::mutex mutex;
-@@ -287,6 +306,10 @@ size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bo
+@@ -291,6 +310,10 @@ size_t WriteLocal(const void* bytes, size_t size, size_t count, FILE* stream, bo
  }
  size_t ReadLocal(void* bytes, size_t size, size_t count, FILE* stream, bool unlocked) {
    if (size == 0 || count == 0) return 0;
@@ -39,8 +39,8 @@ index 83ab9abc..91c8c2b8 100644
    AccessStream state(stream, unlocked);
    if (!state) return 0;
    state->line_output.store(false, std::memory_order_release);
-@@ -309,6 +332,10 @@ char* LineLocal(char* bytes, int count, FILE* stream, bool unlocked) {
-   return bytes;
+@@ -312,6 +335,10 @@ int64_t DelimitedLocal(char** bytes, size_t* capacity, int delimiter, FILE* stre
+                                      Writer(state->fd), reallocate);
  }
  int UngetLocal(int character, FILE* stream) {
 +  if (auto* state = ScanCallback(stream)) {
@@ -50,7 +50,7 @@ index 83ab9abc..91c8c2b8 100644
    AccessStream state(stream, false);
    if (!state) return EOF;
    state->line_output.store(false, std::memory_order_release);
-@@ -416,14 +443,12 @@ wint_t PutWideLocal(wchar_t value, FILE* stream) {
+@@ -419,14 +446,12 @@ wint_t PutWideLocal(wchar_t value, FILE* stream) {
    AccessStream state(stream, false);
    return state ? PutWide(state.Get(), value) : WEOF;
  }
@@ -67,7 +67,7 @@ index 83ab9abc..91c8c2b8 100644
      if (value == EOF) { if (partial) state->buffer.SetError(EILSEQ); return WEOF; }
      const char byte = static_cast<char>(value);
      wchar_t decoded = 0;
-@@ -433,10 +458,12 @@ wint_t GetWideLocal(FILE* stream) {
+@@ -436,10 +461,12 @@ wint_t GetWideLocal(FILE* stream) {
      return static_cast<wint_t>(decoded);
    }
  }
@@ -83,7 +83,7 @@ index 83ab9abc..91c8c2b8 100644
    state->buffer.Orient(1);
    state->line_output.store(false, std::memory_order_release);
    char encoded[MB_LEN_MAX];
-@@ -449,6 +476,12 @@ wint_t UngetWideLocal(wint_t value, FILE* stream) {
+@@ -452,6 +479,12 @@ wint_t UngetWideLocal(wint_t value, FILE* stream) {
    state->input_conversion = {};
    return value;
  }
@@ -96,7 +96,7 @@ index 83ab9abc..91c8c2b8 100644
  int PrintLocal(FILE* stream, const char* format, va_list arguments) {
    AccessStream state(stream, false);
    if (!state) return -1;
-@@ -479,12 +512,14 @@ int ScanLocal(FILE* stream, const char* format, va_list arguments) {
+@@ -482,12 +515,14 @@ int ScanLocal(FILE* stream, const char* format, va_list arguments) {
    state->buffer.Orient(-1);
    // The runtime parser uses public getc/ungetc. Wrapping its va_list entry
    // retains this same stream lock for the whole conversion sequence.

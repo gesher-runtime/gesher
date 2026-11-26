@@ -253,6 +253,7 @@ final class BroadcastController {
         Intent snapshot = new Intent(intent);
         validateBroadcastSender(origin, snapshot);
         boundedIntent(snapshot);
+        deliverToSystemReceivers(snapshot);
         String[] required = copy(requiredPermissions), excluded = copy(excludePermissions),
                 excludedPackages = copy(excludePackages);
         Bundle extras = resultExtras(resultExtras);
@@ -263,10 +264,12 @@ final class BroadcastController {
                 if (snapshot.getPackage() != null && !snapshot.getPackage().equals(rl.packageName)
                         || !receiverPermissions(rl.packageName, required, excluded, excludedPackages)) continue;
                 ReceiverFilter best = null;
+                String type = resolvedType != null ? resolvedType : snapshot.getType();
                 for (ReceiverFilter filter : rl.filters) {
                     if (registeredAllowed(origin, rl, filter)
-                            && filter.filter.match(snapshot.getAction(), resolvedType != null
-                                    ? resolvedType : snapshot.getType(), snapshot.getScheme(),
+                            && ResolverCandidates.isCandidate(filter.filter, snapshot.getAction(),
+                                    type, snapshot.getScheme())
+                            && filter.filter.match(snapshot.getAction(), type, snapshot.getScheme(),
                                     snapshot.getData(), snapshot.getCategories(), "gesher") >= 0
                             && (best == null || filter.filter.getPriority() > best.filter.getPriority())) best = filter;
                 }
@@ -654,6 +657,32 @@ final class BroadcastController {
         if (app != null && mAtm.callerProcess(app.pid) == app) mAtm.maybeExit(app);
     }
 
+    /** System-server receivers of implicit broadcasts, by action (MediaProvider's MediaReceiver). */
+    private final Map<String, List<java.util.function.Consumer<Intent>>> mSystemReceivers =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    void addSystemReceiver(String action, java.util.function.Consumer<Intent> receiver) {
+        mSystemReceivers.computeIfAbsent(java.util.Objects.requireNonNull(action),
+                ignored -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                .add(java.util.Objects.requireNonNull(receiver));
+    }
+
+    /** Hands an implicit, package-less broadcast to the system receivers of its action. */
+    private void deliverToSystemReceivers(Intent intent) {
+        if (intent.getComponent() != null || intent.getPackage() != null) return;
+        String action = intent.getAction();
+        if (action == null) return;
+        List<java.util.function.Consumer<Intent>> receivers = mSystemReceivers.get(action);
+        if (receivers == null) return;
+        for (java.util.function.Consumer<Intent> receiver : receivers) {
+            try {
+                receiver.accept(new Intent(intent));
+            } catch (RuntimeException e) {
+                SystemServer.log("system receiver for " + intent.getAction() + " failed: " + e);
+            }
+        }
+    }
+
     BroadcastController(ActivityTaskManagerService atm, PackageManagerService pm) {
         this(atm, pm, RECEIVER_TIMEOUT_MS);
     }
@@ -711,6 +740,7 @@ final class BroadcastController {
                 throw new SecurityException("Receiver Binder belongs to another application");
             }
             rl.filters.add(new ReceiverFilter(filter, requiredPermission, flags));
+            StickyBroadcasts.receiverRegistered(rl, filter);
         }
         StringBuilder actions = new StringBuilder();
         for (int i = 0; i < filter.countActions(); i++) {
@@ -753,7 +783,9 @@ final class BroadcastController {
                 && (flags & Context.RECEIVER_NOT_EXPORTED) != 0) {
             throw new IllegalArgumentException("A non-exported receiver cannot be visible to instant apps");
         }
-        boolean onlyProtected = filter.countActions() != 0;
+        // Android starts from true and clears it for any unprotected action, so a
+        // filter without actions (it matches no broadcast) needs no explicit flag.
+        boolean onlyProtected = true;
         for (int i = 0; onlyProtected && i < filter.countActions(); i++) {
             // A failed catalog denies unknown senders, but cannot prove this exemption.
             onlyProtected = mPm.permissions().isKnownProtectedBroadcast(filter.getAction(i));
@@ -781,6 +813,7 @@ final class BroadcastController {
                 throw new SecurityException("Cannot unregister another application's receiver");
             }
             mRegistered.remove(receiver.asBinder());
+            if (rl != null) StickyBroadcasts.receiverUnregistered(rl);
         }
         if (rl != null) SystemServer.log("unregisterReceiver of " + rl.packageName);
         pumpOrdered();
@@ -812,10 +845,12 @@ final class BroadcastController {
         if (intent == null) throw new IllegalArgumentException("Missing broadcast intent");
         intent = new Intent(intent);
         validateBroadcastSender(sender, intent);
+        deliverToSystemReceivers(intent);
         String callingPackage = sender.packageName;
         // Registered receivers: implicit broadcasts only.
         List<ReceiverList> registered = new ArrayList<>();
         if (intent.getComponent() == null) {
+            String type = resolvedType != null ? resolvedType : intent.getType();
             synchronized (this) {
                 for (ReceiverList rl : mRegistered.values()) {
                     if (intent.getPackage() != null && !intent.getPackage().equals(rl.packageName)) {
@@ -825,9 +860,11 @@ final class BroadcastController {
                             excludePermissions, excludePackages)) continue;
                     for (ReceiverFilter registeredFilter : rl.filters) {
                         if (!registeredAllowed(sender, rl, registeredFilter)) continue;
-                        if (registeredFilter.filter.match(intent.getAction(), resolvedType != null ? resolvedType
-                                : intent.getType(), intent.getScheme(), intent.getData(),
-                                intent.getCategories(), "gesher") >= 0) {
+                        // Android's receiver resolver offers only indexed filters to match.
+                        if (ResolverCandidates.isCandidate(registeredFilter.filter, intent.getAction(),
+                                type, intent.getScheme())
+                                && registeredFilter.filter.match(intent.getAction(), type,
+                                intent.getScheme(), intent.getData(), intent.getCategories(), "gesher") >= 0) {
                             registered.add(rl);
                             break;
                         }
@@ -1225,7 +1262,11 @@ final class BroadcastController {
     /** The process went away: so did its registered receivers. */
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
         synchronized (this) {
-            mRegistered.values().removeIf(rl -> rl.app == app);
+            mRegistered.values().removeIf(rl -> {
+                if (rl.app != app) return false;
+                StickyBroadcasts.receiverUnregistered(rl);
+                return true;
+            });
             mTimedOut.remove(app);
             for (ManifestDelivery delivery : new ArrayList<>(mManifest)) {
                 // Unassigned work may already target a replacement process that

@@ -58,12 +58,16 @@ public final class ConnectivityServiceSnapshotHost {
             // While watching, JNI changes belong to watch()'s event publication.
             // The sentinel models ownership only; no host event thread is claimed.
             watcher.set(service, new Thread()); snapshot = ONLINE;
+            Field watching = null;
+            try { watching = field(ConnectivityService.class, "mWatching"); watching.set(service, true); }
+            catch (NoSuchFieldException baseline) { /* Older source used thread presence as ownership. */ }
             check(new Network(112).equals(manager.getActiveNetwork()), "watched cache is initialized");
             int before = reads;
             field(ConnectivityService.class, "mSnapshot").set(service, EMPTY);
             check(manager.getActiveNetwork() == null && reads == before,
                     "watched queries use the event-published cache without repeated enumeration");
             watcher.set(service, null);
+            if (watching != null) watching.set(service, false);
             System.out.println("ConnectivityServiceSnapshotHost all passed: " + checks);
         } finally {
             clientService.set(null, oldService); clientSnapshot.set(null, oldSnapshot);
