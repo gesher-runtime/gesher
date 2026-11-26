@@ -116,6 +116,39 @@ static void test_epoll_eventfd_exclusive(uint32_t flags) {
   if (source >= 0) close(source);
 }
 
+static void test_epoll_eventfd_exclusive_output_alias(uint32_t flags) {
+  int ep = epoll_create1(0), source = eventfd(0, EFD_NONBLOCK);
+  int alias = dup(source);
+  check("exclusive output alias setup", ep >= 0 && source >= 0 && alias >= 0);
+  if (ep >= 0 && source >= 0 && alias >= 0) {
+    const eventfd_t full = UINT64_MAX - 1;
+    const uint64_t cookie = 85;
+    eventfd_t value = 0;
+    check("exclusive output starts full",
+          eventfd_write(source, full) == 0 &&
+          edge_ctl(ep, EPOLL_CTL_ADD, source, EPOLLOUT | EPOLLEXCLUSIVE | flags, cookie) == 0 &&
+          edge_empty(ep, 0));
+    check("exclusive output watch outlives the registered descriptor", close(source) == 0);
+    source = -1;
+    check("exclusive output follows the surviving alias",
+          eventfd_read(alias, &value) == 0 && value == full && edge_wait(ep, EPOLLOUT, cookie, 0));
+    check("exclusive output preserves level or consumes edge",
+          flags == 0 ? edge_wait(ep, EPOLLOUT, cookie, 0) : edge_empty(ep, 0));
+    check("exclusive output clears readiness when the counter fills again",
+          eventfd_write(alias, full) == 0 && edge_empty(ep, 0));
+    struct pollfd ready = {ep, POLLIN, 0};
+    check("exclusive output publication makes the epoll descriptor readable",
+          eventfd_read(alias, &value) == 0 && value == full &&
+          poll(&ready, 1, 0) == 1 && ready.revents == POLLIN);
+    check("exclusive output pending notification retires on final alias close",
+          close(alias) == 0 && edge_empty(ep, 0));
+    alias = -1;
+  }
+  if (alias >= 0) close(alias);
+  if (source >= 0) close(source);
+  if (ep >= 0) close(ep);
+}
+
 static void test_epoll_eventfd_edges(void) {
   int ep = epoll_create1(0), fd = eventfd(2, EFD_NONBLOCK | EFD_SEMAPHORE);
   eventfd_t value = 0;
@@ -271,5 +304,7 @@ static void test_epoll_eventfd_edges(void) {
   }
   test_epoll_eventfd_exclusive(0);
   test_epoll_eventfd_exclusive(EPOLLET);
-  printf("eventfd edge and exclusive contracts: complete\n");
+  test_epoll_eventfd_exclusive_output_alias(0);
+  test_epoll_eventfd_exclusive_output_alias(EPOLLET);
+  printf("eventfd edge contracts: complete\n");
 }
