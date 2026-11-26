@@ -95,7 +95,7 @@ public class RecordActivity extends Activity {
         {
             String[] steps = {"session", "devices", "audiorecord", "ndk", "codeclist", "aac", "opus", "h264",
                 "h264surface", "muxboth", "recorder", "recorderlimits", "recordersurface", "recordercamera",
-                "imagereader"};
+                "imagereader", "imageplanes"};
             for (String step : steps) {
                 try {
                     switch (step) {
@@ -114,6 +114,7 @@ public class RecordActivity extends Activity {
                         case "recordersurface": recorderSurface(); break;
                         case "recordercamera": recorderCamera(); break;
                         case "imagereader": imageReader(); break;
+                        case "imageplanes": ImageReaderPlaneScalingTest.run(new File(getFilesDir(), "rec_camera.mp4")); break;
                         default: break;
                     }
                 } catch (Throwable t) {
