@@ -6871,7 +6871,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     case PAUSING:
                         // A task may be restored before its move-to-back pause
                         // completes. Resume it on that acknowledgement.
-                        if (requiredTask != null || fromLaunch) {
+                        if (wasHidden || requiredTask != null || fromLaunch) {
                             top.resumeAfterPause = true;
                         } else {
                             if (!wasHidden && !refocused) return;
@@ -6940,11 +6940,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         synchronized (this) {
             // Covered launches acknowledge the PauseActivityItem actually sent;
             // an already started visible activity may also acknowledge a pause.
-            if (r.app != null && !r.app.dead && (r.state == State.PAUSING
-                    || r.state == State.STARTED
-                    || r.state == State.LAUNCHING && r.launchingPaused)) {
-                recordUsage(r, ActivityUsageHistory.State.PAUSED);
-            }
+            if (r.state != State.PAUSING && r.state != State.STARTED
+                    && (r.state != State.LAUNCHING || !r.launchingPaused)) return;
+            if (r.app != null && !r.app.dead) recordUsage(r, ActivityUsageHistory.State.PAUSED);
             r.launchingPaused = false;
             r.state = State.PAUSED;
             noteShortcutForeground(null, 0);

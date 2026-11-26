@@ -1524,6 +1524,46 @@ public final class TaskStackContractTest {
                 "Back on an activity above a root home launched moved its task to the back");
     }
 
+    private static void restoreTaskWhilePausing() throws Exception {
+        for (int scenario = 0; scenario < 3; scenario++) {
+            Harness h = new Harness();
+            h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Object root = h.record("Root");
+            h.acknowledge("activityResumed", root);
+            IBinder token = (IBinder)get(root, "token");
+            int task = (Integer)get(root, "taskId");
+            int resumes = h.thread.items(ResumeActivityItem.class, root);
+            h.asApp(() -> check(h.api.getActivityClientController().moveActivityTaskToBack(token, true),
+                    "Task did not move to the back"));
+            check("PAUSING".equals(h.state(root)) && h.thread.items(PauseActivityItem.class, root) == 1,
+                    "Moving to the back did not publish one pause");
+
+            // Exercise both an app's request and a legitimate desktop activation.
+            int flags = scenario == 1 ? MOVE_TASK_FROM_WINDOW : 0;
+            h.asApp(() -> h.api.moveTaskToFront(h.thread, PKG, task, flags, null));
+            check(h.thread.items(ResumeActivityItem.class, root) == resumes,
+                    "Task resumed before the outstanding pause completed");
+            boolean hiddenAgain = scenario == 2;
+            if (hiddenAgain) {
+                h.asApp(() -> check(h.api.getActivityClientController().moveActivityTaskToBack(token, true),
+                        "The intervening hide was rejected"));
+            }
+            h.acknowledge("activityPaused", root);
+            h.acknowledge("activityPaused", root);
+            if (hiddenAgain) {
+                check(h.thread.items(ResumeActivityItem.class, root) == resumes
+                                && h.thread.items(StopActivityItem.class, root) == 1,
+                        "A newer move to the back did not retire the queued foreground request");
+                h.acknowledgeStopped(root);
+                h.asApp(() -> h.api.moveTaskToFront(h.thread, PKG, task, 0, null));
+            }
+            check("RESUMING".equals(h.state(root))
+                            && h.thread.items(ResumeActivityItem.class, root) == resumes + 1
+                            && h.thread.launches(root) == 1,
+                    "The restored live task did not resume once after the pause");
+        }
+    }
+
     private static void pendingStacks() throws Exception {
         Harness h = new Harness();
         Object singleton = field(ActivityManager.class, "IActivityManagerSingleton").get(null);
@@ -2222,7 +2262,9 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("appwindow")) oneWindowPerApp();
         if (selected.equals("all") || selected.equals("permissions")) permissions();
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
-        if (selected.equals("all") || selected.equals("back")) backOnTaskRoot();
+        if (selected.equals("all") || selected.equals("back")) {
+            backOnTaskRoot(); restoreTaskWhilePausing();
+        }
         if (selected.equals("all") || selected.equals("windowclose")) {
             closeMinimizedAppTasks(); conditionalCloseOwnership(); conditionalCloseProtocol();
         }
