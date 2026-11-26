@@ -29,6 +29,8 @@ constexpr uint32_t kDtNeeded = 1, kDtPltRelSz = 2, kDtHash = 4, kDtStrtab = 5,
                    kDtRelr = 36, kDtRelrSz = 35, kDtRelrEnt = 37,
                    kDtAndroidRelr = 0x6fffe000, kDtAndroidRelrSz = 0x6fffe001,
                    kDtAndroidRelrEnt = 0x6fffe003, kDtAndroidRelrCount = 0x6fffe005,
+                   kDtAndroidRel = 0x6000000f, kDtAndroidRelSz = 0x60000010,
+                   kDtAndroidRela = 0x60000011, kDtAndroidRelaSz = 0x60000012,
                    kDtFlags1 = 0x6ffffffb;
 constexpr uint8_t kStbGlobal = 1, kStbWeak = 2, kSttFunc = 2,
                   kSttTls = 6, kSttIfunc = 10;
@@ -286,13 +288,13 @@ class Loader {
         case kDtGnuHash: case kDtRelCount: case kDtFlags1:
         case kDtRelr: case kDtRelrSz: case kDtRelrEnt:
         case kDtAndroidRelr: case kDtAndroidRelrSz: case kDtAndroidRelrEnt:
-        case kDtAndroidRelrCount:
+        case kDtAndroidRelrCount: case kDtAndroidRel: case kDtAndroidRelSz:
           break;
         case 7: case 8: case 9: return Fail("DT_RELA relocations are unsupported");
         case 22: return Fail("DT_TEXTREL is unsupported");
         case 32: case 33: return Fail("DT_PREINIT_ARRAY is unsupported for shared libraries");
-                case 0x6000000f: case 0x60000010: case 0x60000011: case 0x60000012:
-          return Fail("Android packed relocations are unsupported");
+                case kDtAndroidRela: case kDtAndroidRelaSz:
+          return Fail("ELF32 Android packed RELA relocations are unsupported");
         case 0x6ffffff0: case 0x6ffffffc: case 0x6ffffffd: case 0x6ffffffe: case 0x6fffffff:
           return Fail("versioned dynamic symbols are unsupported");
         default: return Fail("unsupported dynamic tag " + std::to_string(tag));
@@ -433,28 +435,101 @@ class Loader {
     return true;
   }
 
+  bool AppendRelocation(uint32_t offset, uint32_t info, bool plt) {
+    Relocation r{offset, info >> 8, info & 255};
+    if (r.type == 0) return true;
+    if (r.type != 2 && r.type != 3 && r.type != 21 && r.type != 22 && r.type != 23)
+      return Fail(std::string("unsupported ") + RelocationName(r.type) +
+                  " (" + std::to_string(r.type) + ")");
+    if (plt && r.type != 22) return Fail("DT_JMPREL contains a non-JUMP_SLOT relocation");
+    if ((r.offset & 3) != 0 || At(r.offset, 4) == nullptr)
+      return Fail("relocation target is unaligned or outside PT_LOAD");
+    const auto* target = Covering(r.offset, 4);
+    if ((target->flags & 2) == 0)
+      return Fail("relocation target is not in a writable PT_LOAD segment");
+    if (r.type == 23 && r.symbol != 0)
+      return Fail("R_ARM_RELATIVE must not reference a symbol");
+    if (r.type != 23 && r.symbol >= symbols_.size())
+      return Fail("relocation symbol index out of bounds");
+    if (relocations_.size() >= options_.max_relocations)
+      return Fail("relocation limit exceeded");
+    relocations_.push_back(r);
+    return true;
+  }
+
   bool RelocationTable(uint32_t address, uint32_t bytes, bool plt) {
     if (bytes % 8 != 0 || bytes / 8 > options_.max_relocations -
-        std::min(relocations_.size(), options_.max_relocations)) return Fail("invalid REL table size");
+        std::min(relocations_.size(), options_.max_relocations))
+      return Fail("invalid REL table size");
     if (bytes == 0) return true;
     const uint8_t* table = MetadataAt(address, bytes);
     if (table == nullptr) return Fail("REL table exceeds PT_LOAD");
     for (size_t i = 0; i < bytes / 8; ++i) {
-      const uint32_t info = U32(table + i * 8 + 4);
-      Relocation r{U32(table + i * 8), info >> 8, info & 255};
-      if (r.type == 0) continue;
-      if (r.type != 2 && r.type != 3 && r.type != 21 && r.type != 22 && r.type != 23) {
-        return Fail(std::string("unsupported ") + RelocationName(r.type) +
-                    " (" + std::to_string(r.type) + ")");
-      }
-      if (plt && r.type != 22) return Fail("DT_JMPREL contains a non-JUMP_SLOT relocation");
-      if ((r.offset & 3) != 0 || At(r.offset, 4) == nullptr) return Fail("relocation target is unaligned or outside PT_LOAD");
-      const auto* target = Covering(r.offset, 4);
-      if ((target->flags & 2) == 0) return Fail("relocation target is not in a writable PT_LOAD segment");
-      if (r.type == 23 && r.symbol != 0) return Fail("R_ARM_RELATIVE must not reference a symbol");
-      if (r.type != 23 && r.symbol >= symbols_.size()) return Fail("relocation symbol index out of bounds");
-      relocations_.push_back(r);
+      if (!AppendRelocation(U32(table + i * 8), U32(table + i * 8 + 4), plt))
+        return false;
     }
+    return true;
+  }
+
+  // Android APS2 encodes groups of ELF32 REL records as signed LEB128 values.
+  // Decode a bounded stream, never reading past its declared DT_ANDROID_RELSZ.
+  // AAPCS32 uses REL, not RELA: group addend flags and RELA tags fail closed.
+  bool PackedRelocations() {
+    if (Has(kDtAndroidRel) != Has(kDtAndroidRelSz))
+      return Fail("incomplete Android packed REL description");
+    if (!Has(kDtAndroidRel)) return true;
+    const uint32_t size = Tag(kDtAndroidRelSz);
+    const uint8_t* stream = MetadataAt(Tag(kDtAndroidRel), size);
+    if (size < 4 || stream == nullptr || std::memcmp(stream, "APS2", 4) != 0)
+      return Fail("invalid Android APS2 relocation header");
+    size_t pos = 4;
+    auto number = [&](uint32_t* out) {
+      uint64_t bits = 0;
+      unsigned shift = 0;
+      for (unsigned i = 0; i < 5; ++i) {
+        if (pos >= size) return false;
+        const uint8_t byte = stream[pos++];
+        bits |= uint64_t{byte & 127} << shift;
+        shift += 7;
+        if ((byte & 128) != 0) continue;
+        if ((byte & 64) != 0) bits |= ~uint64_t{0} << shift;
+        if (static_cast<int64_t>(bits) < 0 || bits > UINT32_MAX) return false;
+        *out = static_cast<uint32_t>(bits);
+        return true;
+      }
+      return false;
+    };
+    uint32_t count = 0, offset = 0;
+    if (!number(&count) || !number(&offset) || count > options_.max_relocations)
+      return Fail("invalid Android APS2 relocation count or initial offset");
+    uint32_t remaining = count;
+    uint64_t next = offset;
+    while (remaining != 0) {
+      uint32_t group = 0, flags = 0, delta = 0, info = 0;
+      if (!number(&group) || !number(&flags) || group == 0 || group > remaining)
+        return Fail("invalid Android APS2 group size or flags");
+      if ((flags & ~uint32_t{3}) != 0)
+        return Fail("Android APS2 REL group has invalid flags or addends");
+      if ((flags & 2) != 0 && !number(&delta))
+        return Fail("truncated Android APS2 group offset");
+      if ((flags & 1) != 0 && !number(&info))
+        return Fail("truncated Android APS2 group info");
+      for (uint32_t i = 0; i < group; ++i) {
+        uint32_t step = delta;
+        if ((flags & 2) == 0 && !number(&step))
+          return Fail("truncated Android APS2 relocation offset");
+        next += step;
+        if (next > UINT32_MAX)
+          return Fail("Android APS2 relocation address overflow");
+        uint32_t record_info = info;
+        if ((flags & 1) == 0 && !number(&record_info))
+          return Fail("truncated Android APS2 relocation info");
+        if (!AppendRelocation(static_cast<uint32_t>(next), record_info, false))
+          return false;
+      }
+      remaining -= group;
+    }
+    if (pos != size) return Fail("trailing Android APS2 relocation data");
     return true;
   }
 
@@ -524,6 +599,7 @@ class Loader {
     }
     if (Has(kDtAndroidRelrCount) && !android)
       return Fail("Android RELR count without RELR table");
+    if (!PackedRelocations()) return false;
     if (Has(kDtRelCount)) {
       const uint32_t count = Tag(kDtRelCount);
       if (!Has(kDtRel) || count > Tag(kDtRelSz) / 8) return Fail("invalid DT_RELCOUNT");
