@@ -1195,7 +1195,7 @@ public final class AppOpsService extends IAppOpsService.Default {
             }
             if (stale != null) stale.kill();
             if (callbacks != null) {
-                callbacks.register(callback);
+                if (!callbacks.register(callback)) callbacks.retireIfEmpty();
                 return;
             }
             callbacks = new AsyncNotedCallbacks(owner);
