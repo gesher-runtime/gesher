@@ -41,7 +41,7 @@ namespace {
 // How a shim function returns: 'i' an int, -1 and errno on failure; 'l' a
 // long (ssize_t, off_t), -1 and errno; 'p' a pointer, MAP_FAILED (-1) and errno;
 // 'n' a pointer, nullptr and errno (getcwd: the kernel returns the length);
-// 'e' an int that is the error number itself (clock_nanosleep).
+// 'e' an int that is the error number itself (clock_nanosleep, posix_fadvise).
 struct RawCall {
   uint16_t nr;
   const char* fn;
@@ -85,16 +85,19 @@ constexpr RawCall kRawCalls[] = {
     {194, "listxattr", 'l'}, {195, "llistxattr", 'l'}, {196, "__flistxattr", 'l'},
     {197, "removexattr", 'i'}, {198, "lremovexattr", 'i'}, {199, "fremovexattr", 'i'},
     {200, "tkill", 'i'},       {201, "time", 'l'},
-    {204, "sched_getaffinity", 'i'}, {217, "getdents64", 'l'}, {228, "clock_gettime", 'i'}, {229, "clock_getres", 'i'},
+    {204, "sched_getaffinity", 'i'}, {217, "getdents64", 'l'}, {221, "posix_fadvise64", 'e'},
+    {228, "clock_gettime", 'i'}, {229, "clock_getres", 'i'},
     {230, "clock_nanosleep", 'e'}, {231, "_exit", 'i'},    {232, "epoll_wait", 'i'},
     {233, "epoll_ctl", 'i'},   {234, "tgkill", 'i'},       {254, "inotify_add_watch", 'i'},
     {255, "inotify_rm_watch", 'i'}, {257, "openat", 'i'},  {258, "mkdirat", 'i'},
     {262, "fstatat", 'i'},     {263, "unlinkat", 'i'},     {264, "renameat", 'i'},
     {265, "linkat", 'i'},      {266, "symlinkat", 'i'},    {267, "readlinkat", 'l'},
     {268, "fchmodat", 'i'},    {269, "faccessat", 'i'},    {271, "ppoll", 'i'},
-    {281, "epoll_pwait", 'i'}, {284, "eventfd", 'i'},      {288, "accept4", 'i'},
+    {281, "epoll_pwait", 'i'}, {284, "eventfd", 'i'},      {285, "fallocate", 'i'},
+    {288, "accept4", 'i'},
     {290, "eventfd", 'i'},     {291, "epoll_create1", 'i'}, {292, "dup3", 'i'},
-    {293, "pipe2", 'i'},       {294, "inotify_init1", 'i'}, {318, "getrandom", 'l'},
+    {293, "pipe2", 'i'},       {294, "inotify_init1", 'i'}, {295, "preadv64", 'l'},
+    {296, "pwritev64", 'l'},   {318, "getrandom", 'l'},
     {319, "memfd_create", 'i'}, {325, "mlock2", 'i'},
 };
 
@@ -343,6 +346,8 @@ int64_t RawSyscallX64(int64_t nr, const int64_t a[6]) {
   errno = 0;
   // The older kernel interfaces have fewer arguments than libc's wrappers.
   // Registers beyond the kernel signature are unspecified, not extra flags.
+  // For preadv/pwritev on LP64 the full offset is in a[3]. The shim's
+  // four-argument functions ignore the unused high offset word in a[4].
   const int64_t r = call.fn(a[0], nr == 284 ? 0 : a[1], a[2],
                            nr == 268 || nr == 269 ? 0 : a[3], a[4], a[5]);
   const int error = errno != 0 ? errno : kEINVAL;

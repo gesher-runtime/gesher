@@ -18,6 +18,25 @@ int event_flags = -1, chmod_flags = -1, mask_calls;
 int alt_stack_calls;
 int64_t alt_stack_in, alt_stack_out;
 bool alt_stack_fail;
+constexpr int64_t kWideOffset = 0x123456789L;
+int64_t BIONIC_SYSV Fadvise(int64_t fd, int64_t offset, int64_t length, int64_t advice,
+                           int64_t, int64_t) {
+  if (fd < 0) return EBADF;
+  return fd == 23 && offset == kWideOffset && length == 91 && advice == 5 ? 0 : EINVAL;
+}
+int64_t BIONIC_SYSV Fallocate(int64_t fd, int64_t mode, int64_t offset,
+                             int64_t length, int64_t, int64_t) {
+  if (mode != 0) return errno = EOPNOTSUPP, -1;
+  return fd == 23 && offset == kWideOffset && length == 91 ? 0 : (errno = EINVAL, -1);
+}
+int64_t BIONIC_SYSV Preadv(int64_t fd, int64_t iov, int64_t count,
+                          int64_t offset, int64_t, int64_t) {
+  return fd == 23 && iov == 91 && count == 5 && offset == kWideOffset ? 7 : (errno = EINVAL, -1);
+}
+int64_t BIONIC_SYSV Pwritev(int64_t fd, int64_t iov, int64_t count,
+                           int64_t offset, int64_t, int64_t) {
+  return fd == 23 && iov == 91 && count == 5 && offset == kWideOffset ? 13 : (errno = EINVAL, -1);
+}
 int64_t BIONIC_SYSV Eventfd(int64_t initial, int64_t flags, int64_t, int64_t, int64_t, int64_t) {
   event_flags = static_cast<int>(flags);
   return flags < 0 ? (errno = EINVAL, -1) : initial + 100;
@@ -60,6 +79,10 @@ int ProtectLoadedMemory(void*, size_t, int, bool) { errno = ENOSYS; return -1; }
 
 namespace gesher::bionic {
 void* LookupBionicSymbol(const char* name) {
+  if (!std::strcmp(name, "posix_fadvise64")) return reinterpret_cast<void*>(&Fadvise);
+  if (!std::strcmp(name, "fallocate")) return reinterpret_cast<void*>(&Fallocate);
+  if (!std::strcmp(name, "preadv64")) return reinterpret_cast<void*>(&Preadv);
+  if (!std::strcmp(name, "pwritev64")) return reinterpret_cast<void*>(&Pwritev);
   if (!std::strcmp(name, "eventfd")) return reinterpret_cast<void*>(&Eventfd);
   if (!std::strcmp(name, "fchmodat")) return reinterpret_cast<void*>(&Fchmodat);
   if (!std::strcmp(name, "close")) return reinterpret_cast<void*>(&Close);
@@ -111,6 +134,22 @@ int main() {
   errno = EDOM;
   Check("sigaltstack errors stay negative errno",
         RawSyscallX64(131, args) == -EINVAL && alt_stack_calls == 2 && errno == EDOM);
+
+  int64_t advice[6] = {23, kWideOffset, 91, 5, 0, 0};
+  Check("fadvise64 forwards the LP64 byte range and advice",
+        RawSyscallX64(221, advice) == 0 && errno == EDOM);
+  advice[0] = -1;
+  Check("fadvise64 converts the POSIX error number without touching errno",
+        RawSyscallX64(221, advice) == -EBADF && errno == EDOM);
+  int64_t allocate[6] = {23, 0, kWideOffset, 91, 0, 0};
+  Check("fallocate forwards the full byte range", RawSyscallX64(285, allocate) == 0);
+  allocate[1] = 1;
+  Check("fallocate returns the backend error", RawSyscallX64(285, allocate) == -EOPNOTSUPP);
+  int64_t vectors[6] = {23, 91, 5, kWideOffset, 0xdeadbeef, 0};
+  Check("preadv uses the full LP64 offset in the fourth argument",
+        RawSyscallX64(295, vectors) == 7);
+  Check("pwritev uses the full LP64 offset in the fourth argument",
+        RawSyscallX64(296, vectors) == 13);
 
   SymbolTable symbols;
   RegisterSyscall(symbols);
