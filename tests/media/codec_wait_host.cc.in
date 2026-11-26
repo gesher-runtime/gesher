@@ -166,6 +166,9 @@ class Codec {
   uint64_t execution_generation_ = 0, fatal_generation_ = 0;
   bool fatal_ = false;
   std::atomic<bool> frame_rendered_{false};
+  // The host fixture exercises the Java path, which owns no NDK dispatcher.
+  struct NativeFrameCallbacks { void DiscardPending() {} };
+  NativeFrameCallbacks* native_frame_callbacks_ = nullptr;
   bool configured_ = true, started_ = false, flushed_ = false, async_ = false;
   bool flush_requested_ = false, failed_ = false, stall_flush_ = false;
   bool surface_eos_ = false, enc_eos_sent_ = false, output_known_ = false, format_pending_ = false;

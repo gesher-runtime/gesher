@@ -22,6 +22,7 @@
 // where they are, with the output format's csd-0 (and csd-1) set.
 
 #include <jni.h>
+#include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
 #include <gesher/clocks.h>
 #include <gesher/perf_trace.h>
@@ -49,6 +50,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <pthread.h>
 #include <sys/types.h>
 
 #include "../audio/log.h"
@@ -454,9 +456,114 @@ uint8_t* CpuOutputBytes(JNIEnv* env, Slot& slot) {
   return slot.deferred_mem.get();
 }
 
+class Codec;
+
+#if defined(__x86_64__)
+using FrameRenderedCallback = void (__attribute__((sysv_abi)) *)(Codec*, void*, int64_t, int64_t);
+#elif defined(__aarch64__)
+using FrameRenderedCallback = void (*)(Codec*, void*, int64_t, int64_t);
+#endif
+
+// Android delivers these samples on one NDK thread. The dispatcher owns no
+// codec buffers and drops intermediate timing samples if the client is slow.
+class NativeFrameCallbacks {
+ public:
+  explicit NativeFrameCallbacks(Codec* codec) : state_(std::make_shared<State>(codec)) {}
+  void Close() {
+    {
+      std::lock_guard<std::mutex> lock(state_->mutex);
+      state_->closed = true;
+      if (!worker_started_) return;
+      state_->changed.notify_all();
+    }
+    if (pthread_equal(worker_, pthread_self())) {
+      // The worker still owns the state if the current callback deletes its codec.
+      pthread_detach(worker_);
+    } else {
+      pthread_join(worker_, nullptr);
+    }
+  }
+
+  media_status_t Set(FrameRenderedCallback callback, void* userdata) {
+    std::unique_lock<std::mutex> lock(state_->mutex);
+    if (worker_started_ && pthread_equal(worker_, pthread_self()))
+      return AMEDIA_ERROR_INVALID_OPERATION;
+    if (state_->closed) return AMEDIA_ERROR_INVALID_OBJECT;
+    state_->latest.reset();
+    state_->callback = nullptr;
+    state_->changed.wait(lock, [this] { return !state_->calling || state_->closed; });
+    if (state_->closed) return AMEDIA_ERROR_INVALID_OBJECT;
+    if (callback != nullptr && !worker_started_) {
+      if (pthread_create(&worker_, nullptr, Run, this) != 0)
+        return AMEDIACODEC_ERROR_INSUFFICIENT_RESOURCE;
+      worker_started_ = true;
+    }
+    state_->latest.reset();
+    state_->callback = callback;
+    state_->userdata = userdata;
+    return AMEDIA_OK;
+  }
+
+  void Post(int64_t media_time_us, int64_t system_nanos) {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    if (state_->closed || state_->callback == nullptr) return;
+    state_->latest = Sample{media_time_us, system_nanos};
+    state_->changed.notify_one();
+  }
+
+  void DiscardPending() {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->latest.reset();
+  }
+
+ private:
+  struct Sample {
+    int64_t media_time_us;
+    int64_t system_nanos;
+  };
+
+  struct State {
+    explicit State(Codec* owner) : codec(owner) {}
+
+    Codec* const codec;
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::optional<Sample> latest;
+    FrameRenderedCallback callback = nullptr;
+    void* userdata = nullptr;
+    bool calling = false;
+    bool closed = false;
+  };
+
+  static void* Run(void* context) {
+    const auto state = static_cast<NativeFrameCallbacks*>(context)->state_;
+    gesher::bionic::EnterLoadedCode();
+    std::unique_lock<std::mutex> lock(state->mutex);
+    for (;;) {
+      state->changed.wait(lock, [&] { return state->closed || state->latest.has_value(); });
+      if (state->closed) return nullptr;
+      const Sample sample = *state->latest;
+      state->latest.reset();
+      const auto callback = state->callback;
+      void* userdata = state->userdata;
+      state->calling = true;
+      lock.unlock();
+      callback(state->codec, userdata, sample.media_time_us, sample.system_nanos);
+      lock.lock();
+      state->calling = false;
+      state->changed.notify_all();
+    }
+  }
+
+  const std::shared_ptr<State> state_;
+  pthread_t worker_{};
+  bool worker_started_ = false;  // Set holds state_->mutex.
+};
+
 class Codec {
  public:
-  explicit Codec(const CodecEntry& entry) : entry_(entry) {}
+  explicit Codec(const CodecEntry& entry)
+      : entry_(entry), native_frame_callbacks_(std::make_unique<NativeFrameCallbacks>(this)) {}
   Codec(JNIEnv* env, jobject thiz, const CodecEntry& entry)
       : entry_(entry), self_(std::make_shared<WeakRef>(env, thiz)) {}
   ~Codec() {
@@ -745,6 +852,12 @@ class Codec {
 
   void EnableFrameRendered(bool enable) { frame_rendered_ = enable; }
 
+  void CloseNativeFrameCallbacks() { native_frame_callbacks_->Close(); }
+
+  media_status_t SetNativeFrameRendered(FrameRenderedCallback callback, void* userdata) {
+    return native_frame_callbacks_->Set(callback, userdata);
+  }
+
   bool Start(std::string* error) {
     std::lock_guard<std::mutex> lifecycle(lifecycle_mu_);
     std::unique_lock<std::mutex> lock(mu_);
@@ -1029,9 +1142,11 @@ class Codec {
     // AOSP consumes the output for other render failures, but does not report
     // that a frame was rendered. Obsolete consumers are the fatal exception.
     if (delivery_status == android::OK) {
+      const int64_t delivered_at = native_frame_callbacks_ != nullptr ? gesher::MonotonicNanos() : 0;
       std::lock_guard<std::mutex> lock(mu_);
-      if (execution_generation == execution_generation_ && started_ && !fatal_ && frame_rendered_) {
-        PostFrameRendered(time_us);
+      if (execution_generation == execution_generation_ && started_ && !fatal_) {
+        if (native_frame_callbacks_ != nullptr) native_frame_callbacks_->Post(time_us, delivered_at);
+        if (frame_rendered_) PostFrameRendered(time_us);
       }
     }
     return true;
@@ -1268,6 +1383,7 @@ class Codec {
       quit_ = true;
       ++execution_generation_;
       ++wait_generation_;
+      if (native_frame_callbacks_ != nullptr) native_frame_callbacks_->DiscardPending();
       cv_.notify_all();
       done_cv_.notify_all();
     }
@@ -1937,6 +2053,7 @@ class Codec {
   bool failed_ = false;
   std::optional<CodecMetrics> metrics_;
   std::atomic<bool> frame_rendered_{false};
+  std::unique_ptr<NativeFrameCallbacks> native_frame_callbacks_;
   Format input_format_;
   ANativeWindow* window_ = nullptr;
   int video_scaling_mode_ = 1;
@@ -1997,6 +2114,9 @@ Codec* CreateByName(const char* name) { return name != nullptr ? Create(FindByNa
 Codec* CreateDecoder(const char* mime) { return mime != nullptr ? Create(FindByType(mime, false)) : nullptr; }
 Codec* CreateEncoder(const char* mime) { return mime != nullptr ? Create(FindByType(mime, true)) : nullptr; }
 media_status_t Delete(Codec* codec) {
+  // An in-flight callback may be inside the codec. Retire its dispatcher
+  // before destroying the handle, without holding either codec mutex.
+  if (codec != nullptr) codec->CloseNativeFrameCallbacks();
   delete codec;
   return AMEDIA_OK;
 }
@@ -2113,6 +2233,16 @@ media_status_t ReleaseOutput(Codec* codec, size_t index, bool render) {
 media_status_t ReleaseOutputAtTime(Codec* codec, size_t index, int64_t timestamp_ns) {
   return Release(codec, index, true, true, timestamp_ns);
 }
+media_status_t SetOnFrameRenderedCallback(Codec* codec, FrameRenderedCallback callback, void* userdata) {
+  if (codec == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  void* address = reinterpret_cast<void*>(callback);
+  if (address != nullptr && gesher::arm64::IsGuestCode(address)) {
+    address = gesher::arm64::HostEntry(address);
+    if (address == nullptr) return AMEDIA_ERROR_UNKNOWN;
+  }
+  return codec->SetNativeFrameRendered(reinterpret_cast<FrameRenderedCallback>(address), userdata);
+}
+
 media_status_t SetOutputSurface(Codec* codec, ANativeWindow* window) {
   return codec != nullptr ? ToMediaStatus(codec->SetNativeOutputSurface(window))
                           : AMEDIA_ERROR_INVALID_OBJECT;
@@ -2200,6 +2330,7 @@ bool Register() {
   CODEC_ENTRY(releaseOutputBuffer, ReleaseOutput);
   CODEC_ENTRY(releaseOutputBufferAtTime, ReleaseOutputAtTime);
   CODEC_ENTRY(setOutputSurface, SetOutputSurface);
+  CODEC_ENTRY(setOnFrameRenderedCallback, SetOnFrameRenderedCallback);
   CODEC_ENTRY(createInputSurface, CreateInputSurface);
   CODEC_ENTRY(createPersistentInputSurface, CreatePersistentInputSurface);
   CODEC_ENTRY(setInputSurface, SetInputSurface);

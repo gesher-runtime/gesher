@@ -4,6 +4,11 @@
 #include <media/NdkMediaFormat.h>
 #ifndef CODEC_BUFFER_COMPONENT
 #include <media/NdkImageReader.h>
+#ifdef _WIN32
+#include <gesher/awake_clock.h>
+#endif
+#include <pthread.h>
+#include <stdatomic.h>
 #include <time.h>
 #endif
 
@@ -106,6 +111,56 @@ static AImage* WaitForImage(AImageReader* reader) {
   return NULL;
 }
 
+struct RenderEvents {
+  AMediaCodec* codec;
+  pthread_t caller;
+  atomic_int_fast64_t submitted_at, media_time_us, system_nanos;
+  atomic_bool right_codec, separate_thread;
+  atomic_int valid, invalid;
+};
+
+#if defined(_WIN32) && defined(__x86_64__)
+#define FRAME_CALLBACK_ABI __attribute__((sysv_abi))
+#else
+#define FRAME_CALLBACK_ABI
+#endif
+
+static void FRAME_CALLBACK_ABI OnFrameRendered(AMediaCodec* codec, void* context, int64_t media_time_us,
+                                              int64_t system_nanos) {
+  struct RenderEvents* events = context;
+  const bool right_codec = codec == events->codec;
+  const bool separate_thread = !pthread_equal(events->caller, pthread_self());
+  atomic_store(&events->right_codec, right_codec);
+  atomic_store(&events->separate_thread, separate_thread);
+  atomic_store(&events->media_time_us, media_time_us);
+  atomic_store(&events->system_nanos, system_nanos);
+  const bool valid = right_codec && separate_thread && media_time_us == (int64_t)kFirstTime &&
+      system_nanos >= atomic_load(&events->submitted_at);
+  atomic_fetch_add(valid ? &events->valid : &events->invalid, 1);
+}
+
+static bool VerifyRenderedCallback(struct RenderEvents* events) {
+  for (int i = 0; i < 100 && atomic_load(&events->valid) == 0 &&
+                        atomic_load(&events->invalid) == 0; ++i) {
+    const struct timespec pause = {.tv_nsec = 10000000};
+    nanosleep(&pause, NULL);
+  }
+  printf("NDK codec frame rendered: valid=%d invalid=%d\n",
+         atomic_load(&events->valid), atomic_load(&events->invalid));
+  if (atomic_load(&events->invalid) != 0) {
+    printf("NDK codec frame callback payload: right-codec=%d separate-thread=%d "
+           "pts=%" PRId64 " system-nanos=%" PRId64 " submitted-at=%" PRId64 "\n",
+           atomic_load(&events->right_codec), atomic_load(&events->separate_thread),
+           (int64_t)atomic_load(&events->media_time_us), (int64_t)atomic_load(&events->system_nanos),
+           (int64_t)atomic_load(&events->submitted_at));
+  }
+#ifdef CODEC_PARAMETER_CONTROL_COMPONENT
+  if (atomic_load(&events->valid) != 1) return false;
+#endif
+  // Android allows omission of timing samples for some output surfaces.
+  return atomic_load(&events->invalid) == 0;
+}
+
 static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFrames]) {
   AMediaCodec* codec = AMediaCodec_createDecoderByType("video/avc");
   AImageReader* reader = NULL;
@@ -114,7 +169,11 @@ static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFr
   int64_t first_time = -1;
   int count = 0;
   bool eos = false, passed = false;
-  if (codec == NULL || AImageReader_new(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888, 2, &reader) != AMEDIA_OK ||
+  struct RenderEvents events = {.codec = codec, .caller = pthread_self()};
+  if (codec == NULL ||
+      AMediaCodec_setOnFrameRenderedCallback(codec, (AMediaCodecOnFrameRendered)OnFrameRendered,
+                                             &events) != AMEDIA_OK ||
+      AImageReader_new(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888, 2, &reader) != AMEDIA_OK ||
       AImageReader_getWindow(reader, &window) != AMEDIA_OK ||
       AMediaCodec_configure(codec, format, window, NULL, 0) != AMEDIA_OK ||
       AMediaCodec_start(codec) != AMEDIA_OK) {
@@ -137,9 +196,15 @@ static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFr
     }
     eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
     if (count < kFrames && (uint64_t)info.presentationTimeUs == packets[count].time) {
+#ifdef _WIN32
+      // Native component builds bypass the guest clock_gettime shim.
+      const int64_t timestamp = gesher_monotonic_nanos();
+#else
       struct timespec now;
       if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) goto cleanup;
       const int64_t timestamp = (int64_t)now.tv_sec * INT64_C(1000000000) + now.tv_nsec;
+#endif
+      if (count == 0) atomic_store(&events.submitted_at, timestamp);
       if (AMediaCodec_releaseOutputBufferAtTime(codec, (size_t)index, timestamp) != AMEDIA_OK)
         goto cleanup;
       AImage* image = WaitForImage(reader);
@@ -148,6 +213,8 @@ static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFr
       if (count == 0) {
         first = image;
         first_time = timestamp;
+        if (!VerifyRenderedCallback(&events) ||
+            AMediaCodec_setOnFrameRenderedCallback(codec, NULL, NULL) != AMEDIA_OK) goto cleanup;
       } else {
         AImage_delete(image);
       }
@@ -159,12 +226,13 @@ static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFr
   }
   passed = eos && count == kFrames && AMediaCodec_stop(codec) == AMEDIA_OK &&
            CheckSurfaceImage(first, 0, first_time);
-  if (passed) puts("NDK codec surface: all passed");
 
 cleanup:
   if (first != NULL) AImage_delete(first);
   if (codec != NULL) AMediaCodec_delete(codec);
   if (reader != NULL) AImageReader_delete(reader);
+  passed = passed && atomic_load(&events.valid) <= 1 && atomic_load(&events.invalid) == 0;
+  if (passed) puts("NDK codec surface: all passed");
   return passed;
 }
 #endif
