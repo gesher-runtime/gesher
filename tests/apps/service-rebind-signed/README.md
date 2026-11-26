@@ -33,3 +33,12 @@ pwsh -NoProfile -File tests/apps/service-rebind-signed/run-windows.ps1 `
 
 The check uses the production binding APIs and waits for the actual provider
 process to be replaced. [Android 16 service death handling](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/services/core/java/com/android/server/am/ActiveServices.java)
+
+The signed APK with SHA-256
+`3d3a347af54fc9afea841ab05b0ea9d831504e9af2a8cfc3fac95b21cbb5f3e8`
+passed on Android 16 ARM64 (`BE2A.250530.026.D1/13818094`) and in a Windows
+11 Parallels portable profile. Each run observed a new provider process, two
+connections, one normal disconnection, and the same client process.
+The Windows run used ART SHA-256
+`2ccdcda2ea088ee73c67fec9b78767e37455b60a6ef364a37c9af4ab623e0ef8`,
+a rebuilt Gesher app JAR and matching Binder daemons.
