@@ -1,6 +1,9 @@
 // Actual Windows pipe/OFD transport. The component's job runner owns every
 // child and supplies a hard deadline; no foreign process or pipe is touched.
 #include "exec_spawn.h"
+#include "../../compat/posix/src/ofd_internal.h"
+#include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -143,6 +146,97 @@ static void AwarePeer(const std::wstring& self, bool diagnostic_stdio) {
   }
   files.clear(); snapshot.reset(); close(ends[0]); close(ends[1]);
 }
+static constexpr unsigned kPipeBuf = 4096;
+
+static int AtomicWriter(const char* name, char marker) {
+  if (marker != 'A' && marker != 'B') return 2;
+  const std::string base(name);
+  HANDLE go = OpenEventA(SYNCHRONIZE, FALSE, (base + "-go").c_str());
+  HANDLE ready = OpenEventA(EVENT_MODIFY_STATE, FALSE, (base + "-" + marker).c_str());
+  if (!go || !ready || WaitForSingleObject(go, 4000) != WAIT_OBJECT_0) return 3;
+  if (fcntl(37, F_GETFL) != (O_WRONLY | O_NONBLOCK)) return 4;
+  std::array<char, kPipeBuf> record;
+  record.fill(marker);
+  SetEvent(ready);
+  const int result = write(37, record.data(), record.size());
+  const int error = errno;
+  CloseHandle(go);
+  CloseHandle(ready);
+  if (result == static_cast<int>(record.size())) return 0;
+  std::printf("PIPE_ATOMIC_WRITER %c count=%d errno=%d\n", marker, result, error);
+  return error == EAGAIN ? 5 : 6;
+}
+
+static void AtomicWriters(const std::wstring& self) {
+  int ends[2];
+  if (pipe2(ends, O_CLOEXEC | O_NONBLOCK) < 0) { Check("atomic writers pipe", false); return; }
+  const int alias = dup(ends[1]);
+  auto snapshot = gesher::CaptureDescriptor(ends[1]);
+  wchar_t base[100];
+  std::swprintf(base, 100, L"Local\\gesher-pipe-atomic-%lu-%llu",
+                GetCurrentProcessId(), GetTickCount64());
+  const std::wstring name(base);
+  HANDLE go = CreateEventW(nullptr, TRUE, FALSE, (name + L"-go").c_str());
+  const HANDLE ready[] = {
+      CreateEventW(nullptr, TRUE, FALSE, (name + L"-A").c_str()),
+      CreateEventW(nullptr, TRUE, FALSE, (name + L"-B").c_str())};
+  PROCESS_INFORMATION children[2] = {};
+  const bool setup = alias >= 0 && snapshot && go && ready[0] && ready[1];
+  Check("capture nonblocking writer and create separate process rendezvous", setup);
+  if (setup) {
+    std::vector<gesher::exec::ChildFd> files{{37, snapshot->handle, snapshot}};
+    for (int i = 0; i != 2; ++i) {
+      const std::wstring mode = L"--aware-atomic-writer " + name + L" " + wchar_t(L'A' + i);
+      const DWORD error = gesher::exec::SpawnWithFds(
+          Target(self, mode.c_str()), nullptr, L"", files, &children[i]);
+      Check("spawn writer sharing the original open file description", error == 0);
+    }
+    const HANDLE gate = snapshot->description->pipe_mutex;
+    const DWORD status = WaitForSingleObject(gate, 2000);
+    const bool held = status == WAIT_OBJECT_0 || status == WAIT_ABANDONED;
+    Check("fixture can briefly hold the same admission gate", held);
+    SetEvent(go);
+    if (children[0].hProcess && children[1].hProcess) {
+      Check("both writers begin their real operation",
+            WaitForMultipleObjects(2, ready, TRUE, 2000) == WAIT_OBJECT_0);
+      if (held) {
+        Check("bookkeeping contention does not return EAGAIN before native admission",
+              WaitForSingleObject(children[0].hProcess, 50) == WAIT_TIMEOUT &&
+              WaitForSingleObject(children[1].hProcess, 50) == WAIT_TIMEOUT);
+      }
+    }
+    if (held) ReleaseMutex(gate);
+    for (auto& child : children)
+      if (child.hProcess) Check("each nonblocking writer sends its complete record", WaitChild(&child));
+  }
+  snapshot.reset();
+  close(ends[1]);
+  if (setup) {
+    std::array<char, 2 * kPipeBuf> bytes;
+    size_t count = 0;
+    while (count < bytes.size()) {
+      const int n = read(ends[0], bytes.data() + count, bytes.size() - count);
+      if (n <= 0) break;
+      count += static_cast<size_t>(n);
+    }
+    const char first = count == bytes.size() ? bytes.front() : 0;
+    const char second = first == 'A' ? 'B' : 'A';
+    Check("actual stream contains two intact PIPE_BUF records",
+          count == bytes.size() && (first == 'A' || first == 'B') &&
+          std::all_of(bytes.begin(), bytes.begin() + kPipeBuf, [first](char c) { return c == first; }) &&
+          std::all_of(bytes.begin() + kPipeBuf, bytes.end(), [second](char c) { return c == second; }));
+    Check("empty pipe still has the surviving duplicate writer", read(ends[0], bytes.data(), 1) == -1 &&
+          errno == EAGAIN);
+    close(alias);
+    Check("last writer duplicate closure produces EOF", read(ends[0], bytes.data(), 1) == 0);
+  } else if (alias >= 0) {
+    close(alias);
+  }
+  for (HANDLE event : {go, ready[0], ready[1]})
+    if (event) CloseHandle(event);
+  close(ends[0]);
+}
+
 struct ReadState { int fd; int result = -1; char byte = 0; };
 static void* ReadOne(void* raw) {
   auto* state = static_cast<ReadState*>(raw);
@@ -194,6 +288,8 @@ static void ExternalPipe(bool asynchronous) {
   close(fd);
 }
 int main(int argc, char** argv) {
+  if (argc == 4 && std::strcmp(argv[1], "--aware-atomic-writer") == 0)
+    return AtomicWriter(argv[2], argv[3][0]);
   if (argc == 2 && (std::strcmp(argv[1], "--aware-flags") == 0 ||
                     std::strcmp(argv[1], "--aware-flags-stdio") == 0)) {
     if (!StandardDescriptors(std::strcmp(argv[1], "--aware-flags-stdio") == 0)) return 22;
@@ -220,6 +316,7 @@ int main(int argc, char** argv) {
   NativePeer(native);
   AwarePeer(self, false);
   AwarePeer(self, true);
+  AtomicWriters(self);
   ExternalPipe(false);
   ExternalPipe(true);
   std::printf("pipe native process contracts: %d checks, %d failures\n", checks, failures);

@@ -487,11 +487,22 @@ int main() {
   });
   Await("another thread owns endpoint admission", [&] { return held.load(); });
   const int old_queries = queries.load();
-  Check("contended nonblocking write returns EAGAIN", gesher::TransferPipe(w, &byte, 1, true) == -1 && errno == EAGAIN);
+  std::atomic<bool> contending{false}, finished{false};
+  int transferred;
+  std::thread peer([&] {
+    contending.store(true);
+    transferred = gesher::TransferPipe(w, &byte, 1, true);
+    finished.store(true);
+  });
+  Await("the nonblocking writer entered the contended call", [&] { return contending.load(); });
+  Sleep(20);
+  Check("nonblocking writer does not confuse admission with backpressure", !finished.load());
   ready = -1;
   Check("contended control fails without ready or invalid bits", gesher::PollPipeHandle(w, POLLOUT, &ready) == -1 && errno == EOPNOTSUPP && ready == 0);
   Check("busy endpoint was never queried", queries.load() == old_queries);
-  release.store(true); holder.join();
+  release.store(true); holder.join(); peer.join();
+  Check("admitted nonblocking writer transfers a byte", transferred == 1 &&
+        gesher::TransferPipe(r, &byte, 1, false) == 1);
 
   Check("blocking mode restored for cancellation", Mode(r, false) == 0);
   {
