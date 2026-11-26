@@ -6087,10 +6087,16 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         List<ActivityRecord> matching = new ArrayList<>();
         synchronized (this) {
             if (isActivityRetired(r)) return false;
+            String affinity = r.info.taskAffinity;
+            int uid = r.info.applicationInfo.uid;
             for (int i = mActivities.indexOf(r); i >= 0; i--) {
                 ActivityRecord candidate = mActivities.get(i);
                 if (candidate.taskId != r.taskId || candidate.state == State.DESTROYED) continue;
-                if (!java.util.Objects.equals(candidate.info.taskAffinity, r.info.taskAffinity)) break;
+                // AOSP qualifies non-null affinities with their owning UID.
+                if (!java.util.Objects.equals(candidate.info.taskAffinity, affinity)
+                        || affinity != null && candidate.info.applicationInfo.uid != uid) {
+                    break;
+                }
                 matching.add(candidate);
             }
         }

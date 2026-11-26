@@ -554,6 +554,23 @@ public final class ActivityFinishFixture {
                     "Destroyed affinity token was acknowledged as live"));
             check(events == h.thread.events.size(), "Repeated affinity finish emitted lifecycle work");
         }
+        for (boolean sharedUid : new boolean[] {true, false}) {
+            String sharedIdentity = sharedUid ? OWNER + ".shared" : null;
+            ApkPackage peer = code(OWNER + ".peer", sharedIdentity, sharedUid ? UID : UID + 1, null);
+            Harness cross = new Harness(sharedIdentity, peer);
+            Object previous = cross.record(peer, null, "Bottom", 21, "a", "INITIALIZING",
+                    null, null, -1);
+            Object origin = cross.record("Caller", 21, "a", "STOPPED");
+            Object above = cross.record("Above", 21, "a", "RESUMED");
+            cross.asApp(() -> activity(origin).finishAffinity());
+            cross.gone(origin);
+            cross.alive(above);
+            if (sharedUid) {
+                cross.gone(previous);
+            } else {
+                cross.alive(previous);
+            }
+        }
         Harness h = new Harness();
         Object root = h.record("Root", 23, "a", "STOPPED");
         Object top = h.record("Top", 23, "a", "RESUMED");
