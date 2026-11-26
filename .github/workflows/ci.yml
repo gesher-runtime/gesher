@@ -2176,20 +2176,22 @@ jobs:
     name: AppContainer APK LAN qualification
     needs: [package]
     runs-on: windows-2025
-    timeout-minutes: 30
-    env:
-      GH_TOKEN: ${{ github.token }}
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           sparse-checkout: |
+            tests/apps/editionadmission
             tests/apps/sandboxnetwork
             tests/windows/sandbox
             tools/ci
+            tools/package
             tools/surface
 
       - name: Verify the packaged runtime for this run
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           python tools/ci/artifact_receipt.py --name gesher-setup --producer package --destination ci-suppliers/gesher_setup
@@ -2200,25 +2202,44 @@ jobs:
           if ($archives.Count -ne 1) { throw 'Expected one packaged CI runtime archive' }
           Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath (Join-Path $env:RUNNER_TEMP 'gesher-lan-runtime')
 
-      - name: Run ordinary and contained APKs against a separate virtual LAN peer
+      - name: Prepare the Android fixture tools
+        id: fixture-sdk
         shell: pwsh
         run: |
-          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
           $sdk = $env:ANDROID_HOME
           if (!$sdk) { $sdk = $env:ANDROID_SDK_ROOT }
           if (!$sdk) { throw 'Android SDK is unavailable on the Windows runner' }
           & (Join-Path $sdk 'cmdline-tools/latest/bin/sdkmanager.bat') 'build-tools;36.0.0' 'platforms;android-36'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Qualify signed APK edition admission and localized notices
+        shell: pwsh
+        run: |
+          $sdk = $env:ANDROID_HOME
+          if (!$sdk) { $sdk = $env:ANDROID_SDK_ROOT }
+          ./tests/windows/sandbox/Test-EditionAdmission.ps1 -AndroidSdk $sdk `
+            -RuntimeDir (Join-Path $env:RUNNER_TEMP 'gesher-lan-runtime/GesherPortable/App') `
+            -OutputDir (Join-Path $env:RUNNER_TEMP 'gesher-edition-evidence')
+
+      - name: Run ordinary and contained APKs against a separate virtual LAN peer
+        if: ${{ !cancelled() && steps.fixture-sdk.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $sdk = $env:ANDROID_HOME
+          if (!$sdk) { $sdk = $env:ANDROID_SDK_ROOT }
           ./tests/windows/sandbox/Invoke-SandboxNetworkCi.ps1 -AndroidSdk $sdk `
             -RuntimeDir (Join-Path $env:RUNNER_TEMP 'gesher-lan-runtime/GesherPortable/App') `
             -OutputDir (Join-Path $env:RUNNER_TEMP 'gesher-lan-evidence')
 
-      - name: Preserve APK and listener evidence
+      - name: Preserve APK, edition and listener evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: appcontainer-apk-lan-windows-2025
-          path: ${{ runner.temp }}/gesher-lan-evidence/**/*.log
+          path: |
+            ${{ runner.temp }}/gesher-lan-evidence/**/*.log
+            ${{ runner.temp }}/gesher-edition-evidence/**/*.log
+            ${{ runner.temp }}/gesher-edition-evidence/**/*.error.txt
           if-no-files-found: warn
 
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a

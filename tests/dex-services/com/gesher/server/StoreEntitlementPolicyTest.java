@@ -3,6 +3,10 @@ package com.gesher.server;
 
 public final class StoreEntitlementPolicyTest {
     public static void main(String[] args) {
+        System.loadLibrary("android_runtime");
+        check(!StoreEntitlement.releaseEnabled(), "the Store release gate must be off before qualification");
+        check(StoreEntitlement.read() == EditionPolicy.StoreStatus.UNCONFIGURED,
+                "the unconfigured release must not obtain Store entitlement");
         check(StoreEntitlement.fromNativeStatus(0) == EditionPolicy.StoreStatus.UNCONFIGURED,
                 "native status 0 must be unconfigured");
         check(StoreEntitlement.fromNativeStatus(1) == EditionPolicy.StoreStatus.UNAVAILABLE,

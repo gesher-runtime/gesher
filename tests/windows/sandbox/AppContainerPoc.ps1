@@ -17,6 +17,7 @@ param(
   [switch] $NoSandbox,
   # Supply an HWND for APK fixtures that initialize the real WebView2 controller.
   [switch] $HiddenWindow,
+  [switch] $InitializeOnly,
   [string[]] $LaunchArguments = @()
 )
 $ErrorActionPreference = 'Stop'
@@ -46,6 +47,7 @@ if (Test-Path "$Dir/framework/x86_64/boot.art") {
   New-Item -ItemType Directory -Force (Join-Path $Root 'system/framework/x86_64') | Out-Null
   Copy-Item "$Dir/framework/x86_64/*" (Join-Path $Root 'system/framework/x86_64')
 }
+if ($InitializeOnly) { return }
 
 $env:ANDROID_ROOT = NoDrive "$Root/system"
 $env:ANDROID_ART_ROOT = NoDrive "$Root/art"
