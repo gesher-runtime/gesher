@@ -20,7 +20,7 @@ DLL, or advertised by `NativeLibs.SUPPORTED` or `build.prop`.
 | --- | --- |
 | `arm32_memory` | A separate 32-bit guest address domain, zero-filled pages, independent read/write/execute permissions, checked range arithmetic, transactional memory operations and synchronized scalar/CAS access. |
 | `arm32_abi` | Scalar Android softfp argument/return frames, even-register alignment for 64-bit values, stack spills, floating-point bit preservation, JNI descriptor validation and explicit opaque guest handles. |
-| `arm32_elf` | Checked little-endian ELF32 ARM EABI5 softfp `ET_DYN` parsing, owned image bytes, SysV/GNU symbols, ordinary REL relocations, explicit imports, BSS, init/fini arrays and validated RELRO ranges. |
+| `arm32_elf` | Checked little-endian ELF32 ARM EABI5 softfp `ET_DYN` parsing, owned image bytes, SysV/GNU symbols, ordinary REL and standard/legacy Android RELR relative relocations, explicit imports, BSS, init/fini arrays and validated RELRO ranges. |
 | `arm32_image_memory` | Mapping relocated image bytes into guest pages, inaccessible segment holes and read-only RELRO protection. |
 | `arm32_executor` | ARM/Thumb execution through the pinned Dynarmic A32 frontend, finite instruction budgets, checked instruction/data access, explicit faults and typed host-function thunks. |
 
@@ -52,13 +52,13 @@ thread affinity, array/string pinning or ART native registration.
 ### ELF and execution limits
 
 The image loader supports `R_ARM_NONE`, `R_ARM_RELATIVE`, `R_ARM_ABS32`,
-`R_ARM_REL32`, `R_ARM_GLOB_DAT` and `R_ARM_JUMP_SLOT`. It preserves Thumb symbol
+`R_ARM_REL32`, `R_ARM_GLOB_DAT` and `R_ARM_JUMP_SLOT`, together with standard ELF32 RELR and Android's earlier RELR tag family. RELR entries are checked for size, range, writable targets, duplicates and bounded expansion before relocation writes. It preserves Thumb symbol
 bits and rejects unresolved required imports. Weak imports follow the relevant
 relocation contract. ELF tables and relocation targets are range checked;
 failed loads preserve the previous output image, including allocation and
 import-adapter failures.
 
-Dependencies, TLS, IFUNC, packed Android relocations, RELR/RELA, symbol versions,
+Dependencies, TLS, IFUNC, Android APS2 packed relocations, RELA, symbol versions,
 executable interpreters and preinit arrays are explicitly rejected. The loader
 does not claim general Android DSO compatibility. It accepts System V/Linux
 OSABI values with ABI version zero and rejects unsupported FDPIC variants.
