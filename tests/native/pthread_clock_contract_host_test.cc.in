@@ -78,6 +78,9 @@ int64_t MonotonicNanos() {
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 void DeliverPendingSignals() {}
+::gesher_futex_interrupt* AttachSignalInterrupt() { return nullptr; }
+void DetachSignalInterrupt() {}
+int DeliverAfterInterrupt() { return kNoHandler; }
 // No fixture thread has signal state (signal_bionic.cc); for such a thread
 // InterruptibleAddressWait is the plain address wait.
 bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,

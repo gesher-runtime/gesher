@@ -233,17 +233,9 @@ int BIONIC_SYSV PthreadGetnameNp(uint64_t thread, char* buf, size_t size) {
 int BIONIC_SYSV PthreadGetcpuclockid(uint64_t thread, int* clock) {
   return PthreadCpuClock(thread, clock);
 }
-int BIONIC_SYSV PthreadMutexattrGetpshared(const int64_t*, int* v) {
-  *v = 0;
-  return 0;
-}
 int BIONIC_SYSV PthreadMutexattrSetprotocol(int64_t*, int) { return 0; }
 int BIONIC_SYSV PthreadMutexattrGetprotocol(const int64_t*, int* v) {
   *v = 0;
-  return 0;
-}
-int BIONIC_SYSV PthreadCondattrGetclock(const int64_t* a, int* clock) {
-  *clock = static_cast<int>(*a);  // pthread_bionic.cc keeps the clock id in it
   return 0;
 }
 int BIONIC_SYSV PthreadAttrPsharedGet(const void*, int* v) {
@@ -251,11 +243,6 @@ int BIONIC_SYSV PthreadAttrPsharedGet(const void*, int* v) {
   return 0;
 }
 int BIONIC_SYSV PthreadAttrPsharedSet(void*, int) { return 0; }
-int BIONIC_SYSV PthreadRwlockattrInit(int64_t* a) {
-  *a = 0;
-  return 0;
-}
-int BIONIC_SYSV PthreadRwlockattrDestroy(int64_t*) { return 0; }
 int BIONIC_SYSV PthreadRwlockattrGetkind(const int64_t*, int* v) {
   *v = 0;
   return 0;
@@ -1140,16 +1127,8 @@ void RegisterExtraSys(SymbolTable& t) {
   E("pthread_attr_setstack", PthreadAttrSetstack);
   E("pthread_getname_np", PthreadGetnameNp);
   E("pthread_getcpuclockid", PthreadGetcpuclockid);
-  E("pthread_mutexattr_getpshared", PthreadMutexattrGetpshared);
   E("pthread_mutexattr_setprotocol", PthreadMutexattrSetprotocol);
   E("pthread_mutexattr_getprotocol", PthreadMutexattrGetprotocol);
-  E("pthread_condattr_getclock", PthreadCondattrGetclock);
-  E("pthread_condattr_getpshared", PthreadAttrPsharedGet);
-  E("pthread_condattr_setpshared", PthreadAttrPsharedSet);
-  E("pthread_rwlockattr_init", PthreadRwlockattrInit);
-  E("pthread_rwlockattr_destroy", PthreadRwlockattrDestroy);
-  E("pthread_rwlockattr_getpshared", PthreadAttrPsharedGet);
-  E("pthread_rwlockattr_setpshared", PthreadAttrPsharedSet);
   E("pthread_rwlockattr_getkind_np", PthreadRwlockattrGetkind);
   E("pthread_rwlockattr_setkind_np", PthreadAttrPsharedSet);
   E("pthread_spin_init", SpinInit);
