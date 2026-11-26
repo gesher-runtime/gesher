@@ -196,8 +196,8 @@ foreach ($d in 'system/framework', 'art', 'data', 'i18n/etc/icu', 'tzdata') {
 # ICU's data, the framework's resources and the system properties, where Android
 # keeps them; refreshed when a new version of Gesher brings different ones.
 $runtimeSync = New-GesherRuntimeSync -InstallDirectory $here -ProfileDirectory $root -Component app
-function Install([string] $from, [string] $to) {
-  Sync-GesherRuntimeFile -Source $from -Destination $to -State $runtimeSync
+function Install([string] $from, [string] $to, [switch] $readOnly) {
+  Sync-GesherRuntimeFile -Source $from -Destination $to -State $runtimeSync -ReadOnly:$readOnly
 }
 $data = Get-Item (Join-Path $here 'icudt*l.dat')
 Install $data.FullName (Join-Path $root "i18n/etc/icu/$($data.Name)")
@@ -207,18 +207,18 @@ Install (Join-Path $here 'build.prop') (Join-Path $root 'system/build.prop')
 # their declarations, as /system/framework and /system/etc/permissions.
 if (Test-Path (Join-Path $here 'org.apache.http.legacy.jar')) {
   New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
-  Install (Join-Path $here 'org.apache.http.legacy.jar') (Join-Path $root 'system/framework/org.apache.http.legacy.jar')
+  Install (Join-Path $here 'org.apache.http.legacy.jar') (Join-Path $root 'system/framework/org.apache.http.legacy.jar') -ReadOnly
   Install (Join-Path $here 'etc/permissions/org.apache.http.legacy.xml') (Join-Path $root 'system/etc/permissions/org.apache.http.legacy.xml')
 }
 if (Test-Path (Join-Path $here 'com.android.location.provider.jar')) {
   New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
-  Install (Join-Path $here 'com.android.location.provider.jar') (Join-Path $root 'system/framework/com.android.location.provider.jar')
+  Install (Join-Path $here 'com.android.location.provider.jar') (Join-Path $root 'system/framework/com.android.location.provider.jar') -ReadOnly
   Install (Join-Path $here 'etc/permissions/com.android.location.provider.xml') (Join-Path $root 'system/etc/permissions/com.android.location.provider.xml')
 }
 foreach ($library in 'android.test.base', 'android.test.mock', 'android.test.runner') {
   if (Test-Path (Join-Path $here "$library.jar")) {
     New-Item -ItemType Directory -Force (Join-Path $root 'system/etc/permissions') | Out-Null
-    Install (Join-Path $here "$library.jar") (Join-Path $root "system/framework/$library.jar")
+    Install (Join-Path $here "$library.jar") (Join-Path $root "system/framework/$library.jar") -ReadOnly
     Install (Join-Path $here "etc/permissions/$library.xml") (Join-Path $root "system/etc/permissions/$library.xml")
   }
 }

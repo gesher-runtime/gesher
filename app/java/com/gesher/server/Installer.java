@@ -620,8 +620,10 @@ final class Installer {
             pendingPackage = pkg;
             File base = new File(code, "base.apk");
             boolean syncCode = sessionMetadata != null;
-            copy(source, base, syncCode, true);
-            if (metadata.isFile()) copy(metadata, new File(code, "base.dm"), syncCode, false);
+            com.gesher.app.ApkCode.copy(source, base, syncCode, true);
+            if (metadata.isFile()) {
+                com.gesher.app.ApkCode.copy(metadata, new File(code, "base.dm"), syncCode, false);
+            }
             if (incomingSplits != null) {
                 for (File split : incomingSplits) {
                     String targetName = splitFileName(split);
@@ -629,9 +631,9 @@ final class Installer {
                     if (!target.createNewFile()) {
                         throw new IOException("Conflicting split filenames: " + targetName);
                     }
-                    copy(split, target, syncCode, true);
+                    com.gesher.app.ApkCode.copy(split, target, syncCode, true);
                     File splitMetadata = dexMetadata(split);
-                    if (splitMetadata.isFile()) copy(splitMetadata,
+                    if (splitMetadata.isFile()) com.gesher.app.ApkCode.copy(splitMetadata,
                             new File(code, InstallSessionMetadata.dexName(targetName)), syncCode, false);
                 }
             }
@@ -1093,26 +1095,6 @@ final class Installer {
             total += n;
         }
         return total;
-    }
-
-    private static void copy(File from, File to, boolean sync, boolean readOnly) throws IOException {
-        byte[] buffer = new byte[64 * 1024];
-        try (InputStream in = new FileInputStream(from);
-                FileOutputStream out = new FileOutputStream(to)) {
-            if (readOnly) {
-                // Publish the same generation that signature verification reads.
-                // Keep the original writable handle only while filling the new file.
-                try {
-                    android.system.Os.fchmod(out.getFD(), 0444);
-                } catch (android.system.ErrnoException e) {
-                    throw new IOException("Cannot make staged APK read-only: " + to, e);
-                }
-            }
-            for (int n; (n = in.read(buffer)) > 0; ) {
-                out.write(buffer, 0, n);
-            }
-            if (sync) out.getFD().sync();
-        }
     }
 
     /**
