@@ -151,3 +151,15 @@ int jni32_env_get_vm(JNIEnv32* env) {
   if (VMAPI(vm, 6, VmGetEnv)(vm, &again, 0x10006) != 0) return -2;
   return again == env ? 88 : -3;
 }
+
+extern int JNI_GetCreatedJavaVMs(JavaVM32** vm_buffer, int buffer_length,
+                                 int* total_vms);
+int jni32_get_created_vm(JNIEnv32* env) {
+  JavaVM32* vm = 0;
+  int count = 0;
+  if (JNI_GetCreatedJavaVMs(&vm, 1, &count) != 0 ||
+      count != 1 || !vm) return -1;
+  JNIEnv32* again = 0;
+  if (VMAPI(vm, 6, VmGetEnv)(vm, &again, 0x10006) != 0) return -2;
+  return again == env ? 99 : -3;
+}
