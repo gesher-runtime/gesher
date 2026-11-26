@@ -84,6 +84,36 @@ def main() -> None:
                 raise RuntimeError(
                     f"{bionic_output}: unexpected guest libc imports {sorted(imports)}")
         print(f"Verified {mode} ARM32 libc fixture: {bionic_output}")
+        # Exercise a real guest JNI function-pointer table. This DSO has no
+        # undefined JNI symbols: it calls the mapped JNIEnv32 table directly.
+        jni_source = source.with_name("guest_jni_fixture.c")
+        jni_output = (args.out_dir / f"jni-{mode}.so").resolve()
+        subprocess.run(compiler + [
+            "cc", "-target", f"{mode}-linux-androideabi", "-mcpu=cortex_a9",
+            "-mfloat-abi=softfp", "-mfpu=neon", "-O2", "-fno-builtin",
+            "-fno-stack-protector", "-shared", "-fPIC", "-nostdlib",
+            "-Wl,--hash-style=both", "-Wl,-soname,gesher_arm32_jni_fixture.so",
+            str(jni_source), "-o", str(jni_output),
+        ], check=True, timeout=120)
+        with jni_output.open("rb") as stream:
+            elf = ELFFile(stream)
+            if elf.elfclass != 32 or not elf.little_endian or elf["e_machine"] != "EM_ARM":
+                raise RuntimeError(f"{jni_output}: not ARM ELF32")
+            symbols = list(elf.get_section_by_name(".dynsym").iter_symbols())
+            functions = {symbol.name: symbol for symbol in symbols
+                         if symbol.name.startswith("jni32_")}
+            expected = {"jni32_version", "jni32_contract", "jni32_stale",
+                        "jni32_wrong_env", "jni32_unsupported"}
+            if set(functions) != expected or any(
+                    bool(symbol["st_value"] & 1) != (mode == "thumb")
+                    for symbol in functions.values()):
+                raise RuntimeError(f"{jni_output}: JNI function exports lost ARM/Thumb state")
+            imported = {symbol.name for symbol in symbols
+                        if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
+            if imported:
+                raise RuntimeError(f"{jni_output}: unexpected guest JNI imports {imported}")
+        print(f"Verified {mode} guest JNI32 ELF32 fixture: {jni_output}")
+
         # A genuine two-DSO DT_NEEDED graph. It exercises the Program loader,
         # cross-module PLT fixups and dependency-first guest constructors.
         dependency = (args.out_dir / f"dependency-{mode}.so").resolve()
