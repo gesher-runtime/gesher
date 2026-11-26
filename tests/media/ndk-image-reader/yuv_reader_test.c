@@ -4,6 +4,7 @@
 #include <android/hardware_buffer.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
+#include <stdbool.h>
 #include <media/NdkImageReader.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -25,7 +26,7 @@ static unsigned sample(const uint8_t* data, int row_stride, int pixel_stride, in
     return data[y * row_stride + x * pixel_stride];
 }
 
-static void check_frame(AImage* image, int color) {
+static void check_frame(AImage* image, int color, bool check_buffer) {
     // The reference clip uses limited-range BT.601 red followed by blue.
     static const int expected[2][3] = {{81, 90, 240}, {41, 240, 110}};
     int32_t width = 0, height = 0, format = 0, count = 0;
@@ -36,6 +37,32 @@ static void check_frame(AImage* image, int color) {
     CHECK(AImage_getCropRect(image, &crop) == AMEDIA_OK);
     CHECK(crop.left == 0 && crop.top == 0 && crop.right == kWidth && crop.bottom == kHeight);
     CHECK(AImage_getNumberOfPlanes(image, &count) == AMEDIA_OK && count == 3);
+    // AImage holds its mapper lock once a CPU plane is requested. Read the
+    // buffer first, then use AImage's own access to cross-check the samples.
+    int buffer_values[3];
+    if (check_buffer) {
+        AHardwareBuffer* buffer = NULL;
+        CHECK(AImage_getHardwareBuffer(image, &buffer) == AMEDIA_OK && buffer != NULL);
+        AHardwareBuffer_Desc desc = {0};
+        AHardwareBuffer_describe(buffer, &desc);
+        CHECK(desc.width >= kWidth && desc.height >= kHeight && desc.layers == 1);
+        AHardwareBuffer_Planes planes = {0};
+        int result = AHardwareBuffer_lockPlanes(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+                                                -1, NULL, &planes);
+        if (result != 0) {
+            fprintf(stderr, "YUV hardware buffer lockPlanes returned %d (format %#x, usage %#llx)\n",
+                    result, desc.format, (unsigned long long)desc.usage);
+        }
+        CHECK(result == 0 && planes.planeCount == 3);
+        for (int plane = 0; plane < 3; ++plane) {
+            const AHardwareBuffer_Plane* layout = &planes.planes[plane];
+            CHECK(layout->data != NULL && layout->rowStride > 0 && layout->pixelStride > 0);
+            buffer_values[plane] = (int)sample(layout->data, layout->rowStride, layout->pixelStride,
+                                               plane);
+        }
+        CHECK(AHardwareBuffer_unlock(buffer, NULL) == 0);
+    }
+
     int values[3];
     int32_t chroma_pixel_stride = 0, chroma_row_stride = 0;
     for (int plane = 0; plane < 3; ++plane) {
@@ -58,6 +85,7 @@ static void check_frame(AImage* image, int color) {
         CHECK(pixel_stride > 0 && row_stride >= (columns - 1) * pixel_stride + 1);
         CHECK(data != NULL && length >= (rows - 1) * row_stride + (columns - 1) * pixel_stride + 1);
         values[plane] = (int)sample(data, row_stride, pixel_stride, plane);
+        if (check_buffer) CHECK(values[plane] == buffer_values[plane]);
         if (abs(values[plane] - expected[color][plane]) > 10) {
             fprintf(stderr, "YUV frame %d plane %d: expected %d, got %d\n",
                     color, plane, expected[color][plane], values[plane]);
@@ -65,23 +93,6 @@ static void check_frame(AImage* image, int color) {
         }
     }
 
-    // Verify that AHardwareBuffer sees the same planes. AOSP may interleave
-    // chroma or pad rows, so compare visible samples using the reported layout.
-    AHardwareBuffer* buffer = NULL;
-    CHECK(AImage_getHardwareBuffer(image, &buffer) == AMEDIA_OK && buffer != NULL);
-    AHardwareBuffer_Desc desc = {0};
-    AHardwareBuffer_describe(buffer, &desc);
-    CHECK(desc.width >= kWidth && desc.height >= kHeight && desc.layers == 1);
-    AHardwareBuffer_Planes planes = {0};
-    CHECK(AHardwareBuffer_lockPlanes(buffer, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
-                                    -1, NULL, &planes) == 0);
-    CHECK(planes.planeCount == 3);
-    for (int plane = 0; plane < 3; ++plane) {
-        const AHardwareBuffer_Plane* layout = &planes.planes[plane];
-        CHECK(layout->data != NULL && layout->rowStride > 0 && layout->pixelStride > 0);
-        CHECK((int)sample(layout->data, layout->rowStride, layout->pixelStride, plane) == values[plane]);
-    }
-    CHECK(AHardwareBuffer_unlock(buffer, NULL) == 0);
     printf("NDK YUV image reader: frame %d YUV %d %d %d\n", color, values[0], values[1], values[2]);
 }
 
@@ -124,7 +135,7 @@ JNIEXPORT jlong JNICALL Java_gesher_NdkYuvImageReaderTest_checkImage(JNIEnv* env
     int64_t actual_timestamp = 0;
     CHECK(AImage_getTimestamp(image, &actual_timestamp) == AMEDIA_OK);
     CHECK(actual_timestamp == timestamp);
-    check_frame(image, color);
+    check_frame(image, color, true);
     return (jlong)(uintptr_t)image;
 }
 
@@ -132,7 +143,7 @@ JNIEXPORT void JNICALL Java_gesher_NdkYuvImageReaderTest_checkRetainedImage(JNIE
                                                                          jlong handle) {
     (void)env;
     (void)cls;
-    check_frame((AImage*)(uintptr_t)handle, 0);
+    check_frame((AImage*)(uintptr_t)handle, 0, false);
 }
 
 JNIEXPORT void JNICALL Java_gesher_NdkYuvImageReaderTest_deleteImage(JNIEnv* env, jclass cls,
