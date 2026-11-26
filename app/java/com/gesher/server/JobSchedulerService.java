@@ -102,6 +102,8 @@ final class JobSchedulerService extends IJobScheduler.Default
     private final NotificationManagerService mNotifications;
     private final double mTimeScale;
     private final ConnectivityService mConnectivity;
+    private final Runnable mNetworkChanged = () -> constraintsChanged(OBSERVE_NETWORK);
+    private boolean mObservingNetwork; // Guarded by this.
     private final ScheduledThreadPoolExecutor mTimeouts = new ScheduledThreadPoolExecutor(1, task -> {
         Thread thread = new Thread(task, "job-timeouts");
         thread.setDaemon(true);
@@ -645,11 +647,9 @@ final class JobSchedulerService extends IJobScheduler.Default
             addJobLocked(j);
             SystemServer.log("jobscheduler: persisted " + j + " scheduled again");
         }
+        updateNetworkObservationLocked();
         WindowsHost.addListener(this);
         mAtm.setTopResumedPackageListener(() -> constraintsChanged(OBSERVE_TOP));
-        if (mConnectivity != null) {
-            mConnectivity.addSystemListener(() -> constraintsChanged(OBSERVE_NETWORK));
-        }
         mThread = new Thread(this::run, "jobs");
         mThread.setDaemon(true);
         mThread.start();
@@ -741,6 +741,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                     // are admitted, then ordinary replacements/new jobs fail too.
                     // The identical-info enqueue fast path above bypasses this check.
                     if (!attributed && mJobsPerUid.getOrDefault(callingUid, 0) > MAX_JOBS_PER_APP) {
+                        if (stale != null) updateNetworkObservationLocked();
                         throw new IllegalStateException("Apps may not schedule more than "
                                 + MAX_JOBS_PER_APP + " distinct jobs");
                     }
@@ -770,6 +771,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                     work.setWorkId(job.nextWorkId++);
                     job.work.add(work);
                 }
+                updateNetworkObservationLocked();
                 notifyAll();
             }
         } finally {
@@ -793,6 +795,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 if (j.same(pkg, namespace, jobId)) cancelled.add(j);
             }
             removeJobsLocked(cancelled);
+            updateNetworkObservationLocked();
             notifyAll();
         }
         cancelled(cancelled, "cancelled");
@@ -818,6 +821,7 @@ final class JobSchedulerService extends IJobScheduler.Default
                 }
             }
             removeJobsLocked(cancelled);
+            updateNetworkObservationLocked();
             notifyAll();
         }
         cancelled(cancelled, "cancelled");
@@ -991,6 +995,9 @@ final class JobSchedulerService extends IJobScheduler.Default
         boolean resumed = (events & WindowsHost.EVENT_RESUMED) != 0;
         if (resumed) inputs |= OBSERVE_POWER | OBSERVE_IDLE | OBSERVE_STORAGE | OBSERVE_NETWORK;
         if (inputs == 0) return;
+        // The scheduler may precede ConnectivityService in WindowsHost's listener
+        // order. Do not admit a job using the pre-suspend cache during that interval.
+        if (resumed && mConnectivity != null) mConnectivity.invalidateSnapshot();
         synchronized (this) {
             mCheckExecutionAfterResume |= resumed && mRunning != 0;
             constraintsChanged(inputs);
@@ -1084,6 +1091,21 @@ final class JobSchedulerService extends IJobScheduler.Default
         int inputs = 0;
         for (Job job : mJobs) inputs |= job.hostInputs;
         return inputs;
+    }
+
+    /**
+     * Every job-list publication/removal updates ownership under the same monitor,
+     * including persisted jobs, retries and active runs. Connectivity's ownership
+     * methods never invoke listeners inline and its dispatcher holds no monitor over
+     * callbacks, so this does not invert the scheduler/observer lock order.
+     */
+    private void updateNetworkObservationLocked() {
+        if (mConnectivity == null) return;
+        boolean required = (hostInputsLocked() & OBSERVE_NETWORK) != 0;
+        if (required == mObservingNetwork) return;
+        if (required) mConnectivity.addSystemListener(mNetworkChanged);
+        else mConnectivity.removeSystemListener(mNetworkChanged);
+        mObservingNetwork = required;
     }
 
     private void run() {
@@ -1790,6 +1812,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             j.work.clear();
             j.delivered.clear();
         }
+        updateNetworkObservationLocked();
         notifyAll();
         return keep ? 1 : 0;
     }
@@ -1969,6 +1992,7 @@ final class JobSchedulerService extends IJobScheduler.Default
             mRemovalEpochs.put(name, mRemovalEpochs.getOrDefault(name, 0L) + 1);
             for (Job job : mJobs) if (name.equals(job.packageName)) cancelled.add(job);
             removeJobsLocked(cancelled);
+            updateNetworkObservationLocked();
             notifyAll();
             File[] persisted = persistDir().listFiles();
             if (persisted != null) for (File file : persisted) {

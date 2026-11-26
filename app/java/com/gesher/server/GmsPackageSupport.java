@@ -4,44 +4,25 @@
  */
 package com.gesher.server;
 
-import android.content.ComponentName;
-import android.content.Intent;
-import android.content.pm.ActivityInfo;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageInfo;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
-import android.content.pm.ServiceInfo;
 import android.content.pm.Signature;
-import android.content.pm.SigningDetails;
-import android.content.pm.SigningInfo;
-import android.os.Process;
-
-import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
- * Synthetic package definitions for Google Play Services (GMS) and Google Play Store.
- * Provides microG-style stand-in package information, signatures, and service resolution.
+ * Package names of Google Play services and the Play Store, and Google's public app
+ * signing certificate for an installed, verified microG (GmsSignatureSpoofing).
+ *
+ * <p>Neither package is reported unless it is installed: without microG, Play services
+ * and the Play Store are unknown packages, as on an Android device without them, and
+ * client libraries report {@code SERVICE_MISSING} (issue #335).
  */
 public final class GmsPackageSupport {
     public static final String PACKAGE_GMS = "com.google.android.gms";
     public static final String PACKAGE_VENDING = "com.android.vending";
 
-    // A current Play services: apps compare it with the version their client libraries
-    // need (Gmail 2026: 264280000) and, below it, post "update Google Play services".
-    public static final int GMS_VERSION_CODE = 264434000;
-    public static final String GMS_VERSION_NAME = "26.44.34 (190400-000000000)";
-
-    public static final int VENDING_VERSION_CODE = 83000000;
-    public static final String VENDING_VERSION_NAME = "83.0.00";
-
     // Google's app signing certificate (SHA-1 38:91:8A:45:3D:07:19:93:54:F8:B1:9A:F0:5E:C6:56:2C:ED:57:88),
     // public in every APK Google signs with it (Play services, Gmail...). The client
     // libraries' GoogleSignatureVerifier accepts Play services only with one of Google's
-    // certificates: with any other, apps report it "not available" (error 9,
-    // SERVICE_INVALID) and Gmail refuses to start. Only the certificate; no key.
+    // certificates. Only the certificate; no key. GmsSignatureSpoofing reports it for an
+    // installed microG whose own signature it has verified.
     public static final String GOOGLE_CERT_HEX =
             "308204433082032ba003020102020900c2e08746644a308d300d06092a864886f70d010104050030" +
             "74310b3009060355040613025553311330110603550408130a43616c69666f726e69613116301406" +
@@ -77,168 +58,10 @@ public final class GmsPackageSupport {
     private GmsPackageSupport() {
     }
 
-    public static boolean isSyntheticPackage(String packageName) {
-        return PACKAGE_GMS.equals(packageName) || PACKAGE_VENDING.equals(packageName);
-    }
-
     public static Signature getGoogleSignature() {
         if (sGoogleSignature == null) {
             sGoogleSignature = new Signature(GOOGLE_CERT_HEX);
         }
         return sGoogleSignature;
-    }
-
-    public static PackageInfo createSyntheticPackageInfo(String packageName, long flags) {
-        if (!isSyntheticPackage(packageName)) return null;
-
-        PackageInfo pi = new PackageInfo();
-        pi.packageName = packageName;
-        pi.versionCode = PACKAGE_GMS.equals(packageName) ? GMS_VERSION_CODE : VENDING_VERSION_CODE;
-        pi.setLongVersionCode(pi.versionCode);
-        pi.versionName = PACKAGE_GMS.equals(packageName) ? GMS_VERSION_NAME : VENDING_VERSION_NAME;
-        pi.firstInstallTime = System.currentTimeMillis();
-        pi.lastUpdateTime = pi.firstInstallTime;
-        pi.applicationInfo = createSyntheticApplicationInfo(packageName, flags);
-
-        if ((flags & PackageManager.GET_SIGNATURES) != 0
-                || (flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0) {
-            pi.signatures = new Signature[] { getGoogleSignature() };
-        }
-        // What GET_SIGNING_CERTIFICATES asks for (WhatsApp's AppIdentity of Play services:
-        // "signingInfo was null" ends its process).
-        if ((flags & PackageManager.GET_SIGNING_CERTIFICATES) != 0) {
-            pi.signingInfo = new SigningInfo(new SigningDetails(
-                    new Signature[] { getGoogleSignature() },
-                    SigningDetails.SignatureSchemeVersion.SIGNING_BLOCK_V3, null, null));
-        }
-
-        if ((flags & PackageManager.GET_SERVICES) != 0 && PACKAGE_GMS.equals(packageName)) {
-            pi.services = createSyntheticServices(packageName);
-        }
-
-        if ((flags & PackageManager.GET_RECEIVERS) != 0 && PACKAGE_GMS.equals(packageName)) {
-            pi.receivers = createSyntheticReceivers(packageName);
-        }
-
-        return pi;
-    }
-
-    private static volatile String sGmsCodeApk;
-
-    /** gesher-camera.apk next to dalvikvm.exe (drive-less, '/'), or null. */
-    private static String gmsCodeApk() {
-        String apk = sGmsCodeApk;
-        if (apk == null) {
-            try {
-                String exe = Zygote.exePath();
-                apk = (exe.substring(0, exe.lastIndexOf('\\') + 1) + "gesher-camera.apk")
-                        .replace('\\', '/').replaceFirst("^[A-Za-z]:", "");
-                if (!new File(apk).isFile()) apk = "";
-            } catch (Throwable t) {
-                apk = "";
-            }
-            sGmsCodeApk = apk;
-        }
-        return apk.isEmpty() ? null : apk;
-    }
-
-    public static ApplicationInfo createSyntheticApplicationInfo(String packageName, long flags) {
-        if (!isSyntheticPackage(packageName)) return null;
-
-        ApplicationInfo ai = new ApplicationInfo();
-        ai.packageName = packageName;
-        ai.name = PACKAGE_GMS.equals(packageName) ? "Google Play services" : "Google Play Store";
-        ai.flags = ApplicationInfo.FLAG_SYSTEM | ApplicationInfo.FLAG_INSTALLED;
-        ai.enabled = true;
-        ai.uid = Process.myUid();
-        ai.targetSdkVersion = 34;
-        ai.sourceDir = "/system/priv-app/" + (PACKAGE_GMS.equals(packageName) ? "PrebuiltGmsCore" : "Phonesky") + ".apk";
-        // Play services' code, for apps that load it (createPackageContext with
-        // CONTEXT_INCLUDE_CODE: the client library's ProviderInstaller): an APK that is
-        // there, gesher-camera.apk, which carries ProviderInstallerImpl.
-        String code = gmsCodeApk();
-        // FLAG_HAS_CODE too: without it ActivityThread.getPackageInfo drops
-        // CONTEXT_INCLUDE_CODE and the package's class loader is empty (Gmail: "Didn't
-        // find class ...ProviderInstallerImpl on path: DexPathList[[]]").
-        if (PACKAGE_GMS.equals(packageName) && code != null) {
-            ai.sourceDir = code;
-            ai.flags |= ApplicationInfo.FLAG_HAS_CODE;
-        }
-        ai.publicSourceDir = ai.sourceDir;
-        // The data areas an installed package of this name has under $ANDROID_DATA,
-        // never created: not "/data/data/...", which on Windows is a folder at the
-        // root of the current drive (C:\data\data\...) outside Gesher's data. The
-        // native library directory is set too: LoadedApk's class loader adds it as a
-        // native path (new File(nativeLibraryDir)), and without one the package
-        // context's getClassLoader throws a NullPointerException (Gmail's
-        // ProviderInstaller: "Failed to install provider").
-        ApklessDataDirs.describe(ai);
-        return ai;
-    }
-
-    private static ServiceInfo[] createSyntheticServices(String packageName) {
-        String[] serviceNames = new String[] {
-                "com.google.android.gms.auth.service.START",
-                "com.google.android.gms.auth.api.signin.service.START",
-                "com.google.android.gms.location.internal.GoogleLocationManagerService.START",
-                "com.google.android.gms.gcm.GcmService",
-                "com.google.android.c2dm.intent.REGISTER"
-        };
-        ServiceInfo[] services = new ServiceInfo[serviceNames.length];
-        for (int i = 0; i < serviceNames.length; i++) {
-            ServiceInfo si = new ServiceInfo();
-            si.packageName = packageName;
-            si.name = serviceNames[i];
-            si.exported = true;
-            si.enabled = true;
-            si.applicationInfo = createSyntheticApplicationInfo(packageName, 0);
-            services[i] = si;
-        }
-        return services;
-    }
-
-    private static ActivityInfo[] createSyntheticReceivers(String packageName) {
-        String[] receiverNames = new String[] {
-                "com.google.android.gms.gcm.GcmReceiver",
-                "com.google.android.c2dm.intent.RECEIVE"
-        };
-        ActivityInfo[] receivers = new ActivityInfo[receiverNames.length];
-        for (int i = 0; i < receiverNames.length; i++) {
-            ActivityInfo ai = new ActivityInfo();
-            ai.packageName = packageName;
-            ai.name = receiverNames[i];
-            ai.exported = true;
-            ai.enabled = true;
-            ai.applicationInfo = createSyntheticApplicationInfo(packageName, 0);
-            receivers[i] = ai;
-        }
-        return receivers;
-    }
-
-    public static List<ResolveInfo> querySyntheticServices(Intent intent, String resolvedType, long flags) {
-        List<ResolveInfo> result = new ArrayList<>();
-        if (intent == null) return result;
-
-        String pkg = intent.getPackage();
-        ComponentName comp = intent.getComponent();
-        String targetPkg = comp != null ? comp.getPackageName() : pkg;
-
-        if (targetPkg != null && !isSyntheticPackage(targetPkg)) {
-            return result;
-        }
-
-        String action = intent.getAction();
-        if (action != null && (targetPkg == null || isSyntheticPackage(targetPkg))) {
-            ResolveInfo ri = new ResolveInfo();
-            ServiceInfo si = new ServiceInfo();
-            si.packageName = PACKAGE_GMS;
-            si.name = comp != null ? comp.getClassName() : action + "Service";
-            si.enabled = true;
-            si.exported = true;
-            si.applicationInfo = createSyntheticApplicationInfo(PACKAGE_GMS, flags);
-            ri.serviceInfo = si;
-            result.add(ri);
-        }
-        return result;
     }
 }
