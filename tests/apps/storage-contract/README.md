@@ -106,3 +106,32 @@ The comparator requires every storage and class-loader check in both phases and 
 startup IDs differ while the storage token persists within each platform.
 Retain an unsuccessful startup, blocked result or missing phase as a test
 failure to complete. Keep launch-only evidence outside the functional result.
+
+## Recorded comparison
+
+Both platforms executed the same separately signed APK for each target. The
+reference was the Android 16 ARM64 system image, API 36 and fingerprint
+`Android/sdk_phone64_arm64/emu64a:16/BE2A.250530.026.D1/13818094:userdebug/test-keys`.
+Windows was Windows 11 Pro 24H2 ARM64 under Parallels. Gesher's x64 Windows
+runtime ran through Windows emulation, in an isolated portable profile with the
+managed launcher. The runtime is 0.2.0.3123 from [package run 45668397258](https://github.com/gesher-runtime/gesher/actions/runs/45668397258)
+at [156abd94](https://github.com/gesher-runtime/gesher/commit/156abd94bbe733e07171931027d5eb3613565dc1).
+Its portable ZIP SHA-256 was
+`3efa411cd6538ebca1cbe477a8f97ea8ca31ba1f66676c13906c83fb15fe6c15`.
+The shipped `dalvikvm.exe` SHA-256 was
+`f8db9f613eb58312998fe9cdfea9b59813e97a0b89906c82da4aa0a5b7c88f35`.
+
+| Target SDK | APK SHA-256 confirmed on both guests | Paired observations |
+| --- | --- | --- |
+| 33 | `b6ff4bc3039537c54bd39d51a9682b32bad18bb0605bb8f17ba89ae61d8c7289` | 34/34 passed. Both ran the writable test archive. |
+| 36 | `763602fdf1c993646be1a05bf127c80e837e4beaf8c6840eebf63127f93c8f01` | 32/34 passed. Android rejected the writable test archive at startup and after restart. Gesher loaded its class both times. |
+
+Both APKs used the test certificate SHA-256
+`136b5f0535eec269566e79a2a0bf0bba916258d0bc18ab7dcebf9d6175ea9953`.
+The 32 matching checks in each profile cover separate CE/DE data and dynamic
+DEX behavior under read-only file and memory loaders. The Windows failure is
+scoped to the retained runtime. No exact current-main Windows build or
+standalone-Gesher process was run. The Android ART check for read-only DEX is
+compiled behind Android target handling. Windows needs equivalent admission
+for app-written DEX while ordinary installation and launch continue to use
+authorized base and split APKs.
