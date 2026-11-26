@@ -15,12 +15,12 @@
     "chooser_cancel": {"en": "Cancel", "he": "ביטול"},
     "chooser_add": {"en": "Add account", "he": "הוספת חשבון"},
     "install_request": {
-      "en": "Install or update Android application \u2068{0}\u2069 (version \u2068{1}\u2069)?\nThis approval applies to this installation only.",
-      "he": "להתקין או לעדכן את יישום Android \u2068{0}\u2069 (גרסה \u2068{1}\u2069)?\nהאישור חל על התקנה זו בלבד."
+      "en": "Install or update Android application {0} (version {1})?\r\nThis approval applies to this installation only.",
+      "he": "להתקין או לעדכן את יישום \u202aAndroid {0}\u202c (גרסה \u202a{1}\u202c)?\r\nהאישור חל על התקנה זו בלבד."
     },
     "removal_request": {
-      "en": "Remove Android application \u2068{0}\u2069 (version \u2068{1}\u2069)?\nIts app data will be deleted. This approval applies to this removal only.",
-      "he": "להסיר את יישום Android \u2068{0}\u2069 (גרסה \u2068{1}\u2069)?\nגם נתוני היישום יימחקו. האישור חל על הסרה זו בלבד."
+      "en": "Remove Android application {0} (version {1})?\r\nIts app data will be deleted. This approval applies to this removal only.",
+      "he": "להסיר את יישום \u202aAndroid {0}\u202c (גרסה \u202a{1}\u202c)?\r\nגם נתוני היישום יימחקו. האישור חל על הסרה זו בלבד."
     },
     "starting": {
       "en": "Starting…",
