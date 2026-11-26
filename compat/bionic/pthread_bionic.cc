@@ -94,6 +94,7 @@ thread_local uint64_t t_key_generations[kKeysMax] = {};
 struct ThreadAtExit {
   void (BIONIC_SYSV* dtor)(void*);
   void* obj;
+  elf::Library* owner;
 };
 thread_local std::vector<ThreadAtExit>* t_thread_atexit = nullptr;
 thread_local CleanupStack t_cleanups;
@@ -105,6 +106,7 @@ void RunThreadAtExit() {
     ThreadAtExit e = t_thread_atexit->back();
     t_thread_atexit->pop_back();
     e.dtor(e.obj);
+    elf::ReleaseLifetimePin(e.owner);
   }
   delete t_thread_atexit;
   t_thread_atexit = nullptr;
@@ -1199,9 +1201,11 @@ int BIONIC_SYSV gesher_bionic_pthread_setspecific(bionic_pthread_key_t key, cons
 // C++ thread_local destructors (libc++abi calls this for every thread_local
 // object with a destructor). Run when the thread ends, before its keys.
 int BIONIC_SYSV gesher_bionic_cxa_thread_atexit_impl(void (BIONIC_SYSV* dtor)(void*), void* obj,
-                                                    void* /*dso*/) {
+                                                    void* dso) {
   if (t_thread_atexit == nullptr) t_thread_atexit = new std::vector<ThreadAtExit>();
-  t_thread_atexit->push_back({dtor, obj});
+  auto* owner = elf::RetainForAddress(dso);
+  if (owner == nullptr) owner = elf::RetainForAddress(reinterpret_cast<void*>(dtor));
+  t_thread_atexit->push_back({dtor, obj, owner});
   ArmHostExit();
   return 0;
 }
@@ -1209,8 +1213,16 @@ int BIONIC_SYSV gesher_bionic_cxa_thread_atexit_impl(void (BIONIC_SYSV* dtor)(vo
 // pthread_atfork/__register_atfork: run by fork in translated arm64 code
 // (process_bionic.cc, ADR 0092), as bionic runs them: prepare handlers last
 // registered first, parent and child handlers in registration order.
-int BIONIC_SYSV gesher_bionic_register_atfork(void* prepare, void* parent, void* child, void*) {
-  return gesher::bionic::RegisterAtfork(prepare, parent, child);
+int BIONIC_SYSV gesher_bionic_register_atfork(void* prepare, void* parent, void* child, void* dso) {
+  int result = gesher::bionic::RegisterAtfork(prepare, parent, child);
+  if (result == 0) {
+    // Gesher's fork hook table retains callbacks for the process lifetime.
+    elf::KeepResidentForAddress(dso);
+    elf::KeepResidentForAddress(prepare);
+    elf::KeepResidentForAddress(parent);
+    elf::KeepResidentForAddress(child);
+  }
+  return result;
 }
 
 }  // extern "C"

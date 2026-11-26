@@ -1034,6 +1034,7 @@ std::mutex g_atexit_mutex;
 std::vector<AtExitEntry> g_atexit;
 
 int BIONIC_SYSV CxaAtexit(void (BIONIC_SYSV* func)(void*), void* arg, void* dso) {
+  if (dso == nullptr) gesher::elf::KeepResidentForAddress(reinterpret_cast<void*>(func));
   std::lock_guard<std::mutex> lock(g_atexit_mutex);
   g_atexit.push_back({func, arg, dso, nullptr});
   return 0;
@@ -1054,6 +1055,7 @@ void BIONIC_SYSV CxaFinalize(void* dso) {
   }
 }
 int BIONIC_SYSV Atexit(void (BIONIC_SYSV* func)(void)) {
+  gesher::elf::KeepResidentForAddress(reinterpret_cast<void*>(func));
   std::lock_guard<std::mutex> lock(g_atexit_mutex);
   g_atexit.push_back({nullptr, nullptr, nullptr, func});
   return 0;
@@ -1205,8 +1207,9 @@ void* DlOpenImpl(const char* filename, int flags, const AndroidDlextinfo* ext) {
     if (force_load && by_path) return DlOpenUnsupported(kDlextForceLoad);
     return platform;
   }
+  const bool keep_resident = (flags & (RTLD_NODELETE | RTLD_GLOBAL)) != 0;
   if (!by_path) {
-    if (auto* existing = gesher::elf::OpenLoaded(filename)) return existing;
+    if (auto* existing = gesher::elf::OpenLoaded(filename, keep_resident)) return existing;
   }
   std::string path = filename;
   std::vector<std::string> dirs = LibraryDirectories();
@@ -1227,6 +1230,7 @@ void* DlOpenImpl(const char* filename, int flags, const AndroidDlextinfo* ext) {
   gesher::elf::LoadOptions options;
   options.reject_loaded_file = force_load;
   options.no_load = (flags & RTLD_NOLOAD) != 0;
+  options.keep_resident = keep_resident;
   if (ext != nullptr && (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint)) != 0) {
     options.use_reserved = true;
     options.reserved_addr = ext->reserved_addr;
@@ -1274,11 +1278,13 @@ void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
   }
   return p;
 }
-// dlclose: libraries stay loaded for the life of the process, also one loaded
-// into a caller's reservation (android_dlopen_ext). The caller may unmap that
-// reservation after dlclose; the library then leaves every list
-// (gesher::elf::ForgetReservedMappings, from munmap).
-int BIONIC_SYSV DlClose(void*) { return 0; }
+int BIONIC_SYSV DlClose(void* handle) {
+  if (handle == reinterpret_cast<void*>(-2) || IsPlatformLibraryHandle(handle)) return 0;
+  if (gesher::elf::Close(static_cast<gesher::elf::Library*>(handle))) return 0;
+  t_dlerror = "dlclose: invalid or closed handle";
+  t_has_dlerror = true;
+  return -1;
+}
 const char* BIONIC_SYSV DlError() {
   if (!t_has_dlerror) return nullptr;
   t_has_dlerror = false;
@@ -1323,7 +1329,7 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
     info.dlpi_phdr = in.phdr;
     info.dlpi_phnum = in.phnum;
     info.dlpi_adds = in.adds;
-    info.dlpi_subs = 0;
+    info.dlpi_subs = in.subs;
     info.dlpi_tls_modid = in.tls_modid;
     info.dlpi_tls_data = nullptr;
     return cb(&info, sizeof(info), data);

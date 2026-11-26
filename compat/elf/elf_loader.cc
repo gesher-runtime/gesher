@@ -168,6 +168,13 @@ struct Library {
   std::unique_ptr<uint8_t[]> tls_image_copy;
   bool is_closed = false;
   bool is_closing = false;  // finalizers claimed, still visible until they finish
+  bool keep_resident = false;
+  bool reclaim_when_idle = false;
+  size_t open_references = 0;
+  size_t lifetime_pins = 0;
+  uint64_t init_order = 0;
+  Library* load_group_root = nullptr;
+  std::vector<Library*> relocation_dependencies;
   bool is_aarch64 = false;   // EM_AARCH64: translated guest code (ADR 0047)
   bool relocation_global = false;  // DF_1_GLOBAL or the main executable
   bool symbolic_lookup = false;    // DT_SYMBOLIC or DF_SYMBOLIC
@@ -317,6 +324,11 @@ std::vector<Library*>& RelocationGlobals() {
 }
 SymbolResolver g_resolver;
 uint64_t g_load_count = 0;  // under g_mutex
+uint64_t g_init_order = 0;   // under g_mutex
+uint64_t g_unload_count = 0; // under g_mutex
+bool g_closes_pending = false;
+void CollectClosedGroups();
+void ReclaimRetiredImage(Library* library);
 UnresolvedHandler g_unresolved_handler = nullptr;
 // dl_iterate_phdr callbacks running on this thread (ForEachLoaded): an unmap
 // from inside one does not wait for other callbacks.
@@ -593,9 +605,17 @@ ResolvedSymbol ResolveForReloc(Library* lib, const Elf64_Sym* reference) {
   const char* name = lib->strtab + reference->st_name;
   const uint32_t gh = GnuHash(name), sh = SysvHash(name);
   auto lookup = [&](Library* candidate) -> ResolvedSymbol {
-    if (candidate->is_closed || candidate->is_aarch64 != lib->is_aarch64) return {};
+    if (candidate->is_closed || candidate->is_closing ||
+        candidate->is_aarch64 != lib->is_aarch64) return {};
     const Elf64_Sym* symbol = FindDefinedSymbol(candidate, name, gh, sh);
     if (symbol == nullptr || ELF64_ST_BIND(symbol->st_info) == STB_LOCAL) return {};
+    // The existing fallback can bind an object outside DT_NEEDED. Preserve
+    // that provider while the relocation can still be called or read.
+    if (candidate != lib &&
+        std::find(lib->relocation_dependencies.begin(), lib->relocation_dependencies.end(),
+                  candidate) == lib->relocation_dependencies.end()) {
+      lib->relocation_dependencies.push_back(candidate);
+    }
     return {SymbolAddress(candidate, symbol), candidate, symbol, true};
   };
   if (lib->symbolic_lookup) {
@@ -1259,7 +1279,10 @@ bool ParseDynamic(Library* lib, const uint8_t* data, std::string_view* runpath,
         lib->text_relocations |= (v & DF_TEXTREL) != 0;
         lib->symbolic_lookup |= (v & DF_SYMBOLIC) != 0;
         break;
-      case DT_FLAGS_1: lib->relocation_global |= (v & DF_1_GLOBAL) != 0; break;
+      case DT_FLAGS_1:
+        lib->relocation_global |= (v & DF_1_GLOBAL) != 0;
+        lib->keep_resident |= (v & DF_1_NODELETE) != 0;
+        break;
       case DT_INIT: lib->init_func = reinterpret_cast<void (SYSV*)()>(p); break;
       case DT_FINI: lib->fini_func = reinterpret_cast<void (SYSV*)()>(p); break;
       case DT_INIT_ARRAY: lib->init_array = reinterpret_cast<void (SYSV**)()>(p); break;
@@ -1839,6 +1862,7 @@ void RunInit(Library* lib) {
     for (Library* dep : lib->dependencies) RunInit(dep);
     guest_init(lib->init_func);
     for (size_t i = 0; i < lib->init_array_count; ++i) guest_init(lib->init_array[i]);
+    lib->init_order = ++g_init_order;
     return;
   }
   // An executable's DT_PREINIT_ARRAY runs before its other initializers.
@@ -1846,14 +1870,31 @@ void RunInit(Library* lib) {
   for (Library* dep : lib->dependencies) RunInit(dep);
   if (lib->init_func) CallInit(lib->init_func);
   for (size_t i = 0; i < lib->init_array_count; ++i) CallInit(lib->init_array[i]);
+  lib->init_order = ++g_init_order;
 }
 
-// A constructor can open a sibling that was linked and published with the
-// outer graph but has not reached its turn in RunInit yet.
-Library* FindAndInitLocked(const std::string& name) {
-  Library* lib = FindLocked(name);
-  if (lib != nullptr) RunInit(lib);
+// The caller owns a reference before a constructor may re-enter the loader.
+Library* OpenReferenceLocked(Library* lib, bool keep_resident) {
+  if (lib == nullptr || lib->is_closing) return nullptr;
+  ++lib->open_references;
+  lib->keep_resident |= keep_resident;
+  RunInit(lib);
   return lib;
+}
+
+void ReleaseUnresolvedImports(Library* lib) {
+  for (void* stub : lib->unresolved_functions) {
+    if (lib->is_aarch64) gesher::arm64::UnbindHostFunction(stub);
+  }
+  for (uint8_t* page : lib->unresolved_pages) VirtualFree(page, 0, MEM_RELEASE);
+  if (lib->unresolved_data != nullptr) {
+    {
+      std::lock_guard<std::mutex> lock(g_data_mutex);
+      g_data_owners.erase(std::remove(g_data_owners.begin(), g_data_owners.end(), lib),
+                          g_data_owners.end());
+    }
+    VirtualFree(lib->unresolved_data, 0, MEM_RELEASE);
+  }
 }
 
 // A pending image has never been returned to application code. Withdraw every
@@ -1870,18 +1911,7 @@ void DiscardLibrary(Library* lib) {
     }
   }
   lib->rewrite_registration.reset();
-  for (void* stub : lib->unresolved_functions) {
-    if (lib->is_aarch64) gesher::arm64::UnbindHostFunction(stub);
-  }
-  for (uint8_t* page : lib->unresolved_pages) VirtualFree(page, 0, MEM_RELEASE);
-  if (lib->unresolved_data != nullptr) {
-    {
-      std::lock_guard<std::mutex> lock(g_data_mutex);
-      g_data_owners.erase(std::remove(g_data_owners.begin(), g_data_owners.end(), lib),
-                          g_data_owners.end());
-    }
-    VirtualFree(lib->unresolved_data, 0, MEM_RELEASE);
-  }
+  ReleaseUnresolvedImports(lib);
   if (lib->mapped_by_caller) {
     // The caller's reservation (android_dlopen_ext): what was mapped over it
     // becomes PROT_NONE again and stays the caller's.
@@ -1973,6 +2003,7 @@ class LoadTransaction {
     // still exist. No finalizers run for objects whose constructors never ran.
     for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it) (*it)->library.reset();
     g_pending_scopes.pop_back();
+    CollectClosedGroups();
   }
 
   // `path`: the root's file (null for an object loaded from memory).
@@ -2010,6 +2041,7 @@ class LoadTransaction {
           TlsPublishModule(&lib->tls);
         }
       }
+      lib->load_group_root = root;
       lib->load_scope = nullptr;
       lib->pending_globals = nullptr;
       lib->writable = {};
@@ -2022,8 +2054,7 @@ class LoadTransaction {
     global_group.insert(global_group.end(), pending_globals_.begin(), pending_globals_.end());
     // The graph is complete before a constructor can re-enter the loader.
     for (const auto& node : nodes_) node->library.release();
-    RunInit(root);
-    return root;
+    return OpenReferenceLocked(root, options.main_executable || options.keep_resident);
   }
 
  private:
@@ -2129,6 +2160,10 @@ class LoadTransaction {
           if (dep == nullptr) dep = FindFile(Loaded(), *child_image->id);
         }
         if (dep != nullptr) {
+          if (dep->is_closing) {
+            Fail(error, lib->name + ": dependency is being unloaded: " + soname);
+            return nullptr;
+          }
           lib->dependencies.push_back(dep);
           continue;
         }
@@ -2145,6 +2180,10 @@ class LoadTransaction {
         dep = Stage(soname.c_str(), found.c_str(), source, source->data, source->size,
                     child_options, error, std::move(child_image));
         if (dep == nullptr) return nullptr;
+      }
+      if (dep->is_closing) {
+        Fail(error, lib->name + ": dependency is being unloaded: " + soname);
+        return nullptr;
       }
       lib->dependencies.push_back(dep);
     }
@@ -2257,15 +2296,13 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
       info.phnum = lib->phnum;
       info.tls_modid = lib->tls.present ? lib->tls.module_id : 0;
       info.adds = g_load_count;
-      infos.emplace_back(info, lib->mapped_by_caller ? lib : nullptr);
+      info.subs = g_unload_count;
+      infos.emplace_back(info, lib);
     }
   }
-  // Called without the lock: the callback may itself look symbols up. An
-  // object in a caller's reservation that the caller unmapped since the
-  // snapshot (ForgetReservedMappings marks it retired before the pages go)
-  // is skipped; Library objects are never freed once listed, so the check
-  // itself is safe. One unmapped while a callback is reading it is the app's
-  // own race, as with bionic.
+  // The callback may re-enter the loader. The retirement flag excludes an
+  // image withdrawn after this snapshot, and the callback pin keeps the
+  // mapped headers live through a concurrent ordinary close.
   // Undone when the callback returns or is unwound through this frame's
   // destructors. A longjmp out of the callback skips them (gesher's longjmp
   // runs no host cleanups) and leaves the count raised (docs/native-libs.md).
@@ -2295,6 +2332,10 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
         }
       }
       g_callbacks_cv.notify_all();
+      if (lib->retired.load()) {
+        std::lock_guard<LoaderMutex> lock(g_mutex);
+        ReclaimRetiredImage(lib);
+      }
     }
   };
   for (const auto& entry : infos) {
@@ -2304,16 +2345,9 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
       // callback (and may wait for it before the pages go) or this sees
       // retired.
       lib->in_callback.fetch_add(1);
-      if (lib->retired.load()) {
-        {
-          std::lock_guard<std::mutex> lock(g_callbacks_mutex);
-          lib->in_callback.fetch_sub(1);
-        }
-        g_callbacks_cv.notify_all();
-        continue;
-      }
     }
     CallbackScope scope(lib);
+    if (lib != nullptr && lib->retired.load()) continue;
     if (int r = fn(entry.first)) return r;
   }
   return 0;
@@ -2406,8 +2440,11 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
         Fail(error, "ANDROID_DLEXT_FORCE_LOAD of an already loaded file is not supported");
         return nullptr;
       }
-      RunInit(existing);
-      return existing;
+      if (existing->is_closing) {
+        Fail(error, std::string(path) + " is being unloaded");
+        return nullptr;
+      }
+      return OpenReferenceLocked(existing, options.keep_resident);
     }
   }
   if (options.no_load) {
@@ -2427,7 +2464,13 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
                         const LoadOptions& options) {
   std::lock_guard<LoaderMutex> operation(g_mutex);
-  if (Library* existing = FindAndInitLocked(name)) return existing;
+  if (Library* existing = FindLocked(name)) {
+    if (existing->is_closing) {
+      Fail(error, std::string(name) + " is being unloaded");
+      return nullptr;
+    }
+    return OpenReferenceLocked(existing, options.keep_resident);
+  }
   return LoadCommon(name, nullptr, nullptr, static_cast<const uint8_t*>(data), size, error, options);
 }
 
@@ -2486,11 +2529,9 @@ void* ResolveBionic(const char* name) {
   return g_resolver ? g_resolver(name) : nullptr;
 }
 
-Library* OpenLoaded(const char* name) {
+Library* OpenLoaded(const char* name, bool keep_resident) {
   std::lock_guard<LoaderMutex> lock(g_mutex);
-  Library* lib = FindSoname(Loaded(), name);
-  if (lib != nullptr) RunInit(lib);
-  return lib;
+  return OpenReferenceLocked(FindSoname(Loaded(), name), keep_resident);
 }
 
 Library* Find(const char* name) {
@@ -2500,17 +2541,9 @@ Library* Find(const char* name) {
 
 const char* Soname(Library* library) { return library ? library->soname.c_str() : ""; }
 
-void Close(Library* library) {
-  std::lock_guard<LoaderMutex> operation(g_mutex);
-  if (library == nullptr) return;
-  {
-    std::lock_guard<LoaderMutex> lock(g_mutex);
-    if (library->is_closed || library->is_closing) return;
-    // Finalizers may re-enter dlclose. Claim this object before calling them,
-    // keeping its symbols visible until they finish. The recursive operation
-    // lock permits same-thread finalizer reentry and excludes concurrent loads.
-    library->is_closing = true;
-  }
+namespace {
+
+void RunFinalizers(Library* library) {
   auto finish = [library](void (SYSV* function)()) {
     if (function == nullptr || function == reinterpret_cast<void (SYSV*)()>(-1)) return;
     if (library->is_aarch64) {
@@ -2523,23 +2556,14 @@ void Close(Library* library) {
     finish(library->fini_array[i]);
   }
   finish(library->fini_func);
-  {
-    std::lock_guard<LoaderMutex> lock(g_mutex);
-    library->is_closed = true;
-    library->is_closing = false;
-  }
 }
 
-namespace {
-
-// Takes `library` out of every list: lookups, dl_iterate_phdr, dladdr, the
-// arm64 translator's code ranges, the lazy %fs rewrite. Runs none of its
-// code. Its TLS module stays registered, initialized from the loader-owned
-// copy of its image (tls_image_copy). Its unresolved-import stubs and
-// placeholders stay allocated (a few pages; code elsewhere could still hold
-// their addresses).
+// Withdraw lookup and code registrations after ordinary finalization, or
+// before the caller replaces a reserved mapping. For a reserved mapping,
+// keep the registered TLS image and import diagnostics as before.
 void RetireLocked(Library* library) {
   library->retired = true;  // first: ForEachLoaded's snapshots check it
+  ++g_unload_count;
   auto& loaded = Loaded();
   loaded.erase(std::remove(loaded.begin(), loaded.end(), library), loaded.end());
   auto& global_group = RelocationGlobals();
@@ -2557,7 +2581,114 @@ void RetireLocked(Library* library) {
   library->caller_ranges.clear();
 }
 
+void ReclaimRetiredImage(Library* library) {
+  if (!library->reclaim_when_idle || library->in_callback.load() != 0) return;
+  library->reclaim_when_idle = false;
+  ReleaseUnresolvedImports(library);
+  munmap(library->base, library->map_size);
+  // Drop auxiliary allocations while preserving the opaque handle's identity
+  // and names already returned by dladdr or an iteration snapshot.
+  library->base = nullptr;
+  library->needed = std::vector<std::string>();
+  library->dependencies = std::vector<Library*>();
+  library->relocation_dependencies = std::vector<Library*>();
+  library->unresolved_functions = std::vector<void*>();
+  library->unresolved_pages = std::vector<uint8_t*>();
+  library->unresolved_data_names = std::vector<const char*>();
+  library->load_notes = std::string();
+}
+
+// Only one collection runs under the recursive loader lock. Pending objects
+// can take new bindings while their IFUNCs call dlclose, so collection waits
+// until their complete relocation transaction has published or rolled back.
+bool g_collecting_closes = false;
+void CollectClosedGroups() {
+  if (!g_closes_pending || g_collecting_closes || !g_pending_scopes.empty()) return;
+  g_collecting_closes = true;
+  while (g_closes_pending) {
+    g_closes_pending = false;
+    std::set<Library*> live;
+    std::vector<Library*> queue;
+    auto visit = [&](Library* lib) {
+      if (lib != nullptr && !lib->retired && live.insert(lib).second) queue.push_back(lib);
+    };
+    for (Library* lib : Loaded()) {
+      // Committed TLS registration and reservations currently require stable
+      // backing. A close releases the explicit handle without reclaiming them.
+      if (lib->open_references || lib->lifetime_pins || lib->keep_resident ||
+          lib->tls.present || lib->mapped_by_caller) visit(lib);
+    }
+    for (size_t i = 0; i < queue.size(); ++i) {
+      Library* lib = queue[i];
+      visit(lib->load_group_root);
+      for (Library* dep : lib->dependencies) visit(dep);
+      for (Library* dep : lib->relocation_dependencies) visit(dep);
+    }
+    std::vector<Library*> retired;
+    for (Library* lib : Loaded()) {
+      if (!live.contains(lib)) retired.push_back(lib);
+    }
+    if (retired.empty()) break;
+    std::sort(retired.begin(), retired.end(), [](Library* a, Library* b) {
+      return a->init_order > b->init_order;
+    });
+    for (Library* lib : retired) lib->is_closing = true;
+    for (Library* lib : retired) {
+      if (lib->init_done && !lib->retired) RunFinalizers(lib);
+    }
+    for (Library* lib : retired) {
+      if (lib->retired) continue;
+      RetireLocked(lib);
+      lib->reclaim_when_idle = true;
+      ReclaimRetiredImage(lib);
+    }
+  }
+  g_collecting_closes = false;
+}
+
+Library* LibraryForAddressLocked(const void* address) {
+  const uintptr_t value = reinterpret_cast<uintptr_t>(address);
+  for (Library* lib : Loaded()) {
+    const uintptr_t base = reinterpret_cast<uintptr_t>(lib->base);
+    if (value >= base && value - base < lib->map_size) return lib;
+  }
+  return nullptr;
+}
+
 }  // namespace
+
+bool Close(Library* library) {
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  if (library == nullptr ||
+      std::find(Loaded().begin(), Loaded().end(), library) == Loaded().end() ||
+      library->open_references == 0) return false;
+  if (--library->open_references == 0) {
+    g_closes_pending = true;
+    CollectClosedGroups();
+  }
+  return true;
+}
+
+Library* RetainForAddress(const void* address) {
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  Library* owner = LibraryForAddressLocked(address);
+  if (owner != nullptr) ++owner->lifetime_pins;
+  return owner;
+}
+
+void ReleaseLifetimePin(Library* library) {
+  if (library == nullptr) return;
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  if (--library->lifetime_pins == 0) {
+    g_closes_pending = true;
+    CollectClosedGroups();
+  }
+}
+
+void KeepResidentForAddress(const void* address) {
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  if (Library* owner = LibraryForAddressLocked(address)) owner->keep_resident = true;
+}
 
 void ForgetReservedMappings(const void* addr, size_t length) {
   if (g_reserved_count.load() == 0 || length == 0) return;

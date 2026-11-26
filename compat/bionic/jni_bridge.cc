@@ -1107,6 +1107,7 @@ void* ElfOpen(const char* path, int flags, char* error, size_t error_size) {
   Install();
   elf::LoadOptions options;
   options.no_load = (flags & RTLD_NOLOAD) != 0;
+  options.keep_resident = (flags & (RTLD_NODELETE | RTLD_GLOBAL)) != 0;
   if (!options.no_load) LoadArtShimFor(path);
   // DT_NEEDED libraries the APK ships (libc++_shared.so, ...) sit next to it.
   std::string dir(path);
@@ -1137,8 +1138,7 @@ void* ElfSym(void* handle, const char* symbol) {
 }
 
 int ElfClose(void* handle) {
-  elf::Close(static_cast<elf::Library*>(handle));
-  return 0;
+  return elf::Close(static_cast<elf::Library*>(handle)) ? 0 : -1;
 }
 
 const gesher_elf_dlopen_ops kElfOps = {&ElfOpen, &ElfSym, &ElfClose};

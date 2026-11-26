@@ -82,6 +82,8 @@ struct LoadOptions {
   bool reject_loaded_file = false;
   // For Load(): accept an already-linked instance of the opened file only.
   bool no_load = false;
+  // dlopen with RTLD_NODELETE or RTLD_GLOBAL keeps the group resident.
+  bool keep_resident = false;
 };
 
 // Loads the ELF object at `path`. On success returns a handle and runs its
@@ -112,7 +114,7 @@ bool IsAarch64(Library* library);
 
 // Opens an already-linked object by soname, running its
 // constructors if they have not started. Returns nullptr on a miss.
-Library* OpenLoaded(const char* name);
+Library* OpenLoaded(const char* name, bool keep_resident = false);
 
 // Looks up an already-linked object by soname or file base name without
 // starting its constructors.
@@ -121,18 +123,23 @@ Library* Find(const char* name);
 // The soname (DT_SONAME, else the file base name) of a loaded object.
 const char* Soname(Library* library);
 
-// Runs the object's DT_FINI_ARRAY / DT_FINI and marks it closed. The mapping is
-// kept (handles may still be held); full unmap is not implemented.
-void Close(Library* library);
+// Releases one explicit Load/OpenLoaded reference. Runs finalizers and retires
+// an unreachable load group when its mapping can be reclaimed safely.
+bool Close(Library* library);
+
+// Pins an ELF object named by an address in its mapping, for a runtime-owned
+// callback whose lifetime can outlast a public handle. Null when there is no object.
+Library* RetainForAddress(const void* address);
+void ReleaseLifetimePin(Library* library);
+void KeepResidentForAddress(const void* address);
 
 // The app unmaps or maps over [addr, addr + length) (munmap, MAP_FIXED), which
 // it may do with its reservation after dlclose (android_dlopen_ext): an object
 // loaded into a reservation there is gone, and is taken out of every list
 // (dlsym, dl_iterate_phdr, dladdr, symbol binding of later loads, the arm64
 // translator's code ranges) without running any of its code, so no lookup
-// reads its unmapped tables. Objects are never unloaded otherwise (dlclose
-// keeps every library loaded). The shim calls it once the operation is sure
-// to be carried out (fs_rewrite.cc).
+// reads its unmapped tables. The shim calls it once the operation is sure to be
+// carried out (fs_rewrite.cc).
 void ForgetReservedMappings(const void* addr, size_t length);
 
 // What dl_iterate_phdr reports for one loaded object.
@@ -147,6 +154,7 @@ struct PhdrInfo {
   uint16_t phnum = 0;
   size_t tls_modid = 0;          // 0 when the object has no PT_TLS
   uint64_t adds = 0;             // objects loaded so far (dlpi_adds)
+  uint64_t subs = 0;             // objects retired so far (dlpi_subs)
 };
 
 // Calls `fn` for each loaded (not closed) object, in load order, until it

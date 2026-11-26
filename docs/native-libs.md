@@ -215,9 +215,8 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     load, under the loader's lock, so no other load (into the same
     reservation or not) runs in between. Only the named library goes there;
     its dependencies load anywhere.
-  - A library loaded into a reservation is never unloaded: `dlclose` returns
-    0 and keeps it loaded, as it does every library in gesher (bionic would
-    unload it at its last reference). The caller may still unmap its
+  - A library loaded into a reservation remains resident after `dlclose`
+    releases its reference. The caller may still unmap its
     reservation after `dlclose`, or map over it, as the contract allows: once
     such a `munmap` or anonymous `MAP_FIXED` `mmap` through the shim is
     certain to take place (valid arguments, and for `MAP_FIXED` a range of one
@@ -810,7 +809,13 @@ see "After that" for what is left._
   `dlsym` results
   other than `JNI_OnLoad`/`JNI_OnUnload`/`Java_*` are raw System V
   addresses. No linker namespaces: all app libraries share one global scope.
-  `dlclose` (class loader unloading) runs fini functions but never unmaps.
+  Direct and ART loader handles use the same `dlclose` reference accounting.
+  An ordinary ELF load group runs its finalizers and drops its own mappings
+  after the last reference, including references from dependent groups and
+  resolved ELF imports. A running program-header callback defers reclamation
+  of the mapping it observes. Explicit resident flags, committed TLS modules,
+  caller reservations and process-owned callbacks can retain groups. Full
+  class-loader unloading and committed TLS retirement remain open.
 - **libc++**: every import of the NDK's `libc++_shared.so` now resolves.
   Locales other than C/UTF-8 do not exist (collation and `strftime_l` are the
   C locale's). Symbolic links: `symlink` fails with `EPERM` and `readlink`
