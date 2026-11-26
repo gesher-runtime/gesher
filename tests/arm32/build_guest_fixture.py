@@ -105,7 +105,8 @@ def main() -> None:
             expected = {"jni32_version", "jni32_contract", "jni32_stale",
                         "jni32_wrong_env", "jni32_unsupported",
                         "jni32_vm_bad_version", "jni32_vm_attach",
-                        "jni32_env_get_vm", "jni32_onload_state"}
+                        "jni32_env_get_vm", "jni32_onload_state",
+                        "jni32_get_created_vm"}
             named = {symbol.name: symbol for symbol in symbols
                      if symbol.name.startswith("Java_gesher_Test_")}
             expected_named = {"Java_gesher_Test_add", "Java_gesher_Test_length",
@@ -120,7 +121,7 @@ def main() -> None:
                 raise RuntimeError(f"{jni_output}: JNI functions lost ARM/Thumb entry state")
             imported = {symbol.name for symbol in symbols
                         if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
-            if imported:
+            if imported != {"JNI_GetCreatedJavaVMs"}:
                 raise RuntimeError(f"{jni_output}: unexpected guest JNI imports {imported}")
         print(f"Verified {mode} guest JNI32 ELF32 fixture: {jni_output}")
 
