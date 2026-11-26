@@ -109,6 +109,10 @@ enum Op : uint32_t {
   // Takes a group back out of its queue (its sendmsg failed) and closes it.
   // -> {token}; <- {status}: -ENOENT if a receiver already took it.
   kRightsCancel = 11,
+
+  // Host registration before starting a package in its AppContainer.
+  // -> {magic, kVersion, uid, sid size, binary SID}; <- {status}
+  kRegisterContainer = 12,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

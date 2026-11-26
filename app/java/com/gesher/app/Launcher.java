@@ -615,7 +615,7 @@ public final class Launcher {
 
         String idle = System.getenv("GESHER_IDLE_TIMEOUT");
         List<String> args = new ArrayList<>(List.of("--persistent", "--adopt",
-                binderd + "," + servicemanager));
+                binderd + "," + servicemanager, "--binder-pid", Integer.toString(binderd)));
         if (idle != null && !idle.isEmpty()) {
             args.add("--idle-timeout");
             args.add(idle);

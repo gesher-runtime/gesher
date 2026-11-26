@@ -5,7 +5,7 @@
 // the production launch path (gesher::zygote::SpawnInAppContainer) and binderd's
 // sandbox admission, with real Windows processes, tokens and a running binderd.
 //
-//   appcontainer-probe <binder device>
+//   appcontainer-probe <binder device> <broker pid>
 //
 // binderd must serve <device> with GESHER_SANDBOX=appcontainer. The probe starts
 // copies of itself in a throwaway AppContainer, with and without the binder-client
@@ -92,7 +92,6 @@ int Child(const std::wstring& device, const std::wstring& canary, DWORD parent) 
   }
   const DWORD self = GetCurrentProcessId();
   std::printf("hello-app %s\n", Hello(device, self, 10123).c_str());
-  std::printf("hello-system %s\n", Hello(device, self, 1000).c_str());
   std::printf("hello-other-pid %s\n", Hello(device, parent, 10123).c_str());
   std::fflush(stdout);
   return 0;
@@ -419,11 +418,12 @@ int main(int argc, char** argv) {
   if (argc == 5 && !std::strcmp(argv[1], "--child")) {
     return Child(Wide(argv[2]), Wide(argv[3]), static_cast<DWORD>(std::strtoul(argv[4], nullptr, 10)));
   }
-  if (argc != 2) {
-    std::fprintf(stderr, "usage: appcontainer-probe <binder device>\n");
+  if (argc != 3) {
+    std::fprintf(stderr, "usage: appcontainer-probe <binder device> <broker pid>\n");
     return 2;
   }
   const std::wstring device = Wide(argv[1]);
+  const int broker_pid = std::atoi(argv[2]);
   wchar_t self[MAX_PATH], temp[MAX_PATH];
   GetModuleFileNameW(nullptr, self, MAX_PATH);
   GetTempPathW(MAX_PATH, temp);
@@ -455,12 +455,21 @@ int main(int argc, char** argv) {
   }
   const std::wstring log = std::wstring(temp) + L"gesher-sandbox-probe-" + stamp + L".log";
 
+  const std::vector<std::u16string> caps{u"gesherRuntimeFiles", u"gesherBinderClient"};
+  const std::string unregistered = RunContained(exe, container, caps, device, canary, log);
+  failures += !Expect(unregistered, "hello-app status -1", "unregistered container is denied");
+  const auto register_uid = [&](uint32_t uid) {
+    return gesher::zygote::RegisterBinderContainer(U16(device), broker_pid, U16(container), uid);
+  };
+  if (!register_uid(10123) || !register_uid(10123) || register_uid(10124)) {
+    std::printf("FAIL  immutable per-device container registration\n");
+    ++failures;
+  }
   std::string admitted = RunContained(exe, container, {u"gesherRuntimeFiles", u"gesherBinderClient"},
                                       device, canary, log);
   std::printf("-- contained, with gesherBinderClient:\n%s", admitted.c_str());
   failures += !Expect(admitted, "canary error 5", "the user's file is closed to the container (ERROR_ACCESS_DENIED)");
   failures += !Expect(admitted, "hello-app status 0", "binderd admits the container as an app UID at its own pid");
-  failures += !Expect(admitted, "hello-system status -1", "binderd refuses the container's claim of SYSTEM_UID (EPERM)");
   failures += !Expect(admitted, "hello-other-pid status -1", "binderd refuses the container's claim of another pid (EPERM)");
   failures += !Expect(admitted, "serve-instance error 5", "a container cannot serve an instance of the device's pipe");
 
@@ -472,8 +481,7 @@ int main(int argc, char** argv) {
   // speak for the system either.
   std::string low = RunLowIntegrity(exe, device, canary, log);
   std::printf("-- Low integrity, not contained:\n%s", low.c_str());
-  failures += !Expect(low, "hello-app status 0", "binderd admits a Low integrity process as an app UID at its own pid");
-  failures += !Expect(low, "hello-system status -1", "binderd refuses a Low integrity process's claim of SYSTEM_UID (EPERM)");
+  failures += !Expect(low, "hello-app status -1", "binderd denies a Low integrity process without a registered SID");
 
   // This process: the user's Medium token, as the system server's. Sandbox mode
   // must still admit it with SYSTEM_UID.

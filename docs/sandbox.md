@@ -88,10 +88,16 @@ it does not establish a complete Android app launch in M1.
   `FILE_WRITE_ATTRIBUTES` only (`kPipeClientAccess`), and the capability gets just
   that: never `FILE_CREATE_PIPE_INSTANCE`, so a container cannot serve an
   instance of the device's pipe. Pipe DACL `D:P(A;;GA;;;SY)(A;;GA;;;<user>)(A;;0x12018b;;;<gesherBinderClient>)S:(ML;;NW;;;LW)`.
-  A restricted client's hello (in an AppContainer, or below Medium integrity,
-  which the Low label also admits) is refused (`-EPERM`) when it claims a UID
-  below 10000 or a pid other than its own (`GetNamedPipeClientProcessId`). The
-  user's own Medium processes (the system server) are admitted as before.
+  Before starting an app process, the system server registers its assigned
+  Android UID against the package's AppContainer SID on the device's verified
+  broker. Binderd reads the SID from the Windows pipe client's token and uses
+  the registered UID for Binder calls. A connection without a registration is
+  denied. Only an uncontained host client at Medium integrity or above can
+  register a mapping. Registrations are immutable for the broker's lifetime.
+  Binderd verifies the pipe PID on both the process and thread connections.
+  Registration checks the broker's Windows PID. Authenticating the server
+  endpoint for ordinary Binder clients is still pending, including protection
+  from other Low-integrity processes running as the same Windows user.
 
 ## Milestones
 
@@ -99,7 +105,7 @@ it does not establish a complete Android app launch in M1.
 |---|---|---|
 | M0 | ADR: threat model, trust split | done: ADR 0090 |
 | M1 | Proof of concept: launch path, grants, binderd admission, a real launch; collect what is denied | done, results below |
-| M2 | Runtime fixes for containers: descriptors, named objects, properties, record locks; caller UID from the container SID | next |
+| M2 | Runtime fixes for containers: descriptors, named objects, properties, record locks; caller UID from the container SID | SID registration implemented. Remaining runtime qualification in progress |
 | M3 | Permission → capability mapping, devices through the broker, network switches, loopback exemption policy | |
 | M4 | dex2oat, profman and `gesher-exec` in containers; LPAC where no device is needed | |
 | M5 | On by default, per-app opt-out, docs/microg.md's warning updated | |

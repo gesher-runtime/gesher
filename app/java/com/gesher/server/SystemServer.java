@@ -188,6 +188,7 @@ public final class SystemServer {
         String frameworkRes = null;
         boolean persistent = false;
         String adopt = null;
+        int binderPid = 0;
         long idleTimeoutS = 600;
         List<String> apks = new ArrayList<>();
         for (int i = 0; i < args.length; i++) {
@@ -198,12 +199,14 @@ public final class SystemServer {
                 case "--strict-services": StandIn.setStrict(true); break;
                 case "--persistent": persistent = true; break;
                 case "--adopt": adopt = args[++i]; break;
+                case "--binder-pid": binderPid = Integer.parseInt(args[++i]); break;
                 case "--idle-timeout": idleTimeoutS = Long.parseLong(args[++i]); break;
                 default:
                     if (a.startsWith("-")) {
                         throw new IllegalArgumentException("usage: SystemServer [--build-prop FILE]"
                                 + " [--framework-res FILE] [--strict-services] [--persistent"
-                                + " [--adopt PID,...] [--idle-timeout SECONDS]] [<app.apk>...]");
+                                + " [--adopt PID,...] [--idle-timeout SECONDS]]"
+                                + " [--binder-pid PID] [<app.apk>...]");
                     }
                     apks.add(new File(a).getAbsolutePath());
             }
@@ -226,6 +229,9 @@ public final class SystemServer {
 
         String trial = System.getenv(EditionPolicy.TRIAL_ENV);
         boolean contained = AppSandbox.enabled();
+        if (contained && binderPid <= 0) {
+            throw new IllegalStateException("AppContainer requires the trusted Binder broker's PID");
+        }
         String networkProfile = System.getenv(AppSandbox.NETWORK_ENV);
         EditionPolicy edition = trial == null && StoreEntitlement.releaseEnabled()
                 ? EditionPolicy.forStoreLaunch(StoreEntitlement.read(), contained, networkProfile)
@@ -313,7 +319,7 @@ public final class SystemServer {
         // server's writable region and real package-cache nonce before publishing APIs.
         created.am.invalidatePermissionCaches();
         ExternalStorageAccess.syncAll(created.pm);
-        startAppProcessesOnDemand(created.atm, created.pm);
+        startAppProcessesOnDemand(created.atm, created.pm, binderPid);
         PersistentDevice device = null;
         if (persistent) {
             device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
@@ -358,7 +364,7 @@ public final class SystemServer {
      * log.
      */
     private static void startAppProcessesOnDemand(ActivityTaskManagerService atm,
-            PackageManagerService pm) {
+            PackageManagerService pm, int binderPid) {
         final String vm;
         try {
             // With the JIT and its profile saver, as Android's app processes (ADR 0054).
@@ -416,7 +422,7 @@ public final class SystemServer {
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
                 return AppSandbox.spawn(command, env, logFile, pm, pkg, packageName,
-                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
+                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET), binder, binderPid);
             }
             ExternalStorageAccess.syncPackage(pm, pkg);
             return Zygote.spawn(command, env, logFile.getPath(), false);

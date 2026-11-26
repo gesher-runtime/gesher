@@ -30,6 +30,8 @@ public final class Zygote {
             String[] unsetEnv, String logPath, String container, String displayName,
             String[] capabilities);
     static native int nativeEnsureAppContainer(String container, String displayName);
+    static native boolean nativeRegisterBinderContainer(String device, int brokerPid,
+            String container, int appUid);
     static native int nativeGrantToAppContainer(String path, String container, int access,
             boolean inherit);
     static native int nativeRevokeFromAppContainer(String path, String container);

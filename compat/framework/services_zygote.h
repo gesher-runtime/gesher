@@ -99,6 +99,10 @@ bool SignalEvent(const std::u16string& name);
 // Connects to the expected broker pid and completes its process handshake.
 // No libbinder process state is initialized; timeout and broker exit are bounded.
 bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms);
+// Registers the host-assigned UID for this package's Windows AppContainer SID.
+// The broker must acknowledge before any APK process is started.
+bool RegisterBinderContainer(const std::u16string& device, int broker_pid,
+                             const std::u16string& profile, uint32_t uid);
 
 std::u16string CommandLine();
 std::u16string ExePath();

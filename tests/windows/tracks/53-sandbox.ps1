@@ -3,8 +3,8 @@
 # $failed these use. A binderd started with GESHER_SANDBOX=appcontainer and the
 # production launch path (SpawnInAppContainer) with real AppContainer tokens:
 # the kernel closes the user's files to a contained process, binderd's pipe admits
-# it only with the binder-client capability, and binderd refuses its claims of a
-# system UID or of another process's pid. The same probe checks shared-storage
+# it with the binder-client capability and a host-registered container SID.
+# The same probe checks shared-storage
 # inheritance, live downgrade/revoke, protected private roots and replacement
 # policy-file readability through real Windows access checks.
 $sandboxSaved = $env:GESHER_SANDBOX
@@ -21,7 +21,7 @@ try {
     Start-Sleep -Milliseconds 100
   }
   Check 'sandbox: AppContainer isolation, Binder identity and live storage ACL lifecycle' {
-    & "$Dir/appcontainer_probe.exe" $sandboxDevice
+    & "$Dir/appcontainer_probe.exe" $sandboxDevice $sandboxBinderd.Id
   } @('all passed')
 } finally {
   if ($null -eq $sandboxSaved) { Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue }

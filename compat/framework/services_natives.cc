@@ -312,6 +312,12 @@ static jboolean Zygote_waitForBinder(JNIEnv* env, jclass, jstring device, jint p
     return gesher::zygote::WaitForBinder(ZygoteString(env, device), pid, timeout) ? JNI_TRUE : JNI_FALSE;
 }
 
+static jboolean Zygote_registerBinderContainer(JNIEnv* env, jclass, jstring device, jint pid,
+                                              jstring profile, jint uid) {
+    return gesher::zygote::RegisterBinderContainer(ZygoteString(env, device), pid,
+            ZygoteString(env, profile), static_cast<uint32_t>(uid)) ? JNI_TRUE : JNI_FALSE;
+}
+
 static jstring Zygote_exePath(JNIEnv* env, jclass) {
     return ZygoteJavaString(env, gesher::zygote::ExePath());
 }
@@ -324,6 +330,8 @@ static const JNINativeMethod gZygoteMethods[] = {
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;"
      "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I",
      GESHER_JNI(Zygote_spawnInAppContainer)},
+    {"nativeRegisterBinderContainer", "(Ljava/lang/String;ILjava/lang/String;I)Z",
+     GESHER_JNI(Zygote_registerBinderContainer)},
     {"nativeEnsureAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
      GESHER_JNI(Zygote_ensureAppContainer)},
     {"nativeGrantToAppContainer", "(Ljava/lang/String;Ljava/lang/String;IZ)I",

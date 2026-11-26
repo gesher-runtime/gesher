@@ -622,7 +622,8 @@ bool SignalEvent(const std::u16string& name) {
   return ok != FALSE;
 }
 
-bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms) {
+static bool ExchangeWithBinder(const std::u16string& device, int broker_pid, int timeout_ms,
+                               void* request, DWORD request_size, void* reply, DWORD reply_size) {
   if (device.empty() || broker_pid <= 0 || timeout_ms < 0) return false;
   struct ScopedHandle {
     HANDLE value;
@@ -678,17 +679,40 @@ bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms)
     }
     return true;
   };
+  uint32_t length = 0;
+  return transfer(request, request_size, true) && transfer(&length, sizeof(length), false) &&
+         length == reply_size && transfer(reply, reply_size, false) &&
+         WaitForSingleObject(broker.value, 0) == WAIT_TIMEOUT;
+}
+
+bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms) {
   uint32_t hello[]{5 * sizeof(uint32_t), binder_wire::kHelloProc, binder_wire::kMagic,
                     binder_wire::kVersion, GetCurrentProcessId(), 10000};
-  uint32_t length = 0;
   unsigned char reply[16]{};
-  if (!transfer(hello, sizeof(hello), true) || !transfer(&length, sizeof(length), false) ||
-      length != sizeof(reply) || !transfer(reply, sizeof(reply), false)) return false;
+  if (!ExchangeWithBinder(device, broker_pid, timeout_ms, hello, sizeof(hello), reply, sizeof(reply)))
+    return false;
   int32_t status;
   uint32_t process;
   std::memcpy(&status, reply, sizeof(status));
   std::memcpy(&process, reply + 4, sizeof(process));
-  return status == 0 && process != 0 && WaitForSingleObject(broker.value, 0) == WAIT_TIMEOUT;
+  return status == 0 && process != 0;
+}
+
+bool RegisterBinderContainer(const std::u16string& device, int broker_pid,
+                             const std::u16string& profile, uint32_t uid) {
+  appcontainer::Sid sid;
+  if (appcontainer::ContainerSid(Wide(profile), &sid) != ERROR_SUCCESS) return false;
+  const DWORD size = GetLengthSid(sid.value);
+  uint32_t header[]{5 * static_cast<uint32_t>(sizeof(uint32_t)) + size,
+                    binder_wire::kRegisterContainer, binder_wire::kMagic, binder_wire::kVersion,
+                    uid, size};
+  std::vector<BYTE> request(sizeof(header) + size);
+  memcpy(request.data(), header, sizeof(header));
+  memcpy(request.data() + sizeof(header), sid.value, size);
+  int32_t status = -1;
+  return ExchangeWithBinder(device, broker_pid, 5000, request.data(),
+                           static_cast<DWORD>(request.size()), &status, sizeof(status)) &&
+         status == 0;
 }
 
 std::u16string CommandLine() {

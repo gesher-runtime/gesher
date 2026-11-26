@@ -106,7 +106,8 @@ final class AppSandbox {
      * idempotent: an ACE already there is not written (or propagated) again.
      */
     static int spawn(String commandLine, List<String> env, File logFile,
-            PackageManagerService pm, ApkPackage pkg, String packageName, boolean internet) {
+            PackageManagerService pm, ApkPackage pkg, String packageName, boolean internet,
+            String binderDevice, int binderPid) {
         List<String> caps = capabilities(internet);
         String container = containerName(packageName);
         int error = Zygote.nativeEnsureAppContainer(container, packageName);
@@ -158,6 +159,9 @@ final class AppSandbox {
         // Publication prepares the replacement file's ACL and reconciles live
         // storage grants through the same path as permission/AppOp changes.
         ExternalStorageAccess.syncPackage(pm, pkg);
+        if (!Zygote.nativeRegisterBinderContainer(binderDevice, binderPid, container, pkg.uid())) {
+            throw new IllegalStateException("Binder identity registration failed for " + packageName);
+        }
         SystemServer.log("sandbox: " + packageName + " in AppContainer " + container
                 + " with " + caps);
         return Zygote.spawnInAppContainer(commandLine, env, logFile.getPath(), container,
