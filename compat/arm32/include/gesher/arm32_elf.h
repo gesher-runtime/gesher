@@ -63,10 +63,10 @@ struct ElfLoadOptions {
 
 // Loads a little-endian ARM EABI5 softfp ET_DYN image using checked ELF32
 // reads. Supports ordinary REL relocations: NONE, RELATIVE, ABS32, REL32,
-// GLOB_DAT and JUMP_SLOT, SysV/GNU dynamic hashes, BSS and init/fini arrays.
+// GLOB_DAT and JUMP_SLOT, standard and legacy Android RELR tables, Android\n// APS2 packed REL groups, SysV/GNU dynamic hashes, BSS and init/fini arrays.
 //
 // This is the loader core for an experimental executor, not an Android app
-// runtime. DT_NEEDED, TLS, IFUNC, packed/RELR/RELA relocations, versioned
+// runtime. DT_NEEDED, TLS, IFUNC, packed RELA relocations, versioned
 // symbols, an interpreter and preinit arrays are explicitly unsupported.
 // Only System V/Linux OSABI with ABI version zero is accepted; FDPIC and
 // unknown ABI variants are rejected. Unknown dynamic tags are rejected.
