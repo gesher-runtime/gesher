@@ -351,3 +351,17 @@ target_link_options(media_audio_decoder_scratch_test PRIVATE -Wl,--gc-sections)
 target_link_libraries(media_audio_decoder_scratch_test PRIVATE
   stagefright_foundation stagefright_mp3dec vorbisidec opus)
 set_target_properties(media_audio_decoder_scratch_test PROPERTIES CXX_STANDARD 20)
+
+# Complete HEVC output path and frame helpers, with the real pinned provider.
+# Unselected VPx/AV1 backends abort at the explicit test boundary.
+add_executable(media_soft_hevc_output_test
+  "${CMAKE_SOURCE_DIR}/tests/media/soft_hevc_output_test.cc"
+  "${CMAKE_SOURCE_DIR}/compat/media/video/video_decoder.cc")
+target_include_directories(media_soft_hevc_output_test PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/media/decoder-host/include")
+target_include_directories(media_soft_hevc_output_test SYSTEM PRIVATE ${GESHER_SOFT_VIDEO_INCLUDES})
+target_compile_definitions(media_soft_hevc_output_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_soft_hevc_output_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections)
+target_link_options(media_soft_hevc_output_test PRIVATE -Wl,--gc-sections)
+target_link_libraries(media_soft_hevc_output_test PRIVATE hevcdec pthread)
