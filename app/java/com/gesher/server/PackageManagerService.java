@@ -51,6 +51,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     // result objects remain the responsibility of each resolution under this monitor.
     private ProviderAuthorityIndex mProviderAuthorityIndex;
     private IntentPackageIndex mIntentPackageIndex;
+    // Writes remain under this monitor; UID queries may borrow safely published metadata.
+    private volatile VisibilitySnapshot mVisibilitySnapshot; // metadata, never decisions
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
     private final PermissionPolicy mPermissions = new PermissionPolicy(this);
@@ -102,6 +104,7 @@ public final class PackageManagerService extends IPackageManager.Default {
                 || mRemoving.containsKey(original.packageName)) throw new SecurityException("Package removal already pending or changed");
         Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
         next.put(original.packageName, original); mRemoving = next;
+        mVisibilitySnapshot = null;
     }
     void endPackageRemoval(ApkPackage original) {
         boolean restored;
@@ -109,6 +112,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             if (mRemoving.get(original.packageName) != original) return;
             Map<String, ApkPackage> next = new LinkedHashMap<>(mRemoving);
             next.remove(original.packageName); mRemoving = next;
+            mVisibilitySnapshot = null;
             restored = mPermissions.finishPackageRemoval(original);
         }
         if (restored) mPermissions.packageRemovalRestored(original);
@@ -119,6 +123,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         synchronized (this) {
             List<ApkPackage> previous = new ArrayList<>(mRemoving.values());
             mRemoving = new LinkedHashMap<>();
+            mVisibilitySnapshot = null;
             for (ApkPackage original : previous) {
                 if (mPermissions.finishPackageRemoval(original)) restored.add(original);
             }
@@ -208,12 +213,6 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override public boolean isProtectedBroadcast(String action) {
         return mPermissions.isProtectedBroadcast(action);
-    }
-
-    private boolean synthetic(String name) {
-        return GmsPackageSupport.isSyntheticPackage(name)
-                && (!GmsPackageSupport.PACKAGE_VENDING.equals(name)
-                        || get(GmsPackageSupport.PACKAGE_GMS) == null);
     }
 
     private PackageInfo installedInfo(ApkPackage pkg, long flags) {
@@ -423,6 +422,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         // permission query follows.
         mProviderAuthorityIndex = null;
         mIntentPackageIndex = null;
+        mVisibilitySnapshot = null;
         mPermissions.invalidatePackageIndex();
     }
 
@@ -545,7 +545,7 @@ public final class PackageManagerService extends IPackageManager.Default {
     public boolean isPackageAvailable(String packageName, int userId) {
         if (userId != 0) return false;
         if ("android".equals(packageName)) return true;
-        return get(packageName) != null || synthetic(packageName)
+        return get(packageName) != null
                 || BrowserPackageSupport.isBrowserPackage(packageName)
                 || uriHandlerPackage(packageName);
     }
@@ -580,9 +580,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage p = get(packageName);
         if (p != null) {
             return installedInfo(p, flags);
-        }
-        if (synthetic(packageName)) {
-            return GmsPackageSupport.createSyntheticPackageInfo(packageName, flags);
         }
         if (BrowserPackageSupport.isBrowserPackage(packageName)) {
             return BrowserPackageSupport.createPackageInfo(flags);
@@ -624,9 +621,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage p = get(packageName);
         if (p != null) {
             return p.applicationInfo(flags);
-        }
-        if (synthetic(packageName)) {
-            return GmsPackageSupport.createSyntheticApplicationInfo(packageName, flags);
         }
         if (BrowserPackageSupport.isBrowserPackage(packageName)) {
             return BrowserPackageSupport.createApplicationInfo(flags);
@@ -748,12 +742,9 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     /** Visibility to an installed service, from the already authenticated caller's package. */
     synchronized boolean canSeeInstalledPackage(String source, String target) {
-        Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
-        for (String removing : mRemoving.keySet()) packages.remove(removing);
-        ApkPackage caller = packages.get(source);
+        PackageVisibility visibility = packageVisibility(false);
+        ApkPackage caller = visibility.apk(source);
         if (caller == null) return false;
-        PackageVisibility visibility = new PackageVisibility(packages, false, false, false,
-                mPermissions::isDeclaredProtectedBroadcast);
         // Package admission assigns isolated or authenticated shared identities
         // in both signature-spoofing modes.
         return visibility.canSee(caller.uid(), target);
@@ -765,9 +756,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (ApkPackage p : intentPackages(intent, ApkPackage.ComponentKind.SERVICE)) {
             if (isRemovalPending(p.packageName)) continue;
             result.addAll(p.queryIntentServices(intent, resolvedType, flags));
-        }
-        if (result.isEmpty() && intent != null && get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.addAll(GmsPackageSupport.querySyntheticServices(intent, resolvedType, flags));
         }
         return result;
     }
@@ -913,13 +901,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (ApkPackage p : mPackages.values()) {
             result.add(installedInfo(p, flags));
         }
-        if (get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.add(GmsPackageSupport.createSyntheticPackageInfo(GmsPackageSupport.PACKAGE_GMS, flags));
-        }
-        if (get(GmsPackageSupport.PACKAGE_VENDING) == null
-                && get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.add(GmsPackageSupport.createSyntheticPackageInfo(GmsPackageSupport.PACKAGE_VENDING, flags));
-        }
         return new ParceledListSlice<>(result);
     }
 
@@ -955,13 +936,6 @@ public final class PackageManagerService extends IPackageManager.Default {
         for (ApkPackage p : mPackages.values()) {
             result.add(p.applicationInfo(flags));
         }
-        if (get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.add(GmsPackageSupport.createSyntheticApplicationInfo(GmsPackageSupport.PACKAGE_GMS, flags));
-        }
-        if (get(GmsPackageSupport.PACKAGE_VENDING) == null
-                && get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            result.add(GmsPackageSupport.createSyntheticApplicationInfo(GmsPackageSupport.PACKAGE_VENDING, flags));
-        }
         return new ParceledListSlice<>(result);
     }
 
@@ -977,9 +951,9 @@ public final class PackageManagerService extends IPackageManager.Default {
         ApkPackage installed = get(pkg);
         if (installed != null) return installed.componentEnabledState(componentName.getClassName());
         // As Settings.getComponentEnabledSettingLPr: an unknown package throws, an unknown
-        // class of a known package is DEFAULT. Gesher's synthetic GMS/Play and browser
-        // packages are known packages whose components keep their manifest state.
-        if (get(pkg) == null && !synthetic(pkg) && !BrowserPackageSupport.isBrowserPackage(pkg)
+        // class of a known package is DEFAULT. Gesher's browser and available Windows
+        // URI handler packages keep their host component state.
+        if (get(pkg) == null && !BrowserPackageSupport.isBrowserPackage(pkg)
                 && !uriHandlerPackage(pkg)) {
             throw new IllegalArgumentException("Unknown package: " + pkg);
         }
@@ -1194,8 +1168,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         enforceCrossUser(userId);
         ApkPackage installed = get(packageName);
         if (installed != null) return installed.applicationEnabledState();
-        if (synthetic(packageName)
-                || BrowserPackageSupport.isBrowserPackage(packageName)
+        if (BrowserPackageSupport.isBrowserPackage(packageName)
                 || uriHandlerPackage(packageName)) {
             return PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
         }
@@ -1693,14 +1666,42 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     @Override
     public String getNameForUid(int uid) {
-        return nameForUid(uid, false);
+        if (mPackages.size() < UID_INDEX_MIN_PACKAGES) return nameForUid(uid, false);
+        PackageVisibility metadata = uid == android.os.Process.SYSTEM_UID || uid == android.os.Process.SHELL_UID
+                ? null : uidMetadata();
+        return metadata == null ? nameForUid(uid, false)
+                : packageUidName(metadata.firstPackageForUid(uid), uid, false);
     }
+
+    private static final int UID_INDEX_MIN_PACKAGES = 16;
+    private static final int UID_BATCH_MIN_PACKAGES = 32;
+    private static final int UID_BATCH_MIN = 16;
 
     @Override
     public String[] getNamesForUids(int[] uids) {
         // AOSP distinguishes an absent input from positional unknown UID answers.
         if (uids == null || uids.length == 0) return null;
         String[] names = new String[uids.length];
+        if (mPackages.size() < UID_INDEX_MIN_PACKAGES) {
+            for (int i = 0; i < uids.length; i++) names[i] = nameForUid(uids[i], true);
+            return names;
+        }
+        PackageVisibility metadata = uidMetadata();
+        if (metadata != null) {
+            for (int i = 0; i < uids.length; i++) {
+                int uid = uids[i];
+                names[i] = uid == android.os.Process.SYSTEM_UID || uid == android.os.Process.SHELL_UID
+                        ? nameForUid(uid, true) : packageUidName(metadata.firstPackageForUid(uid), uid, true);
+            }
+            return names;
+        }
+        if (uids.length >= UID_BATCH_MIN) {
+            Map<String, ApkPackage> packages = mPackages;
+            if (packages.size() >= UID_BATCH_MIN_PACKAGES) {
+                fillUidNames(uids, names, packages);
+                return names;
+            }
+        }
         for (int i = 0; i < uids.length; i++) {
             names[i] = nameForUid(uids[i], true);
         }
@@ -1723,6 +1724,78 @@ public final class PackageManagerService extends IPackageManager.Default {
         return null;
     }
 
+    private static String packageUidName(ApkPackage pkg, int uid, boolean bulk) {
+        if (pkg == null) return null;
+        String shared = pkg.sharedUserId();
+        return shared == null || shared.isEmpty() ? pkg.packageName : sharedUidName(shared, uid, bulk);
+    }
+
+    /** One cold batch owns only its requested UID keys, never a retained registry index. */
+    private static void fillUidNames(int[] uids, String[] names, Map<String, ApkPackage> packages) {
+        int[] requested = null;
+        int count = 0, uniformUid = 0;
+        for (int i = 0; i < uids.length; i++) {
+            int uid = uids[i];
+            if (uid == android.os.Process.SYSTEM_UID) {
+                names[i] = sharedUidName("android.uid.system", uid, true);
+            } else if (uid == android.os.Process.SHELL_UID) {
+                names[i] = sharedUidName("android.uid.shell", uid, true);
+            } else {
+                if (count == 0) uniformUid = uid;
+                else if (requested == null && uid != uniformUid) {
+                    requested = new int[uids.length];
+                    java.util.Arrays.fill(requested, 0, count, uniformUid);
+                }
+                if (requested != null) requested[count] = uid;
+                count++;
+            }
+        }
+        if (count == 0) return;
+        if (requested == null) {
+            // A repeated UID, possibly mixed with core identities, needs one scan
+            // and no key/match arrays. Preserve the first admitted owner.
+            String name = null;
+            for (ApkPackage pkg : packages.values()) {
+                if (pkg.uid() == uniformUid) { name = packageUidName(pkg, uniformUid, true); break; }
+            }
+            for (int i = 0; i < names.length; i++) if (names[i] == null) names[i] = name;
+            return;
+        }
+        // Sort once and compact duplicates: reverse-ordered large inputs must
+        // not introduce quadratic sparse-array insertion or box every APK UID.
+        java.util.Arrays.sort(requested, 0, count);
+        int unique = 1;
+        for (int i = 1; i < count; i++) {
+            if (requested[i] != requested[unique - 1]) requested[unique++] = requested[i];
+        }
+        ApkPackage[] matches = new ApkPackage[unique];
+        int remaining = unique;
+        for (ApkPackage pkg : packages.values()) {
+            int index = java.util.Arrays.binarySearch(requested, 0, unique, pkg.uid());
+            if (index < 0 || matches[index] != null) continue;
+            matches[index] = pkg;
+            if (--remaining == 0) break;
+        }
+        for (int i = 0; i < uids.length; i++) {
+            if (names[i] != null) continue;
+            int index = java.util.Arrays.binarySearch(requested, 0, unique, uids[i]);
+            names[i] = packageUidName(index < 0 ? null : matches[index], uids[i], true);
+        }
+    }
+
+    /**
+     * Borrow only an already-built, current visibility index. UID ownership lasts
+     * until registry publication, so a filtered pending-removal view cannot serve
+     * these APIs. Cold and small queries keep the direct path; no view is built here.
+     */
+    private PackageVisibility uidMetadata() {
+        VisibilitySnapshot snapshot = mVisibilitySnapshot;
+        if (snapshot == null || !snapshot.uidLookupSuitable || snapshot.packages != mPackages
+                || snapshot.removing != mRemoving || !snapshot.removing.isEmpty()) return null;
+        PackageVisibility installed = snapshot.installedPackages;
+        return installed != null ? installed : snapshot.publicPackages;
+    }
+
     private static String sharedUidName(String shared, int uid, boolean bulk) {
         // AOSP distinguishes the singular UID identity from the bulk diagnostic name.
         return bulk ? "shared:" + shared : shared + ":" + android.os.UserHandle.getAppId(uid);
@@ -1732,6 +1805,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     public String[] getPackagesForUid(int uid) {
         if (uid == android.os.Process.SYSTEM_UID) return new String[] {"android"};
         if (uid == android.os.Process.SHELL_UID) return new String[] {"com.android.shell"};
+        PackageVisibility metadata = mPackages.size() < UID_INDEX_MIN_PACKAGES ? null : uidMetadata();
+        if (metadata != null) return metadata.installedPackageNamesForUid(uid);
         List<String> result = new ArrayList<>();
         for (ApkPackage pkg : mPackages.values()) if (pkg.uid() == uid) result.add(pkg.packageName);
         return result.isEmpty() ? null : result.toArray(new String[0]);
@@ -1796,22 +1871,60 @@ public final class PackageManagerService extends IPackageManager.Default {
         return visible ? visibility.apk(packageName) : null;
     }
 
-    private PackageVisibility packageVisibility() {
-        Map<String, ApkPackage> packages;
-        boolean browser, gms, vending;
-        synchronized (this) {
-            packages = new LinkedHashMap<>(mPackages);
-            for (String removing : mRemoving.keySet()) packages.remove(removing);
-            browser = !mPackages.containsKey(BrowserPackageSupport.PACKAGE)
-                    && !mRemoving.containsKey(BrowserPackageSupport.PACKAGE);
-            gms = !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_GMS);
-            vending = !mPackages.containsKey(GmsPackageSupport.PACKAGE_VENDING)
-                    && !mPackages.containsKey(GmsPackageSupport.PACKAGE_GMS)
-                    && !mRemoving.containsKey(GmsPackageSupport.PACKAGE_VENDING);
+    private static final class VisibilitySnapshot {
+        final Map<String, ApkPackage> packages, removing, visible;
+        final boolean uidLookupSuitable;
+        volatile PackageVisibility publicPackages, installedPackages;
+
+        VisibilitySnapshot(Map<String, ApkPackage> packages, Map<String, ApkPackage> removing) {
+            this.packages = packages;
+            this.removing = removing;
+            // Visibility reserves android's table position before inserting APKs.
+            // A real non-system-UID owner must keep the registry's identity order.
+            ApkPackage platform = packages.get("android");
+            uidLookupSuitable = packages.size() >= UID_INDEX_MIN_PACKAGES
+                    && (platform == null || platform.uid() == android.os.Process.SYSTEM_UID);
+            if (removing.isEmpty()) visible = packages;
+            else {
+                visible = new LinkedHashMap<>(packages);
+                for (String name : removing.keySet()) visible.remove(name);
+            }
         }
-        return new PackageVisibility(packages, browser, gms, vending,
+    }
+
+    private PackageVisibility packageVisibility() { return packageVisibility(true); }
+
+    /** Reuse admitted metadata only; installer attribution and resource policy stay live. */
+    private PackageVisibility packageVisibility(boolean includeHostDefinitions) {
+        VisibilitySnapshot snapshot;
+        synchronized (this) {
+            snapshot = mVisibilitySnapshot;
+            if (snapshot == null || snapshot.packages != mPackages || snapshot.removing != mRemoving) {
+                mVisibilitySnapshot = snapshot = new VisibilitySnapshot(mPackages, mRemoving);
+            }
+            PackageVisibility cached = includeHostDefinitions
+                    ? snapshot.publicPackages : snapshot.installedPackages;
+            if (cached != null) return cached;
+        }
+        // Keep construction outside this method's monitor. Callers that already
+        // hold the package monitor retain their original locking behavior.
+        boolean browser = includeHostDefinitions
+                && !snapshot.packages.containsKey(BrowserPackageSupport.PACKAGE)
+                && !snapshot.removing.containsKey(BrowserPackageSupport.PACKAGE);
+        PackageVisibility visibility = new PackageVisibility(snapshot.visible, browser,
                 mPermissions::isDeclaredProtectedBroadcast);
+        synchronized (this) {
+            // A concurrent publication may retire this snapshot during construction.
+            // The captured query stays coherent, but must not retain retired metadata.
+            if (mVisibilitySnapshot == snapshot) {
+                PackageVisibility existing = includeHostDefinitions
+                        ? snapshot.publicPackages : snapshot.installedPackages;
+                if (existing != null) return existing;
+                if (includeHostDefinitions) snapshot.publicPackages = visibility;
+                else snapshot.installedPackages = visibility;
+            }
+        }
+        return visibility;
     }
 
     @Override
@@ -1962,7 +2075,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         synchronized (this) {
             ApkPackage target = get(packageName);
             if (isRemovalPending(packageName) || (target == null && !"android".equals(packageName)
-                    && !synthetic(packageName) && !BrowserPackageSupport.isBrowserPackage(packageName))) {
+                    && !BrowserPackageSupport.isBrowserPackage(packageName))) {
                 return null;
             }
             // Revalidate the authenticated caller under the same lock as target, source, UID and

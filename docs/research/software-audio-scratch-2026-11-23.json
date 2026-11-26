@@ -1,0 +1,606 @@
+{
+  "schema": 1,
+  "date": "2026-11-23",
+  "base_commit": "d38b5549dc3963f8d491e9205f9b2743bb6d3745",
+  "scope": "Complete production AudioDecoder::Decode and Drain calls, real pinned providers; C++ allocation observer, not total process allocation/RSS/CPU.",
+  "environment": {
+    "system": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "compiler": "g++ (Debian 14.2.0-19) 14.2.0",
+    "sanitizers": "Provider objects ASan; complete product wrapper and observer ASan+UBSan; local detect_leaks=0 for tracer only, unchanged CI defaults."
+  },
+  "baseline": {
+    "source_sha256": "1c2f3bb8b590a5919fcd118e238ae5e259a7a8876153b887ea3c448c22cf4358",
+    "providers": {
+      "frameworks-av": "22fd1c5d895e45a49df5582a4b345d8e3b75e46b",
+      "tremolo": "bda690e46497e1f65c5077173b9c548e6e0cd5a1",
+      "libopus": "15179bce8c2b7f35a99c810f4574560b99e90059"
+    },
+    "measure_only": true,
+    "metrics": [
+      {
+        "name": "mp3-mono",
+        "packets": 82,
+        "outputs": 83,
+        "cpp_allocations": 166,
+        "cpp_allocated_bytes": 945698,
+        "pcm_bytes": 188928,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 11520
+      },
+      {
+        "name": "mp3-stereo",
+        "packets": 89,
+        "outputs": 90,
+        "cpp_allocations": 180,
+        "cpp_allocated_bytes": 1232452,
+        "pcm_bytes": 410112,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 13824
+      },
+      {
+        "name": "mp3-mpeg2",
+        "packets": 90,
+        "outputs": 91,
+        "cpp_allocations": 182,
+        "cpp_allocated_bytes": 1038916,
+        "pcm_bytes": 207360,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 11520
+      },
+      {
+        "name": "vorbis-mono",
+        "packets": 106,
+        "outputs": 105,
+        "cpp_allocations": 211,
+        "cpp_allocated_bytes": 1921924,
+        "pcm_bytes": 185220,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 18432
+      },
+      {
+        "name": "vorbis-stereo",
+        "packets": 115,
+        "outputs": 114,
+        "cpp_allocations": 229,
+        "cpp_allocated_bytes": 4171520,
+        "pcm_bytes": 403200,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 36864
+      },
+      {
+        "name": "opus-mono",
+        "packets": 106,
+        "outputs": 106,
+        "cpp_allocations": 212,
+        "cpp_allocated_bytes": 1424016,
+        "pcm_bytes": 202896,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 13440
+      },
+      {
+        "name": "opus-stereo",
+        "packets": 106,
+        "outputs": 106,
+        "cpp_allocations": 212,
+        "cpp_allocated_bytes": 2848032,
+        "pcm_bytes": 405792,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 26880
+      },
+      {
+        "name": "opus-long",
+        "packets": 36,
+        "outputs": 36,
+        "cpp_allocations": 72,
+        "cpp_allocated_bytes": 1242912,
+        "pcm_bytes": 413472,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 34560
+      },
+      {
+        "name": "opus-surround",
+        "packets": 106,
+        "outputs": 106,
+        "cpp_allocations": 212,
+        "cpp_allocated_bytes": 8544096,
+        "pcm_bytes": 1217376,
+        "active_scratch_bytes": 0,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 80640
+      }
+    ],
+    "fixtures": {
+      "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+      "clips": {
+        "mp3-mono": {
+          "codec": 1,
+          "rate": 44100,
+          "channels": 1,
+          "packets": 82,
+          "expected_frames": 94464,
+          "reference_frames": 94464,
+          "fixture_sha256": "d0eee30b0fff0602e09f2abcb2ad8fc11bae77588a9bcee7bacf3ec41ad92b5f",
+          "reference_sha256": "547889c6cccaaa9fc866bfa179978da817c8b69fb347b10de816893691c0033a"
+        },
+        "mp3-stereo": {
+          "codec": 1,
+          "rate": 48000,
+          "channels": 2,
+          "packets": 89,
+          "expected_frames": 102528,
+          "reference_frames": 102528,
+          "fixture_sha256": "ce498a63bc1216dbc1b3d134c78e1aea618f5a3482ee81546d782e602286d5b5",
+          "reference_sha256": "f61b48a687eb454faad5af2781a353af21f2e535e3cdb97131513c6a4e38ea2e"
+        },
+        "mp3-mpeg2": {
+          "codec": 1,
+          "rate": 24000,
+          "channels": 2,
+          "packets": 90,
+          "expected_frames": 51840,
+          "reference_frames": 51840,
+          "fixture_sha256": "97cb06f7b26cbdd3436f23cd3b97d94c8b51b83a7a91cecf190303a3af8eb3d0",
+          "reference_sha256": "b77ed27554cae53da4809f1f0dd507ca8e3eeb717fa70ce2c31dc75b706ff4e5"
+        },
+        "vorbis-mono": {
+          "codec": 2,
+          "rate": 44100,
+          "channels": 1,
+          "packets": 106,
+          "expected_frames": 92610,
+          "reference_frames": 92610,
+          "fixture_sha256": "e5189de935a95722e4f2342b95a7d99cd65bd86f4f514573b5b80a885a6f5e78",
+          "reference_sha256": "89590e20842e85362eb9a43bc4d0b83763190d56aae2a2d047826b2b33f71bb9"
+        },
+        "vorbis-stereo": {
+          "codec": 2,
+          "rate": 48000,
+          "channels": 2,
+          "packets": 115,
+          "expected_frames": 100800,
+          "reference_frames": 100800,
+          "fixture_sha256": "c70e3df75bea8e221656002427a4f2544c80fffa937ecb21f1ab90dcf61b7bb9",
+          "reference_sha256": "0cf767a881840377f71430b15b2009bc7ded06e4b58986ae8184c68243a82cdb"
+        },
+        "opus-mono": {
+          "codec": 3,
+          "rate": 48000,
+          "channels": 1,
+          "packets": 106,
+          "expected_frames": 101448,
+          "reference_frames": 100800,
+          "fixture_sha256": "97d20c5ffa0919da89a37011998cf3080d2345f87814ba24e6119edef674b1cd",
+          "reference_sha256": "c9d753e13a1a5edd9985d3eeb4ef8ca514f6cad2e3d72ce22e9e7d282331542c"
+        },
+        "opus-stereo": {
+          "codec": 3,
+          "rate": 48000,
+          "channels": 2,
+          "packets": 106,
+          "expected_frames": 101448,
+          "reference_frames": 100800,
+          "fixture_sha256": "4adafc921adfb59085348b21b129e5f7cae92c86ee50aaae44e1784a36397358",
+          "reference_sha256": "a366fc8bf335c5a2fdba3f6933c7014978f937b4a20be5d71906c7150ce04f01"
+        },
+        "opus-long": {
+          "codec": 3,
+          "rate": 48000,
+          "channels": 2,
+          "packets": 36,
+          "expected_frames": 103368,
+          "reference_frames": 100800,
+          "fixture_sha256": "926a261e514bc53243d058135aa27b638b18e0e32dcec93d42c3fea93eaa14e5",
+          "reference_sha256": "25fc16cc255ed14c78381fc10c32a8190b3f7365752f6961f5c689ba8d798b2a"
+        },
+        "opus-surround": {
+          "codec": 3,
+          "rate": 48000,
+          "channels": 6,
+          "packets": 106,
+          "expected_frames": 101448,
+          "reference_frames": 100800,
+          "fixture_sha256": "0654e2b14c8e7cf6bce6071b9f5e544ed3662a9066423687d0a5911721fc11a5",
+          "reference_sha256": "783c2ac164e21d99798e927ff56fe84638a268ca46c07bee2cff83e407a94d00"
+        }
+      }
+    }
+  },
+  "candidate": {
+    "source_sha256": "b749d0576526c6c564f96679f6ba4c6864c75a79c99df1d35b38f212500aa780",
+    "providers": {
+      "frameworks-av": "22fd1c5d895e45a49df5582a4b345d8e3b75e46b",
+      "tremolo": "bda690e46497e1f65c5077173b9c548e6e0cd5a1",
+      "libopus": "15179bce8c2b7f35a99c810f4574560b99e90059"
+    },
+    "measure_only": false,
+    "comparison_source_sha256": "1c2f3bb8b590a5919fcd118e238ae5e259a7a8876153b887ea3c448c22cf4358",
+    "metrics": [
+      {
+        "name": "mp3-mono",
+        "packets": 82,
+        "outputs": 83,
+        "cpp_allocations": 85,
+        "cpp_allocated_bytes": 199202,
+        "pcm_bytes": 188928,
+        "active_scratch_bytes": 9216,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 11520
+      },
+      {
+        "name": "mp3-stereo",
+        "packets": 89,
+        "outputs": 90,
+        "cpp_allocations": 92,
+        "cpp_allocated_bytes": 421444,
+        "pcm_bytes": 410112,
+        "active_scratch_bytes": 9216,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 13824
+      },
+      {
+        "name": "mp3-mpeg2",
+        "packets": 90,
+        "outputs": 91,
+        "cpp_allocations": 93,
+        "cpp_allocated_bytes": 218692,
+        "pcm_bytes": 207360,
+        "active_scratch_bytes": 9216,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 11520
+      },
+      {
+        "name": "vorbis-mono",
+        "packets": 106,
+        "outputs": 105,
+        "cpp_allocations": 106,
+        "cpp_allocated_bytes": 201604,
+        "pcm_bytes": 185220,
+        "active_scratch_bytes": 16384,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 18432
+      },
+      {
+        "name": "vorbis-stereo",
+        "packets": 115,
+        "outputs": 114,
+        "cpp_allocations": 115,
+        "cpp_allocated_bytes": 435968,
+        "pcm_bytes": 403200,
+        "active_scratch_bytes": 32768,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 36864
+      },
+      {
+        "name": "opus-mono",
+        "packets": 106,
+        "outputs": 106,
+        "cpp_allocations": 107,
+        "cpp_allocated_bytes": 214416,
+        "pcm_bytes": 202896,
+        "active_scratch_bytes": 11520,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 13440
+      },
+      {
+        "name": "opus-stereo",
+        "packets": 106,
+        "outputs": 106,
+        "cpp_allocations": 107,
+        "cpp_allocated_bytes": 428832,
+        "pcm_bytes": 405792,
+        "active_scratch_bytes": 23040,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 26880
+      },
+      {
+        "name": "opus-long",
+        "packets": 36,
+        "outputs": 36,
+        "cpp_allocations": 37,
+        "cpp_allocated_bytes": 436512,
+        "pcm_bytes": 413472,
+        "active_scratch_bytes": 23040,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 34560
+      },
+      {
+        "name": "opus-surround",
+        "packets": 106,
+        "outputs": 106,
+        "cpp_allocations": 107,
+        "cpp_allocated_bytes": 1286496,
+        "pcm_bytes": 1217376,
+        "active_scratch_bytes": 69120,
+        "drained_scratch_bytes": 0,
+        "peak_cpp_live_bytes": 80640
+      }
+    ],
+    "fixtures": {
+      "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers",
+      "clips": {
+        "mp3-mono": {
+          "codec": 1,
+          "rate": 44100,
+          "channels": 1,
+          "packets": 82,
+          "expected_frames": 94464,
+          "reference_frames": 94464,
+          "fixture_sha256": "d0eee30b0fff0602e09f2abcb2ad8fc11bae77588a9bcee7bacf3ec41ad92b5f",
+          "reference_sha256": "547889c6cccaaa9fc866bfa179978da817c8b69fb347b10de816893691c0033a"
+        },
+        "mp3-stereo": {
+          "codec": 1,
+          "rate": 48000,
+          "channels": 2,
+          "packets": 89,
+          "expected_frames": 102528,
+          "reference_frames": 102528,
+          "fixture_sha256": "ce498a63bc1216dbc1b3d134c78e1aea618f5a3482ee81546d782e602286d5b5",
+          "reference_sha256": "f61b48a687eb454faad5af2781a353af21f2e535e3cdb97131513c6a4e38ea2e"
+        },
+        "mp3-mpeg2": {
+          "codec": 1,
+          "rate": 24000,
+          "channels": 2,
+          "packets": 90,
+          "expected_frames": 51840,
+          "reference_frames": 51840,
+          "fixture_sha256": "97cb06f7b26cbdd3436f23cd3b97d94c8b51b83a7a91cecf190303a3af8eb3d0",
+          "reference_sha256": "b77ed27554cae53da4809f1f0dd507ca8e3eeb717fa70ce2c31dc75b706ff4e5"
+        },
+        "vorbis-mono": {
+          "codec": 2,
+          "rate": 44100,
+          "channels": 1,
+          "packets": 106,
+          "expected_frames": 92610,
+          "reference_frames": 92610,
+          "fixture_sha256": "e5189de935a95722e4f2342b95a7d99cd65bd86f4f514573b5b80a885a6f5e78",
+          "reference_sha256": "89590e20842e85362eb9a43bc4d0b83763190d56aae2a2d047826b2b33f71bb9"
+        },
+        "vorbis-stereo": {
+          "codec": 2,
+          "rate": 48000,
+          "channels": 2,
+          "packets": 115,
+          "expected_frames": 100800,
+          "reference_frames": 100800,
+          "fixture_sha256": "c70e3df75bea8e221656002427a4f2544c80fffa937ecb21f1ab90dcf61b7bb9",
+          "reference_sha256": "0cf767a881840377f71430b15b2009bc7ded06e4b58986ae8184c68243a82cdb"
+        },
+        "opus-mono": {
+          "codec": 3,
+          "rate": 48000,
+          "channels": 1,
+          "packets": 106,
+          "expected_frames": 101448,
+          "reference_frames": 100800,
+          "fixture_sha256": "97d20c5ffa0919da89a37011998cf3080d2345f87814ba24e6119edef674b1cd",
+          "reference_sha256": "c9d753e13a1a5edd9985d3eeb4ef8ca514f6cad2e3d72ce22e9e7d282331542c"
+        },
+        "opus-stereo": {
+          "codec": 3,
+          "rate": 48000,
+          "channels": 2,
+          "packets": 106,
+          "expected_frames": 101448,
+          "reference_frames": 100800,
+          "fixture_sha256": "4adafc921adfb59085348b21b129e5f7cae92c86ee50aaae44e1784a36397358",
+          "reference_sha256": "a366fc8bf335c5a2fdba3f6933c7014978f937b4a20be5d71906c7150ce04f01"
+        },
+        "opus-long": {
+          "codec": 3,
+          "rate": 48000,
+          "channels": 2,
+          "packets": 36,
+          "expected_frames": 103368,
+          "reference_frames": 100800,
+          "fixture_sha256": "926a261e514bc53243d058135aa27b638b18e0e32dcec93d42c3fea93eaa14e5",
+          "reference_sha256": "25fc16cc255ed14c78381fc10c32a8190b3f7365752f6961f5c689ba8d798b2a"
+        },
+        "opus-surround": {
+          "codec": 3,
+          "rate": 48000,
+          "channels": 6,
+          "packets": 106,
+          "expected_frames": 101448,
+          "reference_frames": 100800,
+          "fixture_sha256": "0654e2b14c8e7cf6bce6071b9f5e544ed3662a9066423687d0a5911721fc11a5",
+          "reference_sha256": "783c2ac164e21d99798e927ff56fe84638a268ca46c07bee2cff83e407a94d00"
+        }
+      }
+    }
+  },
+  "independent_ffmpeg_oracles": [
+    {
+      "name": "mp3-mono",
+      "frames": 94464,
+      "max_sample_error": 1,
+      "total_absolute_error": 5591
+    },
+    {
+      "name": "mp3-stereo",
+      "frames": 102528,
+      "max_sample_error": 1,
+      "total_absolute_error": 12615
+    },
+    {
+      "name": "mp3-mpeg2",
+      "frames": 51840,
+      "max_sample_error": 1,
+      "total_absolute_error": 6485
+    },
+    {
+      "name": "vorbis-mono",
+      "frames": 92610,
+      "max_sample_error": 1,
+      "total_absolute_error": 40236
+    },
+    {
+      "name": "vorbis-stereo",
+      "frames": 100800,
+      "max_sample_error": 1,
+      "total_absolute_error": 88376
+    },
+    {
+      "name": "opus-mono",
+      "frames": 100800,
+      "max_sample_error": 4,
+      "total_absolute_error": 58116
+    },
+    {
+      "name": "opus-stereo",
+      "frames": 100800,
+      "max_sample_error": 44,
+      "total_absolute_error": 125548
+    },
+    {
+      "name": "opus-long",
+      "frames": 100800,
+      "max_sample_error": 43,
+      "total_absolute_error": 135582
+    },
+    {
+      "name": "opus-surround",
+      "frames": 100800,
+      "max_sample_error": 135,
+      "total_absolute_error": 443244
+    }
+  ],
+  "byte_identical_outputs": {
+    "mp3-mono": {
+      "actual.s16": {
+        "bytes": 188928,
+        "sha256": "5d6cbefca21fb433622cc9201b2fa1087dcdd33248bc1a8d595831278304a6f8",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 2304,
+        "sha256": "7d7f5e6e931ef8aec5c77386aa5bf83032064732959e28f08ca221f6fd37c0d5",
+        "baseline_equal": true
+      }
+    },
+    "mp3-stereo": {
+      "actual.s16": {
+        "bytes": 410112,
+        "sha256": "e88699569c086e1adfef6925cd14d29a2a6d8ce9ead2fd1e366abb106db50620",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 4608,
+        "sha256": "86f6dbaa5d2ccdc7cfcf5d5ddb1cd5984b45d38a9749774671a8f5d4095a2930",
+        "baseline_equal": true
+      }
+    },
+    "mp3-mpeg2": {
+      "actual.s16": {
+        "bytes": 207360,
+        "sha256": "3d35430c262e2056555155a86532378214aea105ae149f252ae21cc28689bbb6",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 2304,
+        "sha256": "78ba22fd11d2f38f1ba0b0d77e50c852d740392e961d375328edfe868f4fdcd7",
+        "baseline_equal": true
+      }
+    },
+    "vorbis-mono": {
+      "actual.s16": {
+        "bytes": 185220,
+        "sha256": "feaef7c169ac4b11c8ea99a41da93dc6d91db5a92b33523080ae00c5ba60c269",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "baseline_equal": true
+      }
+    },
+    "vorbis-stereo": {
+      "actual.s16": {
+        "bytes": 403200,
+        "sha256": "d09d8c0bb7a0ce2c033c50edd2ac9adb5db8aba8b2b842819e7807965be608ad",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "baseline_equal": true
+      }
+    },
+    "opus-mono": {
+      "actual.s16": {
+        "bytes": 202896,
+        "sha256": "fe33cb78456cd81463428dbfd815259fe67c2fc8fcec40d36de57b2752d3b046",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 1920,
+        "sha256": "b47745aa6827e23aaa9c4f7dc9f440ca39a067101566a0aa4ce7b9a9d56794cc",
+        "baseline_equal": true
+      }
+    },
+    "opus-stereo": {
+      "actual.s16": {
+        "bytes": 405792,
+        "sha256": "45f145c2437c06a0ac4962ff0467f0647c29fe45b7fe2fddb981817b676dd124",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 3840,
+        "sha256": "083a618cc2620aae65d97dc53dad68664dceac94281a120e4e5bfcb95b13dd75",
+        "baseline_equal": true
+      }
+    },
+    "opus-long": {
+      "actual.s16": {
+        "bytes": 413472,
+        "sha256": "4cd949950602596684c01dc1f837c276abe64c3bfaff32f07992cf2d03ac9e99",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 11520,
+        "sha256": "43b828664b0b879ea934c11178d72b8b109153af29e8f04a5ed9b38b4d683b52",
+        "baseline_equal": true
+      }
+    },
+    "opus-surround": {
+      "actual.s16": {
+        "bytes": 1217376,
+        "sha256": "6e5baad4a36f5b498a39b983515fc454ac2c4213d4a65271b4b5ca5d5d96ac30",
+        "baseline_equal": true
+      },
+      "after-drain.s16": {
+        "bytes": 11520,
+        "sha256": "1b18fff5949789e8a7229eb12ba008ccf42b6d0ca9abcd3e75691809d92c210d",
+        "baseline_equal": true
+      }
+    }
+  },
+  "validation": {
+    "candidate_checks": 22823,
+    "baseline_checks": 23623,
+    "fresh_provider_build_checks": 22823,
+    "baseline_mode": "All behavior contracts retained; only three candidate allocation-budget checks per clip disabled by measure mode. Different allocation-record assertion counts explain overall count difference.",
+    "fresh_build_source_and_metrics_equal": true,
+    "windows": "Complete production decoder cross-compiled x86_64 and aarch64; actual providers and x86_64 test executable linked. Windows execution and complete framework CI remain remote gates.",
+    "negative_controls": [
+      {
+        "mutation": "Unchanged production source under the candidate allocation gate",
+        "diagnostic": "Audio scratch check failed at 426: allocated_calls <= outputs + 1 + (fixture.codec == 1 ? 1 : 0)"
+      },
+      {
+        "mutation": "Actual production Opus wrapper appends full scratch capacity instead of the provider returned frame count",
+        "diagnostic": "Audio scratch check failed at 234: joined.size() == static_cast<size_t>(fixture.expected_frames) * audio_channels * 2"
+      }
+    ]
+  }
+}

@@ -336,6 +336,14 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         }
     }
     private final AtomicReference<PendingData> mPendingData = new AtomicReference<>();
+    /** Opt-in event-order diagnostics; never include document bodies or addresses. */
+    private static final boolean TRACE_NAVIGATION =
+            "1".equals(System.getenv("GESHER_TRACE_WEBVIEW_NAVIGATION"));
+
+    private void traceNavigation(String message) {
+        GesherWebView.log("navigation-trace java provider=" + System.identityHashCode(this)
+                + " " + message);
+    }
     /** The WebView's own loads not started yet (onNavigationStarting). */
     private final ApiNavigations mApiNavigations = new ApiNavigations();
     /** The WebView thread's last NavigationStarting was one of the WebView's own loads. */
@@ -598,6 +606,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         }
         long number = mApiNavigations.issued(webView2Url);
         mPendingData.set(data == null ? null : new PendingData(data.url, data.mime, data.body, number));
+        if (TRACE_NAVIGATION) traceNavigation("event=issued api=" + number
+                + " inline=" + (data != null));
         mHost.navigate(webView2Url, headers, number);
     }
 
@@ -1988,6 +1998,12 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             mStartingApi = false;
             if (arg == 1) mApiNavigations.started(a, number(b));
             PendingData published = mPendingData.get();
+            if (TRACE_NAVIGATION) traceNavigation("event=start-before nav=" + id
+                    + " handed=" + number(b) + " native-own=" + (arg == 1) + " own=" + own
+                    + " published=" + (published != null ? published.number : 0)
+                    + " armed=" + (published != null && published.answer.get())
+                    + " matches=" + (published != null
+                            && published.url.equals(ApiNavigations.document(a))));
             // b is the last API load handed to WebView2 before this navigation's
             // callback. A newer document may already be published by the Looper
             // (including inside shouldOverrideUrlLoading) while its Navigate is queued.
@@ -1999,6 +2015,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                     published.answer.set(true);
                 }
             }
+            if (TRACE_NAVIGATION) traceNavigation("event=start-after nav=" + id
+                    + " published=" + (published != null ? published.number : 0)
+                    + " retained=" + (published != null && mPendingData.get() == published)
+                    + " armed=" + (published != null && published.answer.get()));
         } else if (type == WebView2Host.EVENT_FAILED && a != null && a.startsWith("Navigate ")) {
             int end = a.lastIndexOf(": ");
             if (end > "Navigate ".length()) {
@@ -2014,6 +2034,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             // the page's pushState/replaceState does not end a load (id: the last number
             // WebView2 had been handed).
             mApiNavigations.sameDocument(a, id);
+        }
+        if (TRACE_NAVIGATION && type == WebView2Host.EVENT_PAGE_FINISHED) {
+            traceNavigation("event=finished http=" + id + " status=" + arg
+                    + " handed=" + number(b) + " retire-requested=" + (arg != 14));
         }
         if (type == WebView2Host.EVENT_PARKED) {
             CountDownLatch parked = mParked;
@@ -2043,6 +2067,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         // one issued before the first started reaches here too. Android does not ask the
         // app about either (a WebViewClient that takes its base URL would cancel the load).
         mStartingApi = !redirect && mApiNavigations.started(url, handed);
+        if (TRACE_NAVIGATION) traceNavigation("event=classify handed=" + handed
+                + " own=" + mStartingApi + " redirect=" + redirect + " user=" + userInitiated);
         if (mStartingApi) return false;
         String appUrl = FileUrls.fromWebView2(url);
         final String fallback = IntentFallback.httpUrl(appUrl);
@@ -2098,7 +2124,17 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         // NavigationStarting and resource admission run on the same WebView STA.
         // Claim before dispatch: a delayed older worker must not consume the next
         // navigation's allowance or reread a later publication's body and MIME.
+        PendingData observed = TRACE_NAVIGATION ? mPendingData.get() : null;
+        boolean armed = observed != null && observed.answer.get();
         PendingData data = claimData(url, context, mainFrame);
+        if (TRACE_NAVIGATION && context == CONTEXT_DOCUMENT) {
+            traceNavigation("event=request request=" + id + " main=" + mainFrame
+                    + " observed=" + (observed != null ? observed.number : 0)
+                    + " armed-before=" + armed
+                    + " matches=" + (observed != null
+                            && observed.url.equals(ApiNavigations.document(url)))
+                    + " claimed=" + (data != null ? data.number : 0));
+        }
         sRequests.execute(() -> answerRequest(id, url, method, headers, context, mainFrame, data));
     }
 
@@ -2157,10 +2193,19 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             response = null;
         }
         if (response == null) {
+            if (TRACE_NAVIGATION && context == CONTEXT_DOCUMENT) {
+                traceNavigation("event=response request=" + id + " status=0 owner="
+                        + (data != null ? data.number : 0));
+            }
             host.respond(id, 0, "", "", null);
             return;
         }
         int status = response.getStatusCode() > 0 ? response.getStatusCode() : 200;
+        if (TRACE_NAVIGATION && context == CONTEXT_DOCUMENT) {
+            traceNavigation("event=response request=" + id + " status=" + status
+                    + " owner=" + (data != null ? data.number : 0)
+                    + " inline=" + (ownedBody != null));
+        }
         String reason = response.getReasonPhrase() != null ? response.getReasonPhrase() : "OK";
         StringBuilder h = new StringBuilder();
         String mime = response.getMimeType();
