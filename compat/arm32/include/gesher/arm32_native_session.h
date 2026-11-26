@@ -31,8 +31,12 @@ class NativeLibrarySession {
   // installs an explicit Bionic32/JNI32 domain and runs guest constructors.
   // If require_jni_onload is true, a JNI_OnLoad export must exist, return a
   // supported version and run successfully before Open returns.
+  // A real host ART RegisterNatives handler must be supplied before
+  // JNI_OnLoad for libraries that register their natives at startup. Never
+  // acknowledge registration without installing callable ART trampolines.
   bool Open(std::string_view soname, bool require_jni_onload,
-            std::string* error = nullptr);
+            std::string* error = nullptr,
+            NativeRegistrationHandler registration_handler = {});
 
   // After Open, invoke a named ARM32 Java_* native with exact JVM descriptor.
   // This still uses an injected host JNIEnv. It does not register a method
