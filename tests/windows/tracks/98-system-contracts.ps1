@@ -124,6 +124,13 @@ try {
     $microgLibsOut
   } @('MicrogAddonNativeLibsTest all passed')
 
+  $identityDigestOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'IdentityDigestContractTest') 90
+  $identityDigestCode = $LASTEXITCODE
+  Check 'services: complete digest identities preserve input framing, signers and live split files' {
+    $global:LASTEXITCODE = $identityDigestCode
+    $identityDigestOut
+  } @('IdentityDigestContractTest all passed:')
+
   $callLogOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' + 'CallLogContractTest') 120
   $callLogCode = $LASTEXITCODE
   Check 'services: CallLog provider CRUD, strict SQL, phone matching, voicemail, AppOps and admission' {

@@ -1,0 +1,298 @@
+diff --git a/compat/bionic/stdio_bionic.cc b/compat/bionic/stdio_bionic.cc
+index 3848a9a1..59cc73e4 100644
+--- a/compat/bionic/stdio_bionic.cc
++++ b/compat/bionic/stdio_bionic.cc
+@@ -713,26 +713,10 @@ int BIONIC_SYSV Fsetpos(void* f, const int64_t* pos) { return SeekDiscardingPush
+ // getline/getdelim: *line grows with the CRT's realloc, which the .so's
+ // free (the shim's) accepts.
+ int64_t BIONIC_SYSV Getdelim(char** line, size_t* n, int delim, void* f) {
+-  if (line == nullptr || n == nullptr) return errno = kEINVAL, -1;
+   FILE* fp = F(f);
+   StreamLock lock(fp);
+-  if (Orient(fp, -1) == 0) return -1;
+-  size_t len = 0;
+-  int c;
+-  while ((c = gesher::stdio::Get(fp, true)) != EOF) {
+-    if (*line == nullptr || len + 2 > *n) {
+-      size_t cap = *n < 120 ? 120 : *n * 2;
+-      char* grown = static_cast<char*>(std::realloc(*line, cap));
+-      if (grown == nullptr) return errno = kENOMEM, -1;
+-      *line = grown;
+-      *n = cap;
+-    }
+-    (*line)[len++] = static_cast<char>(c);
+-    if (c == delim) break;
+-  }
+-  if (len == 0) return -1;
+-  (*line)[len] = 0;
+-  return static_cast<int64_t>(len);
++  if (line != nullptr && n != nullptr && Orient(fp, -1) == 0) return -1;
++  return gesher::stdio::ReadDelimited(line, n, delim, fp, true);
+ }
+ int64_t BIONIC_SYSV Getline(char** line, size_t* n, void* f) { return Getdelim(line, n, '\n', f); }
+ 
+@@ -892,18 +876,7 @@ char* BIONIC_SYSV FgetsUnlocked(char* s, int n, void* f) {
+   if (n <= 0) return errno = kEINVAL, nullptr;
+   FILE* stream = F(f);
+   if (Orient(stream, -1) == 0) return nullptr;
+-  int count = 0;
+-  while (count < n - 1) {
+-    int c = gesher::stdio::Get(stream, true);
+-    if (c == EOF) {
+-      if (count == 0) return nullptr;
+-      break;
+-    }
+-    s[count++] = static_cast<char>(c);
+-    if (c == '\n') break;
+-  }
+-  s[count] = 0;
+-  return s;
++  return gesher::stdio::ReadLine(s, n, stream, true);
+ }
+ 
+ size_t BIONIC_SYSV Fread(void* buf, size_t size, size_t n, void* f) {
+diff --git a/compat/posix/include/gesher/stdio.h b/compat/posix/include/gesher/stdio.h
+index 163ac6cf..7b068e7e 100644
+--- a/compat/posix/include/gesher/stdio.h
++++ b/compat/posix/include/gesher/stdio.h
+@@ -23,6 +23,8 @@ int TryLock(FILE* stream);
+ size_t Read(void* bytes, size_t size, size_t count, FILE* stream, bool unlocked = false);
+ size_t Write(const void* bytes, size_t size, size_t count, FILE* stream, bool unlocked = false);
+ char* ReadLine(char* bytes, int count, FILE* stream, bool unlocked = false);
++int64_t ReadDelimited(char** bytes, size_t* capacity, int delimiter, FILE* stream,
++                      bool unlocked = false);
+ int Get(FILE* stream, bool unlocked = false);
+ int Put(int value, FILE* stream, bool unlocked = false);
+ int Flush(FILE* stream, bool unlocked = false);
+diff --git a/compat/posix/src/misc.cc b/compat/posix/src/misc.cc
+index f185d98a..0120cd6c 100644
+--- a/compat/posix/src/misc.cc
++++ b/compat/posix/src/misc.cc
+@@ -233,35 +233,8 @@ char* hasmntopt(const struct mntent* mnt, const char* opt) {
+ 
+ // Reads up to and including `delim` into *lineptr, growing it with realloc.
+ ssize_t getdelim(char** lineptr, size_t* n, int delim, FILE* stream) {
+-  if (lineptr == nullptr || n == nullptr || stream == nullptr) return errno = EINVAL, -1;
+-  gesher::stdio::StreamGuard lock(stream);
+-  if (!lock) return -1;
+-  if (*lineptr == nullptr || *n == 0) {
+-    char* initial = static_cast<char*>(realloc(*lineptr, 128));
+-    if (initial == nullptr) { gesher::stdio::SetError(stream, ENOMEM); return -1; }
+-    *lineptr = initial;
+-    *n = 128;
+-  }
+-  size_t length = 0;
+-  for (;;) {
+-    int c = gesher::stdio::Get(stream, true);
+-    if (c == EOF) break;
+-    if (length + 2 > *n) {  // room for c and the terminator
+-      if (*n > static_cast<size_t>(std::numeric_limits<ssize_t>::max()) / 2) {
+-        gesher::stdio::SetError(stream, EOVERFLOW);
+-        return -1;
+-      }
+-      size_t bigger = *n * 2;
+-      char* grown = static_cast<char*>(realloc(*lineptr, bigger));
+-      if (grown == nullptr) { gesher::stdio::SetError(stream, ENOMEM); return -1; }
+-      *lineptr = grown;
+-      *n = bigger;
+-    }
+-    (*lineptr)[length++] = static_cast<char>(c);
+-    if (c == delim) break;
+-  }
+-  (*lineptr)[length] = '\0';
+-  return length > 0 ? static_cast<ssize_t>(length) : -1;  // -1 at end of file
++  if (stream == nullptr) return errno = EINVAL, -1;
++  return static_cast<ssize_t>(gesher::stdio::ReadDelimited(lineptr, n, delim, stream));
+ }
+ 
+ ssize_t getline(char** lineptr, size_t* n, FILE* stream) {
+diff --git a/compat/posix/src/stdio_output.cc b/compat/posix/src/stdio_output.cc
+index 1bbbc511..da507701 100644
+--- a/compat/posix/src/stdio_output.cc
++++ b/compat/posix/src/stdio_output.cc
+@@ -292,17 +292,16 @@ char* LineLocal(char* bytes, int count, FILE* stream, bool unlocked) {
+   if (count <= 0) std::abort();  // Bionic fgets rejects a nonpositive bound fatally.
+   AccessStream state(stream, unlocked);
+   if (!state) return nullptr;
+-  state->buffer.Orient(-1);
+   state->line_output.store(false, std::memory_order_release);
+-  int used = 0;
+-  while (used < count - 1) {
+-    int value = state->buffer.Get(Reader(state.Get()), Writer(state->fd));
+-    if (value == EOF) { if (!used) return nullptr; break; }
+-    bytes[used++] = static_cast<char>(value);
+-    if (value == '\n') break;
+-  }
+-  bytes[used] = '\0';
+-  return bytes;
++  return state->buffer.ReadLine(bytes, count, Reader(state.Get()), Writer(state->fd));
++}
++int64_t DelimitedLocal(char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
++  AccessStream state(stream, unlocked);
++  if (!state) return -1;
++  state->line_output.store(false, std::memory_order_release);
++  auto reallocate = [](void* prior, size_t size) { return std::realloc(prior, size); };
++  return state->buffer.ReadDelimited(bytes, capacity, delimiter, Reader(state.Get()),
++                                     Writer(state->fd), reallocate);
+ }
+ int UngetLocal(int character, FILE* stream) {
+   AccessStream state(stream, false);
+@@ -522,6 +521,12 @@ extern "C" __declspec(dllexport) const Api* gesher_stdio_output_owner_v1() {
+       PrintLocal, PrintWideLocal, ScanLocal, ScanWideLocal};
+   return &api;
+ }
++// A separate versioned entry avoids extending the existing v1 owner table.
++// All modules still use the same registry and descriptor-backed input state.
++extern "C" __declspec(dllexport) int64_t gesher_stdio_delimited_v1(
++    char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
++  return DelimitedLocal(bytes, capacity, delimiter, stream, unlocked);
++}
+ namespace {
+ // Register before ordinary application constructors register their destructors
+ // or atexit callbacks. A lazy registration during the first fopen would flush
+@@ -556,6 +561,13 @@ size_t Write(const void* bytes, size_t size, size_t count, FILE* stream, bool un
+   return Owner()->write(bytes, size, count, stream, unlocked);
+ }
+ char* ReadLine(char* bytes, int count, FILE* stream, bool unlocked) { return Owner()->line(bytes, count, stream, unlocked); }
++int64_t ReadDelimited(char** bytes, size_t* capacity, int delimiter, FILE* stream, bool unlocked) {
++  using Read = int64_t (*)(char**, size_t*, int, FILE*, bool);
++  static auto read = reinterpret_cast<Read>(reinterpret_cast<void*>(
++      GetProcAddress(GetModuleHandleW(nullptr), "gesher_stdio_delimited_v1")));
++  if (!read) std::abort();
++  return read(bytes, capacity, delimiter, stream, unlocked);
++}
+ int Get(FILE* stream, bool unlocked) {
+   unsigned char value;
+   return Read(&value, 1, 1, stream, unlocked) == 1 ? value : EOF;
+diff --git a/compat/posix/src/stdio_stream_buffer.h b/compat/posix/src/stdio_stream_buffer.h
+index 1d28bef5..963a1cde 100644
+--- a/compat/posix/src/stdio_stream_buffer.h
++++ b/compat/posix/src/stdio_stream_buffer.h
+@@ -10,9 +10,33 @@
+ 
+ #include <cstdint>
+ #include <cstdio>
++#include <cstdlib>
+ #include <limits>
+ 
+ namespace gesher::stdio {
++namespace detail {
++// Keep the terminator inside the signed result range before doing either
++// addition. A failed growth leaves the allocation and input cursor unchanged.
++template<class Reallocator>
++int GrowLine(char** bytes, size_t* capacity, size_t used, size_t append,
++             Reallocator& reallocate) {
++  constexpr size_t limit = static_cast<size_t>(PTRDIFF_MAX);
++  if (used >= limit || append >= limit - used) return errno = EOVERFLOW, -1;
++  const size_t needed = used + append + 1;
++  if (needed <= *capacity) return 0;
++  size_t next = 128;
++  while (next < needed) next *= 2;
++  char* grown = static_cast<char*>(reallocate(*bytes, next));
++  if (!grown) return errno = ENOMEM, -1;
++  // Bionic's getdelim grows through recallocarray. Preserve its zeroed tail
++  // without introducing a second buffer or discarding caller-owned bytes.
++  std::memset(grown + *capacity, 0, next - *capacity);
++  *bytes = grown;
++  *capacity = next;
++  return 0;
++}
++}  // namespace detail
++
+ class StreamBuffer {
+  public:
+   enum class Access { kRead, kWrite, kUpdate };
+@@ -138,6 +162,63 @@ class StreamBuffer {
+     return Read(&value, 1, 1, reader, writer) == 1 ? value : EOF;
+   }
+ 
++  template<class Reader, class Writer>
++  char* ReadLine(char* bytes, int count, Reader&& reader, Writer&& writer) {
++    Orient(-1);
++    size_t used = 0;
++    const size_t maximum = static_cast<size_t>(count - 1);
++    if (maximum && !PrepareRead(writer)) return nullptr;
++    while (used < maximum) {
++      InputSpan span;
++      if (!PeekInput(span, reader)) {
++        if (!used) return nullptr;
++        break;  // fgets returns an already-read prefix on EOF or input error.
++      }
++      const size_t bound = std::min(span.size, maximum - used);
++      const auto* newline = static_cast<const char*>(std::memchr(span.bytes, '\n', bound));
++      const size_t take = newline ? static_cast<size_t>(newline - span.bytes) + 1 : bound;
++      std::memcpy(bytes + used, span.bytes, take);
++      ConsumeInput(span, take);
++      used += take;
++      if (newline) break;
++    }
++    bytes[used] = '\0';
++    return bytes;
++  }
++
++  template<class Reader, class Writer, class Reallocator>
++  int64_t ReadDelimited(char** bytes, size_t* capacity, int delimiter,
++                        Reader&& reader, Writer&& writer, Reallocator&& reallocate) {
++    if (!bytes || !capacity) { SetError(EINVAL); return -1; }
++    if (!*bytes) *capacity = 0;
++    Orient(-1);
++    if (!PrepareRead(writer)) return -1;
++    size_t used = 0;
++    for (;;) {
++      InputSpan span;
++      if (!PeekInput(span, reader)) {
++        // Unlike fgets, Android getdelim reports errors even after reading a
++        // partial record. A pre-existing error remains relevant at EOF too.
++        if (Error()) return -1;
++        break;
++      }
++      const auto* separator = static_cast<const char*>(
++          std::memchr(span.bytes, static_cast<unsigned char>(delimiter), span.size));
++      const size_t take = separator ? static_cast<size_t>(separator - span.bytes) + 1 : span.size;
++      if (detail::GrowLine(bytes, capacity, used, take, reallocate) < 0) {
++        SetError(errno);
++        return -1;
++      }
++      std::memcpy(*bytes + used, span.bytes, take);
++      ConsumeInput(span, take);
++      used += take;
++      if (separator) break;
++    }
++    if (!used) return -1;
++    (*bytes)[used] = '\0';
++    return static_cast<int64_t>(used);
++  }
++
+   template<class Writer>
+   int Unget(int value, Writer&& writer) {
+     if (value == EOF) return EOF;
+@@ -188,6 +269,29 @@ class StreamBuffer {
+ 
+  private:
+   enum class Direction { kNone, kRead, kWrite };
++  struct InputSpan { const char* bytes = nullptr; size_t size = 0; bool pushed = false; };
++  template<class Reader>
++  bool PeekInput(InputSpan& span, Reader& reader) {
++    if (pushed_) {
++      // ungetc is a stack; do not reverse or consume it before output growth
++      // succeeds. Ordinary buffered input remains a contiguous span.
++      span = {reinterpret_cast<const char*>(Pushback() + pushed_ - 1), 1, true};
++      return true;
++    }
++    if (next_ == available_) {
++      if (output_.EnsureStorage() < 0) { SetError(errno); return false; }
++      int read = ReadChunk(reader, InputData(), InputCapacity());
++      if (read <= 0) return false;
++      next_ = 0;
++      available_ = static_cast<size_t>(read);
++    }
++    span = {InputData() + next_, available_ - next_, false};
++    return true;
++  }
++  void ConsumeInput(const InputSpan& span, size_t size) {
++    if (span.pushed) --pushed_;
++    else next_ += size;
++  }
+   template<class Writer>
+   bool PrepareRead(Writer& writer) {
+     if (!CanRead()) { SetError(EBADF); return false; }

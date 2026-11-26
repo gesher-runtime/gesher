@@ -736,6 +736,7 @@ class Builder:
         modules = self.modules = Modules(tree, self.config)
         planner = Planner(tree, modules)
         planner.root = self.args.module  # not core_platform()'s first library
+        planner.provided = set(self.args.provided)
         planner.core_platform()
         planner.library(self.args.module)
         if self.args.module == 'framework-minus-apex':
@@ -992,6 +993,8 @@ def main():
     ap.add_argument('--sdk', default='36')
     ap.add_argument('--core-classes', required=True)
     ap.add_argument('--classpath', action='append', default=[])
+    ap.add_argument('--provided', action='append', default=[],
+                    help='a library --classpath already supplies compiled (not planned)')
     ap.add_argument('--aidl', default='aidl')
     ap.add_argument('--host-tools', default='out/host', help='tools/host build directory')
     ap.add_argument('--framework-res-java')

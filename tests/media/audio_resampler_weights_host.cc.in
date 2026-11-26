@@ -1,0 +1,263 @@
+// Complete production Track methods and the maintained Engine/clock boundary.
+// The scalar oracle uses the unchanged sinc table; the second executable runs
+// the complete original source and compares every output/state transcript byte.
+#include <array>
+#include <bit>
+#include <cfenv>
+#include <cstdlib>
+#include <limits>
+
+namespace { thread_local size_t resampler_kernel_calls = 0; }
+@PRODUCTION@
+@COMMON@
+
+bool SameSample(float a, float b) {
+  return std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b) ||
+         (std::isnan(a) && std::isnan(b));
+}
+
+void PhaseOracle(FILE* output, uint32_t channels, float speed, double fraction,
+                 size_t offset, int rounding, bool gate, bool special = false) {
+  TrackParams p;
+  p.channels = channels; p.format = PcmFormat::kFloat;
+  p.capacity_frames = 32768; p.is_static = true;
+  Track t(&engine, p);
+  std::vector<float> source(p.capacity_frames * channels);
+  const uint32_t values[] = {0, 0x80000000u, 0x00000001u, 0x80000001u,
+                            0x7f800000u, 0xff800000u, 0x7fc00071u, 0xffc00037u};
+  for (size_t i = 0; i < source.size(); ++i)
+    source[i] = special ? std::bit_cast<float>(values[(i * 7 + i / channels) % std::size(values)]) :
+                         Sample(i / channels, i % channels);
+  const auto retained_source = source;
+  Check(t.Write(source.data(), source.size() * sizeof(float), false) ==
+            static_cast<ssize_t>(source.size() * sizeof(float)), "phase oracle owns actual source frames");
+  Check(std::fesetround(rounding) == 0, "requested floating rounding mode is available");
+  t.SetSpeed(speed); t.Start();
+  float dummy = 0;
+  t.MixInto(&dummy, 0, 48000, 1);
+  const size_t width = t.rs_->width;
+  t.rs_->hist.resize((width + p.capacity_frames) * channels);
+  bool ended = false;
+  Check(t.ReadSource(t.rs_->hist.data() + width * channels, p.capacity_frames, &ended) == p.capacity_frames,
+        "phase oracle uses real ReadSource conversion and ownership");
+  t.rs_->t = static_cast<double>(width + offset) + fraction;
+  // A rate transition can leave one representable value below an integer.
+  if (fraction == -1) t.rs_->t = std::nextafter(static_cast<double>(width + offset), 0.0);
+  const auto original_history = t.rs_->hist;
+  const int64_t original_start = t.rs_->start_index;
+  double phase = t.rs_->t;
+  const double step = static_cast<double>(t.sample_rate()) * t.speed() / 48000;
+  const double cutoff = step > 1 ? 1.0 / step * 0.97 : 1.0;
+  constexpr size_t frames = 67;
+  const bool reusable_step = step != 1 && width <= 64 && std::fmod(step, 0.5) == 0;
+  bool observed_phase[2] = {};
+  size_t expected_evaluations = 0;
+  std::array<float, frames * 2> expected{}, actual{};
+  for (size_t i = 0; i < expected.size(); ++i) expected[i] = actual[i] = (i & 1) ? -0.125f : 0.25f;
+  // Frozen scalar tap order, independently of the repeated-weight branch.
+  // Nonfinite classification is checked here; the full original-source
+  // transcript additionally compares actual NaN payloads and all signed zeros.
+  for (size_t out = 0; out < frames; ++out) {
+    std::array<float, 24> sums{};
+    const int64_t center = static_cast<int64_t>(std::floor(phase));
+    const double actual_fraction = phase - static_cast<double>(center);
+    const int half = phase >= 0 && phase < 0x1p51 && actual_fraction == 0 ? 0 :
+                     phase >= 0 && phase < 0x1p51 && actual_fraction == 0.5 ? 1 : -1;
+    // A noncanonical starting phase may round onto an exact phase at a later
+    // addition. Account for each actual scalar phase, not its initial label.
+    if (reusable_step && half >= 0) {
+      if (!observed_phase[half]) { expected_evaluations += 2 * width; observed_phase[half] = true; }
+    } else expected_evaluations += 2 * width;
+    for (int64_t k = center - static_cast<int64_t>(width) + 1;
+         k <= center + static_cast<int64_t>(width); ++k) {
+      float coefficient = Kernel(KernelTable(), (phase - static_cast<double>(k)) * cutoff) *
+                          static_cast<float>(cutoff);
+      if (coefficient == 0) continue;
+      for (size_t c = 0; c < channels; ++c)
+        sums[c] += original_history[static_cast<size_t>(k) * channels + c] * coefficient;
+    }
+    float left = sums[0], right = channels == 1 ? sums[0] : sums[1];
+    if (channels > 2) {
+      left += 0.7071f * sums[2]; right += 0.7071f * sums[2];
+      for (size_t c = 4; c + 1 < channels && c < 8; c += 2) {
+        left += 0.7071f * sums[c]; right += 0.7071f * sums[c + 1];
+      }
+    }
+    expected[out * 2] += left; expected[out * 2 + 1] += right;
+    phase += step;
+  }
+  std::feclearexcept(FE_ALL_EXCEPT);
+  resampler_kernel_calls = 0;
+  gesher::fixture_playback_ns += 10'000'000;
+  Check(t.MixInto(actual.data(), frames, 48000, 2), "phase oracle actually mixes every requested frame");
+  const int exceptions = std::fetestexcept(FE_ALL_EXCEPT);
+  const size_t evaluated = resampler_kernel_calls;
+  Check(std::fegetround() == rounding, "mix retains the calling thread rounding mode");
+  bool matching = true;
+  for (size_t i = 0; i < actual.size(); ++i) matching &= SameSample(actual[i], expected[i]);
+  Check(matching, "uncached scalar tap oracle matches complete PCM");
+  Check(original_start + phase == t.rs_->start_index + t.rs_->t,
+        "phase advances by the original repeated floating additions");
+  Check(t.Position() == static_cast<uint32_t>(original_start + std::floor(phase)),
+        "resampler position retains the original source centers");
+  Check(std::memcmp(source.data(), retained_source.data(), source.size() * sizeof(float)) == 0,
+        "mix does not modify caller-owned source storage");
+  if (gate)
+    Check(evaluated == expected_evaluations, "repeated-phase coefficient work is bounded by two actual phases per mix");
+  else
+    Check(evaluated == frames * 2 * width, "original scalar coefficient work covers every actual output frame");
+  // Only actual outputs/state enter the baseline comparison; the intended
+  // coefficient count reduction is a separate observation.
+  Write(output, actual); Write(output, exceptions); Observe(output, t, {});
+  std::fesetround(FE_TONEAREST);
+  t.Release();
+  auto released = actual;
+  Check(!t.MixInto(actual.data(), frames, 48000, 2) &&
+        std::memcmp(actual.data(), released.data(), sizeof(actual)) == 0,
+        "release prevents all further mixing and output access");
+}
+
+void ExactPhaseBounds() {
+  // Execute the production classifier at otherwise impractically large
+  // history indices. This is scalar classification/arithmetic evidence, not
+  // a claim to allocate or mix 2^51 real frames on the host.
+  for (double value : {0.0, 0.5, 12.0, 12.5, 4096.0, 4096.5, 0x1p51 - 1, 0x1p51 - 0.5}) {
+    const int64_t center = static_cast<int64_t>(std::floor(value));
+    const int expected = value == static_cast<double>(center) ? 0 : 1;
+    Check(ExactHalfPhase(value, center) == expected, "exact finite half-phase classifier accepts represented values");
+    if (center >= 64) for (int tap = -63; tap <= 64; ++tap) {
+      const double original = value - static_cast<double>(center + tap);
+      const double canonical = expected * 0.5 - static_cast<double>(tap);
+      Check(original == canonical, "bounded integer-tap subtraction retains the exact original argument");
+    }
+  }
+  for (double value : {0.25, 12.25, std::nextafter(256.0, 0.0), -1.0, 0x1p51, 0x1p52,
+                       std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+    const int64_t center = std::isfinite(value) ? static_cast<int64_t>(std::floor(value)) : 0;
+    Check(ExactHalfPhase(value, center) == -1, "fractional or out-of-range phase cannot enter coefficient reuse");
+  }
+}
+
+void ZeroWeightNonfinite(FILE* output) {
+  TrackParams p; p.channels = 1; p.format = PcmFormat::kFloat;
+  p.capacity_frames = 128; p.is_static = true;
+  Track t(&engine, p);
+  std::array<float, 128> values{};
+  values[12] = std::numeric_limits<float>::quiet_NaN();
+  t.Write(values.data(), sizeof(values), false); t.SetSpeed(0.5f); t.Start();
+  std::array<float, 2> actual{};
+  t.MixInto(actual.data(), 1, 48000, 2);
+  Check(std::isfinite(actual[0]) && std::isfinite(actual[1]),
+        "zero-weight tap does not introduce a nonfinite source sample");
+  Write(output, actual); Observe(output, t, {});
+  t.Release();
+}
+
+void EmptyAndSilent(FILE* output) {
+  // The eligibility check must not introduce an extra inexact exception on
+  // an empty or silent first frame at a nonbinary rate.
+  for (size_t frames : {0u, 1u}) {
+    TrackParams p; p.channels = 1; p.sample_rate = 44100;
+    p.format = PcmFormat::kFloat; p.capacity_frames = 512; p.is_static = true;
+    Track t(&engine, p); std::array<float, 512> input{};
+    t.Write(input.data(), sizeof(input), false); t.Start();
+    std::array<float, 2> result{};
+    std::feclearexcept(FE_ALL_EXCEPT);
+    t.MixInto(result.data(), frames, 48000, 2);
+    const int exceptions = std::fetestexcept(FE_ALL_EXCEPT);
+    Write(output, exceptions); Write(output, result); Observe(output, t, {});
+    t.Release();
+  }
+}
+
+void Lifecycle(FILE* output, PcmFormat format, uint32_t channels, bool is_static) {
+  TrackParams p; p.format = format; p.channels = channels;
+  p.capacity_frames = is_static ? 4096 : 311; p.is_static = is_static;
+  Track t(&engine, p); auto source = Payload(format, channels, p.capacity_frames);
+  std::vector<uint64_t> events; InstallEvents(t, &events);
+  t.Write(source.data(), source.size(), false);
+  if (is_static) t.SetLoop(3, 997, -1);
+  t.Start(); t.SetVolume(0.3f, 0.9f);
+  const std::array<float, 10> rates{0.5f, 1.5f, 2, 2.5f, 3, 3.5f, 4, 4.5f, 5, 6};
+  const std::array<size_t, 8> spans{0, 1, 2, 17, 127, 256, 257, 513};
+  for (size_t step = 0; step < 104; ++step) {
+    t.SetSpeed(rates[(step / 3) % rates.size()]);
+    if (step == 9) t.SetSampleRate(44100);
+    if (step == 16) t.SetSampleRate(48000);
+    if (step == 29) { t.Pause(); Record(output, t, 17, 48000, 2, events); t.Start(); }
+    if (step == 41) t.Stop();
+    if (step == 48) t.Start();
+    if (step == 55) { t.Pause(); t.Flush(); if (is_static) t.SetPosition(31); t.Start(); }
+    if (step == 63) { t.SetVolume(0.75f, 0.25f); t.SetMarker(t.Position() + 23); t.SetUpdatePeriod(83); }
+    if (step == 72 && is_static) { t.Pause(); t.Reload(); t.SetLoop(11, 267, 3); t.Start(); }
+    if (step == 77 && !is_static) t.SetBufferSizeFrames(73);
+    if (step == 83 && !is_static) t.SetBufferSizeFrames(311);
+    if (!is_static && step % 7 != 0) {
+      const size_t bytes = ((step * 137) % 312) * t.frame_size();
+      Write(output, t.Write(source.data(), bytes, false));
+    }
+    const uint32_t output_rate = step % 11 == 0 ? 44100 : step % 13 == 0 ? 96000 : 48000;
+    Record(output, t, spans[step % spans.size()], output_rate, step % 3 == 0 ? 1 : 2, events);
+  }
+  t.Stop();
+  for (unsigned i = 0; i < 8; ++i) Record(output, t, 257, 48000, 2, events);
+  if (is_static) { t.Reload(); t.SetLoop(0, 4096, -1); }
+  else t.Write(source.data(), source.size(), false);
+  t.SetSampleRate(48000); t.SetSpeed(1.5f); t.Start();
+  Record(output, t, 5000, 48000, 2, events);
+  t.Release(); Record(output, t, 480, 48000, 2, events);
+}
+
+void CoefficientBudget(bool gate) {
+  constexpr size_t blocks = 31, frames = 480;
+  for (float speed : {0.5f, 1.5f, 2.0f, 4.0f}) {
+    TrackParams p; p.channels = 2; p.format = PcmFormat::kFloat;
+    p.capacity_frames = 4096; p.is_static = true;
+    Track t(&engine, p); const auto source = Payload(p.format, p.channels, p.capacity_frames);
+    t.Write(source.data(), source.size(), false); t.SetLoop(0, 4096, -1); t.SetSpeed(speed); t.Start();
+    std::array<float, frames * 2> output{};
+    resampler_kernel_calls = 0;
+    for (size_t block = 0; block < blocks; ++block) {
+      output.fill(0); t.MixInto(output.data(), frames, 48000, 2);
+    }
+    const size_t evaluated = resampler_kernel_calls;
+    if (gate) Check(evaluated <= blocks * 4 * t.rs_->width,
+                    "repeated-phase coefficient work is bounded by two actual phases per mix");
+    Check(t.Position() == static_cast<uint32_t>(blocks * frames * speed), "budget workload transfers all source centers");
+    std::printf("resampler speed=%.1f output_frames=%zu kernel_calls=%zu width=%zu\n",
+                speed, blocks * frames, evaluated, t.rs_->width);
+    t.Release();
+  }
+}
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc != 4) return 2;
+  const bool gate = std::strcmp(argv[2], "gate") == 0;
+  const bool full = std::strcmp(argv[3], "full") == 0;
+  FILE* output = std::fopen(argv[1], "wb"); if (!output) return 2;
+  std::fesetround(FE_TONEAREST); (void)KernelTable();
+  @PHASE_BOUNDS@
+  for (int rounding : {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO}) {
+    for (float speed : {0.5f, 1.5f, 2.0f, 4.0f, 5.0f, 6.0f}) {
+      PhaseOracle(output, 2, speed, 0, 0, rounding, gate);
+      PhaseOracle(output, 2, speed, 0.5, 4117, rounding, gate);
+      PhaseOracle(output, 2, speed, 0.25, 16, rounding, gate);
+      PhaseOracle(output, 2, speed, -1, 256, rounding, gate);
+    }
+  }
+  for (uint32_t channels : {1u, 3u, 8u, 24u})
+    for (float speed : {0.5f, 1.5f, 2.0f}) PhaseOracle(output, channels, speed, 0, 7, FE_TONEAREST, gate);
+  for (float speed : {0.5f, 1.5f, 2.0f}) PhaseOracle(output, 2, speed, 0, 31, FE_TONEAREST, gate, true);
+  for (float speed : {5.052083f, 5.133125f, 5.21375f})
+    PhaseOracle(output, 2, speed, 0.5, 19, FE_TONEAREST, gate);
+  ZeroWeightNonfinite(output); EmptyAndSilent(output); CoefficientBudget(gate);
+  if (full) for (PcmFormat format : {PcmFormat::kU8, PcmFormat::kS16, PcmFormat::kS24Packed, PcmFormat::kS32, PcmFormat::kFloat})
+    for (uint32_t channels : {1u, 2u, 3u, 8u, 24u}) {
+      Oracle(format, channels, 1); Oracle(format, channels, 2); Oracle(format, channels, 4);
+      Lifecycle(output, format, channels, false); Lifecycle(output, format, channels, true);
+    }
+  if (std::fclose(output)) return 2;
+  std::printf("audio resampler weight contracts: %zu checks, %zu failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

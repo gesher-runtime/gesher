@@ -9,7 +9,8 @@
 // unlockAndPost). ANGLE's reverse-row and BGRA readback extensions permit
 // direct readback into compatible destination buffers; other formats use a
 // clipped fallback. The GPU-to-CPU transfer remains synchronous, with frames
-// posted at most 60 times a second (a high-resolution timer), as a display's
+// paced to the queried Windows display frequency (a high-resolution timer,
+// 60 Hz fallback when unavailable), as a display's
 // vsync paces them on a device; the helper's swap chain presents with
 // interval 0, since nothing shows it. The helper window follows the
 // ANativeWindow's size (setFixedSize, a resized view), which ANGLE picks up at

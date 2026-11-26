@@ -4,6 +4,10 @@
 #include <bcrypt.h>
 #include <cstdlib>
 #include <new>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher::record_locks {
 namespace {
@@ -329,3 +333,8 @@ int ClosingDescriptor::Finish(bool closed_or_replaced) {
 }
 
 }  // namespace gesher::record_locks
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h): every descriptor operation's guard.
+GESHER_FORK_LOCK(gesher::kForkOrderDescriptors, SRWLOCK, gesher::record_locks::descriptor_lock);
+#endif

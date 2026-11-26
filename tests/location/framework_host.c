@@ -14,6 +14,15 @@ JNIEXPORT jlong JNICALL Java_android_os_SystemClock_elapsedRealtimeNanos(JNIEnv*
 }
 JNIEXPORT jlong JNICALL Java_android_os_Binder_getNativeFinalizer(JNIEnv* env, jclass type) { return (jlong)(uintptr_t)free; }
 JNIEXPORT jlong JNICALL Java_android_os_Binder_getNativeBBinderHolder(JNIEnv* env, jclass type) { return (jlong)(uintptr_t)calloc(1, 1); }
+// Binder carries the calling thread's StrictMode policy; on the host it is
+// a per-thread value, as libbinder's IPCThreadState keeps it.
+static _Thread_local jint strict_mode_policy;
+JNIEXPORT void JNICALL Java_android_os_Binder_setThreadStrictModePolicy(JNIEnv* env, jclass type, jint policy) {
+  strict_mode_policy = policy;
+}
+JNIEXPORT jint JNICALL Java_android_os_Binder_getThreadStrictModePolicy(JNIEnv* env, jclass type) {
+  return strict_mode_policy;
+}
 JNIEXPORT void JNICALL Java_libcore_util_NativeAllocationRegistry_applyFreeFunction(JNIEnv* env, jclass type, jlong function, jlong pointer) {
     if (function == (jlong)(uintptr_t)free) free((void*)(uintptr_t)pointer);
 }
