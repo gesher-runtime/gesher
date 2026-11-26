@@ -42,6 +42,7 @@ inline constexpr int kMsgDontRoute = 4;
 inline constexpr int kMsgWaitAll = 8;
 inline constexpr int kMsgTrunc = 16;
 inline constexpr int kMsgCmsgCloexec = 32;
+inline constexpr int kMsgControlTrunc = 64;
 
 // Options with an int value. Timeouts are in milliseconds.
 enum class Option {
@@ -362,6 +363,8 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
 // adopted). With `fds` null, the descriptors are discarded. close_on_exec
 // belongs to this receive, not to the sender's descriptor or the shared OFD.
 bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec = false);
+// A datagram peek installs independent descriptors and leaves its group queued.
+bool PeekRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec);
 // The groups of a stream connection's queue whose position is below `limit`.
 bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec = false);
 // A sender's deposit whose message was not sent: discarded, if still queued.

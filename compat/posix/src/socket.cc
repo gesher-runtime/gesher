@@ -493,8 +493,12 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
                             (flags & MSG_DONTWAIT) != 0, result_flags, credentials,
                             rights != nullptr ? &token : nullptr, rights);
   if (want_packet_info) ws::SetReceivePacketInfo(nullptr);
-  if (n >= 0 && rights != nullptr && token.count != 0)
-    gesher::ClaimRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0);
+  if (n >= 0 && rights != nullptr && token.count != 0) {
+    const bool received = (flags & MSG_PEEK) != 0
+        ? gesher::PeekRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0)
+        : gesher::ClaimRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0);
+    if (!received && result_flags != nullptr) *result_flags |= ws::kMsgControlTrunc;
+  }
   if (n >= 0 && addr != nullptr) {
     sockaddr_storage local = {};
     socklen_t actual = sizeof(local), capacity = 0;
@@ -673,8 +677,14 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
                  local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags,
                  &credentials, &pass_credentials, &rights, &packet_info);
   pthread_cleanup_pop(0);
+  auto close_rights = [&]() {
+    for (int received : rights) {
+      if (received >= 0) close(received);
+    }
+  };
   if (n >= 0) {
     local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
+    if (result_flags & ws::kMsgControlTrunc) local.msg_flags |= MSG_CTRUNC;
     std::vector<unsigned char> control;
     // Appends one control message, as much of it as fits, as Linux's put_cmsg:
     // nothing if not even its header fits, else the header with cmsg_len
@@ -721,15 +731,20 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
       const size_t room = capacity - control.size();
       if (room >= CMSG_LEN(sizeof(int))) fit = (room - CMSG_LEN(0)) / sizeof(int);
       std::vector<int> delivered;
-      for (int received : rights) {
+      for (int& received : rights) {
         if (received < 0) continue;  // could not be adopted here
-        if (delivered.size() < fit) delivered.push_back(received);
-        else close(received);
+        if (delivered.size() < fit) {
+          delivered.push_back(received);
+        } else {
+          close(received);
+          received = -1;
+        }
       }
       if (delivered.size() < rights.size()) local.msg_flags |= MSG_CTRUNC;
       if (!delivered.empty()) append(SCM_RIGHTS, delivered.data(), delivered.size() * sizeof(int));
     }
     if (!control.empty() && !ws::CopyToUser(local.msg_control, control.data(), control.size())) {
+      close_rights();
       return errno = EFAULT, -1;
     }
     local.msg_controllen = control.size();
@@ -739,7 +754,14 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
         !ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_controllen)),
                         &local.msg_controllen, sizeof(local.msg_controllen)) ||
         !ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_flags)),
-                        &local.msg_flags, sizeof(local.msg_flags))) return errno = EFAULT, -1;
+                        &local.msg_flags, sizeof(local.msg_flags))) {
+      close_rights();
+      return errno = EFAULT, -1;
+    }
+  } else {
+    const int saved = errno;
+    close_rights();
+    errno = saved;
   }
   return n;
 }

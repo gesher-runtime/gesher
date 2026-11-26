@@ -109,12 +109,15 @@ enum Op : uint32_t {
   // Takes a group back out of its queue (its sendmsg failed) and closes it.
   // -> {token}; <- {status}: -ENOENT if a receiver already took it.
   kRightsCancel = 11,
+  // Duplicates a datagram's group for MSG_PEEK. The broker retains its handles.
+  // The request and reply have the kRightsClaim layout.
+  kRightsPeek = 12,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
 // binderd and the processes that send or receive descriptors must agree on it;
 // other binder clients need not.
-constexpr uint32_t kRightsVersion = 5;
+constexpr uint32_t kRightsVersion = 6;
 
 // The broker's doorbell for stream queues: a shared section named
 // kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint64 values, one

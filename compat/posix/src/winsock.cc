@@ -1343,20 +1343,17 @@ ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, A
       memcpy(carried.value, packet.get() + kUnixHeader, sizeof(carried.value));
       carried.count = header.descriptors;
     }
-    // The descriptors leave the broker with their datagram: to the caller, or
-    // discarded for a reader without control data, as Linux discards them. A
-    // peek leaves the datagram, and them, in place.
-    if ((flags & kMsgPeek) == 0) {
-      if (rights != nullptr) *rights = carried;
-      else if (carried.count != 0) gesher::ClaimRights(carried, nullptr);
-    } else if (rights != nullptr) {
-      *rights = {};
-    }
+    // recvmsg can claim the group's descriptors or duplicate them for a peek.
+    // An ordinary read consumes the group without delivering descriptors.
+    const bool peek = (flags & kMsgPeek) != 0;
+    if (rights != nullptr) *rights = carried;
+    else if (!peek && carried.count != 0) gesher::ClaimRights(carried, nullptr);
     const size_t payload = static_cast<size_t>(n) - header_size;
     size_t copied = 0;
     for (size_t i = 0; i < count && copied < payload; ++i) {
       const size_t part = buffers[i].len < payload - copied ? buffers[i].len : payload - copied;
       if (!CopyToUser(buffers[i].data, packet.get() + header_size + copied, part)) {
+        if (!peek && rights != nullptr && carried.count != 0) gesher::ClaimRights(carried, nullptr);
         return errno = EFAULT, -1;
       }
       copied += part;
