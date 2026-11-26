@@ -147,6 +147,26 @@ struct Fixture {
   }
 };
 
+// An APS2 stream using real Android SLEB128 grouping (ELF32 REL records).
+// All encoded relocations target previously unrelocated writable words.
+void PackedAps2(Fixture& f, bool grouped) {
+  std::vector<uint8_t> encoded{'A', 'P', 'S', '2'};
+  // total count = 3; previous offset = 0x624 (signed LEB128).
+  encoded.insert(encoded.end(), {3, 0xa4, 0x0c, 3});
+  if (grouped) {
+    // grouped by offset delta and r_info; relative relocation at each step.
+    encoded.insert(encoded.end(), {3, 4, 23});
+  } else {
+    // Three individual (delta, r_info) pairs.
+    encoded.insert(encoded.end(), {0, 4, 23, 4, 23, 4, 23});
+  }
+  CHECK(0x4a0 + encoded.size() < 0x500);
+  std::copy(encoded.begin(), encoded.end(), f.file.begin() + 0x4a0);
+  for (uint32_t at : {0x628u, 0x62cu, 0x630u}) W32(f.file, at, at - 0x628 + 0x640);
+  f.Tag(0x6000000f, 0x4a0);
+  f.Tag(0x60000010, static_cast<uint32_t>(encoded.size()));
+}
+
 ElfLoadOptions Options(int* imports = nullptr) {
   ElfLoadOptions options;
   options.resolve_import = [imports](std::string_view name, uint32_t* address) {
@@ -286,6 +306,16 @@ void ValidImages() {
     CHECK(R32(image.bytes, 0x600) == 0x10640);  // Existing RELs still apply.
   }
 
+  for (bool grouped : {false, true}) {
+    Fixture packed;
+    PackedAps2(packed, grouped);
+    CHECK(LoadElf32(packed.file.data(), packed.file.size(), Options(), &image, &error));
+    CHECK(R32(image.bytes, 0x628) == 0x10640);
+    CHECK(R32(image.bytes, 0x62c) == 0x10644);
+    CHECK(R32(image.bytes, 0x630) == 0x10648);
+    CHECK(R32(image.bytes, 0x600) == 0x10640);  // ordinary REL table coexists.
+  }
+
   Fixture linux;
   linux.file[7] = 3;
   CHECK(LoadElf32(linux.file.data(), linux.file.size(), Options(), &image, &error));
@@ -379,7 +409,30 @@ void HostileImages() {
     W32(f.file, 0x4a4, 3);
   }, "RELR target is unaligned or outside");
 
-  bad([](auto& f) { f.Tag(0x6000000f, 0x400); }, "packed relocations");
+  bad([](auto& f) { f.Tag(0x6000000f, 0x400); }, "incomplete Android packed REL");
+  bad([](auto& f) {
+    PackedAps2(f, true); f.file[0x4a0] = 'X';
+  }, "invalid Android APS2 relocation header");
+  bad([](auto& f) {
+    PackedAps2(f, true); f.Tag(0x60000010, 5); f.file[0x4a4] = 0x80;
+  }, "invalid Android APS2 relocation count");
+  bad([](auto& f) {
+    PackedAps2(f, true); f.file[0x4a7] = 0;
+  }, "invalid Android APS2 group size");
+  bad([](auto& f) {
+    PackedAps2(f, true); f.file[0x4a8] = 8;
+  }, "invalid flags or addends");
+  bad([](auto& f) {
+    PackedAps2(f, true); f.file[0x4a5] = 0xa0; // first offset 0x620, first relocation 0x624 duplicates REL.
+  }, "duplicate relocation");
+  bad([](auto& f) {
+    PackedAps2(f, true); f.Tag(0x60000010, 12);
+  }, "trailing Android APS2 relocation data");
+  bad([](auto& f) {
+    PackedAps2(f, true); f.file[0x4aa] = 0x7f;
+  }, "truncated Android APS2 group info");
+  bad([](auto& f) { f.Tag(0x60000011, 0x400); }, "ELF32 Android packed RELA");
+
   bad([](auto& f) { f.Tag(0x6ffffff0, 0x400); }, "versioned");
   bad([](auto& f) { f.Tag(0x12345678, 0); }, "unsupported dynamic tag");
   bad([](auto& f) { f.Tag(30, 0x10); }, "dynamic flags");
