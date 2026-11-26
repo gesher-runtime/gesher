@@ -58,9 +58,12 @@ void Run(const char* fixture) {
   Check(opens == 1, "provider called exactly once");
   Check(program.LoadLibrary(soname, &error) && opens == 1,
         "idempotent already loaded dependency");
+  Value result;
+  Check(!program.CallExport(soname, "fixture_add",
+        {Value::Signed32(1), Value::Signed32(2)}, ValueKind::I32,
+        &result, &error), "cannot call library before its constructors");
   if (!program.Initialize(&error)) std::cerr << error << '\n';
 
-  Value result;
   Check(program.CallExport(soname, "fixture_add",
         {Value::Signed32(11), Value::Signed32(13)}, ValueKind::I32, &result, &error),
         "call exported code");
