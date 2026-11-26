@@ -5,6 +5,7 @@ import base64
 import gzip
 import hashlib
 import io
+import importlib.util
 import json
 import math
 from pathlib import Path
@@ -65,6 +66,13 @@ def campaign(raw: dict, summary: dict) -> None:
 def main() -> None:
     report = json.loads((ROOT / "docs/research/memrchr-word-search-2026-11-23.json").read_text())
     current = (ROOT / contracts.SOURCE).read_bytes()
+    spec = importlib.util.spec_from_file_location("scandir_source_policy",
+        ROOT / "tools/net-tcp-priority/test-selected-policy.py")
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    predecessor = policy.preceding_scandir_source(current)
+    check(contracts.production(current.decode()) == contracts.production(predecessor.decode()),
+          "measured Memrchr component unchanged by exact directory transition")
     # Whole-translation-unit receipts remain attached to their immutable original
     # source. Later procfs/FIFO changes are protected by the exact current source
     # qualification; this archived campaign establishes only the same search code.

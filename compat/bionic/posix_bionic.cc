@@ -234,6 +234,56 @@ using SysvDirCompare = int(BIONIC_SYSV*)(const BionicDirent**, const BionicDiren
 int BIONIC_SYSV Alphasort(const BionicDirent** a, const BionicDirent** b) {
   return std::strcmp((*a)->d_name, (*b)->d_name);
 }
+bool MergeDirectoryEntries(BionicDirent** entries, size_t count, SysvDirCompare compare) {
+  // Optional pointer scratch never changes the C API's allocation-failure
+  // contract. Keep the comparator's errno even when this allocation fails.
+  const int saved_errno = errno;
+  auto** scratch = static_cast<BionicDirent**>(std::malloc(count * sizeof(*entries)));
+  errno = saved_errno;
+  if (scratch == nullptr) return false;
+  BionicDirent** from = entries;
+  BionicDirent** to = scratch;
+  // count is bounded by INT_MAX in ScanDirectory; all width/index arithmetic
+  // and the pointer allocation therefore fit the shim's LP64 size_t.
+  for (size_t width = 1; width < count; width *= 2) {
+    for (size_t begin = 0; begin < count; begin += width * 2) {
+      const size_t middle = count - begin < width ? count : begin + width;
+      const size_t end = count - middle < width ? count : middle + width;
+      size_t left = begin, right = middle;
+      for (size_t out = begin; out < end; ++out) {
+        if (left == middle) to[out] = from[right++];
+        else if (right == end) to[out] = from[left++];
+        else {
+          const BionicDirent* x = from[left];
+          const BionicDirent* y = from[right];
+          to[out] = compare(&x, &y) <= 0 ? from[left++] : from[right++];
+        }
+      }
+    }
+    std::swap(from, to);
+  }
+  if (from != entries) std::memcpy(entries, from, count * sizeof(*entries));
+  std::free(scratch);
+  return true;
+}
+void SortLongDirectory(BionicDirent** entries, size_t count, SysvDirCompare compare) {
+  // Already/nearly sorted directories retain insertion sort and allocate no
+  // scratch. Bound its work before a stable merge on a disordered directory.
+  size_t remaining_swaps = count * 8;
+  for (size_t i = 1; i < count; ++i) {
+    for (size_t j = i; j > 0; --j) {
+      const BionicDirent* x = entries[j - 1];
+      const BionicDirent* y = entries[j];
+      if (compare(&x, &y) <= 0) break;
+      std::swap(entries[j - 1], entries[j]);
+      if (--remaining_swaps == 0) {
+        if (MergeDirectoryEntries(entries, count, compare)) return;
+        // One failed optional allocation resumes the original stable sort.
+        remaining_swaps = SIZE_MAX;
+      }
+    }
+  }
+}
 int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
                   SysvDirCompare compare) {
   if (d == nullptr) return -1;
@@ -283,7 +333,9 @@ int ScanDirectory(ShimDir* d, BionicDirent*** list, SysvFilter filter,
     errno = error;
     return -1;  // Leave the caller's output untouched and free the prefix.
   }
-  if (compare != nullptr) {
+  if (compare != nullptr && count >= 128) {
+    SortLongDirectory(entries, count, compare);
+  } else if (compare != nullptr) {
     // Insertion sort through the System V comparator (lists are short).
     for (size_t i = 1; i < count; ++i) {
       for (size_t j = i; j > 0; --j) {

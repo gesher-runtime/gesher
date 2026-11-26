@@ -67,6 +67,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "socket_control_test.inc"
 #include "socket_timeout_contract_test.inc"
 #include "directory_contract_test.inc"
+#include "scandir_sort_contract_test.inc"
 #include "semaphore_contract_test.inc"
 #include "file_allocation_contract_test.inc"
 #include "positioned_io_contract_test.inc"
@@ -987,6 +988,7 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_socket_control_contracts();
   test_socket_timeout_contracts();
   test_directory_contracts();
+  test_scandir_sort_contracts();
   test_semaphore_contracts();
   test_file_allocation_contracts();
   test_positioned_io_contracts();

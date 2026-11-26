@@ -780,6 +780,45 @@ def preceding_storage_policy_sources():
    assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
  return baseline
 
+# Reverse only the reviewed adaptive stable-directory sort before the exact
+# Memrchr transition and all original OFD checks. It grants no supplier,
+# controller or runtime approval and admits no other POSIX source change.
+SCANDIR_BASE = '5894cea6c2bc35d1ae316f8bb401181689a85424'
+SCANDIR_SOURCE = 'compat/bionic/posix_bionic.cc'
+SCANDIR_TRANSITION_SHA256 = '30447f7968242481142d2b4ac7cabff7231560210c1be8a5fd67393cef1b8758'
+def preceding_scandir_source(current):
+ folder=ROOT/'tools/net-tcp-priority/qualified'
+ raw=(folder/'scandir-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==SCANDIR_TRANSITION_SHA256,'scandir source transition changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'baseline','baseline_policy_sha256','paths','before_sha256',
+                         'after_sha256','patch_sha256'},'scandir transition schema changed'
+ assert transition['baseline']==SCANDIR_BASE,'scandir baseline changed'
+ paths=[SCANDIR_SOURCE]
+ assert transition['paths']==paths,'scandir transition paths changed'
+ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==paths,'scandir endpoint paths changed'
+ policy=subprocess.check_output(['git','-C',str(ROOT),'show',SCANDIR_BASE+':tools/net-tcp-priority/test-selected-policy.py'])
+ assert hashlib.sha256(policy).hexdigest()==transition['baseline_policy_sha256'],'scandir baseline policy changed'
+ patch=(folder/'scandir-source.patch').read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'scandir transition patch changed'
+ assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+     ('diff --git a/'+SCANDIR_SOURCE+' b/'+SCANDIR_SOURCE).encode()],'scandir patch paths changed'
+ assert hashlib.sha256(current).hexdigest()==transition['after_sha256'][SCANDIR_SOURCE],SCANDIR_SOURCE
+ baseline=subprocess.check_output(['git','-C',str(ROOT),'show',SCANDIR_BASE+':'+SCANDIR_SOURCE])
+ assert hashlib.sha256(baseline).hexdigest()==transition['before_sha256'][SCANDIR_SOURCE],SCANDIR_SOURCE
+ assert current!=baseline,'empty scandir transition'
+ with tempfile.TemporaryDirectory(prefix='gesher-scandir-qualification-') as temporary:
+  work=Path(temporary)
+  (work/SCANDIR_SOURCE).parent.mkdir(parents=True)
+  (work/SCANDIR_SOURCE).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/SCANDIR_SOURCE).read_bytes()==baseline,'scandir reverse endpoint'
+  subprocess.run(['git','apply','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert (work/SCANDIR_SOURCE).read_bytes()==current,'scandir forward endpoint'
+ return baseline
+
 # Reverse only the reviewed bounded memrchr word-search delta to the exact
 # public main source before the unchanged OFD digest is checked. This admits
 # no other POSIX byte and grants no supplier, controller or runtime approval.
@@ -803,7 +842,7 @@ def preceding_memrchr_source(qualification):
  assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'memrchr transition patch changed'
  assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
      ('diff --git a/'+MEMRCHR_SOURCE+' b/'+MEMRCHR_SOURCE).encode()],'memrchr patch paths changed'
- current=(ROOT/MEMRCHR_SOURCE).read_bytes()
+ current=preceding_scandir_source((ROOT/MEMRCHR_SOURCE).read_bytes())
  assert hashlib.sha256(current).hexdigest()==transition['after_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
  baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MEMRCHR_BASE+':'+MEMRCHR_SOURCE])
  assert hashlib.sha256(baseline).hexdigest()==transition['before_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
@@ -1583,3 +1622,4 @@ if __name__=='__main__':
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-tsf-metadata-policy.py'),run_name='__main__')
+  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
