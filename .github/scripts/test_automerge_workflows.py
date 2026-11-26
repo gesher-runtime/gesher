@@ -39,10 +39,85 @@ class QueueWorkflows(unittest.TestCase):
         self.assertEqual(set(gate['needs']), set(jobs) - {'ci-required'})
         self.assertEqual(gate['if'], 'always()')
         body = gate['steps'][0]['run'].split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
-        for result in ['success', 'failure', 'cancelled', 'skipped']:
-            env = dict(os.environ, JOB_RESULTS=json.dumps({'producer': {'result': result}}))
-            run = subprocess.run([sys.executable, '-c', body], env=env, capture_output=True)
-            self.assertEqual(run.returncode == 0, result == 'success')
+        self.assertIn('test-shards', gate['needs'])
+        self.assertNotIn('test', jobs)
+        for ref, identity, shard, allowed in (
+            ('branch', 'skipped', 'success', True),
+            ('branch', 'failure', 'success', False),
+            ('branch', 'cancelled', 'success', False),
+            ('branch', 'skipped', 'failure', False),
+            ('branch', 'skipped', 'cancelled', False),
+            ('branch', 'skipped', 'skipped', False),
+            ('branch', None, 'success', False),
+            ('tag', 'success', 'success', True),
+            ('tag', 'failure', 'success', False),
+            ('tag', 'cancelled', 'success', False),
+            ('tag', 'skipped', 'success', False),
+            (None, 'skipped', 'success', False),
+        ):
+            with self.subTest(ref=ref, identity=identity, shard=shard):
+                results = {'test-shards': {'result': shard}}
+                if identity is not None:
+                    results['source-identity'] = {'result': identity}
+                env = dict(os.environ, JOB_RESULTS=json.dumps(results))
+                env.pop('GITHUB_REF_TYPE', None)
+                if ref is not None:
+                    env['GITHUB_REF_TYPE'] = ref
+                run = subprocess.run([sys.executable, '-c', body], env=env, capture_output=True)
+                self.assertEqual(run.returncode == 0, allowed)
+
+    def test_tag_validation_schedules_builds_and_branch_skip_preserves_dependencies(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
+        graph = {name: {'needs': job.get('needs', []), 'condition': job['if']}
+                 for name, job in doc['jobs'].items()}
+        # Simulate resolved direct dependencies using the checked-in conditions.
+        # The condition explicitly handles the skipped source ancestor in CI.
+        script = r"""
+          const graph = JSON.parse(process.env.CI_JOB_GRAPH);
+          const cases = JSON.parse(process.env.CI_JOB_CASES);
+          const contains = (values, value) => values.includes(value);
+          const always = () => true;
+          const schedules = ({event, ref, forced, cancelled}) => {
+            const github = {event_name: event, ref_type: ref};
+            const results = {}, scheduled = {};
+            function visit(name) {
+              if (name in results) return results[name];
+              const job = graph[name];
+              const needs = Object.fromEntries(job.needs.map(id => [id, {result: visit(id)}]));
+              const expression = job.condition.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, '')
+                .replaceAll('needs.*.result', 'Object.values(needs).map(n => n.result)')
+                .replace(/needs\.([a-z0-9-]+)/g, (_, id) => 'needs[' + JSON.stringify(id) + ']');
+              scheduled[name] = Function('github', 'needs', 'always', 'cancelled', 'contains',
+                'return ' + expression)(github, needs, always, () => cancelled, contains);
+              results[name] = forced[name] || (scheduled[name] ? 'success' : 'skipped');
+              return results[name];
+            }
+            Object.keys(graph).forEach(visit);
+            return Object.keys(graph).filter(name => scheduled[name]);
+          };
+          console.log(JSON.stringify(cases.map(schedules)));
+        """
+        def case(event, ref, forced=None, cancelled=False):
+            return dict(event=event, ref=ref, forced=forced or {}, cancelled=cancelled)
+
+        cases = [case('pull_request', 'branch'), case('push', 'branch'),
+                 case('workflow_dispatch', 'branch'), case('push', 'tag'),
+                 case('push', 'tag', {'source-identity': 'failure'}),
+                 case('push', 'tag', {'source-identity': 'skipped'}),
+                 case('push', 'tag', {'source-identity': 'cancelled'}, True),
+                 case('pull_request', 'branch', {'framework': 'failure'}),
+                 case('pull_request', 'branch', {'package': 'failure'})]
+        actual = json.loads(subprocess.check_output(['node', '-e', script], env=dict(
+            os.environ, CI_JOB_GRAPH=json.dumps(graph), CI_JOB_CASES=json.dumps(cases))))
+        ordinary = [name for name in graph if name != 'source-identity']
+        self.assertEqual(actual[:3], [ordinary] * 3)
+        self.assertEqual(actual[3], list(graph))
+        self.assertEqual(actual[4:7], [['source-identity', 'ci-required']] * 3)
+        self.assertIn('native-libs', actual[7])
+        for job in ('webview', 'boot-image', 'media', 'package', 'e2e', 'core-suppliers', 'test-shards'):
+            self.assertNotIn(job, actual[7])
+        self.assertIn('e2e', actual[8])
+
 
     def test_arm64_required_verifies_source_and_builds_on_the_same_runner(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/arm64-windows.yml').read_text(encoding='utf-8'))

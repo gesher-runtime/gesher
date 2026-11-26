@@ -30,10 +30,10 @@ env:
 
 jobs:
   source-identity:
+    # Branch jobs obtain identity directly from GitHub. Only tags need a runner
+    # at this point, before any builds start.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
-    outputs:
-      source: ${{ github.sha }}
-      policy_ref: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
     steps:
       - run: echo "SOURCE_IDENTITY source=${{ github.sha }}"
       # The tag filter's * also matches e.g. v1.2.3-rc1. Stop such a run here,
@@ -54,6 +54,10 @@ jobs:
           [ "${BASH_REMATCH[1]}" -gt 0 ] || [ "${BASH_REMATCH[2]}" -ge 2 ] ||
             { echo "::error::Release $TAG must be at least v0.2.0 (earlier CI builds used 0.1.<run number>)"; exit 1; }
   automerge-script:
+    needs: [source-identity]
+    if: &source_ready >-
+      ${{ !cancelled() && (needs.source-identity.result == 'success' ||
+          (github.ref_type == 'branch' && needs.source-identity.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -86,6 +90,7 @@ jobs:
   network-cost-client:
     name: Windows client network cost
     needs: [source-identity]
+    if: *source_ready
     runs-on: windows-11-arm
     timeout-minutes: 10
     steps:
@@ -123,6 +128,7 @@ jobs:
   # does not hide another.
   windows-host-contracts:
     needs: [source-identity]
+    if: *source_ready
     strategy:
       fail-fast: false
       matrix:
@@ -429,6 +435,7 @@ jobs:
         run: python tools/ci/run_api37_report_tests.py --profile windows
   api37-report-tests:
     needs: [source-identity]
+    if: *source_ready
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -454,17 +461,21 @@ jobs:
         run: python tools/ci/run_api37_report_tests.py --profile linux
   union-tsf:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/tsf-format-component.yml
   union-services:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/services-geocoder-worker-component.yml
   union-native-blocking:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/native3-locks-blocking.yml
   # Host-only contract tests. Builds no longer wait for them: they run
   # alongside the build jobs and ci-required still requires them to pass.
   artifact-preflight:
     needs: [source-identity]
+    if: *source_ready
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -821,6 +832,7 @@ jobs:
 
   build-framework-assets:
     needs: [source-identity]
+    if: *source_ready
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -865,18 +877,14 @@ jobs:
           java-version: 21
 
       - name: Build test apps
-        # The framework resources use the same pinned build-tools below.
         env:
           R8_JAR: ${{ runner.temp }}/gesher-r8.jar
-        run: BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/build-test-apps.sh out/test-apps
+        run: tests/build-test-apps.sh out/test-apps
 
       - name: Build boot class path (core-oj, core-libart)
         env:
           R8_JAR: ${{ runner.temp }}/gesher-r8.jar
         run: tools/build-boot-jars.sh out/boot-jars
-
-      - name: Build the framework's resources (framework-res.apk)
-        run: WORK_DIR="$PWD/work" tools/build-framework-res.sh out/framework-res
 
       - name: Collect framework assets
         run: |
@@ -901,12 +909,13 @@ jobs:
   # real Windows runners.
   build:
     needs: [source-identity]
+    if: *source_ready
     runs-on: ubuntu-24.04
     env:
       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
       GESHER_HOST_PTHREAD_CALLER: ${{ github.ref == 'refs/heads/wip/coherent-selected-tcp' && 'coherent-selected-full/build' || 'ci/build' }}
-      GESHER_COHERENT_FULL_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
-      GESHER_COHERENT_FULL_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
+      GESHER_COHERENT_FULL_AUTHORIZED_SOURCE: ${{ github.sha }}
+      GESHER_COHERENT_FULL_POLICY_REF: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -1167,6 +1176,7 @@ jobs:
 
   native3-locks-reference:
     needs: [source-identity]
+    if: *source_ready
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -1181,6 +1191,11 @@ jobs:
 
   native3-locks-regression:
     needs: [build, native3-locks-reference]
+    # The branch-only skip is an ancestor via build. Require direct suppliers
+    # explicitly so the implicit success() does not inspect that ancestor.
+    if: &suppliers_ready >-
+      ${{ !cancelled() && !contains(needs.*.result, 'failure') &&
+          !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -1233,6 +1248,7 @@ jobs:
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
     needs: [source-identity]
+    if: *source_ready
     # A local call runs the framework.yml of the commit under test, so a
     # framework.yml change takes effect in the same PR. Hosted build runners;
     # see docs/self-hosted-ci.md before routing it to the restricted group.
@@ -1244,24 +1260,28 @@ jobs:
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
   native-libs:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/native-libs.yml
 
   # The Bluetooth backend's probe (docs/bluetooth.md): built on the Linux
   # runner, run against Windows' real APIs (no radio) and the test radio.
   bluetooth:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/bluetooth.yml
 
   # Android ELF executables run as processes (docs/exec.md): the NDK test
   # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
   exec:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/exec.yml
 
   # The core libraries' own unit tests (AOSP's cc_test modules), built for
   # the test job: .github/workflows/libs.yml.
   libs:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/libs.yml
 
   # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
@@ -1269,30 +1289,35 @@ jobs:
   # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
   arm64:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/arm64.yml
 
   # The native2 track's NDK test programs (shim extras, platform dlopen,
   # popular NDK libraries' self-tests): .github/workflows/native2.yml.
   native2:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/native2.yml
 
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/posix.yml
 
   # Skia, hwui and the graphics probes (docs/graphics.md):
   # .github/workflows/graphics.yml, which also runs on its own.
   graphics:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/graphics.yml
 
   # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
   # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
   angle:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/angle.yml
 
   # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
@@ -1300,6 +1325,7 @@ jobs:
   # .github/workflows/webview.yml, which also runs on its own.
   webview:
     needs: [framework]
+    if: *suppliers_ready
     uses: ./.github/workflows/webview.yml
     with:
       apk: true
@@ -1308,23 +1334,27 @@ jobs:
   # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
   boot-image:
     needs: [build, framework]
+    if: *suppliers_ready
     uses: ./.github/workflows/boot-image.yml
 
   # Media (docs/media.md): the media track's test apps, built against this
   # run's framework classes: .github/workflows/media.yml.
   media:
     needs: [framework]
+    if: *suppliers_ready
     uses: ./.github/workflows/media.yml
 
   # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
   # .github/workflows/surfaces.yml.
   surfaces:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/surfaces.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
     needs: [source-identity]
+    if: *source_ready
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -1361,6 +1391,7 @@ jobs:
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
     needs: [build, framework, graphics, angle, boot-image, media, arm64]
+    if: *suppliers_ready
     runs-on: windows-2022
     env:
       GH_TOKEN: ${{ github.token }}
@@ -1440,8 +1471,10 @@ jobs:
             installer/SHA256SUMS.txt
 
       - name: Install, run Hello, uninstall
+        timeout-minutes: 30
         shell: pwsh
         run: |
+          . "$PWD/tests/windows/shell/RunPackageLauncher.ps1"
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           # Every run of the installed Gesher below must load the installed boot
           # image (docs/boot-image.md): without it the runtime fails instead of
@@ -1608,19 +1641,13 @@ jobs:
           # The shortcut's command line, as the Start menu starts it (its output
           # passed on by gesher-launch).
           $psi = [Diagnostics.ProcessStartInfo]::new($link.TargetPath, $link.Arguments)
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
           $psi.WorkingDirectory = $link.WorkingDirectory
-          $p = [Diagnostics.Process]::Start($psi)
-          $errors = $p.StandardError.ReadToEndAsync()
-          $out = $p.StandardOutput.ReadToEnd()
-          $p.WaitForExit()
-          $out += $errors.Result
+          $launch = Invoke-PackageLauncher $psi 'Start menu shortcut'
+          $out = $launch.Output
           Write-Host (($out -split "`n" | Select-Object -Last 8) -join "`n")
-          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'launching the installed package com\.gesher\.lifecycle' -or
+          if ($launch.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'launching the installed package com\.gesher\.lifecycle' -or
               $out -notmatch 'LifecycleActivity onResume') {
-            throw "The shortcut's command line did not run lifecycle.apk (exit $($p.ExitCode))"
+            throw "The shortcut's command line did not run lifecycle.apk (exit $($launch.ExitCode))"
           }
           'PASS  installer: the Start menu shortcut''s command line runs the installed app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # An adaptive icon (components.apk: a WebP foreground over a color).
@@ -1677,18 +1704,12 @@ jobs:
           # The URL protocol's command line, as Windows runs it (%1: the URL), for a package
           # that is not installed: gesher-app view gets the package and the whole URL.
           $psi = [Diagnostics.ProcessStartInfo]::new("$app\gesher-launch.exe", 'view com.gesher.notinstalled "gesher-components://callback?code=1&state=2"')
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
           $psi.WorkingDirectory = $app
-          $p = [Diagnostics.Process]::Start($psi)
-          $errors = $p.StandardError.ReadToEndAsync()
-          $out = $p.StandardOutput.ReadToEnd()
-          $p.WaitForExit()
-          $out += $errors.Result
-          if ($p.ExitCode -ne 1 -or $out -notmatch 'com\.gesher\.notinstalled is not installed: gesher-components://callback\?code=1&state=2 goes nowhere') {
+          $launch = Invoke-PackageLauncher $psi 'Uninstalled package URL protocol'
+          $out = $launch.Output
+          if ($launch.ExitCode -ne 1 -or $out -notmatch 'com\.gesher\.notinstalled is not installed: gesher-components://callback\?code=1&state=2 goes nowhere') {
             Write-Host $out
-            throw "gesher-launch view of a package that is not installed (exit $($p.ExitCode))"
+            throw "gesher-launch view of a package that is not installed (exit $($launch.ExitCode))"
           }
           'PASS  installer: a URL protocol''s command line (gesher-launch view PACKAGE "%1") hands gesher-app the package and the whole URL' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # An APK Gesher never installed (gesher-app apk-icon, what the .apk icon handler
@@ -1736,17 +1757,11 @@ jobs:
           Write-Host "Gesher.Apk open command: $open"
           if ($open -notmatch '^"([^"]+)"\s*(.*)$' -or $Matches[1] -ne "$app\gesher-launch.exe") { throw "Gesher.Apk's open command does not start gesher-launch.exe: $open" }
           $psi = [Diagnostics.ProcessStartInfo]::new($Matches[1], $Matches[2].Replace('%1', "$app\lifecycle.apk"))
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $p = [Diagnostics.Process]::Start($psi)
-          $errors = $p.StandardError.ReadToEndAsync()
-          $out = $p.StandardOutput.ReadToEnd()
-          $p.WaitForExit()
-          $out += $errors.Result
+          $launch = Invoke-PackageLauncher $psi 'Registered APK open command'
+          $out = $launch.Output
           Write-Host (($out -split "`n" | Select-Object -Last 5) -join "`n")
-          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device') {
-            throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
+          if ($launch.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device') {
+            throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($launch.ExitCode))"
           }
           'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $bundleExtensions = '.apks', '.xapk', '.apkm', '.apk+'
@@ -1766,13 +1781,9 @@ jobs:
               $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$app\lifecycle.apk", 'base.apk')
             } finally { $archive.Dispose() }
             $psi.Arguments = '"{0}"' -f $bundle
-            $p = [Diagnostics.Process]::Start($psi)
-            $errors = $p.StandardError.ReadToEndAsync()
-            $out = $p.StandardOutput.ReadToEnd()
-            $p.WaitForExit()
-            $out += $errors.Result
-            if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
-              throw "$ext open command failed (exit $($p.ExitCode)): $out"
+            $launch = Invoke-PackageLauncher $psi "$ext open command"
+            if ($launch.ExitCode -ne 0 -or $launch.Output -notmatch 'gesher-app: done') {
+              throw "$ext open command failed (exit $($launch.ExitCode)): $($launch.Output)"
             }
           }
           'PASS  installer: split bundle associations and registered APKM/APK+ open commands' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1903,58 +1914,58 @@ jobs:
           }
           $problems = @()
           $psi = [Diagnostics.ProcessStartInfo]::new("$app\gesher-launch.exe", "install `"$uiapp`"")
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $p = [Diagnostics.Process]::Start($psi)
-          $errors = $p.StandardError.ReadToEndAsync()
-          $outs = $p.StandardOutput.ReadToEndAsync()
-          $sawSplash = $false
-          while (-not $p.WaitForExit(100)) { if ([GesherSplashCi]::Find('GesherSplash', [uint32]$p.Id).Count -gt 0) { $sawSplash = $true } }
-          $p.WaitForExit()
-          if ($p.ExitCode -ne 0) { $problems += "gesher-launch install exit $($p.ExitCode): $($outs.Result)$($errors.Result)" }
-          if ($sawSplash) { $problems += 'gesher-launch install showed a splash' }
-          $psi = [Diagnostics.ProcessStartInfo]::new("$app\gesher-launch.exe", 'launch com.gesher.uiapp')
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $psi.EnvironmentVariables['GESHER_APP_WINDOW'] = 'window'
-          $p = [Diagnostics.Process]::Start($psi)
-          $errors = $p.StandardError.ReadToEndAsync()
-          $outs = $p.StandardOutput.ReadToEndAsync()
-          $splash = [IntPtr]::Zero; $appWindow = [IntPtr]::Zero; $splashGone = $false
-          $deadline = (Get-Date).AddSeconds(400)
-          while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
-            if ($splash -eq [IntPtr]::Zero) {
-              $s = @([GesherSplashCi]::Find('GesherSplash', [uint32]$p.Id))
-              if ($s.Count -gt 0) {
-                $splash = $s[0]
-                Write-Host "splash: title '$([GesherWin32]::Title($splash))', AppUserModelID '$([GesherWin32]::AppUserModelId($splash))', icon: $([GesherWin32]::HasIcon($splash))"
-                if ([GesherWin32]::AppUserModelId($splash) -ne 'Gesher.App.com.gesher.uiapp') { $problems += "the splash's AppUserModelID is '$([GesherWin32]::AppUserModelId($splash))'" }
-                if ([GesherWin32]::Title($splash) -ne 'Gesher UI') { $problems += "the splash's title is '$([GesherWin32]::Title($splash))', not the app's label" }
-                if (-not [GesherWin32]::HasIcon($splash)) { $problems += 'the splash has no icon' }
-              }
+          $installProbe = Invoke-PackageLauncher $psi 'gesher-launch splash install check' -Observe {
+            param($p)
+            $sawSplash = $false
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            while (-not $p.WaitForExit(100)) {
+              if ($clock.Elapsed.TotalSeconds -ge 120) { throw 'gesher-launch splash install check did not exit within 120s' }
+              if ([GesherSplashCi]::Find('GesherSplash', [uint32]$p.Id).Count -gt 0) { $sawSplash = $true }
             }
-            $w = @([GesherSplashCi]::Find('GesherWindow', 0) | Where-Object { [GesherWin32]::AppUserModelId($_) -eq 'Gesher.App.com.gesher.uiapp' })
-            if ($w.Count -gt 0) {
-              $appWindow = $w[0]
-              # The splash looks every 200 ms.
-              for ($i = 0; $i -lt 50 -and -not $splashGone; $i++) {
-                $splashGone = $splash -ne [IntPtr]::Zero -and -not [GesherWin32]::IsWindow($splash)
-                if (-not $splashGone) { Start-Sleep -Milliseconds 100 }
-              }
-              break
-            }
-            Start-Sleep -Milliseconds 100
+            $sawSplash
           }
-          if ($splash -eq [IntPtr]::Zero) { $problems += 'no splash window' }
-          if ($appWindow -eq [IntPtr]::Zero) { $problems += 'the app''s window was not shown' }
-          elseif (-not $splashGone) { $problems += 'the splash was still up 5 s after the app''s window was shown' }
-          if ($appWindow -ne [IntPtr]::Zero) { [void][GesherWin32]::PostMessageW($appWindow, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }  # WM_CLOSE
-          if (-not $p.WaitForExit(120000)) { $p.Kill($true); $problems += 'gesher-launch did not end after the app''s window was closed' }
-          elseif ($p.ExitCode -ne 0) { $problems += "gesher-launch launch exit $($p.ExitCode)" }
+          if ($installProbe.ExitCode -ne 0) { $problems += "gesher-launch install exit $($installProbe.ExitCode): $($installProbe.Output)" }
+          if ($installProbe.Observation[0]) { $problems += 'gesher-launch install showed a splash' }
+          $psi = [Diagnostics.ProcessStartInfo]::new("$app\gesher-launch.exe", 'launch com.gesher.uiapp')
+          $psi.EnvironmentVariables['GESHER_APP_WINDOW'] = 'window'
+          $launchProbe = Invoke-PackageLauncher $psi 'gesher-launch splash close check' -Observe {
+            param($p)
+            $splashProblems = @()
+            $splash = [IntPtr]::Zero; $appWindow = [IntPtr]::Zero; $splashGone = $false
+            $deadline = (Get-Date).AddSeconds(400)
+            while ((Get-Date) -lt $deadline -and -not $p.HasExited) {
+              if ($splash -eq [IntPtr]::Zero) {
+                $s = @([GesherSplashCi]::Find('GesherSplash', [uint32]$p.Id))
+                if ($s.Count -gt 0) {
+                  $splash = $s[0]
+                  Write-Host "splash: title '$([GesherWin32]::Title($splash))', AppUserModelID '$([GesherWin32]::AppUserModelId($splash))', icon: $([GesherWin32]::HasIcon($splash))"
+                  if ([GesherWin32]::AppUserModelId($splash) -ne 'Gesher.App.com.gesher.uiapp') { $splashProblems += "the splash's AppUserModelID is '$([GesherWin32]::AppUserModelId($splash))'" }
+                  if ([GesherWin32]::Title($splash) -ne 'Gesher UI') { $splashProblems += "the splash's title is '$([GesherWin32]::Title($splash))', not the app's label" }
+                  if (-not [GesherWin32]::HasIcon($splash)) { $splashProblems += 'the splash has no icon' }
+                }
+              }
+              $w = @([GesherSplashCi]::Find('GesherWindow', 0) | Where-Object { [GesherWin32]::AppUserModelId($_) -eq 'Gesher.App.com.gesher.uiapp' })
+              if ($w.Count -gt 0) {
+                $appWindow = $w[0]
+                # The splash looks every 200 ms.
+                for ($i = 0; $i -lt 50 -and -not $splashGone; $i++) {
+                  $splashGone = $splash -ne [IntPtr]::Zero -and -not [GesherWin32]::IsWindow($splash)
+                  if (-not $splashGone) { Start-Sleep -Milliseconds 100 }
+                }
+                break
+              }
+              Start-Sleep -Milliseconds 100
+            }
+            if ($splash -eq [IntPtr]::Zero) { $splashProblems += 'no splash window' }
+            if ($appWindow -eq [IntPtr]::Zero) { $splashProblems += 'the app''s window was not shown' }
+            elseif (-not $splashGone) { $splashProblems += 'the splash was still up 5 s after the app''s window was shown' }
+            if ($appWindow -ne [IntPtr]::Zero) { [void][GesherWin32]::PostMessageW($appWindow, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }  # WM_CLOSE
+            $splashProblems
+          }
+          $problems += $launchProbe.Observation
+          if ($launchProbe.ExitCode -ne 0) { $problems += "gesher-launch launch exit $($launchProbe.ExitCode)" }
           if ($problems) {
-            Write-Host "$($outs.Result)$($errors.Result)"
+            Write-Host $launchProbe.Output
             throw "gesher-launch's splash: $($problems -join '; ')"
           }
           'PASS  installer: gesher-launch launch com.gesher.uiapp shows a splash (GesherSplash: the app''s label, icon and AppUserModelID) until the app''s window is up; gesher-launch install shows none' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -2238,6 +2249,7 @@ jobs:
   # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
   core-suppliers:
     needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    if: *suppliers_ready
     runs-on: ubuntu-24.04
     # Room for a reachable wait on the shared hourly API quota.
     timeout-minutes: 90
@@ -2264,6 +2276,7 @@ jobs:
   test-shards:
     name: test-${{ matrix.shard }} (${{ matrix.os }})
     needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    if: *suppliers_ready
     strategy:
       fail-fast: false
       matrix:
@@ -2526,25 +2539,11 @@ jobs:
             ${{ runner.temp }}/clipboard-foreground-*/*.json
           if-no-files-found: error
 
-  test:
-    name: test (${{ matrix.os }})
-    needs: [test-shards]
-    if: always()
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Require every Windows test shard to pass
-        env:
-          SHARD_RESULT: ${{ needs.test-shards.result }}
-        run: test "$SHARD_RESULT" = success
-
   # Extra isolated jobs execute the real regression in the SAME canonical
   # full. Only these jobs download the separately named hook artifact.
   web3-query-regression:
     needs: [build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
+    if: *suppliers_ready
     strategy:
       fail-fast: false
       matrix:
@@ -2606,10 +2605,12 @@ jobs:
   # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
   binder2-sg-fixtures:
     needs: [source-identity]
+    if: *source_ready
     uses: ./.github/workflows/binder2-sg-full-fixtures.yml
 
   binder2-sg-regression:
     needs: [build, framework, arm64, boot-image, binder2-sg-fixtures]
+    if: *suppliers_ready
     strategy:
       fail-fast: false
       matrix:
@@ -2668,6 +2669,7 @@ jobs:
   # Current selected TCP role; historical canonical red remains separately preserved.
   compile:
     needs: [source-identity]
+    if: *source_ready
     name: compile-${{ matrix.supplier }}
     strategy:
       fail-fast: false
@@ -2677,8 +2679,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
-      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
-      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ github.sha }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
       DYNARMIC_COMMIT: 9d4582339990d4eae53f1dc7160686920fc2075c
       FMT_VERSION: "11.0.2"
       BOOST_VERSION: "1.83.0"
@@ -2813,11 +2815,12 @@ jobs:
           retention-days: 14
   linux-reference:
     needs: [source-identity]
+    if: *source_ready
     env:
       GH_TOKEN: ${{ github.token }}
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
-      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
-      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ github.sha }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -2837,7 +2840,8 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
           timeout 20 /tmp/tcp-priority-reference
   supplier-correlation:
-    needs: [source-identity, build, compile]
+    needs: [build, compile]
+    if: *suppliers_ready
     runs-on: ubuntu-24.04
     # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
     # published hourly reset instead of failing the job.
@@ -2846,8 +2850,8 @@ jobs:
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
       TCP_SUPPLIER_ROLE: selected-minimum
-      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
-      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ github.sha }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -2874,7 +2878,8 @@ jobs:
           if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
           python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
   windows:
-    needs: [source-identity, compile, linux-reference, supplier-correlation]
+    needs: [compile, linux-reference, supplier-correlation]
+    if: *suppliers_ready
     strategy:
       fail-fast: false
       matrix:
@@ -2886,8 +2891,8 @@ jobs:
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
       GH_TOKEN: ${{ github.token }}
       TCP_SUPPLIER_ROLE: ${{ matrix.supplier }}
-      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ needs.source-identity.outputs.source }}
-      GESHER_COHERENT_TCP_POLICY_REF: ${{ needs.source-identity.outputs.policy_ref }}
+      GESHER_COHERENT_TCP_AUTHORIZED_SOURCE: ${{ github.sha }}
+      GESHER_COHERENT_TCP_POLICY_REF: ${{ github.repository }}/.github/workflows/ci.yml@${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -2917,7 +2922,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job
@@ -2927,7 +2932,12 @@ jobs:
           python3 - <<'PY'
           import json, os
           results = json.loads(os.environ['JOB_RESULTS'])
+          ref_type = os.environ.get('GITHUB_REF_TYPE')
+          if ref_type not in ('branch', 'tag') or 'source-identity' not in results:
+              raise SystemExit('Missing required GitHub ref or source-identity result')
           failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
-          if not results or failed:
+          if ref_type == 'branch' and failed.get('source-identity') == 'skipped':
+              del failed['source-identity']
+          if failed:
               raise SystemExit(f"Required jobs did not succeed: {failed}")
           PY

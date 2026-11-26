@@ -3,12 +3,9 @@ Checks of one line of work each, run by `run-tests.ps1` in its own scope
 `$root` and `$bcp` from there. Keeping them apart lets branches add checks
 without touching each other's lines.
 
-CI runs four isolated shards on each of Windows 2022 and Windows 2025:
+CI runs seven isolated shards on each of Windows 2022 and Windows 2025:
 
-- `native`: core libraries, POSIX, native libraries, processes, ARM64 and native networking.
-- `desktop`: graphics, windows, input, WebView, surfaces, locale and process-helper controls.
-- `services`: media, device services, shell, framework and compatibility contracts.
-- `compilation`: boot images, AOT policies, profiles and shared libraries.
+- `native`, `desktop`, `windowing`, `services`, `contracts`, `media`, and `compilation`.
 
 `../test-shards.json` assigns every `.ps1` file in this directory to one owner.
 A new, missing or multiply assigned track fails preflight rather than silently
@@ -24,11 +21,10 @@ pwsh -NoProfile -File tests/windows/test-test-shards.ps1
 ```
 
 Without `-Shard`, the complete suite still runs in name order. The existing
-`-FrameworkContractsOnly` local mode also remains available. CI includes those
-contracts in the services shard, and preserves `test (windows-2022)` and
-`test (windows-2025)` as summary checks: neither can pass if any of the eight
-shards fails, is skipped or is cancelled. Each shard uploads its own results;
-`TRACK_START` and `TRACK_END` record durations for subsequent balancing.
+`-FrameworkContractsOnly` local mode also remains available. The required
+`ci-required` check waits for every Windows shard to succeed. Each shard uploads
+its own results. `TRACK_START` and `TRACK_END` record durations for subsequent
+balancing.
 
 ### Runtime file contracts
 

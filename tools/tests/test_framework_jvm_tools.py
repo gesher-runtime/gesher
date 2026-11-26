@@ -2,11 +2,13 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -117,6 +119,45 @@ class JvmToolsDownloadTest(unittest.TestCase):
             self.builder.jvm_tools()
         self.assertEqual(self.server.requests, ['/primary/javapoet'] * 4 + ['/alternate/javapoet'])
         self.assertEqual({item.name for item in self.cache.iterdir()}, {'kotlinc'})
+
+
+class R8PackagingTest(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.builder = BUILD.Builder(SimpleNamespace(
+            aosp=self.root / 'aosp', out=self.root / 'out', module='fixture',
+            java_home='/jdk', javac_memory='1g', sdk='36'))
+        self.builder.plan = SimpleNamespace(resources={})
+        self.r8 = self.root / 'shared-r8.jar'
+        self.commands = self.enterContext(mock.patch.object(BUILD, 'run'))
+
+    def test_packaging_uses_verified_shared_compiler(self):
+        payload = b'R8 fixture'
+        self.r8.write_bytes(payload)
+        self.builder.R8_SHA256 = hashlib.sha256(payload).hexdigest()
+        with mock.patch.dict(os.environ, {'R8_JAR': str(self.r8)}):
+            self.builder.package()
+        d8 = self.commands.call_args_list[0].args[0]
+        self.assertEqual(d8[:5], ['/jdk/bin/java', '-Xmx1g', '-cp', str(self.r8),
+                                 'com.android.tools.r8.D8'])
+        self.assertEqual(self.commands.call_count, 2)
+
+    def test_bad_shared_compiler_stops_before_fallback_or_d8(self):
+        with mock.patch.dict(os.environ, {'R8_JAR': str(self.r8)}):
+            with self.assertRaises(FileNotFoundError):
+                self.builder.package()
+            self.r8.write_bytes(b'incorrect compiler')
+            with self.assertRaisesRegex(RuntimeError, 'R8_JAR SHA-256 mismatch'):
+                self.builder.package()
+        self.commands.assert_not_called()
+
+    def test_default_compiler_download_still_works(self):
+        with mock.patch.dict(os.environ, {'R8_JAR': ''}):
+            self.builder.package()
+        expected = str(Path(self.builder.out) / 'r8-9.5.26.jar')
+        self.assertEqual(self.commands.call_args_list[0].args[0],
+                         ['curl', '-fsSL', '-o', expected, self.builder.R8])
+        self.assertEqual(self.commands.call_args_list[1].args[0][3], expected)
 
 
 if __name__ == '__main__':

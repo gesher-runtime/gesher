@@ -7,6 +7,10 @@ import time
 from github_read import GitHubReadError, GitHubTransientError, get_json
 
 
+# Remember only the supported page size for this process and exact endpoint.
+_PAGED_ENDPOINTS = set()
+
+
 class _InventoryChanged(GitHubReadError):
     pass
 
@@ -18,13 +22,21 @@ def get_jobs(endpoint):
     and so the repository's shared GITHUB_TOKEN quota. GitHub can return 502
     for a 100-row attempt inventory while both 50-row pages succeed, so an
     observed transient failure of that single request (not retried) falls back
-    to the 50-row pages. Paging changes transport size, never producer acceptance.
+    to the 50-row pages. After a successful fallback, later reads of that exact
+    endpoint in this process start at 50 rows and still read a fresh inventory.
     """
+    if endpoint not in _PAGED_ENDPOINTS:
+        try:
+            return _consistent_snapshot(endpoint, _single_page)
+        except GitHubTransientError:
+            print('CI_GITHUB_JOBS_FALLBACK per_page=50', file=sys.stderr, flush=True)
     try:
-        return _consistent_snapshot(endpoint, _single_page)
-    except GitHubTransientError:
-        print('CI_GITHUB_JOBS_FALLBACK per_page=50', file=sys.stderr, flush=True)
-    return _consistent_snapshot(endpoint, _paged_snapshot)
+        snapshot = _consistent_snapshot(endpoint, _paged_snapshot)
+    except GitHubReadError:
+        _PAGED_ENDPOINTS.discard(endpoint)
+        raise
+    _PAGED_ENDPOINTS.add(endpoint)
+    return snapshot
 
 
 def _consistent_snapshot(endpoint, read):
