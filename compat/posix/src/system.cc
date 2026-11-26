@@ -823,7 +823,9 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
 }
 
 ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+  if (offset < 0) return errno = EINVAL, -1;
   if (BadVector(fd, iovcnt)) return -1;
+  if (iovcnt == 0) return gesher::CheckEmptyPositionedVector(fd, offset, false);
   ssize_t total = 0;
   for (int i = 0; i < iovcnt; ++i) {
     ssize_t n = pread(fd, iov[i].iov_base, iov[i].iov_len, offset + total);
@@ -835,7 +837,9 @@ ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
 }
 
 ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+  if (offset < 0) return errno = EINVAL, -1;
   if (BadVector(fd, iovcnt)) return -1;
+  if (iovcnt == 0) return gesher::CheckEmptyPositionedVector(fd, offset, true);
   ssize_t total = 0;
   if (FileWriteVector(fd, iov, iovcnt, true, offset, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {

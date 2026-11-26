@@ -109,6 +109,11 @@ static int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const voi
   }
   return result;
 }
+static int CheckEmptyPositionedVector(int fd, int64_t offset, bool writing) {
+  iovec empty{};
+  return static_cast<int>(writing ? ::pwritev(fd, &empty, 0, offset)
+                                  : ::preadv(fd, &empty, 0, offset));
+}
 static int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count, int64_t offset) {
   return ::pwrite(static_cast<int>(snapshot->handle), bytes, count, offset);
 }
