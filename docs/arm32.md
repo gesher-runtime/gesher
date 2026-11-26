@@ -175,9 +175,43 @@ load alignment and cancellation of queued code-cache invalidation. These
 specific failures have regression tests. ASan/UBSan results do not include
 LeakSanitizer when leak detection is disabled in a ptrace-supervised environment.
 
-The later RELR, APS2, dependency-callback, linked-program, guest libc, JNIEnv32/JavaVM32 and JNI_OnLoad adapter additions have not yet been executed in a verified complete component test run. In particular, the new host C++ JNI bridge has not yet passed a local or CI full compilation/test cycle. The ELF32 guest test source was separately compiled with local Clang 17 and LLD for both ARM and Thumb; `readelf` confirmed actual libc imports, `DT_NEEDED` and cross-library symbol imports plus constructor/finalizer arrays. The pinned Zig guest compiler and Dynarmic executor were not available in that local environment. Clang 17 and LLD also compiled the JNI table-call fixture separately for ARM and Thumb: `readelf` verified ELF32 EM_ARM, EABI5 softfp, exported JNI methods and the Thumb-bit distinction. A subsequent fixture build verified an actual undefined `JNI_GetCreatedJavaVMs` import and its `R_ARM_JUMP_SLOT` PLT relocation in both modes, plus exported `JNI_OnLoad`/`JNI_OnUnload`. A local JDK verified the host JNI table slot offsets and CMake's ability to find JNI headers. These checks verify build inputs and fixture shapes only, not complete bridge execution. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
+The later RELR, APS2, dependency-callback, linked-program, guest libc, JNIEnv32/JavaVM32 and JNI_OnLoad adapter additions were subsequently compiled and exercised in the complete cross-platform component QA run documented below. They remain unintegrated with production ART and the APK path. The ELF32 guest test source was separately compiled with local Clang 17 and LLD for both ARM and Thumb; `readelf` confirmed actual libc imports, `DT_NEEDED` and cross-library symbol imports plus constructor/finalizer arrays. The pinned Zig guest compiler and Dynarmic executor were not available in that local environment. Clang 17 and LLD also compiled the JNI table-call fixture separately for ARM and Thumb: `readelf` verified ELF32 EM_ARM, EABI5 softfp, exported JNI methods and the Thumb-bit distinction. A subsequent fixture build verified an actual undefined `JNI_GetCreatedJavaVMs` import and its `R_ARM_JUMP_SLOT` PLT relocation in both modes, plus exported `JNI_OnLoad`/`JNI_OnUnload`. A local JDK verified the host JNI table slot offsets and CMake's ability to find JNI headers. These checks verify build inputs and fixture shapes only, not complete bridge execution. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
 Existing x86-64/AArch64 production sources, packaging and advertised ABI lists
 are unchanged by these standalone components.
+
+## Verified cross-platform component result (26 November 2026)
+
+The branch-local [arm32-review run 45887442356](https://github.com/gesher-runtime/gesher/actions/runs/45887442356)
+completed **successfully in all three environments**: Ubuntu 24.04,
+Windows Server 2022 and Windows Server 2025. Each built the pinned
+Dynarmic A32 frontend, the ARM32 executor, multi-DSO Program, Bionic32
+adapter and partial JNI32 bridge. On **each platform**, all **16/16
+CTest component suites passed**, including real compiler-generated ARM
+and Thumb, distinct ELF dependencies, 64-KiB alignment, guest libc and
+fake-host JNI reference/JavaVM/registration tests. The Linux job also
+passed **220 independent Unicorn ABI calls** (110 genuine ARM, 110 Thumb).
+All 3/3 core CTests passed on each platform before the full builds.
+
+Windows validation reproduced two actual problems and their fixes:
+
+- MSVC allocates a sentinel in the default constructor of the staging
+  `std::map` used by `GuestMemory::Map`. That construction was outside
+  the `try` block, causing `std::bad_alloc` to escape on a forced
+  allocation failure. Staging construction now occurs inside the
+  guarded transaction. The formerly failing Windows allocation-rollback
+  test passes in both runner images.
+- Git Bash fixture paths cached as CMake `STRING` values were not
+  native Windows paths, preventing eight CTest programs from opening
+  their compiled `.so` fixtures. The workflows convert these paths
+  using `cygpath -m`; the same executables then passed on both Windows
+  images.
+
+This verifies the **standalone component test harness only**. It does
+**not** establish that the actual Gesher `dalvikvm`, ART native method
+registration, APK installer, Windows packaging, Bionic32 TLS/threads,
+full JNI, NDK rendering, or an end-to-end 32-bit APK launch works.
+Consequently, the supported APK ABI list remains unchanged, and
+PR #631 must remain a draft.
 
 ## Remaining gates for application support
 
