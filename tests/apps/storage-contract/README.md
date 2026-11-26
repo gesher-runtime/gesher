@@ -112,7 +112,7 @@ failure to complete. Keep launch-only evidence outside the functional result.
 Both platforms executed the same separately signed APK for each target. The
 reference was the Android 16 ARM64 system image, API 36 and fingerprint
 `Android/sdk_phone64_arm64/emu64a:16/BE2A.250530.026.D1/13818094:userdebug/test-keys`.
-Windows was Windows 11 Pro 24H2 ARM64 under Parallels. Gesher's x64 Windows
+Windows was Windows 11 Pro 26H2 ARM64 (build 26300.10075) under Parallels. Gesher's x64 Windows
 runtime ran through Windows emulation, in an isolated portable profile with the
 managed launcher. The runtime is 0.2.0.3123 from [package run 45668397258](https://github.com/gesher-runtime/gesher/actions/runs/45668397258)
 at [156abd94](https://github.com/gesher-runtime/gesher/commit/156abd94bbe733e07171931027d5eb3613565dc1).
