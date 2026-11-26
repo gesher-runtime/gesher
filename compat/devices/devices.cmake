@@ -21,6 +21,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devices/location_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/sensors.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/sensors_jni.cc
+  ${CMAKE_SOURCE_DIR}/compat/devices/sensors_ndk.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/webauthn_jni.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/webauthn_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/speech_jni.cc
@@ -29,7 +30,8 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devices/speech_recognition_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devices/winrt.cc)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devices
-  ${CMAKE_SOURCE_DIR}/compat/bionic/include)  # gesher/rgba_buffers.h
+  ${CMAKE_SOURCE_DIR}/compat/bionic/include  # gesher/rgba_buffers.h
+  ${AOSP_DIR}/frameworks/native/include)  # android/sensor.h
 target_link_libraries(framework_runtime PUBLIC ole32)
 # Location: the GNSS receiver's device interface (CM_Get_Device_Interface_List).
 target_link_libraries(framework_runtime PUBLIC cfgmgr32)

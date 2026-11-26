@@ -17,8 +17,7 @@
 //  - ALooper_*: libutils' Looper itself (an ALooper* is a Looper*, as on
 //    Android); ALooper_addFd's System V callback is wrapped in a
 //    LooperCallback that sets up the thread for loaded code first.
-//  - ASensorManager: a device without sensors (an empty list; queues that
-//    never deliver events).
+//  - ASensorManager: the shared Windows sensor hub (compat/devices/sensors_ndk.cc).
 //  - ATrace_*: tracing is off (no-ops; isEnabled is false).
 //  - APerformanceHint_* / AWorkDuration_* / ASessionCreationConfig_*:
 //    performance hint service is unavailable (APerformanceHint_getManager
@@ -80,6 +79,8 @@ extern "C" ANativeWindow* ANativeWindow_fromSurface(JNIEnv* env, jobject surface
 extern "C" jobject ANativeWindow_toSurface(JNIEnv* env, ANativeWindow* window);
 
 namespace gesher::bionic {
+
+void RegisterNdkSensors();  // compat/devices/sensors_ndk.cc
 
 namespace {
 
@@ -305,62 +306,6 @@ int BIONIC_SYSV LooperAddFd(void* looper, int fd, int ident, int events, SysvLoo
   return L(looper)->addFd(fd, ident, events, cb, data);
 }
 int BIONIC_SYSV LooperRemoveFd(void* looper, int fd) { return L(looper)->removeFd(fd); }
-
-// --- ASensorManager: no sensors ---------------------------------------------------------------
-
-struct SensorManager {
-  int unused;
-};
-SensorManager g_sensor_manager;
-struct SensorQueue {
-  int unused;
-};
-const void* const g_empty_sensor_list[1] = {nullptr};
-constexpr int kEinval = -22;
-
-SensorManager* BIONIC_SYSV SensorManagerGetInstance() { return &g_sensor_manager; }
-SensorManager* BIONIC_SYSV SensorManagerGetInstanceForPackage(const char*) {
-  return &g_sensor_manager;
-}
-int BIONIC_SYSV SensorManagerGetSensorList(SensorManager*, const void* const** list) {
-  if (list != nullptr) *list = g_empty_sensor_list;
-  return 0;
-}
-int64_t BIONIC_SYSV SensorManagerGetDynamicSensorList(SensorManager*, const void* const** list) {
-  if (list != nullptr) *list = g_empty_sensor_list;
-  return 0;
-}
-const void* BIONIC_SYSV SensorManagerGetDefaultSensor(SensorManager*, int) { return nullptr; }
-const void* BIONIC_SYSV SensorManagerGetDefaultSensorEx(SensorManager*, int, bool) {
-  return nullptr;
-}
-SensorQueue* BIONIC_SYSV SensorManagerCreateEventQueue(SensorManager*, void*, int, void*, void*) {
-  return new SensorQueue();
-}
-int BIONIC_SYSV SensorManagerDestroyEventQueue(SensorManager*, SensorQueue* q) {
-  delete q;
-  return 0;
-}
-int BIONIC_SYSV SensorManagerCreateDirectChannel(SensorManager*, int, size_t) { return kEinval; }
-void BIONIC_SYSV SensorManagerDestroyDirectChannel(SensorManager*, int) {}
-int BIONIC_SYSV SensorManagerConfigureDirectReport(SensorManager*, const void*, int, int) {
-  return kEinval;
-}
-int BIONIC_SYSV SensorQueueRegisterSensor(SensorQueue*, const void*, int32_t, int64_t) {
-  return kEinval;
-}
-int BIONIC_SYSV SensorQueueEnableSensor(SensorQueue*, const void*) { return kEinval; }
-int BIONIC_SYSV SensorQueueDisableSensor(SensorQueue*, const void*) { return kEinval; }
-int BIONIC_SYSV SensorQueueSetEventRate(SensorQueue*, const void*, int32_t) { return kEinval; }
-int BIONIC_SYSV SensorQueueHasEvents(SensorQueue*) { return 0; }
-int64_t BIONIC_SYSV SensorQueueGetEvents(SensorQueue*, void*, size_t) { return 0; }
-int BIONIC_SYSV SensorQueueRequestAdditionalInfo(SensorQueue*, bool) { return kEinval; }
-// ASensor_* would only see sensors the list never contains.
-const char* BIONIC_SYSV SensorGetString(const void*) { return ""; }
-int BIONIC_SYSV SensorGetInt(const void*) { return 0; }
-float BIONIC_SYSV SensorGetFloat(const void*) { return 0; }
-bool BIONIC_SYSV SensorGetBool(const void*) { return false; }
-bool BIONIC_SYSV SensorChannelSupported(const void*, int) { return false; }
 
 // --- ATrace: tracing is off ------------------------------------------------------------------------
 
@@ -677,39 +622,6 @@ void Register() {
       E("ALooper_wake", LooperWake),
       E("ALooper_addFd", LooperAddFd),
       E("ALooper_removeFd", LooperRemoveFd),
-      // Sensors.
-      E("ASensorManager_getInstance", SensorManagerGetInstance),
-      E("ASensorManager_getInstanceForPackage", SensorManagerGetInstanceForPackage),
-      E("ASensorManager_getSensorList", SensorManagerGetSensorList),
-      E("ASensorManager_getDynamicSensorList", SensorManagerGetDynamicSensorList),
-      E("ASensorManager_getDefaultSensor", SensorManagerGetDefaultSensor),
-      E("ASensorManager_getDefaultSensorEx", SensorManagerGetDefaultSensorEx),
-      E("ASensorManager_createEventQueue", SensorManagerCreateEventQueue),
-      E("ASensorManager_destroyEventQueue", SensorManagerDestroyEventQueue),
-      E("ASensorManager_createSharedMemoryDirectChannel", SensorManagerCreateDirectChannel),
-      E("ASensorManager_createHardwareBufferDirectChannel", SensorManagerCreateDirectChannel),
-      E("ASensorManager_destroyDirectChannel", SensorManagerDestroyDirectChannel),
-      E("ASensorManager_configureDirectReport", SensorManagerConfigureDirectReport),
-      E("ASensorEventQueue_registerSensor", SensorQueueRegisterSensor),
-      E("ASensorEventQueue_enableSensor", SensorQueueEnableSensor),
-      E("ASensorEventQueue_disableSensor", SensorQueueDisableSensor),
-      E("ASensorEventQueue_setEventRate", SensorQueueSetEventRate),
-      E("ASensorEventQueue_hasEvents", SensorQueueHasEvents),
-      E("ASensorEventQueue_getEvents", SensorQueueGetEvents),
-      E("ASensorEventQueue_requestAdditionalInfoEvents", SensorQueueRequestAdditionalInfo),
-      E("ASensor_getName", SensorGetString),
-      E("ASensor_getVendor", SensorGetString),
-      E("ASensor_getStringType", SensorGetString),
-      E("ASensor_getType", SensorGetInt),
-      E("ASensor_getMinDelay", SensorGetInt),
-      E("ASensor_getFifoMaxEventCount", SensorGetInt),
-      E("ASensor_getFifoReservedEventCount", SensorGetInt),
-      E("ASensor_getReportingMode", SensorGetInt),
-      E("ASensor_getHighestDirectReportRateLevel", SensorGetInt),
-      E("ASensor_getHandle", SensorGetInt),
-      E("ASensor_getResolution", SensorGetFloat),
-      E("ASensor_isWakeUpSensor", SensorGetBool),
-      E("ASensor_isDirectChannelTypeSupported", SensorChannelSupported),
       // Tracing.
       E("ATrace_isEnabled", TraceIsEnabled),
       E("ATrace_beginSection", TraceBeginSection),
@@ -779,6 +691,7 @@ void Register() {
 #undef CFG
 #undef E
   for (const Entry& e : kEntries) AddBionicSymbol(e.name, e.fn);
+  RegisterNdkSensors();
   // __system_property_* read and write the runtime's properties (what
   // gesher-app loaded from build.prop), as an app's code sees them on a
   // device (extra_bionic.cc).

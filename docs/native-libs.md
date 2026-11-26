@@ -345,8 +345,8 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     `ALooper_addFd`'s System V callback is wrapped in a `LooperCallback` that
     sets the thread up for loaded code; `ALooper_pollOnce`/`pollAll`/`wake`/
     `removeFd`/`acquire`/`release`;
-  - `ASensorManager_*`/`ASensorEventQueue_*`/`ASensor_*`: a device with no
-    sensors (an empty list, queues that never deliver);
+  - `ASensorManager_*`/`ASensorEventQueue_*`/`ASensor_*`: the Windows sensor inventory and sampled events shared with Java
+    (docs/devices.md). Direct channels are unavailable;
   - `ATrace_*`: no-ops, `isEnabled` false;
   - `AStorageManager_*`: mounting OBBs is not supported (the callback gets
     `AOBB_STATE_ERROR_INTERNAL` from another thread, as the platform's comes

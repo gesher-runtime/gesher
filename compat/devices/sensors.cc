@@ -354,7 +354,7 @@ class Sampler {
     return *sampler;
   }
 
-  int Enable(Sink* sink, int handle, int periodUs) {
+  int Enable(Sink* sink, int handle, int periodUs, bool enabledOnly) {
     const Sensor* sensor = Find(handle);
     if (sensor == nullptr) return -EINVAL;
     int64_t period = std::max<int64_t>(periodUs, std::max(sensor->minDelayUs, 1000)) * 1000;
@@ -367,6 +367,7 @@ class Sampler {
         return 0;
       }
     }
+    if (enabledOnly) return -EINVAL;
     subs_.push_back({sink, handle, period, android::elapsedRealtimeNano(),
                      sensor->flags == kOnChange, false, Reading()});
     if (!thread_.joinable()) thread_ = std::thread([this] { Run(); });
@@ -453,7 +454,11 @@ const std::vector<Sensor>& List() {
 }
 
 int Enable(Sink* sink, int handle, int periodUs) {
-  return Sampler::Get().Enable(sink, handle, periodUs);
+  return Sampler::Get().Enable(sink, handle, periodUs, false);
+}
+
+int SetRate(Sink* sink, int handle, int periodUs) {
+  return Sampler::Get().Enable(sink, handle, periodUs, true);
 }
 
 int Disable(Sink* sink, int handle) { return Sampler::Get().Disable(sink, handle); }
