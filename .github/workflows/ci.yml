@@ -875,6 +875,14 @@ jobs:
       - name: Real software AVC ownership and reusable storage
         run: python3 tools/test_soft_avc_reuse.py --libavc-root third_party/aosp/external/libavc --sanitize
 
+      - name: Real software audio decoder scratch and output ownership
+        run: |
+          python3 tools/test_audio_decoder_scratch.py \
+            --frameworks-av-root third_party/aosp/frameworks/av-media \
+            --tremolo-root third_party/aosp/external/tremolo \
+            --opus-root third_party/aosp/external/libopus \
+            --sanitize --output-dir out/media-audio-scratch-fixtures
+
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
 
@@ -901,6 +909,8 @@ jobs:
       - name: Collect framework assets
         run: |
           mkdir -p framework-assets
+          mkdir -p framework-assets/media-audio-scratch-fixtures
+          cp out/media-audio-scratch-fixtures/*.audt out/media-audio-scratch-fixtures/fixtures.json framework-assets/media-audio-scratch-fixtures/
           cp out/test-apps/* out/boot-jars/*.jar framework-assets/
           mkdir -p framework-assets/media-avc-output-fixtures
           cp out/media-avc-output-fixtures/*.avct out/media-avc-output-fixtures/fixtures.json framework-assets/media-avc-output-fixtures/
