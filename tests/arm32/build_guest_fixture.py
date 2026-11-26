@@ -69,7 +69,8 @@ def main() -> None:
                 raise RuntimeError(f"{bionic_output}: not ARM ELF32")
             symbols = list(elf.get_section_by_name(".dynsym").iter_symbols())
             functions = [symbol for symbol in symbols if symbol.name.startswith("bionic_")]
-            expected = {"bionic_heap", "bionic_copy", "bionic_strings", "bionic_invalid"}
+            expected = {"bionic_heap", "bionic_copy", "bionic_strings", "bionic_invalid",
+                        "bionic_errno"}
             if {symbol.name for symbol in functions} != expected or any(
                     bool(symbol["st_value"] & 1) != (mode == "thumb")
                     for symbol in functions):
@@ -78,7 +79,7 @@ def main() -> None:
                        if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
             required_imports = {"malloc", "calloc", "realloc", "free", "strlen",
                                 "strnlen", "memcpy", "memmove", "memset",
-                                "memcmp", "strcmp", "strncmp"}
+                                "memcmp", "strcmp", "strncmp", "__errno"}
             if imports != required_imports:
                 raise RuntimeError(
                     f"{bionic_output}: unexpected guest libc imports {sorted(imports)}")
