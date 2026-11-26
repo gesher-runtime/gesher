@@ -12,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -35,10 +36,11 @@ bool Fail(std::string* error, const char* message) {
 }
 
 bool ReadGuestString(GuestMemory& memory, uint32_t address,
-                     std::string* output, std::string* error) {
+                     std::string* output, std::string* error,
+                     uint32_t max_length = kMaxUtfBytes) {
   if (!address) return Fail(error, "JNI32 null guest string pointer");
   std::string string;
-  for (uint32_t i = 0; i < kMaxUtfBytes; ++i) {
+  for (uint32_t i = 0; i < max_length; ++i) {
     if (uint64_t{address} + i > UINT32_MAX)
       return Fail(error, "JNI32 guest string address overflow");
     uint8_t byte = 0;
@@ -113,6 +115,7 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
   JNIEnv* const real;
   const std::thread::id owner = std::this_thread::get_id();
   OpaqueHandleTable handles;
+  NativeRegistrationHandler registration_handler;
   std::map<uint32_t, Ref> references;
   std::map<uint32_t, UtfCopy> utf_copies;
   uint64_t next_string = kStringStart;
@@ -481,6 +484,72 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
           *out = Value::Signed32(real->GetArrayLength(static_cast<jarray>(array)));
           return true;
         }, error) &&
+        Register("RegisterNatives", Slot(offsetof(JNINativeInterface_, RegisterNatives)),
+                 {P, P, P, I}, I,
+                 [this](const auto& a, Value* out, std::string* e) {
+          if (!Args(a, 4, e)) return false;
+          jobject declaring_class = nullptr;
+          if (!Lookup(static_cast<uint32_t>(a[1].bits), &declaring_class, e) ||
+              !declaring_class)
+            return Fail(e, "JNI32 RegisterNatives has no valid guest jclass");
+          const int32_t count = static_cast<int32_t>(a[3].bits);
+          if (count < 0 || count > 128)
+            return Fail(e, "JNI32 RegisterNatives count exceeds bounded limit");
+          // A missing real ART trampoline installer must NEVER acknowledge
+          // native registration. The guest sees the genuine JNI_ERR status.
+          if (!registration_handler) {
+            *out = Value::Signed32(JNI_ERR);
+            return true;
+          }
+          const uint32_t array = static_cast<uint32_t>(a[2].bits);
+          const uint64_t size = static_cast<uint64_t>(count) * 12;
+          if (count && (array < kPage || (array & 3) != 0 ||
+                         !program.Memory().IsMapped(
+                             array, size, MemoryPermission::kRead)))
+            return Fail(e, "JNI32 RegisterNatives has invalid guest method array");
+          std::vector<RegisteredNative32> methods;
+          std::set<std::pair<std::string, std::string>> seen;
+          try {
+            methods.reserve(static_cast<size_t>(count));
+            for (int32_t i = 0; i < count; ++i) {
+              const uint32_t at = array + static_cast<uint32_t>(i) * 12;
+              uint32_t name_at = 0, descriptor_at = 0, entry = 0;
+              if (!program.Memory().Read32(at, &name_at, e) ||
+                  !program.Memory().Read32(at + 4, &descriptor_at, e) ||
+                  !program.Memory().Read32(at + 8, &entry, e))
+                return false;
+              RegisteredNative32 method;
+              if (!ReadGuestString(program.Memory(), name_at, &method.name,
+                                   e, 4096) ||
+                  !ReadGuestString(program.Memory(), descriptor_at,
+                                   &method.descriptor, e, 4096))
+                return false;
+              JniMethodSignature signature;
+              if (method.name.empty() ||
+                  !ParseJniMethodDescriptor(method.descriptor,
+                                            &signature, e))
+                return Fail(e, "JNI32 RegisterNatives name or signature invalid");
+              // Thumb pointers retain bit zero. Reject an instruction pointer
+              // into unmapped memory, a non-executable segment or unaligned ARM.
+              if (entry == 0 ||
+                  ((entry & 1) == 0 && (entry & 3) != 0) ||
+                  !program.Memory().IsMapped(entry & ~uint32_t{1},
+                           (entry & 1) ? 2 : 4,
+                           MemoryPermission::kExecute))
+                return Fail(e, "JNI32 RegisterNatives entry is not executable ARM32");
+              method.guest_entry = entry;
+              if (!seen.emplace(method.name, method.descriptor).second)
+                return Fail(e, "JNI32 RegisterNatives contains a duplicate signature");
+              methods.push_back(std::move(method));
+            }
+            bool installed = registration_handler(
+                static_cast<jclass>(declaring_class), methods, e);
+            *out = Value::Signed32(installed ? JNI_OK : JNI_ERR);
+            return true;
+          } catch (...) {
+            return Fail(e, "JNI32 RegisterNatives handler threw or allocation failed");
+          }
+        }, error) &&
         Register("GetJavaVM", Slot(offsetof(JNINativeInterface_, GetJavaVM)),
                  {P, P}, I, [this](const auto& a, Value* out, std::string* e) {
           if (!Args(a, 2, e)) return false;
@@ -628,6 +697,15 @@ Jni32::~Jni32() {
   }
 }
 bool Jni32::Install(std::string* error) { return state_->Install(error); }
+bool Jni32::SetNativeRegistrationHandler(
+    NativeRegistrationHandler handler, std::string* error) {
+  if (!state_ || !state_->CheckThread(error) || !handler)
+    return Fail(error, "JNI32 native registration handler requires installed Java thread");
+  state_->registration_handler = std::move(handler);
+  if (error) error->clear();
+  return true;
+}
+
 uint32_t Jni32::GuestEnvironment() const {
   return state_ && state_->active ? kGuestEnv : 0;
 }
