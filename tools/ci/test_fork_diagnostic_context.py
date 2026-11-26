@@ -146,6 +146,34 @@ class ForkDiagnosticContextTest(unittest.TestCase):
                 with self.subTest(key=key), self.assertRaises(RuntimeError):
                     diagnostic.assert_current(bad)
 
+    @patch('producer_context.authenticate_archive')
+    def test_retained_dns_producer_requires_exact_archive_proof(self, archive):
+        producer = self.validate(producer=True)
+        consumer = dict(producer, attempt='2')
+        manifest = Path('net-dns/manifest.json')
+        raw = json.dumps({'context': producer}).encode()
+        self.assertEqual(diagnostic.authenticate_dns_producer(manifest, raw, consumer, producer), producer)
+        archive.assert_called_once()
+        path, data, current, earlier, role = archive.call_args.args
+        self.assertEqual((path, data, role), (manifest, raw, 'native2-dns'))
+        self.assertEqual(current, dict(earlier, attempt='2'))
+        self.assertEqual(earlier['attempt'], '1')
+        self.assertEqual(earlier['checkout'], self.sha)
+        archive.side_effect = RuntimeError('Archive proof failed')
+        with self.assertRaisesRegex(RuntimeError, 'Archive proof failed'):
+            diagnostic.authenticate_dns_producer(manifest, raw, consumer, producer)
+
+    @patch('producer_context.authenticate_archive')
+    def test_dns_producer_rejects_changed_identity_or_future_attempt(self, archive):
+        consumer = self.validate(producer=True)
+        manifest = Path('net-dns/manifest.json')
+        self.assertEqual(diagnostic.authenticate_dns_producer(manifest, b'', consumer, consumer), consumer)
+        for key, value in [('attempt', '2'), ('attempt', '01'), ('repository', 'other/fork'),
+                           ('canonical_authority', True), ('source', 'b' * 40)]:
+            with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
+                diagnostic.authenticate_dns_producer(manifest, b'', consumer, dict(consumer, **{key: value}))
+        archive.assert_not_called()
+
     def test_invalid_endpoint_components_fail_before_api_access(self):
         for repo in ('../gesher', 'owner/..', './gesher', 'owner/.', 'owner/repo?extra', 'owner/repo/extra'):
             with patch.dict(os.environ, dict(self.env, GITHUB_REPOSITORY=repo), clear=True), \

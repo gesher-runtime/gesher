@@ -169,13 +169,16 @@ $recordChecks = @(
   @{ Name = 'MediaRecorder, video from its Surface (Canvas) with the microphone: H.264 and AAC in MPEG-4, every color in order, the frame at 1.25 s, the tones'
      P = @("${t}recorder surface: getSurface the same true, 2 track\(s\) \[video/avc 320x240, audio/mp4a-latm 44100 Hz 1 ch\], [12]\.\d s; video 45\+ frames, colors \[red, lime, blue, white\], frame at 1\.25 s 320x240 blue; audio 750 Hz then 1250 Hz") },
   @{ Name = 'MediaRecorder, video from the camera (Camera2: GESHER_CAMERA_TEST''s camera, a repeating request into getSurface()): H.264 in MPEG-4 with the test picture'
-     P = @("${t}recorder camera \d+: 1 track\(s\) \[video/avc 320x240\], [12]\.\d s; video 30\+ frames, ordered true, the test picture true") },
+     P = @("${t}recorder camera \d+: 1 track\(s\) \[video/avc 320x240\], [12]\.\d s; video 30\+ frames, ordered true, the test picture true",
+           "${t}recorder camera ready: completed recording sequence true") },
   @{ Name = 'Camera2 close delivers onClosed exactly once before its callback thread quits'
      P = @("${t}recorder camera close: onClosed exactly once before callback thread quit true, callback thread stopped true") },
   @{ Name = 'MediaCodec output into an ImageReader''s Surface: YUV pixels and default or explicit timestamps'
      P = @("${t}imagereader: decoder rendered 60 frames into the reader's surface; images 40\+ \(35 320x240 3 planes\), colors \[red, lime, blue, white\]",
            "${t}imagereader timestamps: pass",
-           "${t}imagereader retained image: pass") }
+           "${t}imagereader retained image: pass") },
+  @{ Name = 'Gesher MediaCodec to ImageReader floor-resize path: exact decoded planes at four sizes, timestamps and owned teardown'
+     P = @("${t}imagereader plane scaling: pass 4 sizes, exact decoded planes and timestamps, owned teardown") }
 )
 function RecordChecks([string] $Mode, [string] $Out, [int] $Code) {
   foreach ($trace in @($Out -split "`n" | Where-Object {
