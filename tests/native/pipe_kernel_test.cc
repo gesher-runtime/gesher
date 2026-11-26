@@ -9,6 +9,7 @@
 #include <initializer_list>
 #include <poll.h>
 #include <pthread.h>
+#include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/uio.h>
 #include <time.h>
@@ -90,6 +91,60 @@ static void Admission() {
   ready = {ends[0], POLLIN, 0};
   Check("last writer closure reports HUP without invented bytes", poll(&ready, 1, 0) == 1 &&
         ready.revents == POLLHUP && read(ends[0], bytes, 1) == 0);
+  close(ends[0]);
+}
+
+static void Readiness() {
+  Phase("poll-and-epoll-pipe-readiness");
+  int ends[2];
+  const bool created = pipe2(ends, O_CLOEXEC | O_NONBLOCK) == 0;
+  Check("pipe readiness fixture", created);
+  if (!created) return;
+  int writer_alias = dup(ends[1]);
+  int ep = epoll_create1(EPOLL_CLOEXEC);
+  Check("writer alias and epoll open", writer_alias >= 0 && ep >= 0);
+  if (writer_alias < 0 || ep < 0) {
+    if (writer_alias >= 0) close(writer_alias);
+    if (ep >= 0) close(ep);
+    close(ends[0]);
+    close(ends[1]);
+    return;
+  }
+
+  pollfd directions[] = {{ends[0], POLLOUT, 0}, {ends[1], POLLIN | POLLOUT, 0}};
+  Check("only the writable endpoint reports POLLOUT", poll(directions, 2, 0) == 1 &&
+        directions[0].revents == 0 && directions[1].revents == POLLOUT);
+  epoll_event interest{};
+  interest.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+  interest.data.u64 = 73;
+  Check("register pipe read endpoint", epoll_ctl(ep, EPOLL_CTL_ADD, ends[0], &interest) == 0);
+  epoll_event ready{};
+  Check("empty pipe with a live writer has no ready reads", epoll_wait(ep, &ready, 1, 0) == 0);
+  Check("alias writes an actual byte", write(writer_alias, "r", 1) == 1);
+  Check("epoll reports only the read direction", epoll_wait(ep, &ready, 1, 0) == 1 &&
+        ready.events == EPOLLIN && ready.data.u64 == 73);
+  Check("close the original writer", close(ends[1]) == 0);
+  Check("the writer alias prevents premature hangup", epoll_wait(ep, &ready, 1, 0) == 1 &&
+        ready.events == EPOLLIN && ready.data.u64 == 73);
+  Check("close the last writer", close(writer_alias) == 0);
+
+  pollfd reader{ends[0], POLLIN | POLLRDHUP, 0};
+  Check("poll preserves both queued data and hangup", poll(&reader, 1, 0) == 1 &&
+        reader.revents == (POLLIN | POLLHUP));
+  Check("epoll reports data and HUP after the last writer closes", epoll_wait(ep, &ready, 1, 0) == 1 &&
+        ready.events == (EPOLLIN | EPOLLHUP) && ready.data.u64 == 73);
+  char byte = 0;
+  Check("buffered byte survives writer closure", read(ends[0], &byte, 1) == 1 && byte == 'r');
+  Check("poll keeps HUP after the last byte drains", poll(&reader, 1, 0) == 1 &&
+        reader.revents == POLLHUP);
+  Check("epoll keeps HUP after the last byte drains", epoll_wait(ep, &ready, 1, 0) == 1 &&
+        ready.events == EPOLLHUP && ready.data.u64 == 73);
+  interest.events = EPOLLRDHUP;
+  Check("re-arm with only the socket half-close bit", epoll_ctl(ep, EPOLL_CTL_MOD, ends[0], &interest) == 0);
+  Check("pipe HUP is delivered even without read interest", epoll_wait(ep, &ready, 1, 0) == 1 &&
+        ready.events == EPOLLHUP && ready.data.u64 == 73);
+  Check("the drained pipe returns EOF", read(ends[0], &byte, 1) == 0);
+  close(ep);
   close(ends[0]);
 }
 
@@ -384,6 +439,7 @@ int main() {
   ExternalInterruption();
 #endif
   Admission();
+  Readiness();
   BlockingCompletion();
   Cancellation();
   DisabledCancellation();
