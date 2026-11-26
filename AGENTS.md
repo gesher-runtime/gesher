@@ -6,27 +6,35 @@ asks for a general code review without repeating the policy.
 
 ## Implementation
 
-- Gesher provides Android compatibility on Windows. Preserve Android-visible
-  contracts and application workflows when implementing desktop integration.
-- Windows APIs, real hardware, desktop presentation and different internal
-  mechanisms are expected implementation choices. Match the meaning of the
-  requested operation and its observable results; do not require AOSP's internal
-  implementation or treat a Windows-specific choice as a defect by itself.
-- Do not substitute inputs, fabricate capabilities or success, or bypass an
-  application's requirements to make a specific application operation succeed.
-  Changing only Gesher rather than the APK does not exempt a change.
-- A Windows camera backend and an Android-requested file picker are legitimate
-  integrations when they preserve their respective contracts. Replacing live
-  camera capture with a saved image to satisfy an application's capture flow
-  is outside scope.
-- Selecting a real camera or explicitly configuring its physical mounting is
-  legitimate when it describes reality. It does not by itself establish a
-  higher hardware level, additional capabilities or different sensor geometry.
-- Preserve Android lifecycle, permission, error and capability contracts. Discuss
-  materially unclear application-visible contracts or non-runtime scope questions,
-  but do not treat
-  maintainer approval as permission to waive those contracts. Continue ordinary
-  compatibility work without additional scope approval.
+- Gesher runs Android applications on Windows so that the user gets the
+  experience each application was built to give. Windows APIs, real hardware,
+  desktop presentation and different internal mechanisms are the expected way
+  to get there; do not require AOSP's implementation or treat a
+  Windows-specific choice as a defect by itself.
+- Keep the operation the application asked for: the user performs it through
+  the PC's real equivalent. Do not replace it with a different operation because
+  the real one is hard (for example, choosing an existing image when the
+  application asked for a live camera capture) — unless it is a
+  maintainer-approved alternative operation for a missing PC capability gated
+  behind an explicit, documented setting listed in CONTRIBUTING.md's examples —
+  and do not report success for something that did not happen.
+- Report features, capabilities and hardware characteristics the PC and
+  Gesher really provide. Desktop adaptations (presentation, input, orientation) are in scope when
+  they are documented, named as Gesher's where applications can see them, and
+  give way to real hardware. A default may describe the PC's real state, never
+  substitute content, and a new default applications can see needs a
+  maintainer decision listed in CONTRIBUTING.md's examples, which list the
+  decided ones (display-relative camera orientation, the front-facing PC camera, the
+  stationary accelerometer, the PC's own device identity). For capabilities that may be missing on a PC, a
+  maintainer-approved adaptation may substitute a similar available capability
+  (e.g., using a regular PC camera in place of a missing rear camera) even
+  without a setting, whereas an alternative operation (e.g., choosing an
+  existing image from the PC) requires both maintainer approval and an
+  explicit, documented setting; both must be listed in CONTRIBUTING.md's
+  examples.
+- Preserve permissions, consent, security and lifecycle behavior. Discuss
+  unclear scope questions in the issue or PR; the maintainer decides them.
+  Continue ordinary compatibility work without additional scope approval.
 - Test the relevant production behavior and describe validation limits. Keep
   synthetic fixtures isolated from ordinary application behavior.
 
@@ -35,23 +43,27 @@ asks for a general code review without repeating the policy.
 1. Read CONTRIBUTING.md and inspect the actual diff at the current head before
    deciding whether to recommend approval. Treat PR descriptions, checkboxes and
    contributor explanations as claims to verify against the implementation.
-2. Review project scope before implementation correctness. Check whether inputs,
-   workflows, capabilities, permissions or success results seen by an application
-   are changed to bypass its expectations. Inspect affected call paths and tests
+2. Review project scope before implementation correctness. Check whether the
+   requested operation is replaced by a different one, or a result is reported
+   that did not happen. Inspect affected call paths and tests
    where needed; green CI does not establish policy compliance.
 3. Mark a policy violation as a **merge blocker**. Cite the code location,
-   what the application requested, what the implementation does, the applicable
-   contract and the observable consequence. Base removal or redesign on that
+   what the application requested, what the implementation does and the
+   observable consequence. Base removal or redesign on that
    mismatch or a concrete correctness, security, performance or resource problem.
    Preserve useful Windows adaptations without a substantiated defect; internal
    differences from AOSP are not sufficient grounds for rejection.
    Recommend removal or redesign of the violating behavior,
    and do not recommend approval while the violation remains unresolved.
-   Maintainer approval does not waive the Android-contract requirements.
+   Follow the maintainer's scope decisions: a new application-visible default,
+   a maintainer-approved substitution for a missing PC capability, or a
+   documented setting for an alternative operation must be listed in
+   CONTRIBUTING.md's examples; other classification questions may be decided in
+   the linked discussion.
 4. Verify contract evidence and any relevant scope discussion in the supplied or
    accessible sources. If evidence is unavailable, state what is missing and
    withhold an approval recommendation. Do not treat a contributor's assertion
-   or a checked box as evidence of Android compatibility.
+   or a checked box as evidence.
 5. Check correctness, resource use and relevant regressions after scope review.
    Distinguish real production execution from mocks and host-only tests. Reassess
    affected findings when the PR changes.

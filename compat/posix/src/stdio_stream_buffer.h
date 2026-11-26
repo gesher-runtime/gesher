@@ -10,9 +10,33 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace gesher::stdio {
+namespace detail {
+// Keep the terminator inside the signed result range before doing either
+// addition. A failed growth leaves the allocation and input cursor unchanged.
+template<class Reallocator>
+int GrowLine(char** bytes, size_t* capacity, size_t used, size_t append,
+             Reallocator& reallocate) {
+  constexpr size_t limit = static_cast<size_t>(PTRDIFF_MAX);
+  if (used >= limit || append >= limit - used) return errno = EOVERFLOW, -1;
+  const size_t needed = used + append + 1;
+  if (needed <= *capacity) return 0;
+  size_t next = 128;
+  while (next < needed) next *= 2;
+  char* grown = static_cast<char*>(reallocate(*bytes, next));
+  if (!grown) return errno = ENOMEM, -1;
+  // Bionic's getdelim grows through recallocarray. Preserve its zeroed tail
+  // without introducing a second buffer or discarding caller-owned bytes.
+  std::memset(grown + *capacity, 0, next - *capacity);
+  *bytes = grown;
+  *capacity = next;
+  return 0;
+}
+}  // namespace detail
+
 class StreamBuffer {
  public:
   enum class Access { kRead, kWrite, kUpdate };
@@ -138,6 +162,63 @@ class StreamBuffer {
     return Read(&value, 1, 1, reader, writer) == 1 ? value : EOF;
   }
 
+  template<class Reader, class Writer>
+  char* ReadLine(char* bytes, int count, Reader&& reader, Writer&& writer) {
+    Orient(-1);
+    size_t used = 0;
+    const size_t maximum = static_cast<size_t>(count - 1);
+    if (maximum && !PrepareRead(writer)) return nullptr;
+    while (used < maximum) {
+      InputSpan span;
+      if (!PeekInput(span, reader)) {
+        if (!used) return nullptr;
+        break;  // fgets returns an already-read prefix on EOF or input error.
+      }
+      const size_t bound = std::min(span.size, maximum - used);
+      const auto* newline = static_cast<const char*>(std::memchr(span.bytes, '\n', bound));
+      const size_t take = newline ? static_cast<size_t>(newline - span.bytes) + 1 : bound;
+      std::memcpy(bytes + used, span.bytes, take);
+      ConsumeInput(span, take);
+      used += take;
+      if (newline) break;
+    }
+    bytes[used] = '\0';
+    return bytes;
+  }
+
+  template<class Reader, class Writer, class Reallocator>
+  int64_t ReadDelimited(char** bytes, size_t* capacity, int delimiter,
+                        Reader&& reader, Writer&& writer, Reallocator&& reallocate) {
+    if (!bytes || !capacity) { SetError(EINVAL); return -1; }
+    if (!*bytes) *capacity = 0;
+    Orient(-1);
+    if (!PrepareRead(writer)) return -1;
+    size_t used = 0;
+    for (;;) {
+      InputSpan span;
+      if (!PeekInput(span, reader)) {
+        // Unlike fgets, Android getdelim reports errors even after reading a
+        // partial record. A pre-existing error remains relevant at EOF too.
+        if (Error()) return -1;
+        break;
+      }
+      const auto* separator = static_cast<const char*>(
+          std::memchr(span.bytes, static_cast<unsigned char>(delimiter), span.size));
+      const size_t take = separator ? static_cast<size_t>(separator - span.bytes) + 1 : span.size;
+      if (detail::GrowLine(bytes, capacity, used, take, reallocate) < 0) {
+        SetError(errno);
+        return -1;
+      }
+      std::memcpy(*bytes + used, span.bytes, take);
+      ConsumeInput(span, take);
+      used += take;
+      if (separator) break;
+    }
+    if (!used) return -1;
+    (*bytes)[used] = '\0';
+    return static_cast<int64_t>(used);
+  }
+
   template<class Writer>
   int Unget(int value, Writer&& writer) {
     if (value == EOF) return EOF;
@@ -188,6 +269,29 @@ class StreamBuffer {
 
  private:
   enum class Direction { kNone, kRead, kWrite };
+  struct InputSpan { const char* bytes = nullptr; size_t size = 0; bool pushed = false; };
+  template<class Reader>
+  bool PeekInput(InputSpan& span, Reader& reader) {
+    if (pushed_) {
+      // ungetc is a stack; do not reverse or consume it before output growth
+      // succeeds. Ordinary buffered input remains a contiguous span.
+      span = {reinterpret_cast<const char*>(Pushback() + pushed_ - 1), 1, true};
+      return true;
+    }
+    if (next_ == available_) {
+      if (output_.EnsureStorage() < 0) { SetError(errno); return false; }
+      int read = ReadChunk(reader, InputData(), InputCapacity());
+      if (read <= 0) return false;
+      next_ = 0;
+      available_ = static_cast<size_t>(read);
+    }
+    span = {InputData() + next_, available_ - next_, false};
+    return true;
+  }
+  void ConsumeInput(const InputSpan& span, size_t size) {
+    if (span.pushed) --pushed_;
+    else next_ += size;
+  }
   template<class Writer>
   bool PrepareRead(Writer& writer) {
     if (!CanRead()) { SetError(EBADF); return false; }

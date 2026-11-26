@@ -21,8 +21,9 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
- * SensorManager: the list (Windows' sensors, the test ones with GESHER_SENSOR_TEST, or
- * none), and for an accelerometer and a light sensor, events through a listener on a
+ * SensorManager: the list (Windows' sensors, Gesher's stationary accelerometer when
+ * Windows has no motion sensor, the test ones with GESHER_SENSOR_TEST, or none with
+ * GESHER_SENSOR_FALLBACK=0), and for an accelerometer and a light sensor, events through a listener on a
  * Handler, flush and unregistering.
  */
 final class SensorSteps {

@@ -37,6 +37,15 @@ public final class GesherService extends Binder {
     /** A host launch with an exact, retained process-generation exit receipt. */
     static final int START_ACTIVITY = IBinder.FIRST_CALL_TRANSACTION + 8;
     static final int START_SHORTCUT = IBinder.FIRST_CALL_TRANSACTION + 9;
+    /** An installed app's special access switches (SpecialAccess): the Control Center's App info. */
+    static final int SPECIAL_ACCESS = IBinder.FIRST_CALL_TRANSACTION + 10;
+    /** The user turned a special access switch of an installed app on or off. */
+    static final int SET_SPECIAL_ACCESS = IBinder.FIRST_CALL_TRANSACTION + 11;
+    /** The Control Center closed the app details shown for these Settings requests. */
+    static final int SETTINGS_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 12;
+    static final int SETTINGS_SHOWN = IBinder.FIRST_CALL_TRANSACTION + 13;
+    static final int SETTINGS_VISIT_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 14;
+    static final int SET_SPECIAL_ACCESS_VISIT = IBinder.FIRST_CALL_TRANSACTION + 15;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -78,6 +87,11 @@ public final class GesherService extends Binder {
     /** What the service does; the system server implements it. */
     interface Device {
         String[] install(String apk) throws Exception;
+        /** Explicit host installation may refresh installer eligibility without replacing code. */
+        default String[] install(String apk, boolean explicitInstall) throws Exception {
+            if (explicitInstall) throw new UnsupportedOperationException("Explicit host installation unavailable");
+            return install(apk);
+        }
         boolean uninstall(String packageName) throws Exception;
         String status();
         void shutdown(String reason);
@@ -89,6 +103,30 @@ public final class GesherService extends Binder {
         }
         default LaunchResult startShortcutAndWait(String pkg, String key) throws Exception {
             throw new UnsupportedOperationException("Publisher-bound shortcut launch unavailable");
+        }
+        /** The app's special access switches: rows of "op-name TAB allowed|denied". */
+        default String[] specialAccess(String packageName) {
+            throw new UnsupportedOperationException("Special access unavailable");
+        }
+        /** Turns one switch on or off as the user chose; answers its row afterwards. */
+        default String setSpecialAccess(String packageName, String opName, boolean allowed) {
+            throw new UnsupportedOperationException("Special access unavailable");
+        }
+        /** Records a switch turn made while the corresponding Settings visits were visible. */
+        default String setSpecialAccess(String packageName, String opName, boolean allowed,
+                int panelPid, long panelStartedAt, String[] tokens) {
+            return setSpecialAccess(packageName, opName, allowed);
+        }
+        /** The Control Center displayed these requests in this exact Windows process. */
+        default int settingsScreensShown(int pid, long startedAt, String[] tokens) {
+            throw new UnsupportedOperationException("Settings visits unavailable");
+        }
+        /** The Control Center closed these requests' details (SettingsResults tokens). */
+        default int settingsScreensClosed(String[] tokens) {
+            throw new UnsupportedOperationException("Settings results unavailable");
+        }
+        default int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
+            return settingsScreensClosed(tokens);
         }
         /** A call came: the device is not idle. */
         void touch();
@@ -109,7 +147,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > START_SHORTCUT) {
+        if (code < INSTALL || code > SET_SPECIAL_ACCESS_VISIT) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -121,9 +159,28 @@ public final class GesherService extends Binder {
         try {
             switch (code) {
                 case INSTALL: {
-                    String[] result = mDevice.install(data.readString());
+                    String apk = data.readString();
+                    // Older launchers send only the path. Absence must preserve the
+                    // ordinary launch behavior, never infer an explicit reinstall.
+                    boolean extended = data.dataAvail() != 0;
+                    boolean explicitInstall = false;
+                    if (extended) {
+                        if (data.dataAvail() != Integer.BYTES) {
+                            throw new IllegalArgumentException("Invalid host install intent payload");
+                        }
+                        int intent = data.readInt();
+                        if (intent != 0 && intent != 1) {
+                            throw new IllegalArgumentException("Invalid host install intent");
+                        }
+                        explicitInstall = intent == 1;
+                    }
+                    data.enforceNoDataAvail();
+                    String[] result = mDevice.install(apk, explicitInstall);
                     reply.writeNoException();
                     reply.writeStringArray(result);
+                    // An updated launcher must not mistake an older server ignoring
+                    // the extension for a completed explicit reinstall.
+                    if (extended) reply.writeInt(explicitInstall ? 1 : 0);
                     return true;
                 }
                 case UNINSTALL: {
@@ -182,6 +239,50 @@ public final class GesherService extends Binder {
                     reply.writeInt(result.taskId); reply.writeStrongBinder(result.exitReceipt);
                     return true;
                 }
+                case SPECIAL_ACCESS: {
+                    String pkg = data.readString();
+                    data.enforceNoDataAvail();
+                    String[] rows = mDevice.specialAccess(pkg);
+                    reply.writeNoException();
+                    reply.writeStringArray(rows);
+                    return true;
+                }
+                case SET_SPECIAL_ACCESS:
+                case SET_SPECIAL_ACCESS_VISIT: {
+                    String pkg = data.readString(), op = data.readString();
+                    boolean allowed = data.readBoolean();
+                    String row;
+                    if (code == SET_SPECIAL_ACCESS) {
+                        data.enforceNoDataAvail();
+                        row = mDevice.setSpecialAccess(pkg, op, allowed);
+                    } else {
+                        int pid = data.readInt();
+                        long startedAt = data.readLong();
+                        String[] tokens = readSettingsTokens(data);
+                        row = mDevice.setSpecialAccess(pkg, op, allowed, pid, startedAt, tokens);
+                    }
+                    reply.writeNoException();
+                    reply.writeString(row);
+                    return true;
+                }
+                case SETTINGS_CLOSED: {
+                    String[] tokens = readSettingsTokens(data);
+                    int answered = mDevice.settingsScreensClosed(tokens);
+                    reply.writeNoException();
+                    reply.writeInt(answered);
+                    return true;
+                }
+                case SETTINGS_SHOWN:
+                case SETTINGS_VISIT_CLOSED: {
+                    int pid = data.readInt();
+                    long startedAt = data.readLong();
+                    String[] tokens = readSettingsTokens(data);
+                    int count = code == SETTINGS_SHOWN ? mDevice.settingsScreensShown(pid, startedAt, tokens)
+                            : mDevice.settingsScreensClosed(pid, startedAt, tokens);
+                    reply.writeNoException();
+                    reply.writeInt(count);
+                    return true;
+                }
                 default:
                     return false;
             }
@@ -192,6 +293,20 @@ public final class GesherService extends Binder {
                     : new IllegalStateException(e.toString(), e));
             return true;
         }
+    }
+
+    private static String[] readSettingsTokens(Parcel data) {
+        String[] tokens = data.createStringArray();
+        data.enforceNoDataAvail();
+        if (tokens == null || tokens.length > SettingsResults.MAX_PENDING) {
+            throw new IllegalArgumentException("Invalid settings visit tokens");
+        }
+        for (String token : tokens) {
+            if (!SettingsResults.validToken(token)) {
+                throw new IllegalArgumentException("Invalid settings visit token");
+            }
+        }
+        return tokens;
     }
 
     /** The launcher's side. */
@@ -231,6 +346,31 @@ public final class GesherService extends Binder {
             try {
                 return reply.createStringArray();
             } finally {
+                reply.recycle();
+            }
+        }
+
+        /** Only an explicit host install asks to refresh unchanged-package eligibility. */
+        public String[] install(String apk, boolean explicitInstall) throws RemoteException {
+            if (!explicitInstall) return install(apk);
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(apk);
+                data.writeInt(1);
+                if (!mBinder.transact(INSTALL, data, reply, 0)) {
+                    throw new RemoteException("Host installation unavailable");
+                }
+                reply.readException();
+                String[] result = reply.createStringArray();
+                if (reply.dataAvail() != Integer.BYTES || reply.readInt() != 1) {
+                    throw new IllegalStateException(
+                            "Explicit host installation unavailable; restart the Gesher device after updating");
+                }
+                return result;
+            } finally {
+                data.recycle();
                 reply.recycle();
             }
         }
@@ -305,6 +445,97 @@ public final class GesherService extends Binder {
                 data.writeString(arguments);
                 mBinder.transact(TOAST_ACTIVATED, data, reply, 0);
                 reply.readException();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** A device whose system server predates a transaction answers it with nothing. */
+        private static UnsupportedOperationException olderDevice() {
+            return new UnsupportedOperationException("The running Gesher device does not support"
+                    + " this; restart it (gesher-app shutdown) to use the installed version");
+        }
+
+        /** The installed app's special access switches: rows of "op-name TAB allowed|denied". */
+        public String[] specialAccess(String packageName) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(java.util.Objects.requireNonNull(packageName));
+                if (!mBinder.transact(SPECIAL_ACCESS, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                String[] rows = reply.createStringArray();
+                if (rows == null) throw olderDevice();
+                return rows;
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        public int reportSettingsVisit(boolean shown, int pid, long startedAt, String[] tokens)
+                throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeInt(pid);
+                data.writeLong(startedAt);
+                data.writeStringArray(tokens);
+                int code = shown ? SETTINGS_SHOWN : SETTINGS_VISIT_CLOSED;
+                if (!mBinder.transact(code, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                return reply.readInt();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** Reports the requests whose app details the Control Center closed. */
+        public int settingsScreensClosed(String[] tokens) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeStringArray(java.util.Objects.requireNonNull(tokens));
+                if (!mBinder.transact(SETTINGS_CLOSED, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                return reply.readInt();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** Turns one special access switch on or off, as the user chose; answers its row. */
+        public String setSpecialAccess(String packageName, String opName, boolean allowed)
+                throws RemoteException {
+            return setSpecialAccess(packageName, opName, allowed, 0, 0, new String[0]);
+        }
+
+        public String setSpecialAccess(String packageName, String opName, boolean allowed,
+                int pid, long startedAt, String[] tokens) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(packageName);
+                data.writeString(opName);
+                data.writeBoolean(allowed);
+                if (tokens.length > 0) {
+                    data.writeInt(pid);
+                    data.writeLong(startedAt);
+                    data.writeStringArray(tokens);
+                }
+                int code = tokens.length == 0 ? SET_SPECIAL_ACCESS : SET_SPECIAL_ACCESS_VISIT;
+                if (!mBinder.transact(code, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                String row = reply.readString();
+                if (row == null) throw olderDevice();
+                return row;
             } finally {
                 data.recycle();
                 reply.recycle();

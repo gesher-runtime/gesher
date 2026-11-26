@@ -12,6 +12,7 @@
 #include <unordered_map>
 #define __declspec(x)
 using DWORD = uint32_t;
+using LONG = int32_t;
 using HMODULE = void*;
 using FARPROC = void (*)();
 using SRWLOCK = std::mutex;
@@ -21,6 +22,9 @@ static thread_local DWORD last_windows_error;
 static void AcquireSRWLockExclusive(SRWLOCK* p) { p->lock(); }
 static void ReleaseSRWLockExclusive(SRWLOCK* p) { p->unlock(); }
 static DWORD GetLastError() { return last_windows_error; }
+static LONG InterlockedExchange(volatile LONG* target, LONG value) {
+  return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST);
+}
 static DWORD GetCurrentThreadId() { return 1; }
 static DWORD GetCurrentProcessId() { return 1; }
 static HMODULE GetModuleHandleW(const wchar_t*) { return reinterpret_cast<void*>(1); }

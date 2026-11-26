@@ -10,6 +10,7 @@
 
 #include <gesher/unc_paths.h>
 #include <gesher/environment.h>
+#include <gesher/storage_policy.h>
 #include "exec_spawn.h"
 
 // Only upstream dalvikvm.cc is compiled with this main rename.
@@ -129,6 +130,7 @@ bool InitializeTemporaryDirectory(const std::vector<std::string>& arguments) {
 }  // namespace
 
 extern "C" int wmain(int argc, wchar_t** wide_argv) {
+  gesher::InitializeExternalStoragePolicy();
   if (argc < 1 || wide_argv == nullptr) return EXIT_FAILURE;
   std::vector<std::string> values;
   values.reserve(static_cast<std::size_t>(argc));

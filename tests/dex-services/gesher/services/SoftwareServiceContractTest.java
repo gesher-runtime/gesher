@@ -6,6 +6,7 @@ package gesher.services;
 
 import android.app.admin.DevicePolicyManager;
 import android.app.admin.IDevicePolicyManager;
+import android.app.PendingIntent;
 import android.app.usage.IUsageStatsManager;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageEventsQuery;
@@ -14,6 +15,8 @@ import android.app.usage.UsageStatsManager;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.IIntentReceiver;
+import android.content.IIntentSender;
 import android.content.pm.IShortcutService;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.ShortcutInfo;
@@ -24,6 +27,10 @@ import android.os.Parcel;
 import android.os.RemoteCallback;
 import android.os.Temperature;
 import android.os.UserHandle;
+import android.os.Binder;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.Process;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -65,6 +72,16 @@ public final class SoftwareServiceContractTest {
             call.run();
             throw new AssertionError(name + " accepted an unauthorized caller");
         } catch (SecurityException expected) {
+            require(System.nanoTime() - start < 1_000_000_000L, name + " did not fail promptly");
+        }
+    }
+
+    private static void unsupported(Action call, String name) throws Exception {
+        long start = System.nanoTime();
+        try {
+            call.run();
+            throw new AssertionError(name + " accepted an unavailable operation");
+        } catch (UnsupportedOperationException expected) {
             require(System.nanoTime() - start < 1_000_000_000L, name + " did not fail promptly");
         }
     }
@@ -211,8 +228,22 @@ public final class SoftwareServiceContractTest {
             usage.getAppStandbyBucket("missing.package", "gesher.services", 0);
             throw new AssertionError("unknown package acquired a standby bucket");
         } catch (IllegalArgumentException expected) { }
-        denied(() -> usage.registerAppUsageObserver(1, new String[] {"gesher.services"},
-                1, null, "gesher.services"), "usage observer");
+        // This direct in-process service call has trusted local authority. With
+        // no history path or managed lifecycle it must reject the capability;
+        // it is not an unprivileged application's permission-denial case.
+        require(Binder.getCallingPid() == Process.myPid()
+                        && (boolean) callersType.getMethod("isSystem").invoke(callers),
+                "Unmanaged observer fixture requires the real trusted local caller");
+        PendingIntent observerCallback = new PendingIntent(new IIntentSender.Stub() {
+            @Override public void send(int code, Intent intent, String resolvedType,
+                    IBinder whitelistToken, IIntentReceiver finishedReceiver,
+                    String requiredPermission, Bundle options) {
+                throw new AssertionError("Unavailable observer delivered a callback");
+            }
+        });
+        unsupported(() -> usage.registerAppUsageObserver(1, new String[] {"gesher.services"},
+                60_000, observerCallback, "gesher.services"), "unmanaged usage observer");
+        System.out.println("SoftwareServiceContractTest usage observer: trusted local caller, unmanaged unavailable");
         denied(() -> usage.registerUsageSessionObserver(2, new String[] {"gesher.services"},
                 1, 1, null, null, "gesher.services"), "session observer");
         denied(() -> usage.registerAppUsageLimitObserver(3, new String[] {"gesher.services"},

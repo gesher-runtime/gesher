@@ -106,6 +106,9 @@ SDK inventory that separates structural gaps from demonstrated failures.
 
 ## Building
 
+See the [build and package guide](docs/build-and-package.md) for source identity,
+complete installer suppliers and local validation.
+
 The production build runs on Linux or WSL and produces Windows x64 binaries.
 Requirements: CMake 3.24+, Ninja, Python 3.12+, git, curl, and GNU Make. The
 recipe downloads the pinned [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)
@@ -136,7 +139,8 @@ Outputs include:
 
 - `dalvikvm.exe`: The ported ART runtime with JIT compiler.
 - `gesher-exec.exe`: App process host and launcher.
-- `installer/gesher-setup-*.exe`: Complete Windows installer and shell integration.
+- `installer/gesher-setup-*.exe`: Complete Windows installer and shell integration,
+  produced separately by the CI `package` job after supplier verification.
 
 Tests: `tests/build-test-apps.sh out/test-apps` (needs a JDK), then
 `tests/windows/run-tests.ps1` on Windows.
@@ -150,8 +154,19 @@ See [updating Gesher](docs/updates.md) for behavior, release packaging and tests
 
 ## License
 
-[Apache License 2.0](LICENSE), the same license as AOSP. See
-[decision 0001](docs/decisions/0001-license.md).
+Gesher is commercially licensed. Use of its proprietary portions requires
+acceptance of the [Commercial End-User License Agreement](LICENSE) and a valid
+License Entitlement from the licensor or an authorized reseller. Licenses may
+be paid, discounted through coupons or promotions, supplied at no charge, or
+granted under a separate agreement. The entitlement or applicable agreement
+sets any fees, eligibility, permitted usage and license duration; an authorized
+published offer may cover a group of eligible users.
+
+The commercial license permits installation and operation within the granted
+scope. A free license or coupon does not by itself permit modification, forks
+or redistribution of proprietary portions; those rights require separate
+permission. Components and materials governed by separate licenses remain
+subject to those licenses, and mandatory legal rights are preserved.
 
 ---
 
