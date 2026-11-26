@@ -125,7 +125,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
         final long retainedBytes;
         final long frameBytes;
 
-        Request(int requestId, CaptureRequest request) {
+        Request(int requestId, CaptureRequest request, Map<Integer, Stream> configuredStreams) {
             this.requestId = requestId;
             int[] streams = request.getStreamIds();
             int[] surfaces = request.getSurfaceIds();
@@ -133,10 +133,26 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     || (surfaces != null && surfaces.length > CameraCallbacks.MAX_TARGETS)) {
                 throw CameraCallbacks.full();
             }
-            this.settings = request.getNativeCopy();
-            long metadata = CameraCallbacks.metadataBytes(settings);
             this.streamIds = streams != null ? streams.clone() : new int[0];
             this.surfaceIds = surfaces != null ? surfaces.clone() : new int[0];
+            if (streamIds.length != surfaceIds.length) {
+                throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                        "each request target requires a stream and surface index");
+            }
+            for (int i = 0; i < streamIds.length; i++) {
+                Stream stream = configuredStreams.get(streamIds[i]);
+                if (stream == null) {
+                    throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                            "request targets stream " + streamIds[i] + ", not configured");
+                }
+                if (surfaceIds[i] < 0 || surfaceIds[i] >= stream.surfaces.size()) {
+                    throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                            "request targets invalid surface index " + surfaceIds[i]
+                                    + " for stream " + streamIds[i]);
+                }
+            }
+            this.settings = request.getNativeCopy();
+            long metadata = CameraCallbacks.metadataBytes(settings);
             retainedBytes = metadata + 4L * (streamIds.length + surfaceIds.length) + 256;
             // Result metadata clones the request and adds a fixed set of tags.
             // The native buffer grows geometrically; reserve its doubled capacity,
@@ -366,13 +382,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
                     throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
                             "null capture request");
                 }
-                copies[i] = new Request(requestId, requests[i]);
-                for (int streamId : copies[i].streamIds) {
-                    if (!mStreams.containsKey(streamId)) {
-                        throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
-                                "request targets stream " + streamId + ", not configured");
-                    }
-                }
+                copies[i] = new Request(requestId, requests[i], mStreams);
                 frameBytes[i] = copies[i].frameBytes;
                 largestFrame = Math.max(largestFrame, frameBytes[i]);
                 retainedBytes += copies[i].retainedBytes;
