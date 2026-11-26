@@ -13,6 +13,7 @@ extern size_t strlen(const char*);
 extern size_t strnlen(const char*, size_t);
 extern int strcmp(const char*, const char*);
 extern int strncmp(const char*, const char*, size_t);
+extern int* __errno(void);
 
 // Keep string inputs in actual writable guest allocations.
 int bionic_heap(void) {
@@ -64,4 +65,16 @@ int bionic_strings(void) {
 int bionic_invalid(void) {
   // Must fail explicitly in the host adapter; no native host pointer access.
   return (int)strlen((const char*)0xff00);
+}
+
+int bionic_errno(void) {
+  int* guest_errno = __errno();
+  if (!guest_errno) return -1;
+  *guest_errno = 0;
+  if (malloc(0xffffffffu) != 0) return -2;
+  if (*guest_errno != 12) return -3;  // Linux ENOMEM in guest memory.
+  *guest_errno = 0;
+  if (calloc(0x80000000u, 2) != 0) return -4;
+  if (*guest_errno != 12) return -5;
+  return 55;
 }
