@@ -66,8 +66,9 @@ bool FillGuest(GuestMemory& memory, uint32_t destination, uint32_t value,
 
 bool CompareGuest(GuestMemory& memory, uint32_t left, uint32_t right,
                   uint32_t count, bool stop_at_null, int32_t* out,
-                  std::string* error) {
-  const uint32_t bounded = std::min<uint32_t>(count, kMaxString);
+                  std::string* error, bool must_terminate = false) {
+  const uint32_t bounded = std::min<uint32_t>(
+      count, stop_at_null ? kMaxString : kMaxCopy);
   for (uint32_t i = 0; i < bounded; ++i) {
     const uint64_t a = uint64_t{left} + i, b = uint64_t{right} + i;
     uint8_t first = 0, second = 0;
@@ -84,7 +85,7 @@ bool CompareGuest(GuestMemory& memory, uint32_t left, uint32_t right,
       return true;
     }
   }
-  if (count > bounded)
+  if (count > bounded || must_terminate)
     return Fail(error, "Bionic32 string comparison exceeds scan limit");
   *out = 0;
   return true;
@@ -110,7 +111,8 @@ uint32_t Bionic32::State::Alloc(uint32_t requested) {
   }
   const bool reuse = reusable_it != reusable.end();
   if (!reuse) {
-    if (next_heap > kHeapEnd || rounded > kHeapEnd - next_heap - kPage)
+    if (next_heap >= kHeapEnd || kHeapEnd - next_heap < kPage ||
+        rounded > kHeapEnd - next_heap - kPage)
       return 0;
     base = static_cast<uint32_t>(next_heap);
   }
@@ -302,7 +304,7 @@ bool Bionic32::Install(std::string* error) {
         if (!GoodArguments(a, 2, e)) return false;
         int32_t value = 0;
         if (!CompareGuest(s->program.Memory(), Word(a[0]), Word(a[1]),
-                          kMaxString, true, &value, e)) return false;
+                          kMaxString, true, &value, e, true)) return false;
         *r = Value::Signed32(value);
         return true;
       }) ||
