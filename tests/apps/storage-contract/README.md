@@ -135,3 +135,35 @@ standalone-Gesher process was run. The Android ART check for read-only DEX is
 compiled behind Android target handling. Windows needs equivalent admission
 for app-written DEX while ordinary installation and launch continue to use
 authorized base and split APKs.
+
+### Windows compatibility fix
+
+Windows ART now checks the writable-file contract at file-backed DEX admission.
+The default target boundary is Android 14, matching the pinned
+[libcore change](https://android.googlesource.com/platform/libcore/+/refs/tags/android-16.0.0_r4/dalvik/src/main/java/dalvik/system/DexFile.java#66).
+Managed installs publish read-only base and split APKs, and boot migrates
+previously installed code. Standalone launch copies the source into a read-only
+profile file before parsing and removes the copy on normal VM exit.
+
+The same target 33 and 36 APKs listed above passed all 34 checks each in both
+managed and standalone Windows launches. Each run used two distinct app
+processes and retained its own CE/DE contents. The target 33 APK loaded the
+writable control archive, and the target 36 APK received `SecurityException`
+on both starts. Read-only file loads and in-memory loads succeeded in both
+profiles. Before the second managed launch the test cleared the read-only
+attribute on the installed base. Startup restored it and loaded the original
+code. The standalone launches preserved the writable source and its SHA-256.
+
+The focused split-package contract also passed 630 checks on Windows ART,
+including writable-to-read-only migration of the base and both splits and
+loading the feature's actual classes afterward. The retained original build
+failed at the first installed base write-access assertion.
+
+The local Windows ART executable for this comparison was built at integrated
+source `df594e2062cef5b1a13b81aba5704850ba04c656` with SHA-256
+`5d78707e5dae217e04dc4cc54587a01cc3757cb35c08138d4195b6cdbc9c2122`.
+The candidate app Java donor SHA-256 was
+`479eb47321e67cac2125b85ecdea65a9cecb4e3a54ad8d24d7df54c6a17b6c49`.
+The remaining boot assets came from `156abd94`. In this donor run, APK execution
+fell back from the retained dex2oat build. Packaged AOT, third-party shared
+libraries and abrupt standalone process termination remain unverified.
