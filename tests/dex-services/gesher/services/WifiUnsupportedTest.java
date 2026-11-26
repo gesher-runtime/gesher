@@ -61,7 +61,8 @@ public final class WifiUnsupportedTest {
         WifiManager wifi = context.getSystemService(WifiManager.class);
         require(wifi != null, "Typed Context lookup did not create the Wi-Fi wrapper");
         require(wifi == context.getSystemService(Context.WIFI_SERVICE), "String and typed service lookup differ");
-        require(!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI), "Wrapper declared Wi-Fi hardware");
+        require(context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WIFI)
+                == com.gesher.net.WindowsWifi.hardware().present(), "FEATURE_WIFI differs from the real WLAN census");
         int wifiState = wifi.getWifiState();
         require(wifiState == WifiManager.WIFI_STATE_DISABLED || wifiState == WifiManager.WIFI_STATE_ENABLED
                 || wifiState == WifiManager.WIFI_STATE_UNKNOWN, "Invalid observed Wi-Fi radio state");
@@ -94,10 +95,27 @@ public final class WifiUnsupportedTest {
         lock.release(); require(!lock.isHeld(), "Wi-Fi token leaked after final release");
         try { lock.release(); throw new AssertionError("Wi-Fi token underflow accepted"); }
         catch (RuntimeException expected) { checks++; }
+        // As Android: the underflow leaves the count at -1, so the next counted acquire
+        // only returns it to zero and does not hold the lock.
+        lock.acquire();
+        require(!lock.isHeld() && lock.toString().endsWith("refcount = 0 }"), "Underflowed count was reset instead of kept");
         lock.setReferenceCounted(false); lock.acquire(); lock.acquire(); lock.release();
         require(!lock.isHeld(), "Non-reference-counted token retained stale acquisitions");
-        lock.acquire(); lock.setReferenceCounted(true); lock.release();
-        require(!lock.isHeld(), "Changing token mode retained stale reference counts");
+        // Android only flips the mode: a non-counted acquisition left no count to release.
+        lock.acquire(); lock.setReferenceCounted(true);
+        try { lock.release(); throw new AssertionError("Counted release below zero accepted"); }
+        catch (RuntimeException expected) { checks++; }
+        require(lock.isHeld(), "Under-locked release dropped the non-counted acquisition");
+        // The count is now -1: Android's non-counted release drops the lock and still
+        // reports the negative count.
+        lock.setReferenceCounted(false);
+        try { lock.release(); throw new AssertionError("Negative count not reported"); }
+        catch (RuntimeException expected) { checks++; }
+        require(!lock.isHeld(), "Non-counted release did not drop the lock");
+        try { wifi.createWifiLock(9, "synthetic-test").acquire(); throw new AssertionError("Invalid lock mode accepted"); }
+        catch (IllegalArgumentException expected) { checks++; }
+        require(lock.toString().startsWith("WifiLock{ ") && lock.toString().endsWith("not refcounted }"),
+                "WifiLock description format differs from Android");
         WifiManager.MulticastLock multicast = wifi.createMulticastLock("synthetic-test");
         multicast.acquire(); multicast.acquire(); multicast.release();
         require(multicast.isHeld(), "Multicast token lost a live reference");
@@ -140,6 +158,11 @@ public final class WifiUnsupportedTest {
         require(scan.SSID.equals(scanCopy.SSID) && scan.BSSID.equals(scanCopy.BSSID)
                 && scan.capabilities.equals(scanCopy.capabilities) && scan.frequency == scanCopy.frequency
                 && scan.level == scanCopy.level && scan.timestamp == scanCopy.timestamp, "Scan data parcel lost supplied values");
+        WifiManager.AddNetworkResult added = roundTrip(new WifiManager.AddNetworkResult(
+                WifiManager.AddNetworkResult.STATUS_ADD_WIFI_CONFIG_FAILURE, -1), WifiManager.AddNetworkResult.CREATOR);
+        require(added.statusCode == WifiManager.AddNetworkResult.STATUS_ADD_WIFI_CONFIG_FAILURE && added.networkId == -1,
+                "AddNetworkResult parcel keeps status then network id");
+        require(wifi.getMaxSignalLevel() == 4 && wifi.calculateSignalLevel(-70) == 2, "RSSI level thresholds");
         System.out.println("WifiUnsupportedTest all passed: " + checks);
     }
 }

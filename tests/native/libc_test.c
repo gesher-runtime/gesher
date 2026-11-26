@@ -62,6 +62,7 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "event_loop_contract_test.inc"
 #include "allocation_test.inc"
 #include "memmem_test.inc"
+#include "memrchr_contract.inc"
 #include "system_contract_test.inc"
 #include "socket_control_test.inc"
 #include "socket_timeout_contract_test.inc"
@@ -80,9 +81,12 @@ static void check_str(const char* what, const char* got, const char* want) {
 #include "freopen_mode_contract_test.inc"
 #include "file_description_contract_test.inc"
 #include "stdio_ofd_contract.inc"
+#define GESHER_STDIO_SCAN_NO_WIDE 1
+#include "stdio_scan_contract.inc"
 #include "statvfs_contract_test.inc"
 #include "sleep_contract_test.inc"
 #include "bionic_signal_range_contracts.h"
+#include "bionic_tgkill_contracts.h"
 #include "stream_device_contract_test.inc"
 #include "regex_scaling_contract.inc"
 
@@ -121,6 +125,16 @@ static void test_memory(void) {
   check("mallinfo: allocated fit in mapped, the rest is free",
         during.hblkhd >= during.uordblks && during.fordblks == during.hblkhd - during.uordblks);
   free(big);
+  // mallopt: purging unused memory succeeds (1); an option the heap does not
+  // support, or one no allocator knows, fails (0), as malloc.h specifies.
+  check("mallopt(M_PURGE) succeeds", mallopt(M_PURGE, 0) == 1);
+  check("mallopt(M_PURGE_ALL) succeeds", mallopt(M_PURGE_ALL, 0) == 1);
+  check("mallopt(unknown option) fails", mallopt(12345, 0) == 0);
+  // No memory tags: the NONE level holds already; a tagging level fails.
+  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, NONE) succeeds",
+        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE) == 1);
+  check("mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, TBI) fails",
+        mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_TBI) == 0);
 }
 
 static void test_strings(void) {
@@ -966,6 +980,7 @@ static void test_dl(void) {
 __attribute__((visibility("default"))) int gesher_selftest(void) {
   printf("libc_test: bionic libc through the shim\n");
   failures += BionicSignalRangeContracts();
+  failures += BionicTgkillContracts();
   test_memory();
   test_allocation_contracts();
   test_system_contracts();
@@ -985,11 +1000,13 @@ __attribute__((visibility("default"))) int gesher_selftest(void) {
   test_freopen_mode_contracts();
   test_file_description_contracts();
   test_stdio_ofd_contracts();
+  test_stdio_scan_contracts();
   test_statvfs_contracts();
   test_sleep_contracts();
   test_timerfd_syscalls();
   test_strings();
   test_memmem_contracts();
+  test_memrchr_contracts(memrchr, (memrchr_checked_function)dlsym(RTLD_DEFAULT, "__memrchr_chk"));
   test_fnmatch();
   test_regex_scaling_contracts(regcomp, regexec, regfree);
   test_getrlimit_fault();

@@ -14,6 +14,7 @@
 
 #include <gesher/reserved_names.h>
 #include <gesher/file_description.h>
+#include <gesher/procfs_fd.h>
 #include <gesher/environment.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -76,6 +77,11 @@ bool PathOfFd(int fd, std::string* out) {
   // These callers resolve directory-relative paths. A session capability is
   // a file, and must not reveal/reopen its private backing pathname here.
   if (gesher::FileDescriptionIsRevocable(snapshot)) return errno = kENOTDIR, false;
+  // A /proc directory fd: its own path (a /proc file is no directory).
+  bool proc_directory;
+  if (gesher::ProcfsDescriptor(fd, out, &proc_directory)) {
+    return proc_directory || (errno = kENOTDIR, false);
+  }
   auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, false;
   wchar_t buf[32768];
@@ -313,6 +319,11 @@ int BIONIC_SYSV Scandirat(int dirfd, const char* path, BionicDirent*** list,
 
 // --- the *at() calls and other path calls ---------------------------------------
 
+// getdents64(2): struct linux_dirent64 is the same on every architecture.
+int64_t BIONIC_SYSV Getdents64(int fd, void* buffer, size_t size) {
+  return getdents64(fd, buffer, size);
+}
+
 // gesher-base's struct stat with its 32-bit tv_nsec widened (shim.cc's FixStat).
 void WidenStat(struct stat* st) {
   for (struct timespec* ts : {&st->st_atim, &st->st_mtim, &st->st_ctim}) {
@@ -446,6 +457,8 @@ int BIONIC_SYSV Fchdir(int fd) {
 char* BIONIC_SYSV Realpath(const char* path, char* resolved) { return realpath(path, resolved); }
 int64_t BIONIC_SYSV Readlink(const char* path, char* buf, size_t n) { return readlink(path, buf, n); }
 int64_t BIONIC_SYSV Readlinkat(int dirfd, const char* path, char* buf, size_t n) {
+  // An empty path reads the link the fd itself is open on (O_PATH | O_NOFOLLOW).
+  if (path != nullptr && path[0] == '\0' && dirfd != kAtFdcwd) return readlinkat(dirfd, "", buf, n);
   std::string p;
   if (!AtPath(dirfd, path, &p)) return -1;
   return readlink(p.c_str(), buf, n);
@@ -468,6 +481,8 @@ int BIONIC_SYSV Ftruncate(int fd, int64_t length) {
   return gesher_ftruncate(fd, length);
 }
 int BIONIC_SYSV Truncate(const char* path, int64_t length) {
+  // Linux refuses a FIFO without opening it (an open would wait for a reader).
+  if (gesher_is_fifo_path(path)) return errno = kEINVAL, -1;
   int fd = open(path, O_WRONLY);
   if (fd < 0) return -1;
   int rc = Ftruncate(fd, length);
@@ -479,7 +494,7 @@ int BIONIC_SYSV Truncate(const char* path, int64_t length) {
 int BIONIC_SYSV Fsync(int fd) { return fsync(fd); }
 int BIONIC_SYSV Fdatasync(int fd) { return fdatasync(fd); }
 uint32_t BIONIC_SYSV Umask(uint32_t mask) { return static_cast<uint32_t>(_umask(static_cast<int>(mask & 0777))); }
-int BIONIC_SYSV Mkfifo(const char*, uint32_t) { return errno = kEPERM, -1; }
+int BIONIC_SYSV Mkfifo(const char* path, uint32_t mode) { return mkfifo(path, static_cast<mode_t>(mode)); }
 
 int64_t BIONIC_SYSV Sendfile(int out_fd, int in_fd, int64_t* offset, size_t count) {
   return sendfile(out_fd, in_fd, reinterpret_cast<off_t*>(offset), count);
@@ -701,8 +716,42 @@ char* BIONIC_SYSV StpncpyChk(char* d, const char* s, size_t n, size_t dn) {
   if (n > dn) FortifyFailure("stpncpy");
   return Stpncpy(d, s, n);
 }
+// Keep the word loop's register saves out of tiny and near-end searches.
+// Both functions use the guest calling convention, so this can be a tail call.
+__attribute__((noinline))
+void* BIONIC_SYSV MemrchrWords(const uint8_t* p, uint8_t byte, size_t n) {
+  // Read only complete words inside the caller's range. memcpy permits
+  // unaligned input without changing the byte buffer's effective type.
+  constexpr uint64_t ones = UINT64_C(0x0101010101010101);
+  constexpr uint64_t highs = UINT64_C(0x8080808080808080);
+  const uint64_t repeated = ones * byte;
+  while (n >= sizeof(uint64_t)) {
+    n -= sizeof(uint64_t);
+    uint64_t word;
+    std::memcpy(&word, p + n, sizeof(word));
+    const uint64_t different = word ^ repeated;
+    if (((different - ones) & ~different & highs) != 0) {
+      // The zero-byte test is a block predicate, not a position mask:
+      // subtraction can also mark a neighboring 0x01 byte after a zero.
+      for (size_t i = sizeof(word); i != 0; --i) {
+        if (p[n + i - 1] == byte) return const_cast<uint8_t*>(p + n + i - 1);
+      }
+    }
+  }
+  while (n-- > 0) {
+    if (p[n] == byte) return const_cast<uint8_t*>(p + n);
+  }
+  return nullptr;
+}
 void* BIONIC_SYSV Memrchr(const void* s, int c, size_t n) {
   auto p = static_cast<const uint8_t*>(s);
+  if (n >= 2 * sizeof(uint64_t)) {
+    const uint8_t byte = static_cast<uint8_t>(c);
+    for (size_t i = 0; i < sizeof(uint64_t); ++i) {
+      if (p[--n] == byte) return const_cast<uint8_t*>(p + n);
+    }
+    return MemrchrWords(p, byte, n);
+  }
   while (n-- > 0) {
     if (p[n] == static_cast<uint8_t>(c)) return const_cast<uint8_t*>(p + n);
   }
@@ -780,6 +829,7 @@ void RegisterPosix(SymbolTable& t) {
   E("telldir", Telldir);
   E("seekdir", Seekdir);
   E("dirfd", Dirfd);
+  E("getdents64", Getdents64);
   E("scandir", Scandir);
   E("scandir64", Scandir);
   E("scandirat", Scandirat);

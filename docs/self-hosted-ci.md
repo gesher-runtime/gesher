@@ -1,15 +1,17 @@
 # Framework build routing and the local Linux runner
 
 The required `ci / framework` pipeline retains its existing `host-tools` and
-`framework` jobs. The current CI caller requests GitHub-hosted `ubuntu-24.04`
-execution with `local-runner: false` for the new immutable policy described below.
+`framework` jobs. `ci.yml` calls `framework.yml` as a local reusable workflow
+(`uses: ./.github/workflows/framework.yml`) with `local-runner: false`, so these
+jobs run on GitHub-hosted `ubuntu-24.04`.
 Their producer IDs, artifact names, current-run host-tool receipts, compiler
 flags, Android contract checks and Windows consumers are preserved. No
 application behavior is changed.
 
-The previously authorized policy can run these jobs on `gesher-wsl-trial`.
-There is one physical runner, so it executes one job at a time; other PRs can
-queue. The new policy has not been authorized for that restricted runner group.
+The previously authorized policy (`framework.yml@7a45c246...`, below) could run
+these jobs on `gesher-wsl-trial`. There is one physical runner, so it executes
+one job at a time; other PRs can queue. No current caller uses that policy, and
+the local call cannot be authorized for that restricted runner group (see below).
 
 The root native Gesher `build` job still runs on GitHub. This rollout first
 validates these two framework producer jobs before moving more required work.
@@ -37,9 +39,10 @@ expected. Windows-only execution tests continue on GitHub-hosted Windows.
 
 ## Trust and rollout
 
-The CI caller pins the combined `framework.yml` recipe at
-`jobs.framework.uses` in `.github/workflows/ci.yml`. That workflow pins the
-runner-route action to `5d76cae649c2257c376aaf87a5283099c99f111c`; its
+The CI caller references `framework.yml` at `jobs.framework.uses` in
+`.github/workflows/ci.yml` by local path, so every CI run uses the
+`framework.yml` of the commit it tests. That workflow pins the runner-route
+action to `5d76cae649c2257c376aaf87a5283099c99f111c`; its
 local-cache actions pin to `e5eb64d95271bc83c4eb40c9a069a2a45acac11c`.
 Hosted cache saves are limited to `main`; branch and PR restores retain the
 same keys, inputs and behavior.
@@ -49,13 +52,19 @@ lifetime contracts. It also retains the current package-visibility gate in both
 GMS modes, including canonical and authenticated shared-UID queries.
 The union also keeps the current package-installer identity, speech-recognition
 connection lifecycle and persisted activity-usage checks.
-Changes to PR workflow files cannot change the policy authorized by the runner
-group. Publishing a replacement requires reviewing/pinning a new immutable
-policy and explicitly updating the group allowlist before enabling local use.
-This change does not update that allowlist or any permission. The current caller
-sets `local-runner: false`, so the pinned action selects the existing hosted
-runner without making local-authorization API requests. Both required Linux
-producer jobs and all Windows execution jobs remain required.
+The runner group's workflow allowlist matches the called workflow's
+`job_workflow_ref`. With the local call that ref is
+`gesher-runtime/gesher/.github/workflows/framework.yml@refs/pull/<N>/merge` for
+a PR (`@refs/heads/main` on `main`), which names a per-PR, author-controlled ref
+rather than a reviewed commit. It cannot be added to the allowlist, so
+`ci.yml` must not request `local-runner: true` with the local call: an eligible
+PR would be routed to a group that will not run the job. Moving the framework
+producers back to the local runner needs a separate reviewed design (for
+example a dedicated caller that pins a reviewed `framework.yml` commit) and an
+explicit allowlist update. The current caller sets `local-runner: false`, so
+the pinned route action selects the hosted runner without making
+local-authorization API requests, regardless of `GESHER_SELF_HOSTED_PRS`.
+Both required Linux producer jobs and all Windows execution jobs remain required.
 
 The pinned action also handles confirmed GitHub quota responses if local routing
 is later enabled after separate authorization. Matching HTTP 403/429 status and
@@ -64,12 +73,11 @@ retry the API, grant restricted-runner access, skip work or log the response bod
 Permission denials, malformed quota evidence, invalid merge identity and invalid
 ancestry retain their existing failure behavior.
 
-The pinned `framework.yml` is the one CI runs, also on GitHub-hosted runners,
-so a change to `framework.yml` on `main` takes effect only once the pin moves
-to a `main` commit that contains it (the framework steps added after the
-previous pin, such as building `crashnotice.apk` for the package job, did not
-run until then). Update the `gesher-build-trial` allowlist to the same commit
-before turning `GESHER_SELF_HOSTED_PRS` back on.
+Because the call is local, a change to `framework.yml` takes effect in the PR
+that makes it and on `main` once merged; no pin has to move. Earlier, `ci.yml`
+pinned `framework.yml` to a commit SHA; a PR changing `framework.yml` had to
+pin a commit on its own branch, which a squash merge made unreachable from
+`main`, and every repin conflicted with other open PRs.
 
 The route job runs on GitHub, without checking out PR code. It permits local
 execution only when all of these hold:
@@ -87,16 +95,17 @@ hosted CI. Invalid merge identity fails closed. No GitHub write token or account
 login is installed on the build computer.
 
 The existing documented `gesher-build-trial` allowlist remains restricted to this
-repository and the following older policies; the new framework policy is not
-added by this change:
+repository and the following older policies. The second entry is the earlier
+pinned framework policy; no current caller references it:
 
 ```
 gesher-runtime/gesher/.github/workflows/arm64-windows-self-hosted.yml@refs/heads/main
 gesher-runtime/gesher/.github/workflows/framework.yml@7a45c2468c270bfe68ee5f854aa9d4feaf2208b3
 ```
 
-The first entry remains for explicit ARM64 diagnostics. Turn off its automatic
-duplicate builds once required framework execution is enabled:
+The first entry remains for explicit ARM64 diagnostics. If a reviewed design
+later re-enables required framework execution on the local runner, turn off
+the ARM64 trial's automatic duplicate builds at the same time:
 
 ```powershell
 gh variable set GESHER_SELF_HOSTED_TRIAL --repo gesher-runtime/gesher --body false
@@ -138,11 +147,11 @@ until active local jobs finish or cancellation completes. If cancellation gets
 stuck, use `gh api --method POST repos/gesher-runtime/gesher/actions/runs/$ciRunId/force-cancel`
 and wait for completion before rerunning. Do not bypass required checks.
 
-For the previously authorized policy, `GESHER_SELF_HOSTED_PRS=true` enables local
-routing. For the new policy, a separate reviewed rollout must first authorize its
-exact workflow SHA in the group and change the caller's `local-runner` input to
-true. Leave the trial flag false. The repository switch remains the rollback
-path for any policy that has been authorized and explicitly opted in.
+`GESHER_SELF_HOSTED_PRS=true` enables local routing only for a caller that also
+passes `local-runner: true` and whose `job_workflow_ref` the group allows; the
+local call in `ci.yml` does neither. Leave the trial flag false. The repository
+switch remains the rollback path for any policy that has been authorized and
+explicitly opted in.
 
 ## Local caches
 
@@ -192,8 +201,8 @@ place. New installations receive these dependencies from `setup-wsl-runner.ps1`.
 `gh` must be installed, but must not be logged into a personal account: artifact
 reads use only the current job's read-only `GH_TOKEN`.
 `prepare-wsl-runner.ps1` verifies the exact group policy, refuses unknown
-workflow grants, and can add the newly approved pinned workflow to the old
-single-workflow group. It does not weaken repository or workflow restrictions.
+workflow grants, and can add the earlier pinned framework workflow to the old
+single-workflow group (it cannot authorize the local `ci.yml` call). It does not weaken repository or workflow restrictions.
 
 ## Validation
 

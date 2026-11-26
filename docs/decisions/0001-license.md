@@ -1,6 +1,12 @@
-# 0001 — License: Apache 2.0
+# 0001 — License: Apache 2.0 (Superseded)
 
-**Status:** accepted, 2026-10-19
+**Status:** superseded on 2026-11-25 by [LICENSE](../../LICENSE) (Proprietary — All Rights Reserved).
+
+> **Note (2026-11-25):** Going forward, Gesher is licensed under a proprietary
+> All Rights Reserved license in [LICENSE](../../LICENSE) with no public
+> redistribution permitted (with or without modifications) without prior written
+> permission. Prior releases and third-party components remain under their
+> respective licenses.
 
 ## Context
 Gesher's core is AOSP code (ART, libcore, framework, HWUI), which is Apache

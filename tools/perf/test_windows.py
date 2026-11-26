@@ -12,6 +12,7 @@ import unittest
 
 import benchmark
 from contract import read_json, write_json
+from failure_diagnostics import runner_failure_diagnostics
 from windows import WindowsJob, U32, U64
 
 HERE = Path(__file__).resolve().parent
@@ -165,7 +166,10 @@ class WindowsOwnershipTests(unittest.TestCase):
                                 'collect_resources': False, 'required_metrics': ['workload_ms']}}
         plan_path = self.root / 'plan.json'; output = self.root / 'output'
         write_json(plan_path, plan)
-        self.assertEqual(benchmark.run(plan_path, output), 2)  # Success, insufficient sample count.
+        actual = benchmark.run(plan_path, output)
+        # Keep the exact success predicate. A failed owned subprocess needs its
+        # bounded retained evidence before TemporaryDirectory removes the files.
+        self.assertEqual(actual, 2, runner_failure_diagnostics(output) if actual != 2 else None)
         rows = read_json(output / 'runs.json')['attempts']
         self.assertEqual([row['status'] for row in rows], ['passed', 'passed'])
         for row in rows:
