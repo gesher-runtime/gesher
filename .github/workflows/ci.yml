@@ -891,6 +891,10 @@ jobs:
           --dav1d-root third_party/aosp/external/libdav1d --sanitize --negative-controls
           --output-dir out/media-hevc-output-fixtures
 
+      - name: Actual RGBA input conversion and real AVC output
+        run: |
+          python3 tools/test_rgba_i420.py --libavc-root third_party/aosp/external/libavc --sanitize --negative-controls
+
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
 
