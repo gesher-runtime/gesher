@@ -139,7 +139,77 @@ bool OpenFileDescription::Adopt(HANDLE inherited) {
   return true;
 }
 
+namespace {
+#ifdef GESHER_FORK_LOCK
+SRWLOCK capture_lock = SRWLOCK_INIT;
+DescriptorSnapshot* first_capture = nullptr;
+DWORD forking_thread = 0;
+
+struct CaptureLock {
+  CaptureLock() { AcquireSRWLockExclusive(&capture_lock); }
+  ~CaptureLock() { ReleaseSRWLockExclusive(&capture_lock); }
+};
+
+void LinkCapture(DescriptorSnapshot& snapshot) {
+  snapshot.capture_thread = GetCurrentThreadId();
+  snapshot.next_capture = first_capture;
+  if (first_capture) first_capture->previous_capture = &snapshot;
+  first_capture = &snapshot;
+}
+
+void UnlinkCapture(DescriptorSnapshot& snapshot) {
+  if (snapshot.previous_capture) {
+    snapshot.previous_capture->next_capture = snapshot.next_capture;
+  } else {
+    first_capture = snapshot.next_capture;
+  }
+  if (snapshot.next_capture) snapshot.next_capture->previous_capture = snapshot.previous_capture;
+  snapshot.previous_capture = nullptr;
+  snapshot.next_capture = nullptr;
+  snapshot.capture_thread = 0;
+}
+
+bool TryCaptureForkLock(void* lock) {
+  if (!TryAcquireSRWLockExclusive(static_cast<SRWLOCK*>(lock))) return false;
+  forking_thread = GetCurrentThreadId();
+  return true;
+}
+
+void CaptureForkChild(void* lock) {
+  const DWORD child_thread = GetCurrentThreadId();
+  for (auto* snapshot = first_capture; snapshot != nullptr;) {
+    auto* next = snapshot->next_capture;
+    if (snapshot->capture_thread == forking_thread) {
+      snapshot->capture_thread = child_thread;
+    } else {
+      // The operation owning this duplicate will never resume here. Other
+      // owners of the file (including the real descriptor) keep their handles.
+      if (InheritedAtFork(snapshot->handle)) CloseHandle(snapshot->handle);
+      snapshot->handle = nullptr;
+      UnlinkCapture(*snapshot);
+    }
+    snapshot = next;
+  }
+  InitializeSRWLock(static_cast<SRWLOCK*>(lock));
+}
+
+const ForkLockOps capture_fork_ops{
+    TryCaptureForkLock, ForkLockTraits<SRWLOCK>::Unlock, CaptureForkChild};
+const ForkLockRegistration capture_fork_lock(
+    kForkOrderLeaf, "descriptor captures", []() -> void* { return &capture_lock; },
+    &capture_fork_ops);
+#endif
+}  // namespace
+
 DescriptorSnapshot::~DescriptorSnapshot() {
+#ifdef GESHER_FORK_LOCK
+  if (capture_thread) {
+    CaptureLock lock;
+    UnlinkCapture(*this);
+    CloseHandle(handle);
+    return;
+  }
+#endif
   if (handle && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
 }
 
@@ -393,9 +463,15 @@ DescriptorSnapshotPtr Snapshot(HANDLE file, const std::shared_ptr<OpenFileDescri
   // allocation failure cannot leak a hidden handle or prolong peer lifetime.
   auto snapshot = std::make_shared<DescriptorSnapshot>();
   HANDLE duplicate = nullptr;
+#ifdef GESHER_FORK_LOCK
+  CaptureLock lock;
+#endif
   if (!DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &duplicate,
                        0, FALSE, DUPLICATE_SAME_ACCESS)) { FailWithLastError(); return {}; }
   snapshot->handle = duplicate;
+#ifdef GESHER_FORK_LOCK
+  LinkCapture(*snapshot);
+#endif
   snapshot->descriptor_flags = (native_flags & HANDLE_FLAG_INHERIT) != 0 ? 0 : FD_CLOEXEC;
   snapshot->description = description;
   snapshot->kind = description->kind.load();

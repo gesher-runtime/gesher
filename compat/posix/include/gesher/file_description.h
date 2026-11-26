@@ -25,6 +25,12 @@ struct DescriptorSnapshot {
   DescriptorKind kind = DescriptorKind::kFile;
   std::shared_ptr<OpenFileDescription> description;
   ~DescriptorSnapshot();
+
+  // Only private duplicates made while capturing a descriptor are linked.
+  // Their owner is the thread running the operation that requested the pin.
+  DWORD capture_thread = 0;
+  DescriptorSnapshot* previous_capture = nullptr;
+  DescriptorSnapshot* next_capture = nullptr;
 };
 
 using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;

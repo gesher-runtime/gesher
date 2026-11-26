@@ -113,6 +113,9 @@ if ($LASTEXITCODE -ne 0) { $failed++ }
 # It works in a directory of its own under the current one (the workspace's
 # drive), and on TEMP's drive as /mnt/<drive> when that is another one.
 Check 'posix probe: paths, /proc, /etc/timezone, inotify, processes' { & "$Dir/posix_probe.exe" } @('inotify local-write routing: complete', 'all passed')
+Check 'fork releases private descriptor pins belonging to other threads' {
+  & "$Dir/posix_probe.exe" --fork-captures
+} @('fork descriptor captures passed')
 Check 'native dlopen paths, safe search and module references' {
   & "$Dir/dlopen_windows_test.exe" (Resolve-Path -LiteralPath (Join-Path $Dir 'dlopen-fixtures')).Path
 } @('dlopen Windows:', '0 failures')
