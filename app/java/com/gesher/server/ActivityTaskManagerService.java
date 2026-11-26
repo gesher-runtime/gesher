@@ -6187,7 +6187,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         List<PendingFinish> accepted = new ArrayList<>();
-        Map<ActivityRecord, List<ResultInfo>> immediateResults = new java.util.LinkedHashMap<>();
+        Set<ActivityRecord> immediateResults = new java.util.LinkedHashSet<>();
         synchronized (this) {
             if (isActivityRetired(source) || !allowedAtCommit.getAsBoolean()) return false;
             for (PendingFinish pending : prepared) {
@@ -6212,10 +6212,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 if (pending.deliverResult) {
                     ActivityRecord recipient = pending.result.recipient;
                     queueActivityResultLocked(r, pending.result);
-                    if (recipient.state == State.RESUMED && recipient.app != null) {
-                        immediateResults.computeIfAbsent(recipient, ignored -> new ArrayList<>())
-                                .addAll(takeResults(recipient));
-                    }
+                    if (recipient.state == State.RESUMED) immediateResults.add(recipient);
                 }
             }
             if (!accepted.isEmpty()) notifyTaskStackChangedLocked();
@@ -6229,24 +6226,35 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             }
         }
         updateTopResumed();
-        for (Map.Entry<ActivityRecord, List<ResultInfo>> entry : immediateResults.entrySet()) {
-            ActivityRecord recipient = entry.getKey();
-            synchronized (this) {
-                if (isActivityRetired(recipient) || recipient.finishing) continue;
-                if (recipient.state != State.RESUMED || recipient.app == null) {
-                    recipient.pendingResults.addAll(0, entry.getValue());
-                    continue;
-                }
-            }
-            ClientTransaction transaction = new ClientTransaction(recipient.app.thread);
-            transaction.addTransactionItem(new ActivityResultItem(recipient.token, entry.getValue()));
-            schedule(recipient, transaction, "ActivityResultItem");
-        }
+        for (ActivityRecord recipient : immediateResults) dispatchResumedResults(recipient);
         for (PendingFinish pending : accepted) {
             SystemServer.log("finishing " + pending.activity.name() + " (" + reason + ")");
             completeFinish(pending.activity);
         }
         return true;
+    }
+
+    private void dispatchResumedResults(ActivityRecord recipient) {
+        final ProcessRecord app;
+        final List<ResultInfo> results;
+        synchronized (this) {
+            app = recipient.app;
+            if (isActivityRetired(recipient) || recipient.finishing || recipient.state != State.RESUMED
+                    || app == null || app.thread == null || app.dead || app.exiting || app.pidSuperseded) return;
+            results = takeResults(recipient);
+        }
+        if (results == null) return;
+        ClientTransaction transaction = new ClientTransaction(app.thread);
+        transaction.addTransactionItem(new ActivityResultItem(recipient.token, results));
+        if (!schedule(app, recipient, transaction, "ActivityResultItem")) {
+            synchronized (this) {
+                // The restored record still owns these results after a failed
+                // transaction. Keep them ahead of any newer pending results.
+                if (!isActivityRetired(recipient) && !recipient.finishing) {
+                    recipient.pendingResults.addAll(0, results);
+                }
+            }
+        }
     }
 
     private record PreparedActivityResult(ActivityRecord recipient, int code, Intent data,

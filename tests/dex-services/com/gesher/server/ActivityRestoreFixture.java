@@ -7,6 +7,7 @@ import android.app.ActivityManager;
 import android.app.IActivityClientController;
 import android.app.IApplicationThread;
 import android.app.ResultInfo;
+import android.app.servertransaction.ActivityResultItem;
 import android.app.servertransaction.ActivityTransactionItem;
 import android.app.servertransaction.ClientTransaction;
 import android.app.servertransaction.ClientTransactionItem;
@@ -147,6 +148,7 @@ public final class ActivityRestoreFixture {
         IActivityClientController controller;
         boolean autoAck = true;
         boolean failNextTransaction;
+        boolean failNextResultTransaction;
         Operation onExit;
         @Override public void scheduleExit() {
             try { if (onExit != null) onExit.run(); }
@@ -157,6 +159,11 @@ public final class ActivityRestoreFixture {
 
         @Override public void scheduleTransaction(ClientTransaction transaction) throws RemoteException {
             if (failNextTransaction) { failNextTransaction = false; throw new RemoteException("isolated failed restore IPC"); }
+            if (failNextResultTransaction
+                    && transaction.getTransactionItems().stream().anyMatch(ActivityResultItem.class::isInstance)) {
+                failNextResultTransaction = false;
+                throw new RemoteException("isolated failed result IPC");
+            }
             try {
                 for (ClientTransactionItem item : transaction.getTransactionItems()) {
                     IBinder token = null;
@@ -645,6 +652,45 @@ public final class ActivityRestoreFixture {
         check(!h.records.contains(record), "Process death retained activity using a late snapshot");
     }
 
+    private static void testFailedFinishResultDelivery() throws Exception {
+        Harness h = new Harness();
+        Object recipient = h.record("ParentAct", 20, "a", "RESUMED");
+        Object older = h.record("ChildAct", 21, "b", "STOPPED", recipient, "route", 56);
+        Object newer = h.record("ChildAct", 21, "b", "STOPPED", recipient, "route", 56);
+
+        h.thread.failNextResultTransaction = true;
+        h.asApp(() -> h.controller.finishSubActivity(token(recipient), "route", 56));
+        check(!h.thread.failNextResultTransaction, "Resumed result dispatch was never attempted");
+        check(!h.records.contains(older) && !h.records.contains(newer),
+                "Rejected dispatch prevented finishing the selected children");
+        List<?> pending = (List<?>) get(recipient, "pendingResults");
+        check(pending.size() == 2, "Rejected finish transaction discarded the caller's queued results");
+        check(get(pending.get(0), "source") == newer && get(pending.get(1), "source") == older,
+                "Rejected finish transaction changed the selected result order");
+
+        set(recipient, "state", state("STOPPING"));
+        Bundle snapshot = new Bundle();
+        snapshot.putString("restore", "finish-result");
+        h.asApp(() -> h.controller.activityStopped(token(recipient), snapshot, null, null, null));
+        h.processDied(h.process);
+        check(h.records.contains(recipient) && get(recipient, "app") == null,
+                "Stopped parent was not retained after process death");
+        AppThread replacement = new AppThread();
+        h.newProcess(PID + 32, replacement);
+        h.moveTaskToFront(20);
+        LaunchActivityItem launch = replacement.findLaunchItem(recipient);
+        check(launch != null, "No restored launch after rejected result transaction");
+        @SuppressWarnings("unchecked")
+        List<ResultInfo> results = (List<ResultInfo>) field(LaunchActivityItem.class, "mPendingResults").get(launch);
+        check(results != null && results.size() == 2, "Restored activity lost results from rejected IPC");
+        for (ResultInfo result : results) {
+            check(result.mRequestCode == 56 && "route".equals(result.mResultWho)
+                            && result.mResultCode == Activity.RESULT_CANCELED && result.mData == null,
+                    "Restored finish result changed routing, status, or data");
+        }
+        check(pending.isEmpty(), "Restored launch kept already accepted results queued");
+    }
+
     private static void testForceStopLiveSavedRecord() throws Exception {
         Harness h = new Harness();
         Object original = h.record("MainAct", 1, "a", "STOPPED");
@@ -672,6 +718,7 @@ public final class ActivityRestoreFixture {
             testForceStopLiveSavedRecord();
         }
         if (group.equals("all") || group.equals("results")) testPendingResultsPreservedAcrossProcessDeath();
+        if (group.equals("all") || group.equals("finish-result-retry")) testFailedFinishResultDelivery();
         if (group.equals("all") || group.equals("late-stop")) testLateStopDoesNotRestoreStaleState();
         if (group.equals("all") || group.equals("movetask")) testMoveTaskToFrontRelaunch();
         if (group.equals("all") || group.equals("paused")) testActivityPausedFinishingRelaunchesUnderlying();
