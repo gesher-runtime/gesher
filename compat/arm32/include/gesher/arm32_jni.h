@@ -35,6 +35,19 @@ class Jni32 {
   // Must be called after Install(); no host pointer is returned.
   uint32_t GuestEnvironment() const;
 
+  // Guest JavaVM* has its own 32-bit invoke-interface table. GetEnv and
+  // AttachCurrentThread on the existing owning ART thread are implemented;
+  // new guest threads and detachment are not supported.
+  uint32_t GuestJavaVM() const;
+
+  // Enter the DSO's JNI_OnLoad(JavaVM*, void*) through AAPCS32 after its
+  // constructors have been run. A missing JNI_OnLoad export is an error here:
+  // the caller decides whether the library declares one. No ART registration
+  // is performed by this helper.
+  bool CallOnLoad(std::string_view library, jint* version,
+                  std::string* error = nullptr,
+                  uint64_t instruction_budget = 1000000);
+
   // Enter a named ARM32 JNI method from the owning ART thread. The descriptor
   // governs every argument and the result; jobjects are copied into
   // generation-checked 32-bit guest tokens, never narrowed from 64-bit host
