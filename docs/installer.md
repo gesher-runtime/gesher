@@ -17,6 +17,58 @@ Gesher's icon, `tools/package/gesher.ico` (a bridge, drawn by
 Programs' (`UninstallDisplayIcon`), the Start menu entries' and that of an
 `.apk` file Gesher has not installed.
 
+## License agreement
+
+Before a new installation, Setup displays the complete repository
+[`LICENSE`](../LICENSE), including the Commercial End-User License Agreement,
+in a scrollable text viewer. The agreement is bundled into Setup, so reading it
+does not require an internet connection. The same English text appears in both
+the English and Hebrew wizard; the Hebrew wizard keeps the agreement itself
+left-to-right. **I do not accept the agreement** is selected initially, and
+**Next** stays disabled until the user selects **I accept the agreement**.
+Cancelling or declining does not install files or record acceptance.
+
+The agreement step follows the installation mode and destination selection.
+A successful installation stores the SHA-256 of the accepted `LICENSE` in
+`gesher-license.ini` beside the installed `LICENSE`. Updates of that same
+installation skip the agreement step only while this receipt matches the exact
+agreement bundled in the new installer. A changed agreement, a legacy install
+without a receipt, or an unreadable or invalid receipt requires acceptance
+again. The installer does not infer consent from an existing copy of `LICENSE`.
+Changing the destination checks the new target separately. These rules apply
+to standard and portable Setup installations, including updates of a portable
+ZIP's `App` directory.
+
+For an unattended deployment, `/SILENT` and `/VERYSILENT` alone do not accept
+new terms. If the target has no matching receipt, first provide the complete
+agreement to the person authorizing the deployment and obtain their acceptance,
+then pass `/ACCEPTLICENSE=<SHA256>` with the SHA-256 of that exact `LICENSE`
+file. A bare flag, an incorrect hash or a hash for older terms is refused before
+Setup stops the device or replaces installed files. A matching existing receipt
+allows a same-terms unattended update without a new flag. The flag does not
+preselect acceptance in the interactive wizard.
+
+```powershell
+# After reviewing and accepting this release's complete LICENSE:
+$licenseHash = (Get-FileHash -LiteralPath .\LICENSE -Algorithm SHA256).Hash
+.\gesher-setup-X.Y.Z.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/ACCEPTLICENSE=$licenseHash"
+```
+
+The receipt records installation consent; it is not a license entitlement or
+an activation check. The agreement's existing requirements still apply.
+
+The package job runs `tests/windows/shell/InstallerLicenseChecks.ps1` against
+the compiled installer. It reads back the complete displayed text in both
+languages, checks scrolling and the default/explicit choice, unchanged and
+changed terms, destination changes, cancellation without writes, and rejection
+of unattended installs without valid consent. The ordinary package checks then
+verify the installed agreement and receipt and perform a same-terms update
+without an acceptance flag. These checks require Windows; portable packaging
+tests separately verify the archive's exact agreement bytes and absence of a
+pre-created consent receipt. The Windows host job also compiles the unchanged
+installer with inert payload files and runs the same wizard checks before the
+full runtime is built; that fixture never installs or executes a runtime.
+
 ## Portable package
 
 Each release also includes `gesher-X.Y.Z-portable.zip`, its `.sha256` file and
@@ -29,6 +81,9 @@ the runtime, while `Data` contains the Android profile, installed apps, settings
 and logs. A `portable.marker` file declares the mode; an unrelated folder named
 `Data` does not. `GESHER_PROFILE` remains an explicit profile override. Stop the
 Gesher device and close its apps before copying the folder or removing a drive.
+`App/LICENSE` contains the complete agreement. Extracting the ZIP does not run
+Setup or create an acceptance receipt; the Setup agreement step applies when
+that folder is subsequently installed or updated with Setup.
 
 Setup also offers a portable mode (`/PORTABLE /DIR=<runtime-directory>`), with a
 flat runtime layout. Updating an extracted ZIP targets its existing `App`

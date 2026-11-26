@@ -73,7 +73,11 @@ foreach ($line in [IO.File]::ReadAllLines((Join-Path $packageDir 'gesher.iss')))
     if (@($flags | Where-Object { $_ -notin @('ignoreversion', 'recursesubdirs') }).Count) { throw "Unsupported installer file flags: $($fields.Flags)" }
     $sourceRoot = $packageDir
     $relative = $fields.Source
-    if ($relative.StartsWith('{#BuildDir}\', [StringComparison]::Ordinal)) {
+    if ($relative -ceq '..\..\LICENSE') {
+        # This exact repository-owned input is shared with Setup's agreement
+        # page. Keep every other parent-relative path forbidden.
+        $sourceRoot = $repoRoot; $relative = 'LICENSE'
+    } elseif ($relative.StartsWith('{#BuildDir}\', [StringComparison]::Ordinal)) {
         $sourceRoot = $BuildDir; $relative = $relative.Substring(12)
     }
     $relative = $relative.Replace('\', '/')

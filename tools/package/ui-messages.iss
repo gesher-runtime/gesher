@@ -12,6 +12,8 @@ en.setup_control_panel=Gesher Control Center
 en.setup_installing_webview2=Installing Microsoft Edge WebView2...
 en.setup_configuring_microg=Setting up Google Play services and applications...
 en.setup_download_skipped=Setup could not download these components and will continue without them:%n%n%1%nThe network may be blocking the download, or the server may be unreachable (%2). To install them later, run Setup again (microG and Aurora Store can also be installed from the Gesher Control Center).
+en.setup_license_required=The license agreement must be accepted before installation. Run Setup interactively to read the complete agreement, or, after reviewing this release's LICENSE, pass /ACCEPTLICENSE=<SHA256 of that LICENSE> for an unattended installation.
+en.setup_license_receipt_failed=Gesher was installed, but acceptance of the license agreement could not be saved. Check that the installation folder is writable. Setup will ask for acceptance again on the next update.
 en.setup_install_type_title=Installation Type
 en.setup_install_type_desc=Choose how you want to install Gesher.
 en.setup_install_standard=Standard installation (recommended for this computer)
@@ -33,6 +35,8 @@ he.setup_control_panel=לוח הבקרה של גשר
 he.setup_installing_webview2=מתקין את Microsoft Edge WebView2...
 he.setup_configuring_microg=מגדיר שירותי Google Play ויישומים...
 he.setup_download_skipped=לא ניתן היה להוריד את הרכיבים הבאים, וההתקנה תמשיך בלעדיהם:%n%n%1%nייתכן שהרשת חוסמת את ההורדה או שאין גישה לשרת ההורדה (%2). כדי להתקין אותם מאוחר יותר, יש להריץ את ההתקנה שוב (את microG ואת Aurora Store אפשר להתקין גם מלוח הבקרה של גשר).
+he.setup_license_required=יש לאשר את הסכם הרישיון לפני ההתקנה. יש להפעיל את ההתקנה במצב רגיל כדי לקרוא את ההסכם המלא, או, לאחר עיון בקובץ LICENSE של גרסה זו, להעביר /ACCEPTLICENSE=<SHA256 של קובץ LICENSE זה> להתקנה ללא ממשק.
+he.setup_license_receipt_failed=גשר הותקן, אך לא ניתן היה לשמור את אישור הסכם הרישיון. יש לוודא שניתן לכתוב לתיקיית ההתקנה. ההתקנה תבקש אישור נוסף בעדכון הבא.
 he.setup_install_type_title=סוג התקנה
 he.setup_install_type_desc=בחר כיצד ברצונך להתקין את גשר.
 he.setup_install_standard=התקנה רגילה (מומלץ למחשב זה)

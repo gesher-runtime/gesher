@@ -21,6 +21,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or $PSVersionTa
 }
 $ZipPath = (Resolve-Path -LiteralPath $ZipPath).ProviderPath
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).ProviderPath
+$licenseHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot '../../../LICENSE') -Algorithm SHA256).Hash
 $InstalledRuntimeDirectory = (Resolve-Path -LiteralPath $InstalledRuntimeDirectory).ProviderPath
 if ($ComponentsApk) { $ComponentsApk = (Resolve-Path -LiteralPath $ComponentsApk).ProviderPath }
 $testStarted = [DateTime]::UtcNow
@@ -235,9 +236,11 @@ function Invoke-Hello([string] $Runtime, [string] $Name) {
     Assert-PortableRuntime ($output.Contains('Hello from ART on Windows') -and $output.Contains('gesher: boot image loaded: 3 spaces')) 'Portable Hello did not execute through its required boot image'
 }
 function Invoke-PortableSetup([string] $Runtime, [string] $Name, [switch] $ExpectFailure) {
-    # Same flags supplied by the production updater, plus unattended CI/logging.
+    # Same mode and destination as the updater, plus explicit agreement consent
+    # for this unattended test deployment and its log.
     $null = Invoke-CheckedProcess $InstallerPath @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/PORTABLE',
-        ('/DIR=' + $Runtime), ('/LOG=' + (Join-Path $logs ($Name + '-setup.log')))) $work $Name 240 -ExpectFailure:$ExpectFailure
+        ('/ACCEPTLICENSE=' + $licenseHash), ('/DIR=' + $Runtime),
+        ('/LOG=' + (Join-Path $logs ($Name + '-setup.log')))) $work $Name 240 -ExpectFailure:$ExpectFailure
 }
 function Assert-PackageProfile([string] $Listing, [string] $Root, [string] $Runtime) {
     $match = [regex]::Match($Listing, '(?m)^package:com\.gesher\.lifecycle version .*? \(\d+\) (.+?), \d+ activities,')

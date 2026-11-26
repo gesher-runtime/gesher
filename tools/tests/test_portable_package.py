@@ -23,6 +23,7 @@ class PortablePackageTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.build = self.root / 'build [literal]'
         self.out = self.root / 'output [literal]'
+        self.packager = ROOT / 'tools/package/package-portable.ps1'
         self.build.mkdir()
         names = (
             'dalvikvm.exe libgesher_account_crypto.so libgesher_install_pipe.so '
@@ -46,7 +47,7 @@ class PortablePackageTests(unittest.TestCase):
 
     def package(self, *extra, success=True, version=VERSION):
         result = subprocess.run(
-            [SHELL, '-NoProfile', '-File', str(ROOT / 'tools/package/package-portable.ps1'),
+            [SHELL, '-NoProfile', '-File', str(self.packager),
              '-BuildDir', str(self.build), '-OutDir', str(self.out), '-Version', version, *extra],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
         if success:
@@ -79,6 +80,8 @@ class PortablePackageTests(unittest.TestCase):
             self.assertNotIn(prefix + 'App/unshipped-test-fixture.jar', names)
             self.assertEqual(z.read(prefix + 'Gesher.exe'), (self.build / 'gesher-launch.exe').read_bytes())
             self.assertEqual(z.read(prefix + 'App/gesher-launch.exe'), (self.build / 'gesher-launch.exe').read_bytes())
+            self.assertEqual(z.read(prefix + 'App/LICENSE'), (ROOT / 'LICENSE').read_bytes())
+            self.assertNotIn(prefix + 'App/gesher-license.ini', names)
             self.assertIn(b'Version=0.9.1', z.read(prefix + 'App/gesher-version.ini'))
         self.assertFalse(any(p.name.startswith('.portable-') for p in self.out.iterdir()))
 
@@ -91,6 +94,17 @@ class PortablePackageTests(unittest.TestCase):
         self.package()
         before = {p.name: p.read_bytes() for p in self.out.iterdir()}
         (self.build / 'ANGLE-NOTICES.txt').unlink()
+        self.package(success=False)
+        self.assertEqual({p.name: p.read_bytes() for p in self.out.iterdir()}, before)
+
+    def test_missing_repository_agreement_preserves_existing_archive(self):
+        self.package()
+        before = {p.name: p.read_bytes() for p in self.out.iterdir()}
+        # A source checkout with a missing canonical agreement must fail before
+        # replacing any release files. Never remove the real repository license.
+        package_copy = self.root / 'checkout/tools/package'
+        shutil.copytree(ROOT / 'tools/package', package_copy)
+        self.packager = package_copy / 'package-portable.ps1'
         self.package(success=False)
         self.assertEqual({p.name: p.read_bytes() for p in self.out.iterdir()}, before)
 

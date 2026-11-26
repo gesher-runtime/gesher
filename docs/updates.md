@@ -18,6 +18,15 @@ in place, with automatic Windows restart disabled. The panel distinguishes
 installer cancellation/failure from completion and reads the installed version
 again before reporting success. Save work in open Android apps before proceeding.
 
+The installer asks for license acceptance only when this installation has not
+accepted the exact agreement bundled in the update. If the agreement's SHA-256
+matches the installation's `gesher-license.ini` receipt, Setup skips that step.
+Changed terms, an older installation without a receipt, or an invalid receipt
+show the complete agreement and require an explicit choice. The Control Center
+does not accept terms on the user's behalf. See [the installer agreement
+step](installer.md#license-agreement) for unattended deployments and portable
+installations.
+
 Installed Android apps, their data, accounts and settings remain in
 `%LOCALAPPDATA%\Gesher`. The updater runs the new installer over the current
 installation; it never runs the uninstaller. Uninstalling Gesher has different
