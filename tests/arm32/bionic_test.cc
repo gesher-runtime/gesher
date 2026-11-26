@@ -46,6 +46,7 @@ void Run(const char* path) {
   call("bionic_heap", 42);
   call("bionic_copy", 77);
   call("bionic_strings", 21);
+  call("bionic_errno", 55);
 
   Value invalid;
   Check(!program.CallExport(soname, "bionic_invalid", {}, ValueKind::I32,
