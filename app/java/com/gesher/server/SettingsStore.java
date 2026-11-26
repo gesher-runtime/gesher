@@ -4,7 +4,6 @@ package com.gesher.server;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
@@ -45,6 +44,7 @@ final class SettingsStore {
     private final File mFile;
     private final Map<String, Map<String, String>> mTables;
     private final Map<String, Map<String, Long>> mIds = new LinkedHashMap<>();
+    private final CRC32 mRecordCrc = new CRC32();
     private long mNextId;
     private boolean mCheckpointNeeded = true;
     private boolean mTornTail;
@@ -160,30 +160,59 @@ final class SettingsStore {
         }
     }
 
+    private static int tableIndex(String table) {
+        if ("system".equals(table)) return 0;
+        if ("secure".equals(table)) return 1;
+        if ("global".equals(table)) return 2;
+        for (int i = 0; i < TABLES.length; i++) {
+            if (TABLES[i].equals(table)) return i;
+        }
+        return -1;
+    }
+
+    private static void putInt(byte[] buf, int pos, int v) {
+        buf[pos] = (byte) (v >>> 24);
+        buf[pos + 1] = (byte) (v >>> 16);
+        buf[pos + 2] = (byte) (v >>> 8);
+        buf[pos + 3] = (byte) v;
+    }
+
+    private static void putLong(byte[] buf, int pos, long v) {
+        putInt(buf, pos, (int) (v >>> 32));
+        putInt(buf, pos + 4, (int) v);
+    }
+
+    private static int putString(byte[] buf, int pos, String value) {
+        int len = value.length();
+        putInt(buf, pos, len);
+        pos += 4;
+        for (int i = 0; i < len; i++) {
+            char c = value.charAt(i);
+            buf[pos++] = (byte) (c >>> 8);
+            buf[pos++] = (byte) c;
+        }
+        return pos;
+    }
+
     /** At most one changed row is buffered, independently of the size of the store. */
-    private byte[] record(String table, String name, String value, boolean remove) throws IOException {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        DataOutputStream out = new DataOutputStream(bytes);
-        out.writeLong(mNextId);
-        int index = java.util.Arrays.asList(TABLES).indexOf(table);
-        out.writeByte(index);
-        out.writeByte(remove ? 2 : value == null ? 0 : 1);
-        writeString(out, name);
-        if (!remove && value != null) writeString(out, value);
-        out.flush();
-        byte[] payload = bytes.toByteArray();
-        CRC32 checksum = new CRC32();
-        checksum.update(payload);
-        bytes.reset();
-        out.writeInt(payload.length);
+    private byte[] record(String table, String name, String value, boolean remove) {
+        boolean hasValue = !remove && value != null;
+        int payloadLen = 10 + 4 + name.length() * 2 + (hasValue ? 4 + value.length() * 2 : 0);
+        byte[] buf = new byte[8 + payloadLen + 4];
         // Validate framing before treating EOF as an incomplete payload. Without
         // this redundant header, a corrupted length could hide a committed row
         // as a supposedly torn append and the next write would truncate it.
-        out.writeInt(~payload.length);
-        out.write(payload);
-        out.writeInt((int) checksum.getValue());
-        out.flush();
-        return bytes.toByteArray();
+        putInt(buf, 0, payloadLen);
+        putInt(buf, 4, ~payloadLen);
+        putLong(buf, 8, mNextId);
+        buf[16] = (byte) tableIndex(table);
+        buf[17] = (byte) (remove ? 2 : value == null ? 0 : 1);
+        int pos = putString(buf, 18, name);
+        if (hasValue) pos = putString(buf, pos, value);
+        mRecordCrc.reset();
+        mRecordCrc.update(buf, 8, payloadLen);
+        putInt(buf, 8 + payloadLen, (int) mRecordCrc.getValue());
+        return buf;
     }
 
     /**

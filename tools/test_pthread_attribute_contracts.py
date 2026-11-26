@@ -51,7 +51,11 @@ def main() -> int:
             r"^  P\(pthread_(?:attr_[A-Za-z_]+|getattr_np|self|create|join|detach)\);$", pthread, re.M)),
         "@EXTRA_REGISTRATIONS@": "\n".join(re.findall(
             r'^  E\("pthread_attr_[A-Za-z_]+", PthreadAttr[A-Za-z_]+\);$', extra, re.M)),
-        "@GUEST_START_STATE@": section(guest, "using ThreadStart =", "// fork()/vfork()"),
+        # The guest's thread start state ends where its fork section begins
+        # (ADR 0092 replaced the EAGAIN stub's comment).
+        "@GUEST_START_STATE@": section(guest, "using ThreadStart =",
+                                       "// --- fork, vfork, clone" if "// --- fork, vfork, clone" in guest
+                                       else "// fork()/vfork()"),
         "@GUEST_START_API@": section(guest, "void* GESHER_SYSV StartGuestThread(",
                                     "// arm64's wchar_t"),
         "@GUEST_STACK_PUBLICATION@": "" if args.source_ref else section(

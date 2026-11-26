@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "services_zygote.h"
+#include "app_container.h"
 #include "../posix/src/binder_wire.h"
 
 namespace gesher {
@@ -123,9 +124,48 @@ struct HandleList {
 
 }  // namespace
 
-int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
-          const std::vector<std::u16string>& unset, const std::u16string& log_path,
-          bool breakaway, uint32_t compiler_memory_mib, uint32_t compiler_cpu_rate) {
+namespace {
+
+// An app process's AppContainer token: its package's container SID and its
+// capability SIDs, kept alive until CreateProcessW returns.
+struct Container {
+  appcontainer::Sid sid;
+  std::vector<appcontainer::Sid> capability_sids;
+  std::vector<SID_AND_ATTRIBUTES> capabilities;
+  SECURITY_CAPABILITIES security{};
+  std::u16string folder;
+};
+
+std::wstring Wide(const std::u16string& s) {
+  return std::wstring(reinterpret_cast<const wchar_t*>(s.data()), s.size());
+}
+
+DWORD PrepareContainer(const AppContainerSpec& spec, Container* out) {
+  DWORD error = appcontainer::EnsureProfile(Wide(spec.name), Wide(spec.display_name), &out->sid);
+  if (error != ERROR_SUCCESS) return error;
+  for (const auto& capability : spec.capabilities) {
+    appcontainer::Sid sid;
+    error = appcontainer::CapabilitySid(Wide(capability), &sid);
+    if (error != ERROR_SUCCESS) return error;
+    out->capability_sids.push_back(std::move(sid));
+  }
+  for (const auto& sid : out->capability_sids) {
+    out->capabilities.push_back({sid.value, SE_GROUP_ENABLED});
+  }
+  out->security.AppContainerSid = out->sid.value;
+  out->security.Capabilities = out->capabilities.empty() ? nullptr : out->capabilities.data();
+  out->security.CapabilityCount = static_cast<DWORD>(out->capabilities.size());
+  std::wstring folder;
+  error = appcontainer::FolderPath(out->sid.value, &folder);
+  if (error != ERROR_SUCCESS) return error;
+  out->folder = U(folder.c_str(), folder.size());
+  return ERROR_SUCCESS;
+}
+
+int SpawnImpl(const std::u16string& command_line, std::vector<std::u16string> set,
+              const std::vector<std::u16string>& unset, const std::u16string& log_path,
+              bool breakaway, uint32_t compiler_memory_mib, uint32_t compiler_cpu_rate,
+              const AppContainerSpec* sandbox) {
   const bool compiler = compiler_memory_mib != 0;
   if (compiler && (breakaway || compiler_memory_mib < 512 || compiler_memory_mib > 2048 ||
                    compiler_cpu_rate < 100 || compiler_cpu_rate > 10000))
@@ -150,6 +190,15 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
                                  &cpu, sizeof(cpu)))
       return -static_cast<int>(GetLastError());
   }
+  Container container;
+  if (sandbox != nullptr) {
+    DWORD error = PrepareContainer(*sandbox, &container);
+    if (error != ERROR_SUCCESS) return -static_cast<int>(error);
+    // Temporary files in the container's own folder: the user's %TEMP% is closed to it.
+    set.push_back(u"TEMP=" + container.folder);
+    set.push_back(u"TMP=" + container.folder);
+  }
+  const DWORD attribute_count = sandbox != nullptr ? 2 : 1;
   SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, TRUE};
   // Appending only: stdout and stderr share the handle, and every write goes
   // to the end, also with another process appending to the same log.
@@ -166,13 +215,19 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
   }
   HANDLE handles[] = {log, nul};
   SIZE_T size = 0;
-  InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+  InitializeProcThreadAttributeList(nullptr, attribute_count, 0, &size);
   std::vector<char> storage(size);
   auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
   int result = 0;
-  if (!InitializeProcThreadAttributeList(attributes, 1, 0, &size) ||
+  const bool initialized =
+      InitializeProcThreadAttributeList(attributes, attribute_count, 0, &size) != FALSE;
+  if (!initialized ||
       !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
-                                 sizeof(handles), nullptr, nullptr)) {
+                                 sizeof(handles), nullptr, nullptr) ||
+      (sandbox != nullptr &&
+       !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                                  &container.security, sizeof(container.security), nullptr,
+                                  nullptr))) {
     result = -static_cast<int>(GetLastError());
   }
   if (result == 0) {
@@ -236,11 +291,71 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
     } else if (result == 0) {
       result = -static_cast<int>(GetLastError());
     }
-    DeleteProcThreadAttributeList(attributes);
   }
+  if (initialized) DeleteProcThreadAttributeList(attributes);
   CloseHandle(nul);
   CloseHandle(log);
   return result;
+}
+
+}  // namespace
+
+int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
+          const std::vector<std::u16string>& unset, const std::u16string& log_path,
+          bool breakaway, uint32_t compiler_memory_mib, uint32_t compiler_cpu_rate) {
+  return SpawnImpl(command_line, set, unset, log_path, breakaway, compiler_memory_mib,
+                   compiler_cpu_rate, nullptr);
+}
+
+int SpawnInAppContainer(const std::u16string& command_line,
+                        const std::vector<std::u16string>& set,
+                        const std::vector<std::u16string>& unset, const std::u16string& log_path,
+                        const AppContainerSpec& sandbox) {
+  return SpawnImpl(command_line, set, unset, log_path, false, 0, 0, &sandbox);
+}
+
+uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& display_name) {
+  appcontainer::Sid sid;
+  return appcontainer::EnsureProfile(Wide(name), Wide(display_name), &sid);
+}
+
+uint32_t GrantToAppContainer(const std::u16string& path, const std::u16string& name,
+                             uint32_t access, bool inherit) {
+  appcontainer::Sid sid;
+  DWORD error = appcontainer::ContainerSid(Wide(name), &sid);
+  if (error != ERROR_SUCCESS) return error;
+  return appcontainer::Grant(Wide(path), sid.value, access, inherit);
+}
+
+uint32_t RevokeFromAppContainer(const std::u16string& path, const std::u16string& name) {
+  appcontainer::Sid sid;
+  DWORD error = appcontainer::ContainerSid(Wide(name), &sid);
+  if (error != ERROR_SUCCESS) return error;
+  return appcontainer::Revoke(Wide(path), sid.value);
+}
+
+uint32_t SetAppContainerStorageAccess(const std::u16string& path, const std::u16string& name,
+                                      uint32_t access, bool inherit) {
+  appcontainer::Sid sid;
+  DWORD error = appcontainer::ContainerSid(Wide(name), &sid);
+  if (error != ERROR_SUCCESS) return error;
+  return appcontainer::SetStorageAccess(Wide(path), sid.value, access, inherit);
+}
+
+uint32_t ProtectPrivateStorage(const std::u16string& path) {
+  return appcontainer::ProtectPrivateStorage(Wide(path));
+}
+
+uint32_t GrantToCapability(const std::u16string& path, const std::u16string& capability,
+                           uint32_t access, bool inherit) {
+  appcontainer::Sid sid;
+  DWORD error = appcontainer::CapabilitySid(Wide(capability), &sid);
+  if (error != ERROR_SUCCESS) return error;
+  return appcontainer::Grant(Wide(path), sid.value, access, inherit);
+}
+
+uint32_t DeleteAppContainer(const std::u16string& name) {
+  return appcontainer::DeleteContainerProfile(Wide(name));
 }
 
 uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
@@ -506,7 +621,7 @@ bool WaitForBinder(const std::u16string& device, int broker_pid, int timeout_ms)
   ScopedHandle pipe{INVALID_HANDLE_VALUE};
   for (;;) {
     if (WaitForSingleObject(broker.value, 0) != WAIT_TIMEOUT) return false;
-    pipe.value = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+    pipe.value = CreateFileW(name.c_str(), binder_wire::kPipeClientAccess, 0, nullptr,
                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     if (pipe.value != INVALID_HANDLE_VALUE) break;
     DWORD error = GetLastError(), left = remaining();

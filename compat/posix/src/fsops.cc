@@ -26,9 +26,12 @@
 
 #include "internal.h"
 #include "descriptor_resources.h"
+#include "fifo_internal.h"
 #include "record_lock_descriptors.h"
 #include "revocable_internal.h"
 #include "stdio_internal.h"
+#include "system_linker.h"
+#include "storage_policy.h"
 
 using gesher::PathKind;
 
@@ -158,8 +161,16 @@ int CheckDirectoryRenameVolume(const BY_HANDLE_FILE_INFORMATION& source,
 // it is not atomic. Renaming onto another name of the same file does nothing.
 int Rename(const char* oldpath, const char* newpath, unsigned flags) {
   if ((flags & ~kRenameNoReplace) != 0) return errno = EINVAL, -1;  // RENAME_EXCHANGE, WHITEOUT
+  if (gesher::system_linker::RefuseChange(oldpath) != 0 ||
+      gesher::system_linker::RefuseChange(newpath) != 0) {
+    return -1;
+  }
   std::wstring from, to;
   if (!gesher::DiskPath(oldpath, &from, EACCES) || !gesher::DiskPath(newpath, &to, EACCES)) {
+    return -1;
+  }
+  if (!gesher::CheckExternalStorageAccess(from, gesher::AccessKind::kWrite) ||
+      !gesher::CheckExternalStorageAccess(to, gesher::AccessKind::kWrite)) {
     return -1;
   }
   HANDLE h = CreateFileW(from.c_str(), DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
@@ -167,6 +178,10 @@ int Rename(const char* oldpath, const char* newpath, unsigned flags) {
                          OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
                          nullptr);
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite)) {
+    CloseHandle(h);
+    return errno = EACCES, -1;
+  }
   BY_HANDLE_FILE_INFORMATION info;
   if (!GetFileInformationByHandle(h, &info)) {
     int r = gesher::FailWithLastError();
@@ -264,15 +279,21 @@ int SetMode(HANDLE h, mode_t mode) {
 }
 
 int Chmod(const char* path, mode_t mode, bool follow) {
+  if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EPERM)) return -1;
-  HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                         OPEN_EXISTING,
-                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
-                         nullptr);
+  if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
+  HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-  int result = !follow && gesher::IsSymlinkHandle(h) ? (errno = EOPNOTSUPP, -1) : SetMode(h, mode);
+  // Gesher's ELF loader through a link to it (system_linker.h).
+  if (gesher::system_linker::RefuseChangeHandle(h) != 0) {
+    CloseHandle(h);
+    return errno = EROFS, -1;
+  }
+  int result = !gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite) ? -1
+      : !follow && gesher::IsSymlinkHandle(h) ? (errno = EOPNOTSUPP, -1) : SetMode(h, mode);
   CloseHandle(h);
   return result;
 }
@@ -282,29 +303,44 @@ int Access(const char* path, int mode, bool follow) {
   if (path == nullptr) return errno = EFAULT, -1;
   if (path[0] == '\0') return errno = ENOENT, -1;
   std::wstring windows;
+  const gesher::AccessKind access_kind =
+      (mode & W_OK) != 0          ? gesher::AccessKind::kWrite
+      : (mode & (R_OK | X_OK)) != 0 ? gesher::AccessKind::kRead
+                                    : gesher::AccessKind::kStat;
   switch (gesher::MapPath(path, &windows)) {
-    case PathKind::kFile:
+    case PathKind::kFile: {
+      if (!gesher::CheckExternalStorageAccess(windows, access_kind)) return -1;
       break;
+    }
     case PathKind::kNull:
     case PathKind::kZero:
     case PathKind::kRandom:
     case PathKind::kBinder:
       return (mode & X_OK) != 0 ? (errno = EACCES, -1) : 0;
     case PathKind::kVirtual: {
-      unsigned type = gesher::procfs::Type(windows);
-      if (type == 0) return errno = ENOENT, -1;
-      if ((mode & W_OK) != 0 || ((mode & X_OK) != 0 && type != S_IFDIR)) return errno = EACCES, -1;
+      const gesher::procfs::NameStatus name = gesher::procfs::Describe(windows);
+      if (name.type == 0) return errno = ENOENT, -1;
+      // access follows a link at the end (faccessat AT_SYMLINK_NOFOLLOW
+      // does not): a map_files link refuses that, F_OK too (EPERM).
+      if (follow && name.type == S_IFLNK && name.follow_error != 0) {
+        return errno = name.follow_error, -1;
+      }
+      if ((mode & W_OK) != 0 || ((mode & X_OK) != 0 && name.type != S_IFDIR)) {
+        return errno = EACCES, -1;
+      }
       return 0;
     }
     case PathKind::kMissing:
       return errno = ENOENT, -1;
   }
-  HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                         OPEN_EXISTING,
-                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
-                         nullptr);
+  HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+  if (!gesher::CheckExternalStorageHandle(h, access_kind)) {
+    CloseHandle(h);
+    return errno = EACCES, -1;
+  }
   BY_HANDLE_FILE_INFORMATION info;
   bool ok = GetFileInformationByHandle(h, &info);
   CloseHandle(h);
@@ -323,8 +359,10 @@ int Access(const char* path, int mode, bool follow) {
 int Symlink(const char* target, const char* linkpath) {
   if (target == nullptr) return errno = EFAULT, -1;
   if (target[0] == '\0') return errno = ENOENT, -1;
+  if (gesher::system_linker::RefuseChange(linkpath) != 0) return -1;
   std::wstring link;
   if (!gesher::DiskPath(linkpath, &link, EEXIST)) return -1;
+  if (!gesher::CheckExternalStorageAccess(link, gesher::AccessKind::kWrite)) return -1;
   // The target as Windows stores it: backslashes; an absolute one with its
   // drive, as a drive-less one would be read against whatever drive is
   // current when the link is followed.
@@ -350,6 +388,7 @@ int Symlink(const char* target, const char* linkpath) {
     size_t slash = link.find_last_of(L"\\/");
     resolved = (slash == std::wstring::npos ? L"" : link.substr(0, slash + 1)) + windows_target;
   }
+  if (!gesher::CheckExternalStorageAccess(resolved, gesher::AccessKind::kRead)) return -1;
   DWORD attributes = GetFileAttributesW(resolved.c_str());
   DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE |
                 (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
@@ -374,6 +413,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
       if (!gesher::procfs::ReadLink(windows, &target)) return -1;
       break;
     case PathKind::kFile: {
+      if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kRead)) return -1;
       HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING,
@@ -383,6 +423,14 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
                                             : (errno = EINVAL, false);
       CloseHandle(h);
       if (!ok) return -1;
+      // A link made to /system/bin/linker64 stores the file's Windows path:
+      // read back the name it was made with.
+      std::wstring linked;
+      if (!target.empty() && target[0] == '/' &&
+          gesher::MapPath(target.c_str(), &linked) == PathKind::kFile &&
+          gesher::system_linker::IsFilePath(linked, false)) {
+        target = gesher::system_linker::kPath;
+      }
       break;
     }
     case PathKind::kMissing:
@@ -396,8 +444,16 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
 }
 
 int Link(const char* oldpath, const char* newpath, bool follow) {
+  if (gesher::system_linker::RefuseChange(oldpath) != 0 ||
+      gesher::system_linker::RefuseChange(newpath) != 0) {
+    return -1;
+  }
   std::wstring from, to;
   if (!gesher::DiskPath(oldpath, &from, EPERM) || !gesher::DiskPath(newpath, &to, EEXIST)) return -1;
+  if (!gesher::CheckExternalStorageAccess(from, gesher::AccessKind::kWrite) ||
+      !gesher::CheckExternalStorageAccess(to, gesher::AccessKind::kWrite)) {
+    return -1;
+  }
   if (follow) {
     // AT_SYMLINK_FOLLOW: a link to the file a symbolic link names.
     HANDLE h = CreateFileW(from.c_str(), FILE_READ_ATTRIBUTES,
@@ -518,6 +574,7 @@ int renameat(int olddirfd, const char* oldpath, int newdirfd, const char* newpat
 }
 
 int remove(const char* path) {
+  if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EACCES)) return -1;
   bool link;
@@ -550,6 +607,7 @@ static int SetCurrent(std::wstring path) {
 int chdir(const char* path) {
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, ENOTDIR)) return -1;
+  if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kRead)) return -1;
   return SetCurrent(windows);
 }
 
@@ -579,7 +637,18 @@ int fchmod(int fd, mode_t mode) {
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   HANDLE h = snapshot->handle;
+  if (snapshot->kind == gesher::DescriptorKind::kFifo) {
+    // The mode belongs to the FIFO file, not its placeholder (fifo.cc).
+    HANDLE fifo = gesher::OpenFifoFile(snapshot, FILE_WRITE_ATTRIBUTES);
+    if (fifo == INVALID_HANDLE_VALUE) return -1;
+    const int result = gesher::CheckExternalStorageHandle(fifo, gesher::AccessKind::kWrite)
+        ? SetMode(fifo, mode) : -1;
+    CloseHandle(fifo);
+    return result;
+  }
   if (GetFileType(h) != FILE_TYPE_DISK) return 0;  // pipes, sockets, devices
+  if (gesher::system_linker::RefuseChangeHandle(h) != 0) return -1;
+  if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kWrite)) return -1;
   HANDLE writable = ReOpenFile(h, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                FILE_FLAG_BACKUP_SEMANTICS);
@@ -599,7 +668,31 @@ int symlinkat(const char* target, int newdirfd, const char* linkpath) {
 
 ssize_t readlink(const char* path, char* buf, size_t size) { return Readlink(path, buf, size); }
 
+// readlinkat(fd, "", ...): the link fd itself is open on (O_PATH |
+// O_NOFOLLOW), as Linux reads it since 2.6.39: a /proc link's target, or a
+// symbolic link's on disk; ENOENT for an fd on anything else.
+static ssize_t ReadlinkFd(int fd, char* buf, size_t size) {
+  if (buf == nullptr) return errno = EFAULT, -1;
+  if (size == 0) return errno = EINVAL, -1;
+  HANDLE h = gesher::HandleFromFd(fd);
+  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
+  std::string target;
+  unsigned type;
+  std::string linux_path;
+  if (GetFileType(h) != FILE_TYPE_DISK) return errno = ENOENT, -1;
+  if (gesher::procfs::DescribeHandle(h, &type, &linux_path)) {
+    if (type != S_IFLNK) return errno = ENOENT, -1;
+    if (!gesher::procfs::ReadLink(gesher::Widen(linux_path.c_str() + 1), &target)) return -1;
+  } else if (!gesher::IsSymlinkHandle(h) || !gesher::ReadSymlinkHandle(h, &target)) {
+    return errno = ENOENT, -1;
+  }
+  size_t n = target.size() < size ? target.size() : size;  // not NUL-terminated
+  memcpy(buf, target.data(), n);
+  return static_cast<ssize_t>(n);
+}
+
 ssize_t readlinkat(int dirfd, const char* path, char* buf, size_t size) {
+  if (path != nullptr && path[0] == '\0' && dirfd != AT_FDCWD) return ReadlinkFd(dirfd, buf, size);
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
   return Readlink(resolved.c_str(), buf, size);
@@ -745,8 +838,15 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
     if (path == nullptr) return fail_reopen(EOPNOTSUPP);
     std::wstring windows;
     switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
-      case PathKind::kFile:
+      case PathKind::kFile: {
+        const bool is_write =
+            (flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND)) != 0;
+        if (!gesher::CheckExternalStorageAccess(
+                windows, is_write ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) {
+          return fail_reopen(errno);
+        }
         break;
+      }
       case PathKind::kNull:
         windows = L"NUL";
         break;

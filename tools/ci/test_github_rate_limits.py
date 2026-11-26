@@ -82,37 +82,52 @@ class QuotaReads(unittest.TestCase):
         self.sleep.assert_called_once_with(8)
 
     def test_distant_reset_and_cumulative_wait_fail_without_early_retry(self):
-        self.run.return_value = reply(403, PRIMARY, headers(3600))
+        # No genuine hourly primary reset is more than an hour away.
+        self.run.return_value = reply(403, PRIMARY, headers(3700))
         with self.assertRaisesRegex(reader.GitHubReadError, 'bounded'):
             reader.get_json(ENDPOINT)
         self.run.assert_called_once()
         self.sleep.assert_not_called()
-        self.assertIn('reset=' + str(NOW + 3600), self.logs.getvalue())
+        self.assertIn('reset=' + str(NOW + 3700), self.logs.getvalue())
         self.run.reset_mock()
-        # 600 + 400 seconds exceeds the 15-minute cumulative quota wait budget.
-        self.run.side_effect = [reply(403, PRIMARY, headers(599)), reply(403, PRIMARY, headers(399))]
+        # 3000 + 700 seconds exceeds the 61-minute cumulative quota wait budget.
+        self.run.side_effect = [reply(403, PRIMARY, headers(2999)), reply(403, PRIMARY, headers(699))]
         with self.assertRaisesRegex(reader.GitHubReadError, 'bounded'):
             reader.get_json(ENDPOINT)
         self.assertEqual(self.run.call_count, 2)
-        self.assertEqual([c.args for c in self.sleep.call_args_list], [(60,)] * 10)
+        self.assertEqual([c.args for c in self.sleep.call_args_list], [(60,)] * 50)
 
-    def test_reset_within_fifteen_minutes_is_awaited_instead_of_failing(self):
-        self.run.side_effect = [reply(403, PRIMARY, headers(839)), reply()]
-        self.assertEqual(reader.get_json(ENDPOINT), {'id': 7})
-        self.assertEqual(sum(c.args[0] for c in self.sleep.call_args_list), 840)
-        self.assertIn('action=wait', self.logs.getvalue())
-        self.assertEqual(self.run.call_count, 2)
+    def test_full_hour_reset_is_awaited_instead_of_failing(self):
+        # The 2026-11-23 failure: an exhausted shared quota whose reset was
+        # more than 15 minutes away failed the job and forced a costlier rerun.
+        for wait in (1199, 3599):
+            with self.subTest(wait=wait):
+                self.run.reset_mock(); self.sleep.reset_mock()
+                self.logs.seek(0); self.logs.truncate(0)
+                self.run.side_effect = [reply(403, PRIMARY, headers(wait)), reply()]
+                self.assertEqual(reader.get_json(ENDPOINT), {'id': 7})
+                self.assertEqual(sum(c.args[0] for c in self.sleep.call_args_list), wait + 1)
+                self.assertTrue(all(c.args[0] <= 60 for c in self.sleep.call_args_list))
+                self.assertIn('action=wait', self.logs.getvalue())
+                self.assertEqual(self.run.call_count, 2)
 
-    def test_fifteen_minute_budget_boundary(self):
-        # delay = reset - server date + 1: 899 waits exactly 900 seconds, 900 fails at once.
-        self.run.side_effect = [reply(403, PRIMARY, headers(899)), reply()]
+    def test_sixty_one_minute_budget_boundary(self):
+        # delay = reset - server date + 1: 3659 waits exactly 3660 seconds, 3660 fails at once.
+        self.run.side_effect = [reply(403, PRIMARY, headers(3659)), reply()]
         self.assertEqual(reader.get_json(ENDPOINT), {'id': 7})
-        self.assertEqual(sum(c.args[0] for c in self.sleep.call_args_list), 900)
+        self.assertEqual(sum(c.args[0] for c in self.sleep.call_args_list), 3660)
         self.run.reset_mock(); self.sleep.reset_mock()
-        self.run.side_effect = [reply(403, PRIMARY, headers(900))]
+        self.run.side_effect = [reply(403, PRIMARY, headers(3660))]
         with self.assertRaisesRegex(reader.GitHubReadError, 'bounded'):
             reader.get_json(ENDPOINT)
         self.sleep.assert_not_called()
+
+    def test_reset_wait_uses_server_date_not_a_slow_runner_clock(self):
+        # A runner clock an hour behind the server must not stretch the wait.
+        self.run.side_effect = [reply(403, PRIMARY, headers(1799)), reply()]
+        with patch.object(reader.time, 'time', return_value=NOW - 3600):
+            self.assertEqual(reader.get_json(ENDPOINT), {'id': 7})
+        self.assertEqual(sum(c.args[0] for c in self.sleep.call_args_list), 1800)
 
     def test_rate_wait_does_not_consume_the_247_second_transport_envelope(self):
         responses = [reply(502), reply(503), reply(403, PRIMARY, headers(69)), reply()]
@@ -143,7 +158,7 @@ class QuotaReads(unittest.TestCase):
         self.assertEqual(reader.get_json(ENDPOINT, retry_transient=False), {'id': 7})
         self.assertEqual([c.args for c in self.sleep.call_args_list], [(10,)])
         self.run.reset_mock(); self.sleep.reset_mock()
-        self.run.side_effect = [reply(403, PRIMARY, headers(3600))]
+        self.run.side_effect = [reply(403, PRIMARY, headers(3700))]
         with self.assertRaises(reader.GitHubReadError) as caught:
             reader.get_json(ENDPOINT, retry_transient=False)
         self.assertNotIsInstance(caught.exception, reader.GitHubTransientError)
@@ -242,10 +257,36 @@ class QuotaArchive(unittest.TestCase):
             for private in ('TEST_TOKEN_NEVER_LOG', 'PRIVATE_SIGNED_URL', 'PRIVATE_ERROR'):
                 self.assertNotIn(private, logs.getvalue())
 
+    def test_archive_waits_for_an_hour_away_published_reset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = io.BytesIO()
+            with zipfile.ZipFile(payload, 'w') as package:
+                package.writestr('actual.txt', 'verified data')
+            data = payload.getvalue()
+            calls = []
+            def api(request, timeout):
+                calls.append(request)
+                if len(calls) == 1:
+                    raise urllib.error.HTTPError('https://api.github.com/exact', 403, 'PRIVATE',
+                                                 headers(3599), io.BytesIO(PRIMARY))
+                raise urllib.error.HTTPError(request.full_url, 302, '',
+                    {'Location': 'https://storage.test/file'}, io.BytesIO())
+            def opener(handler):
+                return types.SimpleNamespace(open=api if handler is archive.NoRedirect
+                                             else lambda location, timeout: io.BytesIO(data))
+            with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'GITHUB_REPOSITORY': 'owner/repo', 'GH_TOKEN': 'TEST'}), \
+                    patch.object(archive.urllib.request, 'build_opener', side_effect=opener), \
+                    patch.object(archive.time, 'sleep') as sleep, contextlib.redirect_stderr(io.StringIO()):
+                archive.download_verified('12', 'sha256:' + hashlib.sha256(data).hexdigest(),
+                                          Path(temporary) / 'output')
+            self.assertEqual((Path(temporary) / 'output/actual.txt').read_text(), 'verified data')
+            self.assertEqual(sum(c.args[0] for c in sleep.call_args_list), 3600)
+            self.assertEqual(len(calls), 2)
+
     def test_api_denial_long_reset_and_duplicate_headers_publish_nothing(self):
         for kind in ('denial', 'long reset', 'duplicate', 'malformed'):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
-                fields = headers(3600 if kind == 'long reset' else 9)
+                fields = headers(3700 if kind == 'long reset' else 9)
                 body = PRIMARY
                 if kind == 'denial': body = b'{"message":"Resource not accessible by integration"}'
                 if kind == 'malformed': fields['x-ratelimit-reset'] = 'unknown'

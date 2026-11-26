@@ -44,7 +44,7 @@ def host_test():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding='utf-8')
             sources.append(str(target))
-        sources += [str(ROOT / 'app/java/com/gesher/app' / p) for p in ('AppCrash.java', 'CrashDiagnosis.java', 'CrashReport.java')]
+        sources += [str(ROOT / 'app/java/com/gesher/app' / p) for p in ('AppCrash.java', 'CrashDiagnosis.java', 'CrashReport.java', 'LogRedaction.java')]
         sources += [str(ROOT / 'tests/app-crash/CrashDiagnosisTest.java')]
         subprocess.run([javac, '--release', '11', '-encoding', 'UTF-8', '-d', str(work), *sources], check=True, timeout=60)
         subprocess.run([java, '-cp', str(work), 'CrashDiagnosisTest'], cwd=work,

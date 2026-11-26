@@ -6,6 +6,7 @@ package com.gesher.server;
 
 import android.accounts.Account;
 import android.content.ComponentName;
+import android.content.ContentProvider;
 import android.content.ContentResolver;
 import android.content.IContentService;
 import android.content.ISyncStatusObserver;
@@ -23,6 +24,7 @@ import android.os.IBinder;
 import android.os.RemoteException;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -86,7 +88,10 @@ final class ContentService extends IContentService.Default {
     }
 
     private ApkPackage caller(String claimed, boolean verifyClaim) {
-        if (!GmsSignatureSpoofing.isEnabled()) return null;
+        return GmsSignatureSpoofing.isEnabled() ? authenticatedCaller(claimed, verifyClaim) : null;
+    }
+
+    private ApkPackage authenticatedCaller(String claimed, boolean verifyClaim) {
         CallerIdentity identity = mAm.callers();
         if (identity.isSystem()) {
             if (!verifyClaim || claimed == null || "android".equals(claimed)) return null;
@@ -101,9 +106,16 @@ final class ContentService extends IContentService.Default {
     }
 
     private void user(int userId) {
-        if (GmsSignatureSpoofing.isEnabled() && userId != 0) {
-            throw new SecurityException("Only content/sync user 0 is available");
-        }
+        if (GmsSignatureSpoofing.isEnabled()) enforcePrimaryUser(userId);
+    }
+
+    private static void enforcePrimaryUser(int userId) {
+        if (userId != 0) throw new SecurityException("Only content/sync user 0 is available");
+    }
+
+    private static boolean isProtectedHostedUri(Uri uri) {
+        return uri != null && ContactsProviderSupport.isSystemAuthority(
+                ContentProvider.getAuthorityWithoutUserId(uri.getAuthority()));
     }
 
     private boolean allowed(ApkPackage owner, Uri uri, int mode) {
@@ -129,9 +141,13 @@ final class ContentService extends IContentService.Default {
     public void registerContentObserver(Uri uri, boolean notifyForDescendants,
             IContentObserver observer, int userHandle, int targetSdkVersion) {
         if (uri == null || observer == null) return;
-        user(userHandle);
-        ApkPackage owner = caller(null, false);
-        if (GmsSignatureSpoofing.isEnabled()) uri = UriGrants.checkedUri(uri, userHandle);
+        boolean restricted = GmsSignatureSpoofing.isEnabled() || isProtectedHostedUri(uri);
+        ApkPackage owner = null;
+        if (restricted) {
+            enforcePrimaryUser(userHandle);
+            uri = UriGrants.checkedUri(uri, userHandle);
+            owner = authenticatedCaller(null, false);
+        }
         if (!allowed(owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
             throw new SecurityException("Observing content requires URI read access");
         }
@@ -152,12 +168,16 @@ final class ContentService extends IContentService.Default {
     @Override
     public void unregisterContentObserver(IContentObserver observer) {
         if (observer == null) return;
-        ApkPackage owner = caller(null, false);
+        boolean restricted = GmsSignatureSpoofing.isEnabled();
+        ApkPackage owner = restricted ? authenticatedCaller(null, false) : null;
         IBinder binder = observer.asBinder();
         List<Observer> removed;
         synchronized (mObservers) {
             for (Observer o : mObservers) {
-                if (o.binder == binder && owner != null && o.owner != owner) {
+                if (o.binder != binder) continue;
+                ApkPackage actual = !restricted && isProtectedHostedUri(o.uri)
+                        ? authenticatedCaller(null, false) : owner;
+                if (actual != null && o.owner != actual) {
                     throw new SecurityException("Cannot unregister another content observer");
                 }
             }
@@ -201,14 +221,20 @@ final class ContentService extends IContentService.Default {
             boolean observerWantsSelfNotifications, int flags, int userHandle,
             int targetSdkVersion, String callingPackage) {
         if (uris == null || uris.length == 0) return;
-        user(userHandle);
-        ApkPackage notifier = caller(callingPackage, true);
+        boolean restricted = GmsSignatureSpoofing.isEnabled();
         uris = uris.clone();
+        ApkPackage notifier = null;
+        if (restricted || Arrays.stream(uris).anyMatch(ContentService::isProtectedHostedUri)) {
+            enforcePrimaryUser(userHandle);
+            notifier = authenticatedCaller(callingPackage, true);
+        }
         // Validate the complete batch before any observer, sync or system listener sees it.
         for (int i = 0; i < uris.length; i++) {
-            if (GmsSignatureSpoofing.isEnabled()) uris[i] = UriGrants.checkedUri(uris[i], userHandle);
-            if (!allowed(notifier, uris[i], Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) {
-                throw new SecurityException("Notifying content requires URI write access");
+            if (restricted || isProtectedHostedUri(uris[i])) {
+                uris[i] = UriGrants.checkedUri(uris[i], userHandle);
+                if (!allowed(notifier, uris[i], Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) {
+                    throw new SecurityException("Notifying content requires URI write access");
+                }
             }
         }
         // Each observer once, with the URIs it is told of (ContentService's ObserverCollector).
@@ -257,7 +283,9 @@ final class ContentService extends IContentService.Default {
             }
         }
         if ((flags & ContentResolver.NOTIFY_SYNC_TO_NETWORK) != 0) {
-            for (Uri uri : uris) mSync.localChange(uri, notifier);
+            for (Uri uri : uris) {
+                mSync.localChange(uri, restricted || isProtectedHostedUri(uri) ? notifier : null);
+            }
         }
         for (BiConsumer<Uri[], Integer> l : sListeners) {
             try {

@@ -34,7 +34,9 @@ target_link_options(revocable_job_runner PRIVATE -municode)
 
 include("${GESHER_ROOT}/compat/posix/posix.cmake")
 add_executable(revocable_file_test "${GESHER_ROOT}/tests/native/revocable_file_test.cc")
-add_executable(binderd "${GESHER_ROOT}/compat/binder/binderd.cc")
+add_executable(binderd "${GESHER_ROOT}/compat/binder/binderd.cc"
+  "${GESHER_ROOT}/compat/framework/app_container.cc")
+target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32)
 add_executable(binder_probe "${GESHER_ROOT}/probes/binder/binder_probe.cc")
 add_executable(binder_sg_actor "${GESHER_ROOT}/tests/binder/sg-actor.cc")
 add_executable(binder_sg_wire_peer "${GESHER_ROOT}/tests/binder/sg-wire-peer.cc")

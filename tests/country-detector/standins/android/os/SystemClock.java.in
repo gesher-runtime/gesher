@@ -1,0 +1,37 @@
+/*
+ * Copyright (C) 2026 The Gesher Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+package android.os;
+
+/**
+ * Host stand-in for android.os.SystemClock, whose clocks are native methods in
+ * android-all (Country stamps elapsedRealtime). Monotonic JVM time;
+ * no contract depends on the values.
+ */
+public final class SystemClock {
+    private static final long BASE = System.nanoTime();
+
+    private SystemClock() {
+    }
+
+    public static long uptimeMillis() {
+        return (System.nanoTime() - BASE) / 1_000_000L;
+    }
+
+    public static long uptimeNanos() {
+        return System.nanoTime() - BASE;
+    }
+
+    public static long elapsedRealtime() {
+        return uptimeMillis();
+    }
+
+    public static long elapsedRealtimeNanos() {
+        return uptimeNanos();
+    }
+
+    public static long currentThreadTimeMillis() {
+        return uptimeMillis();
+    }
+}

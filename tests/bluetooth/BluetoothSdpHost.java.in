@@ -1,0 +1,206 @@
+/* Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0 */
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/** The production SDP-lookup section of BluetoothManagerService, around fake native calls. */
+public final class BluetoothSdpHost {
+    private static final class Service {
+        final List<Intent> sent = new ArrayList<>();
+        // PRODUCTION_SDP_METHODS
+        int state() { return BluetoothAdapter.STATE_ON; }
+        private void send(Intent intent) { synchronized (sent) { sent.add(intent); } }
+        int sentFor(String address) {
+            int n = 0;
+            synchronized (sent) {
+                for (Intent i : sent) if (address.equalsIgnoreCase(((BluetoothDevice) i.extras.get(BluetoothDevice.EXTRA_DEVICE)).address)) n++;
+            }
+            return n;
+        }
+    }
+
+    private static void check(boolean value, String message) {
+        if (!value) throw new AssertionError(message);
+    }
+
+    private static void waitFor(java.util.function.BooleanSupplier condition, String message) throws Exception {
+        long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!condition.getAsBoolean()) {
+            check(System.nanoTime() < end, "timed out: " + message);
+            Thread.sleep(2);
+        }
+    }
+
+    private static Set<Thread> sdpThreads() {
+        Set<Thread> out = new HashSet<>();
+        for (Thread t : Thread.getAllStackTraces().keySet()) if (t.getName().startsWith("gesher-bluetooth-sdp")) out.add(t);
+        return out;
+    }
+
+    private static int inFlight(Service s) { synchronized (s.mSdpLock) { return s.mSdpInFlight.size(); } }
+
+    private static void coalescedConcurrentCalls() throws Exception {
+        Service s = new Service();
+        FakeNative.reset();
+        FakeNative.hold = new CountDownLatch(1);
+        String address = "AA:BB:CC:DD:EE:01";
+        int calls = 64;
+        CountDownLatch go = new CountDownLatch(1);
+        AtomicInteger accepted = new AtomicInteger();
+        Thread[] callers = new Thread[calls];
+        for (int i = 0; i < calls; i++) {
+            // Same device spelled with different case: one normalized address.
+            String spelling = i % 2 == 0 ? address : address.toLowerCase();
+            callers[i] = new Thread(() -> {
+                try { go.await(); if (s.fetchUuids(spelling)) accepted.incrementAndGet(); }
+                catch (Exception e) { throw new AssertionError(e); }
+            });
+            callers[i].start();
+        }
+        go.countDown();
+        for (Thread t : callers) t.join(10000);
+        check(accepted.get() == calls, "every concurrent call is accepted");
+        waitFor(() -> FakeNative.queries.get() >= 1, "lookup started");
+        check(s.mSdpExecutor.getLargestPoolSize() <= 2, "bounded lookup threads: " + s.mSdpExecutor.getLargestPoolSize());
+        FakeNative.hold.countDown();
+        waitFor(() -> s.sentFor(address) == calls, "every caller gets its broadcast");
+        check(FakeNative.queries.get() == 1, "one native SDP lookup for " + calls + " calls, got " + FakeNative.queries.get());
+        check(inFlight(s) == 0, "lookup bookkeeping cleared");
+        for (Intent i : s.sent) {
+            Object[] list = (Object[]) i.extras.get(BluetoothDevice.EXTRA_UUID);
+            check(list.length == 1 && ((ParcelUuid) list[0]).uuid.equals(FakeNative.UUID1), "every broadcast carries the result");
+        }
+        int before = FakeNative.queries.get();
+        check(s.fetchUuids(address), "later call accepted");
+        waitFor(() -> s.sentFor(address) == calls + 1, "later call is answered");
+        check(FakeNative.queries.get() == before + 1, "a call after completion runs a fresh lookup");
+        check(s.mSdpExecutor.getLargestPoolSize() <= 2 && s.mSdpExecutor.getTaskCount() <= 2, "still at most two lookup threads, one task per lookup");
+        for (Thread t : sdpThreads()) check(t.isDaemon(), "lookup thread is a daemon");
+        check(s.mSdpExecutor.allowsCoreThreadTimeOut() && s.mSdpExecutor.getKeepAliveTime(TimeUnit.SECONDS) == 15
+                && s.mSdpExecutor.getMaximumPoolSize() == 2, "bounded pool whose idle threads time out");
+    }
+
+    private static void distinctDevicesAreBounded() throws Exception {
+        Service s = new Service();
+        FakeNative.reset();
+        FakeNative.hold = new CountDownLatch(1);
+        int devices = 8;
+        for (int d = 0; d < devices; d++) check(s.fetchUuids("AA:BB:CC:DD:EE:1" + d), "device " + d + " accepted");
+        waitFor(() -> FakeNative.queries.get() == 2, "two lookups run at once");
+        Thread.sleep(50);
+        check(FakeNative.queries.get() == 2 && FakeNative.maxParallel.get() == 2, "no more than two native lookups in parallel");
+        check(s.mSdpExecutor.getLargestPoolSize() == 2, "no thread per call");
+        FakeNative.hold.countDown();
+        waitFor(() -> s.sent.size() == devices, "all devices answered");
+        check(FakeNative.queries.get() == devices && FakeNative.maxParallel.get() == 2, "each device looked up once, two at a time");
+        check(inFlight(s) == 0, "bookkeeping cleared");
+    }
+
+    private static void failureDoesNotWedge() throws Exception {
+        Service s = new Service();
+        FakeNative.reset();
+        String address = "AA:BB:CC:DD:EE:02";
+        FakeNative.fail = true;
+        check(s.fetchUuids(address), "call accepted");
+        waitFor(() -> FakeNative.queries.get() == 1 && inFlight(s) == 0, "failed lookup released the device");
+        check(s.sentFor(address) == 0, "no broadcast for a failed lookup");
+        FakeNative.fail = false;
+        check(s.fetchUuids(address), "retry accepted");
+        waitFor(() -> s.sentFor(address) == 1, "retry after failure is answered");
+        check(FakeNative.queries.get() == 2, "retry ran a fresh lookup");
+        // Every worker survives repeated failures.
+        FakeNative.fail = true;
+        for (int i = 0; i < 6; i++) { check(s.fetchUuids("AA:BB:CC:DD:EE:2" + i), "failing device accepted"); }
+        waitFor(() -> FakeNative.queries.get() == 8 && inFlight(s) == 0, "failures drained");
+        FakeNative.fail = false;
+        check(s.fetchUuids(address), "accepted after failures");
+        waitFor(() -> s.sentFor(address) == 2, "lookups still run after failures");
+    }
+
+    private static void queueIsBounded() throws Exception {
+        Service s = new Service();
+        FakeNative.reset();
+        FakeNative.hold = new CountDownLatch(1);
+        int capacity = 2 + Service.SDP_QUEUE;
+        for (int d = 0; d < capacity; d++) {
+            check(s.fetchUuids(String.format("AA:BB:CC:00:%02X:%02X", d / 256, d % 256)), "device " + d + " accepted");
+        }
+        String extra = "AA:BB:CC:FF:FF:FF";
+        check(!s.fetchUuids(extra), "a device beyond the bound is refused");
+        check(inFlight(s) == capacity, "the refused device is not left marked busy");
+        FakeNative.hold.countDown();
+        waitFor(() -> s.sent.size() == capacity, "queued devices answered");
+        check(s.fetchUuids(extra), "refused device is accepted once there is room");
+        waitFor(() -> s.sentFor(extra) == 1, "and answered");
+    }
+
+    public static void main(String[] args) throws Exception {
+        coalescedConcurrentCalls();
+        distinctDevicesAreBounded();
+        failureDoesNotWedge();
+        queueIsBounded();
+        System.out.println("BluetoothSdpHost passed: bounded daemon pool, coalesced lookups, failure recovery");
+    }
+}
+class BluetoothAdapter { static final int STATE_OFF = 10, STATE_ON = 12; }
+class SystemServer { static void log(String text) {} }
+interface Parcelable {}
+class ParcelUuid implements Parcelable { final UUID uuid; ParcelUuid(UUID uuid) { this.uuid = uuid; } }
+class BluetoothDevice {
+    static final String ACTION_UUID = "android.bluetooth.device.action.UUID";
+    static final String EXTRA_DEVICE = "android.bluetooth.device.extra.DEVICE";
+    static final String EXTRA_UUID = "android.bluetooth.device.extra.UUID";
+    static final int ADDRESS_TYPE_PUBLIC = 0;
+    final String address;
+    BluetoothDevice(String address) { this.address = address; }
+    static BluetoothDevice createFromHost(String address, int type) { return new BluetoothDevice(address); }
+}
+class Intent {
+    final String action;
+    final Map<String, Object> extras = new HashMap<>();
+    Intent(String action) { this.action = action; }
+    String getAction() { return action; }
+    Intent putExtra(String key, Object value) { extras.put(key, value); return this; }
+}
+class FakeNative {
+    static final UUID UUID1 = UUID.fromString("0000110b-0000-1000-8000-00805f9b34fb");
+    static final AtomicInteger queries = new AtomicInteger(), parallel = new AtomicInteger(), maxParallel = new AtomicInteger();
+    static volatile CountDownLatch hold;
+    static volatile boolean fail;
+    static void reset() { queries.set(0); parallel.set(0); maxParallel.set(0); hold = null; fail = false; }
+}
+class WindowsBluetooth {
+    static long address(String text) {
+        String[] parts = text.split(":");
+        if (parts.length != 6) return -1;
+        long value = 0;
+        for (String part : parts) value = value << 8 | Integer.parseInt(part, 16);
+        return value;
+    }
+    static List<UUID> remoteUuids(long address, boolean refresh) {
+        FakeNative.queries.incrementAndGet();
+        int now = FakeNative.parallel.incrementAndGet();
+        FakeNative.maxParallel.accumulateAndGet(now, Math::max);
+        try {
+            CountDownLatch latch = FakeNative.hold;
+            if (latch != null) {
+                try { if (!latch.await(10, TimeUnit.SECONDS)) throw new AssertionError("lookup never released"); }
+                catch (InterruptedException e) { throw new AssertionError(e); }
+            }
+            if (FakeNative.fail) throw new IllegalStateException("native SDP failure");
+            return List.of(FakeNative.UUID1);
+        } finally {
+            FakeNative.parallel.decrementAndGet();
+        }
+    }
+}

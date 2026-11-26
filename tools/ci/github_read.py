@@ -12,9 +12,10 @@ import time
 _BACKOFF_SECONDS = (1, 2, 4)
 _MAX_ELAPSED_SECONDS = 4 * 60 + sum(_BACKOFF_SECONDS)
 # The repository's GITHUB_TOKEN quota is shared by every concurrent job and
-# resets hourly. Waiting up to 15 minutes for a published reset is cheaper
-# than failing the job and rerunning the whole ci run (about 500 more calls).
-_MAX_RATE_WAIT_SECONDS = 15 * 60
+# resets hourly, so a published primary reset is at most an hour (plus clock
+# skew) away. Waiting for it is cheaper than failing the job and rerunning the
+# ci run, which spends hundreds more calls from the same exhausted quota.
+_MAX_RATE_WAIT_SECONDS = 61 * 60
 _RATE_HEADERS = ('date', 'retry-after', 'x-ratelimit-remaining', 'x-ratelimit-reset',
                  'x-ratelimit-limit', 'x-ratelimit-used', 'x-ratelimit-resource')
 _HTTP_STATUS = re.compile(r'\(HTTP ([1-5][0-9]{2})\)')
@@ -124,12 +125,16 @@ def _sleep(delay):
         delay -= chunk
 
 
-def _transient(stderr):
+def _transient(stderr, http_status):
     # The status reported by gh takes precedence over transport-looking text in
     # an error message. In particular, never turn a 401/403/404 into a retry.
     statuses = _HTTP_STATUS.findall(stderr) + _GH_HTTP_STATUS.findall(stderr)
     if statuses:
         return all(status in ('502', '503', '504') for status in statuses)
+    # gh can exit before passing on a job page when its own JSON decoder hits
+    # the end of the response. Discard that output and repeat only the GET.
+    if stderr.strip() == 'unexpected end of JSON input':
+        return http_status is None or 200 <= http_status < 300
     # Go's HTTPS dial timeout precedes any response. Require its single
     # diagnostic so it cannot override an additional error from gh.
     return bool(_DIAL_TIMEOUT.fullmatch(stderr.strip())) or any(
@@ -140,7 +145,8 @@ def get_json(endpoint, *, retry_transient=True):
     """GET endpoint verbatim, retrying only the observed transient failures.
 
     There are at most four requests. Quota waits require GitHub's message and
-    valid headers and fit a 15-minute cumulative wait budget; time spent in
+    valid headers and fit a 61-minute cumulative wait budget, enough for any
+    published hourly primary reset; time spent in
     those waits does not consume the 247-second transport envelope. JSON parsing and all caller
     identity/digest predicates are outside the retry decision. With
     retry_transient=False an observed transient failure raises
@@ -198,7 +204,7 @@ def get_json(endpoint, *, retry_transient=True):
             rate_failures += 1
             # The quota wait is not transport time: extend the envelope by it.
             deadline += delay
-        elif _transient(stderr):
+        elif _transient(stderr, status):
             if not retry_transient:
                 raise GitHubTransientError(
                     f'GitHub GET transient failure (gh exit {result.returncode})')
@@ -206,7 +212,8 @@ def get_json(endpoint, *, retry_transient=True):
         if delay is None or time.monotonic() + delay >= deadline:
             raise GitHubReadError(
                 f'GitHub GET failed after {attempt + 1} attempt(s) '
-                f'(gh exit {result.returncode})')
+                f'(gh exit {result.returncode}, '
+                f'http_status={status if status is not None else "unavailable"})')
         print(f'CI_GITHUB_READ_RETRY attempt={attempt + 1}/4 delay={delay}s',
               file=sys.stderr, flush=True)
         _sleep(delay)
