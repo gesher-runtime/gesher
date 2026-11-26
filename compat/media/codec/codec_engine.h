@@ -35,6 +35,8 @@ inline constexpr int kCodecInfoOutputBuffersChanged = -3;
 inline constexpr uint32_t kCodecFlagKeyFrame = 1;
 inline constexpr uint32_t kCodecFlagCodecConfig = 2;
 inline constexpr uint32_t kCodecFlagEndOfStream = 4;
+inline constexpr uint32_t kCodecFlagPartialFrame = 8;
+inline constexpr uint32_t kCodecFlagDecodeOnly = 32;
 
 inline constexpr int kCodecColorFormatYuv420Planar = 19;
 inline constexpr int kCodecColorFormatYuv420SemiPlanar = 21;

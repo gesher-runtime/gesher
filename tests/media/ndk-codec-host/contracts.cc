@@ -270,6 +270,15 @@ void Synchronous() {
                                size_t{4}, uint64_t{0},
                                uint32_t{0}) == AMEDIA_ERROR_INVALID_PARAMETER,
         "negative 64-bit offset remains negative across NDK ABI");
+  for (uint32_t flag : {uint32_t{8}, uint32_t{32}}) {
+    Check(Invoke<media_status_t>("AMediaCodec_queueInputBuffer", c,
+                                 static_cast<size_t>(index), int64_t{0},
+                                 size_t{4}, uint64_t{0}, flag) == AMEDIA_ERROR_UNSUPPORTED,
+          "unsupported input operation reports unsupported");
+    Check(Invoke<uint8_t*>("AMediaCodec_getInputBuffer", c,
+                           static_cast<size_t>(index), &cap) != nullptr && cap == 64,
+          "rejected operation preserves the client's input buffer for retry");
+  }
   Send(c, static_cast<size_t>(index));
   Check(Invoke<uint8_t*>("AMediaCodec_getInputBuffer", c,
                          static_cast<size_t>(index), &cap) == nullptr,
@@ -293,6 +302,7 @@ void Synchronous() {
           "invalid buffer format index is rejected");
     auto* bytes = Invoke<uint8_t*>("AMediaCodec_getOutputBuffer", c,
                                    static_cast<size_t>(slot), &cap);
+    Check(cap == static_cast<size_t>(info.size), "output range excludes unused backing storage");
     if (info.size == 4) {
       Check(bytes && std::memcmp(bytes, "abcd", 4) == 0 &&
                 info.presentationTimeUs == 1234,

@@ -8,6 +8,7 @@
 #include <media/NdkMediaFormat.h>
 #include <utils/Errors.h>
 
+#include <cerrno>
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
@@ -143,6 +144,7 @@ media_status_t ToMediaStatus(int status) {
   if (status == android::OK) return AMEDIA_OK;
   if (status == android::INVALID_OPERATION) return AMEDIA_ERROR_INVALID_OPERATION;
   if (status == android::BAD_VALUE) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (status == -ENOTSUP) return AMEDIA_ERROR_UNSUPPORTED;
   return translate_error(status);
 }
 
@@ -243,7 +245,11 @@ uint8_t* GetOutputBuffer(AMediaCodec* codec, size_t idx, size_t* out_size) {
   if (codec == nullptr || codec->engine == nullptr) return nullptr;
   if (idx >= kCodecSlots) return nullptr;
   if (!codec->engine->OwnsBuffer(static_cast<int>(idx), false)) return nullptr;
-  return codec->engine->GetOutputBuffer(static_cast<int>(idx), out_size);
+  int data_size = 0;
+  auto* data = codec->engine->GetOutputBuffer(static_cast<int>(idx), nullptr, nullptr, nullptr,
+                                               &data_size);
+  if (data && out_size) *out_size = static_cast<size_t>(data_size);
+  return data;
 }
 
 abi::guest_ssize_t DequeueInputBuffer(AMediaCodec* codec, int64_t timeout_us) {

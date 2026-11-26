@@ -571,6 +571,11 @@ bool CodecEngine::QueueInput(int index, int64_t offset, int64_t size, int64_t ti
     if (status != nullptr) *status = android::BAD_VALUE;
     return false;
   }
+  if (flags & (kCodecFlagPartialFrame | kCodecFlagDecodeOnly)) {
+    if (error != nullptr) *error = "partial-frame and decode-only inputs are unsupported";
+    if (status != nullptr) *status = -ENOTSUP;
+    return false;
+  }
   s.client = false;
   s.offset = static_cast<int>(offset);
   s.size = static_cast<int>(size);
