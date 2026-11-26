@@ -199,6 +199,8 @@ static void test_syscall_auxv(void) {
         (hw & 3) == 3 && (hw & (1ul << 8)) == 0);
 }
 
+#include "raw_descriptor_syscall_contract.inc"
+
 // --- atomics ---------------------------------------------------------------------------
 static atomic_int g_counter;
 static atomic_llong g_counter64;
@@ -582,6 +584,7 @@ int gesher_selftest(const char* dir) {
   test_stat_epoll(dir != NULL ? dir : ".");
   test_syscall_auxv();
   test_atomics();
+  test_raw_descriptor_syscalls(raw_svc2);
   test_va_list();
   test_host_pointer();
   test_written_code();

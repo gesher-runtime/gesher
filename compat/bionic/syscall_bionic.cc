@@ -48,6 +48,8 @@ struct RawCall {
   char ret;
 };
 constexpr RawCall kRawCalls[] = {
+    // Legacy x86 entry points absent from the generic ARM64 syscall table.
+    {213, "epoll_create", 'i'}, {253, "inotify_init", 'i'},
     {0, "read", 'l'},          {1, "write", 'l'},          {2, "open", 'i'},
     {3, "close", 'i'},         {4, "stat", 'i'},           {5, "fstat", 'i'},
     {6, "lstat", 'i'},         {7, "poll", 'i'},           {8, "lseek", 'l'},
