@@ -612,6 +612,7 @@ int AttachFileDescription(const DescriptorSnapshotPtr& snapshot, bool close_on_e
 }
 int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
   if (InitializeSnapshotFlags(snapshot) < 0) return -1;
+  if (snapshot->kind == DescriptorKind::kUnshareable) return snapshot->description->Flags();
   // A FIFO's status is wholly its shared description's (fifo.cc); its
   // placeholder pipe has no native mode to agree with.
   if (snapshot->kind == DescriptorKind::kFifo) return snapshot->description->Flags();
@@ -674,7 +675,8 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
   for (;;) {
     const int old_flags = description.Flags();
     if ((old_flags & O_PATH) != 0) return errno = EBADF, -1;
-    const DWORD type = GetFileType(file);
+    const DWORD type = snapshot->kind == DescriptorKind::kUnshareable
+        ? FILE_TYPE_CHAR : GetFileType(file);
     if (type == FILE_TYPE_PIPE && !description.KnownPipeStatus()) return errno = EOPNOTSUPP, -1;
     // A raw native handle can already be unbuffered. Preserve that real mode;
     // this backend cannot change buffering on an existing FILE_OBJECT.

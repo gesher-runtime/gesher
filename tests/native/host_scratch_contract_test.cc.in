@@ -245,7 +245,7 @@ struct OpenFileDescription {
   bool KnownPipeStatus() const { return ::fcntl(fd, F_GETFL) >= 0; }
   int Flags() const { return ::fcntl(fd, F_GETFL); }
 };
-enum class DescriptorKind { kFile, kFifo };
+enum class DescriptorKind { kFile, kUnshareable, kFifo };
 struct DescriptorSnapshot {
   HANDLE handle = INVALID_HANDLE_VALUE;
   std::shared_ptr<OpenFileDescription> description;

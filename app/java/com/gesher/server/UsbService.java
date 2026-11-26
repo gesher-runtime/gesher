@@ -26,37 +26,23 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * {@code usb}: AOSP's UsbService (android-16.0.0_r4) as it runs with none of its managers:
- * no UsbHostManager (no {@code FEATURE_USB_HOST}), no UsbDeviceManager (no
- * {@code /sys/class/android_usb}), hence no UsbPortManager. SystemServer starts UsbService
- * on a device with {@code android.hardware.usb.host} or {@code android.hardware.usb.accessory},
- * or on an emulator ({@code Build.IS_EMULATOR}); this is the emulator's state. A device
- * that has neither feature and is not an emulator has no {@code usb} service at all, and
- * {@code getSystemService(USB_SERVICE)} answers null there. Gesher declares neither
- * feature and exposes no Windows USB device to apps, but registers the service as the
- * emulator does, because apps written for phones (where the features are always present)
- * use the manager unchecked: Baseus 2.18.0 casts it to UsbManager in
- * MainActivity.onResume (issue #303).
- *
- * <p>So, as AOSP's methods answer without managers: {@code getDeviceList()} is empty,
- * {@code getAccessoryList()} null, {@code openDevice}/{@code openAccessory} null, ports
- * none, port operations report {@code USB_OPERATION_ERROR_INTERNAL}, and the gadget
- * (device-mode) calls fail with IllegalStateException or NullPointerException as
- * {@code Preconditions} does there. MANAGE_USB and ACCESS_MTP calls are system-only
- * (Gesher grants neither permission to apps). Device and accessory permission is the
- * system's only (AOSP's {@code uid == SYSTEM_UID} rule). One difference: where AOSP
- * starts SystemUI's UsbPermissionActivity for an app without permission, Gesher has no
- * such dialog and answers at once with {@code EXTRA_PERMISSION_GRANTED} false, the
- * dialog's answer when permission is not given; no USB device exists here to give it for.
+ * Android USB service with a Windows host adapter. Accessory, gadget and USB port
+ * operations use AOSP's no-manager behavior. MANAGE_USB and ACCESS_MTP remain
+ * system-only. The service is also registered without a host adapter so applications
+ * can obtain {@link UsbManager} and see an empty inventory (issue #303).
  */
 final class UsbService extends IUsbManager.Default {
     private static final String NO_DEVICE_MANAGER = "DeviceManager must not be null";
 
     private final CallerIdentity mCallers;
+    private final UsbHost mHost;
 
-    UsbService(CallerIdentity callers) {
+    UsbService(CallerIdentity callers, PackageManagerService packages, ActivityManagerService am) {
         mCallers = callers;
+        mHost = new UsbHost(callers, packages, am);
     }
+
+    void startHost() { mHost.start(); }
 
     private void enforce(String permission) {
         if (!mCallers.isSystem()) {
@@ -93,47 +79,47 @@ final class UsbService extends IUsbManager.Default {
         }
     }
 
-    // Host side: no UsbHostManager.
+    // Host devices and per-attachment permissions.
 
     @Override
     public void getDeviceList(Bundle devices) {
-        // No devices attached: the bundle stays empty.
+        mHost.list(devices);
     }
 
     @Override
     public ParcelFileDescriptor openDevice(String deviceName, String packageName) {
-        return null;  // mHostManager == null
+        return mHost.open(deviceName, packageName);
     }
 
     @Override
     public boolean hasDevicePermission(UsbDevice device, String packageName) {
-        return systemHasPermission();
+        return mHost.has(device.getDeviceName(), packageName);
     }
 
     @Override
     public boolean hasDevicePermissionWithIdentity(UsbDevice device, String packageName,
             int pid, int uid) {
         requireManageUsb();
-        return uid == android.os.Process.SYSTEM_UID;
+        return mHost.hasWithIdentity(device.getDeviceName(), packageName, uid);
     }
 
     @Override
     public void requestDevicePermission(UsbDevice device, String packageName, PendingIntent pi) {
+        if (!systemHasPermission()) requireCallerPackage(packageName);
+        mHost.request(device, packageName, Objects.requireNonNull(pi));
+    }
+
+    static void sendDevicePermission(PendingIntent pi, UsbDevice device, boolean allowed) {
         Intent result = new Intent();
         result.putExtra(UsbManager.EXTRA_DEVICE, device);
-        if (systemHasPermission()) {
-            result.putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true);
-        } else {
-            requireCallerPackage(packageName);
-            result.putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
-        }
+        result.putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, allowed);
         send(pi, result);
     }
 
     @Override
     public void setUsbDeviceConnectionHandler(ComponentName handler) {
         requireManageUsb();
-        // mHostManager == null: nothing to hand connections to.
+        // No privileged fixed-handler override.
     }
 
     // Accessory (device mode) side: no UsbDeviceManager.
@@ -219,7 +205,9 @@ final class UsbService extends IUsbManager.Default {
 
     @Override
     public boolean isUvcGadgetSupportEnabled() {
-        return android.os.SystemProperties.getBoolean("ro.usb.uvc.enabled", false);
+        // The Windows host adapter has no USB gadget/device-mode function.
+        // A writable Android property cannot create that hardware capability.
+        return false;
     }
 
     @Override
@@ -259,8 +247,7 @@ final class UsbService extends IUsbManager.Default {
         throw new NullPointerException(NO_DEVICE_MANAGER);
     }
 
-    // Settings and permission records (MANAGE_USB). Nothing is ever attached, so a record
-    // could never apply to a device or accessory here; they are not kept.
+    // Persistent preferences and USB activity handlers (MANAGE_USB).
 
     @Override
     public void setDevicePackage(UsbDevice device, String packageName, int userId) {
@@ -314,6 +301,7 @@ final class UsbService extends IUsbManager.Default {
         Objects.requireNonNull(device);
         Objects.requireNonNull(user);
         requireManageUsb();
+        mHost.setPersistent(device, uid, user.getIdentifier(), shouldBeGranted);
     }
 
     @Override
@@ -322,16 +310,19 @@ final class UsbService extends IUsbManager.Default {
         Objects.requireNonNull(accessory);
         Objects.requireNonNull(user);
         requireManageUsb();
+        throw new UnsupportedOperationException("USB accessory mode is not available");
     }
 
     @Override
     public void grantDevicePermission(UsbDevice device, int uid) {
         requireManageUsb();
+        mHost.grant(device.getDeviceName(), uid);
     }
 
     @Override
     public void grantAccessoryPermission(UsbAccessory accessory, int uid) {
         requireManageUsb();
+        throw new UnsupportedOperationException("USB accessory mode is not available");
     }
 
     @Override

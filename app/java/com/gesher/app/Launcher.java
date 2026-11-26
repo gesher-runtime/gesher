@@ -246,6 +246,11 @@ public final class Launcher {
 
         switch (command) {
             case "launch": return launch(rest);
+            case "protected-launch": {
+                if (rest.size() != 1) return usage();
+                com.gesher.server.ProtectedRuntime.launch(rest.get(0));
+                return 0;
+            }
             case "install": {
                 if (rest.size() != 1) return usage();
                 ensureDevice(true);
@@ -473,7 +478,8 @@ public final class Launcher {
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
                 + " | proxy [[PACKAGE] host:port|socks5://host:port|direct|windows] | windows PACKAGE separate|shared"
                 + " | special-access PACKAGE [OP allow|deny] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
-                + " | shutdown | apk-icon APK | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
+                + " | protected-launch APK | shutdown | apk-icon APK"
+                + " | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
                 + " | " + MobileDataCommands.USAGE);
         return 2;
     }

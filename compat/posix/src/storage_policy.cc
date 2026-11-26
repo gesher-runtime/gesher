@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "internal.h"
+#include "../../usb_storage/protected_runtime_client.h"
 
 namespace gesher {
 namespace {
@@ -218,6 +219,7 @@ struct ProcessIdentity {
   std::string uid;
   std::wstring data_root;
   std::wstring media_root;
+  std::wstring policy_path;
 };
 
 extern "C" __declspec(dllexport) ProcessIdentity* gesher_storage_policy_owner_v1() {
@@ -230,6 +232,8 @@ extern "C" __declspec(dllexport) ProcessIdentity* gesher_storage_policy_owner_v1
     const char* uid = getenv("GESHER_UID");
     if (uid) value->uid = uid;
     value->data_root = EnvDirToWindows(getenv("ANDROID_DATA"));
+    value->policy_path = value->data_root + L"\\system\\storage-policy\\" + Widen(value->package.c_str());
+    if (usb_storage::ProtectedRuntimeEnabled()) value->policy_path += L"\\policy";
     if (!value->data_root.empty())
       value->media_root = CanonicalizeWindowsPath(value->data_root + L"\\media\\0");
     return value;
@@ -512,10 +516,9 @@ bool CheckCanonicalPath(const ProcessIdentity& identity, const std::wstring& can
     }
   }
 
-  std::wstring policy_path = identity.data_root + L"\\system\\storage-policy\\" + pkg_w;
   StorageMode mode = StorageMode::kScoped;
   int media_mask = 0;
-  LoadPolicy(policy_path, identity.package, identity.uid, &mode, &media_mask);
+  LoadPolicy(identity.policy_path, identity.package, identity.uid, &mode, &media_mask);
 
   if (!AllowSharedStorage(canon_path, is_root_or_android_dir, mode, media_mask, kind)) {
     errno = EACCES;

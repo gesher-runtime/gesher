@@ -28,10 +28,12 @@ inline bool ValidFileDescriptions(const void* data, size_t data_size,
     std::memcpy(&object, bytes + offset, sizeof(object));
     const bool socket = description.kind == kSocketFileDescription;
     const bool fence = description.kind == kNativeFenceFileDescription;
+    const bool application_memory = description.kind == kApplicationSharedMemoryDescription;
     if (description.object_offset != offset || description.shared_handle > UINTPTR_MAX ||
         description.reserved != 0 ||
         (socket ? description.shared_handle != 0 || (object.pad_flags & 1) == 0
          : fence ? description.shared_handle != 0 || object.pad_flags != kCompletedNativeFenceMetadata
+         : application_memory ? description.shared_handle != 0 || object.pad_flags != 0
                  : description.shared_handle == 0 || description.kind > 2 || object.pad_flags != 0))
       return false;
   }

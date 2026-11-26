@@ -22,13 +22,16 @@ def main() -> None:
     if source.count(start) != 1 or source.count(end) != 1:
         raise ValueError("Production child lifetime boundaries changed")
     production = source[source.index(start):source.index(end)]
+    identity_start = "uint64_t ProtectedIdentity(int pid)"
+    identity = source[source.index(identity_start):]
+    identity = identity[:identity.index("\n}\n") + 3]
     print("services_zygote.cc SHA256 " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     template = (ROOT / "tests/native/zygote_child_lifetime_host_test.cc.in").read_text()
     if template.count("@PRODUCTION_CHILD_LIFETIME@") != 1:
         raise ValueError("Missing production child lifetime marker")
     with tempfile.TemporaryDirectory(prefix="gesher-child-lifetime-") as directory:
         work = Path(directory); generated = work / "contracts.cc"; binary = work / "contracts"
-        generated.write_text(template.replace("@PRODUCTION_CHILD_LIFETIME@", production))
+        generated.write_text(template.replace("@PRODUCTION_CHILD_LIFETIME@", identity + production))
         command = shlex.split(args.cxx) + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
                 str(generated), "-o", str(binary)]
         if args.sanitize:

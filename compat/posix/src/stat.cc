@@ -10,6 +10,7 @@
 #include "internal.h"
 #include "ofd_internal.h"
 #include "revocable_internal.h"
+#include "usb_block_internal.h"
 #include "storage_policy.h"
 
 extern "C" int gesher_is_socket(int fd);
@@ -158,6 +159,8 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
       // One lookup for the name (a map_files entry's costs a VirtualQuery).
       const gesher::procfs::NameStatus name = gesher::procfs::Describe(windows);
       if (name.type == 0) break;
+      if (name.type == S_IFBLK) return gesher::usb_block::StatNode(
+          gesher::Narrow(windows.substr(windows.find_last_of(L'/') + 1).c_str()), buf);
       if (name.type == S_IFDIR && !follow && windows == L"proc/self") {
         // The link itself, as an fd opened on it O_PATH | O_NOFOLLOW is.
         ProcName("/proc/self", S_IFLNK, 0777, buf);
@@ -205,6 +208,13 @@ int fstat(int fd, struct stat* buf) {
   }
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return -1;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    if (gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR) return errno = ENOENT, -1;
+    ProcName(gesher::procfs::LinuxName(snapshot->description->virtual_directory), S_IFDIR, 0555, buf);
+    return 0;
+  }
+  int block_result;
+  if (gesher::usb_block::StatFd(snapshot, buf, &block_result)) return block_result;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE h = snapshot->handle;
@@ -224,7 +234,7 @@ int fstat(int fd, struct stat* buf) {
     buf->st_ctim = ToTimespec(time);
     return 0;
   }
-  switch (GetFileType(h)) {
+  switch (snapshot->kind == gesher::DescriptorKind::kUnshareable ? FILE_TYPE_CHAR : GetFileType(h)) {
     case FILE_TYPE_DISK:
       return FromHandle(h, buf, snapshot->description.get());
     case FILE_TYPE_PIPE:

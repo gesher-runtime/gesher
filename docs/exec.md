@@ -141,22 +141,41 @@ gesher-base's signal mailbox (`compat/bionic/process_bionic.cc`):
 - **`Process.destroy()`** now sends SIGTERM (the program's handler runs; a
   program with none is terminated with 143); **`destroyForcibly()`** kills
   (137), through a new `UNIXProcess` native.
-- **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `id`, `ps`,
-  `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`, `pm`, `am`, `which`, `mount`, as a bare name or a
-  `/system/bin` path; `sh` is the launcher's shell. `which [-a] NAME...` is
+- **`/system/bin` programs** (`gesher-exec --tool`): `ls`, `cat`, `dd`, `basename`,
+  `tr`, `id`, `ps`, `getprop`, `setprop`, `logcat`, `kill`, `sleep`, `toybox`,
+  `pm`, `am`, `blockdev`, `grep`, `awk`, `sync`, `umount`, `which`, `mount`, as a
+  bare name or a `/system/bin` path; `sh` is the launcher's shell. `which [-a] NAME...` is
   toybox's: a name exec runs as one of these programs (or `sh`) is
   `/system/bin/<name>`, otherwise `$PATH` is searched as exec searches it;
-  no match prints nothing and exits 1 (`which su`); like a device without
-  root tools there is no `/system/xbin/which` or `/system/xbin/mount`. `mount` is toybox's as an
-  app's uid: with no device or directory it lists `/proc/mounts` (the same
+  no match prints nothing and exits 1 (`which su` in ordinary Android).
+  There is no `/system/xbin/which` or `/system/xbin/mount`. `mount` is toybox's
+  as an app's uid: with no device or directory it lists `/proc/mounts` (the same
   table Gesher's `/proc/mounts` and `getmntent` serve, currently empty) as
   `DEVICE on DIR type TYPE (OPTIONS)`; mounting goes through `/etc/fstab`
   first, as toybox does for a non-root uid, and fails with its message and
   status 1 (`mount: bad /etc/fstab: ...`, `'DIR' not in fstab`, `'DEV' not
-  user mountable in fstab`, or EPERM from mount(2) for a `user` entry). `su` stays absent (no root),
+  user mountable in fstab`, or EPERM from mount(2) for a `user` entry).
+  The optional protected runtime supplies a separate `su` route. The authority
+  requires a live, explicitly approved media grant before creating its scoped
+  UID 0 child; this does not grant host mount or arbitrary Windows privileges.
+  In that runtime, `which` also reports its `su` aliases and the installed
+  filesystem-tool aliases that pass the same ELF admission as execution.
+  Bare aliases print `/system/bin/<alias>`; an explicit supported path keeps
+  its spelling. A missing or denied sealed helper has no PATH substitute.
+  Discovery does not grant or renew media access.
   getprop/setprop use the shared backend in ADR 0060. Structured logcat and
   the pm/am Binder client are prepared; the new property ABI, log capture and
   command/device assertions still need CI proof.
+  `dd` copies through Gesher's POSIX file descriptors and supports `if`, `of`,
+  `bs`, `skip`, `seek`, `count`, `conv=notrunc,noerror,sync,fsync`, and
+  `status=none,noxfer,progress` (each status is a separate choice).
+  Unsupported operands fail before opening the output. All reads, writes,
+  seeks and flushes use the actual descriptor; media access remains subject
+  to the authority's revocable grant.
+  `basename` accepts a path and optional suffix. `tr` supports byte
+  translation with escapes and ascending ranges. `id -u` prints the
+  process's effective guest UID. The shell uses the runtime's filesystem
+  for globs and file predicates, including virtual paths.
 
 ## Not done / limits
 

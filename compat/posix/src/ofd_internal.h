@@ -7,11 +7,13 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <windows.h>
 
 namespace gesher {
 
 struct RevocableFileGroup;
+namespace usb_block { struct Description; }
 struct FifoEndpoint;
 struct OpenFileDescription {
   struct Shared {
@@ -41,6 +43,10 @@ struct OpenFileDescription {
   HANDLE pipe_mutex = nullptr;
   std::mutex mutex;
   std::shared_ptr<RevocableFileGroup> revocation;
+  std::shared_ptr<usb_block::Description> usb_block;
+  // Immutable after publication. A USB virtual directory is a local capability,
+  // marked kUnshareable so its readonly metadata file cannot escape as a directory.
+  std::wstring virtual_directory;
   // A FIFO description's process-local view of its ring (fifo.cc), created
   // on first use and destroyed after the shared section above is released.
   std::shared_ptr<FifoEndpoint> fifo;

@@ -27,6 +27,10 @@
 #include <gesher/environment.h>
 #include <gesher/storage_policy.h>
 #include <gesher/fork.h>
+#include <gesher/protected_startup.h>
+
+#include "../../binder/protected_client_startup.h"
+#include "../../usb_storage/protected_runtime_client.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -37,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <iterator>
@@ -353,6 +358,13 @@ DWORD WINAPI ProgramThread(void*) {
 }
 
 int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
+  // This guard is deliberately at the final loader entry, not only in the
+  // authority's direct --elf parser. Encoded spawn and future exec transitions
+  // cannot carry UID 0 into a package-controlled ELF image.
+  if (!ex::CanLoadExecutableElf(path)) {
+    std::fprintf(stderr, "gesher-exec: ELF image is not authorized for this protected process\n");
+    return 126;
+  }
   static ProgramState state;
   g_program = &state;
   state.path = path;
@@ -386,6 +398,29 @@ int RunArguments(const std::vector<std::string>& args) {
   if (!args.empty() && args[0] == "--sh") {
     return ex::RunShell(std::vector<std::string>(args.begin() + 1, args.end()));
   }
+  if (!args.empty() && args[0] == "--su") {
+    uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
+    if (!gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid) || uid != 0 || gid != 0) {
+      std::fprintf(stderr, "su: no active authorized root process\n");
+      return 1;
+    }
+    // This is the real shell in an authority-admitted UID 0 process. Every
+    // media operation still goes through that process's revocable grant;
+    // UID 0 itself never grants access to a disk or another Windows object.
+    std::vector<std::string> shell(args.begin() + 1, args.end());
+    if (!shell.empty() && (shell.front() == "0" || shell.front() == "root")) {
+      shell.erase(shell.begin());
+    }
+    if (!shell.empty() && shell.front() != "-c") {
+      std::fprintf(stderr, "su: supported syntax is su [root|0] [-c COMMAND]\n");
+      return 2;
+    }
+    if (!shell.empty() && shell.size() != 2) {
+      std::fprintf(stderr, "su: -c requires one command\n");
+      return 2;
+    }
+    return ex::RunShell(shell);
+  }
   if (args.size() >= 2 && args[0] == "--tool") {
     return ex::RunTool(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
   }
@@ -403,8 +438,9 @@ int RunArguments(const std::vector<std::string>& args) {
       errno = prepared_error;
       return ex::SpawnFailure("program lookup", request.program.c_str());
     }
-    if (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
-        (launch.kind == "script" && launch.application == ex::LauncherPath())) {
+    if (!gesher::usb_storage::ProtectedRuntimeEnabled() &&
+        (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
+         (launch.kind == "script" && launch.application == ex::LauncherPath()))) {
       int count = 0;
       wchar_t** prepared = CommandLineToArgvW(launch.command_line.c_str(), &count);
       if (prepared == nullptr) return ex::SpawnFailure("prepared arguments", request.program.c_str());
@@ -414,7 +450,10 @@ int RunArguments(const std::vector<std::string>& args) {
       g_link_failure_status = 127;
       return RunArguments(next);
     }
-    // PE/batch programs keep the existing wait-and-propagate convention.
+    // A protected encoded spawn must expose its resolved target to the
+    // authority and receive a fresh exact-process grant. It never executes an
+    // arbitrary resolved image inline with the wrapper's credentials.
+    // Ordinary PE/batch programs keep the wait-and-propagate convention.
     std::vector<ex::ChildFd> fds;
     std::vector<std::pair<int, gesher::DescriptorSnapshotPtr>> captured;
     if (gesher::CaptureDescriptors(&captured, false) != 0) return 127;
@@ -442,6 +481,36 @@ int RunArguments(const std::vector<std::string>& args) {
 }  // namespace
 
 int main() {
+  int argc = 0;
+  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
+  if (!wargv || argc < 1) return 1;
+  std::vector<std::string> args;
+  bool invalid = false;
+  for (int i = 1; i < argc; ++i) {
+    std::string value = ex::Narrow(wargv[i]);
+    if (ex::Widen(value) != wargv[i]) invalid = true;
+    args.push_back(std::move(value));
+  }
+  LocalFree(wargv);
+  if (invalid) return 1;
+  bool binder = false, runtime = false;
+  while (!args.empty() && (args.front() == gesher::kProtectedBinderStartupOption ||
+                           args.front() == "--gesher-protected-runtime")) {
+    const bool binder_option = args.front() == gesher::kProtectedBinderStartupOption;
+    if (args.size() < 5 || (binder_option ? binder : runtime)) return 1;
+    const bool configured = binder_option
+        ? gesher::ConfigureProtectedBinderStartup(args[1], args[2], args[3])
+        : gesher::usb_storage::ConfigureProtectedRuntimeStartup(args[1], args[2], args[3]);
+    if (!configured) return 1;
+    if (binder_option) binder = true;
+    else runtime = true;
+    args.erase(args.begin(), args.begin() + 4);
+  }
+  if (binder != runtime) return 1;
+  if (runtime) {
+    const DWORD status = gesher::InitializeProtectedProcessResources();
+    if (status != ERROR_SUCCESS) return 1;
+  }
   gesher::InitializeExternalStoragePolicy();
   // Publish the inherited property session before the shell copies its env.
   gesher::properties::Initialize();
@@ -455,10 +524,5 @@ int main() {
   g_previous_filter = SetUnhandledExceptionFilter(OnUnhandled);
   AddVectoredExceptionHandler(0, OnFatal);
 
-  int argc = 0;
-  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  std::vector<std::string> args;
-  for (int i = 1; i < argc; ++i) args.push_back(ex::Narrow(wargv[i]));
-  LocalFree(wargv);
   return RunArguments(args);
 }

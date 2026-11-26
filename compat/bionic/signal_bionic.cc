@@ -837,6 +837,19 @@ int BIONIC_SYSV PthreadKill(uint64_t thread, int sig) {
 // A thread of another process is checked through the same mailbox kill()
 // uses; a signal for one of its threads cannot be directed there (that
 // transport is process-directed) and is ENOSYS, as remote RT kill is.
+int RegisteredSignalTarget(uint32_t tid, HANDLE* handle) {
+  std::lock_guard<std::mutex> lock(S().mutex);
+  ThreadState* target = LiveThreadLocked(tid);
+  if (target == nullptr) return kESRCH;
+  // Self and SendToOtherThread publish only proven local thread objects.
+  // Retain that exact lifetime under the registry lock. SYNCHRONIZE suffices;
+  // reopening by TID can be denied by a protected thread's object DACL.
+  HANDLE retained = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), target->lifetime, GetCurrentProcess(), &retained,
+                       SYNCHRONIZE, FALSE, 0)) return kEAGAIN;
+  *handle = retained;
+  return 0;
+}
 int SendToThread(int tgid, int tid, int sig) {
   const DWORD self_pid = GetCurrentProcessId();
   if (static_cast<DWORD>(tid) == GetCurrentThreadId()) {
@@ -844,10 +857,26 @@ int SendToThread(int tgid, int tid, int sig) {
     if (sig != 0 && !Valid(sig)) return errno = kEINVAL, -1;
     return SendFromSelf(sig, kSiTkill, 0, false);
   }
-  HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
-                             static_cast<DWORD>(tid));
+  HANDLE thread = nullptr;
+  int local = RegisteredSignalTarget(static_cast<uint32_t>(tid), &thread);
+  if (local == kESRCH) local = PthreadSignalTargetByTid(static_cast<uint32_t>(tid), &thread);
+  if (local != kESRCH) {
+    if (local != 0) return errno = local, -1;
+    if ((tgid != 0 && static_cast<DWORD>(tgid) != self_pid) ||
+        WaitForSingleObject(thread, 0) != WAIT_TIMEOUT) {
+      CloseHandle(thread);
+      return errno = kESRCH, -1;
+    }
+    if (sig != 0 && !Valid(sig)) { CloseHandle(thread); return errno = kEINVAL, -1; }
+    if (sig == 0) { CloseHandle(thread); return 0; }
+    int error = SendToOtherThread(static_cast<uint32_t>(tid), thread, sig);
+    return error == 0 ? 0 : (errno = error, -1);
+  }
+  thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(tid));
+  const bool can_wait = thread != nullptr;
   if (thread == nullptr) {
-    // A thread this process may not open belongs to another process.
+    // Unregistered targets retain the ordinary owner/permission checks. An
+    // access denial alone does not establish that a thread is external.
     if (GetLastError() != ERROR_ACCESS_DENIED) return errno = kESRCH, -1;
     thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(tid));
     if (thread == nullptr) return errno = kEPERM, -1;
@@ -855,6 +884,7 @@ int SendToThread(int tgid, int tid, int sig) {
   DWORD exit_code = 0;
   const DWORD owner = GetProcessIdOfThread(thread);
   if (owner == 0 || !GetExitCodeThread(thread, &exit_code) || exit_code != STILL_ACTIVE ||
+      (can_wait && WaitForSingleObject(thread, 0) != WAIT_TIMEOUT) ||
       (tgid != 0 && static_cast<DWORD>(tgid) != owner)) {
     CloseHandle(thread);
     return errno = kESRCH, -1;
@@ -866,9 +896,13 @@ int SendToThread(int tgid, int tid, int sig) {
   if (owner != self_pid) {
     CloseHandle(thread);
     int checked = KillOtherProcess(static_cast<int>(owner), 0);
-    if (checked != 0 || sig == 0) return checked;
+    if (checked != 0) return checked;
+    if (sig == 0) return can_wait ? 0 : (errno = kEPERM, -1);
     return errno = kENOSYS, -1;
   }
+  // QUERY alone cannot distinguish an exited thread whose exit code is 259
+  // from a live thread. It also cannot support the queue's retirement wait.
+  if (!can_wait) { CloseHandle(thread); return errno = kEPERM, -1; }
   if (sig == 0) {
     CloseHandle(thread);
     return 0;

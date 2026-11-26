@@ -67,15 +67,17 @@ public final class Services {
         final ActivityTaskManagerService atm;
         final ActivityManagerService am;
         final ClipboardService clipboard;
+        final UsbService usb;
         final Map<String, IBinder> services;
 
         Created(PackageManagerService pm, ActivityTaskManagerService atm,
-                ActivityManagerService am, ClipboardService clipboard,
+                ActivityManagerService am, ClipboardService clipboard, UsbService usb,
                 Map<String, IBinder> services) {
             this.pm = pm;
             this.atm = atm;
             this.am = am;
             this.clipboard = clipboard;
+            this.usb = usb;
             this.services = services;
         }
     }
@@ -109,7 +111,8 @@ public final class Services {
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
         ClipboardService clipboard = new ClipboardService(atm, pm);
-        Created created = new Created(pm, atm, am, clipboard, services);
+        UsbService usb = new UsbService(am.callers(), pm, am);
+        Created created = new Created(pm, atm, am, clipboard, usb, services);
         sLast = created;
         services.put("uri_grants", StandIn.of(android.app.IUriGrantsManager.class,
                 new UriGrantsManagerService(pm, atm, am)).asBinder());
@@ -246,10 +249,9 @@ public final class Services {
         // classes framework.jar does not have (as IAudioService above).
         services.put(android.os.BatteryStats.SERVICE_NAME,
                 new com.gesher.server.stub.IBatteryStatsStub(new BatteryService.Stats()));
-        // usb: AOSP's UsbService without managers, as on an emulator (UsbService). Phone
-        // apps use UsbManager unchecked; without it getSystemService answered null.
+        // Keep UsbManager available even when the Windows USB host is unavailable.
         services.put(Context.USB_SERVICE, StandIn.of(android.hardware.usb.IUsbManager.class,
-                new UsbService(am.callers())).asBinder());
+                usb).asBinder());
         // A device without a vibrator (hwsvc2, ADR 0051).
         services.put(Context.VIBRATOR_MANAGER_SERVICE, StandIn.of(
                 android.os.IVibratorManagerService.class, new VibratorManagerService()).asBinder());

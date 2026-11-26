@@ -52,6 +52,7 @@
 #include <vector>
 
 #include "internal.h"
+#include "usb_block_internal.h"
 #include "ofd_internal.h"
 #include "revocable_internal.h"
 #include "record_lock_descriptors.h"
@@ -895,6 +896,8 @@ std::string BootId() {
 struct Node {
   unsigned type = kNone;
   std::string file;  // "cmdline", "status", ... ; "timezone"
+  std::string usb_content;
+  bool usb_namespace = false;  // Lookup admitted this name through the live USB session.
   DWORD tid = 0;
   int fd = -1;
   std::string link;  // "exe", "cwd", "fd", "map_files"
@@ -934,6 +937,108 @@ void Add(std::vector<procfs::Entry>* entries, const std::string& name, unsigned 
 Node Lookup(const std::wstring& name, bool list) {
   std::vector<std::string> p = Split(name);
   Node n;
+  if (p.size() >= 3 && p[0] == "sys" && p[1] == "dev" && p[2] == "block") {
+    if (!usb_block::Attached()) return n;
+    n.usb_namespace = true;
+    if (p.size() == 3) {
+      n.type = kDir;
+      if (list) for (const auto& node : usb_block::Devices()) {
+        Add(&n.entries, usb_block::DeviceNumberName(node), DT_LNK);
+      }
+    } else if (p.size() == 4) {
+      const std::string node = usb_block::NodeFromDeviceNumber(p[3]);
+      if (!node.empty() && usb_block::DeviceExists(node)) {
+        n.type = kLink;
+        n.link = "usb-alias";
+        n.usb_content = "/sys/block/sdb" + (node == "sdb" ? std::string{} : "/" + node);
+      }
+    }
+    return n;
+  }
+  if (p.size() >= 5 && p[0] == "sys" && p[1] == "devices" && p[2] == "gesher" &&
+      p[3] == "usb" && p[4] == "sdb") {
+    if (!usb_block::Attached()) return n;
+    n.usb_namespace = true;
+    if (p.size() == 5) {
+      n.type = kDir;
+      if (list) for (const char* field : {"model", "serial"}) {
+        std::string value;
+        if (usb_block::SysContent(field, &value)) Add(&n.entries, field, DT_REG);
+      }
+    } else if (p.size() == 6 && (p[5] == "model" || p[5] == "serial") &&
+        usb_block::SysContent(p[5], &n.usb_content)) n.type = kFile;
+    return n;
+  }
+  if (p.size() >= 2 && (p[0] == "dev" || p[0] == "sys") && p[1] == "block") {
+    if (!usb_block::Attached()) return n;
+    n.usb_namespace = true;
+    if (p.size() == 2) {
+      n.type = kDir;
+      if (list) {
+        if (p[0] == "dev") {
+          for (const auto& node : usb_block::Devices()) Add(&n.entries, node, DT_BLK);
+        } else Add(&n.entries, usb_block::kBlockName, DT_DIR);
+      }
+      return n;
+    }
+    if (p[0] == "dev") {
+      if (p.size() == 3 && usb_block::DeviceExists(p[2])) n.type = S_IFBLK;
+      return n;
+    }
+    if (p[2] != usb_block::kBlockName) return n;
+    if (p.size() == 3) {
+      n.type = kDir;
+      if (list) {
+        for (const char* field : {"size", "removable", "ro"}) Add(&n.entries, field, DT_REG);
+        Add(&n.entries, "device", DT_LNK);
+        Add(&n.entries, "holders", DT_DIR);
+        Add(&n.entries, "slaves", DT_DIR);
+        for (const auto& node : usb_block::Devices()) {
+          if (node != usb_block::kBlockName) Add(&n.entries, node, DT_DIR);
+        }
+      }
+      return n;
+    }
+    if (p.size() >= 4 && p[3] != usb_block::kBlockName && usb_block::DeviceExists(p[3])) {
+      if (p.size() == 4) {
+        n.type = kDir;
+        if (list) {
+          for (const char* field : {"size", "start", "partition", "ro", "removable"}) Add(&n.entries, field, DT_REG);
+          Add(&n.entries, "holders", DT_DIR);
+          Add(&n.entries, "slaves", DT_DIR);
+        }
+      } else if (p.size() == 5 && (p[4] == "size" || p[4] == "start" ||
+                                  p[4] == "partition" || p[4] == "ro" || p[4] == "removable")) {
+        std::string content;
+        if (usb_block::NodeSysContent(p[3], p[4], &content)) {
+          n.type = kFile;
+          n.usb_content = std::move(content);
+        }
+      } else if (p.size() == 5 && (p[4] == "holders" || p[4] == "slaves")) {
+        n.type = kDir;
+      }
+      return n;
+    }
+    if (p.size() == 4 && p[3] == "device") {
+      n.type = kLink;
+      n.link = "usb-alias";
+      n.usb_content = "/sys/devices/gesher/usb/sdb";
+      return n;
+    }
+    if (p.size() == 4 && (p[3] == "holders" || p[3] == "slaves")) {
+      n.type = kDir;
+      return n;
+    }
+    if ((p.size() == 4 && (p[3] == "size" || p[3] == "removable" || p[3] == "ro")) ||
+        (p.size() == 5 && p[3] == "device" && (p[4] == "model" || p[4] == "serial"))) {
+      std::string content;
+      if (usb_block::SysContent(p.back(), &content)) {
+        n.type = kFile;
+        n.usb_content = std::move(content);
+      }
+    }
+    return n;
+  }
   if (p.size() == 2 && p[0] == "etc" && p[1] == "timezone") {
     n.type = kFile;
     n.file = "timezone";
@@ -1084,6 +1189,7 @@ Node Lookup(const std::wstring& name, bool list) {
 
 std::string Content(const Node& n) {
   const std::string& f = n.file;
+  if (!n.usb_content.empty()) return n.usb_content;
   if (f == "timezone") return WindowsZoneId();  // no newline: libcore reads it whole
   if (f == "cmdline") return Cmdline();
   if (f == "environ") return Environ();
@@ -1337,6 +1443,7 @@ bool ReadLink(const std::wstring& name, std::string* target) {
     }
     return errno = EINVAL, false;
   }
+  if (n.link == "usb-alias") { *target = n.usb_content; return true; }
   if (n.link == "map_files") {
     *target = n.target;
     return true;
@@ -1376,6 +1483,8 @@ int Open(const std::wstring& name, int flags) {
   if ((flags & O_PATH) != 0) flags &= O_PATH | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW;
   Node n = Lookup(name, false);
   if (n.type == kNone) return errno = (flags & O_CREAT) != 0 ? EACCES : ENOENT, -1;
+  if (n.type == S_IFBLK) return usb_block::OpenNode(
+      Narrow(name.substr(name.find_last_of(L'/') + 1).c_str()), flags);
   // /proc/self is a link on Linux (to /proc/<pid>), though it is a directory
   // here to everyone that follows it.
   const std::vector<std::string> parts = Split(name);
@@ -1404,6 +1513,8 @@ int Open(const std::wstring& name, int flags) {
     return open(target.c_str(), flags & ~(O_CREAT | O_EXCL), 0);
   }
   const bool directory = n.type == kDir && !link_itself;
+  const bool usb_directory = directory && n.usb_namespace;
+  if (usb_directory && (flags & (O_DIRECT | O_APPEND)) != 0) return errno = EOPNOTSUPP, -1;
   if (link_itself) {
     // O_PATH: no access to check, nothing to read.
   } else if (directory) {
@@ -1428,15 +1539,17 @@ int Open(const std::wstring& name, int flags) {
   record_locks::DescriptorGuard descriptors;
   int fd = memfd_create("procfs", (flags & O_CLOEXEC) != 0 ? MFD_CLOEXEC : 0);
   if (fd < 0) return -1;
-  // What the fd is open on (DescribeHandle): /proc and /sys names; not
-  // /etc/timezone, which is an ordinary file on Linux.
+  // What the fd is open on (DescribeHandle): /proc, /sys and the admitted
+  // USB /dev/block directory; not /etc/timezone, an ordinary file on Linux.
+  // The USB directory remains a process-local capability below. Its tagged
+  // readonly file supplies the shared getdents64/lseek position, never disk I/O.
   const std::string linux_name =
       link_itself && self_link ? std::string("/proc/self") : LinuxName(name);
   // The mode as lstat/stat report it now (a map_files link's from its
   // mapping's file), kept for fstat.
   const unsigned tag_mode = link_itself ? (n.type == kLink && n.mode != 0 ? n.mode : 0777)
                                         : n.mode != 0 ? n.mode : DefaultMode(n.type);
-  if ((linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0) &&
+  if ((linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0 || usb_directory) &&
       !SetTag(HandleFromFd(fd), link_itself ? 'l' : directory ? 'd' : 'f', tag_mode, linux_name) &&
       (directory || link_itself)) {
     // The temp volume keeps no extended attributes (FAT): the file cannot
@@ -1480,10 +1593,16 @@ int Open(const std::wstring& name, int flags) {
     CloseHandle(readonly);
     return errno = saved, -1;
   }
-  if (RegisterOfd(fd, flags | ((flags & O_PATH) == 0 ? O_LARGEFILE : 0)) < 0) {
+  if (RegisterOfd(fd, flags | ((flags & O_PATH) == 0 ? O_LARGEFILE : 0)) < 0 ||
+      (usb_directory && SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0)) {
     int saved = errno;
     close(fd);
     return errno = saved, -1;
+  }
+  if (usb_directory) {
+    auto snapshot = CaptureDescriptor(fd);
+    if (!snapshot) { const int error = errno; close(fd); return errno = error, -1; }
+    snapshot->description->virtual_directory = name;
   }
   return fd;
 }

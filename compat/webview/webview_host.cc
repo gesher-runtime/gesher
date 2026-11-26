@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <set>
 #include <utility>
@@ -2049,16 +2050,22 @@ void Host::Configure(const std::wstring& user_data_folder, const std::wstring& b
   std::lock_guard<std::mutex> lock(g_config_mutex);
   if (g_configured) return;
   g_configured = true;
-  // Java's paths are drive-less (ADR 0010: /a/b is \a\b on the current
-  // drive); WebView2 wants a full Windows path.
+  // Java's same-drive paths are drive-less (ADR 0010); ADR 0045 spells
+  // another drive /mnt/<drive>/.... WebView2 needs the actual Windows path.
   std::wstring path = user_data_folder;
+  if (path.size() >= 6 && path.compare(0, 5, L"/mnt/") == 0 &&
+      ((path[5] >= L'a' && path[5] <= L'z') || (path[5] >= L'A' && path[5] <= L'Z')) &&
+      (path.size() == 6 || path[6] == L'/')) {
+    const wchar_t drive = path[5];
+    path = std::wstring(1, drive) + L":\\" + (path.size() > 7 ? path.substr(7) : L"");
+  }
   for (wchar_t& ch : path) {
     if (ch == L'/') ch = L'\\';
   }
   if (!path.empty()) {
-    wchar_t full[MAX_PATH * 2];
-    DWORD n = GetFullPathNameW(path.c_str(), MAX_PATH * 2, full, nullptr);
-    if (n > 0 && n < MAX_PATH * 2) path.assign(full, n);
+    wchar_t full[32768];
+    DWORD n = GetFullPathNameW(path.c_str(), static_cast<DWORD>(std::size(full)), full, nullptr);
+    if (n > 0 && n < std::size(full)) path.assign(full, n);
   }
   g_user_data = path;
   g_browser_args = browser_args;

@@ -25,6 +25,7 @@
 #include <gesher/file_description.h>
 
 #include "internal.h"
+#include "usb_block_internal.h"
 #include "descriptor_resources.h"
 #include "fifo_internal.h"
 #include "record_lock_descriptors.h"
@@ -320,6 +321,10 @@ int Access(const char* path, int mode, bool follow) {
     case PathKind::kVirtual: {
       const gesher::procfs::NameStatus name = gesher::procfs::Describe(windows);
       if (name.type == 0) return errno = ENOENT, -1;
+      if (name.type == S_IFBLK) {
+        return (mode & X_OK) != 0 || ((mode & W_OK) != 0 && !gesher::usb_block::Writable())
+            ? (errno = EACCES, -1) : 0;
+      }
       // access follows a link at the end (faccessat AT_SYMLINK_NOFOLLOW
       // does not): a map_files link refuses that, F_OK too (EPERM).
       if (follow && name.type == S_IFLNK && name.follow_error != 0) {

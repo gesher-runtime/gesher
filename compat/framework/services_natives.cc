@@ -29,10 +29,12 @@
 #include <nativehelper/JNIHelp.h>
 #include <unistd.h>
 #include <cstdio>
+#include <gesher/application_shared_memory.h>
 
 #include "core_jni_helpers.h"
 #include "services_zygote.h"
 #include "services_dexopt_watch.h"
+#include "../usb_storage/protected_runtime_client.h"
 
 // Its layout checks use offsetof on a class with atomics, which Soong's flags
 // let pass (-Wno-invalid-offsetof).
@@ -40,6 +42,37 @@
 #pragma clang diagnostic ignored "-Winvalid-offsetof"
 #include "com_android_internal_os_ApplicationSharedMemory.cpp"
 #pragma clang diagnostic pop
+
+namespace {
+
+static jint ProtectedApplicationMemoryCreate(JNIEnv* env, jclass clazz) {
+    const jint fd = nativeCreate(env, clazz);
+    if (fd < 0) return fd;
+    if (env->ExceptionCheck()) {
+        close(fd);
+        return -1;
+    }
+    if (gesher::PublishApplicationSharedMemory(fd, sizeof(SharedMemory)) < 0) {
+        const int error = errno;
+        close(fd);
+        jniThrowExceptionFmt(env, "java/lang/RuntimeException",
+                            "Cannot publish protected ApplicationSharedMemory: %s", strerror(error));
+        return -1;
+    }
+    return fd;
+}
+
+static jint ProtectedApplicationMemoryReadOnly(JNIEnv* env, jclass clazz, jint fd) {
+    if (!gesher::UsesProtectedBinder()) return nativeDupAsReadOnly(env, clazz, fd);
+    const int result = gesher::DuplicateApplicationSharedMemoryReadOnly(fd);
+    if (result < 0) {
+        jniThrowExceptionFmt(env, "java/lang/RuntimeException",
+                            "Cannot duplicate protected ApplicationSharedMemory: %s", strerror(errno));
+    }
+    return result;
+}
+
+}  // namespace
 
 namespace android {
 
@@ -61,11 +94,11 @@ int RegisterGesherNatives(JNIEnv* env, const char* className, const JNINativeMet
 }
 
 static const JNINativeMethod gGesherApplicationSharedMemoryMethods[] = {
-    {"nativeCreate", "()I", GESHER_JNI(nativeCreate)},
+    {"nativeCreate", "()I", GESHER_JNI(ProtectedApplicationMemoryCreate)},
     {"nativeMap", "(IZ)J", GESHER_JNI(nativeMap)},
     {"nativeInit", "(J)V", GESHER_JNI(nativeInit)},
     {"nativeUnmap", "(J)V", GESHER_JNI(nativeUnmap)},
-    {"nativeDupAsReadOnly", "(I)I", GESHER_JNI(nativeDupAsReadOnly)},
+    {"nativeDupAsReadOnly", "(I)I", GESHER_JNI(ProtectedApplicationMemoryReadOnly)},
     {"nativeSetLatestNetworkTimeUnixEpochMillisAtZeroElapsedRealtimeMillis", "(JJ)V",
      GESHER_JNI(nativeSetLatestNetworkTimeUnixEpochMillisAtZeroElapsedRealtimeMillis)},
     {"nativeGetLatestNetworkTimeUnixEpochMillisAtZeroElapsedRealtimeMillis", "(J)J",
@@ -162,6 +195,32 @@ static jint Zygote_spawn(JNIEnv* env, jclass, jstring commandLine, jobjectArray 
     return gesher::zygote::Spawn(ZygoteString(env, commandLine), ZygoteStrings(env, set),
                                  ZygoteStrings(env, unset), ZygoteString(env, logPath),
                                  breakaway == JNI_TRUE);
+}
+
+static jboolean Zygote_protectedRuntimeEnabled(JNIEnv*, jclass) {
+    return gesher::usb_storage::ProtectedRuntimeEnabled() ? JNI_TRUE : JNI_FALSE;
+}
+
+static jint Zygote_startProtectedRuntime(JNIEnv* env, jclass, jstring apk) {
+    return static_cast<jint>(gesher::usb_storage::StartProtectedRuntime(ZygoteString(env, apk)));
+}
+
+static jint Zygote_spawnProtected(JNIEnv* env, jclass, jstring packageName,
+        jstring processName, jstring apkPath, jstring apkSha256, jstring signerSha256,
+        jint uid, jint targetSdk, jlong startSequence, jobjectArray environment) {
+    if (uid < 10000 || targetSdk <= 0 || startSequence <= 0) return -87;
+    gesher::usb_storage::ProtectedSpawnSpec spec;
+    spec.package_name = ZygoteString(env, packageName);
+    spec.process_name = ZygoteString(env, processName);
+    spec.apk_path = ZygoteString(env, apkPath);
+    spec.apk_sha256 = ZygoteString(env, apkSha256);
+    spec.signer_sha256 = ZygoteString(env, signerSha256);
+    spec.uid = static_cast<uint32_t>(uid);
+    spec.target_sdk = static_cast<uint32_t>(targetSdk);
+    spec.start_sequence = static_cast<uint64_t>(startSequence);
+    spec.environment = ZygoteStrings(env, environment);
+    if (env->ExceptionCheck()) return -8;
+    return gesher::zygote::SpawnProtected(spec);
 }
 
 static jint Zygote_spawnInAppContainer(JNIEnv* env, jclass, jstring commandLine,
@@ -301,6 +360,11 @@ static jstring Zygote_exePath(JNIEnv* env, jclass) {
 }
 
 static const JNINativeMethod gZygoteMethods[] = {
+    {"nativeProtectedRuntimeEnabled", "()Z", GESHER_JNI(Zygote_protectedRuntimeEnabled)},
+    {"nativeStartProtectedRuntime", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_startProtectedRuntime)},
+    {"nativeSpawnProtected",
+     "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+     "IIJ[Ljava/lang/String;)I", GESHER_JNI(Zygote_spawnProtected)},
     {"nativeSpawn",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)I",
      GESHER_JNI(Zygote_spawn)},

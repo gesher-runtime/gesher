@@ -18,8 +18,8 @@
 
 #include "fifo_internal.h"
 #include "internal.h"
-#include "storage_policy.h"
 #include "ofd_internal.h"
+#include "storage_policy.h"
 #include <gesher/file_description.h>
 #include <gesher/procfs_fd.h>
 #include <gesher/reserved_names.h>
@@ -528,6 +528,12 @@ DIR* opendir(const char* name) { return Open(name, -1); }
 
 // The directory open as fd, which the DIR then owns (closedir closes it).
 DIR* fdopendir(int fd) {
+  auto snapshot = gesher::CaptureDescriptor(fd);
+  if (!snapshot) return nullptr;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    const std::string name = gesher::procfs::LinuxName(snapshot->description->virtual_directory);
+    return Open(name.c_str(), fd);
+  }
   std::string path;
   if (!DirectoryOfFd(fd, &path)) return nullptr;
   return Open(path.c_str(), fd);
@@ -538,6 +544,10 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
   // cannot turn this call to another file (Linux pins it with fdget_pos).
   gesher::DescriptorSnapshotPtr snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return errno == 0 ? (errno = EBADF, -1) : -1;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty() &&
+      gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR) {
+    return errno = ENOENT, -1;  // The USB authority/session no longer exposes this directory.
+  }
   const HANDLE h = snapshot->handle;
   if (GetFileType(h) != FILE_TYPE_DISK) return errno = ENOTDIR, -1;
   std::string path;

@@ -28,6 +28,7 @@
 
 #include <linux/android/binder.h>
 #include <gesher/file_description.h>
+#include <gesher/application_shared_memory.h>
 // The fork set (gesher/fork.h); absent where a host test compiles this file alone.
 #if __has_include(<gesher/fork.h>)
 #include <gesher/fork.h>
@@ -36,6 +37,7 @@
 #include "binder_internal.h"
 #include "binder_file_descriptions.h"
 #include "binder_sg.h"
+#include "binder_transport.h"
 #include "binder_wire.h"
 #include "internal.h"
 #include "native_fence_internal.h"
@@ -120,6 +122,7 @@ std::wstring PipeName() {
 }
 
 HANDLE ConnectPipe(const std::wstring& name) {
+  if (const auto* endpoint = ProtectedBinderEndpoint()) return OpenProtectedBinder(*endpoint);
   for (int attempt = 0; attempt < 50; ++attempt) {
     HANDLE h = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING,
                            0, nullptr);
@@ -362,6 +365,21 @@ bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
     DescriptorSnapshotPtr snapshot;
     {
       record_locks::DescriptorGuard guard;
+      if (ProtectedBinderEndpoint()) {
+        // Offer only the exact file object. The authenticated broker admits it
+        // only from the registered system server and only when it matches the
+        // published ApplicationSharedMemory object. Never export caller-owned
+        // writable OFD metadata on this route.
+        snapshot = CaptureDescriptor(fd);
+        if (!snapshot || snapshot->kind != DescriptorKind::kFile) {
+          ok = false; obj.pad_binder = 0; return;
+        }
+        obj.pad_flags = 0;
+        obj.pad_binder = reinterpret_cast<uintptr_t>(snapshot->handle);
+        descriptions->push_back({offset, 0, wire::kApplicationSharedMemoryDescription, 0});
+        pins->push_back(std::move(snapshot));
+        return;
+      }
       uintptr_t fence_event = 0;
       uint64_t fence_metadata = 0;
       if (TransferNativeFence(fd, &fence_event, &fence_metadata)) {
@@ -424,6 +442,18 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
       } else if (description.kind == wire::kNativeFenceFileDescription) {
         // Consumes the handle; admits only an immutable signaled completion event.
         fd = AdoptNativeFence(owned, obj.pad_flags);
+      } else if (description.kind == wire::kApplicationSharedMemoryDescription) {
+        // A protected-only typed transfer. Derive a fresh local description
+        // from the reduced kernel handle; never adopt a producer's writable
+        // metadata or accept this type over ordinary discovery.
+        if (ProtectedBinderEndpoint() && GetFileType(owned) == FILE_TYPE_DISK) {
+          auto snapshot = CaptureFileHandle(owned);
+          const int flags = snapshot ? FileDescriptionIoFlags(snapshot) : -1;
+          if (flags >= 0 && (flags & (O_ACCMODE | O_PATH)) == O_RDONLY) {
+            fd = AttachFileDescription(snapshot, true);
+          }
+        }
+        CloseHandle(owned);
       } else {
         HANDLE shared_staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(description.shared_handle));
         if (DuplicateHandle(GetCurrentProcess(), shared_staging, GetCurrentProcess(), &shared,
@@ -768,7 +798,63 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 
 }  // namespace
 
+bool UsesProtectedBinder() { return ProtectedBinderEndpoint() != nullptr; }
+
+int PublishApplicationSharedMemory(int fd, size_t size) {
+  const auto* endpoint = ProtectedBinderEndpoint();
+  if (!endpoint) return 0;
+  auto snapshot = CaptureDescriptor(fd);
+  if (!snapshot || snapshot->kind != DescriptorKind::kFile) return errno = EBADF, -1;
+  HANDLE pipe = OpenProtectedBinder(*endpoint);
+  if (pipe == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
+  Message request;
+  request.Put<uint32_t>(wire::kPublishApplicationSharedMemory);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put<uint64_t>(reinterpret_cast<uintptr_t>(snapshot->handle));
+  request.Put<uint64_t>(size);
+  std::vector<uint8_t> reply;
+  const bool received = Send(pipe, request) && Receive(pipe, &reply);
+  CloseHandle(pipe);
+  if (!received || reply.size() != sizeof(uint32_t)) return errno = EIO, -1;
+  uint32_t status = 0;
+  memcpy(&status, reply.data(), sizeof(status));
+  if (status != ERROR_SUCCESS) return errno = ErrnoFromWin32(status), -1;
+  return 0;
+}
+
+int DuplicateApplicationSharedMemoryReadOnly(int fd) {
+  auto source = CaptureDescriptor(fd);
+  if (!source || source->kind != DescriptorKind::kFile ||
+      GetFileType(source->handle) != FILE_TYPE_DISK) return errno = EBADF, -1;
+  HANDLE readonly = nullptr;
+  constexpr DWORD access = FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+  if (!DuplicateHandle(GetCurrentProcess(), source->handle, GetCurrentProcess(), &readonly,
+                       access, FALSE, 0)) return FailWithLastError();
+  // Do not CaptureFileHandle here: its exact-object match can reuse the
+  // producer's writable OFD. This is a new read-only descriptor description.
+  int result = _open_osfhandle(reinterpret_cast<intptr_t>(readonly),
+                             _O_RDONLY | _O_BINARY | _O_NOINHERIT);
+  if (result < 0) {
+    const int error = gesher_errno_from_crt(errno);
+    CloseHandle(readonly);
+    return errno = error, -1;
+  }
+  if (RegisterOfd(result, O_RDONLY) < 0) {
+    const int error = errno;
+    close(result);
+    return errno = error, -1;
+  }
+  return result;
+}
+
 bool BinderDeviceExists() {
+  if (const auto* endpoint = ProtectedBinderEndpoint()) {
+    HANDLE pipe = OpenProtectedBinder(*endpoint);
+    if (pipe == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(pipe);
+    return true;
+  }
   std::wstring name = PipeName();
   if (name.empty()) return false;
   // WaitNamedPipe fails at once with ERROR_FILE_NOT_FOUND when no server
@@ -778,8 +864,9 @@ bool BinderDeviceExists() {
 }
 
 int OpenBinder(int flags) {
-  std::wstring name = PipeName();
-  if (name.empty()) return errno = ENOENT, -1;
+  const bool is_protected = ProtectedBinderEndpoint() != nullptr;
+  std::wstring name = is_protected ? std::wstring() : PipeName();
+  if (!is_protected && name.empty()) return errno = ENOENT, -1;
   HANDLE pipe = ConnectPipe(name);
   if (pipe == INVALID_HANDLE_VALUE) return errno = ENOENT, -1;
   auto file = std::make_shared<BinderFile>();

@@ -105,9 +105,11 @@ final class FixtureServiceContext {
                 throws Exception {
             Constructor<?> constructor = Class.forName("com.gesher.server.Services$Created")
                     .getDeclaredConstructor(PackageManagerService.class, ActivityTaskManagerService.class,
-                            ActivityManagerService.class, ClipboardService.class, Map.class);
+                            ActivityManagerService.class, ClipboardService.class,
+                            Class.forName("com.gesher.server.UsbService"), Map.class);
             constructor.setAccessible(true);
-            return constructor.newInstance(pm, atm, am, clipboard, bindings);
+            // This fixture never starts the system server's USB host monitor.
+            return constructor.newInstance(pm, atm, am, clipboard, null, bindings);
         }
 
         @Override public void close() throws Exception {

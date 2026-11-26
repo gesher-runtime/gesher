@@ -333,7 +333,8 @@ public final class SpecialAccessTest {
                     () -> ops.setMode(AppOpsManager.OP_SYSTEM_ALERT_WINDOW, APP_UID, APP, AppOpsManager.MODE_ALLOWED)));
             as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> setAccess(pm, APP, OVERLAY, true)));
             Object created = make(type("Services$Created"), new Class<?>[]{PackageManagerService.class, atm.getClass(),
-                    am.getClass(), type("ClipboardService"), Map.class}, pm, atm, am, null, new java.util.HashMap<>());
+                    am.getClass(), type("ClipboardService"), type("UsbService"), Map.class},
+                    pm, atm, am, null, null, new java.util.HashMap<>());
             field(type("Services"), "sLast").set(null, created);
             Class<?> deviceType = type("GesherService$Device");
             Object device = Proxy.newProxyInstance(deviceType.getClassLoader(), new Class<?>[]{deviceType}, (proxy, method, args) -> {

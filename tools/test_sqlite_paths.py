@@ -83,6 +83,15 @@ def function(source: str, signature: str) -> str:
 
 def namespace_fixture() -> str:
     source = (ROOT / "compat/posix/src/path.cc").read_text()
+    usb = (ROOT / "compat/posix/src/usb_block_internal.h").read_text()
+    helper_begin = 'inline constexpr const char* kBlockName = "sdb";'
+    helper_end = '\nbool Attached();'
+    if usb.count(helper_begin) != 1 or usb.count(helper_end) != 1:
+        raise ValueError("USB device-number helper boundaries changed")
+    usb_helpers = usb[usb.index(helper_begin):usb.index(helper_end)]
+    if usb_helpers.count("inline std::string NodeFromDeviceNumber(") != 1:
+        raise ValueError("USB device-number helper missing")
+    print("Production USB device-number helpers SHA256 " + hashlib.sha256(usb_helpers.encode()).hexdigest(), flush=True)
     internal = (ROOT / "compat/posix/src/internal.h").read_text()
     kinds = internal[internal.index("enum class PathKind {"):]
     kinds = kinds[:kinds.index("};") + 2]
@@ -90,6 +99,7 @@ def namespace_fixture() -> str:
 #pragma once
 #include <algorithm>
 #include <cerrno>
+#include <charconv>
 #include <codecvt>
 #include <cstdint>
 #include <cstring>
@@ -137,10 +147,15 @@ static const std::wstring& File() { static const std::wstring none; return none;
 static bool IsName(const char*) { return false; }
 }
 namespace procfs { static unsigned Type(const std::wstring&) { return 0; } }
+// The SQLite path fixture has no attached USB block broker.
+namespace usb_block {
+@USB_BLOCK_HELPERS@
+static bool Attached() { return false; }
+}
 '''
-    signatures = ["bool IsDriveLetter(", "std::string_view NextPart(", "PathKind VirtualKind(",
-                  "bool DrivePath(", "void Lengthen(", "bool ExternalStoragePath(",
-                  "PathKind MapPath(", "bool DiskPath("]
+    prologue = prologue.replace("@USB_BLOCK_HELPERS@", usb_helpers)
+    signatures = ["bool IsDriveLetter(", "std::string_view NextPart(", "std::wstring VirtualDirectoryPath(", "PathKind VirtualKind(",
+                  "bool DrivePath(", "void Lengthen(", "bool ExternalStoragePath(", "PathKind MapPath(", "bool DiskPath("]
     return prologue + kinds + "\n" + "\n".join(function(source, name) for name in signatures) + "\n}\n"
 
 

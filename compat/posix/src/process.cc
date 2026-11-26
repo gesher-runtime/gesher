@@ -40,6 +40,8 @@
 #include <gesher/ptrace_state.h>
 
 #include "internal.h"
+#include "../../usb_storage/protected_runtime_client.h"
+#include "../../usb_storage/protected_signal.h"
 
 // Set by the bionic shim (compat/bionic/signal_bionic.cc) in processes that
 // run loaded Android code: it gets each signal another process sends first
@@ -51,15 +53,8 @@ int gesher_kill_other(pid_t pid, int sig);
 
 namespace {
 
-struct Mailbox {
-  volatile LONG64 pending;  // bit (signal - 1)
-  volatile LONG senders[NSIG];
-  volatile LONG forked;     // a forked child's (gesher/fork.h): its exit codes
-  // The process it belongs to (its creation time): a mailbox left by an
-  // earlier process with the same pid (a sender still had it open) is reset
-  // by the new owner rather than inherited with its pending signals.
-  volatile LONG64 owner_created;
-};
+using Mailbox = gesher::usb_storage::ProtectedSignalMailbox;
+static_assert(NSIG == 65);
 
 LONG64 CreationTime(HANDLE process) {
   FILETIME created{}, exited{}, kernel{}, user{};
@@ -82,6 +77,11 @@ std::wstring MailboxName(DWORD pid) { return L"Local\\gesher-signals-" + std::to
 std::wstring EventName(DWORD pid) { return L"Local\\gesher-signal-" + std::to_wstring(pid); }
 
 Mailbox* g_mailbox = nullptr;
+HANDLE g_mailbox_section = nullptr;
+HANDLE g_mailbox_event = nullptr;
+HANDLE g_mailbox_wait = nullptr;
+bool g_protected_mailbox = false;
+std::mutex g_mailbox_mutex;
 
 bool DefaultIgnores(int sig) {
   return sig == SIGCHLD || sig == SIGCONT || sig == SIGURG || sig == SIGWINCH;
@@ -135,23 +135,22 @@ extern const bool g_fork_exit_codes;
 
 bool OpenMailbox(bool thread_pool) {
   DWORD pid = GetCurrentProcessId();
-  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+  g_mailbox_section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
                                       sizeof(Mailbox), MailboxName(pid).c_str());
-  if (section == nullptr) return false;
-  auto* mailbox = static_cast<Mailbox*>(MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Mailbox)));
-  HANDLE event = CreateEventW(nullptr, FALSE, FALSE, EventName(pid).c_str());
-  if (mailbox == nullptr || event == nullptr) return false;
+  if (g_mailbox_section == nullptr) return false;
+  auto* mailbox = static_cast<Mailbox*>(MapViewOfFile(g_mailbox_section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Mailbox)));
+  g_mailbox_event = CreateEventW(nullptr, FALSE, FALSE, EventName(pid).c_str());
+  if (mailbox == nullptr || g_mailbox_event == nullptr) return false;
   // A forked child's mailbox already exists (its parent made it for this
   // process, and may have posted signals to it): those are delivered as soon
   // as it is watched.
   ClaimMailbox(mailbox, CreationTime(GetCurrentProcess()), !thread_pool || g_fork_exit_codes);
   g_mailbox = mailbox;
   if (thread_pool) {
-    HANDLE wait = nullptr;
-    return RegisterWaitForSingleObject(&wait, event, OnSignal, nullptr, INFINITE,
+    return RegisterWaitForSingleObject(&g_mailbox_wait, g_mailbox_event, OnSignal, nullptr, INFINITE,
                                        WT_EXECUTEDEFAULT) != FALSE;
   }
-  return gesher::StartHelperThread(MailboxThread, event, 64 * 1024);  // the section and event stay open for the life of the process
+  return gesher::StartHelperThread(MailboxThread, g_mailbox_event, 64 * 1024);  // the section and event stay open for the life of the process
 }
 
 // A process whose parent uses the forked child's exit codes (a program a
@@ -186,11 +185,65 @@ extern "C" {
 // Anchors this file (-u in posix.cmake): the mailbox must exist in every process.
 int gesher_signal_mailbox_anchor = 0;
 
+// Native bootstrap calls the executable owner once, before running guest code.
+// The authority made these unnamed objects for this exact process. A guest
+// cannot replace the mailbox after bootstrap or opt an ordinary process in.
+__declspec(dllexport) DWORD gesher_install_protected_signal_resources(HANDLE section, HANDLE event) {
+  uint32_t uid = 0, gid = 0;
+  if (!gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid) || !section || !event) {
+    return ERROR_ACCESS_DENIED;
+  }
+  std::lock_guard lock(g_mailbox_mutex);
+  if (g_protected_mailbox) return ERROR_ALREADY_ASSIGNED;
+  HANDLE owned_section = nullptr, owned_event = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), section, GetCurrentProcess(), &owned_section,
+      FILE_MAP_READ | FILE_MAP_WRITE, FALSE, 0)) return GetLastError();
+  if (!DuplicateHandle(GetCurrentProcess(), event, GetCurrentProcess(), &owned_event,
+      SYNCHRONIZE, FALSE, 0)) {
+    const DWORD error = GetLastError();
+    CloseHandle(owned_section);
+    return error;
+  }
+  auto* view = static_cast<Mailbox*>(MapViewOfFile(owned_section,
+      FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(Mailbox)));
+  if (!view) {
+    const DWORD error = GetLastError();
+    CloseHandle(owned_section);
+    CloseHandle(owned_event);
+    return error;
+  }
+  // Retire the ordinary named callback completely before changing its view.
+  if (g_mailbox_wait && !UnregisterWaitEx(g_mailbox_wait, INVALID_HANDLE_VALUE)) {
+    const DWORD error = GetLastError();
+    UnmapViewOfFile(view);
+    CloseHandle(owned_section);
+    CloseHandle(owned_event);
+    return error;
+  }
+  g_mailbox_wait = nullptr;
+  if (g_mailbox) UnmapViewOfFile(g_mailbox);
+  if (g_mailbox_section) CloseHandle(g_mailbox_section);
+  if (g_mailbox_event) CloseHandle(g_mailbox_event);
+  g_mailbox = view;
+  g_mailbox_section = owned_section;
+  g_mailbox_event = owned_event;
+  g_protected_mailbox = true;
+  return RegisterWaitForSingleObject(&g_mailbox_wait, g_mailbox_event, OnSignal, nullptr,
+      INFINITE, WT_EXECUTEDEFAULT) ? ERROR_SUCCESS : GetLastError();
+}
+
 // kill() of a pid other than this process's (signal.cc).
 int gesher_kill_other(pid_t pid, int sig) {
   if (pid == -1) return errno = EPERM, -1;  // every process: not for an app
   if (pid < -1) pid = -pid;                 // a process group is one process
   if (pid == static_cast<pid_t>(GetCurrentProcessId())) return kill(pid, sig);
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    const DWORD status = gesher::usb_storage::ProtectedSignalChild(static_cast<uint32_t>(pid), sig);
+    if (status == ERROR_SUCCESS) return 0;
+    errno = status == ERROR_PROCESS_ABORTED || status == ERROR_NOT_FOUND ? ESRCH :
+            status == ERROR_INVALID_PARAMETER ? EINVAL : EPERM;
+    return -1;
+  }
   DWORD access = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE |
                  (sig == SIGKILL || EndsByDefault(sig) ? PROCESS_TERMINATE : 0) |
                  (sig == SIGSTOP || sig == SIGCONT ? PROCESS_SUSPEND_RESUME : 0);

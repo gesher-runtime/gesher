@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "binder_internal.h"
+#include "binder_transport.h"
 #include "binder_wire.h"
 #include "event_internal.h"
 #include "internal.h"
@@ -126,6 +127,7 @@ HANDLE Connect() {
 // One request and its reply; false (errno set) if the broker cannot be reached.
 // g_mutex held.
 bool Call(Request& request, Reply* reply) {
+  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
   const uint32_t len = static_cast<uint32_t>(request.bytes.size() - 4);
   memcpy(request.bytes.data(), &len, 4);
   for (int attempt = 0; attempt < 2; ++attempt) {
@@ -197,6 +199,7 @@ bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt, bool close_o
 
 // A view of one of the broker's sections (binder_wire.h), or null.
 void* MapBrokerSection(const wchar_t* prefix, DWORD access, size_t size) {
+  if (ProtectedBinderEndpoint()) return nullptr;
   const std::string device = Device();
   if (device.empty()) return nullptr;
   const std::wstring name = std::wstring(prefix) + Widen(device.c_str());
@@ -253,6 +256,8 @@ uint64_t AdvanceStream(uint16_t port, bool sent, uint64_t bytes) {
 
 bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t position,
                    ws::RightsToken* token) {
+  // The private data endpoint provisions no shared rights sections.
+  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
   if (fds.empty() || fds.size() > wire::kRightsMaxPerMessage) return errno = EINVAL, false;
   Request request;
   request.Put<uint32_t>(wire::kRightsDeposit);

@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include <cwchar>
+#include <climits>
 #include <algorithm>
 #include <cstring>
 #include <map>
@@ -19,6 +20,7 @@
 #include "services_zygote.h"
 #include "app_container.h"
 #include "../posix/src/binder_wire.h"
+#include "../usb_storage/protected_runtime_client.h"
 
 namespace gesher {
 namespace zygote {
@@ -26,6 +28,7 @@ namespace {
 
 std::mutex g_lock;
 std::map<int, HANDLE> g_children;  // processes this one started, for their exit codes
+std::map<int, uint64_t> g_protected_children;  // authority-owned exact creation identities
 std::map<int, HANDLE> g_compiler_jobs;  // lifetime-bound compiler resource budgets
 HANDLE g_job = nullptr;
 
@@ -122,6 +125,32 @@ struct HandleList {
   }
 };
 
+}  // namespace
+
+int SpawnProtected(const usb_storage::ProtectedSpawnSpec& spec) {
+  usb_storage::ProtectedChild child;
+  const uint32_t error = usb_storage::ProtectedSpawn(spec, &child);
+  if (error != ERROR_SUCCESS) return -static_cast<int>(error);
+  if (child.pid == 0 || child.pid > INT_MAX || child.start_time == 0 || child.start_time > INT64_MAX) {
+    if (child.pid && child.start_time) usb_storage::ProtectedKill(child.pid, child.start_time);
+    return -ERROR_INVALID_DATA;
+  }
+  try {
+    std::lock_guard<std::mutex> guard(g_lock);
+    g_protected_children[static_cast<int>(child.pid)] = child.start_time;
+  } catch (const std::bad_alloc&) {
+    usb_storage::ProtectedKill(child.pid, child.start_time);
+    return -ERROR_NOT_ENOUGH_MEMORY;
+  }
+  return static_cast<int>(child.pid);
+}
+
+namespace {
+uint64_t ProtectedIdentity(int pid) {
+  std::lock_guard<std::mutex> guard(g_lock);
+  auto it = g_protected_children.find(pid);
+  return it == g_protected_children.end() ? 0 : it->second;
+}
 }  // namespace
 
 namespace {
@@ -432,6 +461,17 @@ uint32_t RestartWithUid(int uid, uint32_t* exit_code) {
 }
 
 int64_t StartTime(int pid) {
+  if (pid > 0 && static_cast<DWORD>(pid) == GetCurrentProcessId()) {
+    FILETIME created, exited, kernel, user;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return 0;
+    return (static_cast<int64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  }
+  if (const uint64_t identity = ProtectedIdentity(pid)) {
+    uint32_t code = 0;
+    bool running = false;
+    return usb_storage::ProtectedChildStatus(pid, identity, &code, &running) == ERROR_SUCCESS &&
+        running ? static_cast<int64_t>(identity) : 0;
+  }
   HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE,
                          static_cast<DWORD>(pid));
   if (h == nullptr) return 0;
@@ -446,6 +486,18 @@ int64_t StartTime(int pid) {
 }
 
 int ExitCode(int pid) {
+  if (const uint64_t identity = ProtectedIdentity(pid)) {
+    uint32_t code = 0;
+    bool running = false;
+    const uint32_t error = usb_storage::ProtectedChildStatus(pid, identity, &code, &running);
+    if (error != ERROR_SUCCESS) return -1;
+    if (!running) {
+      std::lock_guard<std::mutex> guard(g_lock);
+      auto it = g_protected_children.find(pid);
+      if (it != g_protected_children.end() && it->second == identity) g_protected_children.erase(it);
+    }
+    return static_cast<int>(code);
+  }
   std::lock_guard<std::mutex> guard(g_lock);
   auto it = g_children.find(pid);
   if (it == g_children.end()) return -1;
@@ -464,6 +516,7 @@ int ExitCode(int pid) {
 }
 
 int64_t ChildStartTime(int pid) {
+  if (const uint64_t identity = ProtectedIdentity(pid)) return static_cast<int64_t>(identity);
   std::lock_guard<std::mutex> guard(g_lock);
   auto it = g_children.find(pid);
   if (it == g_children.end()) return 0;
@@ -474,6 +527,10 @@ int64_t ChildStartTime(int pid) {
 
 bool KillChild(int pid, int64_t start_time) {
   if (pid <= 0 || start_time <= 0) return false;
+  if (const uint64_t identity = ProtectedIdentity(pid)) {
+    return identity == static_cast<uint64_t>(start_time) &&
+        usb_storage::ProtectedKill(pid, identity) == ERROR_SUCCESS;
+  }
   // ExitCode cannot close this handle and Spawn cannot replace this map entry
   // between checking its identity and termination. The handle, not the PID,
   // names the original Windows process throughout the operation.
@@ -489,6 +546,14 @@ bool KillChild(int pid, int64_t start_time) {
 }
 
 bool Kill(int pid) {
+  // A protected app's process ACL excludes its lowbox token. Its pseudo handle
+  // still names itself exactly and preserves Android's self-termination path.
+  if (pid > 0 && static_cast<DWORD>(pid) == GetCurrentProcessId()) {
+    return TerminateProcess(GetCurrentProcess(), 137) != FALSE;
+  }
+  if (const uint64_t identity = ProtectedIdentity(pid)) {
+    return usb_storage::ProtectedKill(pid, identity) == ERROR_SUCCESS;
+  }
   HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, static_cast<DWORD>(pid));
   if (h == nullptr) return false;
   BOOL ok = TerminateProcess(h, 137);

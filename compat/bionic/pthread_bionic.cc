@@ -1170,6 +1170,30 @@ int PthreadSignalTarget(uint64_t thread, void** handle) {
   *handle = retained;
   return 0;
 }
+int PthreadSignalTargetByTid(uint32_t tid, void** handle) {
+  if (handle == nullptr || *handle != nullptr) return kEINVAL;
+  std::lock_guard<std::mutex> lock(g_threads_mutex);
+  HANDLE target = nullptr;
+  const auto matches = [tid](HANDLE candidate) {
+    return candidate != nullptr && GetThreadId(candidate) == tid &&
+        GetProcessIdOfThread(candidate) == GetCurrentProcessId() &&
+        WaitForSingleObject(candidate, 0) == WAIT_TIMEOUT;
+  };
+  for (const auto& entry : g_threads) {
+    if (matches(entry.second->handle)) { target = entry.second->handle; break; }
+  }
+  if (target == nullptr) {
+    for (const auto& entry : g_external_threads) {
+      if (matches(entry.second.handle)) { target = entry.second.handle; break; }
+    }
+  }
+  if (target == nullptr) return kESRCH;
+  HANDLE retained = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), target, GetCurrentProcess(), &retained,
+                       THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, 0)) return kEAGAIN;
+  *handle = retained;
+  return 0;
+}
 int PthreadSetName(uint64_t thread, const char* name) {
   if (name == nullptr) return kEINVAL;
   if (std::strlen(name) >= 16) return kERANGE;

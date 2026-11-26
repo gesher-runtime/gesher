@@ -339,9 +339,8 @@ PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf
 GLES_PROPERTY_SHA256 = '4d7926dd316851b91bd45620a967da119b54e2408c44e351303ab937866f440c'
 GLES_PROPERTY_PATCH = 'tools/net-tcp-priority/qualified/gles-property-source.patch'
 GLES_PROPERTY_PATCH_SHA256 = '72a6c1c9ba827072ba13c9aac32774e4dcda74260d54f8853e25ae7971be06f6'
-def preceding_gles_property_source():
+def preceding_gles_property_source(source):
  path='compat/posix/src/system_properties.cc'
- source=(ROOT/path).read_bytes()
  assert hashlib.sha256(source).hexdigest()==GLES_PROPERTY_SHA256,path
  patch=(ROOT/GLES_PROPERTY_PATCH).read_bytes()
  assert hashlib.sha256(patch).hexdigest()==GLES_PROPERTY_PATCH_SHA256,'gles property transition changed'
@@ -357,9 +356,9 @@ def preceding_gles_property_source():
   subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
   assert (work/path).read_bytes()==source,'gles property transition does not reproduce: '+path
  return previous
-def preceding_logging_property_source():
+def preceding_logging_property_source(source):
  path='compat/posix/src/system_properties.cc'
- source=preceding_gles_property_source()
+ source=preceding_gles_property_source(source)
  assert hashlib.sha256(source).hexdigest()==PROPERTY_REVISION_SHA256,path
  header='compat/posix/include/gesher/system_properties.h'
  assert hashlib.sha256((ROOT/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
@@ -383,7 +382,7 @@ MEMFD_LEASE_PATCH='tools/net-tcp-priority/qualified/memfd-lease-source.patch'
 MEMFD_LEASE_QUALIFICATION_SHA256 = '6cf8d4bbad04834885426b63c468f0f7f4b1b64784190ed8cab523bbf082ae8c'
 MEMFD_LEASE_BASELINE='e074b67b2f83ce9128c11713171329e9fbbf6739'
 MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
-def preceding_memfd_lease_sources():
+def preceding_memfd_lease_sources(usb_block):
  raw=(ROOT/MEMFD_LEASE_QUALIFICATION).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==MEMFD_LEASE_QUALIFICATION_SHA256,'memfd lease source qualification changed'
  qualification=json.loads(raw)
@@ -393,7 +392,12 @@ def preceding_memfd_lease_sources():
  patch=(ROOT/MEMFD_LEASE_PATCH).read_bytes()
  assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'memfd lease transition patch changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==MEMFD_LEASE_PATHS
- current={path:(ROOT/path).read_bytes() for path in MEMFD_LEASE_PATHS}
+ # internal.h also carries this PR's independently pinned USB declarations.
+ # Remove only that exact USB delta first; the unchanged memfd receipt must
+ # then see every byte of main's lease implementation before reversing it.
+ assert set(usb_block).intersection(MEMFD_LEASE_PATHS)=={'compat/posix/src/internal.h'},'USB/memfd qualification overlap changed'
+ current={path:usb_block[path] if path in usb_block else (ROOT/path).read_bytes()
+          for path in MEMFD_LEASE_PATHS}
  for path in MEMFD_LEASE_PATHS:
   assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
  with tempfile.TemporaryDirectory(prefix='gesher-memfd-lease-qualification-') as temporary:
@@ -460,6 +464,202 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
         if (!result) waiting_files = true;
 '''),
 )
+# Preserve the original OFD evidence while reviewing the USB block device
+# dispatch and contained runtime changes separately. The reverse patch
+# is checked against historical main bytes; the socket ownership and poll
+# checks still compare live code.
+USB_BLOCK_BASE = '08146b1ea150229313ef14a8fcd99df217a57fb9'
+# These additional runtime files already contained reviewed changes after the
+# original USB baseline. Reverse only this PR's new edits in those files, then
+# require the existing OFD receipt's exact bytes as before.
+USB_BLOCK_PATH_BASES = dict.fromkeys((
+ 'compat/bionic/process_bionic.cc',
+ 'compat/elf/exec/exec_spawn.h',
+ 'compat/elf/exec/gesher_exec.cc',
+ 'compat/libcore/process.cc',
+ 'compat/posix/src/binder_file_descriptions.h',
+ 'compat/posix/src/binder_wire.h',
+ 'tests/native/ofd_transfer_host_test.cc.in',
+ 'tools/test_environment_lookup_contracts.py',
+), 'af2a394d0f5399f954aa00aeaf37011d42b96623')
+# Main's native-fence ioctl and shell/exec repairs have their own updated OFD
+# receipt. Reverse USB changes in these overlapping files to that exact main
+# checkpoint, preserving those repairs before the original checks run.
+USB_BLOCK_PATH_BASES.update(dict.fromkeys((
+ 'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/exec_spawn.h',
+ 'compat/elf/exec/gesher_shell.cc',
+ 'compat/elf/exec/shell_execute.inc',
+ 'compat/libcore/process.cc',
+ 'compat/posix/src/system.cc',
+), '5b2af6e4e5de5525791c304de21c2c6a77aebcd2'))
+# Preserve main's memfd lease declarations before their separately pinned
+# reverse transition is checked against the original OFD receipt.
+USB_BLOCK_PATH_BASES['compat/posix/src/internal.h'] = 'dcc29a49143c4bd33e0e60a81b25e0e1f2cfc12a'
+# Re-pin files updated in main through a62bd9a0a (arm64 fork, FIFO, etc.).
+USB_BLOCK_PATH_BASES.update(dict.fromkeys((
+ 'compat/bionic/process_bionic.cc',
+ 'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/exec_spawn.h',
+ 'compat/elf/exec/gesher_exec.cc',
+ 'compat/posix/posix.cmake',
+ 'compat/posix/src/binder.cc',
+ 'compat/posix/src/fd.cc',
+ 'compat/posix/src/fsops.cc',
+ 'compat/posix/src/internal.h',
+ 'compat/posix/src/ofd.cc',
+ 'compat/posix/src/ofd_internal.h',
+ 'compat/posix/src/procfs.cc',
+ 'compat/posix/src/system.cc',
+ 'compat/posix/src/system_properties.cc',
+ 'compat/posix/src/unistd.cc',
+ 'compat/posix/src/unix_rights.cc',
+ 'tests/native/ofd_transfer_host_test.cc.in',
+), 'a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a'))
+USB_BLOCK_PATH_BASES.update(dict.fromkeys((
+ 'compat/posix/src/fsops.cc',
+), 'a44f4d055348db76345a4698441f6301930e401c'))
+# Main's scoped-storage transition is qualified after reversing USB edits.
+USB_BLOCK_PATH_BASES.update(dict.fromkeys((
+ 'compat/art/dalvikvm_main.cc',
+ 'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/gesher_exec.cc',
+ 'compat/posix/posix.cmake',
+ 'compat/posix/src/fsops.cc',
+ 'compat/posix/src/storage_policy.cc',
+ 'compat/posix/src/system.cc',
+ 'compat/posix/src/unistd.cc',
+ 'tests/art-temp/entry_test.cc',
+ 'tests/native/ofd_transfer_host_test.cc.in',
+ 'tools/test_temp_directory.py',
+), '43edc832893d4cd21843c7c6d56424556b625016'))
+# Main #513 changes the exact intermediate procfs/OFD/storage bytes underneath
+# USB. Keep every historical USB path anchor above, and prove this separately
+# pinned main transition to d631 in both directions before removing USB edits.
+# The incoming main receipts then see their exact reviewed bytes; their original
+# OFD/memfd/storage baselines and approval boundaries are unchanged.
+USB_MAIN513_QUALIFICATION='tools/net-tcp-priority/qualified/usb-main513-source.json'
+USB_MAIN513_PATCH='tools/net-tcp-priority/qualified/usb-main513-source.patch'
+USB_MAIN513_QUALIFICATION_SHA256='f65441e94acb1064d97d2a78f2161ed47f543844833707dcfd31d530de6b3b78'
+USB_MAIN513_BASE='156abd94bbe733e07171931027d5eb3613565dc1'
+USB_MAIN513_COMMIT='d63126a95129f4e9bad54676b8e076b12542c86b'
+USB_MAIN513_PATHS=[
+ 'compat/posix/src/fsops.cc',
+ 'compat/posix/src/internal.h',
+ 'compat/posix/src/ofd_internal.h',
+ 'compat/posix/src/procfs.cc',
+ 'compat/posix/src/unistd.cc',
+]
+def qualified_usb_main513_endpoints():
+ raw=(ROOT/USB_MAIN513_QUALIFICATION).read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==USB_MAIN513_QUALIFICATION_SHA256,'USB main513 qualification changed'
+ transition=json.loads(raw)
+ assert set(transition)=={'base','commit','paths','path_bases','before_sha256','after_sha256',
+                          'patch_sha256','native_runtime_approval'},'USB main513 schema changed'
+ assert transition['base']==USB_MAIN513_BASE and transition['commit']==USB_MAIN513_COMMIT
+ assert transition['native_runtime_approval'] is False
+ assert transition['paths']==USB_MAIN513_PATHS
+ assert transition['path_bases']=={p:USB_BLOCK_PATH_BASES.get(p,USB_BLOCK_BASE) for p in USB_MAIN513_PATHS}
+ assert sorted(transition['before_sha256'])==sorted(transition['after_sha256'])==USB_MAIN513_PATHS
+ assert subprocess.check_output(['git','-C',str(ROOT),'show','-s','--format=%P',USB_MAIN513_COMMIT]).decode().strip()==USB_MAIN513_BASE
+ delta=(ROOT/USB_MAIN513_PATCH).read_bytes()
+ assert hashlib.sha256(delta).hexdigest()==transition['patch_sha256'],'USB main513 patch changed'
+ assert [line.decode().split(' b/',1)[1] for line in delta.splitlines() if line.startswith(b'diff --git ')]==USB_MAIN513_PATHS
+ before={p:subprocess.check_output(['git','-C',str(ROOT),'show',USB_BLOCK_PATH_BASES.get(p,USB_BLOCK_BASE)+':'+p])
+         for p in USB_MAIN513_PATHS}
+ after={p:subprocess.check_output(['git','-C',str(ROOT),'show',USB_MAIN513_COMMIT+':'+p])
+        for p in USB_MAIN513_PATHS}
+ for p in USB_MAIN513_PATHS:
+  assert hashlib.sha256(before[p]).hexdigest()==transition['before_sha256'][p],('USB main513 historical endpoint',p)
+  assert hashlib.sha256(after[p]).hexdigest()==transition['after_sha256'][p],('USB main513 incoming endpoint',p)
+  assert before[p]!=after[p],('empty USB main513 transition',p)
+ with tempfile.TemporaryDirectory(prefix='gesher-usb-main513-qualification-') as temporary:
+  work=Path(temporary)
+  for p in USB_MAIN513_PATHS:
+   (work/p).parent.mkdir(parents=True,exist_ok=True)
+   (work/p).write_bytes(after[p])
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
+  for p in USB_MAIN513_PATHS:assert (work/p).read_bytes()==before[p],('USB main513 reverse endpoint',p)
+  subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
+  for p in USB_MAIN513_PATHS:assert (work/p).read_bytes()==after[p],('USB main513 forward endpoint',p)
+ return after
+
+
+USB_BLOCK_TRANSITION_SHA256 = 'c8c90d866ab6ccb5e6f3c8730fa0d61dc2c2cc9e3e1ebbe40c3d43a211a10ddd'
+USB_BLOCK_TRANSITION_PATHS = (
+ 'compat/art/dalvikvm_main.cc',
+ 'compat/binder/binderd.cc',
+ 'compat/bionic/process_bionic.cc',
+ 'compat/elf/exec/exec_spawn.cc',
+ 'compat/elf/exec/exec_spawn.h',
+ 'compat/elf/exec/gesher_exec.cc',
+ 'compat/elf/exec/gesher_shell.cc',
+ 'compat/elf/exec/shell_execute.inc',
+ 'compat/libcore/process.cc',
+ 'compat/posix/posix.cmake',
+ 'compat/posix/src/binder.cc',
+ 'compat/posix/src/binder_file_descriptions.h',
+ 'compat/posix/src/binder_wire.h',
+ 'compat/posix/src/fd.cc',
+ 'compat/posix/src/fsops.cc',
+ 'compat/posix/src/internal.h',
+ 'compat/posix/src/ofd.cc',
+ 'compat/posix/src/ofd_internal.h',
+ 'compat/posix/src/procfs.cc',
+ 'compat/posix/src/storage_policy.cc',
+ 'compat/posix/src/system.cc',
+ 'compat/posix/src/system_properties.cc',
+ 'compat/posix/src/unistd.cc',
+ 'compat/posix/src/unix_rights.cc',
+ 'tests/art-temp/entry_test.cc',
+ 'tests/native/ofd_transfer_host_test.cc.in',
+ 'tools/test_environment_lookup_contracts.py',
+ 'tools/test_temp_directory.py',
+)
+
+
+def preceding_usb_block_sources(folder):
+ main513 = qualified_usb_main513_endpoints()
+ raw = (folder/'usb-block-source.json').read_bytes()
+ assert hashlib.sha256(raw).hexdigest() == USB_BLOCK_TRANSITION_SHA256, 'USB block source transition changed'
+ transition = json.loads(raw)
+ paths = list(USB_BLOCK_TRANSITION_PATHS)
+ assert set(transition) == {'base', 'path_bases', 'patch_sha256', 'after_sha256', 'dependencies_sha256'}
+ assert transition['base'] == USB_BLOCK_BASE
+ assert transition['path_bases'] == USB_BLOCK_PATH_BASES
+ assert sorted(transition['after_sha256']) == paths
+ delta = (folder/'usb-block-source.patch').read_bytes()
+ assert hashlib.sha256(delta).hexdigest() == transition['patch_sha256']
+ assert [line for line in delta.splitlines() if line.startswith(b'diff --git ')] == [
+     ('diff --git a/'+path+' b/'+path).encode() for path in paths]
+ for path, digest in transition['dependencies_sha256'].items():
+  assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest() == digest, path
+
+ preceding = {}
+ with tempfile.TemporaryDirectory(prefix='gesher-usb-block-qualification-') as temporary:
+  work = Path(temporary)
+  for path in paths:
+   current = (ROOT/path).read_bytes()
+   assert hashlib.sha256(current).hexdigest() == transition['after_sha256'][path], path
+   (work/path).parent.mkdir(parents=True, exist_ok=True)
+   (work/path).write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],
+                 input=delta,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],
+                 input=delta,cwd=work,check=True,capture_output=True)
+  for path in paths:
+   preceding[path] = (work/path).read_bytes()
+   historical = main513[path] if path in main513 else subprocess.check_output(
+       ['git','-C',str(ROOT),'show',USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)+':'+path])
+   assert preceding[path] == historical, path
+  subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
+  for path in paths:assert (work/path).read_bytes()==(ROOT/path).read_bytes(),('USB forward endpoint',path)
+ return preceding
+
+
 # Storage policy adds file-path checks and launch initialization to files also
 # covered by the OFD receipt. Reverse this separately pinned transition to the
 # exact main checkpoint before running EVERY original receipt and TCP check.
@@ -487,7 +687,7 @@ STORAGE_POLICY_HELPERS=[
  'compat/posix/src/storage_policy.cc',
  'compat/posix/src/storage_policy.h',
 ]
-def preceding_storage_policy_sources():
+def preceding_storage_policy_sources(usb_block):
  raw=(ROOT/STORAGE_POLICY_QUALIFICATION).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==STORAGE_POLICY_QUALIFICATION_SHA256,'storage policy source qualification changed'
  qualification=json.loads(raw)
@@ -500,11 +700,11 @@ def preceding_storage_policy_sources():
  baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':tools/net-tcp-priority/test-selected-policy.py'])
  assert hashlib.sha256(baseline_policy).hexdigest()==qualification['baseline_policy_sha256'],'storage policy baseline policy changed'
  for path in STORAGE_POLICY_HELPERS:
-  assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==qualification['helper_sha256'][path],path
+  assert hashlib.sha256(usb_block.get(path,(ROOT/path).read_bytes())).hexdigest()==qualification['helper_sha256'][path],path
  patch=(ROOT/STORAGE_POLICY_PATCH).read_bytes()
  assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'storage policy transition patch changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STORAGE_POLICY_PATHS
- current={path:(ROOT/path).read_bytes() for path in STORAGE_POLICY_PATHS}
+ current={path:usb_block.get(path,(ROOT/path).read_bytes()) for path in STORAGE_POLICY_PATHS}
  baseline={path:subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':'+path]) for path in STORAGE_POLICY_PATHS}
  for path in STORAGE_POLICY_PATHS:
   assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
@@ -536,15 +736,16 @@ def preceding_ofd_sources():
         'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
  assert qualification['paths']==paths
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
- memfd_lease=preceding_memfd_lease_sources()
+ usb_block=preceding_usb_block_sources(folder)
+ memfd_lease=preceding_memfd_lease_sources(usb_block)
  shared_stdio=preceding_shared_stdio_sources(qualification)
- storage_policy=preceding_storage_policy_sources()
+ storage_policy=preceding_storage_policy_sources(usb_block)
  assert memfd_lease.keys().isdisjoint(shared_stdio),'source qualifications overlap'
  assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()),'source qualifications overlap'
- preceding={**memfd_lease,**shared_stdio,**storage_policy}
+ preceding={**usb_block,**memfd_lease,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
-  actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
-  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
+  actual=preceding.get(path,(ROOT/path).read_bytes())
+  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source(actual)
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
@@ -751,7 +952,57 @@ def check():
  for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
  print('TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition exact_gles_property_transition exact_memfd_lease_transition exact_storage_policy_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0')
 
+def usb_main513_negative_controls():
+ # These substitutions touch only in-memory reads, never the worktree. Even
+ # repinning a changed receipt/patch cannot move either historical endpoint.
+ from unittest.mock import patch
+ original=Path.read_bytes
+ qualification=json.loads(original(ROOT/USB_MAIN513_QUALIFICATION))
+ delta=original(ROOT/USB_MAIN513_PATCH)
+ checked=0
+ cases=[]
+ for field in ('base','commit','native_runtime_approval','path_bases','before_sha256','after_sha256'):
+  changed=json.loads(json.dumps(qualification))
+  if field in ('path_bases','before_sha256','after_sha256'):
+   changed[field][USB_MAIN513_PATHS[0]]='0'*len(changed[field][USB_MAIN513_PATHS[0]])
+  elif field=='native_runtime_approval':changed[field]=True
+  else:changed[field]='0'*40
+  receipt=(json.dumps(changed,indent=2,sort_keys=True)+'\n').encode()
+  cases.append((field,receipt,None,True))
+ cases.append(('unrepinned receipt',original(ROOT/USB_MAIN513_QUALIFICATION)+b'\n',None,False))
+ for repin in (False,True):
+  bad=delta.replace(b'@@',b'@x',1)
+  assert bad!=delta
+  changed=json.loads(json.dumps(qualification))
+  if repin:changed['patch_sha256']=hashlib.sha256(bad).hexdigest()
+  receipt=(json.dumps(changed,indent=2,sort_keys=True)+'\n').encode()
+  cases.append(('patch syntax repin='+str(repin),receipt,bad,repin))
+ # A valid patch with a changed transition must also fail after updating its
+ # hash: the unchanged authoritative incoming bytes will not reverse to it.
+ marker=b'+  std::atomic<signed char> procfs_file{-1};'
+ assert delta.count(marker)==1
+ bad=delta.replace(marker,b'+  std::atomic<signed char> procfs_file{0};',1)
+ changed=json.loads(json.dumps(qualification));changed['patch_sha256']=hashlib.sha256(bad).hexdigest()
+ cases.append(('semantic patch repin',(json.dumps(changed,indent=2,sort_keys=True)+'\n').encode(),bad,True))
+ for name,receipt,changed_patch,repin in cases:
+  def reads(path):
+   if path==ROOT/USB_MAIN513_QUALIFICATION:return receipt
+   if changed_patch is not None and path==ROOT/USB_MAIN513_PATCH:return changed_patch
+   return original(path)
+  pins={'USB_MAIN513_QUALIFICATION_SHA256':hashlib.sha256(receipt).hexdigest()} if repin else {}
+  rejected=None
+  with patch.object(Path,'read_bytes',reads),patch.dict(globals(),pins):
+   try:qualified_usb_main513_endpoints()
+   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
+  assert rejected is not None,'USB main513 invalid transition accepted: '+name
+  if repin:
+   assert 'qualification changed' not in str(rejected) and 'patch changed' not in str(rejected),name
+  checked+=1
+ print('TCP_USB_MAIN513_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(checked)+' native_processes_started=0')
+
+
 def storage_policy_negative_controls():
+ usb_preceding=preceding_usb_block_sources(ROOT/'tools/net-tcp-priority/qualified')
  # Isolated read substitution only: no source files are changed or executed.
  # Refreshing this transition's after hash cannot admit an extra byte outside
  # its exact patch, because the reverse endpoint is still the historical main.
@@ -761,7 +1012,7 @@ def storage_policy_negative_controls():
  checked=repinned=0
  for name in STORAGE_POLICY_PATHS+STORAGE_POLICY_HELPERS+[STORAGE_POLICY_PATCH]:
   target=ROOT/name
-  source=original(target)
+  source=usb_preceding.get(name,original(target))
   data=source.replace(b'@@',b'@x',1) if name==STORAGE_POLICY_PATCH else source+b'\n'
   assert data!=source,name
   for repin in (False,True) if name in STORAGE_POLICY_PATHS or name==STORAGE_POLICY_PATCH else (False,):
@@ -778,9 +1029,11 @@ def storage_policy_negative_controls():
     if path==target:return data
     if receipt is not None and path==ROOT/STORAGE_POLICY_QUALIFICATION:return receipt
     return original(path)
+   stage=dict(usb_preceding)
+   if name in stage:stage[name]=data
    rejected=None
    with patch.object(Path,'read_bytes',reads),patch.dict(globals(),pins):
-    try:preceding_storage_policy_sources()
+    try:preceding_storage_policy_sources(stage)
     except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
    assert rejected is not None,'unqualified storage source accepted: '+name+' repin='+str(repin)
    if repin:
@@ -795,7 +1048,7 @@ def storage_policy_negative_controls():
   def reads(path):return receipt if path==ROOT/STORAGE_POLICY_QUALIFICATION else original(path)
   rejected=None
   with patch.object(Path,'read_bytes',reads),patch.dict(globals(),{'STORAGE_POLICY_QUALIFICATION_SHA256':hashlib.sha256(receipt).hexdigest()}):
-   try:preceding_storage_policy_sources()
+   try:preceding_storage_policy_sources(usb_preceding)
    except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
   assert rejected is not None,'storage historical endpoint changed: '+field
   checked+=1
@@ -804,6 +1057,7 @@ def storage_policy_negative_controls():
 def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
+ usb_preceding=preceding_usb_block_sources(ROOT/'tools/net-tcp-priority/qualified')
  cases=[
   ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
@@ -812,6 +1066,9 @@ def transition_negative_controls():
   ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
   ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
   ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
+  ('tools/net-tcp-priority/qualified/usb-block-source.patch',b'@@',b'@x'),
+  ('compat/posix/include/gesher/usb_block.h',b'AttachBroker',b'AttachUncheckedBroker'),
+  ('compat/elf/exec/exec_spawn.cc',b'"basename"',b'"not-basename"'),
   ('compat/posix/src/fd.cc',b'if (result < 0) return -1;',b'if (result < 0) return 0;'),
   ('compat/posix/src/fd.cc',b'SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;',b'SocketRegistry socket_registry;'),
   ('compat/posix/src/stdio_output.cc',b'if (locked_stream_) _lock_file(locked_stream_);',b'if (locked_stream_) {}'),
@@ -872,13 +1129,25 @@ def transition_negative_controls():
    # reverse transitions (#421's, then NATIVE-13's) to reject the change.
    if repin and not lease:pins['GLES_PROPERTY_SHA256']=hashlib.sha256(changed(target)).hexdigest()
    if repin and lease:
-    receipt=memfd_lease_repin(name,changed(target))
+    lease_sources=usb_preceding
+    data=changed(target)
+    if name in usb_preceding:
+     # The ordinary mutation above tests the full combined gate. For this
+     # repinned control, test the memfd reversal on its actual input after USB
+     # normalization; the independent USB source pin must not mask a broken
+     # memfd reverse-transition check in the overlapping header.
+     assert before in usb_preceding[name],name
+     data=usb_preceding[name].replace(before,after,1)
+     lease_sources={**usb_preceding,name:data}
+    receipt=memfd_lease_repin(name,data)
     pins['MEMFD_LEASE_QUALIFICATION_SHA256']=hashlib.sha256(receipt).hexdigest()
     reads=lambda path,receipt=receipt,changed=changed:receipt if path==ROOT/MEMFD_LEASE_QUALIFICATION else changed(path)
     repinned_memfd_lease+=1
    rejected=None
    with patch.object(Path,'read_bytes',reads), patch.dict(globals(),pins):
-    try:check()
+    try:
+     if repin and lease and name in usb_preceding:preceding_memfd_lease_sources(lease_sources)
+     else:check()
     except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
    assert rejected is not None,'unqualified mutation accepted: '+name+' repin='+str(repin)
    # A repinned receipt passes its own digest checks, so the rejection must
@@ -891,6 +1160,7 @@ if __name__=='__main__':
  import sys
  check()
  if '--selftest' in sys.argv:
+  usb_main513_negative_controls()
   storage_policy_negative_controls()
   transition_negative_controls()
   import runpy

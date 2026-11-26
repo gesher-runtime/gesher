@@ -343,7 +343,7 @@ public final class ApkPackage {
         return codeApkLite(file).getSplitName();
     }
 
-    private static ApkLite codeApkLite(File file) throws IOException {
+    static ApkLite codeApkLite(File file) throws IOException {
         if (file == null || !Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Not a regular installed APK: " + file);
         }
@@ -356,13 +356,16 @@ public final class ApkPackage {
         return result.getResult();
     }
 
-    private static ApkPackage parse(String apkPath, File parseRoot) throws Exception {
-        ParsedPackage pkg;
+    static ParsedPackage parseManifest(File parseRoot) throws Exception {
         try (PackageParser2 parser = new PackageParser2(null /* separateProcesses */,
                 null /* displayMetrics: the defaults */, null /* cacher */,
                 new ParserCallback())) {
-            pkg = parser.parsePackage(parseRoot, 0 /* flags */, false /* useCaches */);
+            return parser.parsePackage(parseRoot, 0 /* flags */, false /* useCaches */);
         }
+    }
+
+    private static ApkPackage parse(String apkPath, File parseRoot) throws Exception {
+        ParsedPackage pkg = parseManifest(parseRoot);
         SigningDetails signing = signingDetails(apkPath);
         if (signing != null) {
             pkg.setSigningDetails(signing);

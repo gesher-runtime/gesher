@@ -67,6 +67,17 @@ public final class ExternalStorageAccess {
         void write(ApkPackage pkg, Policy policy, File target) throws IOException;
     }
     private static volatile SnapshotWriter sWriter = ExternalStorageAccess::writeAtomically;
+    // Selected by authenticated system_server startup before package admission.
+    // Each protected package needs its own inheritable read-only policy directory
+    // so atomic replacement does not expose another package's metadata.
+    private static volatile boolean sProtectedPolicyDirectories;
+
+    static void configureProtectedRuntime() {
+        if (!ProtectedRuntime.enabled()) {
+            throw new SecurityException("Protected storage policy requires native protected startup");
+        }
+        sProtectedPolicyDirectories = true;
+    }
 
     private ExternalStorageAccess() { }
 
@@ -150,7 +161,8 @@ public final class ExternalStorageAccess {
     public static File policyFile(String packageName) {
         if (packageName == null || !packageName.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*")
                 || !isDataDirAvailable()) return null;
-        return new File(new File(Device.dataDir(), "system/storage-policy"), packageName);
+        File path = new File(new File(Device.dataDir(), "system/storage-policy"), packageName);
+        return sProtectedPolicyDirectories ? new File(path, "policy") : path;
     }
 
     private static boolean isDataDirAvailable() {

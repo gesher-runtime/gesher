@@ -88,8 +88,10 @@ static int notified, woke;
 static void InotifyNoteWrite(int) { ++notified; }
 static bool HasPollWaiters() { return true; }
 static void WakePollers() { ++woke; }
+enum class DescriptorKind { kFile, kUnshareable };
 struct DescriptorSnapshot {
   HANDLE handle;
+  DescriptorKind kind = DescriptorKind::kFile;
   ~DescriptorSnapshot() { ::close(static_cast<int>(handle)); }
 };
 using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
