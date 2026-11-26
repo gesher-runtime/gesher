@@ -169,6 +169,8 @@ struct Library {
   bool is_closed = false;
   bool is_closing = false;  // finalizers claimed, still visible until they finish
   bool is_aarch64 = false;   // EM_AARCH64: translated guest code (ADR 0047)
+  bool relocation_global = false;  // DF_1_GLOBAL or the main executable
+  bool symbolic_lookup = false;    // DT_SYMBOLIC or DF_SYMBOLIC
 
   // Dynamic section data (pointers into the mapping).
   const Elf64_Sym* symtab = nullptr;
@@ -249,6 +251,7 @@ struct Library {
   // Only the loading thread can see this private relocation scope. It is
   // cleared before publishing the completed graph.
   const std::vector<Library*>* load_scope = nullptr;
+  const std::vector<Library*>* pending_globals = nullptr;
 
   // Unresolved-import diagnostics have the same lifetime as this object.
   // In particular, no process-global stub may retain its unmapped strtab.
@@ -305,6 +308,12 @@ LoaderMutex g_mutex;
 std::vector<Library*>& Loaded() {
   static std::vector<Library*> v;
   return v;
+}
+// DF_1_GLOBAL objects in publication order, with each graph in DT_NEEDED
+// breadth-first order. As with Loaded(), all access is under g_mutex.
+std::vector<Library*>& RelocationGlobals() {
+  static std::vector<Library*> libraries;
+  return libraries;
 }
 SymbolResolver g_resolver;
 uint64_t g_load_count = 0;  // under g_mutex
@@ -572,48 +581,52 @@ struct ResolvedSymbol {
   bool found = false;
 };
 
-// Resolves an undefined symbol for a relocation: first in the object itself and
-// its dependency graph, then through the bionic shim resolver.
-ResolvedSymbol ResolveForReloc(Library* lib, const char* name) {
-  ResolvedSymbol r;
-  uint32_t gh = GnuHash(name), sh = SysvHash(name);
-  // Self first, then dependencies (global scope), as the dynamic linker does.
-  const Elf64_Sym* sym = FindDefinedSymbol(lib, name, gh, sh);
-  if (sym != nullptr && ELF64_ST_BIND(sym->st_info) != STB_LOCAL) {
-    r = {SymbolAddress(lib, sym), lib, sym, true};
-    return r;
+// The explicit ELF global group precedes the ordinary dependency search.
+// Android's relocation group uses DF_1_GLOBAL, independent of the RTLD_GLOBAL
+// dlopen flag. Keep the existing fallback for the shim and its callers.
+ResolvedSymbol ResolveForReloc(Library* lib, const Elf64_Sym* reference) {
+  if (reference->st_shndx != SHN_UNDEF &&
+      (ELF64_ST_BIND(reference->st_info) == STB_LOCAL ||
+       ELF64_ST_VISIBILITY(reference->st_other) != STV_DEFAULT)) {
+    return {SymbolAddress(lib, reference), lib, reference, true};
   }
-  for (Library* dep : lib->dependencies) {
-    if (dep->is_aarch64 != lib->is_aarch64) continue;
-    const Elf64_Sym* s = FindDefinedSymbol(dep, name, gh, sh);
-    if (s != nullptr && ELF64_ST_BIND(s->st_info) != STB_LOCAL) {
-      return {SymbolAddress(dep, s), dep, s, true};
+  const char* name = lib->strtab + reference->st_name;
+  const uint32_t gh = GnuHash(name), sh = SysvHash(name);
+  auto lookup = [&](Library* candidate) -> ResolvedSymbol {
+    if (candidate->is_closed || candidate->is_aarch64 != lib->is_aarch64) return {};
+    const Elf64_Sym* symbol = FindDefinedSymbol(candidate, name, gh, sh);
+    if (symbol == nullptr || ELF64_ST_BIND(symbol->st_info) == STB_LOCAL) return {};
+    return {SymbolAddress(candidate, symbol), candidate, symbol, true};
+  };
+  if (lib->symbolic_lookup) {
+    if (auto self = lookup(lib); self.found) return self;
+  }
+  for (Library* candidate : RelocationGlobals()) {
+    if (auto result = lookup(candidate); result.found) return result;
+  }
+  if (lib->pending_globals != nullptr) {
+    for (Library* candidate : *lib->pending_globals) {
+      if (auto result = lookup(candidate); result.found) return result;
     }
   }
-  // Any other loaded object (global scope).
-  const Library* gl = nullptr;
-  const Elf64_Sym* gs = nullptr;
-  if (void* a = LookupGlobalLocked(name, &gl, &gs, lib->is_aarch64 ? 1 : 0)) {
-    return {a, gl, gs, true};
+  if (auto self = lookup(lib); self.found) return self;
+  for (Library* dependency : lib->dependencies) {
+    if (auto result = lookup(dependency); result.found) return result;
+  }
+  for (Library* candidate : Loaded()) {
+    if (auto result = lookup(candidate); result.found) return result;
   }
   // Siblings and transitive dependencies are prepared together but are not
   // visible through the process registry until the entire graph succeeds.
   if (lib->load_scope != nullptr) {
     for (Library* candidate : *lib->load_scope) {
-      if (candidate->is_aarch64 != lib->is_aarch64) continue;
-      const Elf64_Sym* s = FindDefinedSymbol(candidate, name, gh, sh);
-      if (s != nullptr && ELF64_ST_BIND(s->st_info) != STB_LOCAL) {
-        return {SymbolAddress(candidate, s), candidate, s, true};
-      }
+      if (auto result = lookup(candidate); result.found) return result;
     }
   }
-  // The bionic shim.
   if (g_resolver) {
-    if (void* a = g_resolver(name)) {
-      return {a, nullptr, nullptr, true};
-    }
+    if (void* address = g_resolver(name)) return {address, nullptr, nullptr, true};
   }
-  return r;
+  return {};
 }
 
 void Fail(std::string* error, const std::string& msg) {
@@ -1241,7 +1254,12 @@ bool ParseDynamic(Library* lib, const uint8_t* data, std::string_view* runpath,
       case DT_ANDROID_RELA: lib->android_rela = p; break;
       case DT_ANDROID_RELASZ: lib->android_rela_size = v; break;
       case DT_TEXTREL: lib->text_relocations = true; break;
-      case DT_FLAGS: lib->text_relocations |= (v & DF_TEXTREL) != 0; break;
+      case DT_SYMBOLIC: lib->symbolic_lookup = true; break;
+      case DT_FLAGS:
+        lib->text_relocations |= (v & DF_TEXTREL) != 0;
+        lib->symbolic_lookup |= (v & DF_SYMBOLIC) != 0;
+        break;
+      case DT_FLAGS_1: lib->relocation_global |= (v & DF_1_GLOBAL) != 0; break;
       case DT_INIT: lib->init_func = reinterpret_cast<void (SYSV*)()>(p); break;
       case DT_FINI: lib->fini_func = reinterpret_cast<void (SYSV*)()>(p); break;
       case DT_INIT_ARRAY: lib->init_array = reinterpret_cast<void (SYSV**)()>(p); break;
@@ -1287,9 +1305,9 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
 
   auto resolve = [&](ResolvedSymbol* rs) -> bool {
     const Elf64_Sym* sym = &lib->symtab[sym_index];
-    const char* name = lib->strtab + sym->st_name;
-    *rs = ResolveForReloc(lib, name);
+    *rs = ResolveForReloc(lib, sym);
     if (!rs->found) {
+      const char* name = lib->strtab + sym->st_name;
       // A weak undefined symbol resolves to 0.
       if (ELF64_ST_BIND(sym->st_info) == STB_WEAK) {
         rs->address = nullptr;
@@ -1416,7 +1434,7 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
   auto resolve_value = [&](bool as_function, uint64_t* out) -> bool {
     const Elf64_Sym* sym = &lib->symtab[sym_index];
     const char* name = lib->strtab + sym->st_name;
-    ResolvedSymbol rs = ResolveForReloc(lib, name);
+    ResolvedSymbol rs = ResolveForReloc(lib, sym);
     if (!rs.found || rs.lib == nullptr) {
       // A libc interface whose host (shim) version has an x86-64-specific
       // layout or numbering (struct stat, epoll_event, syscall, setjmp...):
@@ -1496,7 +1514,7 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
         if (sym->st_shndx != SHN_UNDEF) {
           sym_value = sym->st_value;
         } else {
-          ResolvedSymbol rs = ResolveForReloc(lib, lib->strtab + sym->st_name);
+          ResolvedSymbol rs = ResolveForReloc(lib, sym);
           if (!rs.found || rs.lib == nullptr || rs.sym == nullptr) {
             Fail(error, lib->name + ": unresolved TLS symbol '" + (lib->strtab + sym->st_name) + "'");
             return false;
@@ -1966,6 +1984,7 @@ class LoadTransaction {
     for (const auto& node : nodes_) {
       if (!Prepare(*node, error)) return nullptr;
     }
+    CollectPendingGlobals(root);
     if (!Link(root, error)) return nullptr;
     for (const auto& node : nodes_) {
       Library* lib = node->library.get();
@@ -1976,6 +1995,8 @@ class LoadTransaction {
     // Reserve before publication: there is no remaining recoverable operation
     // after TLS images become available to existing/new threads.
     Loaded().reserve(Loaded().size() + nodes_.size());
+    auto& global_group = RelocationGlobals();
+    global_group.reserve(global_group.size() + pending_globals_.size());
     for (const auto& node : nodes_) {
       Library* lib = node->library.get();
       if (lib->tls.present) {
@@ -1990,6 +2011,7 @@ class LoadTransaction {
         }
       }
       lib->load_scope = nullptr;
+      lib->pending_globals = nullptr;
       lib->writable = {};
       lib->made_writable.clear();
       lib->file_phdr = nullptr;
@@ -1997,6 +2019,7 @@ class LoadTransaction {
       Loaded().push_back(lib);
       ++g_load_count;
     }
+    global_group.insert(global_group.end(), pending_globals_.begin(), pending_globals_.end());
     // The graph is complete before a constructor can re-enter the loader.
     for (const auto& node : nodes_) node->library.release();
     RunInit(root);
@@ -2015,6 +2038,23 @@ class LoadTransaction {
   };
   std::vector<std::unique_ptr<Node>> nodes_;
   std::vector<Library*> scope_;
+  std::vector<Library*> pending_globals_;
+
+  void CollectPendingGlobals(Library* root) {
+    if (std::none_of(scope_.begin(), scope_.end(),
+                     [](const Library* lib) { return lib->relocation_global; })) return;
+    std::vector<Library*> pending{root};
+    std::set<Library*> seen{root};
+    for (size_t i = 0; i < pending.size(); ++i) {
+      Library* library = pending[i];
+      if (library->relocation_global) pending_globals_.push_back(library);
+      for (Library* dependency : library->dependencies) {
+        if (dependency->load_scope == &scope_ && seen.insert(dependency).second) {
+          pending.push_back(dependency);
+        }
+      }
+    }
+  }
 
   Library* Stage(const char* name, const char* path, const FileImage* file,
                  const uint8_t* data, size_t size,
@@ -2051,6 +2091,8 @@ class LoadTransaction {
     lib->is_aarch64 = aarch64;
     lib->stub_unresolved = options.stub_unresolved_functions;
     lib->load_scope = &scope_;
+    lib->pending_globals = &pending_globals_;
+    lib->relocation_global = options.main_executable;
     node->data = data;
     node->size = size;
     node->options = options;
@@ -2500,6 +2542,8 @@ void RetireLocked(Library* library) {
   library->retired = true;  // first: ForEachLoaded's snapshots check it
   auto& loaded = Loaded();
   loaded.erase(std::remove(loaded.begin(), loaded.end(), library), loaded.end());
+  auto& global_group = RelocationGlobals();
+  global_group.erase(std::remove(global_group.begin(), global_group.end(), library), global_group.end());
   if (library->guest_code_registered) {
     gesher::arm64::RemoveCode(library->base, library->map_size);
     library->guest_code_registered = false;
