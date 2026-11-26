@@ -51,3 +51,8 @@ endforeach()
 target_compile_options(stdio_ofd_test PRIVATE -fno-builtin)
 target_link_libraries(pipe_native_process_test PRIVATE gesher_exec_spawn)
 add_dependencies(pipe_native_process_test ofd_native_child)
+
+# A standalone diagnostic for the remaining N31 last-reader behavior.
+add_executable(pipe_write_readiness_probe EXCLUDE_FROM_ALL
+  "${GESHER_ROOT}/tests/native/pipe_write_readiness_probe.cc")
+target_compile_options(pipe_write_readiness_probe PRIVATE -Wall -Wextra -Werror)
