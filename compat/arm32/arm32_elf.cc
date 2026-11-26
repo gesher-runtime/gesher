@@ -320,7 +320,16 @@ class Loader {
     for (uint32_t needed : needed_) {
       std::string name;
       if (!Name(needed, &name)) return false;
-      return Fail("DT_NEEDED '" + name + "' requires the unimplemented dependency loader");
+      if (!options_.resolve_dependency)
+        return Fail("DT_NEEDED '" + name + "' requires the unimplemented dependency loader");
+      bool accepted = false;
+      try {
+        accepted = options_.resolve_dependency(name);
+      } catch (...) {
+        return Fail("dependency resolver threw an exception");
+      }
+      if (!accepted) return Fail("unresolved dependency '" + name + "'");
+      image_.dependencies.push_back(std::move(name));
     }
     if (Has(kDtSoname) && !Name(Tag(kDtSoname), &image_.soname)) return false;
     for (uint32_t tag : {uint32_t{15}, uint32_t{29}}) {
