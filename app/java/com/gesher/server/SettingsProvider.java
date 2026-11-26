@@ -176,6 +176,68 @@ final class SettingsProvider extends ContentProvider {
     /** The provider of this process (the system server's), for {@link #putSystem}. */
     private static volatile SettingsProvider sInstance;
 
+    /**
+     * The location service's live state, for the Settings.Secure row Android's location
+     * service keeps: {@code location_mode}. Apps read it to tell whether location is on
+     * (react-native-wifi-reborn before a Wi-Fi scan), so it answers what
+     * LocationManager.isLocationEnabled answers (docs/devices.md). Null without a location
+     * service: the stored row answers. ({@code location_providers_allowed} no longer exists
+     * from Android S on, and is left alone.)
+     */
+    interface LocationState {
+        /** LocationManager.isLocationEnabled's answer. */
+        boolean locationEnabled();
+    }
+
+    private static volatile LocationState sLocation;
+
+    static void setLocationState(LocationState state) {
+        sLocation = state;
+    }
+
+    /** Tells observers of location_mode that the location service's state changed. */
+    static void locationStateChanged() {
+        SettingsProvider p = sInstance;
+        if (p == null) return;
+        p.notifySetting(SECURE, Settings.Secure.LOCATION_MODE);
+    }
+
+    private static boolean locationKey(String table, String name) {
+        return SECURE.equals(table) && Settings.Secure.LOCATION_MODE.equals(name);
+    }
+
+    /**
+     * The live location rows of {@code table} (empty for other tables or without a location
+     * service). Asked before the provider monitor is taken: the location service may wait
+     * for Windows' first answer.
+     */
+    private static Map<String, String> locationRows(String table) {
+        LocationState state = sLocation;
+        if (state == null || !SECURE.equals(table)) return java.util.Collections.emptyMap();
+        boolean enabled;
+        try {
+            enabled = state.locationEnabled();
+        } catch (RuntimeException failure) {
+            SystemServer.log("settings: location state unavailable: " + failure);
+            return java.util.Collections.emptyMap();
+        }
+        // Android P+ (SystemSettingsHelper.setLocationEnabled): LOCATION_MODE_ON or _OFF.
+        return java.util.Collections.singletonMap(Settings.Secure.LOCATION_MODE, Integer.toString(
+                enabled ? Settings.Secure.LOCATION_MODE_ON : Settings.Secure.LOCATION_MODE_OFF));
+    }
+
+    /**
+     * A write to location_mode while a location service answers it: Windows' location setting
+     * turns location on and off, so it is ignored, as LocationManagerService's
+     * setLocationEnabledForUser is (docs/devices.md).
+     */
+    private static boolean ignoredLocationWrite(String table, String name) {
+        if (sLocation == null || !locationKey(table, name)) return false;
+        SystemServer.log("settings: write to secure " + name + " ignored: Windows' location"
+                + " setting turns location on and off");
+        return true;
+    }
+
     /** Server-local view of the actual secure setting; absent configuration stays absent. */
     static String secureString(String name) {
         SettingsProvider provider = sInstance;
@@ -323,6 +385,9 @@ final class SettingsProvider extends ContentProvider {
         // unset). Added to existing stores too, so Settings.Global readers agree with
         // TelephonyManager (docs/telephony.md, "Mobile data switches").
         mStore.addDefault(GLOBAL, Settings.Global.MOBILE_DATA, "1");
+        // location_mode exists in every profile; with a location service its value is the
+        // service's live state (locationRows), this one only answers without one.
+        mStore.addDefault(SECURE, Settings.Secure.LOCATION_MODE, "0");
         // Single-process mode executes app code in the server's own PID and cannot
         // authenticate a privileged writer. Never expose its process to host selection state.
         mTextStore = mPm != null && mPm.hasTransientPackageState() ? null
@@ -499,6 +564,10 @@ final class SettingsProvider extends ContentProvider {
             return method.startsWith("GET_") ? valueBundle(null) : null;
         }
         if (method.equals("GET_" + table)) {
+            if (locationKey(table, arg)) {
+                String live = locationRows(table).get(arg);
+                if (live != null) return valueBundle(live);
+            }
             synchronized (this) {
                 Map<String, String> rows = (textKey(table, arg) ? mTextTables : mTables).get(table);
                 return valueBundle(visible(table, arg, rows.get(arg)));
@@ -506,6 +575,7 @@ final class SettingsProvider extends ContentProvider {
         }
         if (method.equals("PUT_" + table)) {
             enforceWrite(table, arg);
+            if (ignoredLocationWrite(table, arg)) return null;
             put(table, arg, extras == null ? null : extras.getString("value"), false);
             // Retain the accepted-PUT diagnostic even when a durable value is unchanged.
             if (SettingsStore.validKey(arg)) SystemServer.log("settings: updated " + table + " key " + arg);
@@ -514,13 +584,15 @@ final class SettingsProvider extends ContentProvider {
         if (method.equals("DELETE_" + table)) {
             enforceWrite(table, arg);
             Bundle result = new Bundle();
-            result.putInt("result_rows_deleted", remove(table, arg) ? 1 : 0);
+            result.putInt("result_rows_deleted",
+                    !ignoredLocationWrite(table, arg) && remove(table, arg) ? 1 : 0);
             return result;
         }
         if (method.equals("LIST_" + table)) {
             ArrayList<String> all = new ArrayList<>();
+            Map<String, String> live = locationRows(table);
             synchronized (this) {
-                for (Map.Entry<String, String> e : rows(table).entrySet()) {
+                for (Map.Entry<String, String> e : withLive(rows(table), live).entrySet()) {
                     all.add(e.getKey() + "=" + visible(table, e.getKey(), e.getValue()));
                 }
             }
@@ -542,6 +614,16 @@ final class SettingsProvider extends ContentProvider {
         Map<String, String> result = new LinkedHashMap<>(rows);
         result.keySet().removeIf(name -> textKey(table, name));
         result.putAll(mTextTables.get(table));
+        return result;
+    }
+
+    /** {@code rows} with the live location values in place of the stored ones. */
+    private static Map<String, String> withLive(Map<String, String> rows, Map<String, String> live) {
+        if (live.isEmpty()) return rows;
+        Map<String, String> result = new LinkedHashMap<>(rows);
+        for (Map.Entry<String, String> e : live.entrySet()) {
+            if (result.containsKey(e.getKey())) result.put(e.getKey(), e.getValue());
+        }
         return result;
     }
 
@@ -649,8 +731,10 @@ final class SettingsProvider extends ContentProvider {
             }
         }
         MatrixCursor cursor = new MatrixCursor(columns);
+        Map<String, String> live = args.name == null || locationKey(args.table, args.name)
+                ? locationRows(args.table) : java.util.Collections.emptyMap();
         synchronized (this) {
-            for (Map.Entry<String, String> entry : rows(args.table).entrySet()) {
+            for (Map.Entry<String, String> entry : withLive(rows(args.table), live).entrySet()) {
                 if (args.name != null && !args.name.equals(entry.getKey())) continue;
                 Object[] row = new Object[columns.length];
                 for (int i = 0; i < columns.length; i++) {
@@ -682,6 +766,7 @@ final class SettingsProvider extends ContentProvider {
         Arguments args = new Arguments(uri, null, null, true);
         String name = values.getAsString("name");
         enforceWrite(args.table, name);
+        if (ignoredLocationWrite(args.table, name)) return null;
         return put(args.table, name, values.getAsString("value"), false)
                 ? Uri.withAppendedPath(Uri.parse("content://settings/" + args.table), name) : null;
     }
@@ -697,6 +782,7 @@ final class SettingsProvider extends ContentProvider {
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         Arguments args = new Arguments(uri, selection, selectionArgs, false);
         enforceWrite(args.table, args.name);
+        if (ignoredLocationWrite(args.table, args.name)) return 0;
         return remove(args.table, args.name) ? 1 : 0;
     }
 
@@ -704,6 +790,7 @@ final class SettingsProvider extends ContentProvider {
     public int update(Uri uri, ContentValues values, String selection, String[] selectionArgs) {
         Arguments args = new Arguments(uri, selection, selectionArgs, false);
         enforceWrite(args.table, args.name);
+        if (ignoredLocationWrite(args.table, args.name)) return 0;
         if (!SettingsStore.validKey(values.getAsString("name"))) return 0;
         return put(args.table, args.name, values.getAsString("value"), true) ? 1 : 0;
     }
