@@ -147,6 +147,11 @@ int main(int argc, char** argv) {
     printf("readonly edge Windows: %s\n", fails == 0 ? "all passed" : "FAILED");
     return fails != 0;
   }
+  if (argc == 2 && strcmp(argv[1], "--readonly-exclusive") == 0) {
+    test_epoll_readonly_exclusive();
+    printf("readonly exclusive Windows: %s\n", fails == 0 ? "all passed" : "FAILED");
+    return fails != 0;
+  }
   if (argc != 1) return 2;
   test_epoll_nested();
   test_event_loop_contracts();
