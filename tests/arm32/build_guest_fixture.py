@@ -117,7 +117,7 @@ def main() -> None:
             undefined = {symbol.name for symbol in
                          elf.get_section_by_name(".dynsym").iter_symbols()
                          if symbol.name and symbol["st_shndx"] == "SHN_UNDEF"}
-            if undefined != {"dependency_increment"}:
+            if undefined != {"dependency_increment", "dependency_mark_shutdown"}:
                 raise RuntimeError(f"{consumer}: unexpected import {undefined}")
         print(f"Verified {mode} guest dependency graph: {consumer}")
 
