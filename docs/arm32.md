@@ -51,14 +51,14 @@ thread affinity, array/string pinning or ART native registration.
 
 ### ELF and execution limits
 
-The image loader supports `R_ARM_NONE`, `R_ARM_RELATIVE`, `R_ARM_ABS32`,
-`R_ARM_REL32`, `R_ARM_GLOB_DAT` and `R_ARM_JUMP_SLOT`, together with standard ELF32 RELR and Android's earlier RELR tag family. RELR entries are checked for size, range, writable targets, duplicates and bounded expansion before relocation writes. Android APS2 REL groups use checked SLEB128 decoding and are validated against the same relocation and rollback rules. Neither format establishes full Android dependency or JNI support. It preserves Thumb symbol
+DT_NEEDED names may be passed to an explicitly supplied dependency callback before import resolution. This only exposes the dependency contract: the caller must provide its own namespace, recursive loading, lifecycle and external rollback. With no callback, a DT_NEEDED image is rejected. Callbacks run only after ELF metadata and relocation ranges have been checked, avoiding external loads for malformed tables. This is **not yet a dependency manager**.\n\nThe image loader supports `R_ARM_NONE`, `R_ARM_RELATIVE`, `R_ARM_ABS32`,
+`R_ARM_REL32`, `R_ARM_GLOB_DAT` and `R_ARM_JUMP_SLOT`, together with standard ELF32 RELR and Android's earlier RELR tag family. RELR entries are checked for size, range, writable targets, duplicates and bounded expansion before relocation writes. Android APS2 REL groups use checked SLEB128 decoding (including negative offset deltas) and are validated against the same relocation and rollback rules. Neither format establishes full Android dependency or JNI support. It preserves Thumb symbol
 bits and rejects unresolved required imports. Weak imports follow the relevant
 relocation contract. ELF tables and relocation targets are range checked;
 failed loads preserve the previous output image, including allocation and
 import-adapter failures.
 
-Dependencies, TLS, IFUNC, Android packed RELA relocations, symbol versions,
+Dependency namespace/lifecycle, TLS, IFUNC, Android packed RELA relocations, symbol versions,
 executable interpreters and preinit arrays are explicitly rejected. The loader
 does not claim general Android DSO compatibility. It accepts System V/Linux
 OSABI values with ABI version zero and rejects unsupported FDPIC variants.
