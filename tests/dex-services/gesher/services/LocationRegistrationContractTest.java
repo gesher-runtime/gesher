@@ -225,6 +225,8 @@ public final class LocationRegistrationContractTest {
             catch (NoSuchFieldException baseline) { }
             set(service, "mRegistrations", new ArrayList<>()); set(service, "mLast", new HashMap<>());
             set(service, "mReportedEnabled", new HashMap<>());
+            try { set(service, "mModeLock", new Object()); }
+            catch (NoSuchFieldException baseline) { }
             Class<?> type = Class.forName("com.gesher.server.LocationManagerService$TestProvider");
             Constructor<?> constructor = type.getDeclaredConstructor(String.class, ProviderProperties.class);
             constructor.setAccessible(true);
@@ -545,6 +547,109 @@ public final class LocationRegistrationContractTest {
         }
     }
 
+    /**
+     * Location as a whole turning on and off: Settings.Secure location_mode answers it
+     * (react-native-wifi-reborn's check before a Wi-Fi scan), its observers are told once per
+     * change, never under the service's locks, and a change a reader sees first is reported.
+     */
+    private static void locationMode() throws Exception {
+        Field fallback = LocationManagerService.class.getDeclaredField("sIpFallbackAvailable");
+        fallback.setAccessible(true);
+        Object fallbackBefore = fallback.get(null);
+        Class<?> settingsType = Class.forName("com.gesher.server.SettingsProvider");
+        Class<?> stateType = Class.forName("com.gesher.server.SettingsProvider$LocationState");
+        Method setState = settingsType.getDeclaredMethod("setLocationState", stateType);
+        setState.setAccessible(true);
+        java.io.File directory = java.nio.file.Files.createTempDirectory("gesher-location-mode-").toFile();
+        try (Harness h = new Harness()) {
+            // Windows' location is unavailable on the host; the IP fallback is off here, so
+            // location is on exactly while a test provider is.
+            fallback.set(null, false);
+            // Declared host locale boundary, as SettingsProviderContractTest: no ICU data here.
+            Field clock = Class.forName("com.gesher.app.locale.SystemLocale").getDeclaredField("sIs24Hour");
+            clock.setAccessible(true);
+            if (clock.get(null) == null) clock.set(null, Boolean.TRUE);
+            Constructor<?> constructor = settingsType.getDeclaredConstructor(PackageManagerService.class,
+                    Class.forName("com.gesher.server.ActivityTaskManagerService"), java.io.File.class);
+            constructor.setAccessible(true);
+            android.content.ContentProvider settings = (android.content.ContentProvider)
+                    constructor.newInstance(null, null, new java.io.File(directory, "settings.bin"));
+            List<android.net.Uri> seen = new ArrayList<>();
+            class TestContext extends ContextWrapper {
+                android.content.ContentResolver resolver;
+                TestContext() { super(null); }
+                @Override public String getPackageName() { return "android"; }
+                @Override public String getOpPackageName() { return "android"; }
+                @Override public int getUserId() { return 0; }
+                @Override public android.content.pm.ApplicationInfo getApplicationInfo() { return new android.content.pm.ApplicationInfo(); }
+                @Override public Object getSystemService(String name) { return null; }
+                @Override public android.content.ContentResolver getContentResolver() { return resolver; }
+            }
+            TestContext context = new TestContext();
+            context.resolver = new android.content.ContentResolver(context) {
+                @Override protected android.content.IContentProvider acquireProvider(android.content.Context c, String name) { throw new AssertionError(); }
+                @Override protected android.content.IContentProvider acquireUnstableProvider(android.content.Context c, String name) { throw new AssertionError(); }
+                @Override public boolean releaseProvider(android.content.IContentProvider p) { return true; }
+                @Override public boolean releaseUnstableProvider(android.content.IContentProvider p) { return true; }
+                @Override public void unstableProviderDied(android.content.IContentProvider p) { }
+                @Override public void notifyChange(android.net.Uri uri, android.database.ContentObserver observer) {
+                    check(!Thread.holdsLock(h.lock), "location_mode observers outside the service lock");
+                    check(!Thread.holdsLock(settings), "location_mode observers outside the provider monitor");
+                    seen.add(uri);
+                }
+            };
+            Field info = settingsType.getDeclaredField("mInfo"); info.setAccessible(true);
+            settings.attachInfo(context, (android.content.pm.ProviderInfo) info.get(settings));
+            Method install = LocationManagerService.class.getDeclaredMethod("installSettingsState");
+            install.setAccessible(true);
+            install.invoke(h.service);
+            android.net.Uri mode = android.net.Uri.parse("content://settings/secure/location_mode");
+            java.util.function.Supplier<String> read = () ->
+                    settings.call("GET_secure", "location_mode", null).getString("value");
+
+            check("3".equals(read.get()), "location_mode is LOCATION_MODE_ON while a provider is on");
+            check(h.service.isLocationEnabledForUser(0), "isLocationEnabled agrees");
+            h.service.setTestProviderEnabled(GPS, false, PKG, null);  // first observation: on
+            check(seen.isEmpty(), "first observation is not a change");
+            h.service.setTestProviderEnabled(NETWORK, false, PKG, null);
+            check(seen.isEmpty() && "3".equals(read.get()), "location stays on while fused is on");
+            h.service.setTestProviderEnabled("fused", false, PKG, null);
+            check("0".equals(read.get()), "location_mode is LOCATION_MODE_OFF with every provider off");
+            check(!h.service.isLocationEnabledForUser(0), "isLocationEnabled agrees when off");
+            check(seen.equals(List.of(mode)), "one location_mode notification for turning off: " + seen);
+            h.service.setTestProviderEnabled("fused", false, PKG, null);
+            check(seen.size() == 1, "no notification without a change");
+            h.service.setTestProviderEnabled(GPS, true, PKG, null);
+            check("3".equals(read.get()) && seen.equals(List.of(mode, mode)), "turning on notifies once");
+
+            // A change only a reader sees: the read answers it and schedules the report.
+            Object gps = ((Map<?, ?>) get(h.service, "mTestProviders")).get(GPS);
+            set(gps, "enabled", false);
+            int timers = h.executor.timers.size();
+            check("0".equals(read.get()), "a read answers the current state");
+            check(h.executor.timers.size() == timers + 1 && seen.size() == 2, "a read schedules the report");
+            h.executor.timers.get(timers).command.run();
+            check(seen.equals(List.of(mode, mode, mode)), "the scheduled check reports the change once");
+            check("0".equals(read.get()) && h.executor.timers.size() == timers + 1,
+                    "a read of a reported state schedules nothing");
+
+            // Writes are ignored while the location service answers: Windows owns the setting.
+            android.os.Bundle on = new android.os.Bundle(); on.putString("value", "3");
+            long identity = Binder.clearCallingIdentity();  // the server itself writes
+            try { settings.call("PUT_secure", "location_mode", on); }
+            finally { Binder.restoreCallingIdentity(identity); }
+            check("0".equals(read.get()), "a location_mode write does not turn location on");
+            check(settings.call("GET_secure", "location_providers_allowed", null).getString("value") == null,
+                    "location_providers_allowed does not exist (Android S+)");
+        } finally {
+            setState.invoke(null, (Object) null);
+            fallback.set(null, fallbackBefore);
+            java.io.File[] files = directory.listFiles();
+            if (files != null) for (java.io.File f : files) f.delete();
+            directory.delete();
+        }
+    }
+
     private static void initialDisabledNotifications() throws Exception {
         for (boolean initiallyEnabled : new boolean[] {false, true}) {
             for (boolean pending : new boolean[] {false, true}) {
@@ -680,6 +785,7 @@ public final class LocationRegistrationContractTest {
             if (selected.equals("all") || selected.equals("current-deaths")) currentDeaths();
             if (selected.equals("all") || selected.equals("disabled")) disabled();
             if (selected.equals("all") || selected.equals("initial-disabled")) initialDisabledNotifications();
+            if (selected.equals("all") || selected.equals("mode")) locationMode();
             if (selected.equals("late")) lateCurrent();
             if (selected.equals("duration")) durationLimits();
             if (binder && (selected.equals("all") || selected.equals("binder"))) binderAndManager();

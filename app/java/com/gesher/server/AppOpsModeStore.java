@@ -71,9 +71,7 @@ final class AppOpsModeStore {
             List<String> certificates = new ArrayList<>();
             for (Signature signature : signatures) {
                 byte[] digest = MessageDigest.getInstance("SHA-256").digest(signature.toByteArray());
-                StringBuilder hex = new StringBuilder();
-                for (byte value : digest) hex.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
-                certificates.add(hex.toString());
+                certificates.add(libcore.util.HexEncoding.encodeToString(digest, false));
             }
             Collections.sort(certificates);
             return String.join(":", certificates);
