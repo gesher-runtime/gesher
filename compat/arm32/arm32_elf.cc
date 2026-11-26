@@ -514,7 +514,7 @@ class Loader {
       for (unsigned i = 0; i < 5; ++i) {
         if (pos >= size) return false;
         const uint8_t byte = stream[pos++];
-        bits |= uint64_t{byte & 127} << shift;
+        bits |= static_cast<uint64_t>(byte & uint8_t{127}) << shift;
         shift += 7;
         if ((byte & 128) != 0) continue;
         if ((byte & 64) != 0) bits |= ~uint64_t{0} << shift;
