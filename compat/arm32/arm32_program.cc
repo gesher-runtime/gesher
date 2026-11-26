@@ -32,6 +32,10 @@ struct ActiveName {
   std::set<std::string>::iterator iterator;
   ~ActiveName() { set->erase(iterator); }
 };
+struct ActiveProgram {
+  std::atomic_flag* flag;
+  ~ActiveProgram() { flag->clear(); }
+};
 }  // namespace
 
 Program::Program(LibraryProvider provider, size_t budget)
@@ -65,6 +69,8 @@ bool Program::Resolve(std::string_view name, uint32_t* result) const {
 bool Program::BindHostSymbol(std::string name, std::vector<ValueKind> arguments,
                              ValueKind result, HostCallback callback,
                              std::string* error) {
+  if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
+  ActiveProgram active{&busy_};
   if (!stack_ok_ || name.empty() || !callback || host_symbols_.contains(name) ||
       next_thunk_ >= kStackBase)
     return Fail(error, "invalid or duplicate ARM32 host symbol binding");
@@ -192,6 +198,8 @@ void Program::Rollback(size_t count, uint64_t next_address) noexcept {
 }
 
 bool Program::LoadLibrary(std::string_view name, std::string* error) {
+  if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
+  ActiveProgram active{&busy_};
   if (!stack_ok_ || name.empty())
     return Fail(error, "ARM32 program stack unavailable or empty library name");
   const size_t before = modules_.size();
@@ -212,6 +220,8 @@ bool Program::LoadLibrary(std::string_view name, std::string* error) {
 }
 
 bool Program::Initialize(std::string* error) {
+  if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
+  ActiveProgram active{&busy_};
   if (!stack_ok_ || initialization_failed_)
     return Fail(error, "ARM32 program initialization unavailable after a failure");
   for (auto& module : modules_) {
@@ -233,6 +243,8 @@ bool Program::Initialize(std::string* error) {
 bool Program::CallExport(std::string_view library, std::string_view symbol,
                          const std::vector<Value>& arguments, ValueKind result_kind,
                          Value* result, std::string* error, uint64_t budget) {
+  if (busy_.test_and_set()) return Fail(error, "ARM32 program is already active");
+  ActiveProgram active{&busy_};
   if (!stack_ok_ || initialization_failed_ || !result)
     return Fail(error, "ARM32 program not callable");
   const Module* module = Find(library);
