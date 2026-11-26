@@ -111,7 +111,9 @@ cmake -S compat/arm32 -B out-arm32 -DCMAKE_BUILD_TYPE=Release \
   -DGESHER_ARM32_WITH_DYNARMIC=ON \
   -DDYNARMIC_DIR="$PWD/deps/dynarmic" \
   -DBoost_INCLUDE_DIR=/path/to/boost_1_83_0 \
-  -DARM32_GUEST_FIXTURES="$PWD/out-arm32-fixtures/fixture-arm.so;$PWD/out-arm32-fixtures/fixture-thumb.so"
+  -DARM32_GUEST_FIXTURES="$PWD/out-arm32-fixtures/fixture-arm.so;$PWD/out-arm32-fixtures/fixture-thumb.so" \
+  -DARM32_GUEST_BIONIC_FIXTURES="$PWD/out-arm32-fixtures/bionic-arm.so;$PWD/out-arm32-fixtures/bionic-thumb.so" \
+  -DARM32_GUEST_DEPENDENCY_DIR="$PWD/out-arm32-fixtures"
 cmake --build out-arm32 --parallel 4
 ctest --test-dir out-arm32 --output-on-failure
 ```
