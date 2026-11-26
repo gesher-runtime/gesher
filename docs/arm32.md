@@ -25,7 +25,7 @@ DLL, or advertised by `NativeLibs.SUPPORTED` or `build.prop`.
 | `arm32_executor` | ARM/Thumb execution through the pinned Dynarmic A32 frontend, finite instruction budgets, checked instruction/data access, explicit faults and typed host-function thunks. |
 | `arm32_program` | Isolated dependency-DAG loader, guest-address allocation, typed host import bindings, transactional load rollback, guest constructors and reverse-order finalizers, exported function calls and explicit shutdown. Not integrated with ART or APK packaging. |
 | `arm32_bionic` | A narrow ILP32 guest-memory libc adapter for malloc/calloc/realloc/free, memcpy/memmove/memset/memcmp and strlen/strnlen/strcmp/strncmp; a guest `__errno` cell with ENOMEM on allocation failure, bounds checks and typed imports. Not a complete Bionic implementation. |
-| `arm32_jni` | Initial guest `JNIEnv*` and read-only 32-bit function table with typed JNI host callbacks, opaque generation-checked Java references, local/global reference ownership, UTF copies, and descriptor-aware host-to-guest named native invocation, including `@CriticalNative` scalar calls. This is an isolated component with an injected host JNIEnv, not ART native registration or complete JNI32. |
+| `arm32_jni` | Guest `JNIEnv*` and `JavaVM*` with read-only 32-bit tables, typed JNI callbacks, generation-checked Java references, local/global reference ownership, UTF copies, `JNI_OnLoad`, and descriptor-aware named native / `@CriticalNative` calls. The owning thread alone supports `GetEnv` and attach; guest thread creation and detach are unsupported. This is an isolated component with an injected host JNIEnv, not ART native registration or complete JNI32. |
 
 The linked-program test loads and calls the compiled ARM and Thumb fixtures through `Program`, including their constructors and typed host imports. Additional actual compiler-generated ARM/Thumb fixtures test libc imports and a two-DSO `DT_NEEDED` graph with guest-side constructor/finalizer ordering assertions. The dependency's destructor traps if the consumer has not run its own destructor first. The `arm32_bionic` adapter confines pointers to `GuestMemory`; it does not expose host pointers to 32-bit guest code. Its `__errno` cell is per standalone Program, not thread-local: real guest threads require a distinct errno/TLS design before application use. These are component test paths, not Windows/ART APK runs. The executor runs the compiler-generated fixtures in `tests/arm32`: constructors,
 relocated data pointers, integer and floating-point calls, 64-bit register/stack
@@ -57,9 +57,13 @@ reference arguments according to the JVM method descriptor, runs guest
 references are never truncated into a 32-bit guest pointer. CriticalNative
 calls omit JNIEnv and receiver. Unknown table slots are null and fault
 closed; they are not silently simulated. The test harness supplies an
-in-process fake host JNIEnv, not a running ART instance. The actual JVM native
-registration/dlsym path, JavaVM guest table, most JNI functions, attached
-threads, array pinning and cross-ABI callbacks remain unsupported. A native
+in-process fake host JNIEnv, not a running ART instance. The guest JavaVM invoke table supports `GetEnv`, `JNI_OnLoad` and
+same-thread `AttachCurrentThread` / `AttachCurrentThreadAsDaemon` when
+the real ART thread is already attached. `DestroyJavaVM` and
+`DetachCurrentThread` explicitly return JNI_ERR, and new guest threads
+are unsupported. The actual ART native registration/dlsym path, most JNI
+functions, arrays and buffer pinning, real guest-thread attachment, and
+nested cross-ABI callbacks remain unsupported. A native
 frame must release its guest local references before returning to ART.
 
 ### ELF and execution limits
@@ -169,7 +173,7 @@ load alignment and cancellation of queued code-cache invalidation. These
 specific failures have regression tests. ASan/UBSan results do not include
 LeakSanitizer when leak detection is disabled in a ptrace-supervised environment.
 
-The later RELR, APS2, dependency-callback, linked-program, guest libc and JNI32 adapter additions have not yet been executed in a verified complete component test run. The ELF32 guest test source was separately compiled with local Clang 17 and LLD for both ARM and Thumb; `readelf` confirmed actual libc imports, `DT_NEEDED` and cross-library symbol imports plus constructor/finalizer arrays. The pinned Zig guest compiler and Dynarmic executor were not available in that local environment. Clang 17 and LLD also compiled the JNI table-call fixture separately for ARM and Thumb: `readelf` verified ELF32 EM_ARM, EABI5 softfp, exported JNI methods and the Thumb-bit distinction. A local JDK verified the host JNI table slot offsets and CMake's ability to find JNI headers. These checks verify build inputs and fixture shapes only, not complete bridge execution. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
+The later RELR, APS2, dependency-callback, linked-program, guest libc, JNIEnv32/JavaVM32 and JNI_OnLoad adapter additions have not yet been executed in a verified complete component test run. In particular, the new host C++ JNI bridge has not yet passed a local or CI full compilation/test cycle. The ELF32 guest test source was separately compiled with local Clang 17 and LLD for both ARM and Thumb; `readelf` confirmed actual libc imports, `DT_NEEDED` and cross-library symbol imports plus constructor/finalizer arrays. The pinned Zig guest compiler and Dynarmic executor were not available in that local environment. Clang 17 and LLD also compiled the JNI table-call fixture separately for ARM and Thumb: `readelf` verified ELF32 EM_ARM, EABI5 softfp, exported JNI methods and the Thumb-bit distinction. A local JDK verified the host JNI table slot offsets and CMake's ability to find JNI headers. These checks verify build inputs and fixture shapes only, not complete bridge execution. Their added fixture tests are committed but not yet execution evidence. None of these results substitutes for real Windows/ART application tests.
 Existing x86-64/AArch64 production sources, packaging and advertised ABI lists
 are unchanged by these standalone components.
 
