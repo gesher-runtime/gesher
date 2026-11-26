@@ -25,13 +25,15 @@ DLL, or advertised by `NativeLibs.SUPPORTED` or `build.prop`.
 | `arm32_executor` | ARM/Thumb execution through the pinned Dynarmic A32 frontend, finite instruction budgets, checked instruction/data access, explicit faults and typed host-function thunks. |
 | `arm32_program` | Isolated dependency-DAG loader, guest-address allocation, typed host import bindings, transactional load rollback, guest constructors and reverse-order finalizers, exported function calls and explicit shutdown. Not integrated with ART or APK packaging. |
 | `arm32_bionic` | A narrow ILP32 guest-memory libc adapter for malloc/calloc/realloc/free, memcpy/memmove/memset/memcmp and strlen/strnlen/strcmp/strncmp; a guest `__errno` cell with ENOMEM on allocation failure, bounds checks and typed imports. Not a complete Bionic implementation. |
-| `arm32_jni` | Guest `JNIEnv*` and `JavaVM*` with read-only 32-bit tables, typed JNI callbacks (including `JNI_GetCreatedJavaVMs` guest import), generation-checked Java references, local/global reference ownership, UTF copies, `JNI_OnLoad`/`JNI_OnUnload`, and descriptor-aware named native / `@CriticalNative` calls. The owning thread alone supports `GetEnv` and attach; guest thread creation and detach are unsupported. This is an isolated component with an injected host JNIEnv, not ART native registration or complete JNI32. |
+| `arm32_jni` | Guest `JNIEnv*` and `JavaVM*` with read-only 32-bit tables, typed JNI callbacks (including `JNI_GetCreatedJavaVMs` guest import), generation-checked Java references, local/global reference ownership, UTF copies, `JNI_OnLoad`/`JNI_OnUnload`, descriptor-aware named native / `@CriticalNative` calls and checked ILP32 `RegisterNatives` record decoding. Actual registration must be supplied by a host callback that installs callable ART trampolines; without one the guest receives `JNI_ERR`. The owning thread alone supports `GetEnv` and attach; guest thread creation and detach are unsupported. This is not ART native registration or complete JNI32. |
 
 The linked-program test loads and calls the compiled ARM and Thumb fixtures through `Program`, including their constructors and typed host imports. Additional actual compiler-generated ARM/Thumb fixtures test libc imports and a two-DSO `DT_NEEDED` graph with guest-side constructor/finalizer ordering assertions. The dependency's destructor traps if the consumer has not run its own destructor first. The `arm32_bionic` adapter confines pointers to `GuestMemory`; it does not expose host pointers to 32-bit guest code. Its `__errno` cell is per standalone Program, not thread-local: real guest threads require a distinct errno/TLS design before application use. These are component test paths, not Windows/ART APK runs. The executor runs the compiler-generated fixtures in `tests/arm32`: constructors,
 relocated data pointers, integer and floating-point calls, 64-bit register/stack
 arguments, guest-pointer reads and writes, and an imported host adapter. ARM and
-Thumb builds are both checked by inspecting the actual exported function state
-bits. A compiler flag alone is insufficient evidence of Thumb coverage.
+Thumb builds are checked by inspecting the exported function state bits. A
+`thumb` target triple alone can still produce ARM instructions with Clang,
+so the fixture builder now forces `-mthumb` for Thumb and `-marm` for ARM
+in every compilation. A compiler target label alone is insufficient evidence.
 
 ### Address and ABI boundaries
 
@@ -61,9 +63,7 @@ in-process fake host JNIEnv, not a running ART instance. The guest JavaVM invoke
 same-thread `AttachCurrentThread` / `AttachCurrentThreadAsDaemon` when
 the real ART thread is already attached. `DestroyJavaVM` and
 `DetachCurrentThread` explicitly return JNI_ERR, and new guest threads
-are unsupported. Guest `JNI_OnUnload` must be called explicitly before the module is unmapped; this component does not hook ART's unload flow. An installed guest JNIEnv/JavaVM table is retired when the bridge is destroyed; partial installation failures preserve pre-existing foreign guest pages. The actual ART native registration/dlsym path, most JNI
-functions, arrays and buffer pinning, real guest-thread attachment, and
-nested cross-ABI callbacks remain unsupported. A native
+are unsupported. Guest `JNI_OnUnload` must be called explicitly before the module is unmapped; this component does not hook ART's unload flow. An installed guest JNIEnv/JavaVM table is retired when the bridge is destroyed; partial installation failures preserve pre-existing foreign guest pages. The `RegisterNatives` adapter validates the guest array's 12-byte ILP32 records, JNI method descriptors, duplicate names and executable ARM/Thumb addresses before handing owned records to an explicit host-side registration callback. It never passes guest entrypoints as native host function pointers; absent a real trampoline installer it returns `JNI_ERR`. The actual ART native registration/dlsym path, most JNI functions, arrays and buffer pinning, real guest-thread attachment, and nested cross-ABI callbacks remain unsupported. A native
 frame must release its guest local references before returning to ART.
 
 ### ELF and execution limits
@@ -76,6 +76,8 @@ bits and rejects unresolved required imports. Weak imports follow the relevant
 relocation contract. ELF tables and relocation targets are range checked;
 failed loads preserve the previous output image, including allocation and
 import-adapter failures.
+
+ELF32 base mapping rounds the lowest PT_LOAD address down to a guest page boundary without moving the segment's actual file bytes. Multi-DSO address reservation chooses a load bias aligned to the strongest PT_LOAD p_align requirement, including when the first segment begins mid-page. Unit fixtures cover a first segment with offset/vaddr 0x100. The real compiler fixture's PT_LOAD segments are independently visible with readelf; this is not evidence of successfully executing the updated Program loader.
 
 Dependency namespace/lifecycle, TLS, IFUNC, Android packed RELA relocations, symbol versions,
 executable interpreters and preinit arrays are explicitly rejected. The loader
