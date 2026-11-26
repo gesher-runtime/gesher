@@ -1,0 +1,128 @@
+name: Isolated distribution request
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        required: true
+        type: string
+      release_name:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: isolated-distribution
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'gesher-runtime/gesher' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: distribution-build
+    permissions:
+      contents: read
+    outputs:
+      ref: ${{ steps.prepare.outputs.ref }}
+      sha: ${{ steps.prepare.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: prepare
+        name: Prepare exact hardened source
+        env:
+          BRANCH: ${{ inputs.source_branch }}
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_BUILD_TOKEN }}
+          HARDENING: c05a073b21f4f9f9b3461647e3d4fbd79f76eee9
+        run: |
+          set -euo pipefail
+          [[ "$BRANCH" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,199}$ ]]
+          git check-ref-format --branch "$BRANCH"
+          [[ "$VERSION" =~ ^v(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$ ]]
+          python3 -c 'import os; p=tuple(map(int,os.environ["VERSION"][1:].split("."))); assert max(p)<=65535 and p>=(0,2,0)'
+          git switch --detach "refs/remotes/origin/$BRANCH"
+          git config user.name 'Gesher distribution'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null merge --no-edit "$HARDENING"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path('.github/workflows/ci.yml')
+          s=p.read_text()
+          needle='$version = python tools/ci/release_version.py'
+          if s.count(needle)!=1:
+              raise SystemExit('Unsupported CI packaging definition')
+          p.write_text(s.replace(needle, '$version = "'+os.environ['VERSION'][1:]+'"'))
+          PY
+          git add .github/workflows/ci.yml
+          git -c core.hooksPath=/dev/null commit -m 'Set isolated distribution package version'
+          ref="distribution-build/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sha="$(git rev-parse HEAD)"
+          gh auth setup-git
+          git push origin "HEAD:refs/heads/$ref"
+          printf 'ref=%s\nsha=%s\n' "$ref" "$sha" >> "$GITHUB_OUTPUT"
+  build:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    timeout-minutes: 350
+    outputs:
+      run: ${{ steps.ci.outputs.run }}
+    steps:
+      - id: ci
+        name: Run exact private CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ needs.prepare.outputs.ref }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$REF"
+          for i in $(seq 1 60); do
+            run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$REF" --event workflow_dispatch --limit 10 --json databaseId,headSha --jq '.[] | select(.headSha == env.SHA) | .databaseId')"
+            if [[ "$run" =~ ^[0-9]+$ ]]; then break; fi
+            sleep 10
+          done
+          [[ "$run" =~ ^[0-9]+$ ]]
+          gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 60
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+  privacy-audit:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    steps:
+      - name: Download exact tested package privately
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ needs.build.outputs.run }}
+        run: gh run download "$RUN" --repo "$GITHUB_REPOSITORY" --name gesher-setup --dir package
+      - name: Verify package and reject source-bearing payloads
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, os, pathlib, re, stat, zipfile
+          p=pathlib.Path('package')
+          v=os.environ['VERSION'][1:]
+          exe=f'gesher-setup-{v}.exe'
+          portable=f'gesher-{v}-portable.zip'
+          expected={exe,portable,portable+'.sha256','SHA256SUMS.txt'}
+          assert {x.name for x in p.iterdir()}==expected
+          sums=[]
+          for name in (exe,portable):
+              with (p/name).open('rb') as f:
+                  sums.append(hashlib.file_digest(f,'sha256').hexdigest()+'  '+name)
+          assert (p/'SHA256SUMS.txt').read_text().splitlines()==sums
+          assert (p/(portable+'.sha256')).read_text().splitlines()==sums[1:]
+          forbidden=re.compile(r'(^|/)(\.git|\.github)(/|$)|\.(ps1|psm1|cmd|bat|java|kt|c|cc|cpp|h|hpp|py|sh|pdb|map|obj|o|lib|a|xaml)$|(^|/)(mapping|seeds|usage)\.txt$',re.I)
+          with zipfile.ZipFile(p/portable) as z:
+              if any(forbidden.search(x.filename) or stat.S_ISLNK(x.external_attr>>16) for x in z.infolist()):
+                  raise SystemExit('Distribution blocked: source-bearing or debug files found in runtime.')
+          raise SystemExit('Distribution blocked pending installer extraction and source-free runtime verification.')
+          PY
