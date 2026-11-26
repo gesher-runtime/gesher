@@ -131,7 +131,7 @@ public final class StandaloneReviewHost {
             // this host test. The actual installed services and admission remain
             // production objects; no bind/review/permission method is replaced.
             set(admission, "mServices", new Services.Created(pm, atm, am,
-                    new ClipboardService(atm, pm), Map.of()));
+                    new ClipboardService(atm, pm), new UsbService(am.callers(), pm, am), Map.of()));
         }
         FutureTask<Boolean> start() {
             FutureTask<Boolean> result = new FutureTask<>(() -> {
