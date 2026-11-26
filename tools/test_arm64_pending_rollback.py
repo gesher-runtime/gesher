@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Run production ARM64 pending-load retirement with explicit host boundaries.
 
-Registry, TLS, host-entry/trampoline recycling, classification, CallSVC,
-RunGuest and Attach methods are inserted verbatim from translator.cc. The
-Win32/Jit adapter retains instruction bytes until production invalidates them.
+Registry, Jit code tracking, guest protection tracking, TLS,
+host-entry/trampoline recycling, classification, instruction cache
+maintenance, CallSVC, RunGuest and Attach methods are inserted verbatim from
+translator.cc. The Win32/Jit adapter retains instruction bytes until
+production clears or invalidates them.
 Native AArch64 or Windows execution is not established here.
 """
 from __future__ import annotations
@@ -42,8 +44,10 @@ def main() -> None:
         "@RETIRE@": section(source, "void ApiRemoveCode(", "uint64_t ApiCall("),
         "@CLASSIFY@": section(source, "bool InGuestCode(uintptr_t addr) {", "uint32_t GuestFpcr()"),
         "@BINDINGS@": section(source, "void AddVaListFunction(const void* fn, int index) {", "bool InTranslatorCode("),
+        "@PROTECTION@": section(source, "void GuestProtectionChanged(const void* start,", "void* EmitGuestCode("),
         "@COUNTERS@": section(source, "struct Counter {", "class Env final"),
         "@ATTACH@": section(source, "  void Attach() {", "  // The thread is exiting."),
+        "@ICACHE@": section(source, "  void InstructionCacheOperationRaised(", "  void CallSVC(std::uint32_t swi) override {"),
         "@CALLSVC@": section(source, "  void CallSVC(std::uint32_t swi) override {", "  void ExceptionRaised("),
         "@DISPATCH@": section(source, "  struct PendingHostCall {", "  static constexpr size_t kStackSize ="),
     }
@@ -53,11 +57,16 @@ def main() -> None:
             raise ValueError(f"ARM64 pending rollback fixture marker changed: {marker}")
         template = template.replace(marker, production)
         print(marker + " production SHA256 " + hashlib.sha256(production.encode()).hexdigest(), flush=True)
-    # Reuse the same test contract for both implementations, changing only
-    # test call names; no production allocator/rollback body is rewritten.
+    # Reuse the same assertions for both implementations. Only fixture call
+    # names and its six live-block storage seams change: the translated owner
+    # can decommit pages, so it needs mappings rather than stack arrays.
+    # No production allocator/rollback body is rewritten.
     native_test = (ROOT / "tests/native/arm64_native_rollback_host.cc.in").read_text(encoding="utf-8")
     tls_test = section(native_test, "void TestTls() {", "}  // namespace fixture")
     tls_test = tls_test.replace("NativeTls", "ApiTls").replace("native ARM64 rollback", "ARM64 pending rollback")
+    if tls_test.count("std::array<uint8_t, kTlsBlockSize>") != 6:
+        raise ValueError("ARM64 shared TLS storage boundary changed")
+    tls_test = tls_test.replace("std::array<uint8_t, kTlsBlockSize>", "TlsTestBlock")
     if template.count("@TLS_TEST@") != 1:
         raise ValueError("ARM64 shared TLS test marker changed")
     template = template.replace("@TLS_TEST@", tls_test)

@@ -35,6 +35,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <windows.h>
@@ -57,13 +58,68 @@ constexpr DWORD kPipeBuffer = 256 * 1024;
 std::mutex g_mutex;
 std::map<jint, HANDLE> g_children;  // pid -> process handle, until waited for
 
-// The program being started, for the log line of a failure.
+// The program being started and its arguments' log text, for the log line
+// of a failure.
 thread_local const char* t_program = "";
+thread_local std::string t_arguments;
+
+// The exec log lines' ", args: ..." suffix for argv[1..] ("" without
+// arguments): each argument as a shell word (single-quoted unless plain,
+// control bytes escaped, so one record stays one line), at most
+// kExecLogArgumentBytes of argument text, cut at a UTF-8 character boundary
+// and marked "... [truncated]". The child's stdin is never logged.
+constexpr size_t kExecLogArgumentBytes = 200;
+std::string ExecLogArguments(const std::vector<std::string>& argv) {
+  std::string text;
+  for (size_t i = 1; i < argv.size() && text.size() <= kExecLogArgumentBytes; ++i) {
+    const std::string& a = argv[i];
+    if (i > 1) text += ' ';
+    bool plain = !a.empty();
+    for (unsigned char c : a) {
+      if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            std::string_view("_@%+=:,./-").find(static_cast<char>(c)) != std::string_view::npos)) {
+        plain = false;
+        break;
+      }
+    }
+    if (plain) {
+      text += a;
+      continue;
+    }
+    text += '\'';
+    for (unsigned char c : a) {
+      if (c == '\'') {
+        text += "'\\''";
+      } else if (c == '\n') {
+        text += "\\n";
+      } else if (c == '\r') {
+        text += "\\r";
+      } else if (c == '\t') {
+        text += "\\t";
+      } else if (c < 0x20 || c == 0x7f) {
+        char escaped[8];
+        snprintf(escaped, sizeof(escaped), "\\x%02x", c);
+        text += escaped;
+      } else {
+        text += static_cast<char>(c);
+      }
+    }
+    text += '\'';
+  }
+  if (text.empty()) return text;
+  if (text.size() > kExecLogArgumentBytes) {
+    size_t cut = kExecLogArgumentBytes;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xc0) == 0x80) --cut;
+    text.resize(cut);
+    text += "... [truncated]";
+  }
+  return ", args: " + text;
+}
 
 void ThrowIOException(JNIEnv* env, int error, const char* what = nullptr) {
   char message[512];
   snprintf(message, sizeof(message), "error=%d, %s", error, what != nullptr ? what : ex::ErrorText(error));
-  fprintf(stderr, "gesher: exec %s failed: %s\n", t_program, message);
+  fprintf(stderr, "gesher: exec %s failed: %s%s\n", t_program, message, t_arguments.c_str());
   fflush(stderr);
   jclass c = env->FindClass("java/io/IOException");
   if (c != nullptr) env->ThrowNew(c, message);
@@ -95,6 +151,15 @@ void CloseIf(HANDLE* h) {
   *h = nullptr;
 }
 
+// GESHER_TRACE_EXEC=1 adds the arguments themselves to the exec log lines.
+bool TraceExecArguments() {
+  static const bool trace = [] {
+    const char* value = getenv("GESHER_TRACE_EXEC");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return trace;
+}
+
 jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_block, jint argc,
                          jbyteArray env_block, jint envc, jbyteArray dir_bytes, jintArray std_fds,
                          jboolean redirect_error_stream) {
@@ -103,6 +168,10 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
   t_program = program.c_str();
   std::vector<std::string> argv{program};
   for (std::string& a : Strings(ByteString(env, arg_block), argc)) argv.push_back(std::move(a));
+  // Arguments can carry tokens or personal data and these logs are shared in
+  // bug reports, so only their count is logged unless GESHER_TRACE_EXEC is set.
+  t_arguments = TraceExecArguments() ? ExecLogArguments(argv)
+      : argv.size() > 1 ? ", " + std::to_string(argv.size() - 1) + " args" : std::string();
   std::string dir = ByteString(env, dir_bytes);
   if (!dir.empty() && dir.back() == '\0') dir.pop_back();
 
@@ -211,8 +280,8 @@ jint JNICALL ForkAndExec(JNIEnv* env, jobject, jbyteArray prog, jbyteArray arg_b
     CloseIf(&parent[i]);
   }
   env->SetIntArrayRegion(std_fds, 0, 3, fds);
-  fprintf(stderr, "gesher: exec %s (%s) started as pid %d\n", program.c_str(), launch.kind.c_str(),
-          static_cast<int>(pid));
+  fprintf(stderr, "gesher: exec %s (%s) started as pid %d%s\n", program.c_str(), launch.kind.c_str(),
+          static_cast<int>(pid), t_arguments.c_str());
   fflush(stderr);
   return pid;
 }

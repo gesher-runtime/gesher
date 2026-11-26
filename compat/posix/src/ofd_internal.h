@@ -12,6 +12,7 @@
 namespace gesher {
 
 struct RevocableFileGroup;
+struct FifoEndpoint;
 struct OpenFileDescription {
   struct Shared {
     uint64_t magic;
@@ -40,6 +41,16 @@ struct OpenFileDescription {
   HANDLE pipe_mutex = nullptr;
   std::mutex mutex;
   std::shared_ptr<RevocableFileGroup> revocation;
+  // A FIFO description's process-local view of its ring (fifo.cc), created
+  // on first use and destroyed after the shared section above is released.
+  std::shared_ptr<FifoEndpoint> fifo;
+  // getdents64's position in a directory (dirent.cc), made on first use;
+  // it goes with the description when the last fd on it closes.
+  std::shared_ptr<void> directory_stream;
+  // Whether the file is one procfs.cc made for a /proc name (its extended
+  // attribute, read once): -1 not read yet, 0 no, 1 yes. A file's kind is
+  // immutable, so fstat of a memfd reads no attribute after the first.
+  std::atomic<signed char> procfs_file{-1};
   ~OpenFileDescription();
   int Flags() const;
   void SetFlags(int flags);
