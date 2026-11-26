@@ -9,6 +9,10 @@
 #include <memory>
 #include <new>
 #include <utility>
+// The fork set (gesher/fork.h); absent where a host test compiles this file alone.
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
 
 namespace gesher {
 struct FontEnvironmentBytes {
@@ -267,3 +271,9 @@ std::optional<int> WriteWideFontEnvironment(const char* name, const char* value,
       }, &wide);
 }
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+// fork (gesher/fork.h).
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, SRWLOCK, gesher::g_font_environment_writer);
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, SRWLOCK, gesher::g_font_environment_snapshot);
+#endif

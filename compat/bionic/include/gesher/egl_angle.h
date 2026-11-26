@@ -30,6 +30,21 @@ void* gesher_egl_proc(const char* name);
  * EGL_NO_DISPLAY (null) without ANGLE or a device. */
 void* gesher_egl_default_display(void);
 
+/* The OpenGL ES version the device declares for that display
+ * (FeatureInfo.reqGlEsVersion), which is what its configs give: 0x30000 on a
+ * hardware Direct3D 11 device with ES 3.0 configs; 0x20000 on a GPU without
+ * ES 3.0 and on WARP, which is capped at ES 2.0 (no software device gives
+ * ES 3.0); 0 without a display (compat/bionic/egl_gles_version.h). Without the
+ * default display in this process, the same choice is made and its display
+ * terminated again (unless this process had initialized it before); the answer
+ * is kept for the process. */
+int gesher_egl_gles_version(void);
+
+/* eglCreateContext: on the default display a context version above what it
+ * gives (ES 3.1/3.2 on an ES 3.0 display) is refused with EGL_BAD_MATCH;
+ * otherwise ANGLE's eglCreateContext. */
+void* gesher_egl_create_context(void* display, void* config, void* share, const int32_t* attribs);
+
 /* eglChooseConfig / eglGetConfigAttrib with Android's attributes
  * (EGL_RECORDABLE_ANDROID, EGL_FRAMEBUFFER_TARGET_ANDROID,
  * EGL_NATIVE_VISUAL_ID as a HAL pixel format). */

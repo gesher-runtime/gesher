@@ -7,6 +7,7 @@ $slExpected = @(
   'media4 opensl query: ok; typed global and engine queries, supported subsets, null/index/object controls',
   'media4 opensl negotiation: ok; copied UUIDs, all 53 required/optional engine outcomes, duplicate and invalid arrays',
   'media4 opensl player: ok; real PCM queue and volume, explicit exposure and unsupported effect rejection',
+  'media4 opensl effect: ok; required Android effect interface and per-player volume lifecycle',
   'media4 opensl callback trace: calls 1, TLS valid true, caller TLS unchanged true',
   'media4 opensl volume trace: requested -600, set 0, get 0, value -600',
   'media4 opensl volume trace: requested -32768, set 0, get 0, value -32768',

@@ -214,6 +214,53 @@ public final class StorageQueryContractTest {
         }
     }
 
+    /** Non-canonical ANDROID_DATA roots (e.g., 8.3 short paths) must expose canonical volume paths. */
+    private static void canonicalVolumePaths(Context context, Map<String, IBinder> cache)
+            throws Exception {
+        File base = Files.createTempDirectory(
+                Environment.getDataDirectory().getCanonicalFile().getParentFile().toPath(),
+                "gesher-storage-canonical-").toFile();
+        File data = new File(base, "data");
+        File shared = new File(data, "media/0");
+        Files.createDirectory(data.toPath());
+        File nonCanonical = new File(base, "./data");
+        require(!nonCanonical.getAbsolutePath().equals(data.getCanonicalPath()),
+                "test setup failed to produce a non-canonical path");
+        java.lang.reflect.Constructor<Services.StorageService> constructor =
+                Services.StorageService.class.getDeclaredConstructor(File.class);
+        constructor.setAccessible(true);
+        Services.StorageService service = constructor.newInstance(nonCanonical);
+        IBinder target = StandIn.of(IStorageManager.class, service).asBinder();
+        IBinder remote = new Binder() {
+            @Override protected boolean onTransact(int code, Parcel request, Parcel reply, int flags)
+                    throws RemoteException {
+                return target.transact(code, request, reply, flags);
+            }
+        };
+        IBinder previous = cache.put("mount", remote);
+        try {
+            VolumeInfo[] volumes = service.getVolumes(0);
+            require(data.getCanonicalPath().equals(volumes[0].path),
+                    "private volume path was not canonicalized");
+            require(new File(data, "media").getCanonicalPath().equals(volumes[1].path),
+                    "shared volume path was not canonicalized");
+            require(shared.getCanonicalPath().equals(
+                            service.getVolumeList(0, "gesher.services", 0)[0].getDirectory().getPath()),
+                    "StorageVolume directory path was not canonicalized");
+            StorageManager testClient = new StorageManager(context, Looper.myLooper());
+            require(StorageManager.UUID_DEFAULT.equals(testClient.getUuidForPath(
+                            new File(nonCanonical, "data/com.example/cache/Downloads"))),
+                    "getUuidForPath failed for non-canonical data root");
+        } finally {
+            if (previous == null) cache.remove("mount");
+            else cache.put("mount", previous);
+            Files.deleteIfExists(shared.toPath());
+            Files.deleteIfExists(new File(data, "media").toPath());
+            Files.deleteIfExists(data.toPath());
+            Files.delete(base.toPath());
+        }
+    }
+
     /** Exercises the framework FD overload and actual native file growth on Windows. */
     private static void allocateFile(StorageManager client) throws Exception {
         File file = File.createTempFile("gesher-allocation-", ".bin", Environment.getDataDirectory());
@@ -265,6 +312,7 @@ public final class StorageQueryContractTest {
             StorageManager client = new StorageManager(context, Looper.myLooper());
             queries(client, wire, local);
             backingStates();
+            canonicalVolumePaths(context, cache);
             require(StorageManager.isCeStorageUnlocked(0) && !StorageManager.isCeStorageUnlocked(10),
                     "framework CE-storage wrapper disagrees with the single-user state");
             java.lang.reflect.Method strictModeQuery = android.os.StrictMode.class

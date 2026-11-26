@@ -140,13 +140,19 @@ public final class InstallSourceHost {
     }
     private static String[] unchanged(Installer storage, ApkPackage pkg,
             PackageInstallSource source) throws Exception {
+        return unchanged(storage, pkg, source, null);
+    }
+    private static String[] unchanged(Installer storage, ApkPackage pkg,
+            PackageInstallSource source, Runnable authorize) throws Exception {
         Object entry = ((Map<?, ?>)get(storage, "mEntries")).get(pkg.packageName);
         var method = Installer.class.getDeclaredMethod("unchanged", String.class, String.class,
-                ApkPackage.class, entry.getClass(), PackageInstallSource.class);
+                ApkPackage.class, entry.getClass(), PackageInstallSource.class, java.util.Collection.class,
+                Runnable.class);
         method.setAccessible(true);
         try {
             synchronized (storage) {
-                return (String[])method.invoke(storage, pkg.apkPath, pkg.packageName, pkg, entry, source);
+                return (String[])method.invoke(storage, pkg.apkPath, pkg.packageName, pkg, entry, source, null,
+                        authorize);
             }
         } catch (java.lang.reflect.InvocationTargetException failure) {
             if (failure.getCause() instanceof Exception cause) throw cause;
@@ -163,6 +169,19 @@ public final class InstallSourceHost {
         Path oat = Dexopt.oatDir(new File(pkg.apkPath).getParent()).toPath().resolve("base.odex");
         check(!Files.exists(oat), "Cache-rebuild control has no compiled output");
         PackageInstallSource original = pkg.installSource();
+        PackageInstallSource updated = PackageInstallSource.fromSession(next,
+                PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE);
+        Path registry = data.resolve("system/packages.list");
+        String beforeAuthorization = Files.readString(registry);
+        int[] authorizations = {0};
+        expect(SecurityException.class, () -> unchanged(storage, pkg, updated, () -> {
+            authorizations[0]++;
+            throw new SecurityException("Install source access revoked");
+        }), "Revoked source cannot publish a same-code reinstall");
+        check(authorizations[0] == 1 && pm.get(pkg.packageName) == pkg
+                && pkg.installSource() == original && !Files.exists(oat)
+                && Files.readString(registry).equals(beforeAuthorization),
+                "Denied same-code authorization preserves code, cache and durable attribution");
         String[] result = unchanged(storage, pkg, null);
         check("unchanged".equals(result[1]) && pm.get(pkg.packageName) == pkg,
                 "Cache-only rebuild preserves the current installed code identity");
@@ -173,14 +192,12 @@ public final class InstallSourceHost {
             check(sessions.openSession(fresh) != null, "Cache-only rebuild preserves fresh session authority");
             sessions.abandonSession(fresh);
         });
-        PackageInstallSource updated = PackageInstallSource.fromSession(next,
-                PackageInstaller.PACKAGE_SOURCE_LOCAL_FILE);
-        unchanged(storage, pkg, updated);
+        unchanged(storage, pkg, updated, () -> authorizations[0]++);
+        check(authorizations[0] == 2, "Allowed same-code reinstall checks source authorization once");
         check(pm.get(pkg.packageName) == pkg && pkg.installSource() == updated,
                 "Explicit same-code reinstall changes attribution without retiring code");
         check(updated.equals(get(registryEntry(pkg.packageName), "installSource")),
                 "Same-code attribution is durable after cache-only rebuild");
-        Path registry = data.resolve("system/packages.list");
         String stable = Files.readString(registry);
         Path blocked = registry.resolveSibling("packages.list.tmp"); Files.createDirectory(blocked);
         try {

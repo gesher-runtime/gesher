@@ -1,0 +1,517 @@
+{
+  "schema": 1,
+  "date": "2026-11-22",
+  "scope": "#56 F51/T12 shortcut API accounting leaf; not complete F51 or F12",
+  "baseline": "972c2b42b40c4ac799e147f5e352d07ba615d0fb",
+  "contract_pin": "android-16.0.0_r4",
+  "source_sha256": {
+    "app/java/com/gesher/server/ActiveServices.java": "2555493d18e616ca739a33891b18a934a7c2676b625f9c8f4bb28b8319962834",
+    "app/java/com/gesher/server/ActivityManagerService.java": "c6a6bc50023c9ab96517e9a53150ff1c4f1cd41c1d8d580e6e9bdf0ebc4cc549",
+    "app/java/com/gesher/server/ActivityTaskManagerService.java": "8804e631dc73e82a351fabecdadde1010e01f434636319b957fcd7d4ff1d840a",
+    "app/java/com/gesher/server/CallerIdentity.java": "b1417ab1ec8a44e4aab14ebabb1a5bca86fdaec07fa98097be55ea856ea2a523",
+    "app/java/com/gesher/server/ContentProviders.java": "9bc332c284f727beb410528c3802b696478f8195fc8d3a451a2c31f40d75ed96",
+    "app/java/com/gesher/server/DesktopShortcutService.java": "4ef17b19d51f3de8b19b38bbd64bc50b6aeda245f20dfb95965cb79599ec16f9",
+    "app/java/com/gesher/server/PowerManagerService.java": "84d5781f7abca365b5ad8cf13066888c8e340c5f657c4e6caeecd359edf638b8",
+    "app/java/com/gesher/server/Services.java": "c5dbf56f5abcbe0abe9b273d4cbf591d5e6da1773b072f1409f622d8953bf744",
+    "app/java/com/gesher/server/ShortcutProcessState.java": "2dcac57c70db6cc378f081ee98ecb2b715b2db4dac2240e2ef356788afffc1b5",
+    "app/java/com/gesher/server/ShortcutQuota.java": "323d0c4d3aa78b763cefb232e368fefd76f88ed3e13c15a7c566d21d3bb102df",
+    "app/java/com/gesher/server/SystemServer.java": "72c554ed4d8a602bbd913d537e619a14164bd4b09364b6b7c83330dd9f8e4014",
+    "tests/dex-services/gesher/services/DynamicShortcutTest.java": "1bd29672ee8967aa919ac268e3d9e5247784233a9c9735d03e221a9658a286da",
+    "tests/dex-services/gesher/services/ShortcutQuotaContractTest.java": "95204f95800b8ee6c498f390e6d052a2dc34111a5fb4a59f096982cdd435e6bb",
+    "tests/shortcuts/ShortcutQuotaHost.java": "d28e57ca9ce25e85fd92edcc35e5bbd6a05fc72996fb788b7db5f2ab787a711b",
+    "tests/shortcuts/ShortcutUpdateHost.java": "e362626e448993735fa6a1d36e3083459c4d500a7a1b85c6853d4f010f2811d2",
+    "tools/test_shortcut_quota.py": "0b80adb20a75882371c347bd4e7b6a3dd152cdb1d82b4de3720e145858ca2026",
+    "tools/test_shortcut_updates.py": "119578c235e869f39a26bf0a4cbcefa6230eb19034788dac961d4ae1e58a5b24"
+  },
+  "android_references": [
+    {
+      "name": "ShortcutService.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/pm/ShortcutService.java",
+      "sha256": "c14c3ddc92d6ac432ae3a81b276632eac68e39356a7a23bedb8dcca3dfbdfbf6"
+    },
+    {
+      "name": "ShortcutPackage.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/pm/ShortcutPackage.java",
+      "sha256": "0098103ebe2becec639352b4f807cf3ff7014d611973170e5dc8e0b303c1b612"
+    },
+    {
+      "name": "ShortcutUser.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/pm/ShortcutUser.java",
+      "sha256": "6fb708607667d7f8dc0de4534919d35e2b7f65b4aa0e9ad7acafda2050f165b3"
+    },
+    {
+      "name": "ShortcutManager.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/java/android/content/pm/ShortcutManager.java",
+      "sha256": "9996435b7558990b2c3af7f53deff213a079263c9e6dda189738433538044909"
+    },
+    {
+      "name": "OomAdjusterImpl.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/am/OomAdjusterImpl.java",
+      "sha256": "de25d5195a628487ee1dc0e72f58416348dcde343545a5d765eaa323e825cef7"
+    },
+    {
+      "name": "ProcessRecord.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/am/ProcessRecord.java",
+      "sha256": "2aca3f124746991b80d09c2e32a37a3e997d5222d8d773c50b86d9bf62d3a50d"
+    },
+    {
+      "name": "WindowProcessController.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/wm/WindowProcessController.java",
+      "sha256": "304a9ac00c6bbb28ef73e4ea2e520897c0567ea4b305e0dc68c0f32c6ca7e6f3"
+    },
+    {
+      "name": "Context.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/java/android/content/Context.java",
+      "sha256": "248066782192a7e88e30d6d72c50445b78a41954f41bb3078312992fa20b997f"
+    },
+    {
+      "name": "AndroidManifest.xml",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/res/AndroidManifest.xml",
+      "sha256": "201d8390999de22fc6363a40ffdda84c2ed1a4cbd3c4f18cab6d721b505797a9"
+    },
+    {
+      "name": "ContentProviderHelper.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/am/ContentProviderHelper.java",
+      "sha256": "dec65b94d9669541b29b97099fdaaff3cfe59472075ea0ef65c93aa583ad5b2e"
+    },
+    {
+      "name": "ContentProviderRecord.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/am/ContentProviderRecord.java",
+      "sha256": "b8bbfc79991c7604259d7ce4a91c5c9dc585e2e35f22e0275fb26128a5cf1290"
+    },
+    {
+      "name": "ProcessStateController.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/services/core/java/com/android/server/am/ProcessStateController.java",
+      "sha256": "af3c14b88e8d977e50b2caf812457bfabadd7655aa283bc109f7974f19b9dfde"
+    },
+    {
+      "name": "ContentResolver.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-16.0.0_r4/core/java/android/content/ContentResolver.java",
+      "sha256": "68cb1833b33ca0098f13f62931c2aa27ff9bb277561dcb716fbec8ae17eaf95e"
+    }
+  ],
+  "runtime": {
+    "java": "OpenJDK21.0.13.1+2",
+    "framework_classes_sha256": "e471430ab21b951db4d6dc10c8b4512d5bce7868c437a313e7e1585e9687c31a",
+    "apksig_sha256": "c070ed1394629d74641aa0906f60b2ffa1ee77e6366a1f93437f59717b1aeb89",
+    "r8_sha256": "3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad",
+    "framework_classes": 31777,
+    "compat_source_definitions": 16,
+    "compat_unresolved": 0
+  },
+  "overload_work": {
+    "baseline": {
+      "source_ref": "972c2b42b40c4ac799e147f5e352d07ba615d0fb",
+      "calls": {
+        "attempts": 10000,
+        "published": 10000,
+        "rejected": 0,
+        "elapsed_ns": 1396275266
+      },
+      "file_write_events": {
+        "dynamic_writes": 20000,
+        "dynamic_bytes": 3140000,
+        "quota_writes": 0,
+        "quota_bytes": 0
+      },
+      "log": "java-r5-final-baseline-work.log",
+      "log_sha256": "0951e50cabbbbeff05175a1a51bf372d06f7067099271ff60ab1c2ad5f5ae7f1",
+      "jfr_sha256": "f962246ab8f89ac8b91df286c18f4b5ea0cac74237920b354aced379bf4e45d1"
+    },
+    "candidate": {
+      "source_ref": "source_sha256 below",
+      "calls": {
+        "attempts": 10000,
+        "published": 10,
+        "rejected": 9990,
+        "elapsed_ns": 67713782
+      },
+      "file_write_events": {
+        "dynamic_writes": 20,
+        "dynamic_bytes": 3140,
+        "quota_writes": 1,
+        "quota_bytes": 71
+      },
+      "log": "java-r5-final-candidate-work.log",
+      "log_sha256": "3e932fef0cf2fd8aa7301022fa8751c3566cc9503739046bde04df45cf8c282b",
+      "jfr_sha256": "93de37cb2dad5e4567e0e7bc192cfa4518b8c403f51bcdfc9e9cc24b59a285a2"
+    }
+  },
+  "large_graph": [
+    {
+      "stage": "background_denied_publications",
+      "processes": 1001,
+      "connections": 1001,
+      "operations": 10000,
+      "lifetime_checks": 0,
+      "allocated_bytes": 3514784,
+      "thread_cpu_ns": 141063306,
+      "elapsed_ns": 141023526
+    },
+    {
+      "stage": "foreground_allowance_queries",
+      "processes": 1001,
+      "connections": 1001,
+      "operations": 10000,
+      "lifetime_checks": 10010000,
+      "allocated_bytes": 409198696,
+      "thread_cpu_ns": 4010448560,
+      "elapsed_ns": 4031758886
+    },
+    {
+      "stage": "foreground_visits",
+      "processes": 1001,
+      "connections": 1001,
+      "operations": 32,
+      "lifetime_checks": 32032,
+      "allocated_bytes": 1835016,
+      "thread_cpu_ns": 21311419,
+      "elapsed_ns": 24940127
+    },
+    {
+      "stage": "root_connection_retirement",
+      "processes": 1001,
+      "connections": 1001,
+      "operations": 1,
+      "lifetime_checks": 2,
+      "allocated_bytes": 380440,
+      "thread_cpu_ns": 1541121,
+      "elapsed_ns": 1529706
+    },
+    {
+      "stage": "retired_root_denied_publications",
+      "processes": 1001,
+      "connections": 1001,
+      "operations": 10000,
+      "lifetime_checks": 0,
+      "allocated_bytes": 6758040,
+      "thread_cpu_ns": 227308923,
+      "elapsed_ns": 227397050
+    },
+    {
+      "stage": "root_connection_publication",
+      "processes": 1001,
+      "connections": 1001,
+      "operations": 1,
+      "lifetime_checks": 2004,
+      "allocated_bytes": 855464,
+      "thread_cpu_ns": 3645189,
+      "elapsed_ns": 3631795
+    }
+  ],
+  "large_graph_log_sha256": "42d304c33cf39abf781b96846d347786a04dbaf0c06bec07912926c9b35c9162",
+  "graph_stage_connections_note": "Original graph has1001 processes/1001 connections; root retirement leaves1000 connections until republication. Counts describe initial fixture dimensions.",
+  "default_graph": [
+    {
+      "stage": "background_denied_publications",
+      "processes": 65,
+      "connections": 65,
+      "operations": 256,
+      "lifetime_checks": 0,
+      "allocated_bytes": 711584,
+      "thread_cpu_ns": 1480021,
+      "elapsed_ns": 1452249
+    },
+    {
+      "stage": "foreground_allowance_queries",
+      "processes": 65,
+      "connections": 65,
+      "operations": 256,
+      "lifetime_checks": 16640,
+      "allocated_bytes": 2469040,
+      "thread_cpu_ns": 9449818,
+      "elapsed_ns": 16045818
+    },
+    {
+      "stage": "foreground_visits",
+      "processes": 65,
+      "connections": 65,
+      "operations": 32,
+      "lifetime_checks": 2080,
+      "allocated_bytes": 437888,
+      "thread_cpu_ns": 3836084,
+      "elapsed_ns": 4048413
+    },
+    {
+      "stage": "root_connection_retirement",
+      "processes": 65,
+      "connections": 65,
+      "operations": 1,
+      "lifetime_checks": 2,
+      "allocated_bytes": 29128,
+      "thread_cpu_ns": 350811,
+      "elapsed_ns": 345100
+    },
+    {
+      "stage": "retired_root_denied_publications",
+      "processes": 65,
+      "connections": 65,
+      "operations": 256,
+      "lifetime_checks": 0,
+      "allocated_bytes": 761008,
+      "thread_cpu_ns": 2125348,
+      "elapsed_ns": 2030371
+    },
+    {
+      "stage": "root_connection_publication",
+      "processes": 65,
+      "connections": 65,
+      "operations": 1,
+      "lifetime_checks": 132,
+      "allocated_bytes": 79920,
+      "thread_cpu_ns": 2176465,
+      "elapsed_ns": 2168709
+    }
+  ],
+  "validation": {
+    "gates": [
+      {
+        "name": "entry",
+        "exit_code": 0,
+        "log": "java-r5-final-entry.log",
+        "log_sha256": "bb4f9baeb0c9143db8017d0b71ba4770c6a433466f4ec408295aad37da9aba86"
+      },
+      {
+        "name": "rebinding",
+        "exit_code": 0,
+        "log": "java-r5-final-rebinding.log",
+        "log_sha256": "d1f0d9c4c109bd87857d66b3cc8a1b1881ac84330a08e376a3263a5d11a1cf18"
+      },
+      {
+        "name": "activity",
+        "exit_code": 0,
+        "log": "java-r5-final-activity.log",
+        "log_sha256": "d4ef8c92795f25b2ce658f579d7d000e665ae285d80e5dbc3323768ed7d6018a"
+      },
+      {
+        "name": "appops",
+        "exit_code": 0,
+        "log": "java-r5-final-appops.log",
+        "log_sha256": "d50be438e2bbb363d5e5c26b28dd685d9f1e1ed26eb793ca9eeae1486b09f253"
+      },
+      {
+        "name": "enabled",
+        "exit_code": 0,
+        "log": "java-r5-final-enabled.log",
+        "log_sha256": "e8930501a1a2397319c074838c82a37d7d606c97263379fe936f9b41a897d415"
+      },
+      {
+        "name": "power",
+        "exit_code": 0,
+        "log": "java-r5-final-power.log",
+        "log_sha256": "d726b9d8404e93c655578ddec9fd1ff0527115f45ea6a2509d24a62826b7ae95"
+      },
+      {
+        "name": "baseline-work",
+        "exit_code": 0,
+        "log": "java-r5-final-baseline-work.log",
+        "log_sha256": "0951e50cabbbbeff05175a1a51bf372d06f7067099271ff60ab1c2ad5f5ae7f1"
+      },
+      {
+        "name": "candidate-work",
+        "exit_code": 0,
+        "log": "java-r5-final-candidate-work.log",
+        "log_sha256": "3e932fef0cf2fd8aa7301022fa8751c3566cc9503739046bde04df45cf8c282b"
+      },
+      {
+        "name": "large-graph",
+        "exit_code": 0,
+        "log": "java-r5-final-large-graph.log",
+        "log_sha256": "42d304c33cf39abf781b96846d347786a04dbaf0c06bec07912926c9b35c9162"
+      }
+    ],
+    "app_build_log_sha256": "adc6ff87b1f78d8473a90e56a83606348d91642ff53b4a8793d6bc269a8ad72e",
+    "services_dex_log_sha256": "d98c2826977dc07ba0559a41b627fb04522ba604fa68b44a929bf542e9da2439",
+    "contracts": 1048,
+    "existing_shortcut_updates": 52,
+    "service_rebinding": 431,
+    "activity": 389,
+    "appops": 489,
+    "enabled_lifecycle": [
+      343,
+      343
+    ],
+    "provider_authority": 32,
+    "power": 98,
+    "power_negative_control": {
+      "result": "expected failure",
+      "assertion": "sleep/resume lost a real qualifying visit: sameBatch=false",
+      "log_sha256": "fafd539c64049acd84aa3a2695eb7454ac5c7ddb6f5362632b08d6f1c6c37ff4"
+    },
+    "pr260_composition": {
+      "head": "cdd9e3ace0ac9a111d77880caf46ab745bdc8171",
+      "scope": "nine feature files; immutable workflow recipe pins excluded",
+      "tree": "07700fa05a0b2d3b87b09ff1f66190fc7973a407",
+      "admission_checks": 173,
+      "quota_checks": 1048,
+      "admission_log_sha256": "215254908ce6c946447a036b74e22e6b85a68592d58eb57fe7c1d30488ba60e6",
+      "quota_log_sha256": "9ac346b788907b3615a905f0e71f943c9494251043695f074ef10b70c0ce3f9a"
+    }
+  },
+  "limits": [
+    "Host JVM production Java with real Android framework/core classes; constructed package metadata and declared native identity/clock/AssetManager boundaries.",
+    "JFR FileWrite events are JVM-observed file writes, not Windows disk operations or shell UI latency.",
+    "Foreground graph timings and allocation are host-only; no ART/Windows power or application-wide performance claim.",
+    "Full Java and DEX compilation passed; actual Windows/ART Binder/Parcel runtime not executed locally.",
+    "External provider/MIME handles map to process state6, outside the source-pinned quota threshold5; no invented process dependency."
+  ],
+  "source_sha256_note": "Original reviewed feature tree used by the historical measurements. publication_refresh records the later additive main merge and its separate validation.",
+  "publication_refresh": {
+    "feature_commit": "3f275050ba05cd16426ed3c330a684410a01b7b3",
+    "upstream_main": "452372561e0a50c63f072a5ae1e7ca5aa81354b8",
+    "merge_resolution": "Automatic additive merge; no manual conflict resolution",
+    "feature_patch_id_original": "86091a21edd31a276c381b52830a6f2e6faf8459",
+    "feature_patch_id_merged": "86091a21edd31a276c381b52830a6f2e6faf8459",
+    "compiled_production_sources": [
+      {
+        "path": "app/java/com/gesher/server/DesktopShortcutService.java",
+        "before_sha256": "4ef17b19d51f3de8b19b38bbd64bc50b6aeda245f20dfb95965cb79599ec16f9",
+        "after_sha256": "4ef17b19d51f3de8b19b38bbd64bc50b6aeda245f20dfb95965cb79599ec16f9",
+        "changed": false
+      },
+      {
+        "path": "app/java/com/gesher/server/ShortcutQuota.java",
+        "before_sha256": "323d0c4d3aa78b763cefb232e368fefd76f88ed3e13c15a7c566d21d3bb102df",
+        "after_sha256": "323d0c4d3aa78b763cefb232e368fefd76f88ed3e13c15a7c566d21d3bb102df",
+        "changed": false
+      },
+      {
+        "path": "app/java/com/gesher/server/ShortcutProcessState.java",
+        "before_sha256": "2dcac57c70db6cc378f081ee98ecb2b715b2db4dac2240e2ef356788afffc1b5",
+        "after_sha256": "2dcac57c70db6cc378f081ee98ecb2b715b2db4dac2240e2ef356788afffc1b5",
+        "changed": false
+      },
+      {
+        "path": "app/java/com/gesher/server/PolicyStateWriter.java",
+        "before_sha256": "494d840081d6d7b598300b692deeb39e4f0faa3d4861d12655fc84c07317991b",
+        "after_sha256": "494d840081d6d7b598300b692deeb39e4f0faa3d4861d12655fc84c07317991b",
+        "changed": false
+      },
+      {
+        "path": "app/java/com/gesher/server/CallerIdentity.java",
+        "before_sha256": "b1417ab1ec8a44e4aab14ebabb1a5bca86fdaec07fa98097be55ea856ea2a523",
+        "after_sha256": "b1417ab1ec8a44e4aab14ebabb1a5bca86fdaec07fa98097be55ea856ea2a523",
+        "changed": false
+      },
+      {
+        "path": "app/java/com/gesher/server/ActivityManagerService.java",
+        "before_sha256": "c6a6bc50023c9ab96517e9a53150ff1c4f1cd41c1d8d580e6e9bdf0ebc4cc549",
+        "after_sha256": "c6a6bc50023c9ab96517e9a53150ff1c4f1cd41c1d8d580e6e9bdf0ebc4cc549",
+        "changed": false
+      },
+      {
+        "path": "app/java/com/gesher/server/ActivityTaskManagerService.java",
+        "before_sha256": "8804e631dc73e82a351fabecdadde1010e01f434636319b957fcd7d4ff1d840a",
+        "after_sha256": "b21f61b2738ce440ddd6d845a186ab8fb9c8be10879e9aee7eaa026a0f0f2ba0",
+        "changed": true
+      },
+      {
+        "path": "app/java/com/gesher/server/ActiveServices.java",
+        "before_sha256": "2555493d18e616ca739a33891b18a934a7c2676b625f9c8f4bb28b8319962834",
+        "after_sha256": "2555493d18e616ca739a33891b18a934a7c2676b625f9c8f4bb28b8319962834",
+        "changed": false
+      },
+      {
+        "path": "app/java/com/gesher/server/ContentProviders.java",
+        "before_sha256": "9bc332c284f727beb410528c3802b696478f8195fc8d3a451a2c31f40d75ed96",
+        "after_sha256": "9bc332c284f727beb410528c3802b696478f8195fc8d3a451a2c31f40d75ed96",
+        "changed": false
+      },
+      {
+        "path": "app/java/com/gesher/server/PowerManagerService.java",
+        "before_sha256": "84d5781f7abca365b5ad8cf13066888c8e340c5f657c4e6caeecd359edf638b8",
+        "after_sha256": "84d5781f7abca365b5ad8cf13066888c8e340c5f657c4e6caeecd359edf638b8",
+        "changed": false
+      }
+    ],
+    "builds": [
+      {
+        "name": "app Java/DEX",
+        "exit_code": 0,
+        "log": "java-r5-refresh-app.log",
+        "log_sha256": "40ecf546760cc495a2d1d0ef279ea2b5e4f29f4b0a840e5016ad3f28f274c22c"
+      },
+      {
+        "name": "services Java/DEX",
+        "exit_code": 0,
+        "log": "java-r5-refresh-services.log",
+        "log_sha256": "e5e94c37b7eecb08c0f1fee859cd66aa70c1ca179f7722f99394cbf27580108b"
+      }
+    ],
+    "gates": [
+      {
+        "name": "entry",
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "tools/test_shortcut_updates.py",
+          "--java-home",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2",
+          "--framework-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip",
+          "--core-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/coremod",
+          "--app-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/r5-refresh-app/gesher-app-classes.jar",
+          "--apksig-jar",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 6.3303861869972025,
+        "log": "java-r5-refresh-entry.log",
+        "log_sha256": "3ca4294d856b1152aff3648a812e936e2321664e68d4e7d2cb87a9f2d18e8e57"
+      },
+      {
+        "name": "activity",
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "tools/test_activity_finish.py",
+          "--java-home",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2",
+          "--framework-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip",
+          "--core-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/coremod",
+          "--app-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/r5-refresh-app/gesher-app-classes.jar",
+          "--apksig",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 3.775188513998728,
+        "log": "java-r5-refresh-activity.log",
+        "log_sha256": "d4ef8c92795f25b2ce658f579d7d000e665ae285d80e5dbc3323768ed7d6018a"
+      },
+      {
+        "name": "saf",
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "tools/test_saf_documents.py",
+          "--java-home",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/jdk-21.0.13.1+2",
+          "--framework-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/framework-classes.zip",
+          "--core-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/coremod",
+          "--app-classes",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/r5-refresh-app/gesher-app-classes.jar",
+          "--apksig",
+          "/workspace/scratch/9dcd1b3daa63/java-deps/apksig.jar"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 12.533591087998502,
+        "log": "java-r5-refresh-saf.log",
+        "log_sha256": "d70b64af708dd5c9d3e3f70ba340630c277b09bff7c8fce27f82f841f5a28692"
+      }
+    ],
+    "validation_counts": {
+      "shortcut_updates": 52,
+      "shortcut_quota": 1048,
+      "activity": 389,
+      "saf": 799,
+      "detached_native_ui": 14,
+      "saf_restart_phases": 3
+    },
+    "unchanged_feature_tests": true,
+    "windows_art_execution": false
+  }
+}

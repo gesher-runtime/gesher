@@ -110,6 +110,8 @@ final class SupportLib {
 final class FileUrls { static String toWebView2(String url) { return url; } }
 final class GesherWebViewProvider {
     final java.util.Map<String,GesherWebMessagePort> mPagePorts = new java.util.LinkedHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong mNavigationGeneration =
+            new java.util.concurrent.atomic.AtomicLong();
     volatile WebView2Host mHost = new WebView2Host();
     boolean mDestroyed;
     final CleanupBoundary mBridgeDispatcher = new CleanupBoundary();
