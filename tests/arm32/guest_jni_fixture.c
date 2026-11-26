@@ -109,14 +109,26 @@ static const u32* vm_functions(JavaVM32* vm) {
 }
 #define VMAPI(vm, slot, kind) ((kind)(unsigned long)vm_functions(vm)[slot])
 
+static int live_onload;
 int JNI_OnLoad(JavaVM32* vm, void* reserved) {
   if (!vm || reserved) return -1;
   JNIEnv32* env = 0;
   if (VMAPI(vm, 6, VmGetEnv)(vm, &env, 0x10006) != 0 || !env)
     return -1;
   if (API(env, 4, GetVersion)(env) != 0x10006) return -1;
+  live_onload = 1;
   return 0x10006;
 }
+void JNI_OnUnload(JavaVM32* vm, void* reserved) {
+  JNIEnv32* env = 0;
+  if (!vm || reserved ||
+      VMAPI(vm, 6, VmGetEnv)(vm, &env, 0x10006) != 0 || !env) {
+    live_onload = -1;
+    return;
+  }
+  live_onload = 0;
+}
+int jni32_onload_state(void) { return live_onload; }
 
 int jni32_vm_bad_version(JavaVM32* vm) {
   JNIEnv32* env = 0;
