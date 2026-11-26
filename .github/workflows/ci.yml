@@ -886,6 +886,12 @@ jobs:
       - name: Build test apps
         run: tests/build-test-apps.sh out/test-apps
 
+      - name: Incremental Brotli native and real HTTP provider contracts
+        run: >-
+          python3 tools/test_http_brotli.py --java-home "$JAVA_HOME"
+          --brotli-source third_party/aosp/external/brotli
+          --okhttp-source third_party/aosp/external/okhttp
+
       - name: Build boot class path (core-oj, core-libart)
         run: tools/build-boot-jars.sh out/boot-jars
 
