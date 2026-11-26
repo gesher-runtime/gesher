@@ -640,7 +640,7 @@ public final class ServiceRebindContractTest {
         h.stop();
     }
 
-    private static void terminalProcessDeath(boolean forceStop) throws Exception {
+    private static void terminalProcessDeath(boolean forceStop, boolean binderDiedFirst) throws Exception {
         Harness h = new Harness();
         h.start();
         int clientPid = PID + 100;
@@ -650,7 +650,13 @@ public final class ServiceRebindContractTest {
         Connection pending = new Connection(Runnable::run);
         h.bindFrom(clientPid, client, active, "active");
         h.bindFrom(clientPid, client, pending, "pending");
-        h.publish(0, new Binder());
+        IBinder old = new Binder();
+        h.publish(0, old);
+        if (binderDiedFirst) {
+            active.binderDied(old);
+            check(active.disconnected == 1 && active.died == 0,
+                    "Binder death alone announced terminal invalidation");
+        }
         if (forceStop) {
             h.forceStopBindings();
         } else {
@@ -658,6 +664,7 @@ public final class ServiceRebindContractTest {
             h.restartProcess();
         }
 
+        active.binderDied(old);
         check(active.disconnected == 1 && active.died == 1 && active.nulls == 0,
                 "Terminal service death did not disconnect and invalidate a published binding");
         check(pending.connected == 0 && pending.disconnected == 0 && pending.died == 1
@@ -689,8 +696,9 @@ public final class ServiceRebindContractTest {
         if (scenario.equals("all") || scenario.equals("restarted")) restarted();
         if (scenario.equals("all") || scenario.equals("process-death")) {
             recoveringProcessDeath();
-            terminalProcessDeath(false);
-            terminalProcessDeath(true);
+            terminalProcessDeath(false, false);
+            terminalProcessDeath(false, true);
+            terminalProcessDeath(true, false);
         }
         check(checks > 0, "No service rebind scenario selected");
         System.out.println("Service rebinding contracts passed: " + checks
