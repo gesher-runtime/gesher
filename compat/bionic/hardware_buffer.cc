@@ -7,9 +7,9 @@
 // allocated is what this implementation can serve, and AHardwareBuffer_isSupported
 // answers the same:
 //  - formats R8G8B8A8, R8G8B8X8, R8G8B8, R5G6B5, R16G16B16A16_FLOAT,
-//    R10G10B10A2, R8 and BLOB, one layer (no arrays, cube maps or mipmaps);
+//    R10G10B10A2, R8, BLOB and CPU-only YUV 4:2:0, one layer;
 //  - CPU read/write usage; GPU sampling, GPU color output and composer overlay
-//    (SurfaceControl) for every format but BLOB, when ANGLE's device is there
+//    (SurfaceControl) for color formats, when ANGLE's device is there
 //    (the GPU thread, gpu_interop.h) and within its texture size; float color
 //    output only with float color buffers;
 //  - not protected content, video encoding, sensor data, GPU data buffers or
@@ -30,6 +30,7 @@
 
 #include <gesher/bionic_shim.h>
 #include <gesher/rgba_buffers.h>
+#include <gesher/yuv_buffers.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -73,6 +74,7 @@ constexpr uint64_t kGpuUsage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
 constexpr uint64_t kVendorUsage = (0xFULL << 28) | (0xFFFFULL << 48);  // VENDOR_0..19
 // What this implementation serves.
 constexpr uint64_t kServedUsage = kCpuMask | kGpuUsage | kVendorUsage;
+constexpr uint64_t kMaxBufferBytes = 1ULL << 30;
 
 struct Format {
   uint32_t format;
@@ -94,6 +96,7 @@ const Format kFormats[] = {
     {AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM, 4, true, gpu::TextureFormat::kRgb10a2, 4, 0, false},
     {AHARDWAREBUFFER_FORMAT_R8_UNORM, 1, true, gpu::TextureFormat::kR8, 1, 0, true},
     {AHARDWAREBUFFER_FORMAT_BLOB, 1, false, gpu::TextureFormat::kRgba8, 0, 0, true},
+    {AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420, 1, false, gpu::TextureFormat::kRgba8, 0, 0, true},
 };
 
 const Format* FindFormat(uint32_t format) {
@@ -177,13 +180,35 @@ bool ValidDescription(const AHardwareBuffer_Desc* desc) {
   return true;
 }
 
+bool Planar420(uint32_t format) {
+  return format == AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
+}
+
+uint32_t HalfRoundedUp(uint32_t extent) {
+  return extent / 2 + extent % 2;
+}
+
+// Take the bound before multiplying by pixel size or adding chroma storage.
+// The import path checks this as well as allocation.
+size_t BufferBytes(const AHardwareBuffer_Desc& desc, const Format* f) {
+  const uint64_t pixels = static_cast<uint64_t>(desc.stride) * desc.height;
+  if (pixels == 0 || pixels > kMaxBufferBytes) return 0;
+  uint64_t bytes = pixels * f->bytes;
+  if (Planar420(desc.format)) {
+    bytes += 2 * static_cast<uint64_t>(HalfRoundedUp(desc.stride)) *
+             HalfRoundedUp(desc.height);
+  }
+  return bytes <= kMaxBufferBytes ? static_cast<size_t>(bytes) : 0;
+}
+
 // Whether this implementation can allocate a valid description.
 bool Served(const AHardwareBuffer_Desc* desc) {
   const Format* f = FindFormat(desc->format);
   if (f == nullptr || desc->layers != 1) return false;
   if ((desc->usage & ~kServedUsage) != 0) return false;
-  const uint64_t bytes = static_cast<uint64_t>(desc->width) * desc->height * f->bytes;
-  if (bytes > (1ULL << 30)) return false;
+  AHardwareBuffer_Desc tight = *desc;
+  tight.stride = tight.width;
+  if (BufferBytes(tight, f) == 0) return false;
   if ((desc->usage & kGpuUsage) != 0) {
     if (!f->gpu) return false;
     gpu::Thread* thread = gpu::Thread::Get();
@@ -542,10 +567,15 @@ Buffer* Create(const AHardwareBuffer_Desc& desc, int fd, size_t size, uint64_t i
   return b;
 }
 
-// The bytes a description takes.
-size_t BufferBytes(const AHardwareBuffer_Desc& desc, const Format* f) {
-  size_t bytes = static_cast<size_t>(desc.stride) * desc.height * f->bytes;
-  return bytes == 0 ? 1 : bytes;
+void GetPlanar420Planes(Buffer* b, AHardwareBuffer_Planes* planes) {
+  const uint32_t luma_stride = b->desc.stride;
+  const uint32_t chroma_stride = HalfRoundedUp(luma_stride);
+  const size_t luma_bytes = static_cast<size_t>(luma_stride) * b->desc.height;
+  const size_t chroma_bytes = static_cast<size_t>(chroma_stride) * HalfRoundedUp(b->desc.height);
+  planes->planeCount = 3;
+  planes->planes[0] = {b->data, 1, luma_stride};
+  planes->planes[1] = {b->data + luma_bytes, 1, chroma_stride};
+  planes->planes[2] = {b->data + luma_bytes + chroma_bytes, 1, chroma_stride};
 }
 
 // Waits for a fence fd (any pollable fd; ADR 0089: Gesher's fences signal once
@@ -787,6 +817,11 @@ int BIONIC_SYSV Lock(AHardwareBuffer* buffer, uint64_t usage, int32_t fence, con
     WaitFenceAndClose(fence);
     return kBadValue;
   }
+  if (Planar420(b->desc.format)) {
+    *out = nullptr;
+    WaitFenceAndClose(fence);
+    return kInvalidOperation;
+  }
   return LockImpl(b, usage, fence, rect, out);
 }
 
@@ -799,6 +834,11 @@ int BIONIC_SYSV LockAndGetInfo(AHardwareBuffer* buffer, uint64_t usage, int32_t 
   if (b == nullptr) {
     WaitFenceAndClose(fence);
     return kBadValue;
+  }
+  if (Planar420(b->desc.format)) {
+    if (out != nullptr) *out = nullptr;
+    WaitFenceAndClose(fence);
+    return kInvalidOperation;
   }
   int result = LockImpl(b, usage, fence, rect, out);
   if (result == 0) {
@@ -820,7 +860,10 @@ int BIONIC_SYSV LockPlanes(AHardwareBuffer* buffer, uint64_t usage, int32_t fenc
   void* address = nullptr;
   int result = LockImpl(b, usage, fence, rect, &address);
   if (result != 0) return result;
-  // Every served format has one plane.
+  if (Planar420(b->desc.format)) {
+    GetPlanar420Planes(b, planes);
+    return 0;
+  }
   planes->planeCount = 1;
   planes->planes[0].data = address;
   planes->planes[0].pixelStride = static_cast<uint32_t>(b->format->bytes);
@@ -973,7 +1016,10 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   desc.usage = wire.usage;
   desc.stride = wire.stride;
   const Format* f = FindFormat(desc.format);
-  if (f == nullptr || desc.stride < desc.width || wire.size < BufferBytes(desc, f)) {
+  const size_t required_bytes = f != nullptr ? BufferBytes(desc, f) : 0;
+  if (!ValidDescription(&desc) || desc.stride < desc.width || required_bytes == 0 ||
+      wire.size < required_bytes || wire.size > kMaxBufferBytes ||
+      (Planar420(desc.format) && (desc.usage & ~(kCpuMask | kVendorUsage)) != 0)) {
     close(fd);
     return kInvalidOperation;
   }
@@ -1017,6 +1063,24 @@ void Register() {
 }  // namespace
 
 constexpr uint64_t kReleaseFenceTimeoutNs = 2000ull * 1000 * 1000;
+
+AHardwareBuffer* AllocateYuv420Buffer(int32_t width, int32_t height,
+                                      AHardwareBuffer_Planes* planes) {
+  AHardwareBuffer_Desc desc{};
+  desc.width = width;
+  desc.height = height;
+  desc.layers = 1;
+  desc.format = AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
+  desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+  AHardwareBuffer* buffer = nullptr;
+  if (Allocate(&desc, &buffer) != 0) return nullptr;
+  GetPlanar420Planes(FromApp(buffer), planes);
+  return buffer;
+}
+
+void ReleaseImageBuffer(AHardwareBuffer* buffer) {
+  Release(FromApp(buffer));
+}
 
 void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
   AHardwareBuffer_Desc desc{};

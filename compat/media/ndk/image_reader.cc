@@ -10,6 +10,7 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/native_fence.h>
 #include <gesher/rgba_buffers.h>
+#include <gesher/yuv_buffers.h>
 
 #include <cerrno>
 #include <condition_variable>
@@ -22,15 +23,18 @@
 #include <unordered_set>
 #include <utility>
 
+#include "image_reader.h"
+
 #include "abi_types.h"
 #include "../surface/queue_surface.h"
+#include "../video/video_decoder.h"
 
 namespace {
 namespace ahb = gesher::bionic::ahb;
 using gesher::media::QueueSurface;
 using gesher::media::SurfaceFrame;
+using gesher::media::VideoFrame;
 
-constexpr int32_t kFormat = AIMAGE_FORMAT_RGBA_8888;
 constexpr uint64_t kUsage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
 constexpr int32_t kMaxImages = 64;
 constexpr size_t kPendingFrames = 3;
@@ -42,13 +46,15 @@ bool ValidSize(int32_t width, int32_t height) {
 }
 
 struct BufferDeleter {
-  void operator()(void* storage) const { ahb::ReleaseRgbaBuffer(storage); }
+  void operator()(AHardwareBuffer* storage) const { ahb::ReleaseImageBuffer(storage); }
 };
 
 struct ImageFrame {
-  std::unique_ptr<void, BufferDeleter> storage;
+  std::unique_ptr<AHardwareBuffer, BufferDeleter> storage;
+  AHardwareBuffer_Planes planes{};
   int32_t width = 0;
   int32_t height = 0;
+  int32_t format = AIMAGE_FORMAT_RGBA_8888;
   int64_t timestamp_ns = 0;
 };
 
@@ -66,12 +72,33 @@ struct ReaderState {
   bool closed = false;
 };
 
-// The producer accepts RGBA CPU writes, including frames rendered through the
-// existing Surface canvas and decoder paths. Raw GPU buffer dequeue requires
-// a producer with graphics buffer handles and fence-aware slot reuse.
+// The RGBA producer supports native window CPU writes. The YUV producer takes
+// typed frames directly from camera and codec output. Neither exposes raw GPU
+// buffer dequeue because those slots require graphics handles and fence reuse.
 class ReaderWindow final : public QueueSurface {
  public:
-  ReaderWindow(int32_t width, int32_t height) : QueueSurface(width, height) {}
+  ReaderWindow(int32_t width, int32_t height, int32_t format,
+               const std::shared_ptr<ReaderState>& state)
+      : QueueSurface(width, height), width(width), height(height), format(format), state(state) {}
+
+  int lock(ANativeWindow_Buffer* buffer, ARect* dirty) override {
+    return format == AIMAGE_FORMAT_RGBA_8888 ? QueueSurface::lock(buffer, dirty) : -ENOSYS;
+  }
+
+  int query(int what, int* value) const override {
+    if (what == NATIVE_WINDOW_FORMAT) {
+      *value = format;
+      return 0;
+    }
+    return QueueSurface::query(what, value);
+  }
+
+  std::optional<int> PostVideoFrame(const VideoFrame& frame, int64_t timestamp_ns) override;
+
+  const int32_t width;
+  const int32_t height;
+  const int32_t format;
+  const std::weak_ptr<ReaderState> state;
 
  protected:
   int dequeueBuffer(ANativeWindowBuffer**, int*) override { return -ENOSYS; }
@@ -93,7 +120,7 @@ class ReaderWindow final : public QueueSurface {
     switch (operation) {
       case NATIVE_WINDOW_SET_BUFFERS_FORMAT: {
         const int format = va_arg(probe, int);
-        supported = format == 0 || format == kFormat;
+        supported = format == 0 || format == this->format;
         break;
       }
       case NATIVE_WINDOW_SET_BUFFERS_DIMENSIONS:
@@ -104,7 +131,7 @@ class ReaderWindow final : public QueueSurface {
         supported = (width == 0 && height == 0) || ValidSize(width, height);
         if (operation == NATIVE_WINDOW_SET_BUFFERS_GEOMETRY) {
           const int format = va_arg(probe, int);
-          supported = supported && (format == 0 || format == kFormat);
+          supported = supported && (format == 0 || format == this->format);
         }
         break;
       }
@@ -118,18 +145,34 @@ class ReaderWindow final : public QueueSurface {
   }
 };
 
+// Caller holds the reader mutex. The acquired images own separate buffers.
+void Enqueue(ReaderState& state, std::unique_ptr<ImageFrame> frame) {
+  if (state.pending.size() == kPendingFrames) state.pending.pop_front();
+  state.pending.push_back(std::move(frame));
+  if (state.callback != nullptr && state.notifications < kPendingFrames) ++state.notifications;
+}
+
 int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame) {
   auto state = weak.lock();
   if (state == nullptr) return -ENODEV;
 
   const bool valid_size = ValidSize(frame.width, frame.height);
-  std::unique_ptr<void, BufferDeleter> storage;
+  std::unique_ptr<ImageFrame> image;
   if (valid_size) {
-    storage.reset(ahb::AllocateRgbaBuffer(frame.width, frame.height, false));
-    if (storage) {
-      std::memcpy(ahb::RgbaBufferPixels(storage.get()), frame.pixels.data(),
-                  frame.pixels.size() * sizeof(uint32_t));
-      ahb::MarkRgbaWritten(storage.get());
+    auto* storage = static_cast<AHardwareBuffer*>(
+        ahb::AllocateRgbaBuffer(frame.width, frame.height, false));
+    if (storage != nullptr) {
+      image = std::make_unique<ImageFrame>();
+      image->storage.reset(storage);
+      auto* pixels = ahb::RgbaBufferPixels(storage);
+      std::memcpy(pixels, frame.pixels.data(), frame.pixels.size() * sizeof(uint32_t));
+      ahb::MarkRgbaWritten(storage);
+      image->planes.planeCount = 1;
+      image->planes.planes[0] = {
+          pixels, kPixelStride, static_cast<uint32_t>(frame.width * kPixelStride)};
+      image->width = frame.width;
+      image->height = frame.height;
+      image->timestamp_ns = frame.timestamp_ns;
     }
   }
 
@@ -140,20 +183,123 @@ int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame) {
   if (state->closed) return -ENODEV;
   ++state->next_frame;
   state->changed.notify_all();
-  if (!storage) return valid_size ? -ENOMEM : -EINVAL;
-  if (state->pending.size() == kPendingFrames) state->pending.pop_front();
-  state->pending.push_back(
-      std::make_unique<ImageFrame>(ImageFrame{std::move(storage), frame.width, frame.height,
-                                              frame.timestamp_ns}));
-  if (state->callback != nullptr && state->notifications < kPendingFrames) ++state->notifications;
+  if (!image) return valid_size ? -ENOMEM : -EINVAL;
+  Enqueue(*state, std::move(image));
   return 0;
 }
+
+ReaderWindow* YuvWindow(ANativeWindow* window) {
+  auto* reader = dynamic_cast<ReaderWindow*>(QueueSurface::From(window));
+  return reader != nullptr && reader->format == AIMAGE_FORMAT_YUV_420_888 ? reader : nullptr;
+}
+
+int32_t ChromaSize(int32_t extent) { return extent / 2 + extent % 2; }
+
+std::unique_ptr<ImageFrame> NewYuvFrame(int width, int height, int64_t timestamp_ns) {
+  auto image = std::make_unique<ImageFrame>();
+  image->storage.reset(ahb::AllocateYuv420Buffer(width, height, &image->planes));
+  if (!image->storage) return nullptr;
+  image->width = width;
+  image->height = height;
+  image->format = AIMAGE_FORMAT_YUV_420_888;
+  image->timestamp_ns = timestamp_ns;
+  return image;
+}
+
+int PublishYuv(ReaderWindow& reader, std::unique_ptr<ImageFrame> frame) {
+  const auto state = reader.state.lock();
+  if (state == nullptr) return -ENODEV;
+  std::lock_guard<std::mutex> lock(state->mutex);
+  if (state->closed) return -ENODEV;
+  Enqueue(*state, std::move(frame));
+  state->changed.notify_all();
+  return 0;
+}
+std::optional<int> ReaderWindow::PostVideoFrame(const VideoFrame& frame, int64_t timestamp_ns) {
+  if (format != AIMAGE_FORMAT_YUV_420_888) return std::nullopt;
+
+  // Validate the complete backing storage before forming cropped pointers.
+  if (frame.width <= 0 || frame.height <= 0 ||
+      frame.stride_y < frame.width || frame.stride_uv < ChromaSize(frame.width) ||
+      frame.crop_left < 0 || frame.crop_top < 0 ||
+      frame.crop_right < frame.crop_left || frame.crop_right >= frame.width ||
+      frame.crop_bottom < frame.crop_top || frame.crop_bottom >= frame.height) {
+    return -EINVAL;
+  }
+  const auto y_bytes = static_cast<uint64_t>(frame.stride_y) * frame.height;
+  const auto c_bytes = static_cast<uint64_t>(frame.stride_uv) * ChromaSize(frame.height);
+  if (y_bytes + 2 * c_bytes > frame.data.size()) return -EINVAL;
+
+  const int width = frame.visible_width(), height = frame.visible_height();
+  if (!ValidSize(width, height)) return -EINVAL;
+  auto image = NewYuvFrame(width, height, timestamp_ns);
+  if (image == nullptr) return -ENOMEM;
+  const size_t y_offset = static_cast<size_t>(frame.crop_top) * frame.stride_y + frame.crop_left;
+  const size_t c_offset =
+      static_cast<size_t>(frame.crop_top / 2) * frame.stride_uv + frame.crop_left / 2;
+  const uint8_t* sources[] = {frame.data.data() + y_offset,
+                              frame.data.data() + y_bytes + c_offset,
+                              frame.data.data() + y_bytes + c_bytes + c_offset};
+  const int strides[] = {frame.stride_y, frame.stride_uv, frame.stride_uv};
+  for (int plane = 0; plane < 3; ++plane) {
+    auto* target = static_cast<uint8_t*>(image->planes.planes[plane].data);
+    const size_t row_bytes = image->planes.planes[plane].rowStride;
+    const int rows = plane == 0 ? height : ChromaSize(height);
+    for (int row = 0; row < rows; ++row) {
+      std::memcpy(target + static_cast<size_t>(row) * row_bytes,
+                  sources[plane] + static_cast<size_t>(row) * strides[plane], row_bytes);
+    }
+  }
+  return PublishYuv(*this, std::move(image));
+}
 }  // namespace
+
+namespace gesher::media {
+std::optional<int> QueueNdkReaderCameraFrame(ANativeWindow* window, const uint8_t* nv12,
+                                             size_t size, int width, int height,
+                                             int64_t timestamp_ns) {
+  auto* reader = YuvWindow(window);
+  if (reader == nullptr) return std::nullopt;
+  if (nv12 == nullptr || width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0)
+    return -EINVAL;
+  const uint64_t y_bytes = static_cast<uint64_t>(width) * height;
+  if (size < y_bytes + y_bytes / 2) return -EINVAL;
+
+  const int target_width = reader->width, target_height = reader->height;
+  auto image = NewYuvFrame(target_width, target_height, timestamp_ns);
+  if (image == nullptr) return -ENOMEM;
+  const auto* uv = nv12 + y_bytes;
+  for (int plane = 0; plane < 3; ++plane) {
+    const bool chroma = plane != 0;
+    const uint8_t* source = chroma ? uv + plane - 1 : nv12;
+    auto* target = static_cast<uint8_t*>(image->planes.planes[plane].data);
+    const int source_rows = chroma ? height / 2 : height;
+    const int source_columns = chroma ? width / 2 : width;
+    const int rows = chroma ? ChromaSize(target_height) : target_height;
+    const int columns = chroma ? ChromaSize(target_width) : target_width;
+    const int pixel_stride = chroma ? 2 : 1;
+    if (!chroma && target_width == width && target_height == height) {
+      std::memcpy(target, source, y_bytes);
+      continue;
+    }
+    for (int row = 0; row < rows; ++row) {
+      const size_t source_row = static_cast<int64_t>(row) * source_rows / rows * width;
+      for (int column = 0; column < columns; ++column) {
+        const size_t source_column = static_cast<int64_t>(column) * source_columns / columns;
+        target[static_cast<size_t>(row) * columns + column] =
+            source[source_row + source_column * pixel_stride];
+      }
+    }
+  }
+  return PublishYuv(*reader, std::move(image));
+}
+}  // namespace gesher::media
 
 struct AImageReader {
   const int32_t width;
   const int32_t height;
   const int32_t max_images;
+  const int32_t format;
   std::shared_ptr<ReaderState> state;
   android::sp<ReaderWindow> window;
   pthread_t worker{};
@@ -169,15 +315,17 @@ namespace {
 media_status_t BIONIC_SYSV NewWithUsage(int32_t width, int32_t height, int32_t format,
                                       uint64_t usage, int32_t max_images, AImageReader** out) {
   if (out == nullptr || !ValidSize(width, height) || max_images < 1 || max_images > kMaxImages ||
-      format != kFormat || usage != kUsage) {
+      (format != AIMAGE_FORMAT_RGBA_8888 && format != AIMAGE_FORMAT_YUV_420_888) ||
+      usage != kUsage) {
     return AMEDIA_ERROR_INVALID_PARAMETER;
   }
   auto state = std::make_shared<ReaderState>();
-  auto window = android::sp<ReaderWindow>::make(width, height);
-  window->SetForwardingListener([weak = std::weak_ptr<ReaderState>(state)](const SurfaceFrame& frame) {
-    return Publish(weak, frame);
-  });
-  *out = new (std::nothrow) AImageReader{width, height, max_images, std::move(state),
+  auto window = android::sp<ReaderWindow>::make(width, height, format, state);
+  window->SetForwardingListener(
+      [weak = std::weak_ptr<ReaderState>(state), format](const SurfaceFrame& frame) {
+        return format == AIMAGE_FORMAT_RGBA_8888 ? Publish(weak, frame) : -EINVAL;
+      });
+  *out = new (std::nothrow) AImageReader{width, height, max_images, format, std::move(state),
                                         std::move(window), {}, false};
   return *out != nullptr ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
 }
@@ -220,12 +368,6 @@ template <const int32_t AImageReader::*Field>
 media_status_t BIONIC_SYSV GetReaderField(const AImageReader* reader, int32_t* out) {
   if (reader == nullptr || out == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   *out = reader->*Field;
-  return AMEDIA_OK;
-}
-
-media_status_t BIONIC_SYSV GetReaderFormat(const AImageReader* reader, int32_t* out) {
-  if (reader == nullptr || out == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
-  *out = kFormat;
   return AMEDIA_OK;
 }
 
@@ -344,15 +486,6 @@ media_status_t BIONIC_SYSV GetImageField(const AImage* image, T* out) {
   return AMEDIA_OK;
 }
 
-template <int32_t Value>
-media_status_t BIONIC_SYSV GetImageValue(const AImage* image, int32_t* out) {
-  if (image == nullptr || out == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
-  std::lock_guard<std::mutex> lock(image->owner->mutex);
-  if (!image->frame) return AMEDIA_ERROR_INVALID_OBJECT;
-  *out = Value;
-  return AMEDIA_OK;
-}
-
 media_status_t BIONIC_SYSV GetCropRect(const AImage* image, AImageCropRect* out) {
   if (image == nullptr || out == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::lock_guard<std::mutex> lock(image->owner->mutex);
@@ -361,26 +494,40 @@ media_status_t BIONIC_SYSV GetCropRect(const AImage* image, AImageCropRect* out)
   return AMEDIA_OK;
 }
 
-media_status_t BIONIC_SYSV GetPixelStride(const AImage* image, int plane, int32_t* out) {
-  if (plane != 0) return AMEDIA_ERROR_INVALID_PARAMETER;
-  return GetImageValue<kPixelStride>(image, out);
+media_status_t BIONIC_SYSV GetPlaneCount(const AImage* image, int32_t* out) {
+  if (image == nullptr || out == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(image->owner->mutex);
+  if (!image->frame) return AMEDIA_ERROR_INVALID_OBJECT;
+  *out = static_cast<int32_t>(image->frame->planes.planeCount);
+  return AMEDIA_OK;
 }
 
-media_status_t BIONIC_SYSV GetRowStride(const AImage* image, int plane, int32_t* out) {
-  if (plane != 0) return AMEDIA_ERROR_INVALID_PARAMETER;
-  const media_status_t result = GetImageField<int32_t, &ImageFrame::width>(image, out);
-  if (result == AMEDIA_OK) *out *= kPixelStride;
-  return result;
+// Callers validate the output and hold the reader mutex while the image is used.
+media_status_t CheckPlane(const AImage& image, int plane) {
+  if (!image.frame) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (plane < 0 || static_cast<uint32_t>(plane) >= image.frame->planes.planeCount)
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  return AMEDIA_OK;
+}
+
+template <uint32_t AHardwareBuffer_Plane::*Field>
+media_status_t BIONIC_SYSV GetPlaneStride(const AImage* image, int plane, int32_t* out) {
+  if (image == nullptr || out == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(image->owner->mutex);
+  const media_status_t status = CheckPlane(*image, plane);
+  if (status == AMEDIA_OK) *out = static_cast<int32_t>(image->frame->planes.planes[plane].*Field);
+  return status;
 }
 
 media_status_t BIONIC_SYSV GetPlaneData(const AImage* image, int plane, uint8_t** out, int* length) {
-  if (image == nullptr || plane != 0 || out == nullptr || length == nullptr) {
-    return AMEDIA_ERROR_INVALID_PARAMETER;
-  }
+  if (image == nullptr || out == nullptr || length == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::lock_guard<std::mutex> lock(image->owner->mutex);
-  if (!image->frame) return AMEDIA_ERROR_INVALID_OBJECT;
-  *out = ahb::RgbaBufferPixels(image->frame->storage.get());
-  *length = image->frame->width * image->frame->height * kPixelStride;
+  const media_status_t status = CheckPlane(*image, plane);
+  if (status != AMEDIA_OK) return status;
+  const auto& layout = image->frame->planes.planes[plane];
+  const int rows = plane == 0 ? image->frame->height : ChromaSize(image->frame->height);
+  *out = static_cast<uint8_t*>(layout.data);
+  *length = static_cast<int>(layout.rowStride * rows);
   return AMEDIA_OK;
 }
 
@@ -390,7 +537,7 @@ media_status_t BIONIC_SYSV GetHardwareBuffer(const AImage* image, AHardwareBuffe
   if (!image->frame) return AMEDIA_ERROR_INVALID_OBJECT;
   // Borrowed for the lifetime of this image. An explicit AHardwareBuffer_acquire
   // keeps the pixel storage independently of the image and reader.
-  *out = static_cast<AHardwareBuffer*>(image->frame->storage.get());
+  *out = image->frame->storage.get();
   return AMEDIA_OK;
 }
 
@@ -404,7 +551,7 @@ bool Register() {
   ENTRY(AImageReader_getWidth, GetReaderField<&AImageReader::width>);
   ENTRY(AImageReader_getHeight, GetReaderField<&AImageReader::height>);
   ENTRY(AImageReader_getMaxImages, GetReaderField<&AImageReader::max_images>);
-  ENTRY(AImageReader_getFormat, GetReaderFormat);
+  ENTRY(AImageReader_getFormat, GetReaderField<&AImageReader::format>);
   ENTRY(AImageReader_acquireNextImage, AcquireNext);
   ENTRY(AImageReader_acquireLatestImage, AcquireLatest);
   ENTRY(AImageReader_acquireNextImageAsync, AcquireNextAsync);
@@ -414,12 +561,12 @@ bool Register() {
   ENTRY(AImage_deleteAsync, DeleteImageAsync);
   ENTRY(AImage_getWidth, GetImageField<int32_t, &ImageFrame::width>);
   ENTRY(AImage_getHeight, GetImageField<int32_t, &ImageFrame::height>);
-  ENTRY(AImage_getFormat, GetImageValue<kFormat>);
+  ENTRY(AImage_getFormat, GetImageField<int32_t, &ImageFrame::format>);
   ENTRY(AImage_getTimestamp, GetImageField<int64_t, &ImageFrame::timestamp_ns>);
   ENTRY(AImage_getCropRect, GetCropRect);
-  ENTRY(AImage_getNumberOfPlanes, GetImageValue<1>);
-  ENTRY(AImage_getPlanePixelStride, GetPixelStride);
-  ENTRY(AImage_getPlaneRowStride, GetRowStride);
+  ENTRY(AImage_getNumberOfPlanes, GetPlaneCount);
+  ENTRY(AImage_getPlanePixelStride, GetPlaneStride<&AHardwareBuffer_Plane::pixelStride>);
+  ENTRY(AImage_getPlaneRowStride, GetPlaneStride<&AHardwareBuffer_Plane::rowStride>);
   ENTRY(AImage_getPlaneData, GetPlaneData);
   ENTRY(AImage_getHardwareBuffer, GetHardwareBuffer);
 #undef ENTRY
