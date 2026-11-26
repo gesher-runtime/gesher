@@ -19,6 +19,9 @@
 #include <gesher/fork.h>
 #endif
 #include <atomic>
+#ifdef _WIN32
+#include "shared_futex.h"
+#endif
 
 namespace {
 struct Bucket;
@@ -34,6 +37,9 @@ struct Waiter {
   // Requeue can move a sleeping stack node more than once. Its owner must
   // acquire the current bucket before removing it on timeout or returning.
   std::atomic<Bucket*> bucket{nullptr};
+#ifdef _WIN32
+  HANDLE event = nullptr;  // the interrupt target for a shared file wait
+#endif
 };
 static_assert(sizeof(std::atomic<int>) == sizeof(int) && std::atomic<int>::is_always_lock_free);
 static_assert(std::atomic<Bucket*>::is_always_lock_free);
@@ -190,6 +196,52 @@ long Wait(volatile int* address, int value, uint32_t mask, bool private_key,
   if (result != 0) errno = error;
   return result;
 }
+#ifdef _WIN32
+long SharedWait(const gesher::SharedFutexMapping& mapping, volatile int* address,
+                int expected, uint32_t mask, const Deadline& deadline) {
+  gesher_futex_interrupt* cell = t_interrupt;
+  if (TakeInterrupt(cell)) return errno = EINTR, -1;
+
+  gesher::SharedFutexQueue queue(mapping);
+  const int opened = queue.Open(true);
+  if (opened < 0) return errno = -opened, -1;
+  gesher::SharedFutexWaiter shared;
+  if (int error = queue.Enqueue(address, expected, mask, &shared)) return errno = error, -1;
+
+  Waiter interrupt{address, mask, false};
+  interrupt.event = shared.event;
+  if (cell != nullptr) {
+    AcquireSRWLockExclusive(&cell->lock);
+    cell->waiter = &interrupt;
+    ReleaseSRWLockExclusive(&cell->lock);
+  }
+  int error = 0;
+  for (;;) {
+    if (TakeInterrupt(cell)) error = EINTR;
+    if (error == 0) {
+      const DWORD millis = Remaining(deadline);
+      if (millis == 0) error = ETIMEDOUT;
+      else {
+        const DWORD status = WaitForSingleObject(shared.event, millis);
+        if (status != WAIT_OBJECT_0 && status != WAIT_TIMEOUT) error = EIO;
+        if (TakeInterrupt(cell)) error = EINTR;
+      }
+    }
+    const int status = queue.Complete(shared, error != 0);
+    if (status > 0) { error = 0; break; }
+    if (status < 0) error = -status;
+    if (error != 0) break;
+  }
+  if (cell != nullptr) {
+    AcquireSRWLockExclusive(&cell->lock);
+    cell->waiter = nullptr;
+    ReleaseSRWLockExclusive(&cell->lock);
+  }
+  if (error != 0) return errno = error, -1;
+  return 0;
+}
+#endif
+
 long WakeOrRequeue(volatile int* address, int command, int count, uint32_t mask,
                    bool private_key, volatile int* target, int requeue_count, int compare) {
   bool requeue = command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE;
@@ -234,13 +286,40 @@ long FutexOwned(volatile int* address, int op, int value, const timespec* time,
                       ? static_cast<uint32_t>(value3) : UINT32_MAX;
   if (mask == 0 || !Aligned(address)) return errno = EINVAL, -1;
   if (!address && (wait || !private_key || command == FUTEX_CMP_REQUEUE)) return errno = EFAULT, -1;
-  if (wait) return Wait(address, value, mask, private_key, deadline);
   int requeue_count = 0;
-  if (command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE) {
+  const bool requeue = command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE;
+  if (requeue) {
     requeue_count = static_cast<int>(reinterpret_cast<intptr_t>(time));
     if (value < 0 || requeue_count < 0 || !Aligned(target)) return errno = EINVAL, -1;
     if (!target && !private_key) return errno = EFAULT, -1;
   }
+#ifdef _WIN32
+  if (!private_key) {
+    gesher::SharedFutexMapping mapping;
+    const int shared = gesher::GetSharedFutexMapping(address, &mapping);
+    if (shared < 0) return errno = -shared, -1;
+    if (requeue) {
+      gesher::SharedFutexMapping destination;
+      const int to_shared = gesher::GetSharedFutexMapping(target, &destination);
+      if (to_shared < 0) return errno = -to_shared, -1;
+      if (shared || to_shared) return errno = ENOSYS, -1;
+    }
+    if (shared) {
+      if (wait) return SharedWait(mapping, address, value, mask, deadline);
+      // Order the caller's stores before checking whether a wait queue
+      // exists, even on the wake path that has no queue mutex to acquire.
+      std::atomic_thread_fence(std::memory_order_seq_cst);
+      gesher::SharedFutexQueue queue(mapping);
+      const int opened = queue.Open(false);
+      if (opened < 0) return errno = -opened, -1;
+      if (opened == 0) return 0;
+      const long woken = queue.Wake(value, mask);
+      if (woken < 0) return errno = static_cast<int>(-woken), -1;
+      return woken;
+    }
+  }
+#endif
+  if (wait) return Wait(address, value, mask, private_key, deadline);
   return WakeOrRequeue(address, command, value, mask, private_key, target, requeue_count, value3);
 }
 using FutexOwner = long (*)(volatile int*, int, int, const timespec*, volatile int*, int);
@@ -270,10 +349,17 @@ extern "C" __declspec(dllexport) void gesher_futex_interrupt_request_v1(gesher_f
   AcquireSRWLockExclusive(&cell->lock);
   if (cell->waiter != nullptr) {
     auto* waiter = static_cast<Waiter*>(cell->waiter);
-    int expected = 0;
-    if (waiter->ready.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
-      InterlockedExchange(&cell->requested, 0);
-      WakeByAddressSingle(&waiter->ready);
+#ifdef _WIN32
+    if (waiter->event != nullptr) {
+      SetEvent(waiter->event);
+    } else
+#endif
+    {
+      int expected = 0;
+      if (waiter->ready.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+        InterlockedExchange(&cell->requested, 0);
+        WakeByAddressSingle(&waiter->ready);
+      }
     }
   }
   // A WaitOnAddress waiter (the shim's pthread waits) wakes and rechecks.

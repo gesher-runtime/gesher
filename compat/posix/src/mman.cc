@@ -67,6 +67,10 @@
 #include <gesher/fork.h>
 #endif
 #include "revocable_internal.h"
+#ifdef _WIN32
+#include "record_lock_liveness.h"
+#include "shared_futex.h"
+#endif
 
 // Dedicated failure object only; normal production route is fixed Win32.
 #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
@@ -154,7 +158,11 @@ struct Region {
   uintptr_t group = 0;
   void* view = nullptr;       // views: what MapViewOfFile* returned
   HANDLE mapping = nullptr;   // views: the mapping object (owned)
-  uint64_t offset = 0;        // group views: the file offset of the region's start
+  uint64_t offset = 0;        // views: the file offset of the region's start
+#ifdef _WIN32
+  gesher::record_locks::File futex_file{};
+  int futex_file_error = 0;
+#endif
   ULONG view_protection = 0;  // group views: the protection they were mapped with
   // Slice A admission only: not the section maximum. Bounds certified by
   // this successfully created, whole logical view; invalidated by splits,
@@ -328,6 +336,10 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
   alias.write_lease = from.write_lease;  // another view of the same writable mapping
   alias.shared_alias = true;
   alias.offset = from.offset;
+#ifdef _WIN32
+  alias.futex_file = from.futex_file;
+  alias.futex_file_error = from.futex_file_error;
+#endif
   alias.view_protection = protection;
   alias.view_padding = padding;
   alias.physical_extent = length + alias.view_padding;
@@ -894,6 +906,9 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, HANDLE f
     r.view = reinterpret_cast<void*>(result);
     r.mapping = mapping;
     r.offset = begin;
+#ifdef _WIN32
+    if (shared) r.futex_file_error = gesher::record_locks::FileIdentity(file, &r.futex_file);
+#endif
     r.view_protection = view_protection;
     r.shared = shared;
     r.physical_extent = in_view;
@@ -1142,6 +1157,9 @@ void* MapFile(State& s, void* start, size_t len, int prot, int flags, HANDLE fil
   region.mapping = mapping;
   region.shared = shared;
   region.offset = static_cast<uint64_t>(offset);
+#ifdef _WIN32
+  if (shared) region.futex_file_error = gesher::record_locks::FileIdentity(file, &region.futex_file);
+#endif
   region.view_protection = map_access;
   region.view_padding = padding;
   region.physical_extent = len + padding;
@@ -1663,6 +1681,58 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
 }
 
 }  // extern "C"
+
+#ifdef _WIN32
+namespace {
+
+int SharedFutexRegion(State& s, const volatile int* address, gesher::SharedFutexKey* key,
+                      HANDLE* section) {
+  const auto at = reinterpret_cast<uintptr_t>(address);
+  MEMORY_BASIC_INFORMATION info;
+  if (VirtualQuery(const_cast<const int*>(address), &info, sizeof(info)) == 0 ||
+      info.State != MEM_COMMIT ||
+      (info.Protect & (PAGE_NOACCESS | PAGE_GUARD | PAGE_EXECUTE)) != 0) return -EFAULT;
+  auto region = FindRegion(s, at);
+  if (region == s.regions.end() || region->second.kind != Kind::kView ||
+      !region->second.shared) return 0;
+  const auto& view = region->second;
+  const uintptr_t within = at - region->first;
+  if (!view.live[within / s.page_size]) return -EFAULT;
+  if (view.futex_file_error != 0) return -view.futex_file_error;
+  *key = {view.futex_file, view.offset + within};
+  if (section != nullptr) *section = view.mapping;
+  return 1;
+}
+
+}  // namespace
+
+namespace gesher {
+
+int GetSharedFutexMapping(const volatile int* address, SharedFutexMapping* mapping) {
+  State& s = state();
+  std::lock_guard<std::mutex> guard(s.lock);
+  HANDLE section;
+  const int status = SharedFutexRegion(s, address, &mapping->key, &section);
+  if (status <= 0) return status;
+  if (int error = mapping->Pin(section)) return -error;
+  return 1;
+}
+
+int ReadSharedFutexWord(const volatile int* address, const SharedFutexKey& key, int* value) {
+  State& s = state();
+  std::lock_guard<std::mutex> guard(s.lock);
+  SharedFutexKey current;
+  const int status = SharedFutexRegion(s, address, &current, nullptr);
+  if (status < 0) return -status;
+  if (status == 0 || !(current.file == key.file) || current.offset != key.offset) return EFAULT;
+  // Compare an aligned 32-bit word while its mapping and protection are
+  // locked against replacement by mmap, munmap and mprotect.
+  *value = __atomic_load_n(address, __ATOMIC_SEQ_CST);
+  return 0;
+}
+
+}  // namespace gesher
+#endif
 
 namespace gesher {
 
