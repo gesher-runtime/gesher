@@ -41,10 +41,10 @@ import java.util.concurrent.TimeUnit;
  *       transform matrix (the vertical flip), with the frame's time stamp; a second frame
  *       replaces it; no new frame keeps it; another context current is
  *       IllegalStateException;
- *   <li>detachFromGLContext deletes the texture; attachToGLContext in another context shows
- *       the latched frame in its new texture; attaching twice and detaching a detached one
- *       throw; releaseTexImage drops the frame (black, time stamp 0); release() makes
- *       updateTexImage throw;
+ *   <li>detachFromGLContext deletes the texture and prevents latching until reattachment;
+ *       attachToGLContext in another context shows the latched frame in its new texture;
+ *       attaching twice and detaching a detached one throw; releaseTexImage drops the frame
+ *       (black, time stamp 0); release() makes updateTexImage throw;
  *   <li>Firefox's pattern: SurfaceTexture(0) detached at once with no context current,
  *       attached later on the rendering thread.
  * </ul>
@@ -109,6 +109,7 @@ public final class SurfaceTextureGlTest {
     Handler handler = new Handler(thread.getLooper());
     try (Gl a = new Gl(); Gl b = new Gl()) {
       check(a.makeCurrent() && b.makeCurrent(), "two ES 2 contexts on pbuffers");
+      detachedAtConstruction();
       attachedAtConstruction(a, b, handler);
       detachedAtOnce(a, handler);
       singleBuffer(a, b, handler);
@@ -154,6 +155,16 @@ public final class SurfaceTextureGlTest {
     }
     config = configs[0];
     return true;
+  }
+
+  private static void detachedAtConstruction() {
+    SurfaceTexture texture = new SurfaceTexture(false);
+    try {
+      check(throwsIllegalState(texture::updateTexImage),
+          "a detached SurfaceTexture with an empty queue cannot adopt the current context");
+    } finally {
+      texture.release();
+    }
   }
 
   private static void attachedAtConstruction(Gl a, Gl b, Handler handler) throws Exception {
@@ -206,7 +217,12 @@ public final class SurfaceTextureGlTest {
     check(throwsRuntime(st::detachFromGLContext),
         "detachFromGLContext of a detached SurfaceTexture throws");
 
+    long beforeDetach = st.getTimestamp();
+    draw(producer, Color.CYAN, Color.CYAN);
+    check(frames.tryAcquire(5, TimeUnit.SECONDS), "a Canvas frame can queue while detached");
     b.makeCurrent();
+    check(throwsIllegalState(st::updateTexImage) && st.getTimestamp() == beforeDetach,
+        "updateTexImage while detached leaves the current frame intact");
     int texB = newTexture();
     st.attachToGLContext(texB);
     f = sample(texB, m);
@@ -215,6 +231,11 @@ public final class SurfaceTextureGlTest {
             + hex(f[at(W / 2, H / 2)]) + ")");
     check(throwsRuntime(() -> st.attachToGLContext(texB)),
         "attachToGLContext of an attached SurfaceTexture throws");
+
+    st.updateTexImage();
+    f = sample(texB, m);
+    check(f[at(W / 2, H / 2)] == Color.CYAN && st.getTimestamp() > beforeDetach,
+        "updateTexImage after reattachment latches the frame queued while detached");
 
     st.releaseTexImage();
     f = sample(texB, m);

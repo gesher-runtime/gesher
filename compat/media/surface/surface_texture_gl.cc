@@ -198,6 +198,10 @@ int GlTextureConsumer::UpdateTexImage(const std::shared_ptr<const SurfaceFrame>&
     ALOGE("SurfaceTexture: updateTexImage: SurfaceTexture is abandoned!");
     return kNoInit;
   }
+  if (mode_ != Mode::kAttached) {
+    ALOGE("SurfaceTexture: updateTexImage: SurfaceTexture is not attached to a GL context");
+    return kInvalidOperation;
+  }
   if (int err = CheckEglState(false); err != kOk) return err;
   const Angle* a = GetAngle();
   if (latest == nullptr || latest->number == latched_number_ || latest->width <= 0 ||
