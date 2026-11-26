@@ -339,9 +339,30 @@ PROPERTY_REVISION_PATCH_SHA256 = '5bb1443e1964494445e1818a9d6116979e095b23856fcf
 GLES_PROPERTY_SHA256 = '4d7926dd316851b91bd45620a967da119b54e2408c44e351303ab937866f440c'
 GLES_PROPERTY_PATCH = 'tools/net-tcp-priority/qualified/gles-property-source.patch'
 GLES_PROPERTY_PATCH_SHA256 = '72a6c1c9ba827072ba13c9aac32774e4dcda74260d54f8853e25ae7971be06f6'
-def preceding_gles_property_source():
+APPCONTAINER_PROPERTY_PATCH = 'tools/net-tcp-priority/qualified/store-appcontainer-property-source.patch'
+APPCONTAINER_PROPERTY_PATCH_SHA256 = '16a7e272e57c65cb8da21e473f671b9816e18324c45484d85a09f9777ef8e4fe'
+APPCONTAINER_PROPERTY_SHA256 = {
+ 'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
+ 'compat/posix/src/system_properties.cc': 'e5167149c66ce87a3a39c9f05cc685148a93045c31faf3846a08283ba4d59045',
+}
+def preceding_appcontainer_transition(patch_name,patch_digest,source_digests):
+ patch=(ROOT/patch_name).read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==patch_digest,patch_name
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==list(source_digests)
+ sources={path:(ROOT/path).read_bytes() for path in source_digests}
+ with tempfile.TemporaryDirectory(prefix='gesher-appcontainer-source-qualification-') as temporary:
+  work=Path(temporary)
+  for path,source in sources.items():
+   assert hashlib.sha256(source).hexdigest()==source_digests[path],path
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(source)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  previous={path:(work/path).read_bytes() for path in sources}
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert {path:(work/path).read_bytes() for path in sources}==sources,patch_name
+ return previous
+def preceding_gles_property_source(source):
  path='compat/posix/src/system_properties.cc'
- source=(ROOT/path).read_bytes()
  assert hashlib.sha256(source).hexdigest()==GLES_PROPERTY_SHA256,path
  patch=(ROOT/GLES_PROPERTY_PATCH).read_bytes()
  assert hashlib.sha256(patch).hexdigest()==GLES_PROPERTY_PATCH_SHA256,'gles property transition changed'
@@ -359,10 +380,12 @@ def preceding_gles_property_source():
  return previous
 def preceding_logging_property_source():
  path='compat/posix/src/system_properties.cc'
- source=preceding_gles_property_source()
- assert hashlib.sha256(source).hexdigest()==PROPERTY_REVISION_SHA256,path
  header='compat/posix/include/gesher/system_properties.h'
- assert hashlib.sha256((ROOT/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
+ history=preceding_appcontainer_transition(APPCONTAINER_PROPERTY_PATCH,APPCONTAINER_PROPERTY_PATCH_SHA256,
+                                           APPCONTAINER_PROPERTY_SHA256)
+ source=preceding_gles_property_source(history[path])
+ assert hashlib.sha256(source).hexdigest()==PROPERTY_REVISION_SHA256,path
+ assert hashlib.sha256(history[header]).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
  patch=(ROOT/'tools/net-tcp-priority/qualified/native13-property-source.patch').read_bytes()
  assert hashlib.sha256(patch).hexdigest()==PROPERTY_REVISION_PATCH_SHA256,'property revision transition changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
@@ -487,6 +510,30 @@ STORAGE_POLICY_HELPERS=[
  'compat/posix/src/storage_policy.cc',
  'compat/posix/src/storage_policy.h',
 ]
+# Require the exact AppContainer storage and descriptor sources before
+# checking older storage and OFD evidence against the historical bytes.
+# The socket ownership and poll function checks below still read live code.
+APPCONTAINER_BASELINE='82bb674a00ed50fcfa5c234fcd7f9830d08d443e'
+APPCONTAINER_SOURCE_PATCH='tools/net-tcp-priority/qualified/store-appcontainer-bootstrap-source.patch'
+APPCONTAINER_SOURCE_PATCH_SHA256='040f8f8f4ce5d82240ec188ba2f495b5c564a05458d98b302d063267aeafd68d'
+APPCONTAINER_NULL_HEADER='compat/posix/src/startup_null.h'
+APPCONTAINER_NULL_HEADER_SHA256='4795ed9480f6ac589f589ce79bce6fbeb4a7db227beb70e71041766e9e7816d2'
+APPCONTAINER_SOURCE_SHA256={
+ 'compat/posix/src/fd.cc':'a017209b5a38ddaa9fd91772e954927286eeec5122857007a5f8fa5662de26fa',
+ 'compat/posix/src/pipe_io.cc':'1d7dd16a4d6cb3c021feac127af5a8d48bf86e4dec6a63041a57302face82298',
+ 'compat/posix/src/record_lock_duplicate.cc':'429d6b3976cb13d3b324ce6667167303d42e2b3b126b37c9a8fcaeee805655ae',
+ 'compat/posix/src/storage_policy.cc':'804d3fa7643f84e71a461006ceeb528ad6c817d383dfb6a27e6f4eb95701892b',
+}
+def preceding_appcontainer_source(path):
+ if path not in APPCONTAINER_SOURCE_SHA256:
+  return (ROOT/path).read_bytes()
+ assert hashlib.sha256((ROOT/APPCONTAINER_NULL_HEADER).read_bytes()).hexdigest()==APPCONTAINER_NULL_HEADER_SHA256
+ previous=preceding_appcontainer_transition(APPCONTAINER_SOURCE_PATCH,APPCONTAINER_SOURCE_PATCH_SHA256,
+                                            APPCONTAINER_SOURCE_SHA256)
+ for changed in previous:
+  baseline=subprocess.check_output(['git','-C',str(ROOT),'show',APPCONTAINER_BASELINE+':'+changed])
+  assert previous[changed]==baseline,'AppContainer reverse transition differs from baseline: '+changed
+ return previous[path]
 def preceding_storage_policy_sources():
  raw=(ROOT/STORAGE_POLICY_QUALIFICATION).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==STORAGE_POLICY_QUALIFICATION_SHA256,'storage policy source qualification changed'
@@ -500,7 +547,7 @@ def preceding_storage_policy_sources():
  baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':tools/net-tcp-priority/test-selected-policy.py'])
  assert hashlib.sha256(baseline_policy).hexdigest()==qualification['baseline_policy_sha256'],'storage policy baseline policy changed'
  for path in STORAGE_POLICY_HELPERS:
-  assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==qualification['helper_sha256'][path],path
+  assert hashlib.sha256(preceding_appcontainer_source(path)).hexdigest()==qualification['helper_sha256'][path],path
  patch=(ROOT/STORAGE_POLICY_PATCH).read_bytes()
  assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'storage policy transition patch changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STORAGE_POLICY_PATHS
@@ -543,7 +590,7 @@ def preceding_ofd_sources():
  assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()),'source qualifications overlap'
  preceding={**memfd_lease,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
-  actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
+  actual=preceding[path] if path in preceding else preceding_appcontainer_source(path)
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   assert hashlib.sha256(actual).hexdigest()==digest,path
@@ -551,7 +598,7 @@ def preceding_ofd_sources():
   work=Path(temporary)
   for path in paths:
    (work/path).parent.mkdir(parents=True,exist_ok=True)
-   (work/path).write_bytes(preceding.get(path,(ROOT/path).read_bytes()))
+   (work/path).write_bytes(preceding[path] if path in preceding else preceding_appcontainer_source(path))
   subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
   subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
   previous={path:(work/path).read_bytes() for path in paths}
@@ -652,7 +699,7 @@ def check():
          WINSOCK_BASE if path=='compat/posix/src/winsock.cc' else
          CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
   expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
-  actual=preceding.get(path,(ROOT/path).read_bytes())
+  actual=preceding[path] if path in preceding else preceding_appcontainer_source(path)
   for addition in FORK_LOCK_ADDITIONS.get(path,()):
    assert actual.count(addition)==1 and actual.endswith(addition),path
    actual=actual[:-len(addition)]
@@ -829,6 +876,10 @@ def transition_negative_controls():
   # #421's build.prop filter admits its exact reviewed delta only.
   ('compat/posix/src/system_properties.cc',b'if (!ServedBuildProperty(key, value)) continue;',b'if (!ServedBuildProperty(key, value)) {}'),
   (GLES_PROPERTY_PATCH,b'@@',b'@x'),
+  (APPCONTAINER_PROPERTY_PATCH,b'@@',b'@x'),
+  (APPCONTAINER_SOURCE_PATCH,b'@@',b'@x'),
+  (APPCONTAINER_NULL_HEADER,b'kNullDevice[]',b'otherDevice[]'),
+  ('compat/posix/src/storage_policy.cc',b'length >= 32768',b'length >= 32767'),
   # The memmem normalization admits its exact reviewed delta only. The old
   # whole-file digest must still reject any unrelated shim change afterwards.
   ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
@@ -865,12 +916,16 @@ def transition_negative_controls():
   # behavior changes: the pinned reverse transition and original OFD receipt
   # must reject them too.
   lease=name in MEMFD_LEASE_PATHS or name==MEMFD_LEASE_PATCH
-  for repin in (False,True) if name=='compat/posix/src/system_properties.cc' or lease else (False,):
+  bootstrap=name in APPCONTAINER_SOURCE_SHA256
+  for repin in (False,True) if name=='compat/posix/src/system_properties.cc' or bootstrap or lease else (False,):
    pins={'GLES_PROPERTY_SHA256':GLES_PROPERTY_SHA256,'MEMFD_LEASE_QUALIFICATION_SHA256':MEMFD_LEASE_QUALIFICATION_SHA256}
    reads=changed
-   # The current file's pin is GLES_PROPERTY_SHA256: refreshing it must leave the
-   # reverse transitions (#421's, then NATIVE-13's) to reject the change.
-   if repin and not lease:pins['GLES_PROPERTY_SHA256']=hashlib.sha256(changed(target)).hexdigest()
+   if repin and bootstrap:
+    pins['APPCONTAINER_SOURCE_SHA256']={**APPCONTAINER_SOURCE_SHA256,
+                                       name:hashlib.sha256(changed(target)).hexdigest()}
+   if repin and not bootstrap and not lease:
+    pins['APPCONTAINER_PROPERTY_SHA256']={**APPCONTAINER_PROPERTY_SHA256,
+                                         name:hashlib.sha256(changed(target)).hexdigest()}
    if repin and lease:
     receipt=memfd_lease_repin(name,changed(target))
     pins['MEMFD_LEASE_QUALIFICATION_SHA256']=hashlib.sha256(receipt).hexdigest()
@@ -883,7 +938,7 @@ def transition_negative_controls():
    assert rejected is not None,'unqualified mutation accepted: '+name+' repin='+str(repin)
    # A repinned receipt passes its own digest checks, so the rejection must
    # come from the reverse transition, not from the stale pin.
-   if repin and lease:
+   if repin and (bootstrap or lease):
     message=str(rejected)
     assert 'qualification changed' not in message and 'transition patch changed' not in message and message!=name,(name,message)
  print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease))

@@ -1,0 +1,144 @@
+diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
+index a8fb022e2..4bb50d212 100644
+--- a/compat/posix/src/fd.cc
++++ b/compat/posix/src/fd.cc
+@@ -38,0 +39 @@
++#include "startup_null.h"
+@@ -125,0 +127,36 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
++class StartupNull {
++ public:
++  StartupNull() {
++    HANDLE token = nullptr;
++    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return;
++    DWORD contained = 0;
++    DWORD size = 0;
++    const BOOL queried = GetTokenInformation(token, TokenIsAppContainer, &contained,
++                                             sizeof(contained), &size);
++    CloseHandle(token);
++    if (!queried || !contained) return;
++    STARTUPINFOW startup{};
++    startup.cb = sizeof(startup);
++    GetStartupInfoW(&startup);
++    if (startup.dwFlags & STARTF_USESTDHANDLES) {
++      handle_ = DuplicateVerifiedNull(startup.hStdInput);
++    }
++  }
++
++  ~StartupNull() { if (handle_) CloseHandle(handle_); }
++
++  HANDLE Duplicate(bool inheritable) const {
++    HANDLE result = nullptr;
++    if (!handle_ || !DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(), &result,
++                                     0, inheritable, DUPLICATE_SAME_ACCESS)) {
++      return INVALID_HANDLE_VALUE;
++    }
++    return result;
++  }
++
++ private:
++  HANDLE handle_ = nullptr;
++};
++
++const StartupNull startup_null;
++
+@@ -128 +165,2 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
+-int ReserveFd() {
++HANDLE OpenDescriptorPlaceholder(bool inheritable) {
++  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
+@@ -130 +168,13 @@ int ReserveFd() {
+-                         nullptr, OPEN_EXISTING, 0, nullptr);
++                         &attributes, OPEN_EXISTING, 0, nullptr);
++  if (h == INVALID_HANDLE_VALUE) {
++    const DWORD error = GetLastError();
++    // Spawn provides this NUL handle to contained processes before its token
++    // restrictions apply. A verified duplicate keeps the CRT object type.
++    if (error == ERROR_ACCESS_DENIED) h = startup_null.Duplicate(inheritable);
++    if (h == INVALID_HANDLE_VALUE) SetLastError(error);
++  }
++  return h;
++}
++
++int ReserveFd() {
++  const HANDLE h = OpenDescriptorPlaceholder();
+@@ -135 +185,2 @@ int ReserveFd() {
+-  else if (SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
++  else if (RegisterOfd(fd, O_RDWR) < 0 ||
++           SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
+@@ -136,0 +188 @@ int ReserveFd() {
++    ForgetOfd(fd);
+diff --git a/compat/posix/src/pipe_io.cc b/compat/posix/src/pipe_io.cc
+index 2c5158fbd..7ffbb303a 100644
+--- a/compat/posix/src/pipe_io.cc
++++ b/compat/posix/src/pipe_io.cc
+@@ -20,0 +21 @@
++#include <cwchar>
+@@ -361,0 +363,3 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
++  DWORD contained = 0, token_bytes = 0;
++  if (!GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
++                           &contained, sizeof(contained), &token_bytes)) return FailWithLastError();
+@@ -365 +369,7 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
+-  wchar_t name[100] = L"\\\\.\\pipe\\gesher-";
++  // Windows allows AppContainer pipe creation in its own LOCAL namespace.
++  // Transfer and inheritance still use the directional handles opened here.
++  const wchar_t* pipe_directory =
++      contained ? L"\\\\.\\pipe\\LOCAL\\gesher-" : L"\\\\.\\pipe\\gesher-";
++  const size_t prefix = std::wcslen(pipe_directory);
++  wchar_t name[100];
++  std::copy_n(pipe_directory, prefix, name);
+@@ -367 +376,0 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
+-  const size_t prefix = 16;
+diff --git a/compat/posix/src/record_lock_duplicate.cc b/compat/posix/src/record_lock_duplicate.cc
+index 7925d9b85..7625d6a64 100644
+--- a/compat/posix/src/record_lock_duplicate.cc
++++ b/compat/posix/src/record_lock_duplicate.cc
+@@ -4,0 +5 @@
++#include "startup_null.h"
+@@ -34,2 +35 @@ int EnsureNulIdentity() {
+-    HANDLE candidate = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+-        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
++    HANDLE candidate = gesher::OpenDescriptorPlaceholder(false);
+diff --git a/compat/posix/src/storage_policy.cc b/compat/posix/src/storage_policy.cc
+index bfa1fe816..c931fbcfa 100644
+--- a/compat/posix/src/storage_policy.cc
++++ b/compat/posix/src/storage_policy.cc
+@@ -220,0 +221 @@ struct ProcessIdentity {
++  std::wstring native_media_root;
+@@ -222,0 +224,11 @@ struct ProcessIdentity {
++bool IsAppContainer() {
++  HANDLE token = nullptr;
++  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
++  DWORD contained = 0;
++  DWORD size = 0;
++  const BOOL ok = GetTokenInformation(token, TokenIsAppContainer, &contained,
++                                      sizeof(contained), &size);
++  CloseHandle(token);
++  return ok && contained != 0;
++}
++
+@@ -234,0 +247,4 @@ extern "C" __declspec(dllexport) ProcessIdentity* gesher_storage_policy_owner_v1
++    const wchar_t* native_root = _wgetenv(L"GESHER_STORAGE_NT_MEDIA_ROOT");
++    if (!value->media_root.empty() && native_root &&
++        StartsWithIgnoreCase(native_root, L"\\Device\\") && IsAppContainer())
++      value->native_media_root = native_root;
+@@ -546 +562,2 @@ std::wstring ExternalStorageChildEnvironment(const wchar_t* environment) {
+-        !EqualsIgnoreCase(name, L"GESHER_UID") && !EqualsIgnoreCase(name, L"ANDROID_DATA"))
++        !EqualsIgnoreCase(name, L"GESHER_UID") && !EqualsIgnoreCase(name, L"ANDROID_DATA") &&
++        !EqualsIgnoreCase(name, L"GESHER_STORAGE_NT_MEDIA_ROOT"))
+@@ -551,0 +569,2 @@ std::wstring ExternalStorageChildEnvironment(const wchar_t* environment) {
++  if (!identity.native_media_root.empty())
++    entries.push_back(L"GESHER_STORAGE_NT_MEDIA_ROOT=" + identity.native_media_root);
+@@ -570,0 +590,14 @@ bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind) {
++  if (!identity.native_media_root.empty()) {
++    const DWORD length = GetFinalPathNameByHandleW(handle, path, 32768,
++        FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
++    if (!length || length >= 32768) return errno = EACCES, false;
++    const std::wstring_view native_path(path, length);
++    if (!StartsWithIgnoreCase(native_path, L"\\Device\\")) return errno = EACCES, false;
++    const std::wstring& native_root = identity.native_media_root;
++    if (!StartsWithIgnoreCase(native_path, native_root)) return true;
++    const std::wstring_view suffix = native_path.substr(native_root.size());
++    if (!suffix.empty() && suffix.front() != L'\\') return true;
++    // Translate only a normalized handle under the broker's actual media root.
++    // The shared rules still need the DOS path for policy-file and media lookups.
++    return CheckCanonicalPath(identity, identity.media_root + std::wstring(suffix), kind);
++  }

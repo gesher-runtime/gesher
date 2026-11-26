@@ -63,9 +63,13 @@ it does not establish a complete Android app launch in M1.
   | `TEMP`/`TMP` | the container's own folder (`GetAppContainerFolderPath`) | (owner) |
 
 - **Capabilities**: `gesherRuntimeFiles` and `gesherBinderClient` always;
-  INTERNET adds `internetClient` and `privateNetworkClientServer` (Android's
-  INTERNET covers the local network too). Nothing else yet: devices stay with
-  the system server's services.
+  INTERNET normally adds `internetClient` and `privateNetworkClientServer`
+  (Android's INTERNET covers the local network too). In the development layout,
+  set `GESHER_SANDBOX_NETWORK=internet-only` in the server's environment to
+  qualify the Free candidate with only `internetClient`. Other values are
+  rejected. This selects grants on the APK process token. Network calls made
+  by services outside that process still need separate qualification. Devices
+  stay with the system server's services.
 - **External storage** (when this experiment is enabled): policy publication
   updates the package's live storage ACEs, including downgrades and revocation.
   Shared grants inherit into newly created files. `Android/data` and

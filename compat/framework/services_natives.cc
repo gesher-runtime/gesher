@@ -29,6 +29,8 @@
 #include <nativehelper/JNIHelp.h>
 #include <unistd.h>
 #include <cstdio>
+#include <gesher/storage_policy.h>
+#include <gesher/system_properties.h>
 
 #include "core_jni_helpers.h"
 #include "services_zygote.h"
@@ -172,9 +174,22 @@ static jint Zygote_spawnInAppContainer(JNIEnv* env, jclass, jstring commandLine,
     spec.name = ZygoteString(env, name);
     spec.display_name = ZygoteString(env, displayName);
     spec.capabilities = ZygoteStrings(env, capabilities);
+    // Gesher's app window path currently has no display vsync source.
+    // Initialize the same message-clock setting before the contained reader starts.
+    if (!gesher::properties::Set("debug.choreographer.vsync", "false")) return -5;
+    const std::wstring propertyPath = gesher::properties::ReadOnlyAreaPath();
+    if (propertyPath.empty()) return -2;
+    constexpr uint32_t kFileGenericRead = 0x00120089;
+    const uint32_t grant = gesher::zygote::GrantToAppContainer(
+        std::u16string(propertyPath.begin(), propertyPath.end()), spec.name,
+        kFileGenericRead, false);
+    if (grant != 0) return -static_cast<jint>(grant);
+    const std::wstring mediaRoot = gesher::ExternalStorageDataRoot() + L"\\media\\0";
     return gesher::zygote::SpawnInAppContainer(ZygoteString(env, commandLine),
                                                ZygoteStrings(env, set), ZygoteStrings(env, unset),
-                                               ZygoteString(env, logPath), spec);
+                                               ZygoteString(env, logPath), spec,
+                                               std::u16string(reinterpret_cast<const char16_t*>(
+                                                   mediaRoot.data()), mediaRoot.size()));
 }
 
 static jint Zygote_ensureAppContainer(JNIEnv* env, jclass, jstring name, jstring displayName) {

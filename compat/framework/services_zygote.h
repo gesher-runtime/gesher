@@ -37,11 +37,12 @@ struct AppContainerSpec {
 };
 
 // Spawn, never breaking away, in the container `sandbox` (its profile created
-// if needed), TEMP and TMP set to the container's own folder.
+// if needed), TEMP and TMP set to the container's own folder. If supplied,
+// resolve the trusted shared-storage root before dropping broker privileges.
 int SpawnInAppContainer(const std::u16string& command_line,
                         const std::vector<std::u16string>& set,
                         const std::vector<std::u16string>& unset, const std::u16string& log_path,
-                        const AppContainerSpec& sandbox);
+                        const AppContainerSpec& sandbox, const std::u16string& media_root = {});
 
 // The container's profile for this Windows user, created if it does not exist.
 uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& display_name);

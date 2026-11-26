@@ -33,6 +33,8 @@ final class AppSandbox {
 
     /** The environment switch, as binderd reads it too. */
     static final String ENV = "GESHER_SANDBOX";
+    /** Experimental network profile selected by the system server's launcher. */
+    static final String NETWORK_ENV = "GESHER_SANDBOX_NETWORK";
     static final String RUNTIME_FILES = "gesherRuntimeFiles";
     static final String BINDER_CLIENT = "gesherBinderClient";
     static final String INTERNET_CLIENT = "internetClient";
@@ -82,15 +84,19 @@ final class AppSandbox {
     }
 
     /**
-     * The capabilities of the package's token. INTERNET is Android's whole network
-     * access, the Internet and the local network both; nothing else maps to a
-     * capability in this milestone (devices stay with the system server's services).
+     * The capabilities of the package's token. The default experimental profile
+     * maps Android INTERNET to public and private networks. The internet-only
+     * profile omits private network access for Free edition qualification.
      */
     static List<String> capabilities(boolean internet) {
+        String profile = System.getenv(NETWORK_ENV);
+        if (profile != null && !"internet-only".equals(profile)) {
+            throw new IllegalArgumentException("Unknown AppContainer network profile: " + profile);
+        }
         List<String> caps = new ArrayList<>(List.of(RUNTIME_FILES, BINDER_CLIENT));
         if (internet) {
             caps.add(INTERNET_CLIENT);
-            caps.add(PRIVATE_NETWORK);
+            if (profile == null) caps.add(PRIVATE_NETWORK);
         }
         return caps;
     }
@@ -101,6 +107,7 @@ final class AppSandbox {
      */
     static int spawn(String commandLine, List<String> env, File logFile,
             PackageManagerService pm, ApkPackage pkg, String packageName, boolean internet) {
+        List<String> caps = capabilities(internet);
         String container = containerName(packageName);
         int error = Zygote.nativeEnsureAppContainer(container, packageName);
         if (error != 0) {
@@ -151,7 +158,6 @@ final class AppSandbox {
         // Publication prepares the replacement file's ACL and reconciles live
         // storage grants through the same path as permission/AppOp changes.
         ExternalStorageAccess.syncPackage(pm, pkg);
-        List<String> caps = capabilities(internet);
         SystemServer.log("sandbox: " + packageName + " in AppContainer " + container
                 + " with " + caps);
         return Zygote.spawnInAppContainer(commandLine, env, logFile.getPath(), container,

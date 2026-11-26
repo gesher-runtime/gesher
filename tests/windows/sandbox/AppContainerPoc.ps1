@@ -14,10 +14,17 @@ param(
   [string] $Apk = '',
   [int] $Seconds = 600,
   # The same run without the sandbox: a baseline for the layout under test.
-  [switch] $NoSandbox
+  [switch] $NoSandbox,
+  # Supply an HWND for APK fixtures that initialize the real WebView2 controller.
+  [switch] $HiddenWindow,
+  [string[]] $LaunchArguments = @()
 )
 $ErrorActionPreference = 'Stop'
 $Dir = (Resolve-Path $Dir).Path
+$Root = [IO.Path]::GetFullPath($Root)
+if ([IO.Path]::GetPathRoot($Dir) -ne [IO.Path]::GetPathRoot($Root)) {
+  throw 'Use a scratch profile on the same drive as the runtime for drive-less ART paths.'
+}
 if (-not $Apk) { $Apk = Join-Path $Dir 'lifecycle.apk' }
 function NoDrive([string] $p) { ($p -replace '\\', '/') -replace '^[A-Za-z]:', '' }
 
@@ -28,6 +35,13 @@ Copy-Item "$Dir/icudt*l.dat" (Join-Path $Root 'i18n/etc/icu')
 if (Test-Path "$Dir/tzdata") { Copy-Item -Recurse -Force "$Dir/tzdata/*" (Join-Path $Root 'tzdata') }
 Copy-Item "$Dir/framework-res.apk" (Join-Path $Root 'system/framework')
 Copy-Item "$Dir/build.prop" (Join-Path $Root 'system')
+if (Test-Path "$Dir/fonts/fonts.xml") {
+  foreach ($d in 'system/etc','system/fonts') {
+    New-Item -ItemType Directory -Force (Join-Path $Root $d) | Out-Null
+  }
+  Copy-Item "$Dir/fonts/*.xml" (Join-Path $Root 'system/etc')
+  Copy-Item "$Dir/fonts/*.ttf" (Join-Path $Root 'system/fonts')
+}
 if (Test-Path "$Dir/framework/x86_64/boot.art") {
   New-Item -ItemType Directory -Force (Join-Path $Root 'system/framework/x86_64') | Out-Null
   Copy-Item "$Dir/framework/x86_64/*" (Join-Path $Root 'system/framework/x86_64')
@@ -42,6 +56,7 @@ $env:GESHER_LOGS = NoDrive "$Root/logs"
 $env:GESHER_BINDER = "sandbox-$PID"
 $env:GESHER_LOCALES = 'en-US'
 $env:GESHER_APP_WINDOW = 'headless'
+$env:GESHER_SHORTCUTS = '0'
 if ($NoSandbox) { Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue } else { $env:GESHER_SANDBOX = 'appcontainer' }
 
 $bcp = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') |
@@ -122,11 +137,22 @@ $watcher = [PowerShell]::Create()
 }).AddArgument($watch).AddArgument((NoDrive $Dir))
 $async = $watcher.BeginInvoke()
 
+$failure = $null
 try {
   Write-Host "== install $Apk"
-  Run ($launcher + 'install', (NoDrive $Apk)) | Write-Host
-  Write-Host "== launch"
-  Run ($launcher + 'launch', (NoDrive $Apk)) | Write-Host
+  $installOutput = @(Run ($launcher + 'install', (NoDrive $Apk)))
+  $installOutput | Write-Host
+  if ($HiddenWindow -and $installOutput[-1] -ne '(exit 0)') {
+    $failure = 'APK install failed'
+  } else {
+    Write-Host "== launch"
+    $launch = $launcher + 'launch', (NoDrive $Apk)
+    if ($HiddenWindow) { $launch += '--hidden-window', '--wait' }
+    $launch += $LaunchArguments
+    $launchOutput = @(Run $launch)
+    $launchOutput | Write-Host
+    if ($HiddenWindow -and $launchOutput[-1] -ne '(exit 0)') { $failure = 'APK launch failed' }
+  }
 } finally {
   Write-Host "== shutdown"
   Run ($launcher + 'shutdown') | Write-Host
@@ -141,3 +167,4 @@ foreach ($f in Get-ChildItem (Join-Path $Root 'logs') -File -ErrorAction Silentl
   Write-Host "--- $($f.Name)"
   Get-Content $f.FullName -Tail 80 | Write-Host
 }
+if ($failure) { throw $failure }

@@ -36,6 +36,7 @@
 #include "poll_scratch.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
+#include "startup_null.h"
 
 namespace gesher {
 namespace {
@@ -123,17 +124,68 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
   return static_cast<int>(count);
 }
 
+class StartupNull {
+ public:
+  StartupNull() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return;
+    DWORD contained = 0;
+    DWORD size = 0;
+    const BOOL queried = GetTokenInformation(token, TokenIsAppContainer, &contained,
+                                             sizeof(contained), &size);
+    CloseHandle(token);
+    if (!queried || !contained) return;
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    GetStartupInfoW(&startup);
+    if (startup.dwFlags & STARTF_USESTDHANDLES) {
+      handle_ = DuplicateVerifiedNull(startup.hStdInput);
+    }
+  }
+
+  ~StartupNull() { if (handle_) CloseHandle(handle_); }
+
+  HANDLE Duplicate(bool inheritable) const {
+    HANDLE result = nullptr;
+    if (!handle_ || !DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(), &result,
+                                     0, inheritable, DUPLICATE_SAME_ACCESS)) {
+      return INVALID_HANDLE_VALUE;
+    }
+    return result;
+  }
+
+ private:
+  HANDLE handle_ = nullptr;
+};
+
+const StartupNull startup_null;
+
 }  // namespace
 
-int ReserveFd() {
+HANDLE OpenDescriptorPlaceholder(bool inheritable) {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
   HANDLE h = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                         nullptr, OPEN_EXISTING, 0, nullptr);
+                         &attributes, OPEN_EXISTING, 0, nullptr);
+  if (h == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    // Spawn provides this NUL handle to contained processes before its token
+    // restrictions apply. A verified duplicate keeps the CRT object type.
+    if (error == ERROR_ACCESS_DENIED) h = startup_null.Duplicate(inheritable);
+    if (h == INVALID_HANDLE_VALUE) SetLastError(error);
+  }
+  return h;
+}
+
+int ReserveFd() {
+  const HANDLE h = OpenDescriptorPlaceholder();
   if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
   record_locks::DescriptorGuard descriptor_guard;
   int fd = CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_NOINHERIT));
   if (fd < 0) CloseHandle(h);
-  else if (SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
+  else if (RegisterOfd(fd, O_RDWR) < 0 ||
+           SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
     int error = errno;
+    ForgetOfd(fd);
     _close(fd);
     return errno = error, -1;
   }

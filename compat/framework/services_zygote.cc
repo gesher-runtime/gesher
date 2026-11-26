@@ -310,8 +310,27 @@ int Spawn(const std::u16string& command_line, const std::vector<std::u16string>&
 int SpawnInAppContainer(const std::u16string& command_line,
                         const std::vector<std::u16string>& set,
                         const std::vector<std::u16string>& unset, const std::u16string& log_path,
-                        const AppContainerSpec& sandbox) {
-  return SpawnImpl(command_line, set, unset, log_path, false, 0, 0, &sandbox);
+                        const AppContainerSpec& sandbox, const std::u16string& media_root) {
+  std::vector<std::u16string> child_env = set;
+  // The container can get a normalized native path from an authorized handle,
+  // but Windows can refuse the lookup of a DOS drive name for that handle.
+  // Freeze the broker's matching NT root before starting the app.
+  std::u16string root_assignment = u"GESHER_STORAGE_NT_MEDIA_ROOT=";
+  if (!media_root.empty()) {
+    OwnedHandle root;
+    root.value = CreateFileW(W(media_root), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (root.value == INVALID_HANDLE_VALUE) return -static_cast<int>(GetLastError());
+    std::wstring path(32768, L'\0');
+    DWORD length = GetFinalPathNameByHandleW(root.value, path.data(),
+        static_cast<DWORD>(path.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+    if (length == 0) return -static_cast<int>(GetLastError());
+    if (length >= path.size()) return -ERROR_INSUFFICIENT_BUFFER;
+    root_assignment += U(path.data(), length);
+  }
+  child_env.push_back(std::move(root_assignment));
+  return SpawnImpl(command_line, child_env, unset, log_path, false, 0, 0, &sandbox);
 }
 
 uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& display_name) {

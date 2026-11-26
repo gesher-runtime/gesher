@@ -218,7 +218,19 @@ struct ProcessIdentity {
   std::string uid;
   std::wstring data_root;
   std::wstring media_root;
+  std::wstring native_media_root;
 };
+
+bool IsAppContainer() {
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+  DWORD contained = 0;
+  DWORD size = 0;
+  const BOOL ok = GetTokenInformation(token, TokenIsAppContainer, &contained,
+                                      sizeof(contained), &size);
+  CloseHandle(token);
+  return ok && contained != 0;
+}
 
 extern "C" __declspec(dllexport) ProcessIdentity* gesher_storage_policy_owner_v1() {
   // The launcher calls this before entering guest code. Never consult mutable
@@ -232,6 +244,10 @@ extern "C" __declspec(dllexport) ProcessIdentity* gesher_storage_policy_owner_v1
     value->data_root = EnvDirToWindows(getenv("ANDROID_DATA"));
     if (!value->data_root.empty())
       value->media_root = CanonicalizeWindowsPath(value->data_root + L"\\media\\0");
+    const wchar_t* native_root = _wgetenv(L"GESHER_STORAGE_NT_MEDIA_ROOT");
+    if (!value->media_root.empty() && native_root &&
+        StartsWithIgnoreCase(native_root, L"\\Device\\") && IsAppContainer())
+      value->native_media_root = native_root;
     return value;
   }();
   return identity;
@@ -543,12 +559,15 @@ std::wstring ExternalStorageChildEnvironment(const wchar_t* environment) {
     std::wstring_view entry(item);
     const auto name = entry.substr(0, entry.find(L'=', 1));
     if (!EqualsIgnoreCase(name, L"GESHER_APP_PACKAGE") &&
-        !EqualsIgnoreCase(name, L"GESHER_UID") && !EqualsIgnoreCase(name, L"ANDROID_DATA"))
+        !EqualsIgnoreCase(name, L"GESHER_UID") && !EqualsIgnoreCase(name, L"ANDROID_DATA") &&
+        !EqualsIgnoreCase(name, L"GESHER_STORAGE_NT_MEDIA_ROOT"))
       entries.emplace_back(entry);
   }
   entries.push_back(L"GESHER_APP_PACKAGE=" + Widen(identity.package.c_str()));
   entries.push_back(L"GESHER_UID=" + Widen(identity.uid.c_str()));
   entries.push_back(L"ANDROID_DATA=" + identity.data_root);
+  if (!identity.native_media_root.empty())
+    entries.push_back(L"GESHER_STORAGE_NT_MEDIA_ROOT=" + identity.native_media_root);
   std::sort(entries.begin(), entries.end(), [](const std::wstring& a, const std::wstring& b) {
     return _wcsicmp(a.c_str(), b.c_str()) < 0;
   });
@@ -568,6 +587,20 @@ bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind) {
   const ProcessIdentity& identity = Identity();
   if (identity.package.empty() || GetFileType(handle) != FILE_TYPE_DISK) return true;
   wchar_t path[32768];
+  if (!identity.native_media_root.empty()) {
+    const DWORD length = GetFinalPathNameByHandleW(handle, path, 32768,
+        FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+    if (!length || length >= 32768) return errno = EACCES, false;
+    const std::wstring_view native_path(path, length);
+    if (!StartsWithIgnoreCase(native_path, L"\\Device\\")) return errno = EACCES, false;
+    const std::wstring& native_root = identity.native_media_root;
+    if (!StartsWithIgnoreCase(native_path, native_root)) return true;
+    const std::wstring_view suffix = native_path.substr(native_root.size());
+    if (!suffix.empty() && suffix.front() != L'\\') return true;
+    // Translate only a normalized handle under the broker's actual media root.
+    // The shared rules still need the DOS path for policy-file and media lookups.
+    return CheckCanonicalPath(identity, identity.media_root + std::wstring(suffix), kind);
+  }
   DWORD length = GetFinalPathNameByHandleW(handle, path, 32768,
                                            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (!length || length >= 32768) return errno = EACCES, false;
