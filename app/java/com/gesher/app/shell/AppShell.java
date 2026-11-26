@@ -58,10 +58,20 @@ public final class AppShell {
     public static final String ENV_APP_USER_MODEL_ID = "GESHER_APP_USER_MODEL_ID";
     /** {@code GESHER_SHORTCUTS=0}: no Start menu shortcuts (and no URL protocols). */
     public static final String ENV_SHORTCUTS = "GESHER_SHORTCUTS";
+    /** Set by marker-aware launchers: no persistent integration with the host profile. */
+    private static boolean portableMode() {
+        return "1".equals(System.getenv("GESHER_PORTABLE"));
+    }
 
     private static final String TAG = "gesher-app";
     private static final String RECORD = "shortcut.properties";
     private static final String ICON = "icon.ico";
+    /**
+     * Written next to the window icon for a package without an enabled MAIN/LAUNCHER activity,
+     * removed when it has one: the Control Center offers "Launch" only for packages a launcher
+     * would list (tools/package/gesher-control-panel.ps1).
+     */
+    private static final String NO_LAUNCHER = "no-launcher-activity";
 
     private AppShell() {
     }
@@ -128,8 +138,40 @@ public final class AppShell {
         }
     }
 
+    /**
+     * Records whether {@code pkg} has an enabled MAIN/LAUNCHER activity ({@link #NO_LAUNCHER}),
+     * from its installed state when the system server passes its package (an enabled-state
+     * change, the device's start). Never throws.
+     */
+    public static void updateLauncherRecordQuietly(String packageName, ApkPackage pkg) {
+        try {
+            writeLauncherRecord(packageName, launcherActivity(pkg) != null);
+        } catch (Throwable t) {
+            log("no launcher record for " + packageName + ": " + t);
+        }
+    }
+
+    /** The installed package already has a data directory. Never recreate one during removal. */
+    private static void writeLauncherRecord(String packageName, boolean hasLauncher)
+            throws java.io.IOException {
+        File dir = shellDir(packageName);
+        File marker = new File(dir, NO_LAUNCHER);
+        if (hasLauncher) {
+            marker.delete();
+        } else if (!marker.isFile()) {
+            if (!dir.getParentFile().isDirectory()) return;
+            dir.mkdir();
+            new java.io.FileOutputStream(marker).close();
+        }
+    }
+
     private static void register(String packageName, String codePath, boolean changed)
             throws Exception {
+        if (portableMode()) {
+            writePortableRecord(packageName, codePath, changed);
+            return;
+        }
+        Properties old = shortcutOf(packageName);
         if ("0".equals(System.getenv(ENV_SHORTCUTS))) return;
         String gesher = installDir();
         String systemRoot = System.getenv("SystemRoot");
@@ -152,7 +194,6 @@ public final class AppShell {
             log("no Start menu shortcut for " + packageName + ": no Programs folder");
             return;
         }
-        Properties old = shortcutOf(packageName);
         String oldLink = old != null ? old.getProperty("link") : null;
         String oldTarget = old != null ? old.getProperty("target") : null;
         if (!changed && oldLink != null && codePath.equals(old.getProperty("code"))
@@ -162,6 +203,7 @@ public final class AppShell {
         }
 
         ApkPackage addon = com.gesher.server.MicrogAddons.stagedAddon(packageName, codePath);
+        ApkPackage pkg = addon != null ? addon : ApkPackage.parseCodeDirectory(codePath);
         if (addon != null) {
             // A staged microG addon (system/priv-app, not installed with gesher-app): its
             // windows get its icon, but no Start menu shortcut, which gesher-app-microg.ps1
@@ -171,7 +213,6 @@ public final class AppShell {
             writeWindowIcon(addon, packageName, changed);
             return;
         }
-        ApkPackage pkg = ApkPackage.parseCodeDirectory(codePath);
         ActivityInfo launcher = launcherActivity(pkg);
         if (launcher == null) {
             // As a launcher's app list: only apps with a MAIN/LAUNCHER activity.
@@ -222,6 +263,36 @@ public final class AppShell {
                 + icon.source);
     }
 
+    /** The portable app list and windows keep real labels/icons without a Windows shortcut. */
+    private static void writePortableRecord(String packageName, String codePath, boolean changed)
+            throws Exception {
+        Properties old = shortcutOf(packageName);
+        File dir = shellDir(packageName);
+        File ico = new File(dir, ICON);
+        if (!changed && old != null && "portable".equals(old.getProperty("target"))
+                && !old.containsKey("link") && codePath.equals(old.getProperty("code"))
+                && UiText.language().equals(old.getProperty("ui_language"))
+                && ("".equals(old.getProperty("icon")) || ico.isFile())) return;
+        ApkPackage addon = com.gesher.server.MicrogAddons.stagedAddon(packageName, codePath);
+        ApkPackage pkg = addon != null ? addon : ApkPackage.parseCodeDirectory(codePath);
+        ActivityInfo launcher = launcherActivity(pkg);
+        AppIcon icon = AppIcon.load(pkg.apkPath, pkg.applicationInfo(0), launcher);
+        dir.mkdirs();
+        if (icon.hasImages()) icon.writeIco(ico);
+        else ico.delete();
+        Properties record = new Properties();
+        record.setProperty("package", packageName);
+        record.setProperty("label", icon.label);
+        record.setProperty("icon", icon.hasImages() ? Zygote.windowsPath(ico.getPath()) : "");
+        record.setProperty("code", codePath);
+        record.setProperty("app_user_model_id", appUserModelId(packageName));
+        record.setProperty("target", "portable");
+        record.setProperty("ui_language", UiText.language());
+        // Do not copy an old profile's .lnk path into this profile's authority.
+        Device.write(new File(dir, RECORD), record);
+        writeLauncherRecord(packageName, launcher != null);
+    }
+
     /**
      * A package without a launcher activity still has windows (a settings Activity another app
      * or `launch <package>` starts), whose task shows the application's icon as on Android.
@@ -260,6 +331,7 @@ public final class AppShell {
             new File(dir, ICON).delete();
             new File(dir, RECORD).delete();
             new File(dir, DYNAMIC_RECORD).delete();
+            new File(dir, NO_LAUNCHER).delete();
             java.nio.file.Files.deleteIfExists(dir.toPath());
             rewriteApkIcons(packageName, null);
         } catch (Throwable t) {
@@ -283,9 +355,7 @@ public final class AppShell {
         try {
             byte[] bytes = java.security.MessageDigest.getInstance("SHA-256").digest(
                     (pkg + "\u0000" + id).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder result = new StringBuilder();
-            for (byte b : bytes) result.append(String.format(Locale.ROOT, "%02x", b & 255));
-            return result.toString();
+            return libcore.util.HexEncoding.encodeToString(bytes, false);
         } catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
     }
 
@@ -383,7 +453,7 @@ public final class AppShell {
     }
 
     private static boolean removeDynamicLink(String pkg, String id, String path) {
-        return !ownedDynamicLink(pkg, id, path) || Shell.removeFile(path);
+        return portableMode() || !ownedDynamicLink(pkg, id, path) || Shell.removeFile(path);
     }
     private static boolean sameDynamicLink(String first, String second) {
         return first == null ? second == null : second != null && first.replace('/', '\\').equalsIgnoreCase(second.replace('/', '\\'));
@@ -414,7 +484,8 @@ public final class AppShell {
         try {
             Properties app = shortcutOf(pkg);
             String gesher = installDir(), script = gesher + "\\gesher-app.ps1";
-            boolean shellEnabled = !"0".equals(System.getenv(ENV_SHORTCUTS)) && Shell.exists(script);
+            boolean shellEnabled = !portableMode() && !"0".equals(System.getenv(ENV_SHORTCUTS))
+                    && Shell.exists(script);
             if (shellEnabled) {
                 String folder = dynamicFolder();
                 if (folder == null || !Shell.makeDirectories(folder)) return false;
@@ -549,7 +620,7 @@ public final class AppShell {
 
     private static void registerUrlProtocols(String packageName, String codePath,
             boolean changed) throws Exception {
-        if ("0".equals(System.getenv(ENV_SHORTCUTS))) return;
+        if (portableMode() || "0".equals(System.getenv(ENV_SHORTCUTS))) return;
         String gesher = installDir();
         String systemRoot = System.getenv("SystemRoot");
         if (systemRoot == null || systemRoot.isEmpty()) systemRoot = "C:\\Windows";
@@ -618,7 +689,7 @@ public final class AppShell {
     public static void unregisterUrlProtocolsQuietly(String packageName, Properties record) {
         try {
             if (record == null) return;
-            for (String scheme : record.getProperty("schemes", "").split(",")) {
+            for (String scheme : (portableMode() ? "" : record.getProperty("schemes", "")).split(",")) {
                 if (scheme.isEmpty()) continue;
                 int hr = Shell.unregisterUrlProtocol(scheme, packageName);
                 if (hr == 0) {
@@ -674,7 +745,7 @@ public final class AppShell {
     private static final long APK_ICON_CACHE_GRACE_MS = 10 * 60_000L;
 
     /**
-     * {@code gesher-app apk-icon APK}, also accepting APKS/XAPK bundles, what the icon
+     * {@code gesher-app apk-icon APK}, also accepting split APK bundles, what the icon
      * handler runs for a file it has no
      * icon of (gesher_shellext.dll, in the background, at most twice at once): draws the
      * app's icon as {@link #registerQuietly} does, without installing the app, into
@@ -695,6 +766,12 @@ public final class AppShell {
         String packageName = "-";
         String what;
         try (IconApks inputs = IconApks.open(apk)) {
+            if (ApkPackage.PLATFORM_PACKAGE.equals(
+                    ApkPackage.declaredPackageName(new File(inputs.base)))) {
+                // framework-res.apk (Gesher's own, beside the runtime): the platform's
+                // resources, not an app; no app package may be "android".
+                throw new PlatformPackage();
+            }
             ApkPackage pkg = ApkPackage.parse(inputs.base);
             packageName = pkg.packageName;
             AppIcon icon = AppIcon.load(inputs.paths, pkg.applicationInfo(0),
@@ -709,6 +786,8 @@ public final class AppShell {
             } else {
                 what = packageName + ": no icon drawn (" + icon.source + ")";
             }
+        } catch (PlatformPackage p) {
+            what = "the Android platform's resources (package android), not an app";
         } catch (Throwable t) {
             what = "not read: " + t;
         }
@@ -734,6 +813,13 @@ public final class AppShell {
         }
         apkIconLog(windowsApk + ": " + what);
         return 0;
+    }
+
+    /** {@link #apkIcon}: the file is the platform package, recorded with Gesher's icon. */
+    private static final class PlatformPackage extends Exception {
+        PlatformPackage() {
+            super(null, null, false, false);
+        }
     }
 
     /** A line in {@code <logs>/apk-icons.log} (and on the output); never throws. */
@@ -834,6 +920,7 @@ public final class AppShell {
     }
 
     private static void removeShortcut(Properties shortcut) {
+        if (portableMode()) return;
         String link = shortcut != null ? shortcut.getProperty("link") : null;
         if (link == null) return;
         if (Shell.exists(link)) {

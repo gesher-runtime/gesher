@@ -164,6 +164,58 @@ static jint Zygote_spawn(JNIEnv* env, jclass, jstring commandLine, jobjectArray 
                                  breakaway == JNI_TRUE);
 }
 
+static jint Zygote_spawnInAppContainer(JNIEnv* env, jclass, jstring commandLine,
+                                       jobjectArray set, jobjectArray unset, jstring logPath,
+                                       jstring name, jstring displayName,
+                                       jobjectArray capabilities) {
+    gesher::zygote::AppContainerSpec spec;
+    spec.name = ZygoteString(env, name);
+    spec.display_name = ZygoteString(env, displayName);
+    spec.capabilities = ZygoteStrings(env, capabilities);
+    return gesher::zygote::SpawnInAppContainer(ZygoteString(env, commandLine),
+                                               ZygoteStrings(env, set), ZygoteStrings(env, unset),
+                                               ZygoteString(env, logPath), spec);
+}
+
+static jint Zygote_ensureAppContainer(JNIEnv* env, jclass, jstring name, jstring displayName) {
+    return static_cast<jint>(gesher::zygote::EnsureAppContainer(ZygoteString(env, name),
+                                                                ZygoteString(env, displayName)));
+}
+
+static jint Zygote_grantToAppContainer(JNIEnv* env, jclass, jstring path, jstring name,
+                                       jint access, jboolean inherit) {
+    return static_cast<jint>(gesher::zygote::GrantToAppContainer(
+        ZygoteString(env, path), ZygoteString(env, name), static_cast<uint32_t>(access),
+        inherit == JNI_TRUE));
+}
+
+static jint Zygote_revokeFromAppContainer(JNIEnv* env, jclass, jstring path, jstring name) {
+    return static_cast<jint>(gesher::zygote::RevokeFromAppContainer(
+        ZygoteString(env, path), ZygoteString(env, name)));
+}
+
+static jint Zygote_setAppContainerStorageAccess(JNIEnv* env, jclass, jstring path, jstring name,
+                                                jint access, jboolean inherit) {
+    return static_cast<jint>(gesher::zygote::SetAppContainerStorageAccess(
+        ZygoteString(env, path), ZygoteString(env, name), static_cast<uint32_t>(access),
+        inherit == JNI_TRUE));
+}
+
+static jint Zygote_protectPrivateStorage(JNIEnv* env, jclass, jstring path) {
+    return static_cast<jint>(gesher::zygote::ProtectPrivateStorage(ZygoteString(env, path)));
+}
+
+static jint Zygote_grantToCapability(JNIEnv* env, jclass, jstring path, jstring capability,
+                                     jint access, jboolean inherit) {
+    return static_cast<jint>(gesher::zygote::GrantToCapability(
+        ZygoteString(env, path), ZygoteString(env, capability), static_cast<uint32_t>(access),
+        inherit == JNI_TRUE));
+}
+
+static jint Zygote_deleteAppContainer(JNIEnv* env, jclass, jstring name) {
+    return static_cast<jint>(gesher::zygote::DeleteAppContainer(ZygoteString(env, name)));
+}
+
 static jint Zygote_spawnCompiler(JNIEnv* env, jclass, jstring commandLine, jobjectArray set,
                                  jobjectArray unset, jstring logPath, jint memory, jint cpu) {
     return gesher::zygote::Spawn(ZygoteString(env, commandLine), ZygoteStrings(env, set),
@@ -252,6 +304,23 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeSpawn",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)I",
      GESHER_JNI(Zygote_spawn)},
+    {"nativeSpawnInAppContainer",
+     "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;"
+     "Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_spawnInAppContainer)},
+    {"nativeEnsureAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_ensureAppContainer)},
+    {"nativeGrantToAppContainer", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
+     GESHER_JNI(Zygote_grantToAppContainer)},
+    {"nativeRevokeFromAppContainer", "(Ljava/lang/String;Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_revokeFromAppContainer)},
+    {"nativeSetAppContainerStorageAccess", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
+     GESHER_JNI(Zygote_setAppContainerStorageAccess)},
+    {"nativeProtectPrivateStorage", "(Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_protectPrivateStorage)},
+    {"nativeGrantToCapability", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
+     GESHER_JNI(Zygote_grantToCapability)},
+    {"nativeDeleteAppContainer", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_deleteAppContainer)},
     {"nativeSpawnCompiler", "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;II)I",
      GESHER_JNI(Zygote_spawnCompiler)},
     {"nativeWaitChild", "(IJIJZ)I", GESHER_JNI(Zygote_waitChild)},

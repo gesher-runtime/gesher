@@ -156,6 +156,9 @@ namespace gesher {
 class NativeFence;
 std::shared_ptr<NativeFence> LookupNativeFence(int) { return {}; }
 void ForgetNativeFence(int) {}
+// gesher/fork.h (ADR 0092): this fixture is never a forked child, so its
+// timers run on the thread pool.
+[[maybe_unused]] static bool InForkedChild() { return false; }
 static std::atomic<int64_t> suspended_ns{0};
 #if @HAS_ANDROID_CLOCKS@
 int64_t MonotonicNanos() { return monotonic_ns; }
@@ -191,7 +194,7 @@ std::shared_ptr<TimerFd> LookupTimerFd(int);
 int RegisterTimerFd(std::shared_ptr<TimerFd>, std::shared_ptr<EventFd>);
 @EVENT_FD@
 namespace {
-struct Epoll {};
+@OBJECT_STATE@
 @OBJECT_REGISTRY@
 @OBJECT_LOOKUP@
 @OBJECT_INSERT@

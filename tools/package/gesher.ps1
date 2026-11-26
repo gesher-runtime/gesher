@@ -17,8 +17,8 @@ $here = $PSScriptRoot
 if ($Dex -eq '') { $Dex = Join-Path $here 'hello.dex' }  # PowerShell 5: no $PSScriptRoot in param defaults
 
 $dexFull = (Resolve-Path $Dex).Path
-$root = Join-Path $env:LOCALAPPDATA 'Gesher'
 . (Join-Path $here 'gesher-runtime-files.ps1')
+$root = Set-GesherProfileEnvironment $here
 # Drive-less paths resolve on the current drive.
 Set-Location -LiteralPath $here
 # A Windows path as gesher-base's path model reads it (docs/posix.md): no drive

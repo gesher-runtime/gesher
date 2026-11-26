@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include "native3_wide_ascii_contracts.h"
 
 template <class StateT>
 struct WideApi {
@@ -45,6 +46,8 @@ void WideContracts(const Api& api, Check check) {
   constexpr size_t bad = static_cast<size_t>(-1);
   constexpr size_t partial = static_cast<size_t>(-2);
   constexpr size_t pending = static_cast<size_t>(-3);
+  WideAsciiContracts<wchar_t, State>(api.encode_bounded, api.encode_string,
+                                    api.legacy_encode_string, check);
   auto initialized = [&] {
     State state{};
     std::memset(reinterpret_cast<unsigned char*>(&state) + 4, 0xa5, 4);

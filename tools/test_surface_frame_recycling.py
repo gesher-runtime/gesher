@@ -33,6 +33,9 @@ def generate(ref: str | None) -> str:
     constants.discard("NATIVE_WINDOW_TIMESTAMP_AUTO")
     adapters = (ROOT / "tests/media/surface_geometry_host.cc.in").read_text().split("@PRODUCTION@")[0]
     adapters = adapters.replace("@CONSTANTS@", "enum { " + ", ".join(sorted(constants)) + " };")
+    damage = re.sub(r"^\s*#(?:include|pragma).*\n", "",
+                    (ROOT / "compat/hwui/window/surface_damage.h").read_text(), flags=re.MULTILINE)
+    adapters = adapters.replace("@DAMAGE_TYPES@", damage)
     image_source = read("compat/media/surface/surface_jni.cc")
     cache = image_source[image_source.index("class FrameImages {"):
                          image_source.index("// --- SurfaceTexture")]

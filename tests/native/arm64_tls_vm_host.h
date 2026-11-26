@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 using DWORD = uint32_t;
@@ -50,6 +51,7 @@ inline auto RegionAt(uint8_t* at, size_t bytes) {
 }  // namespace vm_boundary
 inline void GetSystemInfo(SYSTEM_INFO* info) { info->dwPageSize = vm_boundary::page; }
 inline DWORD GetCurrentThreadId() { return vm_boundary::thread; }
+inline BOOL SwitchToThread() { std::this_thread::yield(); return 1; }
 inline DWORD GetLastError() { return 0; }
 inline HANDLE GetCurrentProcess() { return reinterpret_cast<HANDLE>(uintptr_t{1}); }
 inline HANDLE GetCurrentThread() { return reinterpret_cast<HANDLE>(uintptr_t{2}); }

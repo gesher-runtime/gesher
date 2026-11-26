@@ -98,6 +98,8 @@ def namespace_fixture() -> str:
 #include <locale>
 #include <string>
 #include <string_view>
+#include <vector>
+#include "storage_policy.h"
 #include "reserved_names.h"
 #include "unc_paths.h"
 using DWORD = uint32_t;
@@ -122,12 +124,23 @@ std::string Narrow(const wchar_t* input) {
   if (!input) return {};
   return std::wstring_convert<std::codecvt_utf8<wchar_t>>{}.to_bytes(input);
 }
+// This namespace fixture runs as a system/tool process. Storage policy is
+// exercised separately with the real policy source and Windows storage test.
+std::wstring ExternalStorageDataRoot() { return {}; }
+bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
+bool CheckExternalStorageHandle(void*, AccessKind) { return true; }
 static bool BinderDeviceExists() { return false; }
 static int SystemFontPath(const char*, std::wstring*) { return 0; }
+namespace system_linker {
+inline constexpr char kPath[] = "/system/bin/linker64";
+static const std::wstring& File() { static const std::wstring none; return none; }
+static bool IsName(const char*) { return false; }
+}
 namespace procfs { static unsigned Type(const std::wstring&) { return 0; } }
 '''
     signatures = ["bool IsDriveLetter(", "std::string_view NextPart(", "PathKind VirtualKind(",
-                  "bool DrivePath(", "void Lengthen(", "PathKind MapPath(", "bool DiskPath("]
+                  "bool DrivePath(", "void Lengthen(", "bool ExternalStoragePath(",
+                  "PathKind MapPath(", "bool DiskPath("]
     return prologue + kinds + "\n" + "\n".join(function(source, name) for name in signatures) + "\n}\n"
 
 
@@ -161,6 +174,14 @@ def main() -> None:
         run(["git", "apply", str(patch)], cwd=work)
         patched = (dist / "sqlite3.c").read_text()
         (work / "sqlite_path_namespace.h").write_text(namespace_fixture())
+        (work / "storage_policy.h").write_text('''#pragma once
+#include <string>
+namespace gesher {
+enum class AccessKind { kStat, kRead, kWrite };
+bool CheckExternalStorageAccess(const std::wstring&, AccessKind);
+bool CheckExternalStorageHandle(void*, AccessKind);
+}
+''')
         for name in ("reserved_names.h", "unc_paths.h"):
             shutil.copyfile(ROOT / "compat/posix/include/gesher" / name, work / name)
         bridge = (ROOT / "compat/posix/src/sqlite_path.cc").read_text()

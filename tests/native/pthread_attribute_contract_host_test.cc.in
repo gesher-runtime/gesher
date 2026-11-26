@@ -16,6 +16,17 @@
 #include "pthread_attributes_host_windows.h"
 
 namespace gesher::elf { bool SetupThreadTls() { return true; } }
+// gesher/fork.h (ADR 0092): this fixture never forks. A leaving thread passes
+// the fork's exit gate (counted here), and key destructors take their lock.
+namespace gesher {
+std::atomic<int> threads_left{0};
+void ThreadLeaving() { threads_left.fetch_add(1); }
+template <typename Lock>
+bool LockUnlessForkHolds(Lock& lock) {
+  lock.lock();
+  return true;
+}
+}  // namespace gesher
 namespace gesher::bionic {
 namespace {
 int32_t SelfTid() { return static_cast<int32_t>(GetCurrentThreadId()); }

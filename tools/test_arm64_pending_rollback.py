@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Run production ARM64 pending-load retirement with explicit host boundaries.
 
-Registry, TLS, host-entry/trampoline recycling, classification, CallSVC,
-RunGuest and Attach methods are inserted verbatim from translator.cc. The
-Win32/Jit adapter retains instruction bytes until production invalidates them.
+Registry, Jit code tracking, guest protection tracking, TLS,
+host-entry/trampoline recycling, classification, instruction cache
+maintenance, CallSVC, RunGuest and Attach methods are inserted verbatim from
+translator.cc. The Win32/Jit adapter retains instruction bytes until
+production clears or invalidates them.
 Native AArch64 or Windows execution is not established here.
 """
 from __future__ import annotations
@@ -42,8 +44,10 @@ def main() -> None:
         "@RETIRE@": section(source, "void ApiRemoveCode(", "uint64_t ApiCall("),
         "@CLASSIFY@": section(source, "bool InGuestCode(uintptr_t addr) {", "uint32_t GuestFpcr()"),
         "@BINDINGS@": section(source, "void AddVaListFunction(const void* fn, int index) {", "bool InTranslatorCode("),
+        "@PROTECTION@": section(source, "void GuestProtectionChanged(const void* start,", "void* EmitGuestCode("),
         "@COUNTERS@": section(source, "struct Counter {", "class Env final"),
         "@ATTACH@": section(source, "  void Attach() {", "  // The thread is exiting."),
+        "@ICACHE@": section(source, "  void InstructionCacheOperationRaised(", "  void CallSVC(std::uint32_t swi) override {"),
         "@CALLSVC@": section(source, "  void CallSVC(std::uint32_t swi) override {", "  void ExceptionRaised("),
         "@DISPATCH@": section(source, "  struct PendingHostCall {", "  static constexpr size_t kStackSize ="),
     }

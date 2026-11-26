@@ -30,6 +30,7 @@ import android.webkit.WebBackForwardList;
 import android.webkit.WebChromeClient;
 import android.webkit.WebMessage;
 import android.webkit.WebMessagePort;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
@@ -48,7 +49,8 @@ import java.nio.file.Files;
  * WebMessagePorts, find in page, capturePicture, permissions, window.open/close, the file
  * choosers (the test clicks them), text zoom, then Basic authentication, postUrl, a
  * certificate error and a client certificate request, the back/forward list and a web
- * archive on the server's pages; "Features done" at the end.
+ * archive on the server's pages, then page-driven intent fallbacks with default,
+ * accepting and target-vetoing clients; "Features done" at the end.
  */
 public class FeaturesActivity extends Activity {
     private static final String TAG = "FeaturesActivity";
@@ -433,8 +435,122 @@ public class FeaturesActivity extends Activity {
             }
             say("saveWebArchive: " + (path != null ? new File(path).getName() : "null") + ", "
                     + head);
-            say("done");
+            intentStep(0);
         });
+    }
+
+    private void intentStep(int step) {
+        if (step == 3) { say("done"); return; }
+        String name = new String[] {"default", "explicit", "veto"}[step];
+        IntentObserver observer = step == 0 ? new IntentObserver(name, step)
+                : new IntentObserver(name, step) {
+                    @Override public boolean shouldOverrideUrlLoading(WebView view,
+                            WebResourceRequest request) {
+                        return overrideIntent(request, step == 2);
+                    }
+                };
+        mNav.setWebViewClient(observer);
+        mHandler.postDelayed(observer.timeout, 30000);
+        mNav.loadUrl(observer.source);
+    }
+
+    /** The default case inherits shouldOverrideUrlLoading, but observes real page callbacks. */
+    private class IntentObserver extends WebViewClient {
+        final String name;
+        final int step;
+        final String sourcePath, targetPath, source, target;
+        final Runnable timeout;
+        int overrides, targetStarts, targetFinishes;
+        boolean sourceSeen, complete;
+
+        IntentObserver(String name, int step) {
+            this.name = name;
+            this.step = step;
+            sourcePath = "/intent-source/" + name;
+            targetPath = "/intent-target/" + name;
+            source = mServerHttp + sourcePath;
+            target = mServerHttp + targetPath;
+            timeout = () -> { if (!complete) throw new AssertionError("Intent " + name + " timed out"); };
+        }
+
+        boolean overrideIntent(WebResourceRequest request, boolean veto) {
+            String url = request.getUrl().toString();
+            if (url.startsWith("intent:")) {
+                if (overrides++ != 0 || !request.isForMainFrame()) {
+                    throw new AssertionError("Intent original callback order: " + name);
+                }
+                say("intent " + name + " callback 1 original allowed");
+                return false;
+            }
+            if (url.equals(target)) {
+                if (overrides++ != 1 || !request.isForMainFrame()) {
+                    throw new AssertionError("Intent target callback order: " + name);
+                }
+                say("intent " + name + " callback 2 target veto " + veto);
+                if (veto) mHandler.postDelayed(this::verifyVeto, 500);
+                return veto;
+            }
+            return false;
+        }
+
+        @Override public void onPageStarted(WebView view, String url, Bitmap icon) {
+            if (url.equals(target)) {
+                targetStarts++;
+                if (step == 2) throw new AssertionError("Vetoed intent target started");
+                say("intent " + name + " target onPageStarted");
+            }
+        }
+
+        @Override public void onPageFinished(WebView view, String url) {
+            if (url.equals(source) && !sourceSeen) {
+                sourceSeen = true;
+                verifyDocument("source", sourcePath, () -> {
+                    say("intent " + name + " source onPageFinished");
+                    // The server page clicks its own intent: anchor. This is not
+                    // an application loadUrl(intent), which skips the callback.
+                    view.evaluateJavascript("runIntent()", null);
+                });
+            } else if (url.equals(target)) {
+                targetFinishes++;
+                if (step == 2) throw new AssertionError("Vetoed intent target finished");
+                verifyDocument("target", targetPath, () -> {
+                    if (!sourceSeen || targetStarts != 1 || targetFinishes != 1
+                            || overrides != (step == 0 ? 0 : 2)) {
+                        throw new AssertionError("Intent destination callback counts: " + name);
+                    }
+                    say("intent " + name + " destination verified callbacks " + overrides
+                            + " started " + targetStarts + " finished " + targetFinishes);
+                    finishIntent();
+                });
+            }
+        }
+
+        private void verifyDocument(String kind, String path, Runnable next) {
+            mNav.evaluateJavascript("document.title + '|' + location.pathname", value -> {
+                String expected = "\"intent " + kind + " " + name + "|" + path + "\"";
+                if (!expected.equals(value)) {
+                    throw new AssertionError("Intent " + name + " document: " + value);
+                }
+                next.run();
+            });
+        }
+
+        private void verifyVeto() {
+            verifyDocument("source", sourcePath, () -> {
+                if (!sourceSeen || overrides != 2 || targetStarts != 0 || targetFinishes != 0) {
+                    throw new AssertionError("Intent target veto was not retained");
+                }
+                say("intent veto retained source callbacks 2 started 0 finished 0");
+                finishIntent();
+            });
+        }
+
+        private void finishIntent() {
+            if (complete) throw new AssertionError("Intent " + name + " completed twice");
+            complete = true;
+            mHandler.removeCallbacks(timeout);
+            mHandler.post(() -> intentStep(step + 1));
+        }
     }
 
     @Override

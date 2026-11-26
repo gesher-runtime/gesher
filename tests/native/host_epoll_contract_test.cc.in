@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <vector>
 #include "poll_scratch.h"
+@VIRTUAL_OWNER@
 using HANDLE = void*;
 using ULONGLONG = unsigned long long;
 static void SetEvent(HANDLE) {}
@@ -26,6 +27,12 @@ struct EpollWakeChannels { void Notify() {} };
 // This fairness adapter registers no producer-backed sources. Edge publication
 // is qualified by test_epoll_eventfd_edges.py.
 static uint32_t EventFdEdgeReady(Entry&, bool) { return 0; }
+#ifdef HAS_VIRTUAL_OWNER
+// This fixture registers native Linux descriptors with empty virtual identity.
+// Actual virtual owners and their wait lifetime run in the complete-source gate.
+static int SampleVirtualEntries(EpollPollScratch&, bool) { return 0; }
+static void DisarmEntry(Entry& entry) { entry.armed = false; }
+#endif
 @EPOLL_CONVERSION@
 static std::mutex registry_lock;
 static std::map<int, std::shared_ptr<Epoll>> registry;
