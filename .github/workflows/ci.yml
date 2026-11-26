@@ -2167,6 +2167,55 @@ jobs:
           path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
           if-no-files-found: warn
 
+  sandbox-lan:
+    name: AppContainer APK LAN qualification
+    needs: [package]
+    runs-on: windows-2025
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tests/apps/sandboxnetwork
+            tests/windows/sandbox
+            tools/ci
+            tools/surface
+
+      - name: Verify the packaged runtime for this run
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name gesher-setup --producer package --destination ci-suppliers/gesher_setup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/surface/assemble-artifacts.py --source ci-suppliers/gesher_setup --destination installer --ledger ci-owners.json --owner gesher_setup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $archives = @(Get-ChildItem installer -File -Filter 'gesher-*-portable.zip')
+          if ($archives.Count -ne 1) { throw 'Expected one packaged CI runtime archive' }
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath (Join-Path $env:RUNNER_TEMP 'gesher-lan-runtime')
+
+      - name: Run ordinary and contained APKs against a separate virtual LAN peer
+        shell: pwsh
+        run: |
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          $sdk = $env:ANDROID_HOME
+          if (!$sdk) { $sdk = $env:ANDROID_SDK_ROOT }
+          if (!$sdk) { throw 'Android SDK is unavailable on the Windows runner' }
+          & (Join-Path $sdk 'cmdline-tools/latest/bin/sdkmanager.bat') 'build-tools;36.0.0' 'platforms;android-36'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./tests/windows/sandbox/Invoke-SandboxNetworkCi.ps1 -AndroidSdk $sdk `
+            -RuntimeDir (Join-Path $env:RUNNER_TEMP 'gesher-lan-runtime/GesherPortable/App') `
+            -OutputDir (Join-Path $env:RUNNER_TEMP 'gesher-lan-evidence')
+
+      - name: Preserve APK and listener evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appcontainer-apk-lan-windows-2025
+          path: ${{ runner.temp }}/gesher-lan-evidence/**/*.log
+          if-no-files-found: warn
+
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
   # clean runner runs real, unmodified open-source apps from F-Droid
   # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
@@ -2937,7 +2986,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, sandbox-lan, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     steps:
       - name: Require every production CI job

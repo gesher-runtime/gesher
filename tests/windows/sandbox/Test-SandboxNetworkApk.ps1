@@ -6,7 +6,8 @@ param(
     [Parameter(Mandatory)][string] $Apk,
     [Parameter(Mandatory)][string] $ScratchDir,
     [switch] $WithLoopback,
-    [switch] $WithLanPeer
+    [switch] $WithLanPeer,
+    [scriptblock] $ObserveContained
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,5 +58,7 @@ $env:GESHER_HWUI_RENDERER = 'skiacpu'
 $env:GESHER_IP_GEOLOCATION = '0'
 $env:GESHER_WEBVIEW_ARGS = '--disable-background-networking --disable-component-update --no-first-run --disable-sync --no-proxy-server'
 RunProbe 'ordinary' $true
+if ($ObserveContained) { & $ObserveContained 'before' }
 RunProbe 'contained' $false
+if ($ObserveContained) { & $ObserveContained 'after' }
 RunProbe 'ordinary-after' $true

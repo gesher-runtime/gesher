@@ -195,6 +195,15 @@ host and LAN requests, and log both its OS token and server-selected capability
 list. Leave `-LanUrl` and `-WithLanPeer` out when there is no distinct LAN
 test peer. A same-PC interface is a separate test from a LAN peer.
 
+The `AppContainer APK LAN qualification` CI job takes the packaged runtime
+from the same CI run. A process-isolated Windows test container on the runner's
+internal NAT switch supplies a separate private IPv4 endpoint in its own
+network compartment. The runner also supplies host-interface and loopback
+listeners. The test requires normal access before and after the contained APK
+and compares listener connection counts around the contained run. A listener
+setup failure fails the job. This virtual LAN check covers the APK's direct
+HTTP and WebView traffic on the tested Windows runner.
+
 On the original packaged CI runtime, after copying the packaged fonts into
 the fixture's system root, the APK ordinary baseline received all three
 response markers in both `HttpURLConnection` and WebView2 for public HTTPS,
