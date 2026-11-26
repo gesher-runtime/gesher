@@ -27,10 +27,10 @@ on a phone. Design: [ADR 0037](decisions/0037-net-networking.md). Branch:
 sockets. The IPv4 and IPv6 records come from the same real Windows adapter
 enumeration as `getifaddrs()`. The receive queue is bounded, and a dump returns
 `ENOBUFS` if its replies cannot fit. Route netlink multicast registration and
-destinations return `EOPNOTSUPP`. Link queries and route netlink ioctls return
+destinations return `EOPNOTSUPP`. Link queries, explicit unicast binds, and route netlink ioctls return
 `EACCES` under the ordinary Android app contract. See
 [Android's route socket policy](https://android.googlesource.com/platform/system/sepolicy/+/android16-release/private/app_neverallows.te#132).
-Local port identities and descriptor aliases are supported within a process.
+Sending a request or connecting to the kernel allocates a local port. Descriptor aliases preserve that port.
 Transferring a route netlink descriptor or addressing another process is unsupported.
 
 ### Android HttpEngine

@@ -74,23 +74,18 @@ uint32_t SelfNetlinkPid() {
   return pid > 0 ? static_cast<uint32_t>(pid) : 1u;
 }
 
-bool BindPort(NetlinkState& state, uint32_t requested) {
-  if (state.bound_pid) {
-    if (requested == 0 || requested == state.bound_pid) return true;
-    return errno = EINVAL, false;
-  }
+void AutoBindPort(NetlinkState& state) {
+  if (state.bound_pid != 0) return;
   PortRegistry& registry = Ports();
   std::lock_guard<std::mutex> lock(registry.mutex);
-  uint32_t port = requested ? requested : SelfNetlinkPid();
+  uint32_t port = SelfNetlinkPid();
   if (!registry.bound.insert(port).second) {
-    if (requested) return errno = EADDRINUSE, false;
     do {
       port = registry.next--;
       if (registry.next == INT32_MAX) registry.next = UINT32_MAX;
     } while (!registry.bound.insert(port).second);
   }
   state.bound_pid = port;
-  return true;
 }
 
 void AppendAttr(std::vector<uint8_t>* msg, unsigned short type, const void* data, size_t len) {
@@ -310,7 +305,8 @@ int NetlinkBind(NetlinkState& state, const void* addr, uint32_t len) {
   if (local.nl_groups) return errno = EOPNOTSUPP, -1;
   std::lock_guard<std::mutex> lock(state.mu);
   if (state.closed) return errno = EBADF, -1;
-  return BindPort(state, local.nl_pid) ? 0 : -1;
+  // The ordinary Android app domains lack route socket bind permission.
+  return errno = EACCES, -1;
 }
 
 int NetlinkConnect(NetlinkState& state, const void* addr, uint32_t len) {
@@ -323,7 +319,8 @@ int NetlinkConnect(NetlinkState& state, const void* addr, uint32_t len) {
   if (!ValidateNetlinkPeerAddr(addr, len)) return -1;
   std::lock_guard<std::mutex> lock(state.mu);
   if (state.closed) return errno = EBADF, -1;
-  return BindPort(state, 0) ? 0 : -1;
+  AutoBindPort(state);
+  return 0;
 }
 
 int NetlinkGetName(NetlinkState& state, void* addr, uint32_t* len, bool peer) {
@@ -381,7 +378,7 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
     std::lock_guard<std::mutex> lock(state.mu);
     if (state.closed) return errno = EPIPE, -1;
     if (req.size() > static_cast<size_t>(state.sndbuf)) return errno = EMSGSIZE, -1;
-    if (!BindPort(state, 0)) return -1;
+    AutoBindPort(state);
 
     PacketBatcher batch;
     if (hdr.nlmsg_type == RTM_GETADDR &&

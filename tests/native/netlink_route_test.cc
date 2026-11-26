@@ -108,37 +108,34 @@ void TestInterfaceAddresses() {
   Check(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0,
         "bound the wait for dump data");
 
-  sockaddr_nl bind_addr = {};
-  bind_addr.nl_family = AF_NETLINK;
-  Check(bind(fd, reinterpret_cast<sockaddr*>(&bind_addr), sizeof(bind_addr)) == 0,
-        "bind netlink auto-pid");
+  sockaddr_nl kernel = {};
+  kernel.nl_family = AF_NETLINK;
+  Check(bind(fd, reinterpret_cast<sockaddr*>(&kernel), sizeof(kernel)) < 0 && errno == EACCES,
+        "explicit route socket bind is denied to ordinary apps");
+
+  const int sent = SendDumpRequest(fd, RTM_GETADDR, 1, AF_UNSPEC);
+  Check(sent == static_cast<int>(NLMSG_LENGTH(sizeof(rtgenmsg))),
+        "sendto RTM_GETADDR sends the whole request");
 
   sockaddr_nl local_addr = {};
   socklen_t local_len = sizeof(local_addr);
   Check(getsockname(fd, reinterpret_cast<sockaddr*>(&local_addr), &local_len) == 0 &&
             local_len == sizeof(sockaddr_nl) && local_addr.nl_family == AF_NETLINK &&
             local_addr.nl_pid != 0,
-        "getsockname returns bound nl_pid");
+        "sending a request automatically binds a local port");
 
   int second_fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
   Check(second_fd >= 0, "open a second route socket");
   if (second_fd >= 0) {
-    Check(bind(second_fd, reinterpret_cast<sockaddr*>(&local_addr), sizeof(local_addr)) < 0 &&
-              errno == EADDRINUSE,
-          "duplicate explicit port binding is refused");
-    Check(bind(second_fd, reinterpret_cast<sockaddr*>(&bind_addr), sizeof(bind_addr)) == 0,
-          "a second zero-port bind allocates a distinct port");
+    Check(connect(second_fd, reinterpret_cast<sockaddr*>(&kernel), sizeof(kernel)) == 0,
+          "connecting a second socket allocates a local port");
     sockaddr_nl second_addr = {};
     socklen_t second_len = sizeof(second_addr);
     Check(getsockname(second_fd, reinterpret_cast<sockaddr*>(&second_addr), &second_len) == 0 &&
               second_addr.nl_pid != 0 && second_addr.nl_pid != local_addr.nl_pid,
-          "bound port identities are distinct");
+          "automatically bound port identities are distinct");
     close(second_fd);
   }
-
-  const int sent = SendDumpRequest(fd, RTM_GETADDR, 1, AF_UNSPEC);
-  Check(sent == static_cast<int>(NLMSG_LENGTH(sizeof(rtgenmsg))),
-        "sendto RTM_GETADDR sends the whole request");
 
   std::set<AddrEntry> netlink_addrs;
   bool saw_done = false;
