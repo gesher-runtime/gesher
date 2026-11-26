@@ -1405,11 +1405,11 @@ bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
                     const RightsToken* rights) {
-  if (description->unix_datagram_pair.load()) {
+  if (description->IsUnixDatagramPair()) {
     return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);
   }
   const ptrdiff_t sent = SendOwnedRaw(s, buffers, count, flags, to, description, dont_wait);
-  if (sent > 0 && description->unix_stream_pair.load()) {
+  if (sent > 0 && description->IsUnixStreamPair()) {
     const int saved = errno;
     uint16_t local, peer;
     if (StreamPorts(s, *description, &local, &peer)) {
@@ -1424,7 +1424,7 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
                     int* result_flags, UnixCredentials* credentials, RightsToken* rights,
                     std::vector<int>* stream_rights) {
-  if (description->unix_datagram_pair.load()) {
+  if (description->IsUnixDatagramPair()) {
     return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
                             credentials, rights);
   }
@@ -1432,7 +1432,7 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
   if (credentials != nullptr) *credentials = {};
   const ptrdiff_t n =
       RecvOwnedRaw(s, buffers, count, flags, from, description, dont_wait, result_flags);
-  if (n > 0 && (flags & kMsgPeek) == 0 && description->unix_stream_pair.load()) {
+  if (n > 0 && (flags & kMsgPeek) == 0 && description->IsUnixStreamPair()) {
     StreamReceived(s, *description, static_cast<size_t>(n), stream_rights,
                    (flags & kMsgCmsgCloexec) != 0);
   }

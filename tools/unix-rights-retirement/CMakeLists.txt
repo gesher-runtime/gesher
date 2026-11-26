@@ -26,7 +26,7 @@ if(WIN32)
   target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32)
 endif()
 
-foreach(probe last_close transferred_close)
+foreach(probe last_close transferred_close socket_identity)
   add_executable(${probe} "${probe}.c")
   target_compile_options(${probe} PRIVATE -Wall -Wextra -Werror)
   if(WIN32)

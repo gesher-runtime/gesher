@@ -71,3 +71,11 @@ serialize with deposit, claim, and cancel. The witness must observe resource
 retirement without keeping the receiver alive. Socket references retained
 only by unreachable queues also need lifecycle accounting. The N43
 receiver-cleanup item remains open.
+
+## Socket identity probe
+
+The same component build produces `socket_identity`. It checks the requested
+Unix domain, type, unnamed endpoint addresses, and an absent per-message source
+address before and after aliasing and transfer. The transferred endpoint
+receives real payloads after the original descriptor is closed. Run the probe
+directly on Linux. On Windows run it under a fresh matching `binderd` as above.

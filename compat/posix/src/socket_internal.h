@@ -88,16 +88,20 @@ struct SocketDescription {
   std::shared_ptr<SocketDescription> failed_close_owner;  // explicit failure quarantine
   size_t descriptor_refs = 0;  // fd.cc's table mutex; snapshots are not fd refs
   // AF_UNIX socketpair (ADR 0088). Set by socketpair before it returns the fds.
-  // A datagram pair (SOCK_SEQPACKET, SOCK_DGRAM) frames each datagram with the
-  // sender's credentials (winsock.cc's UnixDatagramHeader); SO_PASSCRED delivers them.
-  std::atomic<bool> unix_datagram_pair{false};
+  // Preserve the caller's type even when SOCK_SEQPACKET uses the same framed
+  // datagram transport as SOCK_DGRAM. kOther denotes a socket outside this path.
+  std::atomic<Type> unix_pair_type{Type::kOther};
+  bool IsUnixDatagramPair() const {
+    const Type type = unix_pair_type.load();
+    return type == Type::kDgram || type == Type::kSeqpacket;
+  }
+  bool IsUnixStreamPair() const { return unix_pair_type.load() == Type::kStream; }
   std::atomic<bool> pass_credentials{false};  // SO_PASSCRED
   std::atomic<bool> recv_pktinfo{false};  // IP_PKTINFO: recvmsg delivers in_pktinfo
   // A stream pair (SOCK_STREAM): SCM_RIGHTS goes through the broker's queue for
   // the connection, keyed by both loopback ports (stream_ports: local << 16 |
   // peer, 0 until first needed), at stream positions that SendOwned and
   // RecvOwned keep (binder_wire.h's kStreamPositionsPrefix).
-  std::atomic<bool> unix_stream_pair{false};
   std::atomic<uint32_t> stream_ports{0};
   bool has_peer_credentials = false;  // SO_PEERCRED: the pair's creator, as on Linux
   int32_t peer_pid = 0;
@@ -176,7 +180,7 @@ bool CopyToUser(void* destination, const void* source, size_t size);
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait = false,
                     const RightsToken* rights = nullptr);
-// On an AF_UNIX datagram pair (SocketDescription::unix_datagram_pair) both add
+// On an AF_UNIX datagram pair (SocketDescription::IsUnixDatagramPair) both add
 // and remove the framing header: callers see only the payload. RecvOwned
 // stores the sender's credentials in `credentials` when it is not null.
 // On an AF_UNIX stream pair both keep the end's stream position, and a read

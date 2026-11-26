@@ -274,8 +274,9 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
   if (!ws::Startup()) return -1;
   if (domain != AF_UNIX && domain != AF_INET) return errno = EAFNOSUPPORT, -1;
   if (protocol != 0) return errno = EPROTONOSUPPORT, -1;
-  ws::Type ws_type = ToType(type & ~kTypeFlags);
-  if (ws_type == ws::Type::kSeqpacket && domain == AF_UNIX) ws_type = ws::Type::kDgram;
+  const ws::Type pair_type = ToType(type & ~kTypeFlags);
+  const ws::Type ws_type =
+      pair_type == ws::Type::kSeqpacket && domain == AF_UNIX ? ws::Type::kDgram : pair_type;
   if (ws_type != ws::Type::kStream && ws_type != ws::Type::kDgram) return errno = EOPNOTSUPP, -1;
 
   sockaddr_in loopback = {};
@@ -348,8 +349,7 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
       end.description->peer_pid = self.pid;
       end.description->peer_uid = self.uid;
       end.description->peer_gid = self.gid;
-      end.description->unix_datagram_pair.store(ws_type == ws::Type::kDgram);
-      end.description->unix_stream_pair.store(ws_type == ws::Type::kStream);
+      end.description->unix_pair_type.store(pair_type);
       // A stream pair's ends start at stream position 0 (binder_wire.h): their
       // loopback ports are this connection's while it lives.
       uint16_t local, peer;
@@ -407,6 +407,9 @@ int getsockname(int fd, struct sockaddr* addr, socklen_t* len) {
   if (!Lookup(fd, &state)) return -1;
   ws::Address address;
   if (ws::GetSockName(state.socket, &address) < 0) return -1;
+  if (state.description->unix_pair_type.load() != ws::Type::kOther) {
+    address = {ws::Family::kUnix};
+  }
   FromAddress(address, addr, len);
   return 0;
 }
@@ -416,6 +419,9 @@ int getpeername(int fd, struct sockaddr* addr, socklen_t* len) {
   if (!Lookup(fd, &state)) return -1;
   ws::Address address;
   if (ws::GetPeerName(state.socket, &address) < 0) return -1;
+  if (state.description->unix_pair_type.load() != ws::Type::kOther) {
+    address = {ws::Family::kUnix};
+  }
   FromAddress(address, addr, len);
   return 0;
 }
@@ -477,10 +483,11 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   if (flags & MSG_ERRQUEUE) return errno = EAGAIN, -1;
   if (WouldBlock(state, flags, ws::kPollIn)) return -1;
   if (pass_credentials != nullptr) {
-    *pass_credentials = state.description->unix_datagram_pair.load() &&
+    *pass_credentials = state.description->IsUnixDatagramPair() &&
                         state.description->pass_credentials.load();
   }
   ws::Address from;
+  const bool unnamed_pair = state.description->unix_pair_type.load() != ws::Type::kOther;
   ws::RightsToken token;
   // SCM_RIGHTS (ADR 0088): a stream pair's groups come with the read that
   // returns their first byte (RecvOwned), a datagram's with its token.
@@ -489,7 +496,7 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   if (packet_info != nullptr) *packet_info = {};
   if (want_packet_info) ws::SetReceivePacketInfo(packet_info);
   ssize_t n = ws::RecvOwned(state.socket, buffers, count, ToMsgFlags(flags),
-                       addr != nullptr ? &from : nullptr, state.description,
+                       addr != nullptr && !unnamed_pair ? &from : nullptr, state.description,
                             (flags & MSG_DONTWAIT) != 0, result_flags, credentials,
                             rights != nullptr ? &token : nullptr, rights);
   if (want_packet_info) ws::SetReceivePacketInfo(nullptr);
@@ -501,8 +508,13 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
   }
   if (n >= 0 && addr != nullptr) {
     sockaddr_storage local = {};
-    socklen_t actual = sizeof(local), capacity = 0;
-    FromAddress(from, reinterpret_cast<sockaddr*>(&local), &actual);
+    // An unnamed Unix peer contributed no source address to the message.
+    // Leave the caller's address bytes untouched and return a zero name length.
+    socklen_t actual = 0, capacity = 0;
+    if (!unnamed_pair) {
+      actual = sizeof(local);
+      FromAddress(from, reinterpret_cast<sockaddr*>(&local), &actual);
+    }
     if (!ws::CopyFromUser(&capacity, addrlen, sizeof(capacity))) return errno = EFAULT, -1;
     size_t copied = capacity < actual ? capacity : actual;
     if (!ws::CopyToUser(addr, &local, copied) ||
@@ -553,8 +565,8 @@ bool AcceptSendControl(int fd, const msghdr& message, std::vector<int>* rights) 
       return errno = EINVAL, false;
     }
     if (header.cmsg_level == SOL_SOCKET && header.cmsg_type == SCM_RIGHTS) {
-      if (!state.description->unix_datagram_pair.load() &&
-          !state.description->unix_stream_pair.load()) {
+      if (!state.description->IsUnixDatagramPair() &&
+          !state.description->IsUnixStreamPair()) {
         return errno = EOPNOTSUPP, false;
       }
       if (!gesher::UnixRightsAvailable()) return errno = EOPNOTSUPP, false;
@@ -572,7 +584,7 @@ bool AcceptSendControl(int fd, const msghdr& message, std::vector<int>* rights) 
     if (header.cmsg_level != SOL_SOCKET || header.cmsg_type != SCM_CREDENTIALS) {
       return errno = EOPNOTSUPP, false;
     }
-    if (!state.description->unix_datagram_pair.load()) return errno = EOPNOTSUPP, false;
+    if (!state.description->IsUnixDatagramPair()) return errno = EOPNOTSUPP, false;
     if (header.cmsg_len != CMSG_LEN(sizeof(ucred))) return errno = EINVAL, false;
     ucred claimed;
     memcpy(&claimed, control.data() + at + CMSG_ALIGN(sizeof(cmsghdr)), sizeof(claimed));
@@ -620,7 +632,7 @@ ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
     if (!Lookup(fd, &state)) return -1;
     size_t total = 0;
     for (const ws::Buffer& b : buffers) total += b.len;
-    if (state.description->unix_datagram_pair.load()) {
+    if (state.description->IsUnixDatagramPair()) {
       if (!gesher::DepositRights(rights, 0, 0, &token)) return -1;
     } else if (total != 0) {
       uint16_t own, peer;
@@ -861,7 +873,7 @@ bool WriteInt(int v, void* value, socklen_t* len) {
 // An AF_UNIX socketpair (ADR 0088): loopback sockets underneath, but Linux's
 // AF_UNIX has no IP options (EOPNOTSUPP for their levels).
 bool IsUnixPair(const ws::SocketDescription& description) {
-  return description.unix_datagram_pair.load() || description.unix_stream_pair.load();
+  return description.unix_pair_type.load() != ws::Type::kOther;
 }
 
 // The index of the interface with this IPv4 address; 0 for INADDR_ANY.
@@ -1007,7 +1019,7 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     // ADR 0088: an AF_UNIX datagram pair carries its senders' credentials and
     // delivers them as SCM_CREDENTIALS. Other sockets cannot carry them yet,
     // so the option is not accepted there instead of being ignored.
-    if (!state.description->unix_datagram_pair.load()) return errno = ENOPROTOOPT, -1;
+    if (!state.description->IsUnixDatagramPair()) return errno = ENOPROTOOPT, -1;
     if (!ReadInt(value, len, &v)) return -1;
     state.description->pass_credentials.store(v != 0);
     return 0;
@@ -1091,7 +1103,7 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
     if (IsUnixPair(*state.description)) return errno = EOPNOTSUPP, -1;
     return WriteInt(state.description->recv_pktinfo.load() ? 1 : 0, value, len) ? 0 : -1;
   }
-  if (level == SOL_SOCKET && name == SO_PASSCRED && state.description->unix_datagram_pair.load()) {
+  if (level == SOL_SOCKET && name == SO_PASSCRED && state.description->IsUnixDatagramPair()) {
     return WriteInt(state.description->pass_credentials.load() ? 1 : 0, value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_PEERCRED && state.description->has_peer_credentials) {
@@ -1109,15 +1121,19 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
     return 0;
   }
   if (level == SOL_SOCKET && name == SO_TYPE) {
+    const ws::Type pair_type = state.description->unix_pair_type.load();
+    if (pair_type != ws::Type::kOther) return WriteInt(FromType(pair_type), value, len) ? 0 : -1;
     if (ws::GetOption(state.socket, ws::Option::kType, &v) < 0) return -1;
     return WriteInt(FromType(static_cast<ws::Type>(v)), value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_DOMAIN) {
+    if (IsUnixPair(*state.description)) return WriteInt(AF_UNIX, value, len) ? 0 : -1;
     ws::Address address;
     if (ws::GetSockName(state.socket, &address) < 0) return -1;
     return WriteInt(FromFamily(address.family), value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_PROTOCOL) {
+    if (IsUnixPair(*state.description)) return WriteInt(0, value, len) ? 0 : -1;
     if (ws::GetOption(state.socket, ws::Option::kType, &v) < 0) return -1;
     ws::Type type = static_cast<ws::Type>(v);
     int protocol = type == ws::Type::kStream ? IPPROTO_TCP
@@ -1180,6 +1196,8 @@ constexpr uint32_t kTransferNonBlocking = 0x8;
 constexpr uint32_t kTransferPeerCredentials = 0x10;
 constexpr uint32_t kTransferUnixStream = 0x20;
 constexpr uint32_t kTransferPacketInfo = 0x40;  // IP_PKTINFO
+// The two formerly exclusive Unix pair bits encode a third logical type.
+constexpr uint32_t kTransferUnixSeqpacket = kTransferUnixDatagram | kTransferUnixStream;
 // The pid fills bits 7..31: pid / 4 < 2^25, pids below 2^27.
 constexpr int kTransferPidShift = 7;
 static_assert((uint64_t{1} << kTransferPidShift) > kTransferPacketInfo, "bits overlap");
@@ -1190,8 +1208,12 @@ bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {
   if (!gesher::LookupSocket(fd, &state)) return false;
   const ws::SocketDescription& d = *state.description;
   uint64_t m = kTransferredSocket;
-  if (d.unix_datagram_pair.load()) m |= kTransferUnixDatagram;
-  if (d.unix_stream_pair.load()) m |= kTransferUnixStream;
+  switch (d.unix_pair_type.load()) {
+    case ws::Type::kDgram: m |= kTransferUnixDatagram; break;
+    case ws::Type::kStream: m |= kTransferUnixStream; break;
+    case ws::Type::kSeqpacket: m |= kTransferUnixSeqpacket; break;
+    default: break;
+  }
   if (d.pass_credentials.load()) m |= kTransferPassCredentials;
   if (d.nonblocking.load()) m |= kTransferNonBlocking;
   if (d.recv_pktinfo.load()) m |= kTransferPacketInfo;
@@ -1218,8 +1240,12 @@ int gesher::AdoptSocket(uintptr_t socket, uint64_t metadata) {
   SocketFd end;
   if (gesher::LookupSocket(fd, &end)) {
     ws::SocketDescription& d = *end.description;
-    d.unix_datagram_pair.store((metadata & kTransferUnixDatagram) != 0);
-    d.unix_stream_pair.store((metadata & kTransferUnixStream) != 0);
+    switch (metadata & kTransferUnixSeqpacket) {
+      case kTransferUnixDatagram: d.unix_pair_type.store(ws::Type::kDgram); break;
+      case kTransferUnixStream: d.unix_pair_type.store(ws::Type::kStream); break;
+      case kTransferUnixSeqpacket: d.unix_pair_type.store(ws::Type::kSeqpacket); break;
+      default: break;
+    }
     d.pass_credentials.store((metadata & kTransferPassCredentials) != 0);
     // The Winsock option travels with the socket itself (SetPacketInfo).
     d.recv_pktinfo.store((metadata & kTransferPacketInfo) != 0);

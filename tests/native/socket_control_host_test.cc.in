@@ -54,8 +54,8 @@ bool Lookup(int fd, SocketFd* state) {
   socklen_t length = sizeof(type);
   if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0) return false;
   state->description = std::make_shared<ws::SocketDescription>();
-  state->description->unix_stream_pair = type == SOCK_STREAM;
-  state->description->unix_datagram_pair = type != SOCK_STREAM;
+  state->description->unix_pair_type = type == SOCK_STREAM ? ws::Type::kStream
+      : type == SOCK_SEQPACKET ? ws::Type::kSeqpacket : ws::Type::kDgram;
   return true;
 }
 

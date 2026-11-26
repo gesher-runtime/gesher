@@ -157,6 +157,13 @@ Each phase is a PR with contract tests:
   a socket. Sockets are duplicated with `DuplicateHandle`, as inherited
   sockets are, not `WSADuplicateSocketW`: the broker does not know the
   receiver when the descriptor is deposited.
+- **Unix socketpair identity** travels in Binder wire version 5 and rights
+  protocol 7. `SO_TYPE` retains `SOCK_SEQPACKET` even with the existing UDP
+  backing, `SO_DOMAIN` reports `AF_UNIX`, and `SO_PROTOCOL` reports zero.
+  Both ends of an anonymous pair report unnamed Unix addresses. An incoming
+  message from an unnamed peer has no source address. This retains the same
+  logical type and endpoint after duplication and transfer. Datagram
+  backpressure and last-peer shutdown still follow the existing transport.
 - **The broker (phase 2)** is a third kind of binderd connection
   (`binder_wire.h`, `kHelloRights`). binderd knows the caller by the pipe's
   client process id. Tokens are 128 bits from `BCryptGenRandom`. Datagram pairs

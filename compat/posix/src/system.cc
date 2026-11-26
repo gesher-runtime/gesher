@@ -352,7 +352,7 @@ int ioctl(int fd, unsigned long request, ...) {
     if (request == FIONREAD) {
       if (gesher::ws::Available(state.socket, argp) != 0) return -1;
       // An AF_UNIX datagram pair's payload, without its framing (ADR 0088).
-      if (state.description->unix_datagram_pair.load()) *argp = gesher::ws::UnixDatagramPayload(*argp);
+      if (state.description->IsUnixDatagramPair()) *argp = gesher::ws::UnixDatagramPayload(*argp);
       return 0;
     }
     int result;

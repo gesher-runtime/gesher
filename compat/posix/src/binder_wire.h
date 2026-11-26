@@ -41,7 +41,7 @@ namespace binder_wire {
 
 constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
 // Both endpoints must change together; an old endpoint rejects the hello.
-constexpr uint32_t kVersion = 4;
+constexpr uint32_t kVersion = 5;  // includes SOCK_SEQPACKET transfer metadata
 
 // One entry for every FD object, in object-offset order. The file HANDLE still
 // occupies pad_binder on the wire; this side table carries the exact shared
@@ -117,7 +117,7 @@ enum Op : uint32_t {
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
 // binderd and the processes that send or receive descriptors must agree on it;
 // other binder clients need not.
-constexpr uint32_t kRightsVersion = 6;
+constexpr uint32_t kRightsVersion = 7;  // includes SOCK_SEQPACKET transfer metadata
 
 // The broker's doorbell for stream queues: a shared section named
 // kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint64 values, one
